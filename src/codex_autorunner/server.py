@@ -198,7 +198,16 @@ def create_app(repo_root: Path) -> FastAPI:
     async def terminal(ws: WebSocket):
         await ws.accept()
         session_id = str(uuid.uuid4())
-        cmd = [engine.config.codex_binary, *engine.config.codex_terminal_args]
+        resume_mode = ws.query_params.get("mode") == "resume"
+        if resume_mode:
+            cmd = [
+                engine.config.codex_binary,
+                "--yolo",
+                "resume",
+                *engine.config.codex_terminal_args,
+            ]
+        else:
+            cmd = [engine.config.codex_binary, *engine.config.codex_terminal_args]
         try:
             session = PTYSession(cmd, cwd=str(engine.repo_root))
         except FileNotFoundError:

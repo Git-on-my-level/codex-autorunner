@@ -7,6 +7,7 @@ let statusEl = null;
 let overlayEl = null;
 let connectBtn = null;
 let disconnectBtn = null;
+let resumeBtn = null;
 let inputDisposable = null;
 
 const textEncoder = new TextEncoder();
@@ -93,6 +94,7 @@ function teardownSocket() {
 function updateButtons(connected) {
   if (connectBtn) connectBtn.disabled = connected;
   if (disconnectBtn) disconnectBtn.disabled = !connected;
+  if (resumeBtn) resumeBtn.disabled = connected;
 }
 
 function handleResize() {
@@ -124,21 +126,26 @@ function handleResize() {
   );
 }
 
-function connect() {
+function connect(options = {}) {
+  const resume = Boolean(options.resume);
   if (!ensureTerminal()) return;
   if (socket && socket.readyState === WebSocket.OPEN) return;
   teardownSocket();
 
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(`${proto}://${window.location.host}/api/terminal`);
+  const query = resume ? "?mode=resume" : "";
+  socket = new WebSocket(`${proto}://${window.location.host}/api/terminal${query}`);
   socket.binaryType = "arraybuffer";
 
   socket.onopen = () => {
     overlayEl?.classList.add("hidden");
-    setStatus("Connected");
+    setStatus(resume ? "Connected (resume)" : "Connected");
     updateButtons(true);
     fitAddon.fit();
     handleResize();
+    if (resume) {
+      term?.write("\r\nLaunching resume flow...\r\n");
+    }
   };
 
   socket.onmessage = (event) => {
@@ -187,10 +194,12 @@ export function initTerminal() {
   overlayEl = document.getElementById("terminal-overlay");
   connectBtn = document.getElementById("terminal-connect");
   disconnectBtn = document.getElementById("terminal-disconnect");
+  resumeBtn = document.getElementById("terminal-resume");
 
-  if (!statusEl || !connectBtn || !disconnectBtn) return;
+  if (!statusEl || !connectBtn || !disconnectBtn || !resumeBtn) return;
 
-  connectBtn.addEventListener("click", connect);
+  connectBtn.addEventListener("click", () => connect({ resume: false }));
+  resumeBtn.addEventListener("click", () => connect({ resume: true }));
   disconnectBtn.addEventListener("click", disconnect);
   updateButtons(false);
   setStatus("Disconnected");

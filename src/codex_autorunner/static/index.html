@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#0a0c12" />
     <title>Codex Autorunner</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <link rel="stylesheet" href="/static/vendor/xterm.css" />
@@ -96,6 +99,14 @@
             <label>Tail <input id="log-tail" type="number" min="10" value="200" /></label>
             <button id="load-logs" class="primary sm">Load</button>
             <button id="toggle-log-stream" class="ghost sm">Stream</button>
+            <label class="chip">
+              <input id="log-show-timestamp" type="checkbox" />
+              <span>Timestamp</span>
+            </label>
+            <label class="chip">
+              <input id="log-show-run" type="checkbox" />
+              <span>Run</span>
+            </label>
           </div>
           <pre id="log-output" class="log-viewer">(no log loaded)</pre>
         </section>
@@ -104,11 +115,12 @@
           <div class="inline-toolbar">
             <span id="terminal-status" class="muted">Disconnected</span>
             <button id="terminal-connect" class="primary sm">Connect</button>
+            <button id="terminal-resume" class="ghost sm">Resume</button>
             <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
           </div>
           <div id="terminal-container" class="terminal-container">
             <div class="terminal-overlay" id="terminal-overlay">
-              <p class="muted">Press Connect to launch Codex TUI</p>
+              <p class="muted">Press Connect or Resume to launch Codex TUI</p>
             </div>
           </div>
         </section>

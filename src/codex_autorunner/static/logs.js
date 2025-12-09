@@ -4,30 +4,29 @@ import { publish, subscribe } from "./bus.js";
 const logRunIdInput = document.getElementById("log-run-id");
 const logTailInput = document.getElementById("log-tail");
 const toggleLogStreamButton = document.getElementById("toggle-log-stream");
+const showTimestampToggle = document.getElementById("log-show-timestamp");
+const showRunToggle = document.getElementById("log-show-run");
 let stopLogStream = null;
 let lastKnownRunId = null;
+let rawLogLines = [];
 
 function appendLogLine(line) {
   const output = document.getElementById("log-output");
-  
   if (output.dataset.isPlaceholder === "true") {
-    output.textContent = line;
     delete output.dataset.isPlaceholder;
-  } else {
-    // Append using insertAdjacentText to avoid reading/serializing the full text content
-    output.insertAdjacentText("beforeend", "\n" + line);
+    rawLogLines = [];
   }
-
-  // Throttle scroll updates
-  if (!output.dataset.scrollPending) {
-    output.dataset.scrollPending = "true";
-    requestAnimationFrame(() => {
-      output.scrollTop = output.scrollHeight;
-      delete output.dataset.scrollPending;
-    });
-  }
-  
+  rawLogLines.push(line);
+  renderLogs();
   publish("logs:line", line);
+}
+
+function scrollLogsToBottom() {
+  const output = document.getElementById("log-output");
+  if (!output) return;
+  requestAnimationFrame(() => {
+    output.scrollTop = output.scrollHeight;
+  });
 }
 
 function setLogStreamButton(active) {
@@ -50,11 +49,13 @@ async function loadLogs() {
     const output = document.getElementById("log-output");
     
     if (text) {
-      output.textContent = text;
+      rawLogLines = text.split("\n");
       delete output.dataset.isPlaceholder;
+      renderLogs();
     } else {
       output.textContent = "(empty log)";
       output.dataset.isPlaceholder = "true";
+      rawLogLines = [];
     }
     
     flash("Logs loaded");
@@ -78,6 +79,7 @@ function startLogStreaming() {
   const output = document.getElementById("log-output");
   output.textContent = "(listening...)";
   output.dataset.isPlaceholder = "true";
+  rawLogLines = [];
   
   stopLogStream = streamEvents("/api/logs/stream", {
     onMessage: (data) => {
@@ -103,6 +105,42 @@ function syncRunIdPlaceholder(state) {
   logRunIdInput.placeholder = lastKnownRunId ? `latest (${lastKnownRunId})` : "latest";
 }
 
+function renderLogs() {
+  const output = document.getElementById("log-output");
+  if (output.dataset.isPlaceholder === "true") return;
+  const showTimestamp = showTimestampToggle.checked;
+  const showRun = showRunToggle.checked;
+  const rendered = rawLogLines
+    .map((line) => {
+      let next = line;
+      // Normalize run markers that include "chat"
+      next = next.replace(/^=== run (\d+)\s+chat(\s|$)/, "=== run $1$2");
+
+      if (!showTimestamp) {
+        next = next.replace(/^\[[^\]]*]\s*/, "");
+      }
+      if (!showRun) {
+        if (next.startsWith("[")) {
+          next = next.replace(/^(\[[^\]]+]\s*)run=\d+\s*/, "$1");
+        } else {
+          next = next.replace(/^run=\d+\s*/, "");
+        }
+      }
+      // Remove redundant channel prefix
+      next = next.replace(/^(\[[^\]]+]\s*)?(run=\d+\s*)?chat:\s*/, "$1$2");
+      return next;
+    })
+    .join("\n");
+  if (rendered) {
+    output.textContent = rendered;
+    delete output.dataset.isPlaceholder;
+  } else {
+    output.textContent = "(empty log)";
+    output.dataset.isPlaceholder = "true";
+  }
+  scrollLogsToBottom();
+}
+
 export function initLogs() {
   document.getElementById("load-logs").addEventListener("click", loadLogs);
   toggleLogStreamButton.addEventListener("click", () => {
@@ -119,6 +157,9 @@ export function initLogs() {
       stopLogStreaming();
     }
   });
+
+  showTimestampToggle.addEventListener("change", renderLogs);
+  showRunToggle.addEventListener("change", renderLogs);
 
   loadLogs();
 }

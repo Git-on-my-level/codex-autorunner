@@ -99,6 +99,8 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .tab:hover:not(.active) {
@@ -250,6 +252,8 @@ button {
   text-transform: uppercase;
   letter-spacing: 0.02em;
   user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button:hover:not(:disabled) {
@@ -371,6 +375,8 @@ button:disabled {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .chip:hover {
@@ -601,9 +607,15 @@ label {
   }
 }
 
+/* Mobile: 640px and below */
 @media (max-width: 640px) {
+  /* Safe area support for notches */
   .app-shell {
     padding: 4px;
+    padding-top: max(4px, env(safe-area-inset-top));
+    padding-bottom: calc(52px + env(safe-area-inset-bottom, 0px));
+    min-height: 100vh;
+    min-height: 100dvh;
   }
   
   /* Hide brand on mobile */
@@ -611,89 +623,248 @@ label {
     display: none;
   }
   
+  /* Bottom navigation - thumb friendly */
   .nav-bar {
-    margin-bottom: 6px;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    margin: 0;
+    padding: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    z-index: 100;
   }
   
+  .tabs {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    padding: 0;
+    gap: 0;
+  }
+  
+  /* Larger touch targets - min 44px */
   .tab {
-    padding: 8px 6px;
+    padding: 14px 8px;
+    min-height: 48px;
     font-size: 10px;
+    border-radius: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .tab:active {
+    background: rgba(108, 245, 216, 0.1);
+  }
+  
+  .tab.active {
+    background: rgba(108, 245, 216, 0.15);
+    border-top: 2px solid var(--accent);
+  }
+  
+  /* Content area */
+  main {
+    padding-bottom: 8px;
   }
   
   .grid-two {
     grid-template-columns: repeat(2, 1fr);
-    gap: 4px;
+    gap: 6px;
+  }
+  
+  .grid-two > div {
+    padding: 8px;
   }
   
   .metric {
-    font-size: 12px;
+    font-size: 14px;
   }
   
+  /* Larger action buttons - min 44px touch targets */
   .actions {
-    gap: 3px;
+    gap: 6px;
+    margin-top: 12px;
   }
   
   .actions button {
     flex: 1 1 auto;
     min-width: 60px;
-    padding: 8px 6px;
-    font-size: 10px;
-  }
-  
-  .card {
-    padding: 8px;
-  }
-  
-  /* Logs/Terminal full height minus nav */
-  .log-viewer {
-    height: calc(100vh - 90px);
-    font-size: 10px;
-  }
-  
-  .terminal-container {
-    height: calc(100vh - 90px);
-  }
-  
-  .inline-toolbar {
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 4px 6px;
-  }
-  
-  .doc-nav {
-    flex-wrap: wrap;
-  }
-  
-  .chip {
-    padding: 6px 8px;
-    font-size: 10px;
-  }
-  
-  .doc-editor textarea {
-    min-height: calc(100vh - 120px);
+    min-height: 44px;
+    padding: 12px 8px;
     font-size: 11px;
   }
   
+  .actions button:active {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+  
+  .card {
+    padding: 10px;
+  }
+  
+  .card-header {
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+  }
+  
+  /* Sticky inline toolbar */
+  .inline-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px;
+    margin: 0 -4px 6px;
+    border-radius: 0;
+  }
+  
+  .inline-toolbar button {
+    min-height: 40px;
+    padding: 10px 12px;
+  }
+  
+  .inline-toolbar input {
+    min-height: 40px;
+    padding: 8px;
+  }
+  
+  /* Logs/Terminal - account for bottom nav */
+  .log-viewer {
+    height: calc(100vh - 120px);
+    height: calc(100dvh - 120px);
+    font-size: 11px;
+  }
+  
+  .terminal-container {
+    height: calc(100vh - 120px);
+    height: calc(100dvh - 120px);
+  }
+  
+  /* Docs nav - larger chips */
+  .doc-nav {
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  
+  .chip {
+    padding: 10px 14px;
+    min-height: 40px;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+  }
+  
+  .chip:active {
+    transform: scale(0.95);
+  }
+  
+  .doc-editor textarea {
+    min-height: calc(100vh - 160px);
+    min-height: calc(100dvh - 160px);
+    font-size: 13px;
+    padding: 12px;
+  }
+  
+  .doc-actions {
+    gap: 6px;
+    margin-top: 8px;
+  }
+  
+  .doc-actions button {
+    min-height: 44px;
+    padding: 12px 16px;
+    flex: 1;
+  }
+  
+  /* Toast above bottom nav */
   .toast {
     left: 8px;
     right: 8px;
+    bottom: calc(60px + env(safe-area-inset-bottom, 0px));
     text-align: center;
+  }
+  
+  /* Checklist items - larger touch area */
+  .checklist li {
+    padding: 10px 12px;
+    gap: 10px;
+    min-height: 44px;
+  }
+  
+  .checklist .box {
+    width: 18px;
+    height: 18px;
+  }
+  
+  .checklist .box.done::after {
+    font-size: 14px;
+    top: 0;
+    left: 2px;
   }
 }
 
+/* Ultra-small screens */
 @media (max-width: 400px) {
   .tab {
-    padding: 6px 4px;
+    padding: 12px 4px;
     font-size: 9px;
     letter-spacing: 0;
   }
   
   .metric {
-    font-size: 11px;
+    font-size: 13px;
   }
   
   .actions button {
-    font-size: 9px;
-    padding: 6px 4px;
+    font-size: 10px;
+    min-height: 42px;
+  }
+  
+  .grid-two {
+    gap: 4px;
+  }
+}
+
+/* Landscape phone - side-by-side layout */
+@media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) {
+  .app-shell {
+    padding-bottom: 4px;
+  }
+  
+  .nav-bar {
+    position: static;
+    margin-bottom: 6px;
+  }
+  
+  .tabs {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  
+  .tab {
+    min-height: 36px;
+    padding: 8px;
+    border-radius: var(--radius);
+  }
+  
+  .tab.active {
+    border-top: none;
+    background: var(--accent);
+    color: var(--bg);
+  }
+  
+  .log-viewer,
+  .terminal-container {
+    height: calc(100vh - 80px);
+  }
+  
+  .doc-editor textarea {
+    min-height: calc(100vh - 100px);
   }
 }
