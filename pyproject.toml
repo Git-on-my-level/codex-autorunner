@@ -12,6 +12,12 @@ dependencies = [
   "uvicorn[standard]>=0.30",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "black>=23.0",
+  "pytest>=7.0",
+]
+
 [project.scripts]
 codex-autorunner = "codex_autorunner.cli:app"
 
@@ -21,6 +27,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+codex_autorunner = ["static/*", "static/**/*"]
 
 [tool.typer]
 completions = true

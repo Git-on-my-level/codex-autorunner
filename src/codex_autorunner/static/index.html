@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Autorunner</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Codex Autorunner</p>
+          <h1>Operator Console</h1>
+          <p class="lede">Monitor runs, edit docs, tail logs, and chat with Codex.</p>
+        </div>
+        <div class="auth-box">
+          <label for="auth-token">Auth token (optional)</label>
+          <input id="auth-token" type="text" placeholder="Bearer token" />
+          <small>Saved locally in your browser.</small>
+        </div>
+      </header>
+
+      <nav class="tabs">
+        <button class="tab active" data-target="dashboard">Dashboard</button>
+        <button class="tab" data-target="docs">Docs</button>
+        <button class="tab" data-target="logs">Logs</button>
+        <button class="tab" data-target="chat">Chat</button>
+      </nav>
+
+      <main>
+        <section id="dashboard" class="panel active">
+          <div class="cards">
+            <div class="card status-card">
+              <div class="card-header">
+                <span class="label">Status</span>
+                <span id="runner-status" class="pill pill-idle">idle</span>
+              </div>
+              <div class="grid-two">
+                <div>
+                  <p class="muted">Last run id</p>
+                  <p id="last-run-id" class="metric">–</p>
+                </div>
+                <div>
+                  <p class="muted">Exit code</p>
+                  <p id="last-exit-code" class="metric">–</p>
+                </div>
+                <div>
+                  <p class="muted">Started</p>
+                  <p id="last-start" class="metric">–</p>
+                </div>
+                <div>
+                  <p class="muted">Finished</p>
+                  <p id="last-finish" class="metric">–</p>
+                </div>
+                <div>
+                  <p class="muted">Outstanding TODO</p>
+                  <p id="todo-count" class="metric">–</p>
+                </div>
+                <div>
+                  <p class="muted">Done items</p>
+                  <p id="done-count" class="metric">–</p>
+                </div>
+              </div>
+              <div class="actions">
+                <button id="start-run" class="primary">Start</button>
+                <button id="start-once">Run once</button>
+                <button id="stop-run" class="ghost">Stop</button>
+                <button id="resume-run" class="ghost">Resume</button>
+                <button id="kill-run" class="danger">Kill</button>
+                <button id="refresh-state" class="ghost">Refresh</button>
+              </div>
+              <p class="muted small" id="runner-pid">Runner pid: –</p>
+            </div>
+
+            <div class="card todo-preview">
+              <div class="card-header">
+                <span class="label">TODO Preview</span>
+                <button id="refresh-preview" class="ghost sm">Reload</button>
+              </div>
+              <ul id="todo-preview-list" class="checklist"></ul>
+            </div>
+          </div>
+        </section>
+
+        <section id="docs" class="panel">
+          <div class="doc-nav">
+            <button class="chip active" data-doc="todo">TODO</button>
+            <button class="chip" data-doc="progress">PROGRESS</button>
+            <button class="chip" data-doc="opinions">OPINIONS</button>
+            <span class="muted" id="doc-status"></span>
+          </div>
+          <div class="doc-editor">
+            <textarea id="doc-content" spellcheck="false"></textarea>
+            <div class="doc-actions">
+              <button id="save-doc" class="primary">Save</button>
+              <button id="reload-doc" class="ghost">Reload</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="logs" class="panel">
+            <div class="card">
+              <div class="card-header">
+                <span class="label">Logs</span>
+                <div class="row">
+                  <label>Run id <input id="log-run-id" type="number" min="1" placeholder="latest" /></label>
+                  <label>Tail <input id="log-tail" type="number" min="10" value="200" /></label>
+                  <button id="load-logs" class="primary sm">Load</button>
+                  <button id="toggle-log-stream" class="ghost sm">Start stream</button>
+                </div>
+              </div>
+              <pre id="log-output" class="log-viewer">(no log loaded yet)</pre>
+            </div>
+          </section>
+
+        <section id="chat" class="panel">
+          <div class="card chat-card">
+            <div class="card-header">
+              <span class="label">Chat with Codex</span>
+              <div class="row">
+                <label><input type="checkbox" id="include-todo" checked /> Include TODO</label>
+                <label><input type="checkbox" id="include-progress" checked /> Include PROGRESS</label>
+                <label><input type="checkbox" id="include-opinions" checked /> Include OPINIONS</label>
+              </div>
+            </div>
+            <div id="chat-thread" class="chat-thread"></div>
+            <form id="chat-form" class="chat-form">
+              <textarea id="chat-input" placeholder="Ask Codex for guidance..." required></textarea>
+              <div class="doc-actions">
+                <button type="submit" class="primary">Send</button>
+                <span class="muted" id="chat-hint">Responses stream live from Codex.</span>
+              </div>
+            </form>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>

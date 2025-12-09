@@ -35,7 +35,9 @@ def init(
         if git_init:
             subprocess.run(["git", "init"], cwd=repo_root, check=False)
         else:
-            raise typer.Exit("No .git directory found; rerun with --git-init to create one")
+            raise typer.Exit(
+                "No .git directory found; rerun with --git-init to create one"
+            )
 
     ca_dir = repo_root / ".codex-autorunner"
     ca_dir.mkdir(parents=True, exist_ok=True)
@@ -52,7 +54,10 @@ def init(
 
     state_path = ca_dir / "state.json"
     if not state_path.exists() or force:
-        atomic_write(state_path, "{\n  \"last_run_id\": null,\n  \"status\": \"idle\",\n  \"last_exit_code\": null,\n  \"last_run_started_at\": null,\n  \"last_run_finished_at\": null,\n  \"runner_pid\": null\n}\n")
+        atomic_write(
+            state_path,
+            '{\n  "last_run_id": null,\n  "status": "idle",\n  "last_exit_code": null,\n  "last_run_started_at": null,\n  "last_run_finished_at": null,\n  "runner_pid": null\n}\n',
+        )
         typer.echo(f"Initialized {state_path}")
 
     log_path = ca_dir / "codex-autorunner.log"

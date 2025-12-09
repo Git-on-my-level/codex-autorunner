@@ -54,7 +54,9 @@ Here is the contents of those documents:
 """
 
 
-def build_prompt(config: Config, docs: DocsManager, prev_run_output: Optional[str]) -> str:
+def build_prompt(
+    config: Config, docs: DocsManager, prev_run_output: Optional[str]
+) -> str:
     template_path: Path = config.prompt_template if config.prompt_template else None
     if template_path and template_path.exists():
         template = template_path.read_text(encoding="utf-8")

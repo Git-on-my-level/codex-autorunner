@@ -19,6 +19,16 @@ An autorunner that uses the Codex CLI to work on large tasks via a simple loop. 
 5) If stuck: `codex-autorunner kill` then `codex-autorunner resume`
 6) Check status/logs: `codex-autorunner status`, `codex-autorunner log --tail 200`
 
+## Run the web server/UI
+1) Ensure the repo is initialized (`codex-autorunner init`) so `.codex-autorunner/config.yml` exists.
+2) Start the API/UI backend: `codex-autorunner serve` (defaults to `127.0.0.1:4173`; override via `server.host`/`server.port` in `.codex-autorunner/config.yml`).
+3) Open `http://127.0.0.1:4173` to use the UI, or call the FastAPI endpoints under `/api/*` (attach `Authorization: Bearer <token>` if `server.auth_token` is set).
+
+## Git hooks
+- Install dev tools: `pip install -e .[dev]`
+- Point Git to the repo hooks: `git config core.hooksPath .githooks`
+- The `pre-commit` hook runs `scripts/check.sh` (Black formatting check + pytest). Run it manually with `./scripts/check.sh` before committing or in CI.
+
 ## Commands (CLI)
 - `init` — seed config/state/docs.
 - `run` / `once` — run the loop (continuous or single iteration).

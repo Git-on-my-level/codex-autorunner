@@ -44,7 +44,9 @@ class Engine:
             pid = int(pid_text) if pid_text.isdigit() else None
             if pid and _process_alive(pid):
                 if not force:
-                    raise LockError(f"Another autorunner is active (pid={pid}); use --force to override")
+                    raise LockError(
+                        f"Another autorunner is active (pid={pid}); use --force to override"
+                    )
             else:
                 self.lock_path.unlink(missing_ok=True)
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +94,7 @@ class Engine:
         if not collected:
             return None
         text = "\n".join(collected)
+        text = _strip_log_prefixes(text)
         max_chars = self.config.prompt_prev_run_max_chars
         return text[-max_chars:]
 
@@ -144,7 +147,9 @@ class Engine:
 
         if proc.stdout:
             for line in proc.stdout:
-                self.log_line(run_id, f"stdout: {line.rstrip()}" if line else "stdout: ")
+                self.log_line(
+                    run_id, f"stdout: {line.rstrip()}" if line else "stdout: "
+                )
                 print(line, end="")
 
         proc.wait()
@@ -182,29 +187,54 @@ class Engine:
         return proc.returncode, "\n".join(output_lines)
 
     def maybe_git_commit(self, run_id: int) -> None:
-        msg = self.config.git_commit_message_template.replace("{run_id}", str(run_id)).replace("#{run_id}", str(run_id))
-        paths = [self.config.doc_path("todo"), self.config.doc_path("progress"), self.config.doc_path("opinions")]
-        add_cmd = ["git", "add"] + [str(p.relative_to(self.repo_root)) for p in paths if p.exists()]
+        msg = self.config.git_commit_message_template.replace(
+            "{run_id}", str(run_id)
+        ).replace("#{run_id}", str(run_id))
+        paths = [
+            self.config.doc_path("todo"),
+            self.config.doc_path("progress"),
+            self.config.doc_path("opinions"),
+        ]
+        add_cmd = ["git", "add"] + [
+            str(p.relative_to(self.repo_root)) for p in paths if p.exists()
+        ]
         subprocess.run(add_cmd, cwd=self.repo_root, check=False)
         subprocess.run(["git", "commit", "-m", msg], cwd=self.repo_root, check=False)
 
-    def run_loop(self, stop_after_runs: Optional[int] = None, external_stop_flag: Optional[threading.Event] = None) -> None:
+    def run_loop(
+        self,
+        stop_after_runs: Optional[int] = None,
+        external_stop_flag: Optional[threading.Event] = None,
+    ) -> None:
         state = load_state(self.state_path)
         run_id = (state.last_run_id or 0) + 1
         start_wallclock = time.time()
-        target_runs = stop_after_runs if stop_after_runs is not None else self.config.runner_stop_after_runs
+        target_runs = (
+            stop_after_runs
+            if stop_after_runs is not None
+            else self.config.runner_stop_after_runs
+        )
 
         while True:
             if external_stop_flag and external_stop_flag.is_set():
-                self._update_state("idle", run_id - 1, state.last_exit_code, finished=True)
+                self._update_state(
+                    "idle", run_id - 1, state.last_exit_code, finished=True
+                )
                 break
             if self.config.runner_max_wallclock_seconds is not None:
-                if time.time() - start_wallclock > self.config.runner_max_wallclock_seconds:
-                    self._update_state("idle", run_id - 1, state.last_exit_code, finished=True)
+                if (
+                    time.time() - start_wallclock
+                    > self.config.runner_max_wallclock_seconds
+                ):
+                    self._update_state(
+                        "idle", run_id - 1, state.last_exit_code, finished=True
+                    )
                     break
 
             if self.todos_done():
-                self._update_state("idle", run_id - 1, state.last_exit_code, finished=True)
+                self._update_state(
+                    "idle", run_id - 1, state.last_exit_code, finished=True
+                )
                 break
 
             prev_output = self.extract_prev_output(run_id - 1)
@@ -220,7 +250,9 @@ class Engine:
             with self.log_path.open("a", encoding="utf-8") as f:
                 f.write(f"=== run {run_id} end (code {exit_code}) ===\n")
 
-            self._update_state("error" if exit_code != 0 else "idle", run_id, exit_code, finished=True)
+            self._update_state(
+                "error" if exit_code != 0 else "idle", run_id, exit_code, finished=True
+            )
 
             if self.config.git_auto_commit and exit_code == 0:
                 self.maybe_git_commit(run_id)
@@ -285,6 +317,30 @@ def clear_stale_lock(lock_path: Path) -> None:
         pid = int(pid_text) if pid_text.isdigit() else None
         if not pid or not _process_alive(pid):
             lock_path.unlink(missing_ok=True)
+
+
+def _strip_log_prefixes(text: str) -> str:
+    """Strip log prefixes and clip to content after token-usage marker if present."""
+    lines = text.splitlines()
+    cleaned_lines = []
+    token_marker_idx = None
+    for idx, line in enumerate(lines):
+        if "stdout: tokens used" in line:
+            token_marker_idx = idx
+            break
+    if token_marker_idx is not None:
+        lines = lines[token_marker_idx + 1 :]
+
+    for line in lines:
+        if "] run=" in line and "stdout:" in line:
+            try:
+                _, remainder = line.split("stdout:", 1)
+                cleaned_lines.append(remainder.strip())
+                continue
+            except ValueError:
+                pass
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
 
 
 def doctor(repo_root: Path) -> None:
