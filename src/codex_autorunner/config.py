@@ -15,6 +15,7 @@ DEFAULT_CONFIG = {
     "codex": {
         "binary": "codex",
         "args": ["--yolo", "exec", "--sandbox", "danger-full-access"],
+        "terminal_args": [],
     },
     "prompt": {
         "prev_run_max_chars": 6000,
@@ -32,7 +33,6 @@ DEFAULT_CONFIG = {
     "server": {
         "host": "127.0.0.1",
         "port": 4173,
-        "auth_token": None,
     },
 }
 
@@ -48,6 +48,7 @@ class Config:
     docs: Dict[str, Path]
     codex_binary: str
     codex_args: List[str]
+    codex_terminal_args: List[str]
     prompt_prev_run_max_chars: int
     prompt_template: Optional[Path]
     runner_sleep_seconds: int
@@ -57,7 +58,6 @@ class Config:
     git_commit_message_template: str
     server_host: str
     server_port: int
-    server_auth_token: Optional[str]
 
     def doc_path(self, key: str) -> Path:
         return self.repo_root / self.docs[key]
@@ -92,6 +92,8 @@ def load_config(repo_root: Path) -> Config:
 
     template_val = merged["prompt"].get("template")
     template = repo_root / template_val if template_val else None
+    term_args = merged["codex"].get("terminal_args")
+    terminal_args = list(term_args) if isinstance(term_args, list) else []
 
     return Config(
         raw=merged,
@@ -99,6 +101,7 @@ def load_config(repo_root: Path) -> Config:
         docs=docs,
         codex_binary=merged["codex"]["binary"],
         codex_args=list(merged["codex"].get("args", [])),
+        codex_terminal_args=terminal_args,
         prompt_prev_run_max_chars=int(merged["prompt"]["prev_run_max_chars"]),
         prompt_template=template,
         runner_sleep_seconds=int(merged["runner"]["sleep_seconds"]),
@@ -108,7 +111,6 @@ def load_config(repo_root: Path) -> Config:
         git_commit_message_template=str(merged["git"].get("commit_message_template")),
         server_host=str(merged["server"].get("host")),
         server_port=int(merged["server"].get("port")),
-        server_auth_token=merged["server"].get("auth_token"),
     )
 
 
@@ -128,6 +130,8 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("codex.binary is required")
     if not isinstance(codex.get("args", []), list):
         raise ConfigError("codex.args must be a list")
+    if "terminal_args" in codex and not isinstance(codex.get("terminal_args", []), list):
+        raise ConfigError("codex.terminal_args must be a list if provided")
     prompt = cfg.get("prompt")
     if not isinstance(prompt, dict):
         raise ConfigError("prompt section must be a mapping")
@@ -154,6 +158,3 @@ def _validate_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.host must be a string")
     if not isinstance(server.get("port", 0), int):
         raise ConfigError("server.port must be an integer")
-    auth_token = server.get("auth_token")
-    if auth_token is not None and not isinstance(auth_token, str):
-        raise ConfigError("server.auth_token must be a string or null")

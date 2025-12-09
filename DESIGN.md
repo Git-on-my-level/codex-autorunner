@@ -31,7 +31,7 @@ Single-repo autorunner that drives the Codex CLI using three markdown docs (TODO
   - prompt: `prev_run_max_chars`, optional `template` path.
   - runner: `sleep_seconds`, `stop_after_runs`, `max_wallclock_seconds`.
   - git: `auto_commit`, `commit_message_template`.
-  - server: `host`, `port`, optional `auth_token`.
+  - server: `host`, `port`.
 - State (`state.json`): `last_run_id`, `status` (idle/running/error), `last_exit_code`, timestamps.
 - Log: append-only `codex-autorunner.log` with run markers `=== run {id} start/end (code X) ===`.
 
@@ -55,7 +55,7 @@ Single-repo autorunner that drives the Codex CLI using three markdown docs (TODO
 
 ## Web Server + UI (V2)
 - Process model: FastAPI HTTP server + RunnerManager thread controlling the loop; uses same engine/state files.
-- API (defaults `127.0.0.1:4173`, auth via `Authorization: Bearer <token>` when `server.auth_token` set):
+- API (defaults `127.0.0.1:4173`):
   - GET `/api/docs`, PUT `/api/docs/{todo|progress|opinions}` — atomic doc reads/writes.
   - GET `/api/state` — state plus derived fields (e.g., outstanding TODO count).
   - POST `/api/run/start` (optional `{once: true}`), `/api/run/stop`, `/api/run/kill`, `/api/run/resume` — manage loop.

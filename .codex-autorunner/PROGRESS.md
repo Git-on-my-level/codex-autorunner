@@ -13,3 +13,5 @@
 - Added streaming: new `/api/chat/stream` SSE endpoint plus UI hooks for live chat responses and log tailing via `/api/logs/stream`, including toggle controls and auth-aware streaming fetchers.
 - Exposed kill/resume runner controls in the dashboard UI, wiring buttons to the new API endpoints, refreshing state after actions, and styling the kill button distinctly.
 - Added a git `pre-commit` hook that runs a repo check script (`scripts/check.sh`) to enforce Black formatting and pytest before commits, documented hook setup, and added dev extras plus a smoke test for static assets.
+- Removed the unused auth token plumbing from the server config, API routes, and UI to simplify the web surface.
+- Refactored the static UI into modular ES modules with shared fetch/stream/poll utilities, a tiny pub/sub bus for state/log updates, and per-tab components for dashboard, docs, logs, and chat behavior.

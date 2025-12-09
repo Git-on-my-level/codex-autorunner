@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Codex Autorunner</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/vendor/xterm.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -14,11 +15,6 @@
           <h1>Operator Console</h1>
           <p class="lede">Monitor runs, edit docs, tail logs, and chat with Codex.</p>
         </div>
-        <div class="auth-box">
-          <label for="auth-token">Auth token (optional)</label>
-          <input id="auth-token" type="text" placeholder="Bearer token" />
-          <small>Saved locally in your browser.</small>
-        </div>
       </header>
 
       <nav class="tabs">
@@ -26,6 +22,7 @@
         <button class="tab" data-target="docs">Docs</button>
         <button class="tab" data-target="logs">Logs</button>
         <button class="tab" data-target="chat">Chat</button>
+        <button class="tab" data-target="terminal">Terminal</button>
       </nav>
 
       <main>
@@ -116,27 +113,64 @@
 
         <section id="chat" class="panel">
           <div class="card chat-card">
-            <div class="card-header">
-              <span class="label">Chat with Codex</span>
-              <div class="row">
-                <label><input type="checkbox" id="include-todo" checked /> Include TODO</label>
-                <label><input type="checkbox" id="include-progress" checked /> Include PROGRESS</label>
-                <label><input type="checkbox" id="include-opinions" checked /> Include OPINIONS</label>
+            <div class="chat-header">
+              <div>
+                <span class="label">Chat with Codex</span>
+                <p class="muted small" style="margin: 4px 0 0;">Ask questions about your project, get guidance on next steps</p>
+              </div>
+              <div class="chat-options">
+                <label><input type="checkbox" id="include-todo" checked /> TODO</label>
+                <label><input type="checkbox" id="include-progress" checked /> PROGRESS</label>
+                <label><input type="checkbox" id="include-opinions" checked /> OPINIONS</label>
               </div>
             </div>
-            <div id="chat-thread" class="chat-thread"></div>
+            <div id="chat-thread" class="chat-thread">
+              <div class="chat-empty">
+                <div class="chat-empty-icon">💬</div>
+                <p>No messages yet</p>
+                <p class="small">Start a conversation with Codex</p>
+              </div>
+            </div>
             <form id="chat-form" class="chat-form">
               <textarea id="chat-input" placeholder="Ask Codex for guidance..." required></textarea>
-              <div class="doc-actions">
-                <button type="submit" class="primary">Send</button>
-                <span class="muted" id="chat-hint">Responses stream live from Codex.</span>
+              <div class="chat-actions">
+                <button type="submit" class="primary">Send Message</button>
+                <button type="button" id="clear-chat" class="ghost">Clear Chat</button>
+                <span class="muted small" id="chat-hint">Responses stream live from Codex</span>
               </div>
             </form>
+          </div>
+        </section>
+
+        <section id="terminal" class="panel">
+          <div class="card terminal-card">
+            <div class="card-header">
+              <div>
+                <span class="label">Codex CLI (TUI)</span>
+                <p class="muted small" style="margin: 4px 0 0;">
+                  Runs the configured Codex binary inside a PTY linked to this repo.
+                </p>
+              </div>
+              <div class="row">
+                <button id="terminal-connect" class="primary sm">Start session</button>
+                <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
+              </div>
+            </div>
+            <div class="terminal-status muted small" id="terminal-status">
+              Disconnected
+            </div>
+            <div id="terminal-container" class="terminal-container">
+              <div class="terminal-overlay" id="terminal-overlay">
+                <p class="muted">Start a session to launch Codex TUI</p>
+              </div>
+            </div>
           </div>
         </section>
       </main>
     </div>
     <div id="toast" class="toast"></div>
+    <script src="/static/vendor/xterm.js"></script>
+    <script src="/static/vendor/xterm-addon-fit.js"></script>
     <script src="/static/app.js" type="module"></script>
   </body>
 </html>

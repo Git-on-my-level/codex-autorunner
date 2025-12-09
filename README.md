@@ -9,7 +9,7 @@ An autorunner that uses the Codex CLI to work on large tasks via a simple loop. 
 - Initializes a repo with Codex-friendly docs and config.
 - Runs Codex in a loop against the repo, streaming logs.
 - Tracks state, logs, and config under `.codex-autorunner/`.
-- Exposes an HTTP API and web UI for docs, logs, and runner control.
+- Exposes an HTTP API and web UI for docs, logs, runner control, and a Codex TUI terminal.
 
 ## Quick start
 1) Install (editable): `pip install -e .`
@@ -22,7 +22,8 @@ An autorunner that uses the Codex CLI to work on large tasks via a simple loop. 
 ## Run the web server/UI
 1) Ensure the repo is initialized (`codex-autorunner init`) so `.codex-autorunner/config.yml` exists.
 2) Start the API/UI backend: `codex-autorunner serve` (defaults to `127.0.0.1:4173`; override via `server.host`/`server.port` in `.codex-autorunner/config.yml`).
-3) Open `http://127.0.0.1:4173` to use the UI, or call the FastAPI endpoints under `/api/*` (attach `Authorization: Bearer <token>` if `server.auth_token` is set).
+3) Open `http://127.0.0.1:4173` to use the UI, or call the FastAPI endpoints under `/api/*`.
+   - The Terminal tab launches the configured Codex binary inside a PTY via websocket; it uses `codex.terminal_args` (defaults empty, so it runs `codex` bare unless you override). xterm.js assets are vendored under `static/vendor`.
 
 ## Git hooks
 - Install dev tools: `pip install -e .[dev]`
