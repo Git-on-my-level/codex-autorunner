@@ -9,15 +9,14 @@
   </head>
   <body>
     <div class="app-shell">
-      <header class="hero">
-        <h1 class="hero-title">CODEX AUTORUNNER</h1>
-      </header>
-
-      <nav class="tabs">
-        <button class="tab active" data-target="dashboard">Dashboard</button>
-        <button class="tab" data-target="docs">Docs</button>
-        <button class="tab" data-target="logs">Logs</button>
-        <button class="tab" data-target="terminal">Terminal</button>
+      <nav class="nav-bar">
+        <span class="nav-brand">CAR</span>
+        <div class="tabs">
+          <button class="tab active" data-target="dashboard">Dashboard</button>
+          <button class="tab" data-target="docs">Docs</button>
+          <button class="tab" data-target="logs">Logs</button>
+          <button class="tab" data-target="terminal">Terminal</button>
+        </div>
       </nav>
 
       <main>
@@ -92,38 +91,24 @@
         </section>
 
         <section id="logs" class="panel">
-          <div class="card">
-            <div class="card-header">
-              <span class="label">Logs</span>
-              <div class="row">
-                <label>Run <input id="log-run-id" type="number" min="1" placeholder="latest" /></label>
-                <label>Tail <input id="log-tail" type="number" min="10" value="200" /></label>
-                <button id="load-logs" class="primary sm">Load</button>
-                <button id="toggle-log-stream" class="ghost sm">Stream</button>
-              </div>
-            </div>
-            <pre id="log-output" class="log-viewer">(no log loaded)</pre>
+          <div class="inline-toolbar">
+            <label>Run <input id="log-run-id" type="number" min="1" placeholder="latest" /></label>
+            <label>Tail <input id="log-tail" type="number" min="10" value="200" /></label>
+            <button id="load-logs" class="primary sm">Load</button>
+            <button id="toggle-log-stream" class="ghost sm">Stream</button>
           </div>
+          <pre id="log-output" class="log-viewer">(no log loaded)</pre>
         </section>
 
         <section id="terminal" class="panel">
-          <div class="card terminal-card">
-            <div class="card-header">
-              <div>
-                <span class="label">Codex CLI</span>
-              </div>
-              <div class="row">
-                <button id="terminal-connect" class="primary sm">Connect</button>
-                <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
-              </div>
-            </div>
-            <div class="terminal-status muted small" id="terminal-status">
-              Disconnected
-            </div>
-            <div id="terminal-container" class="terminal-container">
-              <div class="terminal-overlay" id="terminal-overlay">
-                <p class="muted">Press Connect to launch Codex TUI</p>
-              </div>
+          <div class="inline-toolbar">
+            <span id="terminal-status" class="muted">Disconnected</span>
+            <button id="terminal-connect" class="primary sm">Connect</button>
+            <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
+          </div>
+          <div id="terminal-container" class="terminal-container">
+            <div class="terminal-overlay" id="terminal-overlay">
+              <p class="muted">Press Connect to launch Codex TUI</p>
             </div>
           </div>
         </section>

@@ -60,8 +60,8 @@ Single-repo autorunner that drives the Codex CLI using three markdown docs (TODO
   - GET `/api/state` — state plus derived fields (e.g., outstanding TODO count).
   - POST `/api/run/start` (optional `{once: true}`), `/api/run/stop`, `/api/run/kill`, `/api/run/resume` — manage loop.
   - GET `/api/logs` (by run_id or tail), GET `/api/logs/stream` — live log SSE.
-  - POST `/api/chat` (blocking) and `/api/chat/stream` (SSE) — Codex chat with optional doc inclusion; chat does not auto-edit docs.
-- UI views: dashboard (status, controls), docs editor (tabs for three docs with checkbox rendering), logs tail/stream, chat panel (include-doc checkboxes, streaming output, optional “add as TODO” helper).
+  - WebSocket `/api/terminal` — PTY-backed Codex CLI (uses `codex.binary` + `codex.terminal_args` or bare binary).
+- UI views: dashboard (status, controls), docs editor (tabs for three docs with checkbox rendering), logs tail/stream, terminal panel (xterm.js) to drive Codex interactively.
 - Mobile: simple responsive layout with top/bottom nav; keep bundle small and avoid heavy frameworks.
 
 ## Extensibility and Implementation Notes

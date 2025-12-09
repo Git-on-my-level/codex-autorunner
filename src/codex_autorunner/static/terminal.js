@@ -17,6 +17,10 @@ function setStatus(message) {
   }
 }
 
+function getFontSize() {
+  return window.innerWidth < 640 ? 10 : 13;
+}
+
 function ensureTerminal() {
   if (!window.Terminal || !window.FitAddon) {
     setStatus("xterm assets missing; reload or check /static/vendor");
@@ -30,11 +34,33 @@ function ensureTerminal() {
   if (!container) return false;
   term = new window.Terminal({
     convertEol: true,
-    fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
-    fontSize: 14,
+    fontFamily: '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+    fontSize: getFontSize(),
     cursorBlink: true,
     rows: 24,
     cols: 100,
+    theme: {
+      background: '#0a0c12',
+      foreground: '#e5ecff',
+      cursor: '#6cf5d8',
+      selectionBackground: 'rgba(108, 245, 216, 0.3)',
+      black: '#000000',
+      red: '#ff5566',
+      green: '#6cf5d8',
+      yellow: '#f1fa8c',
+      blue: '#6ca8ff',
+      magenta: '#bd93f9',
+      cyan: '#8be9fd',
+      white: '#e5ecff',
+      brightBlack: '#6272a4',
+      brightRed: '#ff6e6e',
+      brightGreen: '#69ff94',
+      brightYellow: '#ffffa5',
+      brightBlue: '#d6acff',
+      brightMagenta: '#ff92df',
+      brightCyan: '#a4ffff',
+      brightWhite: '#ffffff',
+    },
   });
   fitAddon = new window.FitAddon.FitAddon();
   term.loadAddon(fitAddon);
@@ -70,7 +96,24 @@ function updateButtons(connected) {
 }
 
 function handleResize() {
-  if (!fitAddon || !term || !socket || socket.readyState !== WebSocket.OPEN) return;
+  if (!fitAddon || !term) return;
+  
+  // Update font size based on current window width
+  const newFontSize = getFontSize();
+  if (term.options.fontSize !== newFontSize) {
+    term.options.fontSize = newFontSize;
+  }
+
+  // Only send resize if connected
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    try {
+      fitAddon.fit();
+    } catch (e) {
+      // ignore fit errors when not visible
+    }
+    return;
+  }
+
   fitAddon.fit();
   socket.send(
     JSON.stringify({

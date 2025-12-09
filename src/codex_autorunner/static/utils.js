@@ -1,10 +1,16 @@
 const toast = document.getElementById("toast");
 const decoder = new TextDecoder();
 
-export function flash(message) {
+export function flash(message, type = "info") {
   toast.textContent = message;
+  toast.classList.remove("error");
+  if (type === "error") {
+    toast.classList.add("error");
+  }
   toast.classList.add("show");
-  setTimeout(() => toast.classList.remove("show"), 2200);
+  setTimeout(() => {
+    toast.classList.remove("show", "error");
+  }, 2200);
 }
 
 export function statusPill(el, status) {

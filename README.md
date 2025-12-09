@@ -11,17 +11,19 @@ An autorunner that uses the Codex CLI to work on large tasks via a simple loop. 
 - Tracks state, logs, and config under `.codex-autorunner/`.
 - Exposes an HTTP API and web UI for docs, logs, runner control, and a Codex TUI terminal.
 
+CLI commands are available as `codex-autorunner` or the shorter `car`.
+
 ## Quick start
 1) Install (editable): `pip install -e .`
-2) Initialize (per repo): `codex-autorunner init --git-init` (if not already a git repo). This creates `.codex-autorunner/config.yml`, state/log files, and the docs under `.codex-autorunner/`.
-3) Run once: `codex-autorunner once`
-4) Continuous loop: `codex-autorunner run`
-5) If stuck: `codex-autorunner kill` then `codex-autorunner resume`
-6) Check status/logs: `codex-autorunner status`, `codex-autorunner log --tail 200`
+2) Initialize (per repo): `codex-autorunner init --git-init` (or `car init --git-init` if you prefer short). This creates `.codex-autorunner/config.yml`, state/log files, and the docs under `.codex-autorunner/`.
+3) Run once: `codex-autorunner once` / `car once`
+4) Continuous loop: `codex-autorunner run` / `car run`
+5) If stuck: `codex-autorunner kill` then `codex-autorunner resume` (or the `car` equivalents)
+6) Check status/logs: `codex-autorunner status`, `codex-autorunner log --tail 200` (or `car ...`)
 
 ## Run the web server/UI
 1) Ensure the repo is initialized (`codex-autorunner init`) so `.codex-autorunner/config.yml` exists.
-2) Start the API/UI backend: `codex-autorunner serve` (defaults to `127.0.0.1:4173`; override via `server.host`/`server.port` in `.codex-autorunner/config.yml`).
+2) Start the API/UI backend: `codex-autorunner serve` (or `car serve`) — defaults to `127.0.0.1:4173`; override via `server.host`/`server.port` in `.codex-autorunner/config.yml`.
 3) Open `http://127.0.0.1:4173` to use the UI, or call the FastAPI endpoints under `/api/*`.
    - The Terminal tab launches the configured Codex binary inside a PTY via websocket; it uses `codex.terminal_args` (defaults empty, so it runs `codex` bare unless you override). xterm.js assets are vendored under `static/vendor`.
 

@@ -21,6 +21,7 @@ dev = [
 
 [project.scripts]
 codex-autorunner = "codex_autorunner.cli:app"
+car = "codex_autorunner.cli:app"
 
 [build-system]
 requires = ["setuptools", "wheel"]
