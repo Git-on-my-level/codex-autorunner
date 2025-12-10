@@ -146,16 +146,28 @@
             <label>Tail <input id="log-tail" type="number" min="10" value="200" /></label>
             <button id="load-logs" class="primary sm">Load</button>
             <button id="toggle-log-stream" class="ghost sm">Stream</button>
-            <label class="chip">
-              <input id="log-show-timestamp" type="checkbox" />
+            <label class="chip" data-short="TS">
+              <input id="log-show-timestamp" type="checkbox" checked />
               <span>Timestamp</span>
             </label>
-            <label class="chip">
+            <label class="chip" data-short="Run">
               <input id="log-show-run" type="checkbox" />
               <span>Run</span>
             </label>
           </div>
-          <pre id="log-output" class="log-viewer">(no log loaded)</pre>
+          <div class="log-legend">
+            <span class="log-legend-item"><span class="log-legend-dot thinking"></span>Thinking</span>
+            <span class="log-legend-item"><span class="log-legend-dot exec"></span>Tool calls</span>
+            <span class="log-legend-item"><span class="log-legend-dot file"></span>File updates</span>
+            <span class="log-legend-item"><span class="log-legend-dot diff-add"></span>Added</span>
+            <span class="log-legend-item"><span class="log-legend-dot diff-del"></span>Removed</span>
+            <span class="log-legend-item"><span class="log-legend-dot output"></span>Agent output</span>
+            <span class="log-legend-item"><span class="log-legend-dot context"></span>Context</span>
+          </div>
+          <div class="log-container">
+            <pre id="log-output" class="log-viewer">(no log loaded)</pre>
+            <button id="log-jump-bottom" class="log-jump-btn hidden" title="Jump to latest">↓ Latest</button>
+          </div>
         </section>
 
         <section id="terminal" class="panel">

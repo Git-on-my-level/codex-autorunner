@@ -1070,14 +1070,14 @@ label {
   margin-bottom: 6px;
 }
 
-/* Log viewer - maximize height */
+/* Log viewer - maximize height (accounts for nav + toolbar + legend) */
 .log-viewer {
   background: var(--bg);
   border-radius: var(--radius);
   border: 1px solid var(--border);
   padding: 8px;
   color: #b0c0d8;
-  height: calc(100vh - 100px);
+  height: calc(100vh - 130px);
   overflow: auto;
   white-space: pre-wrap;
   font-family: inherit;
@@ -1111,6 +1111,355 @@ label {
 
 .log-viewer::-webkit-scrollbar-thumb:hover {
   background: #2a3450;
+}
+
+/* ========== LOG LINE TYPES ========== */
+
+.log-line {
+  padding: 1px 4px;
+  border-radius: 2px;
+  margin: 1px 0;
+  position: relative;
+}
+
+/* Icons before certain line types */
+.log-line[data-icon]::before {
+  content: attr(data-icon);
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+/* Run boundaries - prominent separators */
+.log-line.log-run-start,
+.log-line.log-run-end {
+  background: linear-gradient(90deg, rgba(108, 245, 216, 0.15) 0%, transparent 100%);
+  border-left: 3px solid var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+  padding: 6px 8px;
+  margin: 12px 0 8px 0;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.log-line.log-run-end {
+  background: linear-gradient(90deg, rgba(108, 168, 255, 0.12) 0%, transparent 100%);
+  border-left-color: var(--accent-2);
+  color: var(--accent-2);
+  margin: 8px 0 12px 0;
+}
+
+/* Thinking/reasoning - italicized, muted */
+.log-line.log-thinking-label {
+  color: #9b7aff;
+  font-style: italic;
+  opacity: 0.7;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 6px;
+}
+
+.log-line.log-thinking {
+  color: #b8a3ff;
+  font-style: italic;
+  padding-left: 20px;
+  border-left: 2px solid rgba(155, 122, 255, 0.3);
+  background: rgba(155, 122, 255, 0.05);
+}
+
+/* Tool execution - highlighted */
+.log-line.log-exec-label {
+  color: #ffa64d;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.8;
+  margin-top: 6px;
+}
+
+.log-line.log-exec-command {
+  color: #ffcc80;
+  background: rgba(255, 166, 77, 0.08);
+  border-left: 2px solid rgba(255, 166, 77, 0.4);
+  padding-left: 20px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+/* File updates */
+.log-line.log-file-update-label {
+  color: #4dc9ff;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.8;
+  margin-top: 6px;
+}
+
+.log-line.log-file-modified {
+  color: #80d4ff;
+  background: rgba(77, 201, 255, 0.08);
+  border-left: 2px solid rgba(77, 201, 255, 0.4);
+  padding-left: 20px;
+}
+
+/* Diff styling */
+.log-line.log-diff-header {
+  color: #d2a8ff;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.log-line.log-diff-hunk {
+  color: #58a6ff;
+  background: rgba(56, 139, 253, 0.08);
+  font-weight: 500;
+}
+
+.log-line.log-diff-add {
+  color: #7ee787;
+  background: rgba(46, 160, 67, 0.12);
+  border-left: 2px solid #3fb950;
+  padding-left: 20px;
+}
+
+.log-line.log-diff-del {
+  color: #f97583;
+  background: rgba(248, 81, 73, 0.12);
+  border-left: 2px solid #f85149;
+  padding-left: 20px;
+}
+
+/* Prompt/context markers - dimmed, collapsible appearance */
+.log-line.log-prompt-marker,
+.log-line.log-prompt-marker-end {
+  color: #6e7681;
+  font-size: 10px;
+  opacity: 0.5;
+  font-style: italic;
+}
+
+.log-line.log-prompt-context {
+  color: #6e7681;
+  opacity: 0.4;
+  font-size: 10px;
+  padding-left: 12px;
+  border-left: 1px dashed rgba(110, 118, 129, 0.3);
+}
+
+/* System messages */
+.log-line.log-system {
+  color: #6e7681;
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+.log-line.log-tokens {
+  color: #a371f7;
+  font-size: 10px;
+  background: rgba(163, 113, 247, 0.08);
+  border-radius: 3px;
+  padding: 2px 6px;
+  display: inline-block;
+  margin: 4px 0;
+}
+
+/* Success/exit status */
+.log-line.log-success {
+  color: #56d364;
+}
+
+.log-line.log-exit-code {
+  color: #8b949e;
+  font-size: 10px;
+}
+
+/* Agent output - most prominent! This is the final answer */
+.log-line.log-agent-output {
+  color: var(--text);
+  background: linear-gradient(90deg, rgba(108, 245, 216, 0.12) 0%, rgba(108, 168, 255, 0.08) 100%);
+  border: 1px solid rgba(108, 245, 216, 0.3);
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Regular output */
+.log-line.log-output {
+  color: #b0c0d8;
+}
+
+/* Test output */
+.log-line.log-test-output {
+  color: #58a6ff;
+  font-size: 10px;
+}
+
+/* Error/traceback output */
+.log-line.log-error-output {
+  color: #f97583;
+  background: rgba(248, 81, 73, 0.08);
+  border-left: 2px solid #f85149;
+  padding-left: 20px;
+}
+
+/* Blank lines */
+.log-line.log-blank {
+  height: 8px;
+}
+
+/* ========== LOG LEGEND ========== */
+.log-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  font-size: 9px;
+  align-items: center;
+}
+
+.log-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.log-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.log-legend-dot.thinking { background: #9b7aff; }
+.log-legend-dot.exec { background: #ffa64d; }
+.log-legend-dot.file { background: #4dc9ff; }
+.log-legend-dot.diff-add { background: #3fb950; }
+.log-legend-dot.diff-del { background: #f85149; }
+.log-legend-dot.output { background: var(--accent); }
+.log-legend-dot.context { background: #6e7681; opacity: 0.5; }
+
+/* ========== COLLAPSIBLE CONTEXT BLOCKS ========== */
+.log-context-block {
+  margin: 4px 0;
+  border: 1px solid rgba(110, 118, 129, 0.2);
+  border-radius: 4px;
+  background: rgba(110, 118, 129, 0.05);
+}
+
+.log-context-block[open] {
+  background: rgba(110, 118, 129, 0.08);
+}
+
+.log-context-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 10px;
+  color: #6e7681;
+  user-select: none;
+  list-style: none;
+}
+
+.log-context-summary::-webkit-details-marker {
+  display: none;
+}
+
+.log-context-summary:hover {
+  color: #8b949e;
+  background: rgba(110, 118, 129, 0.1);
+}
+
+.log-context-icon {
+  font-size: 8px;
+  transition: transform 0.15s ease;
+}
+
+.log-context-block[open] .log-context-icon {
+  transform: rotate(90deg);
+}
+
+.log-context-count {
+  opacity: 0.6;
+  font-size: 9px;
+}
+
+.log-context-content {
+  padding: 4px 8px 8px;
+  border-top: 1px solid rgba(110, 118, 129, 0.15);
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 10px;
+}
+
+.log-context-content .log-line {
+  margin: 0;
+  padding: 1px 4px;
+}
+
+/* ========== RUN SECTION STYLING ========== */
+.log-run-section {
+  margin: 8px 0;
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+}
+
+/* ========== LOG CONTAINER WITH JUMP BUTTON ========== */
+.log-container {
+  position: relative;
+  height: calc(100vh - 130px);
+}
+
+.log-container .log-viewer {
+  height: 100%;
+}
+
+.log-jump-btn {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 20px;
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+  transition: all 0.15s ease;
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+}
+
+.log-jump-btn:not(.hidden) {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.log-jump-btn:hover {
+  background: #5de6c9;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+
+.log-jump-btn:active {
+  transform: translateY(0);
 }
 
 /* Terminal - maximize space */
@@ -1291,33 +1640,129 @@ label {
     margin-bottom: 10px;
   }
   
-  /* Sticky inline toolbar */
+  /* Compact inline toolbar for mobile - flex row */
   .inline-toolbar {
     position: sticky;
     top: 0;
     z-index: 10;
+    display: flex;
     flex-wrap: wrap;
-    gap: 6px;
-    padding: 8px;
-    margin: 0 -4px 6px;
+    gap: 4px;
+    padding: 6px;
+    margin: 0 -4px 4px;
     border-radius: 0;
+    align-items: center;
+  }
+  
+  .inline-toolbar label {
+    font-size: 9px;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  
+  .inline-toolbar label:has(input[type="number"]) {
+    display: none; /* Hide Run/Tail labels on mobile, show just inputs */
+  }
+  
+  .inline-toolbar input[type="number"] {
+    width: 50px;
+    min-height: 32px;
+    padding: 4px 6px;
+    font-size: 11px;
+    flex-shrink: 0;
   }
   
   .inline-toolbar button {
-    min-height: 40px;
-    padding: 10px 12px;
+    min-height: 32px;
+    padding: 6px 10px;
+    font-size: 10px;
+    flex-shrink: 0;
   }
   
-  .inline-toolbar input {
-    min-height: 40px;
-    padding: 8px;
+  /* Checkbox toggles - fixed width */
+  .inline-toolbar .chip {
+    padding: 4px 8px;
+    font-size: 9px;
+    min-height: 28px;
+    flex-shrink: 0;
+    flex-grow: 0;
   }
   
-  /* Logs/Terminal - account for bottom nav */
+  .inline-toolbar .chip span {
+    display: none; /* Hide label text, show just checkbox */
+  }
+  
+  .inline-toolbar .chip::after {
+    content: attr(data-short);
+    font-size: 9px;
+  }
+  
+  /* Logs/Terminal - account for bottom nav and compact toolbar */
+  .log-container {
+    height: calc(100vh - 130px);
+    height: calc(100dvh - 130px);
+  }
+  
   .log-viewer {
-    height: calc(100vh - 120px);
-    height: calc(100dvh - 120px);
-    font-size: 11px;
+    font-size: 10px;
+    padding: 4px;
+  }
+  
+  /* Hide log legend on mobile - too cluttered */
+  .log-legend {
+    display: none;
+  }
+  
+  /* Simplified log line styling on mobile */
+  .log-line {
+    padding: 1px 2px;
+    font-size: 10px;
+  }
+  
+  .log-line[data-icon]::before {
+    display: none;
+  }
+  
+  .log-line.log-run-start,
+  .log-line.log-run-end {
+    padding: 3px 6px;
+    margin: 6px 0 3px 0;
+    font-size: 10px;
+  }
+  
+  .log-line.log-agent-output {
+    padding: 4px 6px;
+    margin: 4px 0;
+    font-size: 10px;
+  }
+  
+  .log-line.log-thinking,
+  .log-line.log-exec-command {
+    padding-left: 8px;
+  }
+  
+  /* Collapsible blocks more compact */
+  .log-context-block {
+    margin: 2px 0;
+  }
+  
+  .log-context-summary {
+    padding: 2px 4px;
+    font-size: 9px;
+  }
+  
+  .log-context-content {
+    padding: 2px 4px;
+    max-height: 100px;
+    font-size: 9px;
+  }
+  
+  /* Jump button on mobile */
+  .log-jump-btn {
+    bottom: 10px;
+    right: 10px;
+    padding: 6px 10px;
+    font-size: 9px;
   }
   
   .terminal-container {
@@ -1615,6 +2060,67 @@ label {
     gap: 4px;
   }
 
+  /* Ultra-compact logs toolbar */
+  .inline-toolbar {
+    gap: 3px;
+    padding: 4px;
+  }
+  
+  .inline-toolbar input[type="number"] {
+    width: 45px;
+    min-height: 28px;
+    font-size: 10px;
+  }
+  
+  .inline-toolbar button {
+    min-height: 28px;
+    padding: 4px 8px;
+    font-size: 9px;
+  }
+  
+  .inline-toolbar .chip {
+    padding: 2px 6px;
+    min-height: 24px;
+  }
+  
+  .inline-toolbar .chip::after {
+    font-size: 8px;
+  }
+  
+  .log-container {
+    height: calc(100vh - 110px);
+    height: calc(100dvh - 110px);
+  }
+  
+  .log-viewer {
+    font-size: 9px;
+    padding: 3px;
+  }
+  
+  .log-line {
+    font-size: 9px;
+  }
+  
+  .log-line.log-run-start,
+  .log-line.log-run-end {
+    font-size: 9px;
+    padding: 2px 4px;
+    margin: 4px 0 2px 0;
+  }
+  
+  .log-line.log-agent-output {
+    font-size: 9px;
+    padding: 3px 4px;
+    margin: 3px 0;
+  }
+  
+  .log-jump-btn {
+    padding: 4px 8px;
+    font-size: 8px;
+    bottom: 8px;
+    right: 8px;
+  }
+
   .doc-nav .chip {
     padding: 6px 8px;
     min-height: 32px;
@@ -1701,7 +2207,59 @@ label {
   
   .nav-bar {
     position: static;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
+  }
+  
+  /* Compact logs for landscape */
+  .inline-toolbar {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 4px;
+  }
+  
+  .inline-toolbar label:has(input[type="number"]) {
+    display: flex;
+  }
+  
+  .inline-toolbar input[type="number"] {
+    width: 45px;
+    min-height: 26px;
+  }
+  
+  .inline-toolbar button {
+    min-height: 26px;
+    padding: 4px 8px;
+  }
+  
+  .inline-toolbar .chip {
+    padding: 2px 4px;
+    min-height: 24px;
+  }
+  
+  .inline-toolbar .chip span {
+    display: inline;
+  }
+  
+  .inline-toolbar .chip::after {
+    content: none;
+  }
+  
+  .log-legend {
+    display: flex;
+    padding: 2px 6px;
+    margin-bottom: 4px;
+    font-size: 7px;
+  }
+  
+  .log-container {
+    height: calc(100vh - 90px);
+  }
+  
+  .log-viewer {
+    font-size: 9px;
+    padding: 4px;
   }
   
   .tabs {

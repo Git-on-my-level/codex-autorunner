@@ -1,8 +1,8 @@
-import { api, flash, createPoller } from "./utils.js";
+import { api, flash, streamEvents } from "./utils.js";
 import { publish } from "./bus.js";
 import { CONSTANTS } from "./constants.js";
 
-let stopStatePoll = null;
+let stopStateStream = null;
 
 export async function loadState({ notify = true } = {}) {
   try {
@@ -16,12 +16,43 @@ export async function loadState({ notify = true } = {}) {
   }
 }
 
-export function startStatePolling(intervalMs = CONSTANTS.UI.POLLING_INTERVAL) {
-  if (stopStatePoll) return stopStatePoll;
-  stopStatePoll = createPoller(() => loadState({ notify: false }), intervalMs, {
-    immediate: false,
-  });
-  return stopStatePoll;
+export function startStatePolling() {
+  if (stopStateStream) return stopStateStream;
+
+  let active = true;
+  let cancelStream = null;
+
+  const connect = () => {
+    if (!active) return;
+    // Initial fetch to ensure immediate state
+    loadState({ notify: false }).catch(() => {});
+    
+    cancelStream = streamEvents("/api/state/stream", {
+      onMessage: (data) => {
+        try {
+          const state = JSON.parse(data);
+          publish("state:update", state);
+        } catch (e) {
+          console.error("Bad state payload", e);
+        }
+      },
+      onFinish: () => {
+        if (active) {
+          // Reconnect after delay
+          setTimeout(connect, 2000);
+        }
+      },
+    });
+  };
+
+  connect();
+
+  stopStateStream = () => {
+    active = false;
+    if (cancelStream) cancelStream();
+    stopStateStream = null;
+  };
+  return stopStateStream;
 }
 
 async function runAction(path, body, successMessage) {

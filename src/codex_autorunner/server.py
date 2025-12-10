@@ -85,12 +85,37 @@ async def _log_stream(log_path: Path):
                 await asyncio.sleep(0.5)
 
 
+async def _state_stream(engine: Engine, manager: RunnerManager):
+    last_payload = None
+    while True:
+        try:
+            state = await asyncio.to_thread(load_state, engine.state_path)
+            outstanding, done = await asyncio.to_thread(engine.docs.todos)
+            payload = {
+                "last_run_id": state.last_run_id,
+                "status": state.status,
+                "last_exit_code": state.last_exit_code,
+                "last_run_started_at": state.last_run_started_at,
+                "last_run_finished_at": state.last_run_finished_at,
+                "outstanding_count": len(outstanding),
+                "done_count": len(done),
+                "running": manager.running,
+                "runner_pid": state.runner_pid,
+            }
+            if payload != last_payload:
+                yield f"data: {json.dumps(payload)}\n\n"
+                last_payload = payload
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
+
+
 def _static_dir() -> Path:
     return Path(resources.files("codex_autorunner")) / "static"
 
 
-def create_app(repo_root: Path) -> FastAPI:
-    repo_root = find_repo_root(repo_root)
+def create_app(repo_root: Optional[Path] = None) -> FastAPI:
+    repo_root = find_repo_root(repo_root or Path.cwd())
     engine = Engine(repo_root)
     manager = RunnerManager(engine)
     doc_chat = DocChatService(engine)
@@ -240,6 +265,12 @@ def create_app(repo_root: Path) -> FastAPI:
             "running": manager.running,
             "runner_pid": state.runner_pid,
         }
+
+    @app.get("/api/state/stream")
+    async def stream_state():
+        return StreamingResponse(
+            _state_stream(engine, manager), media_type="text/event-stream"
+        )
 
     @app.post("/api/run/start")
     def start_run(payload: Optional[dict] = None):
