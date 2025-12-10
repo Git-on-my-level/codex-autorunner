@@ -1,4 +1,4 @@
-import { flash, statusPill, confirmModal } from "./utils.js";
+import { api, flash, statusPill, confirmModal } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { loadState, startRun, stopRun, resumeRun, killRun, resetRunner, startStatePolling } from "./state.js";
 
@@ -12,6 +12,78 @@ function renderState(state) {
   document.getElementById("todo-count").textContent = state.outstanding_count ?? "–";
   document.getElementById("done-count").textContent = state.done_count ?? "–";
   document.getElementById("runner-pid").textContent = `Runner pid: ${state.runner_pid ?? "–"}`;
+}
+
+function formatTokens(val) {
+  if (val === null || val === undefined) return "–";
+  const num = Number(val);
+  if (Number.isNaN(num)) return val;
+  return num.toLocaleString();
+}
+
+function setUsageLoading(loading) {
+  const btn = document.getElementById("usage-refresh");
+  if (!btn) return;
+  btn.disabled = loading;
+  btn.classList.toggle("loading", loading);
+}
+
+function formatTokensCompact(val) {
+  if (val === null || val === undefined) return "–";
+  const num = Number(val);
+  if (Number.isNaN(num)) return val;
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(0)}k`;
+  return num.toLocaleString();
+}
+
+function renderUsage(data) {
+  const totals = data?.totals || {};
+  const events = data?.events ?? 0;
+  const rate = data?.latest_rate_limits;
+  const codexHome = data?.codex_home || "–";
+
+  const eventsEl = document.getElementById("usage-events");
+  if (eventsEl) {
+    eventsEl.textContent = `${events} ev`;
+  }
+  const totalEl = document.getElementById("usage-total");
+  const inputEl = document.getElementById("usage-input");
+  const cachedEl = document.getElementById("usage-cached");
+  const outputEl = document.getElementById("usage-output");
+  const reasoningEl = document.getElementById("usage-reasoning");
+  const ratesEl = document.getElementById("usage-rates");
+  const metaEl = document.getElementById("usage-meta");
+
+  if (totalEl) totalEl.textContent = formatTokensCompact(totals.total_tokens);
+  if (inputEl) inputEl.textContent = formatTokensCompact(totals.input_tokens);
+  if (cachedEl) cachedEl.textContent = formatTokensCompact(totals.cached_input_tokens);
+  if (outputEl) outputEl.textContent = formatTokensCompact(totals.output_tokens);
+  if (reasoningEl) reasoningEl.textContent = formatTokensCompact(totals.reasoning_output_tokens);
+
+  if (ratesEl) {
+    if (rate) {
+      const primary = rate.primary || {};
+      const secondary = rate.secondary || {};
+      ratesEl.textContent = `${primary.used_percent ?? "–"}%/${primary.window_minutes ?? ""}m · ${secondary.used_percent ?? "–"}%/${secondary.window_minutes ?? ""}m`;
+    } else {
+      ratesEl.textContent = "–";
+    }
+  }
+  if (metaEl) metaEl.textContent = codexHome;
+}
+
+async function loadUsage() {
+  setUsageLoading(true);
+  try {
+    const data = await api("/api/usage");
+    renderUsage(data);
+  } catch (err) {
+    renderUsage(null);
+    flash(err.message || "Failed to load usage", "error");
+  } finally {
+    setUsageLoading(false);
+  }
 }
 
 function bindAction(buttonId, action) {
@@ -42,6 +114,8 @@ export function initDashboard() {
     if (confirmed) await resetRunner();
   });
   bindAction("refresh-state", loadState);
+  bindAction("usage-refresh", loadUsage);
 
+  loadUsage();
   startStatePolling();
 }

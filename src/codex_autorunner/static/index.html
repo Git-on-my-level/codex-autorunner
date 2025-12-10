@@ -39,6 +39,15 @@
         </div>
       </section>
 
+      <section class="hub-usage-compact">
+        <div class="hub-usage-header">
+          <span class="label">Usage</span>
+          <span id="hub-usage-meta" class="hub-usage-path">–</span>
+          <button id="hub-usage-refresh" class="ghost sm">↻</button>
+        </div>
+        <div id="hub-usage-list" class="hub-usage-grid">Loading…</div>
+      </section>
+
       <section class="hub-repo-panel">
         <div class="hub-panel-header">
           <span class="label">Repositories</span>
@@ -104,6 +113,37 @@
                 <button id="refresh-state" class="ghost">↻</button>
               </div>
               <p class="muted small" id="runner-pid">PID: –</p>
+            </div>
+
+            <div class="card usage-card-compact">
+              <div class="usage-header">
+                <span class="label">Usage</span>
+                <span class="usage-total-badge" id="usage-total">–</span>
+                <span class="usage-events-badge" id="usage-events">–</span>
+                <button id="usage-refresh" class="ghost sm">↻</button>
+              </div>
+              <div class="usage-breakdown">
+                <div class="usage-stat">
+                  <span class="usage-stat-val" id="usage-input">–</span>
+                  <span class="usage-stat-lbl">in</span>
+                </div>
+                <div class="usage-stat usage-stat-cached">
+                  <span class="usage-stat-val" id="usage-cached">–</span>
+                  <span class="usage-stat-lbl">cached</span>
+                </div>
+                <div class="usage-stat">
+                  <span class="usage-stat-val" id="usage-output">–</span>
+                  <span class="usage-stat-lbl">out</span>
+                </div>
+                <div class="usage-stat">
+                  <span class="usage-stat-val" id="usage-reasoning">–</span>
+                  <span class="usage-stat-lbl">reason</span>
+                </div>
+              </div>
+              <div class="usage-footer">
+                <span id="usage-rates">–</span>
+                <span id="usage-meta">–</span>
+              </div>
             </div>
 
             <div class="card todo-preview">

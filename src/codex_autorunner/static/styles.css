@@ -161,7 +161,7 @@ main {
 /* Cards grid */
 .cards {
   display: grid;
-  grid-template-columns: 1fr 280px;
+  grid-template-columns: 1fr 220px;
   gap: 8px;
 }
 
@@ -170,6 +170,168 @@ main {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   padding: 10px;
+}
+
+/* ===== Compact Per-Repo Usage Card ===== */
+.usage-card-compact {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.usage-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.usage-total-badge {
+  background: linear-gradient(135deg, rgba(108, 245, 216, 0.15), rgba(108, 168, 255, 0.1));
+  border: 1px solid rgba(108, 245, 216, 0.3);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 13px;
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  letter-spacing: -0.02em;
+}
+
+.usage-events-badge {
+  color: var(--muted);
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.usage-breakdown {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+
+.usage-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 0;
+}
+
+.usage-stat-cached {
+  background: rgba(108, 245, 216, 0.05);
+  border-color: rgba(108, 245, 216, 0.2);
+}
+
+.usage-stat-cached .usage-stat-val {
+  color: var(--accent);
+}
+
+.usage-stat-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.usage-stat-lbl {
+  font-size: 8px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.usage-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--muted);
+  opacity: 0.7;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+/* ===== Compact Hub Usage Section ===== */
+.hub-usage-compact {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+
+.hub-usage-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.hub-usage-path {
+  flex: 1;
+  font-size: 9px;
+  color: var(--muted);
+  opacity: 0.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.hub-usage-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.hub-usage-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 10px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.hub-usage-chip:hover {
+  border-color: var(--accent);
+  background: rgba(108, 245, 216, 0.04);
+}
+
+.hub-usage-chip-unmatched {
+  opacity: 0.6;
+}
+
+.hub-usage-chip-name {
+  font-weight: 600;
+  color: var(--text);
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-usage-chip-total {
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.hub-usage-chip-meta {
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
 }
 
 /* Hub shell */
@@ -286,6 +448,8 @@ main {
   flex-direction: column;
   gap: 4px;
 }
+
+/* Legacy hub-usage-list styles removed - using hub-usage-grid now */
 
 /* Repo card - compact single-row layout */
 .hub-repo-card {
@@ -1240,6 +1404,14 @@ button:disabled {
   border-bottom: none;
 }
 
+.doc-chat-entry .prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  grid-column: 1;
+  min-width: 0;
+}
+
 .doc-chat-entry .prompt {
   font-weight: 500;
   font-size: 10px;
@@ -1247,7 +1419,37 @@ button:disabled {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  grid-column: 1;
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-chat-entry .copy-prompt-btn {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.1s ease;
+}
+
+.doc-chat-entry:hover .copy-prompt-btn {
+  opacity: 0.7;
+}
+
+.doc-chat-entry .copy-prompt-btn:hover {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(108, 245, 216, 0.1);
 }
 
 .doc-chat-entry .response {
@@ -2154,6 +2356,85 @@ button.loading::after {
     margin-top: 3px;
   }
 
+  /* Compact usage on mobile */
+  .hub-usage-compact {
+    padding: 6px 8px;
+    margin: 6px 0;
+  }
+
+  .hub-usage-header {
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+
+  .hub-usage-path {
+    font-size: 8px;
+  }
+
+  .hub-usage-grid {
+    gap: 3px;
+  }
+
+  .hub-usage-chip {
+    padding: 3px 6px;
+    font-size: 9px;
+    gap: 4px;
+  }
+
+  .hub-usage-chip-name {
+    max-width: 70px;
+  }
+
+  .hub-usage-chip-total {
+    font-size: 10px;
+  }
+
+  .hub-usage-chip-meta {
+    font-size: 8px;
+  }
+
+  /* Per-repo usage compact on mobile */
+  .usage-card-compact {
+    padding: 6px 8px;
+  }
+
+  .usage-header {
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+
+  .usage-total-badge {
+    font-size: 11px;
+    padding: 2px 6px;
+  }
+
+  .usage-events-badge {
+    font-size: 9px;
+    padding: 1px 4px;
+  }
+
+  .usage-breakdown {
+    gap: 2px;
+    margin-bottom: 4px;
+  }
+
+  .usage-stat {
+    padding: 3px 1px;
+  }
+
+  .usage-stat-val {
+    font-size: 10px;
+  }
+
+  .usage-stat-lbl {
+    font-size: 7px;
+  }
+
+  .usage-footer {
+    font-size: 8px;
+    padding-top: 3px;
+  }
+
   /* Modal on mobile */
   .modal-create-repo {
     max-width: 100%;
@@ -2618,6 +2899,13 @@ button.loading::after {
   .doc-chat-entry .prompt,
   .doc-chat-entry .response {
     font-size: 9px;
+  }
+
+  .doc-chat-entry .copy-prompt-btn {
+    opacity: 0.7; /* Always visible on mobile for touch */
+    width: 22px;
+    height: 22px;
+    font-size: 11px;
   }
 
   .doc-chat-entry-detail summary {

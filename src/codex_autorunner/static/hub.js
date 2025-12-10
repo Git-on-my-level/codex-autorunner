@@ -7,6 +7,9 @@ const lastScanEl = document.getElementById("hub-last-scan");
 const totalEl = document.getElementById("hub-count-total");
 const runningEl = document.getElementById("hub-count-running");
 const missingEl = document.getElementById("hub-count-missing");
+const hubUsageList = document.getElementById("hub-usage-list");
+const hubUsageMeta = document.getElementById("hub-usage-meta");
+const hubUsageRefresh = document.getElementById("hub-usage-refresh");
 
 function formatTime(isoString) {
   if (!isoString) return "never";
@@ -72,6 +75,71 @@ function renderSummary(repos) {
   if (missingEl) missingEl.textContent = missing.toString();
   if (lastScanEl) {
     lastScanEl.textContent = formatTimeCompact(hubData.last_scan_at);
+  }
+}
+
+function formatTokensCompact(val) {
+  if (val === null || val === undefined) return "0";
+  const num = Number(val);
+  if (Number.isNaN(num)) return val;
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(0)}k`;
+  return num.toLocaleString();
+}
+
+function renderHubUsage(data) {
+  if (!hubUsageList) return;
+  if (hubUsageMeta) {
+    hubUsageMeta.textContent = data?.codex_home || "–";
+  }
+  if (!data || !data.repos) {
+    hubUsageList.innerHTML = '<span class="muted small">Usage unavailable</span>';
+    return;
+  }
+  if (!data.repos.length && (!data.unmatched || !data.unmatched.events)) {
+    hubUsageList.innerHTML = '<span class="muted small">No token events</span>';
+    return;
+  }
+  hubUsageList.innerHTML = "";
+  const entries = [...data.repos].sort(
+    (a, b) => (b.totals?.total_tokens || 0) - (a.totals?.total_tokens || 0)
+  );
+  entries.forEach((repo) => {
+    const div = document.createElement("div");
+    div.className = "hub-usage-chip";
+    const totals = repo.totals || {};
+    const cached = totals.cached_input_tokens || 0;
+    const cachePercent = totals.input_tokens ? Math.round((cached / totals.input_tokens) * 100) : 0;
+    div.innerHTML = `
+      <span class="hub-usage-chip-name">${repo.id}</span>
+      <span class="hub-usage-chip-total">${formatTokensCompact(totals.total_tokens)}</span>
+      <span class="hub-usage-chip-meta">${repo.events ?? 0}ev · ${cachePercent}%↻</span>
+    `;
+    hubUsageList.appendChild(div);
+  });
+  if (data.unmatched && data.unmatched.events) {
+    const div = document.createElement("div");
+    div.className = "hub-usage-chip hub-usage-chip-unmatched";
+    const totals = data.unmatched.totals || {};
+    div.innerHTML = `
+      <span class="hub-usage-chip-name">other</span>
+      <span class="hub-usage-chip-total">${formatTokensCompact(totals.total_tokens)}</span>
+      <span class="hub-usage-chip-meta">${data.unmatched.events}ev</span>
+    `;
+    hubUsageList.appendChild(div);
+  }
+}
+
+async function loadHubUsage() {
+  if (hubUsageRefresh) hubUsageRefresh.disabled = true;
+  try {
+    const data = await api("/hub/usage");
+    renderHubUsage(data);
+  } catch (err) {
+    flash(err.message || "Failed to load usage", "error");
+    renderHubUsage(null);
+  } finally {
+    if (hubUsageRefresh) hubUsageRefresh.disabled = false;
   }
 }
 
@@ -200,6 +268,7 @@ async function refreshHub({ scan = false } = {}) {
     hubData = data;
     renderSummary(data.repos || []);
     renderRepos(data.repos || []);
+    await loadHubUsage();
   } catch (err) {
     flash(err.message || "Hub request failed", "error");
   } finally {
@@ -301,6 +370,7 @@ function attachHubHandlers() {
   scanBtn?.addEventListener("click", () => refreshHub({ scan: true }));
   quickScanBtn?.addEventListener("click", () => refreshHub({ scan: true }));
   refreshBtn?.addEventListener("click", () => refreshHub({ scan: false }));
+  hubUsageRefresh?.addEventListener("click", () => loadHubUsage());
   
   newRepoBtn?.addEventListener("click", showCreateRepoModal);
   createCancelBtn?.addEventListener("click", hideCreateRepoModal);

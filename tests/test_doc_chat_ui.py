@@ -47,6 +47,10 @@ def test_doc_chat_ui_stream_flow():
             this.children.push(child);
             return child;
           }}
+
+          addEventListener(event, handler) {{
+            // stub - do nothing
+          }}
         }}
 
         const elements = new Map();

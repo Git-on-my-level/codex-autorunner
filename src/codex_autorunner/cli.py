@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -10,6 +11,7 @@ from .bootstrap import seed_hub_files, seed_repo_files
 from .config import ConfigError, HubConfig, load_config
 from .engine import Engine, LockError, clear_stale_lock, doctor
 from .hub import HubSupervisor
+from .manifest import load_manifest
 from .server import create_app, create_hub_app
 from .state import load_state, save_state, RunnerState, now_iso
 from .utils import RepoNotFoundError, default_editor, find_repo_root
@@ -18,6 +20,13 @@ from .spec_ingest import (
     generate_docs_from_spec,
     write_ingested_docs,
     clear_work_docs,
+)
+from .usage import (
+    UsageError,
+    default_codex_home,
+    parse_iso_datetime,
+    summarize_hub_usage,
+    summarize_repo_usage,
 )
 
 app = typer.Typer(add_completion=False)
@@ -130,6 +139,109 @@ def status(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")
     typer.echo(f"Last finish: {state.last_run_finished_at}")
     typer.echo(f"Runner pid: {state.runner_pid}")
     typer.echo(f"Outstanding TODO items: {len(outstanding)}")
+
+
+@app.command()
+def usage(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path; defaults to CWD"),
+    codex_home: Optional[Path] = typer.Option(
+        None, "--codex-home", help="Override CODEX_HOME (defaults to env or ~/.codex)"
+    ),
+    since: Optional[str] = typer.Option(
+        None, "--since", help="ISO timestamp filter, e.g. 2025-12-01 or 2025-12-01T12:00Z"
+    ),
+    until: Optional[str] = typer.Option(
+        None, "--until", help="Upper bound ISO timestamp filter"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+):
+    """Show Codex token usage for a repo or hub by reading CODEX_HOME session logs."""
+    try:
+        config = load_config(repo or Path.cwd())
+    except ConfigError as exc:
+        raise typer.Exit(str(exc))
+
+    try:
+        since_dt = parse_iso_datetime(since)
+        until_dt = parse_iso_datetime(until)
+    except UsageError as exc:
+        raise typer.Exit(str(exc))
+
+    codex_root = (codex_home or default_codex_home()).expanduser()
+
+    if isinstance(config, HubConfig):
+        manifest = load_manifest(config.manifest_path, config.root)
+        repo_map = [(entry.id, (config.root / entry.path)) for entry in manifest.repos]
+        per_repo, unmatched = summarize_hub_usage(
+            repo_map,
+            codex_root,
+            since=since_dt,
+            until=until_dt,
+        )
+        if output_json:
+            payload = {
+                "mode": "hub",
+                "hub_root": str(config.root),
+                "codex_home": str(codex_root),
+                "since": since,
+                "until": until,
+                "repos": {repo_id: summary.to_dict() for repo_id, summary in per_repo.items()},
+                "unmatched": unmatched.to_dict(),
+            }
+            typer.echo(json.dumps(payload, indent=2))
+            return
+
+        typer.echo(f"Hub: {config.root}")
+        typer.echo(f"CODEX_HOME: {codex_root}")
+        typer.echo(f"Repos: {len(per_repo)}")
+        for repo_id, summary in per_repo.items():
+            typer.echo(
+                f"- {repo_id}: total={summary.totals.total_tokens} "
+                f"(input={summary.totals.input_tokens}, cached={summary.totals.cached_input_tokens}, "
+                f"output={summary.totals.output_tokens}, reasoning={summary.totals.reasoning_output_tokens}) "
+                f"events={summary.events}"
+            )
+        if unmatched.events or unmatched.totals.total_tokens:
+            typer.echo(
+                f"- unmatched: total={unmatched.totals.total_tokens} events={unmatched.events}"
+            )
+        return
+
+    engine = _require_repo_config(repo)
+    summary = summarize_repo_usage(
+        engine.repo_root,
+        codex_root,
+        since=since_dt,
+        until=until_dt,
+    )
+
+    if output_json:
+        payload = {
+            "mode": "repo",
+            "repo": str(engine.repo_root),
+            "codex_home": str(codex_root),
+            "since": since,
+            "until": until,
+            "usage": summary.to_dict(),
+        }
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    typer.echo(f"Repo: {engine.repo_root}")
+    typer.echo(f"CODEX_HOME: {codex_root}")
+    typer.echo(
+        f"Totals: total={summary.totals.total_tokens} "
+        f"(input={summary.totals.input_tokens}, cached={summary.totals.cached_input_tokens}, "
+        f"output={summary.totals.output_tokens}, reasoning={summary.totals.reasoning_output_tokens})"
+    )
+    typer.echo(f"Events counted: {summary.events}")
+    if summary.latest_rate_limits:
+        primary = summary.latest_rate_limits.get("primary", {}) or {}
+        secondary = summary.latest_rate_limits.get("secondary", {}) or {}
+        typer.echo(
+            f"Latest rate limits: primary_used={primary.get('used_percent')}%/{primary.get('window_minutes')}m, "
+            f"secondary_used={secondary.get('used_percent')}%/{secondary.get('window_minutes')}m"
+        )
 
 
 @app.command()

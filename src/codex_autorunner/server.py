@@ -31,6 +31,14 @@ from .spec_ingest import (
     write_ingested_docs,
     clear_work_docs,
 )
+from .usage import (
+    UsageError,
+    default_codex_home,
+    parse_iso_datetime,
+    summarize_hub_usage,
+    summarize_repo_usage,
+)
+from .manifest import load_manifest
 
 
 class RunnerManager:
@@ -257,6 +265,28 @@ def create_app(repo_root: Optional[Path] = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
         return docs
+
+    @app.get("/api/usage")
+    def get_usage(since: Optional[str] = None, until: Optional[str] = None):
+        try:
+            since_dt = parse_iso_datetime(since)
+            until_dt = parse_iso_datetime(until)
+        except UsageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        summary = summarize_repo_usage(
+            engine.repo_root,
+            default_codex_home(),
+            since=since_dt,
+            until=until_dt,
+        )
+        return {
+            "mode": "repo",
+            "repo": str(engine.repo_root),
+            "codex_home": str(default_codex_home()),
+            "since": since,
+            "until": until,
+            **summary.to_dict(),
+        }
 
     @app.get("/api/state")
     def get_state():
@@ -563,6 +593,40 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
 
     initial_snapshots = supervisor.scan()
     _refresh_mounts(initial_snapshots)
+
+    @app.get("/hub/usage")
+    def hub_usage(since: Optional[str] = None, until: Optional[str] = None):
+        try:
+            since_dt = parse_iso_datetime(since)
+            until_dt = parse_iso_datetime(until)
+        except UsageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        manifest = load_manifest(config.manifest_path, config.root)
+        repo_map = [(repo.id, (config.root / repo.path)) for repo in manifest.repos]
+        per_repo, unmatched = summarize_hub_usage(
+            repo_map,
+            default_codex_home(),
+            since=since_dt,
+            until=until_dt,
+        )
+        return {
+            "mode": "hub",
+            "hub_root": str(config.root),
+            "codex_home": str(default_codex_home()),
+            "since": since,
+            "until": until,
+            "repos": [
+                {
+                    "id": repo_id,
+                    "events": summary.events,
+                    "totals": summary.totals.to_dict(),
+                    "latest_rate_limits": summary.latest_rate_limits,
+                }
+                for repo_id, summary in per_repo.items()
+            ],
+            "unmatched": unmatched.to_dict(),
+        }
 
     @app.get("/hub/repos")
     def list_repos():

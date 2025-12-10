@@ -18,6 +18,9 @@ const chatState = Object.fromEntries(
   DOC_TYPES.map((k) => [k, createChatState()])
 );
 
+// Track history navigation position for up/down arrow prompt recall
+let historyNavIndex = -1;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // UI Element References
 // ─────────────────────────────────────────────────────────────────────────────
@@ -244,7 +247,7 @@ function renderChat(kind = activeDoc) {
     chatUI.hint.textContent = statusText;
     chatUI.hint.classList.add("loading");
   } else {
-    chatUI.hint.textContent = "Shift+Enter to send";
+    chatUI.hint.textContent = "Shift+Enter to send · ↑ for history";
     chatUI.hint.classList.remove("loading");
   }
 
@@ -311,10 +314,30 @@ function renderChatHistory(state) {
     const wrapper = document.createElement("div");
     wrapper.className = `doc-chat-entry ${entry.status}`;
 
+    // Prompt row with copy button
+    const promptRow = document.createElement("div");
+    promptRow.className = "prompt-row";
+
     const prompt = document.createElement("div");
     prompt.className = "prompt";
     prompt.textContent = truncateText(entry.prompt, 60);
     prompt.title = entry.prompt;
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-prompt-btn";
+    copyBtn.title = "Copy to input";
+    copyBtn.innerHTML = "↑";
+    copyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      chatUI.input.value = entry.prompt;
+      autoResizeTextarea(chatUI.input);
+      chatUI.input.focus();
+      historyNavIndex = -1;
+      flash("Prompt restored to input");
+    });
+
+    promptRow.appendChild(prompt);
+    promptRow.appendChild(copyBtn);
 
     const response = document.createElement("div");
     response.className = "response";
@@ -359,7 +382,7 @@ function renderChatHistory(state) {
     meta.appendChild(dot);
     meta.appendChild(stamp);
 
-    wrapper.appendChild(prompt);
+    wrapper.appendChild(promptRow);
     wrapper.appendChild(response);
     wrapper.appendChild(detail);
     wrapper.appendChild(meta);
@@ -781,20 +804,67 @@ export function initDocs() {
   reloadPatch(activeDoc, true);
 
   // Shift+Enter sends, Enter adds newline (default textarea behavior)
+  // Up/Down arrows navigate prompt history when input is empty
   chatUI.input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.shiftKey) {
       e.preventDefault();
       sendDocChat();
+      return;
+    }
+
+    // Up arrow: recall previous prompts from history
+    if (e.key === "ArrowUp") {
+      const state = getChatState(activeDoc);
+      const isEmpty = chatUI.input.value.trim() === "";
+      const atStart = chatUI.input.selectionStart === 0;
+      if ((isEmpty || atStart) && state.history.length > 0) {
+        e.preventDefault();
+        const maxIndex = state.history.length - 1;
+        if (historyNavIndex < maxIndex) {
+          historyNavIndex++;
+          chatUI.input.value = state.history[historyNavIndex].prompt || "";
+          autoResizeTextarea(chatUI.input);
+          // Move cursor to end
+          chatUI.input.setSelectionRange(
+            chatUI.input.value.length,
+            chatUI.input.value.length
+          );
+        }
+      }
+      return;
+    }
+
+    // Down arrow: navigate forward in history or clear
+    if (e.key === "ArrowDown") {
+      const state = getChatState(activeDoc);
+      const atEnd = chatUI.input.selectionStart === chatUI.input.value.length;
+      if (historyNavIndex >= 0 && atEnd) {
+        e.preventDefault();
+        historyNavIndex--;
+        if (historyNavIndex >= 0) {
+          chatUI.input.value = state.history[historyNavIndex].prompt || "";
+        } else {
+          chatUI.input.value = "";
+        }
+        autoResizeTextarea(chatUI.input);
+        chatUI.input.setSelectionRange(
+          chatUI.input.value.length,
+          chatUI.input.value.length
+        );
+      }
+      return;
     }
   });
 
-  // Clear errors on input and auto-resize textarea
+  // Clear errors on input, auto-resize textarea, and reset history navigation
   chatUI.input.addEventListener("input", () => {
     const state = getChatState(activeDoc);
     if (state.error) {
       state.error = "";
       renderChat();
     }
+    // Reset history navigation when user types
+    historyNavIndex = -1;
     autoResizeTextarea(chatUI.input);
   });
 
