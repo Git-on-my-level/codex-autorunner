@@ -12,7 +12,7 @@ from .engine import Engine, LockError, clear_stale_lock, doctor
 from .hub import HubSupervisor
 from .server import create_app, create_hub_app
 from .state import load_state, save_state, RunnerState, now_iso
-from .utils import default_editor
+from .utils import RepoNotFoundError, default_editor, find_repo_root
 from .spec_ingest import (
     SpecIngestError,
     generate_docs_from_spec,
@@ -47,6 +47,20 @@ def _require_hub_config(path: Optional[Path]) -> HubConfig:
 app.add_typer(hub_app, name="hub")
 
 
+def _has_nested_git(path: Path) -> bool:
+    try:
+        for child in path.iterdir():
+            if not child.is_dir() or child.is_symlink():
+                continue
+            if (child / ".git").exists():
+                return True
+            if _has_nested_git(child):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 @app.command()
 def init(
     path: Optional[Path] = typer.Argument(None, help="Repo path; defaults to CWD"),
@@ -54,12 +68,16 @@ def init(
     git_init: bool = typer.Option(False, "--git-init", help="Run git init if missing"),
 ):
     """Initialize a repo for Codex autorunner."""
-    repo_root = path or Path.cwd()
-    repo_root = repo_root.resolve()
-    git_dir = repo_root / ".git"
-    if not git_dir.exists():
+    start_path = (path or Path.cwd()).resolve()
+    git_required = True
+    try:
+        repo_root = find_repo_root(start_path)
+    except RepoNotFoundError:
+        repo_root = start_path
         if git_init:
             subprocess.run(["git", "init"], cwd=repo_root, check=False)
+        elif _has_nested_git(repo_root):
+            git_required = False
         else:
             raise typer.Exit(
                 "No .git directory found; rerun with --git-init to create one"
@@ -68,7 +86,7 @@ def init(
     ca_dir = repo_root / ".codex-autorunner"
     ca_dir.mkdir(parents=True, exist_ok=True)
 
-    seed_repo_files(repo_root, force=force)
+    seed_repo_files(repo_root, force=force, git_required=git_required)
     typer.echo(f"Initialized {ca_dir}")
     typer.echo("Init complete")
 
@@ -309,6 +327,32 @@ def serve(
     bind_port = port or engine.config.server_port
     typer.echo(f"Serving repo on http://{bind_host}:{bind_port}")
     uvicorn.run(app_instance, host=bind_host, port=bind_port)
+
+
+@hub_app.command("create")
+def hub_create(
+    repo_id: str = typer.Argument(..., help="Repo id to create and initialize"),
+    repo_path: Optional[Path] = typer.Option(
+        None,
+        "--repo-path",
+        help="Custom repo path relative to hub repos_root",
+    ),
+    path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+    force: bool = typer.Option(False, "--force", help="Allow existing directory"),
+    git_init: bool = typer.Option(
+        True, "--git-init/--no-git-init", help="Run git init in the new repo"
+    ),
+):
+    """Create a new git repo under the hub and initialize codex-autorunner files."""
+    config = _require_hub_config(path)
+    supervisor = HubSupervisor(config)
+    try:
+        snapshot = supervisor.create_repo(
+            repo_id, repo_path, git_init=git_init, force=force
+        )
+    except Exception as exc:
+        raise typer.Exit(str(exc))
+    typer.echo(f"Created repo {snapshot.id} at {snapshot.path}")
 
 
 @hub_app.command("serve")

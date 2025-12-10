@@ -1,6 +1,7 @@
 import dataclasses
 import enum
 import threading
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -8,7 +9,7 @@ from .bootstrap import seed_repo_files
 from .config import HubConfig, load_config
 from .discovery import DiscoveryRecord, discover_and_init
 from .engine import Engine, LockError, clear_stale_lock
-from .manifest import Manifest, ManifestRepo, load_manifest
+from .manifest import Manifest, ManifestRepo, load_manifest, save_manifest
 from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
 
@@ -281,6 +282,50 @@ class HubSupervisor:
         if not repo_path.exists():
             raise ValueError(f"Repo {repo_id} missing on disk")
         seed_repo_files(repo_path, force=False, git_required=False)
+        return self._snapshot_for_repo(repo_id)
+
+    def create_repo(
+        self,
+        repo_id: str,
+        repo_path: Optional[Path] = None,
+        git_init: bool = True,
+        force: bool = False,
+    ) -> RepoSnapshot:
+        base_dir = self.hub_config.repos_root
+        target = repo_path if repo_path is not None else Path(repo_id)
+        if not target.is_absolute():
+            target = (base_dir / target).resolve()
+        else:
+            target = target.resolve()
+
+        try:
+            target.relative_to(base_dir)
+        except ValueError:
+            raise ValueError(f"Repo path must live under repos_root ({base_dir})")
+
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        existing = manifest.get(repo_id)
+        if existing:
+            existing_path = (self.hub_config.root / existing.path).resolve()
+            if existing_path != target:
+                raise ValueError(
+                    f"Repo id {repo_id} already exists at {existing.path}; choose a different id"
+                )
+
+        if target.exists() and not force:
+            raise ValueError(f"Repo path already exists: {target}")
+
+        target.mkdir(parents=True, exist_ok=True)
+
+        if git_init and not (target / ".git").exists():
+            subprocess.run(["git", "init"], cwd=target, check=False)
+        if git_init and not (target / ".git").exists():
+            raise ValueError(f"git init failed for {target}")
+
+        seed_repo_files(target, force=force)
+        manifest.ensure_repo(self.hub_config.root, target, repo_id=repo_id)
+        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+
         return self._snapshot_for_repo(repo_id)
 
     def _ensure_runner(

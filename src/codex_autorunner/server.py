@@ -559,6 +559,36 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
             "repos": [repo.to_dict(config.root) for repo in snapshots],
         }
 
+    @app.post("/hub/repos")
+    def create_repo(payload: Optional[dict] = None):
+        if not payload or not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+        repo_id = payload.get("id") or payload.get("repo_id")
+        if not repo_id:
+            raise HTTPException(status_code=400, detail="Missing repo id")
+        repo_path_val = payload.get("path")
+        repo_path = Path(repo_path_val) if repo_path_val else None
+        git_init = bool(payload.get("git_init", True))
+        force = bool(payload.get("force", False))
+        try:
+            app.state.logger.info(
+                "Hub create repo id=%s path=%s git_init=%s force=%s",
+                repo_id,
+                repo_path_val,
+                git_init,
+                force,
+            )
+        except Exception:
+            pass
+        try:
+            snapshot = supervisor.create_repo(
+                str(repo_id), repo_path=repo_path, git_init=git_init, force=force
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        _refresh_mounts([snapshot])
+        return snapshot.to_dict(config.root)
+
     @app.post("/hub/repos/{repo_id}/run")
     def run_repo(repo_id: str, payload: Optional[dict] = None):
         once = False
