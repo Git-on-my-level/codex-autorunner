@@ -31,7 +31,7 @@ Inputs:
 </EXISTING_OPINIONS>
 
 Tasks:
-1) Generate an ordered TODO checklist of high-level tasks derived from the SPEC (use - [ ] bullets).
+1) Generate an ordered TODO checklist of high-level tasks derived from the SPEC (use - [ ] bullets). Each TODO item should be a multi-hour long task. You should also think about how to leverage in-context learning that the agents will have. Meaning that related items should be in one TODO so that the agent only has to learn about them once, instead of potentially multiple agents needing to relearn the same problem space.
 2) Generate PROGRESS that preserves meaningful existing history and notes any inferred status from the SPEC.
 3) Generate OPINIONS by merging existing constraints with SPEC requirements/preferences; keep concise and non-duplicative.
 
