@@ -3,7 +3,8 @@ from typing import Optional
 
 import yaml
 
-from .config import CONFIG_FILENAME, DEFAULT_REPO_CONFIG
+from .config import CONFIG_FILENAME, DEFAULT_REPO_CONFIG, DEFAULT_HUB_CONFIG
+from .manifest import load_manifest
 from .utils import atomic_write
 
 GITIGNORE_CONTENT = "*\n!/.gitignore\n"
@@ -34,6 +35,16 @@ def write_repo_config(repo_root: Path, force: bool = False) -> Path:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(DEFAULT_REPO_CONFIG, f, sort_keys=False)
+    return config_path
+
+
+def write_hub_config(hub_root: Path, force: bool = False) -> Path:
+    config_path = hub_root / CONFIG_FILENAME
+    if config_path.exists() and not force:
+        return config_path
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(DEFAULT_HUB_CONFIG, f, sort_keys=False)
     return config_path
 
 
@@ -69,3 +80,27 @@ def seed_repo_files(repo_root: Path, force: bool = False, git_required: bool = T
     _seed_doc(ca_dir / "PROGRESS.md", force, "# Progress\n\n")
     _seed_doc(ca_dir / "OPINIONS.md", force, sample_opinions())
     _seed_doc(ca_dir / "SPEC.md", force, sample_spec())
+
+
+def seed_hub_files(hub_root: Path, force: bool = False) -> None:
+    """
+    Initialize a hub workspace with defaults and a manifest.
+    """
+    ca_dir = hub_root / ".codex-autorunner"
+    ca_dir.mkdir(parents=True, exist_ok=True)
+
+    gitignore_path = ca_dir / ".gitignore"
+    if not gitignore_path.exists() or force:
+        gitignore_path.write_text(GITIGNORE_CONTENT, encoding="utf-8")
+
+    write_hub_config(hub_root, force=force)
+
+    manifest_path = hub_root / DEFAULT_HUB_CONFIG["hub"]["manifest"]
+    load_manifest(manifest_path, hub_root)
+
+    hub_state_path = ca_dir / "hub_state.json"
+    if not hub_state_path.exists() or force:
+        atomic_write(
+            hub_state_path,
+            '{\n  "last_scan_at": null,\n  "repos": []\n}\n',
+        )

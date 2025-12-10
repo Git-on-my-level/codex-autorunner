@@ -6,7 +6,7 @@ from typing import Optional
 import typer
 import uvicorn
 
-from .bootstrap import seed_repo_files
+from .bootstrap import seed_hub_files, seed_repo_files
 from .config import ConfigError, HubConfig, load_config
 from .engine import Engine, LockError, clear_stale_lock, doctor
 from .hub import HubSupervisor
@@ -66,28 +66,53 @@ def init(
     path: Optional[Path] = typer.Argument(None, help="Repo path; defaults to CWD"),
     force: bool = typer.Option(False, "--force", help="Overwrite existing files"),
     git_init: bool = typer.Option(False, "--git-init", help="Run git init if missing"),
+    mode: str = typer.Option(
+        "auto",
+        "--mode",
+        help="Initialization mode: repo, hub, or auto (default)",
+    ),
 ):
     """Initialize a repo for Codex autorunner."""
     start_path = (path or Path.cwd()).resolve()
+    mode = (mode or "auto").lower()
+    if mode not in ("auto", "repo", "hub"):
+        raise typer.Exit("Invalid mode; expected repo, hub, or auto")
+
     git_required = True
-    try:
-        repo_root = find_repo_root(start_path)
-    except RepoNotFoundError:
-        repo_root = start_path
-        if git_init:
-            subprocess.run(["git", "init"], cwd=repo_root, check=False)
-        elif _has_nested_git(repo_root):
+    target_root: Optional[Path] = None
+    selected_mode = mode
+
+    # First try to treat this as a repo init if requested or auto-detected via .git.
+    if mode in ("auto", "repo"):
+        try:
+            target_root = find_repo_root(start_path)
+            selected_mode = "repo"
+        except RepoNotFoundError:
+            target_root = None
+
+    # If no git root was found, decide between hub or repo-with-git-init.
+    if target_root is None:
+        target_root = start_path
+        if mode in ("hub",) or (mode == "auto" and _has_nested_git(target_root)):
+            selected_mode = "hub"
             git_required = False
+        elif git_init:
+            selected_mode = "repo"
+            subprocess.run(["git", "init"], cwd=target_root, check=False)
         else:
             raise typer.Exit(
                 "No .git directory found; rerun with --git-init to create one"
             )
 
-    ca_dir = repo_root / ".codex-autorunner"
+    ca_dir = target_root / ".codex-autorunner"
     ca_dir.mkdir(parents=True, exist_ok=True)
 
-    seed_repo_files(repo_root, force=force, git_required=git_required)
-    typer.echo(f"Initialized {ca_dir}")
+    if selected_mode == "hub":
+        seed_hub_files(target_root, force=force)
+        typer.echo(f"Initialized hub at {ca_dir}")
+    else:
+        seed_repo_files(target_root, force=force, git_required=git_required)
+        typer.echo(f"Initialized repo at {ca_dir}")
     typer.echo("Init complete")
 
 

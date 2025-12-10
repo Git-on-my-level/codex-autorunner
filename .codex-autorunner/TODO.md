@@ -1,3 +1,0 @@
-- [x] Ship hub-ready config + discovery foundation: v2 schema for hub/repo modes, logging defaults + rotation, nearest-config lookup, manifest management, and one-level scan with auto-init seeding of .codex-autorunner/.
-- [x] Build the supervisor + surfaces: HubSupervisor wired to RepoRunner with status/lock modeling and hub_state snapshots, /hub API with per-repo route mounting, and CLI flow for hub serve/scan plus clear errors when commands run in the wrong mode.
-- [x] Deliver UX + guardrails: Hub home UI (list, badges, last run, quick actions), ensure isolated rotating log handlers per hub/repo, and regression coverage for manifest/discovery/auto-init, API, UI home, log rotation, and parallel run smoke tests.

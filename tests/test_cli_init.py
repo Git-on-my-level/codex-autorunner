@@ -19,6 +19,8 @@ def test_init_from_subdir_walks_to_repo_root(tmp_path: Path):
     config_path = repo_root / ".codex-autorunner" / "config.yml"
     assert config_path.exists()
     assert not (nested / ".codex-autorunner").exists()
+    contents = config_path.read_text(encoding="utf-8")
+    assert "mode: repo" in contents
 
 
 def test_init_allows_child_git_repos_without_parent(tmp_path: Path):
@@ -35,6 +37,8 @@ def test_init_allows_child_git_repos_without_parent(tmp_path: Path):
     assert result.exit_code == 0
     config_path = workspace / ".codex-autorunner" / "config.yml"
     assert config_path.exists()
+    contents = config_path.read_text(encoding="utf-8")
+    assert "mode: hub" in contents
 
 
 def test_init_walks_nested_child_git_repos(tmp_path: Path):
@@ -46,7 +50,10 @@ def test_init_walks_nested_child_git_repos(tmp_path: Path):
     result = runner.invoke(app, ["init", str(workspace)])
 
     assert result.exit_code == 0
-    assert (workspace / ".codex-autorunner" / "config.yml").exists()
+    config_path = workspace / ".codex-autorunner" / "config.yml"
+    assert config_path.exists()
+    contents = config_path.read_text(encoding="utf-8")
+    assert "mode: hub" in contents
 
 
 def test_create_app_allows_parent_without_git(tmp_path: Path):
@@ -58,8 +65,8 @@ def test_create_app_allows_parent_without_git(tmp_path: Path):
     init_result = runner.invoke(app, ["init", str(workspace)])
     assert init_result.exit_code == 0
 
-    # Should not raise even though workspace has no .git
-    from codex_autorunner.server import create_app
+    # Should serve hub even though workspace has no .git
+    from codex_autorunner.server import create_hub_app
 
-    app_instance = create_app(workspace)
+    app_instance = create_hub_app(workspace)
     assert app_instance is not None

@@ -1,6 +1,0 @@
-- Keep hub thin: orchestrate and reflect per-repo state; repos remain the source of truth.
-- Manifest is append-only, normalized to hub-relative paths, and missing repos stay listed instead of being removed.
-- Discovery is shallow (depth=1) and prefers auto-init; initialization must drop a .codex-autorunner/.gitignore with "*" and "!/.gitignore".
-- Respect repo locks; only clear on explicit resume when stale, never auto-override.
-- Use separate rotating file handlers per hub/repo; avoid shared handlers and prefer rotation between runs.
-- Frontend routing must be base-path aware so per-repo apps mounted at `/repos/{id}` keep working; avoid hardcoding `/api` roots.

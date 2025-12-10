@@ -43,6 +43,20 @@ function setButtonLoading(scanning) {
   });
 }
 
+function formatTimeCompact(isoString) {
+  if (!isoString) return "–";
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return isoString;
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return date.toLocaleDateString();
+}
+
 function renderSummary(repos) {
   const running = repos.filter((r) => r.status === "running").length;
   const missing = repos.filter((r) => !r.exists_on_disk).length;
@@ -50,7 +64,7 @@ function renderSummary(repos) {
   if (runningEl) runningEl.textContent = running.toString();
   if (missingEl) missingEl.textContent = missing.toString();
   if (lastScanEl) {
-    lastScanEl.textContent = `Last scan: ${formatTime(hubData.last_scan_at)}`;
+    lastScanEl.textContent = formatTimeCompact(hubData.last_scan_at);
   }
 }
 
@@ -89,6 +103,15 @@ function renderRepos(repos) {
     card.className = "hub-repo-card";
     card.dataset.repoId = repo.id;
 
+    // Make card clickable only for repos that are actually mounted
+    const canNavigate = repo.mounted === true;
+    if (canNavigate) {
+      card.classList.add("hub-repo-clickable");
+      card.dataset.href = `/repos/${repo.id}/`;
+      card.setAttribute("role", "link");
+      card.setAttribute("tabindex", "0");
+    }
+
     const actions = buildActions(repo)
       .map(
         (action) =>
@@ -103,16 +126,28 @@ function renderRepos(repos) {
     const initBadge = !repo.initialized
       ? '<span class="pill pill-small pill-warn">uninitialized</span>'
       : "";
-    const note =
-      !repo.exists_on_disk || repo.init_error
-        ? `<div class="hub-repo-note">${repo.init_error || "Repo missing on disk"}</div>`
-        : "";
+    
+    // Build note for errors
+    let noteText = "";
+    if (!repo.exists_on_disk) {
+      noteText = "Repo missing on disk";
+    } else if (repo.init_error) {
+      noteText = repo.init_error;
+    } else if (repo.mount_error) {
+      noteText = `Cannot open: ${repo.mount_error}`;
+    }
+    const note = noteText ? `<div class="hub-repo-note">${noteText}</div>` : "";
+
+    // Show open indicator only for navigable repos
+    const openIndicator = canNavigate
+      ? '<span class="hub-repo-open-indicator">→</span>'
+      : '';
 
     card.innerHTML = `
       <div class="hub-repo-main">
-        <div>
+        <div class="hub-repo-info">
           <div class="hub-repo-name">
-            <a class="hub-repo-link" href="/repos/${repo.id}/">${repo.display_name}</a>
+            <span class="hub-repo-title">${repo.display_name}</span>
             <span class="hub-repo-path">${repo.path}</span>
           </div>
           <div class="hub-repo-meta">
@@ -123,8 +158,8 @@ function renderRepos(repos) {
           </div>
         </div>
         <div class="hub-repo-actions">
-          ${actions || '<span class="muted small">No actions</span>'}
-          <a class="ghost sm" href="/repos/${repo.id}/">Open</a>
+          ${actions || '<span class="muted small">–</span>'}
+          ${openIndicator}
         </div>
       </div>
       ${note}
@@ -192,12 +227,37 @@ function attachHubHandlers() {
   repoListEl?.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+
+    // Handle action buttons - stop propagation to prevent card navigation
     const btn = target.closest("button[data-action]");
-    if (!btn) return;
-    const action = btn.dataset.action;
-    const repoId = btn.dataset.repo;
-    if (!action || !repoId) return;
-    handleRepoAction(repoId, action);
+    if (btn) {
+      event.stopPropagation();
+      const action = btn.dataset.action;
+      const repoId = btn.dataset.repo;
+      if (action && repoId) {
+        handleRepoAction(repoId, action);
+      }
+      return;
+    }
+
+    // Handle card click for navigation
+    const card = target.closest(".hub-repo-clickable");
+    if (card && card.dataset.href) {
+      window.location.href = card.dataset.href;
+    }
+  });
+
+  // Support keyboard navigation for cards
+  repoListEl?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.classList.contains("hub-repo-clickable")) {
+        event.preventDefault();
+        if (target.dataset.href) {
+          window.location.href = target.dataset.href;
+        }
+      }
+    }
   });
 }
 

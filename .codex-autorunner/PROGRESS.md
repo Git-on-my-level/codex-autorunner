@@ -1,4 +1,0 @@
-- SPEC ingested for hub/supervisor mode; implementation not yet started.
-- Implemented hub foundation: v2 hub/repo config with nearest-config lookup, logging defaults + rotation, manifest helpers, and one-level discovery/auto-init (including .gitignore seeding), with new tests covering manifest normalization, discovery init, and config preference.
-- Built HubSupervisor/RepoRunner orchestration with hub_state snapshots, hub `/hub/repos` APIs mounting per-repo apps, and hub CLI commands (serve/scan) plus mode guards for repo commands, with new supervisor/API tests.
-- Delivered hub UX + guardrails: added hub home UI with repo status badges, run summaries, quick actions, and base-path aware frontend routing; introduced rotating logger helper for isolated hub/repo handlers and wired server endpoints; expanded tests for hub home + per-repo mounting, log handler rotation isolation, and parallel run smoke. Tests: `pytest -q`.

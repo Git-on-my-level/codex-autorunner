@@ -516,21 +516,50 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
     static_dir = _static_dir()
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     mounted_repos: set[str] = set()
+    mount_errors: dict[str, str] = {}
 
-    def _mount_repo(prefix: str, repo_path: Path) -> None:
+    def _mount_repo(prefix: str, repo_path: Path) -> bool:
         if prefix in mounted_repos:
-            return
+            return True
+        if prefix in mount_errors:
+            return False
         try:
             sub_app = create_app(repo_path)
-        except Exception:
-            return
+        except ConfigError as exc:
+            mount_errors[prefix] = str(exc)
+            try:
+                app.state.logger.warning("Cannot mount repo %s: %s", prefix, exc)
+            except Exception:
+                pass
+            return False
+        except Exception as exc:
+            mount_errors[prefix] = str(exc)
+            try:
+                app.state.logger.warning("Cannot mount repo %s: %s", prefix, exc)
+            except Exception:
+                pass
+            return False
         app.mount(f"/repos/{prefix}", sub_app)
         mounted_repos.add(prefix)
+        mount_errors.pop(prefix, None)
+        return True
 
     def _refresh_mounts(snapshots):
         for snap in snapshots:
             if snap.initialized and snap.exists_on_disk:
                 _mount_repo(snap.id, snap.path)
+
+    def _add_mount_info(repo_dict: dict) -> dict:
+        """Add mount_status to repo dict for UI to know if navigation is possible."""
+        repo_id = repo_dict.get("id")
+        if repo_id in mounted_repos:
+            repo_dict["mounted"] = True
+        elif repo_id in mount_errors:
+            repo_dict["mounted"] = False
+            repo_dict["mount_error"] = mount_errors[repo_id]
+        else:
+            repo_dict["mounted"] = False
+        return repo_dict
 
     initial_snapshots = supervisor.scan()
     _refresh_mounts(initial_snapshots)
@@ -545,7 +574,7 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
         _refresh_mounts(snapshots)
         return {
             "last_scan_at": supervisor.state.last_scan_at,
-            "repos": [repo.to_dict(config.root) for repo in snapshots],
+            "repos": [_add_mount_info(repo.to_dict(config.root)) for repo in snapshots],
         }
 
     @app.post("/hub/repos/scan")
@@ -558,7 +587,7 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
         _refresh_mounts(snapshots)
         return {
             "last_scan_at": supervisor.state.last_scan_at,
-            "repos": [repo.to_dict(config.root) for repo in snapshots],
+            "repos": [_add_mount_info(repo.to_dict(config.root)) for repo in snapshots],
         }
 
     @app.post("/hub/repos")
@@ -589,7 +618,7 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _refresh_mounts([snapshot])
-        return snapshot.to_dict(config.root)
+        return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/repos/{repo_id}/run")
     def run_repo(repo_id: str, payload: Optional[dict] = None):
@@ -607,7 +636,7 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _refresh_mounts([snapshot])
-        return snapshot.to_dict(config.root)
+        return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/repos/{repo_id}/stop")
     def stop_repo(repo_id: str):
@@ -619,7 +648,7 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
             snapshot = supervisor.stop_repo(repo_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        return snapshot.to_dict(config.root)
+        return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/repos/{repo_id}/resume")
     def resume_repo(repo_id: str, payload: Optional[dict] = None):
@@ -637,7 +666,7 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _refresh_mounts([snapshot])
-        return snapshot.to_dict(config.root)
+        return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/repos/{repo_id}/kill")
     def kill_repo(repo_id: str):
@@ -649,7 +678,7 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
             snapshot = supervisor.kill_repo(repo_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        return snapshot.to_dict(config.root)
+        return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/repos/{repo_id}/init")
     def init_repo(repo_id: str):
@@ -662,7 +691,7 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _refresh_mounts([snapshot])
-        return snapshot.to_dict(config.root)
+        return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.get("/", include_in_schema=False)
     def hub_index():
