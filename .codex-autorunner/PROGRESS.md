@@ -1,8 +1,4 @@
-- New initiative: design/implement per-doc “chat with this doc” that edits TODO/PROGRESS/OPINIONS/SPEC automatically via backend agent and updates UI in-place
-- Added Docs tab chat panel UI per doc: new panel markup/styles, Enter-to-send/cancel controls, inline errors, streaming token rendering, and page-local history wired to POST /api/docs/{kind}/chat; no tests run (frontend only)
-- Wired doc chat UI to apply backend responses: parse JSON error details, prompt before overwriting unsaved edits, and update editor/cache/preview (including TODO counts/state refresh) when new doc content returns; no tests run (frontend only)
-- Added backend doc chat endpoint with validation, repo/per-doc 409 guards, and SSE/non-streaming responses backed by a stub DocChatService (returns current doc for now); installed dev deps and ran `pytest` (passes)
-- Implemented doc-focused agent runner: builds prompt from all work docs plus recent run summary, runs Codex CLI with a timeout and doc-chat log markers, parses optional `Agent:` summary before updated doc, and writes the target doc atomically; ran `python -m pytest` (passes)
-- Hardened doc chat validation: require a document body after any `Agent:` summary, reject outputs leaking prompt markers, and enforce TODO checkbox formatting before writing atomically; ran `python -m pytest` (passes)
-- Added doc chat telemetry: start/result lines now log chat id, kind, message, doc path, and duration alongside CLI output, covering success and error cases; ran `python -m pytest`
-- Added backend coverage for doc chat API/service: validation (kinds/messages/payloads), prompt assembly with recent runs, happy-path writes, validation failures, and busy/lock conflicts; added Node-backed UI flow test that mocks fetch/stream to assert streaming updates update the doc editor; ran `python -m pytest` (passes)
+- Built per-doc “chat with this doc” flow that rewrites TODO/PROGRESS/OPINIONS/SPEC directly from the Docs tab.
+- Shipped chat panel UI wired to POST /api/docs/{kind}/chat, handling enter-to-send, streaming, errors, and history (frontend only).
+- Added backend chat endpoint, validation/409 guards, and agent runner that assembles prompts, runs Codex, validates output, and writes atomically with telemetry.
+- Expanded tests across API validation, prompt/write paths, lock conflicts, and a mocked UI streaming flow; `python -m pytest` passes.

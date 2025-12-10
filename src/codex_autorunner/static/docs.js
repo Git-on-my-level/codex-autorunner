@@ -98,6 +98,79 @@ function truncateText(text, maxLen) {
     : normalized;
 }
 
+/**
+ * Render a unified diff with syntax highlighting and line numbers.
+ * Returns HTML with colored lines for additions (+), deletions (-),
+ * headers (@@), and file paths (--- / +++).
+ */
+function renderDiffHtml(diffText) {
+  if (!diffText) return "";
+  const lines = diffText.split("\n");
+  let oldLineNum = 0;
+  let newLineNum = 0;
+
+  const htmlLines = lines.map((line, idx) => {
+    // Escape HTML entities
+    const escaped = line
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    // Parse hunk header to get line numbers
+    if (line.startsWith("@@") && line.includes("@@")) {
+      const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (match) {
+        oldLineNum = parseInt(match[1], 10);
+        newLineNum = parseInt(match[2], 10);
+      }
+      return `<div class="diff-line diff-hunk"><span class="diff-gutter diff-gutter-hunk">···</span><span class="diff-content">${escaped}</span></div>`;
+    }
+
+    // File headers (no line numbers)
+    if (line.startsWith("+++") || line.startsWith("---")) {
+      return `<div class="diff-line diff-file"><span class="diff-gutter"></span><span class="diff-content">${escaped}</span></div>`;
+    }
+
+    // Addition line
+    if (line.startsWith("+")) {
+      const lineNum = newLineNum++;
+      const content = escaped.substring(1); // Remove the + prefix
+      const isEmpty = content.trim() === "";
+      const displayContent = isEmpty
+        ? `<span class="diff-empty-marker">↵</span>`
+        : content;
+      return `<div class="diff-line diff-add"><span class="diff-gutter diff-gutter-add">${lineNum}</span><span class="diff-sign">+</span><span class="diff-content">${displayContent}</span></div>`;
+    }
+
+    // Deletion line
+    if (line.startsWith("-")) {
+      const lineNum = oldLineNum++;
+      const content = escaped.substring(1); // Remove the - prefix
+      const isEmpty = content.trim() === "";
+      const displayContent = isEmpty
+        ? `<span class="diff-empty-marker">↵</span>`
+        : content;
+      return `<div class="diff-line diff-del"><span class="diff-gutter diff-gutter-del">${lineNum}</span><span class="diff-sign">−</span><span class="diff-content">${displayContent}</span></div>`;
+    }
+
+    // Context line (unchanged)
+    if (
+      line.startsWith(" ") ||
+      (line.length > 0 && !line.startsWith("\\") && oldLineNum > 0)
+    ) {
+      const oLine = oldLineNum++;
+      const nLine = newLineNum++;
+      const content = escaped.startsWith(" ") ? escaped.substring(1) : escaped;
+      return `<div class="diff-line diff-ctx"><span class="diff-gutter diff-gutter-ctx">${oLine}</span><span class="diff-sign"> </span><span class="diff-content">${content}</span></div>`;
+    }
+
+    // Other lines (like "\ No newline at end of file")
+    return `<div class="diff-line diff-meta"><span class="diff-gutter"></span><span class="diff-content diff-note">${escaped}</span></div>`;
+  });
+
+  return `<div class="diff-view">${htmlLines.join("")}</div>`;
+}
+
 function autoResizeTextarea(textarea) {
   textarea.style.height = "auto";
   textarea.style.height = textarea.scrollHeight + "px";
@@ -201,10 +274,14 @@ function renderChat(kind = activeDoc) {
   const hasPatch = !!(state.patch && state.patch.trim());
   if (chatUI.patchMain) {
     chatUI.patchMain.classList.toggle("hidden", !hasPatch);
-    chatUI.patchBody.textContent = hasPatch ? state.patch : "(no patch)";
+    // Use syntax-highlighted diff rendering
+    chatUI.patchBody.innerHTML = hasPatch
+      ? renderDiffHtml(state.patch)
+      : "(no patch)";
     chatUI.patchSummary.textContent = latest?.response || state.error || "";
     if (chatUI.patchApply) chatUI.patchApply.disabled = isRunning || !hasPatch;
-    if (chatUI.patchDiscard) chatUI.patchDiscard.disabled = isRunning || !hasPatch;
+    if (chatUI.patchDiscard)
+      chatUI.patchDiscard.disabled = isRunning || !hasPatch;
     if (chatUI.patchReload) chatUI.patchReload.disabled = isRunning;
   }
 
@@ -265,8 +342,8 @@ function renderChatHistory(state) {
     detail.appendChild(summary);
     detail.appendChild(body);
 
-  const meta = document.createElement("div");
-  meta.className = "meta";
+    const meta = document.createElement("div");
+    meta.className = "meta";
 
     const dot = document.createElement("span");
     dot.className = "status-dot";
@@ -282,12 +359,12 @@ function renderChatHistory(state) {
     meta.appendChild(dot);
     meta.appendChild(stamp);
 
-  wrapper.appendChild(prompt);
-  wrapper.appendChild(response);
+    wrapper.appendChild(prompt);
+    wrapper.appendChild(response);
     wrapper.appendChild(detail);
-  wrapper.appendChild(meta);
-  chatUI.history.appendChild(wrapper);
-});
+    wrapper.appendChild(meta);
+    chatUI.history.appendChild(wrapper);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -692,9 +769,13 @@ export function initDocs() {
   if (chatUI.patchApply)
     chatUI.patchApply.addEventListener("click", () => applyPatch(activeDoc));
   if (chatUI.patchDiscard)
-    chatUI.patchDiscard.addEventListener("click", () => discardPatch(activeDoc));
+    chatUI.patchDiscard.addEventListener("click", () =>
+      discardPatch(activeDoc)
+    );
   if (chatUI.patchReload)
-    chatUI.patchReload.addEventListener("click", () => reloadPatch(activeDoc, true));
+    chatUI.patchReload.addEventListener("click", () =>
+      reloadPatch(activeDoc, true)
+    );
   reloadPatch(activeDoc, true);
 
   // Shift+Enter sends, Enter adds newline (default textarea behavior)

@@ -85,17 +85,21 @@
           <div class="doc-editor">
             <div id="doc-patch-main" class="doc-patch-main hidden">
               <div class="doc-patch-header">
-                <div>
+                <div class="doc-patch-info">
                   <div class="muted small">Pending patch</div>
                   <div id="doc-patch-summary" class="doc-patch-summary"></div>
+                  <div class="doc-patch-legend">
+                    <span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
+                    <span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
+                  </div>
                 </div>
                 <div class="doc-patch-actions">
-                  <button id="doc-patch-apply" class="primary sm">Apply patch</button>
+                  <button id="doc-patch-apply" class="primary sm">Apply Patch</button>
                   <button id="doc-patch-reload" class="ghost sm">Reload</button>
-                  <button id="doc-patch-discard" class="ghost sm">Discard</button>
+                  <button id="doc-patch-discard" class="danger sm">Discard</button>
                 </div>
               </div>
-              <pre id="doc-patch-body" class="doc-patch-body">(no patch)</pre>
+              <div id="doc-patch-body" class="doc-patch-body">(no patch)</div>
             </div>
             <textarea id="doc-content" spellcheck="false"></textarea>
             <div class="doc-actions">

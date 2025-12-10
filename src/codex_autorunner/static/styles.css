@@ -448,8 +448,55 @@ button:disabled {
 .doc-patch-header {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.doc-patch-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-patch-legend {
+  display: flex;
+  gap: 12px;
+  font-size: 9px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.doc-patch-legend-item {
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+}
+
+.doc-patch-legend-add::before {
+  content: "+";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  background: rgba(46, 160, 67, 0.15);
+  color: #3fb950;
+  border-radius: 2px;
+  font-weight: 600;
+  font-size: 10px;
+}
+
+.doc-patch-legend-del::before {
+  content: "−";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  background: rgba(248, 81, 73, 0.15);
+  color: #f85149;
+  border-radius: 2px;
+  font-weight: 600;
+  font-size: 10px;
 }
 
 .doc-patch-summary {
@@ -465,17 +512,162 @@ button:disabled {
 }
 
 .doc-patch-body {
-  background: #0f1116;
+  background: #0d1117;
   color: #d6dbe0;
   border-radius: var(--radius);
-  padding: 10px;
-  max-height: 280px;
+  padding: 0;
+  max-height: 320px;
   overflow: auto;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1;
+  border: 1px solid #21262d;
+}
+
+/* Diff syntax highlighting - line-by-line with gutters */
+.diff-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.diff-line {
+  display: flex;
+  align-items: stretch;
+  min-height: 1.5em;
+  line-height: 1.5;
+}
+
+.diff-gutter {
+  flex: 0 0 36px;
+  text-align: right;
+  padding-right: 8px;
+  color: #6e7681;
+  font-size: 10px;
+  user-select: none;
+  border-right: 1px solid #21262d;
+  background: #161b22;
+}
+
+.diff-gutter-add {
+  background: rgba(46, 160, 67, 0.2);
+  color: #7ee787;
+}
+
+.diff-gutter-del {
+  background: rgba(248, 81, 73, 0.2);
+  color: #f97583;
+}
+
+.diff-gutter-ctx {
+  background: #161b22;
+}
+
+.diff-gutter-hunk {
+  background: rgba(56, 139, 253, 0.1);
+  color: #58a6ff;
+  text-align: center;
+  padding-right: 0;
+}
+
+.diff-sign {
+  flex: 0 0 16px;
+  text-align: center;
+  font-weight: 600;
+  user-select: none;
+}
+
+.diff-add .diff-sign {
+  color: #3fb950;
+  background: rgba(46, 160, 67, 0.15);
+}
+
+.diff-del .diff-sign {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.15);
+}
+
+.diff-ctx .diff-sign {
+  color: transparent;
+}
+
+.diff-content {
+  flex: 1;
+  padding-left: 8px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Line type backgrounds */
+.diff-line.diff-add {
+  background: rgba(46, 160, 67, 0.12);
+}
+
+.diff-line.diff-add .diff-content {
+  color: #aff5b4;
+}
+
+.diff-line.diff-del {
+  background: rgba(248, 81, 73, 0.12);
+}
+
+.diff-line.diff-del .diff-content {
+  color: #ffc1c8;
+}
+
+.diff-line.diff-hunk {
+  background: rgba(56, 139, 253, 0.08);
+  border-top: 1px solid rgba(56, 139, 253, 0.3);
+  border-bottom: 1px solid rgba(56, 139, 253, 0.3);
+  margin-top: 4px;
+}
+
+.diff-line.diff-hunk:first-child {
+  margin-top: 0;
+}
+
+.diff-line.diff-hunk .diff-content {
+  color: #a5d6ff;
+  font-weight: 600;
+  padding-left: 8px;
+}
+
+.diff-line.diff-file {
+  background: transparent;
+}
+
+.diff-line.diff-file .diff-content {
+  color: #d2a8ff;
+  font-weight: 500;
+}
+
+.diff-line.diff-ctx .diff-content {
+  color: #8b949e;
+}
+
+.diff-line.diff-meta .diff-content {
+  color: #6e7681;
+  font-style: italic;
+  padding-left: 60px; /* Align with content after gutter + sign */
+}
+
+/* Empty line marker - visible symbol for blank lines */
+.diff-empty-marker {
+  color: #6e7681;
+  background: rgba(110, 118, 129, 0.15);
+  padding: 0 4px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-style: italic;
+}
+
+.diff-add .diff-empty-marker {
+  color: #56d364;
+  background: rgba(46, 160, 67, 0.25);
+}
+
+.diff-del .diff-empty-marker {
+  color: #f97583;
+  background: rgba(248, 81, 73, 0.25);
 }
 
 .doc-actions {
@@ -1290,6 +1482,90 @@ label {
     font-size: 9px;
     padding: 6px 10px;
   }
+
+  /* Main patch panel on mobile - stacked layout */
+  .doc-patch-main {
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .doc-patch-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .doc-patch-info {
+    order: 1;
+  }
+
+  .doc-patch-summary {
+    font-size: 12px;
+    line-height: 1.4;
+    padding: 8px;
+    background: var(--bg);
+    border-radius: var(--radius);
+    border-left: 3px solid var(--accent);
+  }
+
+  .doc-patch-legend {
+    display: none; /* Hide on mobile - the colors are self-explanatory */
+  }
+
+  .doc-patch-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    order: 2;
+  }
+
+  .doc-patch-actions button {
+    min-height: 44px;
+    padding: 12px 16px;
+    font-size: 12px;
+    justify-content: center;
+    width: 100%;
+  }
+
+  .doc-patch-actions button.primary {
+    order: -1; /* Move Apply button to top */
+  }
+
+  .doc-patch-body {
+    max-height: 300px;
+    padding: 0;
+    font-size: 11px;
+    line-height: 1.5;
+    -webkit-overflow-scrolling: touch;
+    border-radius: var(--radius);
+    overflow: auto;
+  }
+
+  /* Diff line adjustments for mobile */
+  .diff-gutter {
+    flex: 0 0 28px;
+    font-size: 9px;
+    padding-right: 4px;
+  }
+
+  .diff-sign {
+    flex: 0 0 14px;
+    font-size: 10px;
+  }
+
+  .diff-content {
+    padding-left: 6px;
+    font-size: 11px;
+  }
+
+  .diff-line.diff-hunk .diff-content {
+    font-size: 10px;
+  }
+
+  .diff-empty-marker {
+    font-size: 9px;
+    padding: 0 3px;
+  }
   
   /* Toast above bottom nav */
   .toast {
@@ -1369,6 +1645,52 @@ label {
     height: 32px;
     font-size: 12px;
   }
+
+  /* Patch panel for ultra-small screens */
+  .doc-patch-main {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .doc-patch-summary {
+    font-size: 11px;
+    padding: 6px;
+  }
+
+  .doc-patch-legend {
+    display: none;
+  }
+
+  .doc-patch-actions button {
+    min-height: 40px;
+    padding: 10px 12px;
+    font-size: 11px;
+  }
+
+  .doc-patch-body {
+    max-height: 220px;
+  }
+
+  .diff-gutter {
+    flex: 0 0 24px;
+    font-size: 8px;
+    padding-right: 3px;
+  }
+
+  .diff-sign {
+    flex: 0 0 12px;
+    font-size: 9px;
+  }
+
+  .diff-content {
+    padding-left: 4px;
+    font-size: 10px;
+  }
+
+  .diff-empty-marker {
+    font-size: 8px;
+    padding: 0 2px;
+  }
 }
 
 /* Landscape phone - side-by-side layout */
@@ -1445,5 +1767,50 @@ label {
 
   .doc-actions button[data-short]::after {
     font-size: 9px;
+  }
+
+  /* Patch panel in landscape */
+  .doc-patch-main {
+    padding: 6px;
+    gap: 6px;
+  }
+
+  .doc-patch-header {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .doc-patch-summary {
+    font-size: 10px;
+    padding: 4px 6px;
+  }
+
+  .doc-patch-legend {
+    display: none;
+  }
+
+  .doc-patch-actions {
+    flex-direction: row;
+    gap: 4px;
+  }
+
+  .doc-patch-actions button {
+    min-height: 32px;
+    padding: 6px 10px;
+    font-size: 10px;
+    width: auto;
+  }
+
+  .doc-patch-body {
+    max-height: 140px;
+  }
+
+  .diff-gutter {
+    flex: 0 0 28px;
+    font-size: 9px;
+  }
+
+  .diff-content {
+    font-size: 10px;
   }
 }
