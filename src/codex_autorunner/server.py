@@ -315,6 +315,30 @@ def create_app(repo_root: Optional[Path] = None) -> FastAPI:
         manager.start(once=once)
         return {"running": manager.running, "once": once}
 
+    @app.post("/api/run/reset")
+    def reset_runner():
+        """Reset runner metadata: clear state, logs, and locks."""
+        if manager.running:
+            raise HTTPException(
+                status_code=409, detail="Cannot reset while runner is active"
+            )
+        # Clear stale lock
+        engine.lock_path.unlink(missing_ok=True)
+        # Reset state to initial values
+        initial_state = RunnerState(
+            last_run_id=None,
+            status="idle",
+            last_exit_code=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            runner_pid=None,
+        )
+        save_state(engine.state_path, initial_state)
+        # Clear logs
+        if engine.log_path.exists():
+            engine.log_path.unlink()
+        return {"status": "ok", "message": "Runner reset complete"}
+
     @app.get("/api/logs")
     def get_logs(run_id: Optional[int] = None, tail: Optional[int] = None):
         if run_id is not None:

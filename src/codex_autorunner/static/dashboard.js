@@ -1,6 +1,6 @@
-import { flash, statusPill } from "./utils.js";
+import { flash, statusPill, confirmModal } from "./utils.js";
 import { subscribe } from "./bus.js";
-import { loadState, startRun, stopRun, resumeRun, killRun, startStatePolling } from "./state.js";
+import { loadState, startRun, stopRun, resumeRun, killRun, resetRunner, startStatePolling } from "./state.js";
 
 function renderState(state) {
   if (!state) return;
@@ -37,6 +37,10 @@ export function initDashboard() {
   bindAction("stop-run", stopRun);
   bindAction("resume-run", resumeRun);
   bindAction("kill-run", killRun);
+  bindAction("reset-runner", async () => {
+    const confirmed = await confirmModal("Reset runner? This will clear all logs and reset run ID to 1.");
+    if (confirmed) await resetRunner();
+  });
   bindAction("refresh-state", loadState);
 
   startStatePolling();

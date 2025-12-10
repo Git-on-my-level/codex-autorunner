@@ -76,3 +76,7 @@ export function resumeRun() {
 export function killRun() {
   return runAction("/api/run/kill", null, "Kill signal sent");
 }
+
+export function resetRunner() {
+  return runAction("/api/run/reset", null, "Runner reset complete");
+}
