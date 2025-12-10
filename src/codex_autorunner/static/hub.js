@@ -16,14 +16,21 @@ function formatTime(isoString) {
 }
 
 function formatRunSummary(repo) {
-  if (!repo.initialized) return "Not initialized yet";
+  if (!repo.initialized) return "Not initialized";
   if (!repo.exists_on_disk) return "Missing on disk";
   if (!repo.last_run_id) return "No runs yet";
   const time = repo.last_run_finished_at || repo.last_run_started_at;
   const exit = repo.last_exit_code === null || repo.last_exit_code === undefined
     ? ""
-    : ` (exit ${repo.last_exit_code})`;
-  return `Run ${repo.last_run_id}${exit} • ${formatTime(time)}`;
+    : ` exit:${repo.last_exit_code}`;
+  return `#${repo.last_run_id}${exit}`;
+}
+
+function formatLastActivity(repo) {
+  if (!repo.initialized) return "";
+  const time = repo.last_run_finished_at || repo.last_run_started_at;
+  if (!time) return "";
+  return formatTimeCompact(time);
 }
 
 function setButtonLoading(scanning) {
@@ -94,7 +101,7 @@ function renderRepos(repos) {
   repoListEl.innerHTML = "";
   if (!repos.length) {
     repoListEl.innerHTML =
-      '<div class="hub-empty muted">No repos discovered yet. Run a scan to seed new repos.</div>';
+      '<div class="hub-empty muted">No repos discovered yet. Run a scan or create a new repo.</div>';
     return;
   }
 
@@ -124,13 +131,13 @@ function renderRepos(repos) {
         ? `<span class="pill pill-small pill-warn">${repo.lock_status.replace("_", " ")}</span>`
         : "";
     const initBadge = !repo.initialized
-      ? '<span class="pill pill-small pill-warn">uninitialized</span>'
+      ? '<span class="pill pill-small pill-warn">uninit</span>'
       : "";
     
     // Build note for errors
     let noteText = "";
     if (!repo.exists_on_disk) {
-      noteText = "Repo missing on disk";
+      noteText = "Missing on disk";
     } else if (repo.init_error) {
       noteText = repo.init_error;
     } else if (repo.mount_error) {
@@ -142,23 +149,34 @@ function renderRepos(repos) {
     const openIndicator = canNavigate
       ? '<span class="hub-repo-open-indicator">→</span>'
       : '';
+    
+    // Build compact info line
+    const runSummary = formatRunSummary(repo);
+    const lastActivity = formatLastActivity(repo);
+    const infoItems = [];
+    if (runSummary && runSummary !== "No runs yet" && runSummary !== "Not initialized") {
+      infoItems.push(runSummary);
+    }
+    if (lastActivity) {
+      infoItems.push(lastActivity);
+    }
+    const infoLine = infoItems.length > 0 
+      ? `<span class="hub-repo-info-line">${infoItems.join(' · ')}</span>`
+      : '';
 
     card.innerHTML = `
-      <div class="hub-repo-main">
-        <div class="hub-repo-info">
-          <div class="hub-repo-name">
-            <span class="hub-repo-title">${repo.display_name}</span>
-            <span class="hub-repo-path">${repo.path}</span>
-          </div>
-          <div class="hub-repo-meta">
+      <div class="hub-repo-row">
+        <div class="hub-repo-left">
             <span class="pill pill-small hub-status-pill">${repo.status}</span>
             ${lockBadge}
             ${initBadge}
-            <span class="muted small">${formatRunSummary(repo)}</span>
           </div>
+        <div class="hub-repo-center">
+          <span class="hub-repo-title">${repo.display_name}</span>
+          ${infoLine}
         </div>
-        <div class="hub-repo-actions">
-          ${actions || '<span class="muted small">–</span>'}
+        <div class="hub-repo-right">
+          ${actions || ''}
           ${openIndicator}
         </div>
       </div>
@@ -186,6 +204,62 @@ async function refreshHub({ scan = false } = {}) {
     flash(err.message || "Hub request failed", "error");
   } finally {
     setButtonLoading(false);
+  }
+}
+
+async function createRepo(repoId, repoPath, gitInit) {
+  try {
+    const payload = { id: repoId };
+    if (repoPath) payload.path = repoPath;
+    payload.git_init = gitInit;
+    await api("/hub/repos", { method: "POST", body: payload });
+    flash(`Created repo: ${repoId}`);
+    await refreshHub();
+    return true;
+  } catch (err) {
+    flash(err.message || "Failed to create repo", "error");
+    return false;
+  }
+}
+
+function showCreateRepoModal() {
+  const modal = document.getElementById("create-repo-modal");
+  if (modal) {
+    modal.hidden = false;
+    const input = document.getElementById("create-repo-id");
+    if (input) {
+      input.value = "";
+      input.focus();
+    }
+    const pathInput = document.getElementById("create-repo-path");
+    if (pathInput) pathInput.value = "";
+    const gitCheck = document.getElementById("create-repo-git");
+    if (gitCheck) gitCheck.checked = true;
+  }
+}
+
+function hideCreateRepoModal() {
+  const modal = document.getElementById("create-repo-modal");
+  if (modal) modal.hidden = true;
+}
+
+async function handleCreateRepoSubmit() {
+  const idInput = document.getElementById("create-repo-id");
+  const pathInput = document.getElementById("create-repo-path");
+  const gitCheck = document.getElementById("create-repo-git");
+  
+  const repoId = idInput?.value?.trim();
+  const repoPath = pathInput?.value?.trim() || null;
+  const gitInit = gitCheck?.checked ?? true;
+  
+  if (!repoId) {
+    flash("Repo ID is required", "error");
+    return;
+  }
+  
+  const ok = await createRepo(repoId, repoPath, gitInit);
+  if (ok) {
+    hideCreateRepoModal();
   }
 }
 
@@ -219,10 +293,41 @@ function attachHubHandlers() {
   const scanBtn = document.getElementById("hub-scan");
   const refreshBtn = document.getElementById("hub-refresh");
   const quickScanBtn = document.getElementById("hub-quick-scan");
+  const newRepoBtn = document.getElementById("hub-new-repo");
+  const createCancelBtn = document.getElementById("create-repo-cancel");
+  const createSubmitBtn = document.getElementById("create-repo-submit");
+  const createRepoId = document.getElementById("create-repo-id");
 
   scanBtn?.addEventListener("click", () => refreshHub({ scan: true }));
   quickScanBtn?.addEventListener("click", () => refreshHub({ scan: true }));
   refreshBtn?.addEventListener("click", () => refreshHub({ scan: false }));
+  
+  newRepoBtn?.addEventListener("click", showCreateRepoModal);
+  createCancelBtn?.addEventListener("click", hideCreateRepoModal);
+  createSubmitBtn?.addEventListener("click", handleCreateRepoSubmit);
+  
+  // Allow Enter key in the repo ID input to submit
+  createRepoId?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleCreateRepoSubmit();
+    }
+  });
+  
+  // Close modal on Escape key
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      hideCreateRepoModal();
+    }
+  });
+  
+  // Close modal when clicking overlay background
+  const createRepoModal = document.getElementById("create-repo-modal");
+  createRepoModal?.addEventListener("click", (e) => {
+    if (e.target === createRepoModal) {
+      hideCreateRepoModal();
+    }
+  });
 
   repoListEl?.addEventListener("click", (event) => {
     const target = event.target;

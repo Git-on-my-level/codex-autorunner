@@ -8,7 +8,7 @@ import { initTerminal } from "./terminal.js";
 import { loadState } from "./state.js";
 
 function initRepoShell() {
-  // If this is a repo under a hub, show back button
+  // If this is a repo under a hub, show back button and repo name
   if (REPO_ID) {
     const navBar = document.querySelector(".nav-bar");
     if (navBar) {
@@ -19,10 +19,13 @@ function initRepoShell() {
       backBtn.title = "Back to Hub";
       navBar.insertBefore(backBtn, navBar.firstChild);
     }
-    // Update brand to show repo name
+    // Add repo name after the CAR brand (keep CAR visible)
     const brand = document.querySelector(".nav-brand");
     if (brand) {
-      brand.textContent = REPO_ID;
+      const repoName = document.createElement("span");
+      repoName.className = "nav-repo-name";
+      repoName.textContent = REPO_ID;
+      brand.insertAdjacentElement("afterend", repoName);
     }
   }
 

@@ -798,6 +798,18 @@ export function initDocs() {
     autoResizeTextarea(chatUI.input);
   });
 
+  // Ctrl+S / Cmd+S saves the current doc
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      // Only handle if docs tab is active
+      const docsTab = document.getElementById("docs");
+      if (docsTab && !docsTab.classList.contains("hidden")) {
+        e.preventDefault();
+        saveDoc();
+      }
+    }
+  });
+
   loadDocs();
   renderChat(activeDoc);
 }

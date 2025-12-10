@@ -14,11 +14,12 @@
     <div id="hub-shell" class="hub-shell hidden">
       <header class="hub-hero">
         <div class="hub-hero-text">
-          <h1>Hub</h1>
+          <h1>CAR Hub</h1>
           <span id="hub-last-scan" class="pill pill-small pill-idle">–</span>
         </div>
         <div class="hub-hero-actions">
-          <button id="hub-scan" class="primary sm">Scan</button>
+          <button id="hub-new-repo" class="primary sm">+ New</button>
+          <button id="hub-scan" class="sm">Scan</button>
           <button id="hub-refresh" class="ghost sm">Refresh</button>
         </div>
       </header>
@@ -255,6 +256,37 @@
         <div class="modal-actions">
           <button id="confirm-modal-cancel" class="ghost">Cancel</button>
           <button id="confirm-modal-ok" class="danger">Confirm</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Create Repo Modal -->
+    <div id="create-repo-modal" class="modal-overlay" hidden>
+      <div class="modal-dialog modal-create-repo">
+        <div class="modal-header">
+          <span class="label">Create New Repository</span>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="create-repo-id">Repo ID <span class="required">*</span></label>
+            <input type="text" id="create-repo-id" placeholder="my-project" autocomplete="off" spellcheck="false" />
+            <span class="form-hint">Used as directory name if path not specified</span>
+          </div>
+          <div class="form-group">
+            <label for="create-repo-path">Path <span class="optional">(optional)</span></label>
+            <input type="text" id="create-repo-path" placeholder="relative/path/to/repo" autocomplete="off" spellcheck="false" />
+            <span class="form-hint">Leave empty to use repo ID as path</span>
+          </div>
+          <div class="form-group form-checkbox">
+            <label>
+              <input type="checkbox" id="create-repo-git" checked />
+              <span>Initialize git repository</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="create-repo-cancel" class="ghost">Cancel</button>
+          <button id="create-repo-submit" class="primary">Create</button>
         </div>
       </div>
     </div>

@@ -71,7 +71,15 @@ body {
   padding: 0 8px;
   flex-shrink: 0;
   user-select: none;
-  max-width: 120px;
+}
+
+.nav-repo-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 0 8px;
+  flex-shrink: 0;
+  max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -279,10 +287,11 @@ main {
   gap: 4px;
 }
 
+/* Repo card - compact single-row layout */
 .hub-repo-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 10px;
+  padding: 6px 10px;
   background: var(--bg);
   transition: all 0.1s ease;
 }
@@ -301,6 +310,81 @@ main {
   outline-offset: 1px;
 }
 
+/* New compact row layout */
+.hub-repo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.hub-repo-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.hub-repo-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.hub-repo-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.hub-repo-title {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.hub-repo-clickable:hover .hub-repo-title {
+  color: var(--accent);
+}
+
+.hub-repo-info-line {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hub-repo-open-indicator {
+  color: var(--muted);
+  font-size: 14px;
+  margin-left: 2px;
+  opacity: 0.5;
+  transition: all 0.1s ease;
+}
+
+.hub-repo-clickable:hover .hub-repo-open-indicator {
+  color: var(--accent);
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+.hub-repo-note {
+  margin-top: 4px;
+  color: #ff8899;
+  font-size: 10px;
+  padding-left: 4px;
+}
+
+/* Legacy support - keep for backwards compat */
 .hub-repo-main {
   display: flex;
   justify-content: space-between;
@@ -318,16 +402,6 @@ main {
   align-items: baseline;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.hub-repo-title {
-  color: var(--text);
-  font-weight: 600;
-  font-size: 12px;
-}
-
-.hub-repo-clickable:hover .hub-repo-title {
-  color: var(--accent);
 }
 
 .hub-repo-path {
@@ -350,26 +424,6 @@ main {
   gap: 4px;
   flex-wrap: nowrap;
   flex-shrink: 0;
-}
-
-.hub-repo-open-indicator {
-  color: var(--muted);
-  font-size: 14px;
-  margin-left: 4px;
-  opacity: 0.5;
-  transition: all 0.1s ease;
-}
-
-.hub-repo-clickable:hover .hub-repo-open-indicator {
-  color: var(--accent);
-  opacity: 1;
-  transform: translateX(2px);
-}
-
-.hub-repo-note {
-  margin-top: 4px;
-  color: #ff8899;
-  font-size: 10px;
 }
 
 .hub-empty {
@@ -441,7 +495,15 @@ main {
 
 .pill-small {
   padding: 1px 5px;
-  font-size: 10px;
+  font-size: 9px;
+}
+
+/* Compact status pill for repo cards */
+.hub-repo-left .pill-small {
+  padding: 2px 6px;
+  font-size: 9px;
+  min-width: 42px;
+  text-align: center;
 }
 
 /* Metrics grid */
@@ -1817,6 +1879,88 @@ label {
   min-width: 80px;
 }
 
+/* Create repo modal */
+.modal-create-repo {
+  max-width: 440px;
+}
+
+.modal-header {
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header .label {
+  font-size: 12px;
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-group label {
+  font-size: 11px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.form-group .required {
+  color: var(--error);
+}
+
+.form-group .optional {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.form-group input[type="text"] {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+}
+
+.form-group input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.form-hint {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.form-checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+
+.form-checkbox label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.form-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* Loading button state */
 button.loading {
   position: relative;
@@ -1861,15 +2005,16 @@ button.loading::after {
     }
 
     .hub-hero {
-      flex-direction: column;
-      align-items: stretch;
+      flex-direction: row;
+      align-items: center;
       gap: 8px;
     }
 
     .hub-hero-text {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 4px;
+      flex: 1;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
     }
 
     .hub-hero-actions {
@@ -1884,15 +2029,16 @@ button.loading::after {
       min-width: 80px;
     }
 
-    .hub-repo-main {
-      flex-direction: column;
-      align-items: stretch;
+    /* Compact repo cards on tablet */
+    .hub-repo-row {
+      flex-wrap: wrap;
       gap: 6px;
     }
 
-    .hub-repo-actions {
-      justify-content: flex-start;
-      flex-wrap: wrap;
+    .hub-repo-center {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
     }
 
     .hub-repo-open-indicator {
@@ -1918,16 +2064,24 @@ button.loading::after {
   }
 
   .hub-hero {
-    padding: 8px;
-    gap: 6px;
+    padding: 8px 10px;
+    gap: 8px;
   }
 
   .hub-hero h1 {
-    font-size: 12px;
+    font-size: 13px;
   }
 
   .hub-hero-text {
-    gap: 6px;
+    gap: 8px;
+  }
+  
+  .hub-hero-actions {
+    gap: 4px;
+  }
+  
+  .hub-hero-actions button {
+    padding: 6px 10px;
   }
 
   .hub-stats {
@@ -1936,12 +2090,12 @@ button.loading::after {
   }
 
   .hub-stat {
-    padding: 4px 8px;
-    gap: 4px;
+    padding: 6px 10px;
+    gap: 6px;
   }
 
   .hub-stat-value {
-    font-size: 14px;
+    font-size: 16px;
   }
 
   .hub-stat p {
@@ -1949,53 +2103,75 @@ button.loading::after {
   }
 
   .hub-repo-panel {
-    padding: 6px;
+    padding: 8px;
   }
 
   .hub-panel-header {
-    padding-bottom: 4px;
-    margin-bottom: 4px;
+    padding-bottom: 6px;
+    margin-bottom: 6px;
   }
 
   .hub-repo-list {
-    gap: 3px;
+    gap: 4px;
   }
 
   .hub-repo-card {
-    padding: 8px;
+    padding: 8px 10px;
+  }
+
+  .hub-repo-row {
+    gap: 6px;
+  }
+
+  .hub-repo-left {
+    gap: 3px;
+  }
+
+  .hub-repo-center {
+    flex-direction: row;
+    gap: 6px;
   }
 
   .hub-repo-title {
     font-size: 11px;
   }
 
-  .hub-repo-path {
+  .hub-repo-info-line {
     font-size: 9px;
   }
 
-  .hub-repo-meta {
-    gap: 4px;
-  }
-
-  .hub-repo-meta .muted.small {
-    font-size: 9px;
-  }
-
-  .hub-repo-actions {
+  .hub-repo-right {
     gap: 3px;
   }
 
-  .hub-repo-actions button {
+  .hub-repo-right button {
     padding: 5px 8px;
     font-size: 9px;
   }
 
   .hub-repo-note {
     font-size: 9px;
+    margin-top: 3px;
+  }
+
+  /* Modal on mobile */
+  .modal-create-repo {
+    max-width: 100%;
+    margin: 8px;
+  }
+
+  .modal-body {
+    gap: 12px;
+  }
+
+  .form-group input[type="text"] {
+    font-size: 14px;
+    padding: 10px 12px;
   }
   
-  /* Hide brand on mobile */
-  .nav-brand {
+  /* Hide brand and repo name on mobile */
+  .nav-brand,
+  .nav-repo-name {
     display: none;
   }
 
