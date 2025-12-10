@@ -1,6 +1,5 @@
-- Doc chat must edit only the targeted doc; reject unknown kinds or empty messages; block concurrent edits for the same doc and respect repo lock
-- UI shows per-doc panel with multiline input, disabled Send while running, Enter-to-send with Shift+Enter newline, inline errors, and page-local history; updates editor/preview on success without manual refresh; warn before overwriting unsaved edits
-- Backend API: POST /api/docs/{kind}/chat with optional streaming SSE; return updated doc text and agent message on success or error detail on failure
-- Agent prompt includes target doc plus other work docs and recent run summary; instructions to preserve markdown/checkbox structure and return full rewritten doc (optionally prefixed by a single `Agent:` summary line); run via bounded Codex CLI exec and log with doc-chat marker
-- Validate outputs (non-empty, format sanity), require a doc body after any `Agent:` summary, reject prompt-marker echoes, enforce TODO checkbox syntax, write atomically, leave files untouched on failure; log run id/time, doc kind, message, success/error, file path; optional streaming token rendering if available
-- Testing priority: backend validation/prompt/write/lock scenarios and a lightweight UI chat flow test with mocked network/streaming
+- Keep hub thin: orchestrate and reflect per-repo state; repos remain the source of truth.
+- Manifest is append-only, normalized to hub-relative paths, and missing repos stay listed instead of being removed.
+- Discovery is shallow (depth=1) and prefers auto-init; initialization must drop a .codex-autorunner/.gitignore with "*" and "!/.gitignore".
+- Respect repo locks; only clear on explicit resume when stale, never auto-override.
+- Use separate rotating file handlers per hub/repo; avoid shared handlers and prefer rotation between runs.

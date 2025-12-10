@@ -206,6 +206,18 @@
       </main>
     </div>
     <div id="toast" class="toast"></div>
+    
+    <!-- Confirmation Modal -->
+    <div id="confirm-modal" class="modal-overlay" hidden>
+      <div class="modal-dialog">
+        <p id="confirm-modal-message"></p>
+        <div class="modal-actions">
+          <button id="confirm-modal-cancel" class="ghost">Cancel</button>
+          <button id="confirm-modal-ok" class="danger">Confirm</button>
+        </div>
+      </div>
+    </div>
+    
     <script src="/static/vendor/xterm.js"></script>
     <script src="/static/vendor/xterm-addon-fit.js"></script>
     <script src="/static/app.js" type="module"></script>

@@ -1,4 +1,1 @@
-- Built per-doc “chat with this doc” flow that rewrites TODO/PROGRESS/OPINIONS/SPEC directly from the Docs tab.
-- Shipped chat panel UI wired to POST /api/docs/{kind}/chat, handling enter-to-send, streaming, errors, and history (frontend only).
-- Added backend chat endpoint, validation/409 guards, and agent runner that assembles prompts, runs Codex, validates output, and writes atomically with telemetry.
-- Expanded tests across API validation, prompt/write paths, lock conflicts, and a mocked UI streaming flow; `python -m pytest` passes.
+- SPEC ingested for hub/supervisor mode; implementation not yet started.

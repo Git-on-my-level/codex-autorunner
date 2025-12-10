@@ -6,6 +6,7 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 - Core package code: `src/codex_autorunner/` (engine, CLI, server/API).
 - Runtime/config/state live under `.codex-autorunner/` (not at repo root):
   - Docs the agent reads/updates: `.codex-autorunner/TODO.md`, `.codex-autorunner/PROGRESS.md`, `.codex-autorunner/OPINIONS.md`, `.codex-autorunner/SPEC.md`.
+  - When asked to update any of these docs, you MUST always update these docs. DO NOT create new copies of the docs or put them anywhere else. The system relies on them to be named and placed exactly where they are.
   - Config: `.codex-autorunner/config.yml` (docs paths, codex CLI args, server host/port).
   - State/log: `.codex-autorunner/state.json`, `.codex-autorunner/codex-autorunner.log`, `.codex-autorunner/lock`.
 

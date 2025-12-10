@@ -1,4 +1,4 @@
-import { api, flash, statusPill } from "./utils.js";
+import { api, flash, statusPill, confirmModal } from "./utils.js";
 import { loadState } from "./state.js";
 import { publish } from "./bus.js";
 
@@ -184,14 +184,14 @@ function getDocTextarea() {
 // Chat UI Rendering
 // ─────────────────────────────────────────────────────────────────────────────
 
-function applyDocUpdateFromChat(kind, content) {
+async function applyDocUpdateFromChat(kind, content) {
   if (!content) return false;
   const textarea = getDocTextarea();
   const viewingSameDoc = activeDoc === kind;
   if (viewingSameDoc && textarea) {
     const cached = docsCache[kind] || "";
     if (textarea.value !== cached) {
-      const ok = window.confirm(
+      const ok = await confirmModal(
         `You have unsaved ${kind.toUpperCase()} edits. Overwrite with chat result?`
       );
       if (!ok) {
@@ -507,7 +507,7 @@ async function applyPatch(kind = activeDoc) {
     const applied = parseChatPayload(res);
     if (applied.error) throw new Error(applied.error);
     if (applied.content) {
-      applyDocUpdateFromChat(kind, applied.content);
+      await applyDocUpdateFromChat(kind, applied.content);
     }
     state.patch = "";
     const latest = state.history[0];
@@ -527,7 +527,7 @@ async function discardPatch(kind = activeDoc) {
     const res = await api(`/api/docs/${kind}/chat/discard`, { method: "POST" });
     const parsed = parseChatPayload(res);
     if (parsed.content) {
-      applyDocUpdateFromChat(kind, parsed.content);
+      await applyDocUpdateFromChat(kind, parsed.content);
     }
     state.patch = "";
     const latest = state.history[0];
@@ -564,7 +564,7 @@ async function reloadPatch(kind = activeDoc, silent = false) {
       entry.status = "needs-apply";
       if (!state.history[0]) state.history.unshift(entry);
       if (parsed.content) {
-        applyDocUpdateFromChat(kind, parsed.content);
+        await applyDocUpdateFromChat(kind, parsed.content);
       }
       renderChat(kind);
       if (!silent) flash("Loaded pending patch");
@@ -629,7 +629,7 @@ async function handleStreamEvent(event, rawData, state, entry, kind) {
       entry.status = "needs-apply";
       entry.response = payload.response || entry.response;
       if (payload.content) {
-        applyDocUpdateFromChat(kind, payload.content);
+        await applyDocUpdateFromChat(kind, payload.content);
       }
     }
     renderChat(kind);
@@ -805,8 +805,8 @@ async function ingestSpec() {
     (k) => (docsCache[k] || "").trim().length > 0
   );
   if (needsForce) {
-    const ok = window.confirm(
-      "Overwrite TODO/PROGRESS/OPINIONS from SPEC? Existing content will be replaced."
+    const ok = await confirmModal(
+      "Overwrite TODO, PROGRESS, and OPINIONS from SPEC? Existing content will be replaced."
     );
     if (!ok) return;
   }
@@ -837,12 +837,10 @@ async function ingestSpec() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function clearDocs() {
-  const confirmFirst = window.confirm(
-    "Clear TODO/PROGRESS/OPINIONS? This cannot be undone."
+  const confirmed = await confirmModal(
+    "Clear TODO, PROGRESS, and OPINIONS? This action cannot be undone."
   );
-  if (!confirmFirst) return;
-  const confirmSecond = window.prompt('Type "CLEAR" to confirm reset');
-  if (!confirmSecond || confirmSecond.trim().toUpperCase() !== "CLEAR") {
+  if (!confirmed) {
     flash("Clear cancelled");
     return;
   }
@@ -851,7 +849,12 @@ async function clearDocs() {
   try {
     const data = await api("/api/docs/clear", { method: "POST" });
     docsCache = { ...docsCache, ...data };
-    await loadDocs();
+    // Update UI directly (consistent with ingestSpec)
+    setDoc(activeDoc);
+    renderTodoPreview(docsCache.todo);
+    publish("docs:updated", { kind: "todo", content: docsCache.todo });
+    publish("docs:updated", { kind: "progress", content: docsCache.progress });
+    publish("docs:updated", { kind: "opinions", content: docsCache.opinions });
     flash("Cleared TODO/PROGRESS/OPINIONS");
   } catch (err) {
     flash(err.message, "error");

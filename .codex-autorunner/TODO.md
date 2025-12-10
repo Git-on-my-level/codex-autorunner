@@ -1,7 +1,3 @@
-- [x] Add Docs tab UI chat panel per doc with input, send/Enter handling, history, streaming display, and error states
-- [x] Wire chat panel to new backend API, updating editor/preview on success and guarding against unsaved edits overwrite
-- [x] Implement POST /api/docs/{kind}/chat with validation, doc-kind routing, optional SSE streaming, and concurrency guard (repo lock / per-doc 409)
-- [x] Build doc-focused agent runner: assemble prompt from work docs + recent run summary, invoke Codex CLI bounded mode, log with doc-chat marker
-- [x] Harden doc chat output validation (markdown/checkbox sanity), keep atomic writes, and return updated content or surfaced errors
-- [x] Add logging/telemetry for doc chat runs (run id/time, kind, message, success/error, file pointer)
-- [x] Create backend tests: API validation, prompt assembly, happy-path write, validation failures, lock conflicts; add lightweight UI test for chat flow (mocked fetch/stream)
+- [ ] Ship hub-ready config + discovery foundation: v2 schema for hub/repo modes, logging defaults + rotation, nearest-config lookup, manifest management, and one-level scan with auto-init seeding of .codex-autorunner/.
+- [ ] Build the supervisor + surfaces: HubSupervisor wired to RepoRunner with status/lock modeling and hub_state snapshots, /hub API with per-repo route mounting, and CLI flow for hub serve/scan plus clear errors when commands run in the wrong mode.
+- [ ] Deliver UX + guardrails: Hub home UI (list, badges, last run, quick actions), ensure isolated rotating log handlers per hub/repo, and regression coverage for manifest/discovery/auto-init, API, UI home, log rotation, and parallel run smoke tests.

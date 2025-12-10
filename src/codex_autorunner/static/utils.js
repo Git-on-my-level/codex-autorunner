@@ -124,3 +124,64 @@ export function createPoller(fn, intervalMs, { immediate = true } = {}) {
     if (timer) clearTimeout(timer);
   };
 }
+
+/**
+ * Show a custom confirmation modal dialog.
+ * Works consistently across desktop and mobile.
+ * @param {string} message - The confirmation message to display
+ * @returns {Promise<boolean>} - Resolves to true if confirmed, false if cancelled
+ */
+export function confirmModal(message) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("confirm-modal");
+    const messageEl = document.getElementById("confirm-modal-message");
+    const okBtn = document.getElementById("confirm-modal-ok");
+    const cancelBtn = document.getElementById("confirm-modal-cancel");
+
+    messageEl.textContent = message;
+    overlay.hidden = false;
+
+    const cleanup = () => {
+      overlay.hidden = true;
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onOverlayClick);
+      document.removeEventListener("keydown", onKeydown);
+    };
+
+    const onOk = () => {
+      cleanup();
+      resolve(true);
+    };
+
+    const onCancel = () => {
+      cleanup();
+      resolve(false);
+    };
+
+    const onOverlayClick = (e) => {
+      if (e.target === overlay) {
+        cleanup();
+        resolve(false);
+      }
+    };
+
+    const onKeydown = (e) => {
+      if (e.key === "Escape") {
+        cleanup();
+        resolve(false);
+      } else if (e.key === "Enter") {
+        cleanup();
+        resolve(true);
+      }
+    };
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onOverlayClick);
+    document.addEventListener("keydown", onKeydown);
+
+    // Focus the cancel button for safety (less destructive default)
+    cancelBtn.focus();
+  });
+}
