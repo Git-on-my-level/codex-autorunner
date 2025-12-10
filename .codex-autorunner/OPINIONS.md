@@ -1,9 +1,6 @@
-# Opinions
-
-- Prefer small, well-tested changes; favor minimal new dependencies.
-- Keep TODO/PROGRESS/OPINIONS in sync with each run.
-- Ignore runtime artifacts in git (logs, lock, state files) to keep diffs clean.
-- Favor Typer-based CLI patterns and readable prompts.
-- For the web UI: keep the bundle simple (no heavy design systems), mobile-friendly tabs for Dashboard/Docs/Logs/Chat, and use the existing API shape (serve static assets from the same FastAPI app).
-- Surface kill/resume controls in the UI and reflect runner pid/status clearly.
-- Clean, modern UI that is easy to understand and elegant. Think dark theme and futuristic
+- Doc chat must edit only the targeted doc; reject unknown kinds or empty messages; block concurrent edits for the same doc and respect repo lock
+- UI shows per-doc panel with multiline input, disabled Send while running, Enter-to-send with Shift+Enter newline, inline errors, and page-local history; updates editor/preview on success without manual refresh; warn before overwriting unsaved edits
+- Backend API: POST /api/docs/{kind}/chat with optional streaming SSE; return updated doc text and agent message on success or error detail on failure
+- Agent prompt includes target doc plus other work docs and recent run summary; instructions to preserve markdown/checkbox structure and return full rewritten doc; run via bounded Codex CLI exec and log with doc-chat marker
+- Validate outputs (non-empty, format sanity), write atomically, leave files untouched on failure; log run id/time, doc kind, message, success/error, file path; optional streaming token rendering if available
+- Testing priority: backend validation/prompt/write/lock scenarios and a lightweight UI chat flow test with mocked network/streaming
