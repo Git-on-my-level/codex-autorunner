@@ -15,8 +15,10 @@ from .config import ConfigError, load_config
 from .engine import Engine, doctor
 from .doc_chat import (
     DocChatBusyError,
+    DocChatError,
     DocChatService,
     DocChatValidationError,
+    _normalize_kind,
 )
 from .pty_session import PTYSession
 from .state import load_state, save_state, RunnerState, now_iso
@@ -159,6 +161,45 @@ def create_app(repo_root: Path) -> FastAPI:
             detail = result.get("detail") or "Doc chat failed"
             raise HTTPException(status_code=500, detail=detail)
         return result
+
+    @app.post("/api/docs/{kind}/chat/apply")
+    async def apply_chat_patch(kind: str):
+        key = _normalize_kind(kind)
+        repo_blocked = doc_chat.repo_blocked_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
+
+        try:
+            async with doc_chat.doc_lock(key):
+                content = doc_chat.apply_saved_patch(key)
+        except DocChatBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except DocChatError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        return {
+            "status": "ok",
+            "kind": key,
+            "content": content,
+            "agent_message": doc_chat.last_agent_message or f"Updated {key.upper()} via doc chat.",
+        }
+
+    @app.post("/api/docs/{kind}/chat/discard")
+    async def discard_chat_patch(kind: str):
+        key = _normalize_kind(kind)
+        try:
+            async with doc_chat.doc_lock(key):
+                content = doc_chat.discard_patch(key)
+        except DocChatError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        return {"status": "ok", "kind": key, "content": content}
+
+    @app.get("/api/docs/{kind}/chat/pending")
+    async def pending_chat_patch(kind: str):
+        key = _normalize_kind(kind)
+        pending = doc_chat.pending_patch(key)
+        if not pending:
+            raise HTTPException(status_code=404, detail="No pending patch")
+        return pending
 
     @app.post("/api/ingest-spec")
     def ingest_spec(payload: Optional[dict] = None):

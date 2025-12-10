@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import textwrap
 
 import pytest
 import yaml
@@ -83,7 +84,9 @@ def test_chat_success_writes_doc_and_returns_agent_message(
 
     async def fake_run(self, prompt: str, chat_id: str) -> str:  # type: ignore[override]
         prompts.append(prompt)
-        return "Agent: cleaned\n- [ ] rewritten task"
+        path = self.engine.config.doc_path("todo")
+        path.write_text("- [ ] rewritten task\n- [x] done task\n", encoding="utf-8")
+        return "Agent: cleaned"
 
     monkeypatch.setattr(DocChatService, "_run_codex_cli", fake_run)
     monkeypatch.setattr(DocChatService, "_recent_run_summary", lambda self: "last run summary")
@@ -94,10 +97,19 @@ def test_chat_success_writes_doc_and_returns_agent_message(
     data = res.json()
     assert data["status"] == "ok"
     assert data["agent_message"] == "cleaned"
-    assert data["content"].strip() == "- [ ] rewritten task"
+    assert "- [ ] rewritten task" in data["patch"]
 
     doc_path = repo / ".codex-autorunner" / "TODO.md"
-    assert doc_path.read_text(encoding="utf-8").strip() == "- [ ] rewritten task"
+    assert "rewritten" in doc_path.read_text(encoding="utf-8")
+
+    res_apply = client.post("/api/docs/todo/chat/apply")
+    assert res_apply.status_code == 200, res_apply.text
+    applied = res_apply.json()
+    assert applied["content"].strip().splitlines() == [
+        "- [ ] rewritten task",
+        "- [x] done task",
+    ]
+    assert applied["agent_message"] == "cleaned"
 
     prompt = prompts[0]
     assert "User request: rewrite the todo" in prompt
@@ -109,13 +121,16 @@ def test_chat_validation_failure_does_not_write(repo: Path, monkeypatch: pytest.
     existing = (repo / ".codex-autorunner" / "TODO.md").read_text(encoding="utf-8")
 
     async def fake_run(self, prompt: str, chat_id: str) -> str:  # type: ignore[override]
-        return "Agent: nope\nThis is not a todo list."
+        # overwrite with bad content
+        (repo / ".codex-autorunner" / "TODO.md").write_text("bad content\n", encoding="utf-8")
+        return "Agent: nope"
 
     monkeypatch.setattr(DocChatService, "_run_codex_cli", fake_run)
     client = _client(repo)
     res = client.post("/api/docs/todo/chat", json={"message": "break it"})
-    assert res.status_code == 500
-    assert "checkbox items" in res.json()["detail"]
+    assert res.status_code == 200
+    res_discard = client.post("/api/docs/todo/chat/discard")
+    assert res_discard.status_code == 200
     assert (repo / ".codex-autorunner" / "TODO.md").read_text(encoding="utf-8") == existing
 
 

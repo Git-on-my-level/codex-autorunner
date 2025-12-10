@@ -18,6 +18,7 @@ def test_doc_chat_ui_stream_flow():
             this.disabled = false;
             this.innerHTML = "";
             this.children = [];
+            this.style = {{}};
             this.classList = {{
               classes: new Set(),
               add: (...cls) => cls.forEach((c) => this.classList.classes.add(c)),
@@ -71,7 +72,7 @@ def test_doc_chat_ui_stream_flow():
           'data: {{"status":"running"}}',
           '',
           'event: update',
-          'data: {{"status":"ok","content":"- [ ] streamed task","agent_message":"Done"}}',
+          'data: {{"status":"ok","patch":"--- a/.codex-autorunner/TODO.md\\\\n+++ b/.codex-autorunner/TODO.md\\\\n@@\\\\n- [ ] first\\\\n+ [ ] streamed task","agent_message":"Done"}}',
           '',
           'event: done',
           'data: {{"status":"ok"}}',
@@ -98,6 +99,26 @@ def test_doc_chat_ui_stream_flow():
               }},
             }};
           }}
+          if (urlStr.includes("/chat/apply")) {{
+            return {{
+              ok: true,
+              headers: {{ get: () => "application/json" }},
+              json: async () => ({{
+                status: "ok",
+                content: "- [ ] streamed task",
+                agent_message: "Done",
+              }}),
+              text: async () => "{{}}",
+            }};
+          }}
+          if (urlStr.includes("/chat/discard")) {{
+            return {{
+              ok: true,
+              headers: {{ get: () => "application/json" }},
+              json: async () => ({{ status: "ok" }}),
+              text: async () => "{{}}",
+            }};
+          }}
           return {{
             ok: true,
             headers: {{ get: () => "application/json" }},
@@ -122,10 +143,14 @@ def test_doc_chat_ui_stream_flow():
           status: "running",
           time: Date.now(),
           lastAppliedContent: null,
+          patch: "",
         }};
         state.history.unshift(entry);
 
         await helpers.performDocChatRequest("todo", entry, state);
+        assert.equal(state.patch.includes("streamed task"), true);
+        assert.equal(textarea.value.trim(), "");
+        await helpers.applyPatch("todo");
         state.status = entry.status === "error" ? "error" : "idle";
         helpers.renderChat("todo");
 

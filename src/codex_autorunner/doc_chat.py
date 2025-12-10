@@ -1,10 +1,13 @@
 import asyncio
+import difflib
 import json
+import subprocess
 import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator, Dict, Optional, Tuple
+from pathlib import Path
+from typing import AsyncIterator, Dict, List, Optional, Tuple
 
 from asyncio.subprocess import PIPE, STDOUT
 
@@ -14,6 +17,8 @@ from .utils import atomic_write
 
 ALLOWED_DOC_KINDS = ("todo", "progress", "opinions", "spec")
 DOC_CHAT_TIMEOUT_SECONDS = 180
+DOC_CHAT_PATCH_NAME = "doc-chat.patch"
+DOC_CHAT_BACKUP_NAME = "doc-chat.backup"
 
 
 @dataclass
@@ -62,12 +67,11 @@ DOC_CHAT_PROMPT_TEMPLATE = """You are Codex, an autonomous coding assistant help
 
 Target doc: {doc_title}
 User request: {message}
+Doc path: {target_path}
 
 Instructions:
-- Update only the {doc_title} document.
-- Preserve Markdown structure and checkbox syntax; do not drop sections.
-- Return the fully rewritten {doc_title} content. Optionally begin with one short summary line prefixed with "Agent:" followed by the updated document.
-- Do not include diffs or explanations outside of the optional summary line.
+- Update only the {doc_title} document at {target_path}. Edit the file directly.
+- Keep stdout minimal: optionally print one short summary prefixed with "Agent:"; do not print diffs or extra logs.
 
 <WORK_DOCS>
 <TODO>
@@ -102,6 +106,9 @@ class DocChatService:
             key: asyncio.Lock() for key in ALLOWED_DOC_KINDS
         }
         self._recent_summary_cache: Optional[str] = None
+        self.patch_path = self.engine.repo_root / ".codex-autorunner" / DOC_CHAT_PATCH_NAME
+        self.backup_path = self.engine.repo_root / ".codex-autorunner" / DOC_CHAT_BACKUP_NAME
+        self.last_agent_message: Optional[str] = None
 
     def parse_request(
         self, kind: str, payload: Optional[dict]
@@ -193,6 +200,8 @@ class DocChatService:
             spec=docs.get("spec", ""),
             recent_run_block=recent_section,
             target_doc=target_doc,
+            target_path=str(self.engine.config.doc_path(request.kind)),
+            patch_path=str(self.patch_path),
         )
 
     async def _run_codex_cli(self, prompt: str, chat_id: str) -> str:
@@ -229,51 +238,193 @@ class DocChatService:
             raise DocChatError("Codex CLI produced no output")
         return output
 
-    def _parse_agent_output(
-        self, output: str, kind: str
-    ) -> Tuple[str, str]:
+    @staticmethod
+    def _parse_agent_message(output: str, kind: str) -> str:
         text = (output or "").strip()
         if not text:
-            raise DocChatValidationError("Agent returned empty output")
-        agent_message = ""
-        content = text
-        if text.lower().startswith("agent:"):
-            lines = text.splitlines()
-            agent_message = lines[0][len("agent:") :].strip()
-            content = "\n".join(lines[1:]).lstrip()
-        if agent_message and not content.strip():
-            raise DocChatValidationError("Agent response missing document content")
-        if not content.strip():
-            raise DocChatValidationError("Agent returned empty document content")
-        return agent_message or f"Updated {kind.upper()} via doc chat.", content
+            return f"Updated {kind.upper()} via doc chat."
+        for line in text.splitlines():
+            if line.lower().startswith("agent:"):
+                return line[len("agent:") :].strip() or f"Updated {kind.upper()} via doc chat."
+        return text.splitlines()[0].strip()
 
-    def _validate_doc_content(self, kind: str, content: str) -> str:
-        if not isinstance(content, str):
-            raise DocChatValidationError("Agent returned non-string content")
-        text = content.strip("\n")
+    def _cleanup_patch(self) -> None:
+        if self.patch_path.exists():
+            try:
+                self.patch_path.unlink()
+            except OSError:
+                pass
+        if self.backup_path.exists():
+            try:
+                self.backup_path.unlink()
+            except OSError:
+                pass
+
+    def _read_patch(self) -> str:
+        if not self.patch_path.exists():
+            raise DocChatError("Agent did not produce a patch file")
+        text = self.patch_path.read_text(encoding="utf-8")
         if not text.strip():
-            raise DocChatValidationError("Agent returned empty document content")
-        lower_text = text.lower()
-        if "<work_docs>" in lower_text or "<target_doc>" in lower_text:
-            raise DocChatValidationError("Agent output contained prompt markers")
-        if kind == "todo":
-            checkbox_lines = []
-            for line in text.splitlines():
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                if stripped.startswith("- ["):
-                    checkbox_lines.append(stripped)
-                    if not (
-                        stripped.startswith("- [ ]")
-                        or stripped.lower().startswith("- [x]")
-                    ):
-                        raise DocChatValidationError(
-                            f"Malformed TODO checkbox line: {stripped}"
-                        )
-            if not checkbox_lines:
-                raise DocChatValidationError("TODO content missing checkbox items")
+            raise DocChatError("Agent produced an empty patch")
+        return text
+
+    def _normalize_apply_patch_format(self, patch_text: str) -> Tuple[str, Optional[str]]:
+        if "*** begin patch" not in patch_text.lower():
+            return patch_text, None
+        lines = patch_text.splitlines()
+        target_path: Optional[str] = None
+        body_lines: List[str] = []
+        for line in lines:
+            if line.lower().startswith("*** update file:"):
+                target_path = line.split(":", 1)[1].strip()
+                continue
+            if line.startswith("***"):
+                continue
+            if line.startswith("@@"):
+                body_lines.append(line)
+                continue
+            if line.startswith("+"):
+                payload = line[1:]
+                if payload.startswith("+"):
+                    payload = payload[1:]
+                body_lines.append("+" + payload)
+                continue
+            if line.startswith("-"):
+                payload = line[1:]
+                if payload.startswith("-"):
+                    payload = payload[1:]
+                body_lines.append("-" + payload)
+                continue
+            if line.startswith(" "):
+                payload = line[1:]
+                if payload.startswith(" "):
+                    payload = payload[1:]
+                body_lines.append(" " + payload)
+                continue
+        if not target_path:
+            raise DocChatError("Patch missing target path")
+        header = f"--- a/{target_path}\n+++ b/{target_path}\n"
+        return header + "\n".join(body_lines) + ("\n" if body_lines else ""), target_path
+
+    def _normalize_patch(self, patch_text: str, kind: str) -> Tuple[str, Optional[str]]:
+        normalized, target = self._normalize_apply_patch_format(patch_text)
+        normalized = self._ensure_headers(normalized, kind)
+        return normalized, target
+
+    def _ensure_headers(self, patch_text: str, kind: str) -> str:
+        lines = patch_text.splitlines()
+        has_headers = any(line.startswith("--- ") for line in lines) and any(
+            line.startswith("+++ ") for line in lines
+        )
+        if has_headers:
+            return patch_text
+        target_path = str(self.engine.config.doc_path(kind).relative_to(self.engine.repo_root))
+        header = f"--- a/{target_path}\n+++ b/{target_path}\n"
+        return header + ("\n" if lines and not lines[0].startswith("@@") else "") + patch_text
+
+    def _patch_targets(self, patch_text: str) -> List[str]:
+        targets: List[str] = []
+        for line in patch_text.splitlines():
+            if line.startswith("--- ") or line.startswith("+++ "):
+                parts = line.split()
+                if len(parts) >= 2:
+                    target = parts[1]
+                    if target != "/dev/null":
+                        targets.append(target)
+        return targets
+
+    def _apply_patch(self, patch_text: str, kind: str) -> None:
+        targets = self._patch_targets(patch_text)
+        if not targets:
+            raise DocChatError("Patch file missing file headers")
+        target_path = self.engine.config.doc_path(kind)
+        normalized_target = str(target_path.relative_to(self.engine.repo_root))
+        normalized = []
+        for path in targets:
+            p = path
+            if p.startswith("a/") or p.startswith("b/"):
+                p = p[2:]
+            normalized.append(p)
+        if any(p != normalized_target for p in normalized):
+            raise DocChatError(f"Patch referenced unexpected files: {', '.join(targets)}")
+
+        strip = 1 if all(t.startswith(("a/", "b/")) for t in targets) else 0
+        cmd = [
+            "patch",
+            f"-p{strip}",
+            "--batch",
+            "--quiet",
+            "-i",
+            str(self.patch_path),
+        ]
+        proc = subprocess.run(
+            cmd,
+            cwd=str(self.engine.repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if proc.returncode != 0:
+            raise DocChatError(f"Failed to apply patch: {proc.stdout.strip() or proc.returncode}")
+        self._cleanup_patch()
+
+    def apply_saved_patch(self, kind: str) -> str:
+        # Agent already wrote to the file. Apply = finalize and clean backups.
+        patch_text_raw = self._read_patch()
+        patch_text, _ = self._normalize_patch(patch_text_raw, kind)
+        targets = self._patch_targets(patch_text)
+        target_path = self.engine.config.doc_path(kind)
+        normalized_target = str(target_path.relative_to(self.engine.repo_root))
+        normalized = []
+        for path in targets:
+            p = path
+            if p.startswith("a/") or p.startswith("b/"):
+                p = p[2:]
+            normalized.append(p)
+        if any(p != normalized_target for p in normalized):
+            raise DocChatError(f"Patch referenced unexpected files: {', '.join(targets)}")
+        if self.backup_path.exists():
+            try:
+                self.backup_path.unlink()
+            except OSError:
+                pass
+        self._cleanup_patch()
+        content = target_path.read_text(encoding="utf-8")
         return content
+
+    def discard_patch(self, kind: str) -> str:
+        target_path = self.engine.config.doc_path(kind)
+        if self.backup_path.exists():
+            atomic_write(target_path, self.backup_path.read_text(encoding="utf-8"))
+        self._cleanup_patch()
+        return target_path.read_text(encoding="utf-8")
+
+    def pending_patch(self, kind: str) -> Optional[dict]:
+        if not self.patch_path.exists():
+            return None
+        try:
+            patch_text_raw = self._read_patch()
+            patch_text, target = self._normalize_patch(patch_text_raw, kind)
+        except DocChatError:
+            return None
+        targets = self._patch_targets(patch_text)
+        if not targets:
+            return None
+        target_path = targets[0]
+        normalized_target = target_path
+        if normalized_target.startswith(("a/", "b/")):
+            normalized_target = normalized_target[2:]
+        expected = str(self.engine.config.doc_path(kind).relative_to(self.engine.repo_root))
+        if normalized_target != expected:
+            return None
+        return {
+            "status": "ok",
+            "kind": kind,
+            "patch": patch_text,
+            "agent_message": self.last_agent_message
+            or f"Pending patch for {kind.upper()}",
+            "content": self.engine.config.doc_path(kind).read_text(encoding="utf-8"),
+        }
 
     async def execute(self, request: DocChatRequest) -> dict:
         chat_id = self._chat_id()
@@ -285,15 +436,33 @@ class DocChatService:
             f"start kind={request.kind} path={doc_pointer} message=\"{message_for_log}\"",
         )
         try:
+            self._cleanup_patch()
+            # Backup current doc before the agent edits it.
+            target_doc_path = self.engine.config.doc_path(request.kind)
+            if target_doc_path.exists():
+                self.backup_path.write_text(target_doc_path.read_text(encoding="utf-8"), encoding="utf-8")
+            else:
+                self.backup_path.write_text("", encoding="utf-8")
             prompt = self._build_prompt(request)
             output = await self._run_codex_cli(prompt, chat_id)
-            agent_message, content = self._parse_agent_output(output, request.kind)
-            content = self._validate_doc_content(request.kind, content)
-            atomic_write(self.engine.config.doc_path(request.kind), content)
-            self._log(
-                chat_id,
-                f"wrote {request.kind} to {self.engine.config.doc_path(request.kind)}",
+            agent_message = self._parse_agent_message(output, request.kind)
+            # Generate patch from backup vs current file after agent edits.
+            after_text = target_doc_path.read_text(encoding="utf-8")
+            before_text = self.backup_path.read_text(encoding="utf-8") if self.backup_path.exists() else ""
+            rel_path = str(target_doc_path.relative_to(self.engine.repo_root))
+            patch_text = "\n".join(
+                difflib.unified_diff(
+                    before_text.splitlines(),
+                    after_text.splitlines(),
+                    fromfile=f"a/{rel_path}",
+                    tofile=f"b/{rel_path}",
+                    lineterm="",
+                )
             )
+            if not patch_text.strip():
+                patch_text = "--- a/{path}\n+++ b/{path}\n@@\n".format(path=rel_path)
+            self.patch_path.write_text(patch_text, encoding="utf-8")
+            self.last_agent_message = agent_message
             duration_ms = int((time.time() - started_at) * 1000)
             self._log(
                 chat_id,
@@ -304,7 +473,8 @@ class DocChatService:
             return {
                 "status": "ok",
                 "kind": request.kind,
-                "content": content,
+                "patch": patch_text,
+                "content": after_text,
                 "agent_message": agent_message,
             }
         except DocChatError as exc:
@@ -316,6 +486,11 @@ class DocChatService:
                 f"kind={request.kind} path={doc_pointer} duration_ms={duration_ms} "
                 f"message=\"{message_for_log}\" detail=\"{detail}\"",
             )
+            # Restore backup on error
+            if self.backup_path.exists():
+                target_doc_path = self.engine.config.doc_path(request.kind)
+                atomic_write(target_doc_path, self.backup_path.read_text(encoding="utf-8"))
+            self._cleanup_patch()
             return {"status": "error", "detail": str(exc)}
         except Exception as exc:  # pragma: no cover - defensive
             duration_ms = int((time.time() - started_at) * 1000)

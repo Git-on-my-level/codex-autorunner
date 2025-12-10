@@ -26,6 +26,12 @@ const chatUI = {
   status: document.getElementById("doc-chat-status"),
   response: document.getElementById("doc-chat-response"),
   responseWrapper: document.getElementById("doc-chat-response-wrapper"),
+  patchMain: document.getElementById("doc-patch-main"),
+  patchSummary: document.getElementById("doc-patch-summary"),
+  patchBody: document.getElementById("doc-patch-body"),
+  patchApply: document.getElementById("doc-patch-apply"),
+  patchDiscard: document.getElementById("doc-patch-discard"),
+  patchReload: document.getElementById("doc-patch-reload"),
   history: document.getElementById("doc-chat-history"),
   historyDetails: document.getElementById("doc-chat-history-details"),
   historyCount: document.getElementById("doc-chat-history-count"),
@@ -48,6 +54,7 @@ function createChatState() {
     error: "",
     streamText: "",
     controller: null,
+    patch: "",
   };
 }
 
@@ -71,6 +78,7 @@ function parseChatPayload(payload) {
   return {
     response: payload.agent_message || payload.message || payload.content || "",
     content: payload.content || "",
+    patch: payload.patch || "",
   };
 }
 
@@ -157,10 +165,15 @@ function renderChat(kind = activeDoc) {
   chatUI.input.disabled = isRunning;
   chatUI.cancel.classList.toggle("hidden", !isRunning);
 
-  // Update hint text
-  chatUI.hint.textContent = isRunning
-    ? state.statusText || "Processing..."
-    : "Shift+Enter to send";
+  // Update hint text - show status inline when running
+  if (isRunning) {
+    const statusText = state.statusText || "processing";
+    chatUI.hint.textContent = statusText;
+    chatUI.hint.classList.add("loading");
+  } else {
+    chatUI.hint.textContent = "Shift+Enter to send";
+    chatUI.hint.classList.remove("loading");
+  }
 
   // Handle error display
   if (hasError) {
@@ -171,19 +184,34 @@ function renderChat(kind = activeDoc) {
     chatUI.error.classList.add("hidden");
   }
 
-  // Compute response text
+  // Compute response text - only show actual content, not placeholders
   let responseText = "";
-  if (isRunning) {
-    responseText = state.streamText || "Waiting for response...";
-  } else if (latest && (latest.response || latest.error)) {
+  if (isRunning && state.streamText) {
+    responseText = state.streamText;
+  } else if (!isRunning && latest && (latest.response || latest.error)) {
     responseText = latest.response || latest.error;
   }
 
-  // Show/hide response wrapper based on content
-  const hasResponse = !!responseText || hasError;
-  chatUI.responseWrapper.classList.toggle("hidden", !hasResponse);
+  // Show response wrapper only when there's real content or an error
+  const showResponse = !!responseText || hasError;
+  chatUI.responseWrapper.classList.toggle("hidden", !showResponse);
   chatUI.response.textContent = responseText;
-  chatUI.response.classList.toggle("muted", isRunning && !state.streamText);
+  chatUI.response.classList.toggle("streaming", isRunning && state.streamText);
+
+  const hasPatch = !!(state.patch && state.patch.trim());
+  if (chatUI.patchMain) {
+    chatUI.patchMain.classList.toggle("hidden", !hasPatch);
+    chatUI.patchBody.textContent = hasPatch ? state.patch : "(no patch)";
+    chatUI.patchSummary.textContent = latest?.response || state.error || "";
+    if (chatUI.patchApply) chatUI.patchApply.disabled = isRunning || !hasPatch;
+    if (chatUI.patchDiscard) chatUI.patchDiscard.disabled = isRunning || !hasPatch;
+    if (chatUI.patchReload) chatUI.patchReload.disabled = isRunning;
+  }
+
+  const docContent = getDocTextarea();
+  if (docContent) {
+    docContent.classList.toggle("hidden", hasPatch);
+  }
 
   renderChatHistory(state);
 }
@@ -217,8 +245,28 @@ function renderChatHistory(state) {
     response.textContent = truncateText(preview, 80);
     response.title = preview;
 
-    const meta = document.createElement("div");
-    meta.className = "meta";
+    const detail = document.createElement("details");
+    detail.className = "doc-chat-entry-detail";
+    const summary = document.createElement("summary");
+    summary.textContent = "View details";
+    const body = document.createElement("div");
+    body.className = "doc-chat-entry-body";
+    if (entry.response) {
+      const respBlock = document.createElement("pre");
+      respBlock.textContent = entry.response;
+      body.appendChild(respBlock);
+    }
+    if (entry.patch) {
+      const patchBlock = document.createElement("pre");
+      patchBlock.className = "doc-chat-entry-patch";
+      patchBlock.textContent = entry.patch;
+      body.appendChild(patchBlock);
+    }
+    detail.appendChild(summary);
+    detail.appendChild(body);
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
 
     const dot = document.createElement("span");
     dot.className = "status-dot";
@@ -234,11 +282,12 @@ function renderChatHistory(state) {
     meta.appendChild(dot);
     meta.appendChild(stamp);
 
-    wrapper.appendChild(prompt);
-    wrapper.appendChild(response);
-    wrapper.appendChild(meta);
-    chatUI.history.appendChild(wrapper);
-  });
+  wrapper.appendChild(prompt);
+  wrapper.appendChild(response);
+    wrapper.appendChild(detail);
+  wrapper.appendChild(meta);
+  chatUI.history.appendChild(wrapper);
+});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -250,6 +299,7 @@ function markChatError(state, entry, message) {
   entry.error = message;
   state.error = message;
   state.status = "error";
+  state.patch = "";
   renderChat();
 }
 
@@ -284,6 +334,7 @@ async function sendDocChat() {
     status: "running",
     time: Date.now(),
     lastAppliedContent: null,
+    patch: "",
   };
   state.history.unshift(entry);
   if (state.history.length > CHAT_HISTORY_LIMIT * 2) {
@@ -292,8 +343,14 @@ async function sendDocChat() {
   state.status = "running";
   state.error = "";
   state.streamText = "";
+  state.patch = "";
   state.statusText = "queued";
   state.controller = new AbortController();
+
+  // Collapse history when starting new request for compact view
+  if (chatUI.historyDetails) {
+    chatUI.historyDetails.removeAttribute("open");
+  }
 
   renderChat();
   chatUI.input.value = "";
@@ -362,6 +419,84 @@ async function performDocChatRequest(kind, entry, state) {
   }
 }
 
+async function applyPatch(kind = activeDoc) {
+  const state = getChatState(kind);
+  if (!state.patch) {
+    flash("No patch to apply", "error");
+    return;
+  }
+  try {
+    const res = await api(`/api/docs/${kind}/chat/apply`, { method: "POST" });
+    const applied = parseChatPayload(res);
+    if (applied.error) throw new Error(applied.error);
+    if (applied.content) {
+      applyDocUpdateFromChat(kind, applied.content);
+    }
+    state.patch = "";
+    const latest = state.history[0];
+    if (latest) latest.status = "done";
+    flash("Patch applied");
+  } catch (err) {
+    flash(err.message || "Failed to apply patch", "error");
+  } finally {
+    renderChat(kind);
+  }
+}
+
+async function discardPatch(kind = activeDoc) {
+  const state = getChatState(kind);
+  if (!state.patch) return;
+  try {
+    const res = await api(`/api/docs/${kind}/chat/discard`, { method: "POST" });
+    const parsed = parseChatPayload(res);
+    if (parsed.content) {
+      applyDocUpdateFromChat(kind, parsed.content);
+    }
+    state.patch = "";
+    const latest = state.history[0];
+    if (latest && latest.status === "needs-apply") {
+      latest.status = "done";
+    }
+    flash("Discarded chat patch");
+  } catch (err) {
+    flash(err.message || "Failed to discard patch", "error");
+  } finally {
+    renderChat(kind);
+  }
+}
+
+async function reloadPatch(kind = activeDoc, silent = false) {
+  const state = getChatState(kind);
+  try {
+    const res = await api(`/api/docs/${kind}/chat/pending`, { method: "GET" });
+    const parsed = parseChatPayload(res);
+    if (parsed.error) throw new Error(parsed.error);
+    if (parsed.patch) {
+      state.patch = parsed.patch;
+      const entry = state.history[0] || {
+        id: `${Date.now()}`,
+        prompt: "(pending patch)",
+        response: parsed.response || "",
+        status: "needs-apply",
+        time: Date.now(),
+        lastAppliedContent: null,
+        patch: parsed.patch,
+      };
+      entry.patch = parsed.patch;
+      entry.response = parsed.response || entry.response;
+      entry.status = "needs-apply";
+      if (!state.history[0]) state.history.unshift(entry);
+      if (parsed.content) {
+        applyDocUpdateFromChat(kind, parsed.content);
+      }
+      renderChat(kind);
+      if (!silent) flash("Loaded pending patch");
+    }
+  } catch (err) {
+    if (!silent) flash(err.message || "No pending patch", "error");
+  }
+}
+
 async function readChatStream(res, state, entry, kind) {
   if (!res.body) throw new Error("Streaming not supported in this browser");
   const reader = res.body.getReader();
@@ -411,10 +546,13 @@ async function handleStreamEvent(event, rawData, state, entry, kind) {
     const payload = parseChatPayload(parsed);
     entry.response = payload.response || entry.response;
     state.streamText = entry.response;
-    if (payload.content && payload.content !== entry.lastAppliedContent) {
-      const applied = applyDocUpdateFromChat(kind, payload.content);
-      if (applied) {
-        entry.lastAppliedContent = payload.content;
+    if (payload.patch) {
+      state.patch = payload.patch;
+      entry.patch = payload.patch;
+      entry.status = "needs-apply";
+      entry.response = payload.response || entry.response;
+      if (payload.content) {
+        applyDocUpdateFromChat(kind, payload.content);
       }
     }
     renderChat(kind);
@@ -444,11 +582,11 @@ function applyChatResult(payload, state, entry, kind = activeDoc) {
   entry.status = "done";
   entry.response = parsed.response || "(no response)";
   state.streamText = entry.response;
-  if (parsed.content) {
-    const applied = applyDocUpdateFromChat(kind, parsed.content);
-    if (applied) {
-      entry.lastAppliedContent = parsed.content;
-    }
+  if (parsed.patch) {
+    state.patch = parsed.patch;
+    entry.patch = parsed.patch;
+    entry.status = "needs-apply";
+    entry.response = parsed.response || entry.response;
   }
 }
 
@@ -508,6 +646,7 @@ function setDoc(kind) {
   document.getElementById(
     "doc-status"
   ).textContent = `Editing ${kind.toUpperCase()}`;
+  reloadPatch(kind, true);
   renderChat(kind);
 }
 
@@ -550,6 +689,13 @@ export function initDocs() {
   document.getElementById("clear-docs").addEventListener("click", clearDocs);
   chatUI.send.addEventListener("click", sendDocChat);
   chatUI.cancel.addEventListener("click", cancelDocChat);
+  if (chatUI.patchApply)
+    chatUI.patchApply.addEventListener("click", () => applyPatch(activeDoc));
+  if (chatUI.patchDiscard)
+    chatUI.patchDiscard.addEventListener("click", () => discardPatch(activeDoc));
+  if (chatUI.patchReload)
+    chatUI.patchReload.addEventListener("click", () => reloadPatch(activeDoc, true));
+  reloadPatch(activeDoc, true);
 
   // Shift+Enter sends, Enter adds newline (default textarea behavior)
   chatUI.input.addEventListener("keydown", (e) => {
@@ -640,6 +786,9 @@ async function clearDocs() {
 export const __docChatTest = {
   applyChatResult,
   applyDocUpdateFromChat,
+  applyPatch,
+  reloadPatch,
+  discardPatch,
   getChatState,
   handleStreamEvent,
   performDocChatRequest,

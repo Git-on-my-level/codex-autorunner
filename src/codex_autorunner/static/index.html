@@ -83,12 +83,26 @@
             <span class="muted" id="doc-status"></span>
           </div>
           <div class="doc-editor">
+            <div id="doc-patch-main" class="doc-patch-main hidden">
+              <div class="doc-patch-header">
+                <div>
+                  <div class="muted small">Pending patch</div>
+                  <div id="doc-patch-summary" class="doc-patch-summary"></div>
+                </div>
+                <div class="doc-patch-actions">
+                  <button id="doc-patch-apply" class="primary sm">Apply patch</button>
+                  <button id="doc-patch-reload" class="ghost sm">Reload</button>
+                  <button id="doc-patch-discard" class="ghost sm">Discard</button>
+                </div>
+              </div>
+              <pre id="doc-patch-body" class="doc-patch-body">(no patch)</pre>
+            </div>
             <textarea id="doc-content" spellcheck="false"></textarea>
             <div class="doc-actions">
-              <button id="save-doc" class="primary">Save</button>
-              <button id="reload-doc" class="ghost">Reload</button>
-              <button id="ingest-spec" class="ghost">Ingest SPEC → Docs</button>
-              <button id="clear-docs" class="danger">Clear TODO/PROGRESS/OPINIONS</button>
+              <button id="save-doc" class="primary" data-short="Save">Save</button>
+              <button id="reload-doc" class="ghost" data-short="Reload">Reload</button>
+              <button id="ingest-spec" class="ghost" data-short="Ingest">Ingest SPEC → Docs</button>
+              <button id="clear-docs" class="danger" data-short="Clear">Clear TODO/PROGRESS/OPINIONS</button>
             </div>
             <div class="doc-chat-panel">
               <div class="doc-chat-compose">
