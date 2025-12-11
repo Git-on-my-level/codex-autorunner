@@ -37,6 +37,21 @@ CLI commands are available as `codex-autorunner` or the shorter `car`.
   - Copy `docs/ops/launchd-hub-example.plist` to `~/Library/LaunchAgents/com.codex.autorunner.plist`, replace `/Users/you` with your home, adjust host/port if desired, then `launchctl load -w ~/Library/LaunchAgents/com.codex.autorunner.plist`.
 - The hub serves the UI/API from `http://<host>:<port>` and writes logs to `~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`. Each repo under `~/car-workspace` should be a git repo with its own `.codex-autorunner/` (run `car init` in each).
 
+## Refresh a launchd hub to the current branch
+When you change code in this repo and want the launchd-managed hub to run it:
+1) Reinstall into the launchd venv (pipx default paths shown; adjust if your label/paths differ):
+```
+$HOME/.local/pipx/venvs/codex-autorunner/bin/python -m pip install --force-reinstall --no-deps /path/to/your/codex-autorunner
+```
+2) Restart the agent so it picks up the new bits (default label is `com.codex.autorunner`; default plist `~/Library/LaunchAgents/com.codex.autorunner.plist`):
+```
+launchctl unload ~/Library/LaunchAgents/com.codex.autorunner.plist 2>/dev/null || true
+launchctl load -w ~/Library/LaunchAgents/com.codex.autorunner.plist
+launchctl kickstart -k gui/$(id -u)/com.codex.autorunner
+```
+3) Tail the hub log to confirm it booted: `tail -n 50 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`.
+4) One-liner on this machine: `make refresh-launchd` (overrides available: `PIPX_PYTHON`, `LAUNCH_AGENT`, `LAUNCH_LABEL`).
+
 ## Git hooks
 - Install dev tools: `pip install -e .[dev]`
 - Point Git to the repo hooks: `git config core.hooksPath .githooks`

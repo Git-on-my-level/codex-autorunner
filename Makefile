@@ -6,9 +6,13 @@ HUB_PORT ?= 4517
 HUB_BASE_PATH ?= /car
 CAR_ROOT ?= $(HOME)/car-workspace
 LAUNCH_AGENT ?= $(HOME)/Library/LaunchAgents/com.codex.autorunner.plist
+LAUNCH_LABEL ?= com.codex.autorunner
 NVM_BIN ?= $(HOME)/.nvm/versions/node/v22.12.0/bin
 LOCAL_BIN ?= $(HOME)/.local/bin
 PY39_BIN ?= $(HOME)/Library/Python/3.9/bin
+PIPX_ROOT ?= $(HOME)/.local/pipx
+PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
+PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
 .PHONY: install dev hooks test check serve serve-dev launchd-hub
 
@@ -64,3 +68,12 @@ EOF
 	@launchctl unload -w $(LAUNCH_AGENT) >/dev/null 2>&1 || true
 	launchctl load -w $(LAUNCH_AGENT)
 	launchctl kickstart -k gui/$$(id -u)/com.codex.autorunner
+
+.PHONY: refresh-launchd
+refresh-launchd:
+	@echo "Reinstalling codex-autorunner into pipx venv at $(PIPX_VENV)..."
+	$(PIPX_PYTHON) -m pip install --force-reinstall --no-deps $(CURDIR)
+	@echo "Reloading launchd agent $(LAUNCH_AGENT)..."
+	launchctl unload $(LAUNCH_AGENT) >/dev/null 2>&1 || true
+	launchctl load -w $(LAUNCH_AGENT)
+	launchctl kickstart -k gui/$$(id -u)/$(LAUNCH_LABEL)
