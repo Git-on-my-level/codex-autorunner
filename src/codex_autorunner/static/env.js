@@ -14,6 +14,7 @@ if (segments.length >= 2 && segments[1] === "repos") {
 
 export const REPO_ID = repoId;
 export const BASE_PATH = repoId ? `${basePrefix}/repos/${repoId}` : basePrefix;
+export const HUB_BASE = basePrefix || "/";
 
 let mode = repoId ? "repo" : "unknown";
 const hubEndpoint = `${basePrefix || ""}/hub/repos`;

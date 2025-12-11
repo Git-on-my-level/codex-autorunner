@@ -1,4 +1,4 @@
-import { detectContext, REPO_ID } from "./env.js";
+import { detectContext, REPO_ID, HUB_BASE } from "./env.js";
 import { initHub } from "./hub.js";
 import { initTabs, registerTab } from "./tabs.js";
 import { initDashboard } from "./dashboard.js";
@@ -13,7 +13,7 @@ function initRepoShell() {
     const navBar = document.querySelector(".nav-bar");
     if (navBar) {
       const backBtn = document.createElement("a");
-      backBtn.href = "/";
+      backBtn.href = HUB_BASE || "/";
       backBtn.className = "hub-back-btn";
       backBtn.textContent = "← Hub";
       backBtn.title = "Back to Hub";
