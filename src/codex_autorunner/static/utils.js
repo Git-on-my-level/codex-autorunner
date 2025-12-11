@@ -10,9 +10,6 @@ export function resolvePath(path) {
   if (absolutePrefixes.some((prefix) => path.startsWith(prefix))) {
     return path;
   }
-  if (path.startsWith("/hub")) {
-    return path;
-  }
   if (!BASE_PATH) {
     return path;
   }

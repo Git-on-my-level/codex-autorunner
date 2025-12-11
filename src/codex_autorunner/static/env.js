@@ -1,18 +1,41 @@
 const hasWindow = typeof window !== "undefined" && typeof window.location !== "undefined";
-const pathname = hasWindow ? window.location.pathname : "";
-const segments = pathname.split("/").filter(Boolean);
+const pathname = hasWindow ? window.location.pathname || "/" : "/";
 
-let basePrefix = "";
-let repoId = null;
+function normalizeBase(base) {
+  if (!base || base === "/") return "";
+  let normalized = base.startsWith("/") ? base : `/${base}`;
+  while (normalized.endsWith("/") && normalized.length > 1) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized === "/" ? "" : normalized;
+}
 
-if (segments.length) {
-  basePrefix = `/${segments[0]}`;
+function detectBasePrefix(path) {
+  const prefixes = ["/repos/", "/hub/", "/api/", "/static/", "/cat/"];
+  let idx = -1;
+  for (const prefix of prefixes) {
+    const found = path.indexOf(prefix);
+    if (found === 0) {
+      return "";
+    }
+    if (found > 0 && (idx === -1 || found < idx)) {
+      idx = found;
+    }
+  }
+  if (idx > 0) {
+    return normalizeBase(path.slice(0, idx));
+  }
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length) {
+    return normalizeBase(`/${parts[0]}`);
+  }
+  return "";
 }
-if (segments.length >= 2 && segments[1] === "repos") {
-  repoId = segments[2] || null;
-} else if (!basePrefix && segments[0] === "repos") {
-  repoId = segments[1] || null;
-}
+
+const basePrefix = detectBasePrefix(pathname);
+
+const repoMatch = pathname.match(/\/repos\/([^/]+)/);
+const repoId = repoMatch && repoMatch[1] ? repoMatch[1] : null;
 
 export const REPO_ID = repoId;
 export const BASE_PATH = repoId ? `${basePrefix}/repos/${repoId}` : basePrefix;

@@ -41,71 +41,99 @@ from .usage import (
 from .manifest import load_manifest
 
 
-class BasePathMiddleware:
+class BasePathRouterMiddleware:
     """
-    Lightweight ASGI middleware to strip a configured base path from incoming
-    http/websocket requests so the app can live under a subpath behind a proxy.
+    Middleware that keeps the app mounted at / while enforcing a canonical base path.
+    - Requests that already include the base path are stripped so routing stays rooted at /.
+    - Requests missing the base path but pointing at known CAR prefixes are redirected to the
+      canonical location (HTTP 308). WebSocket handshakes get the same redirect response.
     """
 
-    def __init__(self, app, base_path: str):
+    def __init__(self, app, base_path: str, known_prefixes=None):
         self.app = app
-        self.base_path = base_path
-        self.base_path_bytes = base_path.encode("utf-8")
+        self.base_path = _normalize_base_path(base_path)
+        self.base_path_bytes = self.base_path.encode("utf-8")
+        self.known_prefixes = tuple(
+            known_prefixes
+            or (
+                "/",
+                "/api",
+                "/hub",
+                "/repos",
+                "/static",
+                "/cat",
+            )
+        )
 
     def __getattr__(self, name):
         return getattr(self.app, name)
 
+    def _has_base(self, path: str, root_path: str) -> bool:
+        if not self.base_path:
+            return True
+        full_path = f"{root_path}{path}" if root_path else path
+        if full_path == self.base_path or full_path.startswith(f"{self.base_path}/"):
+            return True
+        return path == self.base_path or path.startswith(f"{self.base_path}/")
+
+    def _should_redirect(self, path: str, root_path: str) -> bool:
+        if not self.base_path:
+            return False
+        if self._has_base(path, root_path):
+            return False
+        return any(
+            path == prefix
+            or path.startswith(f"{prefix}/")
+            or (root_path and root_path.startswith(prefix))
+            for prefix in self.known_prefixes
+        )
+
+    async def _redirect(self, scope, receive, send, target: str):
+        if scope["type"] == "websocket":
+            headers = [(b"location", target.encode("utf-8"))]
+            await send({"type": "http.response.start", "status": 308, "headers": headers})
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+            return
+        response = RedirectResponse(target, status_code=308)
+        await response(scope, receive, send)
+
     async def __call__(self, scope, receive, send):
         scope_type = scope.get("type")
-        if self.base_path and scope_type in ("http", "websocket"):
-            path = scope.get("path", "")
-            if path.startswith(self.base_path):
-                scope = dict(scope)
+        if scope_type not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+
+        path = scope.get("path") or "/"
+        root_path = scope.get("root_path") or ""
+
+        if not self.base_path:
+            return await self.app(scope, receive, send)
+
+        if self._has_base(path, root_path):
+            scope = dict(scope)
+            if path == self.base_path:
+                scope["path"] = "/"
+                raw_path = scope.get("raw_path")
+                if raw_path:
+                    scope["raw_path"] = b"/"
+            elif path.startswith(f"{self.base_path}/"):
                 trimmed = path[len(self.base_path) :] or "/"
                 scope["path"] = trimmed
                 raw_path = scope.get("raw_path")
                 if raw_path:
                     scope["raw_path"] = raw_path[len(self.base_path_bytes) :] or b"/"
-        return await self.app(scope, receive, send)
+            if root_path:
+                if not root_path.startswith(self.base_path):
+                    scope["root_path"] = f"{self.base_path}{root_path}"
+            else:
+                scope["root_path"] = self.base_path
+            return await self.app(scope, receive, send)
 
+        if self._should_redirect(path, root_path):
+            target_path = f"{self.base_path}{path}"
+            if not target_path:
+                target_path = "/"
+            return await self._redirect(scope, receive, send, target_path)
 
-class BaseRedirectMiddleware:
-    """
-    When a base_path is configured, redirect or remap requests that are missing
-    that prefix but clearly target a known CAR route. This lets upstream proxies
-    stay simple while still keeping a canonical base path.
-    """
-
-    def __init__(self, app, base_path: str, known_prefixes=None):
-        self.app = app
-        self.base_path = base_path
-        self.base_path_bytes = base_path.encode("utf-8")
-        self.known_prefixes = known_prefixes or ("/api", "/hub", "/repos", "/static", "/cat")
-
-    def __getattr__(self, name):
-        return getattr(self.app, name)
-
-    async def __call__(self, scope, receive, send):
-        scope_type = scope.get("type")
-        if self.base_path and scope_type in ("http", "websocket"):
-            path = scope.get("path", "") or ""
-            root_path = scope.get("root_path", "") or ""
-            full_path = f"{root_path}{path}" if root_path else path
-
-            # If upstream already set root_path to the base, treat it as canonical.
-            if path.startswith(self.base_path) or full_path.startswith(self.base_path):
-                return await self.app(scope, receive, send)
-
-            should_redirect = any(
-                path == prefix or path.startswith(prefix + "/") or full_path.startswith(prefix)
-                for prefix in self.known_prefixes
-            )
-            if should_redirect:
-                scope = dict(scope)
-                scope["path"] = f"{self.base_path}{path}"
-                raw_path = scope.get("raw_path")
-                if raw_path:
-                    scope["raw_path"] = self.base_path_bytes + raw_path
         return await self.app(scope, receive, send)
 
 
@@ -196,7 +224,7 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
     config = load_config(repo_root or Path.cwd())
     if isinstance(config, HubConfig):
         raise ConfigError("create_app requires repo mode configuration")
-    root_path = (
+    base_path = (
         _normalize_base_path(base_path) if base_path is not None else config.server_base_path
     )
     engine = Engine(config.root)
@@ -206,7 +234,8 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
     terminal_max_idle_seconds = 3600
     terminal_lock = asyncio.Lock()
 
-    app = FastAPI(root_path=root_path or "")
+    app = FastAPI()
+    app.state.base_path = base_path
     app.state.logger = setup_rotating_logger(
         f"repo[{engine.repo_root}]", engine.config.log
     )
@@ -600,6 +629,9 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
                 session.terminate()
             terminal_sessions.clear()
 
+    if base_path:
+        app = BasePathRouterMiddleware(app, base_path)
+
     return app
 
 
@@ -607,11 +639,12 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
     config = load_config(hub_root or Path.cwd())
     if not isinstance(config, HubConfig):
         raise ConfigError("Hub app requires hub mode configuration")
-    root_path = (
+    base_path = (
         _normalize_base_path(base_path) if base_path is not None else config.server_base_path
     )
     supervisor = HubSupervisor(config)
-    app = FastAPI(root_path=root_path or "")
+    app = FastAPI()
+    app.state.base_path = base_path
     app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.log)
     try:
         app.state.logger.info("Hub app ready at %s", config.root)
@@ -628,7 +661,7 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
         if prefix in mount_errors:
             return False
         try:
-            sub_app = create_app(repo_path)
+            sub_app = create_app(repo_path, base_path=base_path)
         except ConfigError as exc:
             mount_errors[prefix] = str(exc)
             try:
@@ -840,8 +873,8 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
             )
         return FileResponse(index_path)
 
-    if root_path:
-        app = BasePathMiddleware(app, root_path)
+    if base_path:
+        app = BasePathRouterMiddleware(app, base_path)
 
     return app
 

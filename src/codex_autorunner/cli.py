@@ -456,26 +456,26 @@ def serve(
     if isinstance(config, HubConfig):
         bind_host = host or config.server_host
         bind_port = port or config.server_port
-        root_path = (
+        normalized_base = (
             _normalize_base_path(base_path) if base_path is not None else config.server_base_path
         )
-        typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{root_path or ''}")
+        typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}")
         uvicorn.run(
-            create_hub_app(config.root, base_path=root_path),
+            create_hub_app(config.root, base_path=normalized_base),
             host=bind_host,
             port=bind_port,
-            root_path=root_path or "",
+            root_path="",
         )
         return
     engine = _require_repo_config(repo)
-    root_path = (
+    normalized_base = (
         _normalize_base_path(base_path) if base_path is not None else engine.config.server_base_path
     )
-    app_instance = create_app(engine.repo_root, base_path=root_path)
+    app_instance = create_app(engine.repo_root, base_path=normalized_base)
     bind_host = host or engine.config.server_host
     bind_port = port or engine.config.server_port
-    typer.echo(f"Serving repo on http://{bind_host}:{bind_port}{root_path or ''}")
-    uvicorn.run(app_instance, host=bind_host, port=bind_port, root_path=root_path or "")
+    typer.echo(f"Serving repo on http://{bind_host}:{bind_port}{normalized_base or ''}")
+    uvicorn.run(app_instance, host=bind_host, port=bind_port, root_path="")
 
 
 @hub_app.command("create")
@@ -513,17 +513,17 @@ def hub_serve(
 ):
     """Start the hub supervisor server."""
     config = _require_hub_config(path)
-    root_path = (
+    normalized_base = (
         _normalize_base_path(base_path) if base_path is not None else config.server_base_path
     )
     bind_host = host or config.server_host
     bind_port = port or config.server_port
-    typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{root_path or ''}")
+    typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}")
     uvicorn.run(
-        create_hub_app(config.root, base_path=root_path),
+        create_hub_app(config.root, base_path=normalized_base),
         host=bind_host,
         port=bind_port,
-        root_path=root_path or "",
+        root_path="",
     )
 
 
