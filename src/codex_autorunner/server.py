@@ -8,7 +8,7 @@ from typing import Optional
 from asyncio.subprocess import PIPE, STDOUT, create_subprocess_exec
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import ConfigError, HubConfig, _normalize_base_path, load_config
@@ -66,6 +66,44 @@ class BasePathMiddleware:
                 raw_path = scope.get("raw_path")
                 if raw_path:
                     scope["raw_path"] = raw_path[len(self.base_path_bytes) :] or b"/"
+        return await self.app(scope, receive, send)
+
+
+class BaseRedirectMiddleware:
+    """
+    When a base_path is configured, redirect or remap requests that are missing
+    that prefix but clearly target a known CAR route. This lets upstream proxies
+    stay simple while still keeping a canonical base path.
+    """
+
+    def __init__(self, app, base_path: str, known_prefixes=None):
+        self.app = app
+        self.base_path = base_path
+        self.base_path_bytes = base_path.encode("utf-8")
+        self.known_prefixes = known_prefixes or ("/api", "/hub", "/repos", "/static", "/cat")
+
+    def __getattr__(self, name):
+        return getattr(self.app, name)
+
+    async def __call__(self, scope, receive, send):
+        scope_type = scope.get("type")
+        if self.base_path and scope_type in ("http", "websocket"):
+            path = scope.get("path", "") or ""
+            if not path.startswith(self.base_path):
+                should_redirect = any(
+                    path == prefix or path.startswith(prefix + "/") for prefix in self.known_prefixes
+                )
+                if should_redirect:
+                    if scope_type == "http":
+                        location = f"{self.base_path}{path}"
+                        response = RedirectResponse(url=location, status_code=308)
+                        await response(scope, receive, send)
+                        return
+                    scope = dict(scope)
+                    scope["path"] = f"{self.base_path}{path}"
+                    raw_path = scope.get("raw_path")
+                    if raw_path:
+                        scope["raw_path"] = self.base_path_bytes + raw_path
         return await self.app(scope, receive, send)
 
 
@@ -561,6 +599,7 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
             terminal_sessions.clear()
 
     if root_path:
+        app = BaseRedirectMiddleware(app, root_path)
         app = BasePathMiddleware(app, root_path)
 
     return app
@@ -583,6 +622,7 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
     static_dir = _static_dir()
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     if root_path:
+        app = BaseRedirectMiddleware(app, root_path)
         app = BasePathMiddleware(app, root_path)
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
