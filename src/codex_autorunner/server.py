@@ -130,6 +130,9 @@ class BasePathRouterMiddleware:
 
         if self._should_redirect(path, root_path):
             target_path = f"{self.base_path}{path}"
+            query_string = scope.get("query_string") or b""
+            if query_string:
+                target_path = f"{target_path}?{query_string.decode('latin-1')}"
             if not target_path:
                 target_path = "/"
             return await self._redirect(scope, receive, send, target_path)

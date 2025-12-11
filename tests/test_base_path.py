@@ -26,6 +26,14 @@ def test_redirects_requests_missing_base_prefix():
     assert resp.headers["location"] == "/car/api/ping"
 
 
+def test_redirects_preserve_query_string():
+    app = BasePathRouterMiddleware(_build_app(), "/car")
+    client = TestClient(app)
+    resp = client.get("/api/ping?foo=bar&nested=1", follow_redirects=False)
+    assert resp.status_code == 308
+    assert resp.headers["location"] == "/car/api/ping?foo=bar&nested=1"
+
+
 def test_strips_base_and_sets_root_path():
     app = BasePathRouterMiddleware(_build_app(), "/car")
     client = TestClient(app)
