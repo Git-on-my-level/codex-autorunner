@@ -141,10 +141,7 @@ class BasePathRouterMiddleware:
                 # Special case: Starlette static file mounts behave best when
                 # scope["path"] still includes scope["root_path"].
                 is_static = trimmed == "/static" or trimmed.startswith("/static/")
-                if is_static:
-                    if not root_path:
-                        scope["root_path"] = self.base_path
-                else:
+                if not is_static:
                     scope["path"] = trimmed
                     raw_path = scope.get("raw_path")
                     if raw_path:
@@ -154,12 +151,6 @@ class BasePathRouterMiddleware:
                 # Preserve the base path for downstream routing helpers.
                 if not root_path:
                     scope["root_path"] = self.base_path
-                elif root_path == self.base_path or root_path.startswith(
-                    f"{self.base_path}/"
-                ):
-                    scope["root_path"] = root_path
-                else:
-                    scope["root_path"] = f"{root_path}{self.base_path}"
             return await self.app(scope, receive, send)
 
         if self._should_redirect(path, root_path):
@@ -282,6 +273,19 @@ def create_app(
             terminal_lock = asyncio.Lock()
         return terminal_lock
 
+    app = FastAPI(redirect_slashes=False)
+    app.state.base_path = base_path
+    app.state.logger = setup_rotating_logger(
+        f"repo[{engine.repo_root}]", engine.config.log
+    )
+    app.state.logger.info("Repo server ready at %s", engine.repo_root)
+    voice_service: Optional[VoiceService]
+    try:
+        voice_service = VoiceService(voice_config, logger=app.state.logger)
+    except Exception as exc:
+        voice_service = None
+        app.state.logger.warning("Voice service unavailable: %s", exc, exc_info=False)
+
     def _voice_config_payload() -> dict:
         service = voice_service or VoiceService(voice_config, logger=app.state.logger)
         return service.config_payload()
@@ -297,18 +301,6 @@ def create_app(
         if file is not None:
             return await file.read()
         return await request.body()
-
-    app = FastAPI(redirect_slashes=False)
-    app.state.base_path = base_path
-    app.state.logger = setup_rotating_logger(
-        f"repo[{engine.repo_root}]", engine.config.log
-    )
-    app.state.logger.info("Repo server ready at %s", engine.repo_root)
-    try:
-        voice_service = VoiceService(voice_config, logger=app.state.logger)
-    except Exception as exc:
-        voice_service = None
-        app.state.logger.warning("Voice service unavailable: %s", exc, exc_info=False)
     static_dir = _static_dir()
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
