@@ -464,6 +464,7 @@ def serve(
             create_hub_app(config.root, base_path=root_path),
             host=bind_host,
             port=bind_port,
+            root_path=root_path or "",
         )
         return
     engine = _require_repo_config(repo)
@@ -474,7 +475,7 @@ def serve(
     bind_host = host or engine.config.server_host
     bind_port = port or engine.config.server_port
     typer.echo(f"Serving repo on http://{bind_host}:{bind_port}{root_path or ''}")
-    uvicorn.run(app_instance, host=bind_host, port=bind_port)
+    uvicorn.run(app_instance, host=bind_host, port=bind_port, root_path=root_path or "")
 
 
 @hub_app.command("create")
@@ -522,6 +523,7 @@ def hub_serve(
         create_hub_app(config.root, base_path=root_path),
         host=bind_host,
         port=bind_port,
+        root_path=root_path or "",
     )
 
 

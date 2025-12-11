@@ -89,21 +89,23 @@ class BaseRedirectMiddleware:
         scope_type = scope.get("type")
         if self.base_path and scope_type in ("http", "websocket"):
             path = scope.get("path", "") or ""
-            if not path.startswith(self.base_path):
-                should_redirect = any(
-                    path == prefix or path.startswith(prefix + "/") for prefix in self.known_prefixes
-                )
-                if should_redirect:
-                    if scope_type == "http":
-                        location = f"{self.base_path}{path}"
-                        response = RedirectResponse(url=location, status_code=308)
-                        await response(scope, receive, send)
-                        return
-                    scope = dict(scope)
-                    scope["path"] = f"{self.base_path}{path}"
-                    raw_path = scope.get("raw_path")
-                    if raw_path:
-                        scope["raw_path"] = self.base_path_bytes + raw_path
+            root_path = scope.get("root_path", "") or ""
+            full_path = f"{root_path}{path}" if root_path else path
+
+            # If upstream already set root_path to the base, treat it as canonical.
+            if path.startswith(self.base_path) or full_path.startswith(self.base_path):
+                return await self.app(scope, receive, send)
+
+            should_redirect = any(
+                path == prefix or path.startswith(prefix + "/") or full_path.startswith(prefix)
+                for prefix in self.known_prefixes
+            )
+            if should_redirect:
+                scope = dict(scope)
+                scope["path"] = f"{self.base_path}{path}"
+                raw_path = scope.get("raw_path")
+                if raw_path:
+                    scope["raw_path"] = self.base_path_bytes + raw_path
         return await self.app(scope, receive, send)
 
 
@@ -204,7 +206,7 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
     terminal_max_idle_seconds = 3600
     terminal_lock = asyncio.Lock()
 
-    app = FastAPI()
+    app = FastAPI(root_path=root_path or "")
     app.state.logger = setup_rotating_logger(
         f"repo[{engine.repo_root}]", engine.config.log
     )
@@ -598,10 +600,6 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
                 session.terminate()
             terminal_sessions.clear()
 
-    if root_path:
-        app = BaseRedirectMiddleware(app, root_path)
-        app = BasePathMiddleware(app, root_path)
-
     return app
 
 
@@ -613,7 +611,7 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
         _normalize_base_path(base_path) if base_path is not None else config.server_base_path
     )
     supervisor = HubSupervisor(config)
-    app = FastAPI()
+    app = FastAPI(root_path=root_path or "")
     app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.log)
     try:
         app.state.logger.info("Hub app ready at %s", config.root)
@@ -621,9 +619,6 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
         pass
     static_dir = _static_dir()
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
-    if root_path:
-        app = BaseRedirectMiddleware(app, root_path)
-        app = BasePathMiddleware(app, root_path)
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
 
