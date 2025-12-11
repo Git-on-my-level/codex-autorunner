@@ -1,11 +1,22 @@
 const hasWindow = typeof window !== "undefined" && typeof window.location !== "undefined";
 const pathname = hasWindow ? window.location.pathname : "";
-const repoMatch = pathname.match(/^\/repos\/([^/]+)/);
+const segments = pathname.split("/").filter(Boolean);
 
-export const REPO_ID = repoMatch ? repoMatch[1] : null;
-export const BASE_PATH = repoMatch ? `/repos/${repoMatch[1]}` : "";
+let basePrefix = "";
+let repoId = null;
 
-let mode = repoMatch ? "repo" : "unknown";
+if (segments.length >= 2 && segments[1] === "repos") {
+  basePrefix = `/${segments[0]}`;
+  repoId = segments[2] || null;
+} else if (segments[0] === "repos") {
+  repoId = segments[1] || null;
+}
+
+export const REPO_ID = repoId;
+export const BASE_PATH = repoId ? `${basePrefix}/repos/${repoId}` : basePrefix;
+
+let mode = repoId ? "repo" : "unknown";
+const hubEndpoint = `${basePrefix || ""}/hub/repos`;
 
 export async function detectContext() {
   if (mode !== "unknown") {
@@ -16,7 +27,7 @@ export async function detectContext() {
     return { mode, repoId: REPO_ID };
   }
   try {
-    const res = await fetch("/hub/repos");
+    const res = await fetch(hubEndpoint);
     mode = res.ok ? "hub" : "repo";
   } catch (err) {
     mode = "repo";

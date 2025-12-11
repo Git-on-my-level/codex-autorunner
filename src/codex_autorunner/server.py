@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import ConfigError, HubConfig, load_config
+from .config import ConfigError, HubConfig, _normalize_base_path, load_config
 from .engine import Engine, LockError, doctor
 from .logging_utils import setup_rotating_logger
 from .doc_chat import (
@@ -39,6 +39,34 @@ from .usage import (
     summarize_repo_usage,
 )
 from .manifest import load_manifest
+
+
+class BasePathMiddleware:
+    """
+    Lightweight ASGI middleware to strip a configured base path from incoming
+    http/websocket requests so the app can live under a subpath behind a proxy.
+    """
+
+    def __init__(self, app, base_path: str):
+        self.app = app
+        self.base_path = base_path
+        self.base_path_bytes = base_path.encode("utf-8")
+
+    def __getattr__(self, name):
+        return getattr(self.app, name)
+
+    async def __call__(self, scope, receive, send):
+        scope_type = scope.get("type")
+        if self.base_path and scope_type in ("http", "websocket"):
+            path = scope.get("path", "")
+            if path.startswith(self.base_path):
+                scope = dict(scope)
+                trimmed = path[len(self.base_path) :] or "/"
+                scope["path"] = trimmed
+                raw_path = scope.get("raw_path")
+                if raw_path:
+                    scope["raw_path"] = raw_path[len(self.base_path_bytes) :] or b"/"
+        return await self.app(scope, receive, send)
 
 
 class RunnerManager:
@@ -124,10 +152,13 @@ def _static_dir() -> Path:
     return Path(resources.files("codex_autorunner")) / "static"
 
 
-def create_app(repo_root: Optional[Path] = None) -> FastAPI:
+def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None) -> FastAPI:
     config = load_config(repo_root or Path.cwd())
     if isinstance(config, HubConfig):
         raise ConfigError("create_app requires repo mode configuration")
+    root_path = (
+        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+    )
     engine = Engine(config.root)
     manager = RunnerManager(engine)
     doc_chat = DocChatService(engine)
@@ -529,13 +560,19 @@ def create_app(repo_root: Optional[Path] = None) -> FastAPI:
                 session.terminate()
             terminal_sessions.clear()
 
+    if root_path:
+        app = BasePathMiddleware(app, root_path)
+
     return app
 
 
-def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
+def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = None) -> FastAPI:
     config = load_config(hub_root or Path.cwd())
     if not isinstance(config, HubConfig):
         raise ConfigError("Hub app requires hub mode configuration")
+    root_path = (
+        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+    )
     supervisor = HubSupervisor(config)
     app = FastAPI()
     app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.log)
@@ -545,6 +582,8 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
         pass
     static_dir = _static_dir()
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    if root_path:
+        app = BasePathMiddleware(app, root_path)
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
 
@@ -765,6 +804,9 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
                 status_code=500, detail="Static UI assets missing; reinstall package"
             )
         return FileResponse(index_path)
+
+    if root_path:
+        app = BasePathMiddleware(app, root_path)
 
     return app
 
