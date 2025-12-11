@@ -235,7 +235,13 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
     doc_chat = DocChatService(engine)
     terminal_sessions: dict[str, PTYSession] = {}
     terminal_max_idle_seconds = 3600
-    terminal_lock = asyncio.Lock()
+    terminal_lock: Optional[asyncio.Lock] = None
+
+    def _terminal_lock() -> asyncio.Lock:
+        nonlocal terminal_lock
+        if terminal_lock is None:
+            terminal_lock = asyncio.Lock()
+        return terminal_lock
 
     app = FastAPI()
     app.state.base_path = base_path
@@ -549,7 +555,7 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
             await ws.close()
             return
 
-        async with terminal_lock:
+        async with _terminal_lock():
             terminal_sessions[session_id] = session
 
         async def pty_to_ws():
@@ -618,7 +624,7 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
         input_task = asyncio.create_task(ws_to_pty())
         await asyncio.wait([forward_task, input_task], return_when=asyncio.FIRST_COMPLETED)
         session.terminate()
-        async with terminal_lock:
+        async with _terminal_lock():
             terminal_sessions.pop(session_id, None)
         try:
             await ws.close()
@@ -627,7 +633,7 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
 
     @app.on_event("shutdown")
     async def shutdown_terminal_sessions():
-        async with terminal_lock:
+        async with _terminal_lock():
             for session in terminal_sessions.values():
                 session.terminate()
             terminal_sessions.clear()

@@ -102,9 +102,7 @@ Instructions:
 class DocChatService:
     def __init__(self, engine: Engine):
         self.engine = engine
-        self._locks: Dict[str, asyncio.Lock] = {
-            key: asyncio.Lock() for key in ALLOWED_DOC_KINDS
-        }
+        self._locks: Dict[str, asyncio.Lock] = {}
         self._recent_summary_cache: Optional[str] = None
         self.patch_path = self.engine.repo_root / ".codex-autorunner" / DOC_CHAT_PATCH_NAME
         self.backup_path = self.engine.repo_root / ".codex-autorunner" / DOC_CHAT_BACKUP_NAME
@@ -135,12 +133,11 @@ class DocChatService:
         return None
 
     def doc_busy(self, kind: str) -> bool:
-        key = _normalize_kind(kind)
-        return self._locks[key].locked()
+        return self._lock_for(kind).locked()
 
     @asynccontextmanager
     async def doc_lock(self, kind: str):
-        lock = self._locks[_normalize_kind(kind)]
+        lock = self._lock_for(kind)
         if lock.locked():
             raise DocChatBusyError(f"Doc chat already running for {kind}")
         await lock.acquire()
@@ -148,6 +145,14 @@ class DocChatService:
             yield
         finally:
             lock.release()
+
+    def _lock_for(self, kind: str) -> asyncio.Lock:
+        key = _normalize_kind(kind)
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[key] = lock
+        return lock
 
     def _chat_id(self) -> str:
         return uuid.uuid4().hex[:8]
