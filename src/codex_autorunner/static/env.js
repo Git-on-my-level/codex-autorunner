@@ -5,10 +5,12 @@ const segments = pathname.split("/").filter(Boolean);
 let basePrefix = "";
 let repoId = null;
 
-if (segments.length >= 2 && segments[1] === "repos") {
+if (segments.length) {
   basePrefix = `/${segments[0]}`;
+}
+if (segments.length >= 2 && segments[1] === "repos") {
   repoId = segments[2] || null;
-} else if (segments[0] === "repos") {
+} else if (!basePrefix && segments[0] === "repos") {
   repoId = segments[1] || null;
 }
 
