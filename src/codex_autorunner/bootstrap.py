@@ -7,7 +7,7 @@ from .config import CONFIG_FILENAME, DEFAULT_REPO_CONFIG, DEFAULT_HUB_CONFIG
 from .manifest import load_manifest
 from .utils import atomic_write
 
-GITIGNORE_CONTENT = "*\n!/.gitignore\n"
+GITIGNORE_CONTENT = "*"
 
 
 def sample_todo() -> str:

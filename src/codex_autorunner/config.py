@@ -20,7 +20,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "codex": {
         "binary": "codex",
         "args": ["--yolo", "exec", "--sandbox", "danger-full-access"],
-        "terminal_args": [],
+        "terminal_args": ["--yolo"],
     },
     "prompt": {
         "prev_run_max_chars": 6000,

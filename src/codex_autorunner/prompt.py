@@ -11,6 +11,11 @@ You are given four documents:
 2) PROGRESS: a running log of what has been done and how it was validated.
 3) OPINIONS: design constraints, architectural preferences, and migration policies.
 4) SPEC: source-of-truth requirements and scope for this project/feature.
+Work docs live under the hidden .codex-autorunner directory. Edit these files directly; do not create new copies elsewhere:
+- TODO: {{TODO_PATH}}
+- PROGRESS: {{PROGRESS_PATH}}
+- OPINIONS: {{OPINIONS_PATH}}
+- SPEC: {{SPEC_PATH}}
 
 You must:
 - Work through TODO items from top to bottom. 
@@ -51,6 +56,19 @@ Instructions:
 def build_prompt(
     config: Config, docs: DocsManager, prev_run_output: Optional[str]
 ) -> str:
+    def _display_path(path: Path) -> str:
+        try:
+            return str(path.relative_to(config.root))
+        except ValueError:
+            return str(path)
+
+    doc_paths = {
+        "todo": _display_path(config.doc_path("todo")),
+        "progress": _display_path(config.doc_path("progress")),
+        "opinions": _display_path(config.doc_path("opinions")),
+        "spec": _display_path(config.doc_path("spec")),
+    }
+
     template_path: Path = config.prompt_template if config.prompt_template else None
     if template_path and template_path.exists():
         template = template_path.read_text(encoding="utf-8")
@@ -67,6 +85,10 @@ def build_prompt(
         "{{OPINIONS}}": docs.read_doc("opinions"),
         "{{SPEC}}": docs.read_doc("spec"),
         "{{PREV_RUN_OUTPUT}}": prev_section,
+        "{{TODO_PATH}}": doc_paths["todo"],
+        "{{PROGRESS_PATH}}": doc_paths["progress"],
+        "{{OPINIONS_PATH}}": doc_paths["opinions"],
+        "{{SPEC_PATH}}": doc_paths["spec"],
     }
     for marker, value in replacements.items():
         template = template.replace(marker, value)
