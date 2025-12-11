@@ -7,8 +7,17 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#0a0c12" />
     <title>Codex Autorunner</title>
-    <link rel="stylesheet" href="/static/styles.css" />
-    <link rel="stylesheet" href="/static/vendor/xterm.css" />
+    <script>
+      (() => {
+        const segments = (window.location.pathname || "").split("/").filter(Boolean);
+        const base = segments.length ? `/${segments[0]}` : "/";
+        const baseTag = document.createElement("base");
+        baseTag.href = base.endsWith("/") ? base : `${base}/`;
+        document.head.appendChild(baseTag);
+      })();
+    </script>
+    <link rel="stylesheet" href="static/styles.css" />
+    <link rel="stylesheet" href="static/vendor/xterm.css" />
   </head>
   <body>
     <div id="hub-shell" class="hub-shell hidden">
@@ -331,8 +340,8 @@
       </div>
     </div>
     
-    <script src="/static/vendor/xterm.js"></script>
-    <script src="/static/vendor/xterm-addon-fit.js"></script>
-    <script src="/static/app.js" type="module"></script>
+    <script src="static/vendor/xterm.js"></script>
+    <script src="static/vendor/xterm-addon-fit.js"></script>
+    <script src="static/app.js" type="module"></script>
   </body>
 </html>
