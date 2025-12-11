@@ -8,7 +8,7 @@ import typer
 import uvicorn
 
 from .bootstrap import seed_hub_files, seed_repo_files
-from .config import ConfigError, HubConfig, load_config
+from .config import ConfigError, HubConfig, _normalize_base_path, load_config
 from .engine import Engine, LockError, clear_stale_lock, doctor
 from .hub import HubSupervisor
 from .manifest import load_manifest
@@ -446,6 +446,7 @@ def serve(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     host: Optional[str] = typer.Option(None, "--host", help="Host to bind"),
     port: Optional[int] = typer.Option(None, "--port", help="Port to bind"),
+    base_path: Optional[str] = typer.Option(None, "--base-path", help="Base path for the server"),
 ):
     """Start the web server and UI API."""
     try:
@@ -455,15 +456,26 @@ def serve(
     if isinstance(config, HubConfig):
         bind_host = host or config.server_host
         bind_port = port or config.server_port
-        typer.echo(f"Serving hub on http://{bind_host}:{bind_port}")
-        uvicorn.run(create_hub_app(config.root), host=bind_host, port=bind_port)
+        normalized_base = (
+            _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+        )
+        typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}")
+        uvicorn.run(
+            create_hub_app(config.root, base_path=normalized_base),
+            host=bind_host,
+            port=bind_port,
+            root_path="",
+        )
         return
     engine = _require_repo_config(repo)
-    app_instance = create_app(engine.repo_root)
+    normalized_base = (
+        _normalize_base_path(base_path) if base_path is not None else engine.config.server_base_path
+    )
+    app_instance = create_app(engine.repo_root, base_path=normalized_base)
     bind_host = host or engine.config.server_host
     bind_port = port or engine.config.server_port
-    typer.echo(f"Serving repo on http://{bind_host}:{bind_port}")
-    uvicorn.run(app_instance, host=bind_host, port=bind_port)
+    typer.echo(f"Serving repo on http://{bind_host}:{bind_port}{normalized_base or ''}")
+    uvicorn.run(app_instance, host=bind_host, port=bind_port, root_path="")
 
 
 @hub_app.command("create")
@@ -497,13 +509,22 @@ def hub_serve(
     path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
     host: Optional[str] = typer.Option(None, "--host", help="Host to bind"),
     port: Optional[int] = typer.Option(None, "--port", help="Port to bind"),
+    base_path: Optional[str] = typer.Option(None, "--base-path", help="Base path for the server"),
 ):
     """Start the hub supervisor server."""
     config = _require_hub_config(path)
+    normalized_base = (
+        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+    )
     bind_host = host or config.server_host
     bind_port = port or config.server_port
-    typer.echo(f"Serving hub on http://{bind_host}:{bind_port}")
-    uvicorn.run(create_hub_app(config.root), host=bind_host, port=bind_port)
+    typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}")
+    uvicorn.run(
+        create_hub_app(config.root, base_path=normalized_base),
+        host=bind_host,
+        port=bind_port,
+        root_path="",
+    )
 
 
 @hub_app.command("scan")

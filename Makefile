@@ -1,8 +1,16 @@
 PYTHON ?= python
 HOST ?= 127.0.0.1
 PORT ?= 4173
+HUB_HOST ?= 127.0.0.1
+HUB_PORT ?= 4517
+HUB_BASE_PATH ?= /car
+CAR_ROOT ?= $(HOME)/car-workspace
+LAUNCH_AGENT ?= $(HOME)/Library/LaunchAgents/com.codex.autorunner.plist
+NVM_BIN ?= $(HOME)/.nvm/versions/node/v22.12.0/bin
+LOCAL_BIN ?= $(HOME)/.local/bin
+PY39_BIN ?= $(HOME)/Library/Python/3.9/bin
 
-.PHONY: install dev hooks test check serve serve-dev
+.PHONY: install dev hooks test check serve serve-dev launchd-hub
 
 install:
 	$(PYTHON) -m pip install .
@@ -24,3 +32,35 @@ serve:
 
 serve-dev:
 	uvicorn codex_autorunner.server:create_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir src --reload-dir .codex-autorunner
+
+launchd-hub:
+	@mkdir -p $(dir $(LAUNCH_AGENT))
+	@cat > $(LAUNCH_AGENT) <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.codex.autorunner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-lc</string>
+    <string>PATH=$(NVM_BIN):$(LOCAL_BIN):$(PY39_BIN):$$PATH; codex-autorunner hub serve --host $(HUB_HOST) --port $(HUB_PORT) --base-path $(HUB_BASE_PATH) --path $(CAR_ROOT)</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$(CAR_ROOT)</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$(CAR_ROOT)/.codex-autorunner/codex-autorunner-hub.log</string>
+  <key>StandardErrorPath</key>
+  <string>$(CAR_ROOT)/.codex-autorunner/codex-autorunner-hub.log</string>
+</dict>
+</plist>
+EOF
+	@launchctl unload -w $(LAUNCH_AGENT) >/dev/null 2>&1 || true
+	launchctl load -w $(LAUNCH_AGENT)
+	launchctl kickstart -k gui/$$(id -u)/com.codex.autorunner

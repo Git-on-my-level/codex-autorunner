@@ -38,6 +38,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "server": {
         "host": "127.0.0.1",
         "port": 4173,
+        "base_path": "",
     },
     "log": {
         "path": ".codex-autorunner/codex-autorunner.log",
@@ -63,6 +64,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "server": {
         "host": "127.0.0.1",
         "port": 4173,
+        "base_path": "",
     },
 }
 
@@ -100,6 +102,7 @@ class RepoConfig:
     git_commit_message_template: str
     server_host: str
     server_port: int
+    server_base_path: str
     log: LogConfig
 
     def doc_path(self, key: str) -> Path:
@@ -118,6 +121,7 @@ class HubConfig:
     auto_init_missing: bool
     server_host: str
     server_port: int
+    server_base_path: str
     log: LogConfig
 
 
@@ -133,6 +137,17 @@ def _merge_defaults(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str
         else:
             merged[key] = value
     return merged
+
+
+def _normalize_base_path(path: Optional[str]) -> str:
+    """Normalize base path to either '' or a single-leading-slash path without trailing slash."""
+    if not path:
+        return ""
+    normalized = str(path).strip()
+    if not normalized.startswith("/"):
+        normalized = "/" + normalized
+    normalized = normalized.rstrip("/")
+    return normalized or ""
 
 
 def find_nearest_config_path(start: Path) -> Optional[Path]:
@@ -201,6 +216,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         git_commit_message_template=str(cfg["git"].get("commit_message_template")),
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
+        server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
         log=LogConfig(
             path=root / log_cfg.get("path", DEFAULT_REPO_CONFIG["log"]["path"]),
             max_bytes=int(log_cfg.get("max_bytes", DEFAULT_REPO_CONFIG["log"]["max_bytes"])),
@@ -226,6 +242,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         auto_init_missing=bool(hub_cfg["auto_init_missing"]),
         server_host=str(cfg["server"]["host"]),
         server_port=int(cfg["server"]["port"]),
+        server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
         log=LogConfig(
             path=root / log_cfg["path"],
             max_bytes=int(log_cfg["max_bytes"]),
@@ -284,6 +301,8 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.host must be a string")
     if not isinstance(server.get("port", 0), int):
         raise ConfigError("server.port must be an integer")
+    if "base_path" in server and not isinstance(server.get("base_path", ""), str):
+        raise ConfigError("server.base_path must be a string if provided")
     log_cfg = cfg.get("log")
     if not isinstance(log_cfg, dict):
         raise ConfigError("log section must be a mapping")
@@ -326,3 +345,5 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.host must be a string")
     if not isinstance(server.get("port", 0), int):
         raise ConfigError("server.port must be an integer")
+    if "base_path" in server and not isinstance(server.get("base_path", ""), str):
+        raise ConfigError("server.base_path must be a string if provided")

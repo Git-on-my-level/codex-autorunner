@@ -1,4 +1,4 @@
-import { api, flash, statusPill } from "./utils.js";
+import { api, flash, statusPill, resolvePath } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 
@@ -184,7 +184,7 @@ function renderRepos(repos) {
     const canNavigate = repo.mounted === true;
     if (canNavigate) {
       card.classList.add("hub-repo-clickable");
-      card.dataset.href = `/repos/${repo.id}/`;
+      card.dataset.href = resolvePath(`/repos/${repo.id}/`);
       card.setAttribute("role", "link");
       card.setAttribute("tabindex", "0");
     }

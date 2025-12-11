@@ -7,8 +7,38 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#0a0c12" />
     <title>Codex Autorunner</title>
-    <link rel="stylesheet" href="/static/styles.css" />
-    <link rel="stylesheet" href="/static/vendor/xterm.css" />
+    <script>
+      (() => {
+        const normalizeBase = (base) => {
+          if (!base || base === "/") return "";
+          let normalized = base.startsWith("/") ? base : `/${base}`;
+          while (normalized.endsWith("/") && normalized.length > 1) {
+            normalized = normalized.slice(0, -1);
+          }
+          return normalized === "/" ? "" : normalized;
+        };
+        const detectBasePrefix = (path) => {
+          const prefixes = ["/repos/", "/hub/", "/api/", "/static/", "/cat/"];
+          let idx = -1;
+          for (const prefix of prefixes) {
+            const found = path.indexOf(prefix);
+            if (found === 0) return "";
+            if (found > 0 && (idx === -1 || found < idx)) idx = found;
+          }
+          if (idx > 0) return normalizeBase(path.slice(0, idx));
+          const parts = path.split("/").filter(Boolean);
+          if (parts.length) return normalizeBase(`/${parts[0]}`);
+          return "";
+        };
+        const basePrefix = detectBasePrefix(window.location.pathname || "/");
+        const base = basePrefix || "/";
+        const baseTag = document.createElement("base");
+        baseTag.href = base.endsWith("/") ? base : `${base}/`;
+        document.head.appendChild(baseTag);
+      })();
+    </script>
+    <link rel="stylesheet" href="static/styles.css" />
+    <link rel="stylesheet" href="static/vendor/xterm.css" />
   </head>
   <body>
     <div id="hub-shell" class="hub-shell hidden">
@@ -331,8 +361,8 @@
       </div>
     </div>
     
-    <script src="/static/vendor/xterm.js"></script>
-    <script src="/static/vendor/xterm-addon-fit.js"></script>
-    <script src="/static/app.js" type="module"></script>
+    <script src="static/vendor/xterm.js"></script>
+    <script src="static/vendor/xterm-addon-fit.js"></script>
+    <script src="static/app.js" type="module"></script>
   </body>
 </html>

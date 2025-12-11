@@ -8,10 +8,10 @@ from typing import Optional
 from asyncio.subprocess import PIPE, STDOUT, create_subprocess_exec
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import ConfigError, HubConfig, load_config
+from .config import ConfigError, HubConfig, _normalize_base_path, load_config
 from .engine import Engine, LockError, doctor
 from .logging_utils import setup_rotating_logger
 from .doc_chat import (
@@ -39,6 +39,105 @@ from .usage import (
     summarize_repo_usage,
 )
 from .manifest import load_manifest
+
+
+class BasePathRouterMiddleware:
+    """
+    Middleware that keeps the app mounted at / while enforcing a canonical base path.
+    - Requests that already include the base path are stripped so routing stays rooted at /.
+    - Requests missing the base path but pointing at known CAR prefixes are redirected to the
+      canonical location (HTTP 308). WebSocket handshakes get the same redirect response.
+    """
+
+    def __init__(self, app, base_path: str, known_prefixes=None):
+        self.app = app
+        self.base_path = _normalize_base_path(base_path)
+        self.base_path_bytes = self.base_path.encode("utf-8")
+        self.known_prefixes = tuple(
+            known_prefixes
+            or (
+                "/",
+                "/api",
+                "/hub",
+                "/repos",
+                "/static",
+                "/cat",
+            )
+        )
+
+    def __getattr__(self, name):
+        return getattr(self.app, name)
+
+    def _has_base(self, path: str, root_path: str) -> bool:
+        if not self.base_path:
+            return True
+        full_path = f"{root_path}{path}" if root_path else path
+        if full_path == self.base_path or full_path.startswith(f"{self.base_path}/"):
+            return True
+        return path == self.base_path or path.startswith(f"{self.base_path}/")
+
+    def _should_redirect(self, path: str, root_path: str) -> bool:
+        if not self.base_path:
+            return False
+        if self._has_base(path, root_path):
+            return False
+        return any(
+            path == prefix
+            or path.startswith(f"{prefix}/")
+            or (root_path and root_path.startswith(prefix))
+            for prefix in self.known_prefixes
+        )
+
+    async def _redirect(self, scope, receive, send, target: str):
+        if scope["type"] == "websocket":
+            headers = [(b"location", target.encode("utf-8"))]
+            await send({"type": "http.response.start", "status": 308, "headers": headers})
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+            return
+        response = RedirectResponse(target, status_code=308)
+        await response(scope, receive, send)
+
+    async def __call__(self, scope, receive, send):
+        scope_type = scope.get("type")
+        if scope_type not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+
+        path = scope.get("path") or "/"
+        root_path = scope.get("root_path") or ""
+
+        if not self.base_path:
+            return await self.app(scope, receive, send)
+
+        if self._has_base(path, root_path):
+            scope = dict(scope)
+            if path == self.base_path:
+                scope["path"] = "/"
+                raw_path = scope.get("raw_path")
+                if raw_path:
+                    scope["raw_path"] = b"/"
+            elif path.startswith(f"{self.base_path}/"):
+                trimmed = path[len(self.base_path) :] or "/"
+                scope["path"] = trimmed
+                raw_path = scope.get("raw_path")
+                if raw_path:
+                    scope["raw_path"] = raw_path[len(self.base_path_bytes) :] or b"/"
+            if root_path:
+                if not root_path.startswith(self.base_path):
+                    scope["root_path"] = f"{self.base_path}{root_path}"
+            else:
+                scope["root_path"] = self.base_path
+            return await self.app(scope, receive, send)
+
+        if self._should_redirect(path, root_path):
+            target_path = f"{self.base_path}{path}"
+            query_string = scope.get("query_string") or b""
+            if query_string:
+                target_path = f"{target_path}?{query_string.decode('latin-1')}"
+            if not target_path:
+                target_path = "/"
+            return await self._redirect(scope, receive, send, target_path)
+
+        return await self.app(scope, receive, send)
 
 
 class RunnerManager:
@@ -124,10 +223,13 @@ def _static_dir() -> Path:
     return Path(resources.files("codex_autorunner")) / "static"
 
 
-def create_app(repo_root: Optional[Path] = None) -> FastAPI:
+def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None) -> FastAPI:
     config = load_config(repo_root or Path.cwd())
     if isinstance(config, HubConfig):
         raise ConfigError("create_app requires repo mode configuration")
+    base_path = (
+        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+    )
     engine = Engine(config.root)
     manager = RunnerManager(engine)
     doc_chat = DocChatService(engine)
@@ -136,6 +238,7 @@ def create_app(repo_root: Optional[Path] = None) -> FastAPI:
     terminal_lock = asyncio.Lock()
 
     app = FastAPI()
+    app.state.base_path = base_path
     app.state.logger = setup_rotating_logger(
         f"repo[{engine.repo_root}]", engine.config.log
     )
@@ -529,15 +632,22 @@ def create_app(repo_root: Optional[Path] = None) -> FastAPI:
                 session.terminate()
             terminal_sessions.clear()
 
+    if base_path:
+        app = BasePathRouterMiddleware(app, base_path)
+
     return app
 
 
-def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
+def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = None) -> FastAPI:
     config = load_config(hub_root or Path.cwd())
     if not isinstance(config, HubConfig):
         raise ConfigError("Hub app requires hub mode configuration")
+    base_path = (
+        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+    )
     supervisor = HubSupervisor(config)
     app = FastAPI()
+    app.state.base_path = base_path
     app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.log)
     try:
         app.state.logger.info("Hub app ready at %s", config.root)
@@ -554,7 +664,7 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
         if prefix in mount_errors:
             return False
         try:
-            sub_app = create_app(repo_path)
+            sub_app = create_app(repo_path, base_path=base_path)
         except ConfigError as exc:
             mount_errors[prefix] = str(exc)
             try:
@@ -765,6 +875,9 @@ def create_hub_app(hub_root: Optional[Path] = None) -> FastAPI:
                 status_code=500, detail="Static UI assets missing; reinstall package"
             )
         return FileResponse(index_path)
+
+    if base_path:
+        app = BasePathRouterMiddleware(app, base_path)
 
     return app
 
