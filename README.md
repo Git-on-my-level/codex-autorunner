@@ -31,6 +31,7 @@ CLI commands are available as `codex-autorunner` or the shorter `car`.
 
 ## Local install (macOS headless hub at `~/car-workspace`)
 - One-shot setup (user scope): `scripts/install-local-mac-hub.sh`. It pipx-installs this repo, creates/initializes `~/car-workspace` as a hub, writes a launchd agent plist, and loads it. Defaults: host `0.0.0.0`, port `4173`, label `com.codex.autorunner`. Override via env (`WORKSPACE`, `HOST`, `PORT`, `LABEL`, `PLIST_PATH`, `PACKAGE_SRC`).
+- Create/update the launchd agent plist and (re)load it: `scripts/launchd-hub.sh` (or `make launchd-hub`).
 - Manual path if you prefer:
   - `pipx install .`
   - `car init --mode hub --path ~/car-workspace`

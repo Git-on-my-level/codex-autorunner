@@ -38,42 +38,22 @@ serve-dev:
 	uvicorn codex_autorunner.server:create_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir src --reload-dir .codex-autorunner
 
 launchd-hub:
-	@mkdir -p $(dir $(LAUNCH_AGENT))
-	@cat > $(LAUNCH_AGENT) <<-'EOF'
-	<?xml version="1.0" encoding="UTF-8"?>
-	<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-	<plist version="1.0">
-	<dict>
-	  <key>Label</key>
-	  <string>com.codex.autorunner</string>
-	  <key>ProgramArguments</key>
-	  <array>
-	    <string>/bin/sh</string>
-	    <string>-lc</string>
-	    <string>PATH=$(NVM_BIN):$(LOCAL_BIN):$(PY39_BIN):$$PATH; codex-autorunner hub serve --host $(HUB_HOST) --port $(HUB_PORT) --base-path $(HUB_BASE_PATH) --path $(CAR_ROOT)</string>
-	  </array>
-	  <key>WorkingDirectory</key>
-	  <string>$(CAR_ROOT)</string>
-	  <key>RunAtLoad</key>
-	  <true/>
-	  <key>KeepAlive</key>
-	  <true/>
-	  <key>StandardOutPath</key>
-	  <string>$(CAR_ROOT)/.codex-autorunner/codex-autorunner-hub.log</string>
-	  <key>StandardErrorPath</key>
-	  <string>$(CAR_ROOT)/.codex-autorunner/codex-autorunner-hub.log</string>
-	</dict>
-	</plist>
-	EOF
-	@launchctl unload -w $(LAUNCH_AGENT) >/dev/null 2>&1 || true
-	launchctl load -w $(LAUNCH_AGENT)
-	launchctl kickstart -k gui/$$(id -u)/com.codex.autorunner
+	@LABEL="$(LAUNCH_LABEL)" \
+		LAUNCH_AGENT="$(LAUNCH_AGENT)" \
+		CAR_ROOT="$(CAR_ROOT)" \
+		HUB_HOST="$(HUB_HOST)" \
+		HUB_PORT="$(HUB_PORT)" \
+		HUB_BASE_PATH="$(HUB_BASE_PATH)" \
+		NVM_BIN="$(NVM_BIN)" \
+		LOCAL_BIN="$(LOCAL_BIN)" \
+		PY39_BIN="$(PY39_BIN)" \
+		scripts/launchd-hub.sh
 
 .PHONY: refresh-launchd
 refresh-launchd:
-	@echo "Reinstalling codex-autorunner into pipx venv at $(PIPX_VENV)..."
-	$(PIPX_PYTHON) -m pip install --force-reinstall $(CURDIR)
-	@echo "Reloading launchd agent $(LAUNCH_AGENT)..."
-	launchctl unload $(LAUNCH_AGENT) >/dev/null 2>&1 || true
-	launchctl load -w $(LAUNCH_AGENT)
-	launchctl kickstart -k gui/$$(id -u)/$(LAUNCH_LABEL)
+	@LABEL="$(LAUNCH_LABEL)" \
+		PLIST_PATH="$(LAUNCH_AGENT)" \
+		PACKAGE_SRC="$(CURDIR)" \
+		PIPX_VENV="$(PIPX_VENV)" \
+		PIPX_PYTHON="$(PIPX_PYTHON)" \
+		scripts/refresh-local-mac-hub.sh
