@@ -64,41 +64,6 @@ class OpenAIWhisperProvider(SpeechProvider):
             # Defensive normalization: .env / launchd / shells sometimes introduce
             # trailing newlines or quoting that can yield 401s.
             api_key = api_key.strip().strip('"').strip("'").strip("`").strip()
-        try:
-            import json as _json
-
-            _ts = int(__import__("time").time() * 1000)
-            v = api_key or ""
-            with open(
-                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
-                "a",
-                encoding="utf-8",
-            ) as _f:
-                _f.write(
-                    _json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "pre-fix",
-                            "hypothesisId": "H5",
-                            "location": "voice/providers/openai_whisper.py:OpenAIWhisperProvider.start_stream",
-                            "message": "resolved api key env",
-                            "data": {
-                                "api_key_env": self._settings.api_key_env,
-                                "present": bool(api_key),
-                                "len": len(v) if v else 0,
-                                "starts_sk": v.startswith("sk-"),
-                                "starts_sk_proj": v.startswith("sk-proj-"),
-                                "has_backtick": "`" in v,
-                                "has_space": " " in v,
-                                "has_quote": ('"' in v) or ("'" in v),
-                            },
-                            "timestamp": _ts,
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
         if not api_key:
             raise ValueError(
                 f"OpenAI Whisper provider requires API key env '{self._settings.api_key_env}' to be set"
@@ -172,6 +137,7 @@ class _OpenAIWhisperStream(TranscriptionStream):
             )
 
         payload = self._build_payload()
+        status_code: Optional[int] = None
         try:
             started = time.monotonic()
             result = self._request_fn(audio_bytes, payload)
@@ -180,44 +146,12 @@ class _OpenAIWhisperStream(TranscriptionStream):
             return [TranscriptionEvent(text=text, is_final=True, latency_ms=latency_ms)]
         except Exception as exc:
             try:
-                import json as _json
-                _ts = int(__import__("time").time() * 1000)
-                status_code = None
-                exc_type = type(exc).__name__
-                msg = str(exc)[:500]
-                try:
-                    import httpx  # type: ignore
+                import httpx  # type: ignore
 
-                    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
-                        status_code = exc.response.status_code
-                except Exception:
-                    pass
-                with open(
-                    "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
-                    "a",
-                    encoding="utf-8",
-                ) as _f:
-                    _f.write(
-                        _json.dumps(
-                            {
-                                "sessionId": "debug-session",
-                                "runId": "pre-fix",
-                                "hypothesisId": "H5",
-                                "location": "voice/providers/openai_whisper.py:_OpenAIWhisperStream.flush_final:except",
-                                "message": "openai whisper request failed",
-                                "data": {
-                                    "exc_type": exc_type,
-                                    "status_code": status_code,
-                                    "message": msg,
-                                    "audio_len": len(audio_bytes),
-                                },
-                                "timestamp": _ts,
-                            }
-                        )
-                        + "\n"
-                    )
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+                    status_code = exc.response.status_code
             except Exception:
-                pass
+                status_code = None
             self._logger.error("OpenAI Whisper transcription failed: %s", exc, exc_info=False)
             # Avoid retry loops for credential errors; surface explicit reasons.
             if status_code == 401:

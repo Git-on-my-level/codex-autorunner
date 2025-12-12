@@ -213,8 +213,6 @@ def test_voice_ui_transcribe_flow_without_opt_in():
         assert.equal(controller.hasPending(), false);
 
         const payload = globalThis.__voiceRequests[0];
-        const optIn = payload && payload.fields.find(([key]) => key === "opt_in");
-        assert.equal(optIn && optIn[1], "1");
         assert.equal(globalThis.__recorderIntervals[0], 700);
         assert.equal(globalThis.__tracksStopped > 0, true);
         """

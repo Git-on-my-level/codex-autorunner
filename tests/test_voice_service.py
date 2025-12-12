@@ -51,5 +51,5 @@ def test_voice_service_does_not_require_opt_in_when_warn_enabled():
     provider = DummyProvider(DummyStream("ignored"))
     service = VoiceService(cfg, provider_resolver=lambda _: provider)
 
-    result = service.transcribe(b"audio bytes", client="web", opt_in=False)
+    result = service.transcribe(b"audio bytes", client="web")
     assert result["text"] == "ignored"

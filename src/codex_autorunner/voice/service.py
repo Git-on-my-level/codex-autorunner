@@ -23,7 +23,7 @@ class VoiceServiceError(Exception):
 class VoiceService:
     """
     Thin wrapper that wires the shared PushToTalkCapture into HTTP handlers.
-    This keeps raw audio in-memory only and enforces opt-in for remote APIs.
+    This keeps raw audio in-memory only and centralizes provider wiring/error mapping.
     """
 
     def __init__(
@@ -70,69 +70,13 @@ class VoiceService:
         client: str = "web",
         user_agent: Optional[str] = None,
         language: Optional[str] = None,
-        opt_in: bool = False,
     ) -> dict:
-        try:
-            import json as _json
-            _ts = int(__import__("time").time() * 1000)
-            with open(
-                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
-                "a",
-                encoding="utf-8",
-            ) as _f:
-                _f.write(
-                    _json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "pre-fix",
-                            "hypothesisId": "H5",
-                            "location": "voice/service.py:VoiceService.transcribe:entry",
-                            "message": "voice transcribe entered",
-                            "data": {
-                                "enabled": bool(self.config.enabled),
-                                "audio_len": len(audio_bytes) if audio_bytes else 0,
-                                "client": client,
-                                "has_user_agent": bool(user_agent),
-                                "language": language,
-                                "opt_in": bool(opt_in),
-                            },
-                            "timestamp": _ts,
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
         if not self.config.enabled:
             raise VoiceServiceError("disabled", "Voice is disabled")
         if not audio_bytes:
             raise VoiceServiceError("empty_audio", "No audio received")
 
         provider = self._resolve_provider()
-        try:
-            import json as _json
-            _ts = int(__import__("time").time() * 1000)
-            with open(
-                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
-                "a",
-                encoding="utf-8",
-            ) as _f:
-                _f.write(
-                    _json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "pre-fix",
-                            "hypothesisId": "H5",
-                            "location": "voice/service.py:VoiceService.transcribe:provider",
-                            "message": "voice provider resolved",
-                            "data": {"provider_name": getattr(provider, "name", None)},
-                            "timestamp": _ts,
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
         buffer = _TranscriptionBuffer()
         capture = PushToTalkCapture(
             provider=provider,
@@ -148,7 +92,6 @@ class VoiceService:
                 user_agent=user_agent,
             ),
         )
-        # No opt-in gating: this is a personal tool and callers may send audio directly.
 
         capture.begin_capture()
         if capture.state == CaptureState.ERROR:
@@ -162,33 +105,6 @@ class VoiceService:
             raise VoiceServiceError("provider_error", str(exc)) from exc
 
         if buffer.error_reason:
-            try:
-                import json as _json
-                _ts = int(__import__("time").time() * 1000)
-                with open(
-                    "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
-                    "a",
-                    encoding="utf-8",
-                ) as _f:
-                    _f.write(
-                        _json.dumps(
-                            {
-                                "sessionId": "debug-session",
-                                "runId": "pre-fix",
-                                "hypothesisId": "H5",
-                                "location": "voice/service.py:VoiceService.transcribe:error_reason",
-                                "message": "capture reported error",
-                                "data": {
-                                    "error_reason": buffer.error_reason,
-                                    "warnings_preview": buffer.warnings[:3],
-                                },
-                                "timestamp": _ts,
-                            }
-                        )
-                        + "\n"
-                    )
-            except Exception:
-                pass
             if buffer.error_reason in ("unauthorized", "forbidden"):
                 provider_cfg = self.config.providers.get(
                     self.config.provider or "openai_whisper", {}
@@ -201,35 +117,6 @@ class VoiceService:
             raise VoiceServiceError(buffer.error_reason, buffer.error_reason.replace("_", " "))
 
         transcript = buffer.final_text or buffer.partial_text or ""
-        try:
-            import json as _json
-            _ts = int(__import__("time").time() * 1000)
-            with open(
-                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
-                "a",
-                encoding="utf-8",
-            ) as _f:
-                _f.write(
-                    _json.dumps(
-                        {
-                            "sessionId": "debug-session",
-                            "runId": "pre-fix",
-                            "hypothesisId": "H5",
-                            "location": "voice/service.py:VoiceService.transcribe:exit",
-                            "message": "voice transcribe completed",
-                            "data": {
-                                "error_reason": buffer.error_reason,
-                                "warnings_count": len(buffer.warnings),
-                                "warnings_preview": buffer.warnings[:2],
-                                "text_len": len(transcript) if transcript else 0,
-                            },
-                            "timestamp": _ts,
-                        }
-                    )
-                    + "\n"
-                )
-        except Exception:
-            pass
         return {
             "text": transcript,
             "warnings": buffer.warnings,

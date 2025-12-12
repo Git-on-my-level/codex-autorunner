@@ -1,4 +1,4 @@
-import { confirmModal, flash, resolvePath } from "./utils.js";
+import { flash, resolvePath } from "./utils.js";
 
 // SVG mic icon (more polished than emoji)
 const MIC_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>`;
@@ -99,35 +99,10 @@ export async function initVoiceInput({
     return null;
   }
 
-  // #region agent log
-  fetch("http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      location: "voice.js:initVoiceInput:config",
-      message: "voice config loaded",
-      data: {
-        enabled: Boolean(config.enabled),
-        provider: config.provider || null,
-        has_api_key: Boolean(config.has_api_key),
-        api_key_env: config.api_key_env || null,
-        chunk_ms: config.chunk_ms || null,
-        latency_mode: config.latency_mode || null,
-        supportsVoice: supportsVoice(),
-      },
-      timestamp: Date.now(),
-      sessionId: "debug-session",
-      runId: "pre-fix",
-      hypothesisId: "H4",
-    }),
-  }).catch(() => {});
-  // #endregion
-
   const state = {
     recording: false,
     sending: false,
     pendingBlob: null,
-    optInAccepted: true, // No opt-in gating
     chunks: [],
     recorder: null,
     stream: null,
@@ -142,9 +117,6 @@ export async function initVoiceInput({
     analyser: null,
     levelMeter: null,
     animationFrame: null,
-    // Debug instrumentation helpers
-    _debugMaxLevel: 0,
-    _debugLevelSamples: 0,
   };
 
   // Threshold for distinguishing click vs hold (ms)
@@ -175,51 +147,9 @@ export async function initVoiceInput({
     state.pointerDownTime = Date.now();
     state.pointerIsDown = true;
     state.pendingClickToggle = false;
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "voice.js:startHandler",
-        message: "pointerdown",
-        data: {
-          recording: Boolean(state.recording),
-          sending: Boolean(state.sending),
-          hasPending: Boolean(state.pendingBlob),
-          isClickToggleMode: Boolean(state.isClickToggleMode),
-          shiftKey: Boolean(event && event.shiftKey),
-        },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H2",
-      }),
-    }).catch(() => {});
-    // #endregion
 
     // If already recording in click-toggle mode, stop on next click
     if (state.recording && state.isClickToggleMode) {
-      // #region agent log
-      fetch(
-        "http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "voice.js:startHandler:toggleStop",
-            message: "click-toggle stopping",
-            data: {
-              recorder_state: (state.recorder && state.recorder.state) || null,
-              chunks: state.chunks.length,
-            },
-            timestamp: Date.now(),
-            sessionId: "debug-session",
-            runId: "pre-fix",
-            hypothesisId: "H2",
-          }),
-        }
-      ).catch(() => {});
-      // #endregion
       stopRecording();
       state.isClickToggleMode = false;
       return;
@@ -231,25 +161,6 @@ export async function initVoiceInput({
   const endHandler = (event) => {
     const holdDuration = Date.now() - state.pointerDownTime;
     state.pointerIsDown = false;
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "voice.js:endHandler",
-        message: "pointerup",
-        data: {
-          holdDurationMs: holdDuration,
-          recording: Boolean(state.recording),
-          isClickToggleMode: Boolean(state.isClickToggleMode),
-        },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H2",
-      }),
-    }).catch(() => {});
-    // #endregion
 
     // If it was a quick click (< threshold), switch to click-toggle mode
     if (holdDuration < CLICK_THRESHOLD_MS && state.recording) {
@@ -287,45 +198,9 @@ export async function initVoiceInput({
 
   async function startRecording() {
     let stream;
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "voice.js:startRecording:getUserMedia",
-        message: "requesting microphone",
-        data: { constraints: { audio: true } },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H1",
-      }),
-    }).catch(() => {});
-    // #endregion
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
-      // #region agent log
-      fetch(
-        "http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "voice.js:startRecording:getUserMedia:err",
-            message: "microphone request failed",
-            data: {
-              name: err && err.name ? String(err.name) : null,
-              message: err && err.message ? String(err.message) : null,
-            },
-            timestamp: Date.now(),
-            sessionId: "debug-session",
-            runId: "pre-fix",
-            hypothesisId: "H1",
-          }),
-        }
-      ).catch(() => {});
-      // #endregion
       state.lastError = "Microphone permission denied";
       setStatus(statusEl, state.lastError);
       setButtonError(button, state.pendingBlob);
@@ -333,77 +208,6 @@ export async function initVoiceInput({
       return;
     }
     state.stream = stream;
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "voice.js:startRecording:getUserMedia:ok",
-        message: "microphone stream acquired",
-        data: {
-          tracks:
-            stream && stream.getAudioTracks
-              ? stream.getAudioTracks().length
-              : null,
-          track_ready:
-            stream && stream.getAudioTracks && stream.getAudioTracks()[0]
-              ? stream.getAudioTracks()[0].readyState
-              : null,
-          settings: (() => {
-            try {
-              const t = stream.getAudioTracks && stream.getAudioTracks()[0];
-              if (!t || !t.getSettings) return null;
-              const s = t.getSettings();
-              const safe = {};
-              for (const k of [
-                "sampleRate",
-                "channelCount",
-                "echoCancellation",
-                "noiseSuppression",
-                "autoGainControl",
-                "sampleSize",
-              ])
-                if (k in s) safe[k] = s[k];
-              return safe;
-            } catch (e) {
-              return null;
-            }
-          })(),
-        },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H1",
-      }),
-    }).catch(() => {});
-    // #endregion
-    try {
-      const t = stream.getAudioTracks && stream.getAudioTracks()[0];
-      if (t) {
-        // #region agent log
-        fetch(
-          "http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              location: "voice.js:startRecording:track",
-              message: "audio track state",
-              data: {
-                enabled: Boolean(t.enabled),
-                muted: Boolean(t.muted),
-                readyState: t.readyState || null,
-              },
-              timestamp: Date.now(),
-              sessionId: "debug-session",
-              runId: "pre-fix",
-              hypothesisId: "H1",
-            }),
-          }
-        ).catch(() => {});
-        // #endregion
-      }
-    } catch (e) {}
     const mimeType = pickMimeType();
     try {
       state.recorder = new MediaRecorder(
@@ -419,55 +223,10 @@ export async function initVoiceInput({
       return;
     }
 
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "voice.js:startRecording:MediaRecorder",
-        message: "media recorder created",
-        data: {
-          picked_mime: mimeType,
-          recorder_mime: (state.recorder && state.recorder.mimeType) || null,
-          recorder_state: (state.recorder && state.recorder.state) || null,
-        },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H2",
-      }),
-    }).catch(() => {});
-    // #endregion
-
     state.chunks = [];
     state.recorder.addEventListener("dataavailable", (e) => {
       if (e.data && e.data.size > 0) {
         state.chunks.push(e.data);
-        if (state.chunks.length === 1) {
-          // #region agent log
-          fetch(
-            "http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad",
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                location: "voice.js:dataavailable:first",
-                message: "first audio chunk received",
-                data: {
-                  chunk_size: e.data.size,
-                  chunk_type: e.data.type || null,
-                  recorder_state:
-                    (state.recorder && state.recorder.state) || null,
-                },
-                timestamp: Date.now(),
-                sessionId: "debug-session",
-                runId: "pre-fix",
-                hypothesisId: "H2",
-              }),
-            }
-          ).catch(() => {});
-          // #endregion
-        }
       }
     });
     state.recorder.addEventListener("stop", onRecorderStop);
@@ -486,8 +245,6 @@ export async function initVoiceInput({
 
     // Set up audio level visualization
     try {
-      state._debugMaxLevel = 0;
-      state._debugLevelSamples = 0;
       state.audioContext = new (window.AudioContext ||
         window.webkitAudioContext)();
       const source = state.audioContext.createMediaStreamSource(stream);
@@ -508,54 +265,11 @@ export async function initVoiceInput({
         // Calculate average level (0-255) and normalize to 0-1
         const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
         const level = Math.min(1, avg / 128);
-        if (level > state._debugMaxLevel) state._debugMaxLevel = level;
         updateLevelMeter(state.levelMeter, level);
-        if (state._debugLevelSamples < 3) {
-          state._debugLevelSamples += 1;
-          // #region agent log
-          fetch(
-            "http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad",
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                location: "voice.js:visualization:level",
-                message: "analyser level sample",
-                data: { avg, level, maxLevel: state._debugMaxLevel },
-                timestamp: Date.now(),
-                sessionId: "debug-session",
-                runId: "pre-fix",
-                hypothesisId: "H3",
-              }),
-            }
-          ).catch(() => {});
-          // #endregion
-        }
         state.animationFrame = requestAnimationFrame(animateLevel);
       };
       animateLevel();
     } catch (err) {
-      // #region agent log
-      fetch(
-        "http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            location: "voice.js:startRecording:visualization:err",
-            message: "audio visualization setup failed",
-            data: {
-              name: err && err.name ? String(err.name) : null,
-              message: err && err.message ? String(err.message) : null,
-            },
-            timestamp: Date.now(),
-            sessionId: "debug-session",
-            runId: "pre-fix",
-            hypothesisId: "H3",
-          }),
-        }
-      ).catch(() => {});
-      // #endregion
       // Continue without visualization - not critical
     }
 
@@ -577,21 +291,6 @@ export async function initVoiceInput({
     state.sending = true;
     setStatus(statusEl, "Transcribing…");
     setButtonSending(button);
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "voice.js:stopRecording",
-        message: "stop requested",
-        data: { maxLevel: state._debugMaxLevel, chunks: state.chunks.length },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H2",
-      }),
-    }).catch(() => {});
-    // #endregion
     try {
       state.recorder.stop();
     } catch (err) {
@@ -606,25 +305,6 @@ export async function initVoiceInput({
     const blob = new Blob(state.chunks, {
       type: (state.recorder && state.recorder.mimeType) || "audio/webm",
     });
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "voice.js:onRecorderStop:blob",
-        message: "recorder stopped; built blob",
-        data: {
-          chunks: state.chunks.length,
-          blob_size: blob.size,
-          blob_type: blob.type || null,
-        },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H2",
-      }),
-    }).catch(() => {});
-    // #endregion
     cleanupRecorder(state);
     if (!blob.size) {
       state.sending = false;
@@ -648,7 +328,7 @@ export async function initVoiceInput({
     state.sending = true;
     state.pendingBlob = blob;
     try {
-      const text = await transcribeBlob(blob, state.optInAccepted);
+      const text = await transcribeBlob(blob);
       state.sending = false;
       state.pendingBlob = null;
       setStatus(statusEl, text ? "Transcript ready" : "No speech detected");
@@ -672,31 +352,10 @@ export async function initVoiceInput({
     }
   }
 
-  async function transcribeBlob(blob, optIn) {
+  async function transcribeBlob(blob) {
     const formData = new FormData();
     formData.append("file", blob, "voice.webm");
-    formData.append("opt_in", optIn ? "1" : "0");
     const url = resolvePath("/api/voice/transcribe");
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "voice.js:transcribeBlob:fetch",
-        message: "sending audio for transcription",
-        data: {
-          url,
-          blob_size: blob.size,
-          blob_type: blob.type || null,
-          opt_in: Boolean(optIn),
-        },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H4",
-      }),
-    }).catch(() => {});
-    // #endregion
     const res = await fetch(url, {
       method: "POST",
       body: formData,
@@ -715,29 +374,6 @@ export async function initVoiceInput({
         `Voice failed (${res.status})`;
       throw new Error(detail);
     }
-    // #region agent log
-    fetch("http://127.0.0.1:7242/ingest/0edefa02-53f9-4997-b974-f16ebabdecad", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        location: "voice.js:transcribeBlob:response",
-        message: "transcribe response received",
-        data: {
-          status: res.status,
-          ok: Boolean(res.ok),
-          keys:
-            payload && typeof payload === "object"
-              ? Object.keys(payload).slice(0, 10)
-              : null,
-          text_len: payload && payload.text ? String(payload.text).length : 0,
-        },
-        timestamp: Date.now(),
-        sessionId: "debug-session",
-        runId: "pre-fix",
-        hypothesisId: "H4",
-      }),
-    }).catch(() => {});
-    // #endregion
     return payload.text || "";
   }
 
