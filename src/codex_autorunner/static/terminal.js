@@ -30,13 +30,13 @@ const textEncoder = new TextEncoder();
 
 // Check if device has touch capability
 function isTouchDevice() {
-  return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  return "ontouchstart" in window || navigator.maxTouchPoints > 0;
 }
 
 // Send a key sequence to the terminal
 function sendKey(seq) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  
+
   // If ctrl modifier is active, convert to ctrl code
   if (ctrlActive && seq.length === 1) {
     const char = seq.toUpperCase();
@@ -45,9 +45,9 @@ function sendKey(seq) {
       seq = String.fromCharCode(code);
     }
   }
-  
+
   socket.send(textEncoder.encode(seq));
-  
+
   // Reset modifiers after sending (unless it was just a modifier toggle)
   ctrlActive = false;
   altActive = false;
@@ -63,50 +63,50 @@ function sendCtrl(char) {
 
 // Update modifier button visual states
 function updateModifierButtons() {
-  const ctrlBtn = document.getElementById('tmb-ctrl');
-  const altBtn = document.getElementById('tmb-alt');
-  if (ctrlBtn) ctrlBtn.classList.toggle('active', ctrlActive);
-  if (altBtn) altBtn.classList.toggle('active', altActive);
+  const ctrlBtn = document.getElementById("tmb-ctrl");
+  const altBtn = document.getElementById("tmb-alt");
+  if (ctrlBtn) ctrlBtn.classList.toggle("active", ctrlActive);
+  if (altBtn) altBtn.classList.toggle("active", altActive);
 }
 
 // Initialize mobile controls
 function initMobileControls() {
-  mobileControlsEl = document.getElementById('terminal-mobile-controls');
+  mobileControlsEl = document.getElementById("terminal-mobile-controls");
   if (!mobileControlsEl) return;
-  
+
   // Only show on touch devices
   if (!isTouchDevice()) {
-    mobileControlsEl.style.display = 'none';
+    mobileControlsEl.style.display = "none";
     return;
   }
-  
+
   // Handle all key buttons
-  mobileControlsEl.addEventListener('click', (e) => {
-    const btn = e.target.closest('.tmb-key');
+  mobileControlsEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".tmb-key");
     if (!btn) return;
-    
+
     e.preventDefault();
-    
+
     // Handle modifier toggles
     const modKey = btn.dataset.key;
-    if (modKey === 'ctrl') {
+    if (modKey === "ctrl") {
       ctrlActive = !ctrlActive;
       updateModifierButtons();
       return;
     }
-    if (modKey === 'alt') {
+    if (modKey === "alt") {
       altActive = !altActive;
       updateModifierButtons();
       return;
     }
-    
+
     // Handle Ctrl+X combos
     const ctrlChar = btn.dataset.ctrl;
     if (ctrlChar) {
       sendCtrl(ctrlChar);
       return;
     }
-    
+
     // Handle direct sequences (arrows, esc, tab)
     const seq = btn.dataset.seq;
     if (seq) {
@@ -114,13 +114,17 @@ function initMobileControls() {
       return;
     }
   });
-  
+
   // Add haptic feedback on touch if available
-  mobileControlsEl.addEventListener('touchstart', (e) => {
-    if (e.target.closest('.tmb-key') && navigator.vibrate) {
-      navigator.vibrate(10);
-    }
-  }, { passive: true });
+  mobileControlsEl.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.target.closest(".tmb-key") && navigator.vibrate) {
+        navigator.vibrate(10);
+      }
+    },
+    { passive: true }
+  );
 }
 
 function setStatus(message) {
@@ -146,7 +150,8 @@ function ensureTerminal() {
   if (!container) return false;
   term = new window.Terminal({
     convertEol: true,
-    fontFamily: '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+    fontFamily:
+      '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
     fontSize: getFontSize(),
     cursorBlink: true,
     rows: 24,
@@ -213,7 +218,7 @@ function updateButtons(connected) {
 
 function handleResize() {
   if (!fitAddon || !term) return;
-  
+
   // Update font size based on current window width
   const newFontSize = getFontSize();
   if (term.options.fontSize !== newFontSize) {
@@ -244,7 +249,7 @@ function connect(options = {}) {
   const resume = Boolean(options.resume);
   if (!ensureTerminal()) return;
   if (socket && socket.readyState === WebSocket.OPEN) return;
-  
+
   // cancel any pending reconnect
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
@@ -254,8 +259,19 @@ function connect(options = {}) {
   teardownSocket();
   intentionalDisconnect = false;
 
-  const query = resume ? "?mode=resume" : "";
-  const wsUrl = buildWsUrl(CONSTANTS.API.TERMINAL_ENDPOINT, query);
+  const queryParams = new URLSearchParams();
+  if (resume) queryParams.append("mode", "resume");
+
+  const savedSessionId = localStorage.getItem("codex_terminal_session_id");
+  if (savedSessionId) {
+    queryParams.append("session_id", savedSessionId);
+  }
+
+  const queryString = queryParams.toString();
+  const wsUrl = buildWsUrl(
+    CONSTANTS.API.TERMINAL_ENDPOINT,
+    queryString ? `?${queryString}` : ""
+  );
   socket = new WebSocket(wsUrl);
   socket.binaryType = "arraybuffer";
 
@@ -275,12 +291,35 @@ function connect(options = {}) {
     if (typeof event.data === "string") {
       try {
         const payload = JSON.parse(event.data);
-        if (payload.type === "exit") {
-          term?.write(`\r\n[session ended${payload.code !== null ? ` (code ${payload.code})` : ""}] \r\n`);
+        if (payload.type === "hello") {
+          if (payload.session_id) {
+            localStorage.setItem(
+              "codex_terminal_session_id",
+              payload.session_id
+            );
+          }
+          if (payload.history) {
+            // Replay history if provided (though server might send it as binary chunks)
+            // If history is sent as base64 or something in this payload
+          }
+        } else if (payload.type === "exit") {
+          term?.write(
+            `\r\n[session ended${
+              payload.code !== null ? ` (code ${payload.code})` : ""
+            }] \r\n`
+          );
+          // Clear saved session on explicit exit
+          localStorage.removeItem("codex_terminal_session_id");
           // Treat exit as an intentional disconnect or at least not something to auto-reconnect to immediately
-          intentionalDisconnect = true; 
+          intentionalDisconnect = true;
           disconnect();
         } else if (payload.type === "error") {
+          if (
+            payload.message &&
+            payload.message.includes("Session not found")
+          ) {
+            localStorage.removeItem("codex_terminal_session_id");
+          }
           flash(payload.message || "Terminal error", "error");
         }
       } catch (err) {
@@ -300,7 +339,7 @@ function connect(options = {}) {
 
   socket.onclose = () => {
     updateButtons(false);
-    
+
     if (intentionalDisconnect) {
       setStatus("Disconnected");
       overlayEl?.classList.remove("hidden");
@@ -474,8 +513,13 @@ export function initTerminal() {
   setStatus("Disconnected");
 
   window.addEventListener("resize", handleResize);
-  
+
   // Initialize mobile touch controls
   initMobileControls();
   initTerminalVoice();
+
+  // Auto-connect if session ID exists
+  if (localStorage.getItem("codex_terminal_session_id")) {
+    connect({ resume: true });
+  }
 }

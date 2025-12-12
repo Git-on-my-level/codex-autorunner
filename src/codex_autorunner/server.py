@@ -1,7 +1,9 @@
 import asyncio
+import collections
 import json
 import os
 import threading
+import time
 import uuid
 from importlib import resources
 from pathlib import Path
@@ -200,6 +202,68 @@ class RunnerManager:
                 self.thread.join(timeout=1.0)
 
 
+class ActiveSession:
+    def __init__(
+        self, session_id: str, pty: PTYSession, loop: asyncio.AbstractEventLoop
+    ):
+        self.id = session_id
+        self.pty = pty
+        self.buffer = collections.deque(maxlen=1000)
+        self.subscribers: set[asyncio.Queue] = set()
+        self.lock = asyncio.Lock()
+        self.loop = loop
+        self._setup_reader()
+
+    def _setup_reader(self):
+        self.loop.add_reader(self.pty.fd, self._read_callback)
+
+    def _read_callback(self):
+        try:
+            # If we are closed, do nothing (should be removed from reader though)
+            if self.pty.closed:
+                return
+
+            # Read directly
+            data = os.read(self.pty.fd, 4096)
+            if data:
+                self.pty.last_active = time.time()
+                self.buffer.append(data)
+                for queue in list(self.subscribers):
+                    try:
+                        queue.put_nowait(data)
+                    except asyncio.QueueFull:
+                        pass
+            else:
+                # EOF
+                self.close()
+        except OSError:
+            self.close()
+
+    def add_subscriber(self) -> asyncio.Queue:
+        q = asyncio.Queue()
+        # Replay buffer
+        for chunk in self.buffer:
+            q.put_nowait(chunk)
+        self.subscribers.add(q)
+        return q
+
+    def remove_subscriber(self, q: asyncio.Queue):
+        if q in self.subscribers:
+            self.subscribers.remove(q)
+
+    def close(self):
+        if not self.pty.closed:
+            self.loop.remove_reader(self.pty.fd)
+            self.pty.terminate()
+        # Notify subscribers of exit?
+        # We can put None or a special sentinel
+        for queue in list(self.subscribers):
+            try:
+                queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+
+
 async def _log_stream(log_path: Path):
     if not log_path.exists():
         yield "data: log file not found\n\n"
@@ -258,7 +322,7 @@ def create_app(
     manager = RunnerManager(engine)
     doc_chat = DocChatService(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
-    terminal_sessions: dict[str, PTYSession] = {}
+    terminal_sessions: dict[str, ActiveSession] = {}
     terminal_max_idle_seconds = 3600
     terminal_lock: Optional[asyncio.Lock] = None
 
@@ -625,65 +689,77 @@ def create_app(
     @app.websocket("/api/terminal")
     async def terminal(ws: WebSocket):
         await ws.accept()
-        session_id = str(uuid.uuid4())
-        resume_mode = ws.query_params.get("mode") == "resume"
-        if resume_mode:
-            cmd = [
-                engine.config.codex_binary,
-                "--yolo",
-                "resume",
-                *engine.config.codex_terminal_args,
-            ]
-        else:
-            cmd = [engine.config.codex_binary, *engine.config.codex_terminal_args]
-        try:
-            session = PTYSession(cmd, cwd=str(engine.repo_root))
-        except FileNotFoundError:
-            await ws.send_text(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "message": f"Codex binary not found: {engine.config.codex_binary}",
-                    }
-                )
-            )
-            await ws.close()
-            return
+        client_session_id = ws.query_params.get("session_id")
+        session_id = None
+        active_session: Optional[ActiveSession] = None
 
         async with _terminal_lock():
-            terminal_sessions[session_id] = session
+            if client_session_id and client_session_id in terminal_sessions:
+                active_session = terminal_sessions[client_session_id]
+                if not active_session.pty.isalive():
+                    active_session.close()
+                    terminal_sessions.pop(client_session_id, None)
+                    active_session = None
+                else:
+                    session_id = client_session_id
+
+            if not active_session:
+                session_id = str(uuid.uuid4())
+                resume_mode = ws.query_params.get("mode") == "resume"
+                if resume_mode:
+                    cmd = [
+                        engine.config.codex_binary,
+                        "--yolo",
+                        "resume",
+                        *engine.config.codex_terminal_args,
+                    ]
+                else:
+                    cmd = [
+                        engine.config.codex_binary,
+                        *engine.config.codex_terminal_args,
+                    ]
+                try:
+                    pty = PTYSession(cmd, cwd=str(engine.repo_root))
+                    active_session = ActiveSession(
+                        session_id, pty, asyncio.get_running_loop()
+                    )
+                    terminal_sessions[session_id] = active_session
+                except FileNotFoundError:
+                    await ws.send_text(
+                        json.dumps(
+                            {
+                                "type": "error",
+                                "message": f"Codex binary not found: {engine.config.codex_binary}",
+                            }
+                        )
+                    )
+                    await ws.close()
+                    return
+
+        # Send hello with session_id
+        await ws.send_text(json.dumps({"type": "hello", "session_id": session_id}))
+
+        queue = active_session.add_subscriber()
 
         async def pty_to_ws():
-            # Stream PTY output as binary frames.
             try:
-                while session.isalive():
-                    if session.is_stale(terminal_max_idle_seconds):
-                        await ws.send_text(
-                            json.dumps(
-                                {
-                                    "type": "exit",
-                                    "code": None,
-                                    "reason": "idle_timeout",
-                                    "session_id": session_id,
-                                }
+                while True:
+                    data = await queue.get()
+                    if data is None:
+                        # Session ended
+                        if active_session:
+                            exit_code = active_session.pty.exit_code()
+                            await ws.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "exit",
+                                        "code": exit_code,
+                                        "session_id": session_id,
+                                    }
+                                )
                             )
-                        )
                         break
-                    data = session.read()
-                    if data:
-                        await ws.send_bytes(data)
-                    else:
-                        await asyncio.sleep(0.02)
-                exit_code = session.exit_code()
-                await ws.send_text(
-                    json.dumps(
-                        {
-                            "type": "exit",
-                            "code": exit_code,
-                            "session_id": session_id,
-                        }
-                    )
-                )
+                    await ws.send_bytes(data)
             except Exception:
                 pass
 
@@ -694,7 +770,7 @@ def create_app(
                     if msg["type"] == "websocket.disconnect":
                         break
                     if msg.get("bytes") is not None:
-                        session.write(msg["bytes"])
+                        active_session.pty.write(msg["bytes"])
                         continue
                     text = msg.get("text")
                     if not text:
@@ -707,7 +783,7 @@ def create_app(
                         cols = int(payload.get("cols", 0))
                         rows = int(payload.get("rows", 0))
                         if cols > 0 and rows > 0:
-                            session.resize(cols, rows)
+                            active_session.pty.resize(cols, rows)
                     elif payload.get("type") == "ping":
                         await ws.send_text(json.dumps({"type": "pong"}))
             except WebSocketDisconnect:
@@ -720,19 +796,49 @@ def create_app(
         await asyncio.wait(
             [forward_task, input_task], return_when=asyncio.FIRST_COMPLETED
         )
-        session.terminate()
-        async with _terminal_lock():
-            terminal_sessions.pop(session_id, None)
+
+        # Cleanup subscription
+        if active_session:
+            active_session.remove_subscriber(queue)
+            # If session is dead, remove from map
+            if not active_session.pty.isalive():
+                async with _terminal_lock():
+                    terminal_sessions.pop(session_id, None)
+
+        forward_task.cancel()
+        input_task.cancel()
         try:
             await ws.close()
         except Exception:
             pass
 
+    @app.on_event("startup")
+    async def start_cleanup_task():
+        async def _cleanup_loop():
+            while True:
+                await asyncio.sleep(600)  # Check every 10 mins
+                try:
+                    async with _terminal_lock():
+                        to_remove = []
+                        for sid, session in terminal_sessions.items():
+                            # If no subscribers and stale, kill it.
+                            # If subscribers exist, maybe don't kill? Or use strict idle?
+                            # Original used strict idle (activity based).
+                            if session.pty.is_stale(terminal_max_idle_seconds):
+                                session.close()
+                                to_remove.append(sid)
+                        for sid in to_remove:
+                            terminal_sessions.pop(sid, None)
+                except Exception:
+                    pass
+
+        asyncio.create_task(_cleanup_loop())
+
     @app.on_event("shutdown")
     async def shutdown_terminal_sessions():
         async with _terminal_lock():
             for session in terminal_sessions.values():
-                session.terminate()
+                session.close()
             terminal_sessions.clear()
 
     if base_path:
