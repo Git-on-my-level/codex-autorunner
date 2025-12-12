@@ -54,7 +54,7 @@ class VoiceConfig:
             "latency_mode": "balanced",
             "chunk_ms": 600,
             "sample_rate": 16_000,
-            "warn_on_remote_api": True,
+            "warn_on_remote_api": False,
             "push_to_talk": {
                 "max_ms": 15_000,
                 "silence_auto_stop_ms": 1_200,
@@ -76,7 +76,17 @@ class VoiceConfig:
                     if isinstance(value, Mapping):
                         merged["providers"][key] = {**merged["providers"].get(key, {}), **dict(value)}
 
-        merged["enabled"] = _env_bool(env.get("CODEX_AUTORUNNER_VOICE_ENABLED"), merged["enabled"])
+        # Auto-enable voice if API key is available (unless explicitly disabled via env/config)
+        explicit_enabled = env.get("CODEX_AUTORUNNER_VOICE_ENABLED")
+        if explicit_enabled is not None:
+            merged["enabled"] = _env_bool(explicit_enabled, merged["enabled"])
+        elif not merged.get("enabled"):
+            # Auto-enable if the provider's API key is available
+            provider_name = env.get("CODEX_AUTORUNNER_VOICE_PROVIDER", merged.get("provider", "openai_whisper"))
+            provider_cfg = merged.get("providers", {}).get(provider_name, {})
+            api_key_env = provider_cfg.get("api_key_env", "OPENAI_API_KEY")
+            if env.get(api_key_env):
+                merged["enabled"] = True
         merged["provider"] = env.get("CODEX_AUTORUNNER_VOICE_PROVIDER", merged.get("provider"))
         merged["latency_mode"] = env.get(
             "CODEX_AUTORUNNER_VOICE_LATENCY", merged.get("latency_mode", "balanced")
@@ -85,10 +95,19 @@ class VoiceConfig:
         merged["sample_rate"] = _env_int(
             env.get("CODEX_AUTORUNNER_VOICE_SAMPLE_RATE"), merged["sample_rate"]
         )
-        merged["warn_on_remote_api"] = _env_bool(
-            env.get("CODEX_AUTORUNNER_VOICE_WARN_REMOTE"),
-            merged.get("warn_on_remote_api", True),
-        )
+        # If API key is already set, don't show the warning popup (user has already configured it)
+        explicit_warn = env.get("CODEX_AUTORUNNER_VOICE_WARN_REMOTE")
+        if explicit_warn is not None:
+            merged["warn_on_remote_api"] = _env_bool(explicit_warn, True)
+        else:
+            # Auto-disable warning if API key is present (user has intentionally configured it)
+            provider_name = merged.get("provider", "openai_whisper")
+            provider_cfg = merged.get("providers", {}).get(provider_name, {})
+            api_key_env = provider_cfg.get("api_key_env", "OPENAI_API_KEY")
+            if env.get(api_key_env):
+                merged["warn_on_remote_api"] = False
+            else:
+                merged["warn_on_remote_api"] = merged.get("warn_on_remote_api", True)
 
         pt = merged.get("push_to_talk", {}) or {}
         push_to_talk = PushToTalkConfig(

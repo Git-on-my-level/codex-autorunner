@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import Callable, Optional
 
@@ -31,14 +32,21 @@ class VoiceService:
         logger: Optional[logging.Logger] = None,
         provider_resolver: Callable[[VoiceConfig], object] = resolve_speech_provider,
         provider: Optional[object] = None,
+        env: Optional[dict] = None,
     ) -> None:
         self.config = config
         self._logger = logger or logging.getLogger(__name__)
         self._provider_resolver = provider_resolver
         self._provider = provider
+        self._env = env if env is not None else os.environ
 
     def config_payload(self) -> dict:
         """Expose safe config fields to the UI."""
+        # Check if API key is configured for status display
+        provider_cfg = self.config.providers.get(self.config.provider or "openai_whisper", {})
+        api_key_env = provider_cfg.get("api_key_env", "OPENAI_API_KEY")
+        has_api_key = bool(self._env.get(api_key_env))
+
         return {
             "enabled": self.config.enabled,
             "provider": self.config.provider,
@@ -46,6 +54,8 @@ class VoiceService:
             "chunk_ms": self.config.chunk_ms,
             "sample_rate": self.config.sample_rate,
             "warn_on_remote_api": self.config.warn_on_remote_api,
+            "has_api_key": has_api_key,
+            "api_key_env": api_key_env,
             "push_to_talk": {
                 "max_ms": self.config.push_to_talk.max_ms,
                 "silence_auto_stop_ms": self.config.push_to_talk.silence_auto_stop_ms,
@@ -62,12 +72,67 @@ class VoiceService:
         language: Optional[str] = None,
         opt_in: bool = False,
     ) -> dict:
+        try:
+            import json as _json
+            _ts = int(__import__("time").time() * 1000)
+            with open(
+                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
+                "a",
+                encoding="utf-8",
+            ) as _f:
+                _f.write(
+                    _json.dumps(
+                        {
+                            "sessionId": "debug-session",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H5",
+                            "location": "voice/service.py:VoiceService.transcribe:entry",
+                            "message": "voice transcribe entered",
+                            "data": {
+                                "enabled": bool(self.config.enabled),
+                                "audio_len": len(audio_bytes) if audio_bytes else 0,
+                                "client": client,
+                                "has_user_agent": bool(user_agent),
+                                "language": language,
+                                "opt_in": bool(opt_in),
+                            },
+                            "timestamp": _ts,
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
         if not self.config.enabled:
             raise VoiceServiceError("disabled", "Voice is disabled")
         if not audio_bytes:
             raise VoiceServiceError("empty_audio", "No audio received")
 
         provider = self._resolve_provider()
+        try:
+            import json as _json
+            _ts = int(__import__("time").time() * 1000)
+            with open(
+                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
+                "a",
+                encoding="utf-8",
+            ) as _f:
+                _f.write(
+                    _json.dumps(
+                        {
+                            "sessionId": "debug-session",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H5",
+                            "location": "voice/service.py:VoiceService.transcribe:provider",
+                            "message": "voice provider resolved",
+                            "data": {"provider_name": getattr(provider, "name", None)},
+                            "timestamp": _ts,
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
         buffer = _TranscriptionBuffer()
         capture = PushToTalkCapture(
             provider=provider,
@@ -83,8 +148,7 @@ class VoiceService:
                 user_agent=user_agent,
             ),
         )
-        if opt_in:
-            capture.acknowledge_remote_opt_in()
+        # No opt-in gating: this is a personal tool and callers may send audio directly.
 
         capture.begin_capture()
         if capture.state == CaptureState.ERROR:
@@ -98,9 +162,74 @@ class VoiceService:
             raise VoiceServiceError("provider_error", str(exc)) from exc
 
         if buffer.error_reason:
+            try:
+                import json as _json
+                _ts = int(__import__("time").time() * 1000)
+                with open(
+                    "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
+                    "a",
+                    encoding="utf-8",
+                ) as _f:
+                    _f.write(
+                        _json.dumps(
+                            {
+                                "sessionId": "debug-session",
+                                "runId": "pre-fix",
+                                "hypothesisId": "H5",
+                                "location": "voice/service.py:VoiceService.transcribe:error_reason",
+                                "message": "capture reported error",
+                                "data": {
+                                    "error_reason": buffer.error_reason,
+                                    "warnings_preview": buffer.warnings[:3],
+                                },
+                                "timestamp": _ts,
+                            }
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+            if buffer.error_reason in ("unauthorized", "forbidden"):
+                provider_cfg = self.config.providers.get(
+                    self.config.provider or "openai_whisper", {}
+                )
+                api_key_env = provider_cfg.get("api_key_env", "OPENAI_API_KEY")
+                raise VoiceServiceError(
+                    buffer.error_reason,
+                    f"OpenAI API key rejected ({buffer.error_reason}); check {api_key_env}",
+                )
             raise VoiceServiceError(buffer.error_reason, buffer.error_reason.replace("_", " "))
 
         transcript = buffer.final_text or buffer.partial_text or ""
+        try:
+            import json as _json
+            _ts = int(__import__("time").time() * 1000)
+            with open(
+                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
+                "a",
+                encoding="utf-8",
+            ) as _f:
+                _f.write(
+                    _json.dumps(
+                        {
+                            "sessionId": "debug-session",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H5",
+                            "location": "voice/service.py:VoiceService.transcribe:exit",
+                            "message": "voice transcribe completed",
+                            "data": {
+                                "error_reason": buffer.error_reason,
+                                "warnings_count": len(buffer.warnings),
+                                "warnings_preview": buffer.warnings[:2],
+                                "text_len": len(transcript) if transcript else 0,
+                            },
+                            "timestamp": _ts,
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
         return {
             "text": transcript,
             "warnings": buffer.warnings,

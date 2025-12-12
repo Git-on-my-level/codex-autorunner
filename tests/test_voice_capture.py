@@ -72,7 +72,7 @@ class FakeProvider(SpeechProvider):
         return self.streams.pop(0)
 
 
-def test_capture_requires_opt_in_before_start():
+def test_capture_starts_without_opt_in():
     config = VoiceConfig.from_raw({"enabled": True, "warn_on_remote_api": True})
     provider = FakeProvider([FakeStream()])
     errors: list[str] = []
@@ -85,11 +85,6 @@ def test_capture_requires_opt_in_before_start():
         now_fn=lambda: 0.0,
     )
 
-    capture.begin_capture()
-    assert errors and errors[-1] == "opt_in_required"
-    assert capture.state == CaptureState.ERROR
-
-    capture.acknowledge_remote_opt_in()
     capture.begin_capture()
     capture.handle_chunk(b"\x00\x01")
     capture.end_capture()
@@ -124,7 +119,6 @@ def test_capture_retries_and_stops_on_silence():
         now_fn=clock.now,
         max_retries=1,
     )
-    capture.acknowledge_remote_opt_in()
 
     capture.begin_capture()
     capture.handle_chunk(b"\x00\x00")

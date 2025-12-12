@@ -61,8 +61,8 @@ class PushToTalkCapture(VoiceCaptureSession):
     """
     Cross-platform push-to-talk controller that sits between UI recorders and a SpeechProvider.
 
-    This keeps raw audio in-memory only, enforces opt-in when sending audio to remote APIs,
-    and exposes explicit states so both TUI and web can render consistent UX.
+    This keeps raw audio in-memory only and exposes explicit states so both TUI and web can
+    render consistent UX.
     """
 
     def __init__(
@@ -89,8 +89,6 @@ class PushToTalkCapture(VoiceCaptureSession):
 
         self._state: CaptureState = CaptureState.IDLE
         self._permission_granted = False
-        self._opt_in_required = bool(config.warn_on_remote_api)
-        self._opt_in_accepted = not self._opt_in_required
         self._stream = None
         self._retry_attempts = 0
         self._chunks: list[AudioChunk] = []
@@ -101,10 +99,6 @@ class PushToTalkCapture(VoiceCaptureSession):
     @property
     def state(self) -> CaptureState:
         return self._state
-
-    def acknowledge_remote_opt_in(self) -> None:
-        """Mark that the user opted into sending audio to remote APIs."""
-        self._opt_in_accepted = True
 
     def request_permission(self) -> None:
         if self._state not in (CaptureState.IDLE, CaptureState.ERROR):
@@ -129,10 +123,6 @@ class PushToTalkCapture(VoiceCaptureSession):
             self.request_permission()
             if not self._permission_granted:
                 return
-
-        if self._opt_in_required and not self._opt_in_accepted:
-            self.fail("opt_in_required")
-            return
 
         if self._state in (CaptureState.RECORDING, CaptureState.STREAMING, CaptureState.FINALIZING):
             self.fail("already_recording")
@@ -194,15 +184,26 @@ class PushToTalkCapture(VoiceCaptureSession):
             self._emit_state(CaptureState.IDLE)
             return
 
-        self._emit_state(CaptureState.FINALIZING)
-        try:
-            events = self._stream.flush_final()
-            self._handle_events(events)
-        except Exception as exc:
-            self._logger.error("Final transcription flush failed: %s", exc, exc_info=False)
-            if self._fail_with_retry("provider_error"):
-                self.end_capture(reason)
-            return
+        while True:
+            self._emit_state(CaptureState.FINALIZING)
+            prior_retries = self._retry_attempts
+            try:
+                events = self._stream.flush_final()
+                self._handle_events(events)
+            except Exception as exc:
+                self._logger.error("Final transcription flush failed: %s", exc, exc_info=False)
+                if self._fail_with_retry("provider_error"):
+                    continue
+                return
+
+            # If _handle_events triggered a retry due to an error event, we restarted the
+            # stream and replayed chunks. We must attempt the final flush again on the
+            # restarted stream, otherwise transcription will never be produced.
+            if self._state == CaptureState.ERROR:
+                return
+            if self._retry_attempts > prior_retries:
+                continue
+            break
 
         self._reset()
         self._emit_state(CaptureState.IDLE)
@@ -275,6 +276,9 @@ class PushToTalkCapture(VoiceCaptureSession):
             self.end_capture("silence")
 
     def _fail_with_retry(self, reason: str) -> bool:
+        if reason in ("unauthorized", "forbidden"):
+            self.fail(reason)
+            return False
         if self._retry_attempts >= self._max_retries:
             self.fail(reason)
             return False

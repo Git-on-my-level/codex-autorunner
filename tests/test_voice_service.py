@@ -46,13 +46,10 @@ def test_voice_service_transcribes_bytes():
     assert result.get("warnings") == []
 
 
-def test_voice_service_requires_opt_in_when_warn_enabled():
+def test_voice_service_does_not_require_opt_in_when_warn_enabled():
     cfg = VoiceConfig.from_raw({"enabled": True, "warn_on_remote_api": True})
     provider = DummyProvider(DummyStream("ignored"))
     service = VoiceService(cfg, provider_resolver=lambda _: provider)
 
-    try:
-        service.transcribe(b"audio bytes", client="web", opt_in=False)
-        assert False, "Expected VoiceServiceError"
-    except VoiceServiceError as exc:
-        assert exc.reason == "opt_in_required"
+    result = service.transcribe(b"audio bytes", client="web", opt_in=False)
+    assert result["text"] == "ignored"

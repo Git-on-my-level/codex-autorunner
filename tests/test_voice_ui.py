@@ -3,7 +3,7 @@ import textwrap
 from pathlib import Path
 
 
-def test_voice_ui_opt_in_and_transcribe_flow():
+def test_voice_ui_transcribe_flow_without_opt_in():
     voice_js = Path("src/codex_autorunner/static/voice.js").resolve()
     script = textwrap.dedent(
         """
@@ -75,7 +75,6 @@ def test_voice_ui_opt_in_and_transcribe_flow():
         // Elements used by utils.js + confirmModal
         ["toast", "confirm-modal", "confirm-modal-message", "confirm-modal-ok", "confirm-modal-cancel"].forEach(getEl);
 
-        globalThis.__confirmResponse = false;
         globalThis.__voiceRequests = [];
         globalThis.__recorderIntervals = [];
         globalThis.__tracksStopped = 0;
@@ -184,53 +183,34 @@ def test_voice_ui_opt_in_and_transcribe_flow():
         const mod = await import(moduleUrl);
         const { initVoiceInput } = mod;
 
-        const micBtn1 = getEl("mic-btn-1");
-        const status1 = getEl("status-1");
-        const input1 = getEl("input-1");
+        const micBtn = getEl("mic-btn-1");
+        const status = getEl("status-1");
+        const input = getEl("input-1");
         const errors = [];
+        const transcripts = [];
 
-        const controller1 = await initVoiceInput({
-          button: micBtn1,
-          input: input1,
-          statusEl: status1,
+        const controller = await initVoiceInput({
+          button: micBtn,
+          input,
+          statusEl: status,
+          onTranscript: (t) => transcripts.push(t),
           onError: (e) => errors.push(e),
         });
 
         await delay(0);
-        await controller1.start();
+        await controller.start();
         await delay(0);
 
-        assert.equal(status1.textContent, "Voice opt-in required");
-        assert.equal(micBtn1.classList.contains("voice-error"), true);
-        assert.equal(controller1.isRecording(), false);
-        assert.equal(controller1.hasPending(), false);
-        assert.ok(errors.includes("Voice opt-in required"));
+        assert.equal(micBtn.classList.contains("voice-recording"), true);
 
-        // Second pass: accept opt-in and verify transcription is sent
-        globalThis.__confirmResponse = true;
-
-        const micBtn2 = getEl("mic-btn-2");
-        const status2 = getEl("status-2");
-        const input2 = getEl("input-2");
-        const transcripts = [];
-        const controller2 = await initVoiceInput({
-          button: micBtn2,
-          input: input2,
-          statusEl: status2,
-          onTranscript: (t) => transcripts.push(t),
-        });
-
-        await controller2.start();
-        assert.equal(micBtn2.classList.contains("voice-recording"), true);
-
-        controller2.stop();
+        controller.stop();
         await delay(0);
         await delay(0);
 
         assert.equal(transcripts[0], "hello from voice");
-        assert.equal(status2.textContent, "Transcript ready");
-        assert.equal(micBtn2.classList.contains("voice-recording"), false);
-        assert.equal(controller2.hasPending(), false);
+        assert.equal(status.textContent, "Transcript ready");
+        assert.equal(micBtn.classList.contains("voice-recording"), false);
+        assert.equal(controller.hasPending(), false);
 
         const payload = globalThis.__voiceRequests[0];
         const optIn = payload && payload.fields.find(([key]) => key === "opt_in");

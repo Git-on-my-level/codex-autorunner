@@ -246,9 +246,15 @@ function renderChat(kind = activeDoc) {
   chatUI.input.disabled = isRunning;
   chatUI.cancel.classList.toggle("hidden", !isRunning);
   if (chatUI.voiceBtn) {
-    chatUI.voiceBtn.disabled = isRunning && !chatUI.voiceBtn.classList.contains("voice-retry");
+    chatUI.voiceBtn.disabled =
+      isRunning && !chatUI.voiceBtn.classList.contains("voice-retry");
     chatUI.voiceBtn.classList.toggle("disabled", chatUI.voiceBtn.disabled);
-    chatUI.voiceBtn.setAttribute("aria-disabled", chatUI.voiceBtn.disabled ? "true" : "false");
+    if (typeof chatUI.voiceBtn.setAttribute === "function") {
+      chatUI.voiceBtn.setAttribute(
+        "aria-disabled",
+        chatUI.voiceBtn.disabled ? "true" : "false"
+      );
+    }
   }
 
   // Update hint text - show status inline when running
@@ -708,7 +714,7 @@ function renderTodoPreview(text) {
   const list = document.getElementById("todo-preview-list");
   list.innerHTML = "";
   const lines = text.split("\n").map((l) => l.trim());
-  const todos = lines.filter((l) => l.startsWith("- [")).slice(0, 8);
+  const todos = lines.filter((l) => l.startsWith("- ["));
   if (todos.length === 0) {
     const li = document.createElement("li");
     li.textContent = "No TODO items found.";
@@ -835,7 +841,9 @@ function applyVoiceTranscript(text) {
 }
 
 function initDocVoice() {
-  if (!chatUI.voiceBtn || !chatUI.input) return;
+  if (!chatUI.voiceBtn || !chatUI.input) {
+    return;
+  }
   initVoiceInput({
     button: chatUI.voiceBtn,
     input: chatUI.input,

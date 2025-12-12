@@ -4,7 +4,10 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
 import typer
+
+load_dotenv()
 import uvicorn
 
 from .bootstrap import seed_hub_files, seed_repo_files

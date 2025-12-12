@@ -1,9 +1,11 @@
 import dataclasses
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import yaml
+from dotenv import load_dotenv
 
 CONFIG_FILENAME = ".codex-autorunner/config.yml"
 CONFIG_VERSION = 2
@@ -41,7 +43,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "base_path": "",
     },
     "voice": {
-        "enabled": False,
+        "enabled": True,
         "provider": "openai_whisper",
         "latency_mode": "balanced",
         "chunk_ms": 600,
@@ -185,6 +187,103 @@ def find_nearest_config_path(start: Path) -> Optional[Path]:
     return None
 
 
+def _load_dotenv_for_config(config_path: Path) -> None:
+    """
+    Best-effort load of environment variables for this config root.
+
+    We intentionally load from deterministic locations rather than relying on
+    process CWD (which differs for installed entrypoints, launchd, etc.).
+    """
+    try:
+        def _summarize_key(name: str) -> dict:
+            v = os.environ.get(name)
+            if not v:
+                return {"present": False}
+            return {
+                "present": True,
+                "len": len(v),
+                "starts_sk": v.startswith("sk-"),
+                "starts_sk_proj": v.startswith("sk-proj-"),
+                "has_backtick": "`" in v,
+                "has_space": " " in v,
+                "has_quote": ('"' in v) or ("'" in v),
+            }
+
+        root = config_path.parent.parent.resolve()
+        candidates = [
+            root / ".env",
+            config_path.parent / ".env",  # .codex-autorunner/.env
+        ]
+
+        try:
+            import json as _json
+
+            _ts = int(__import__("time").time() * 1000)
+            with open(
+                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
+                "a",
+                encoding="utf-8",
+            ) as _f:
+                _f.write(
+                    _json.dumps(
+                        {
+                            "sessionId": "debug-session",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H5",
+                            "location": "config.py:_load_dotenv_for_config:before",
+                            "message": "dotenv load starting",
+                            "data": {
+                                "config_path": str(config_path),
+                                "candidates": [str(p) for p in candidates],
+                                "openai_api_key": _summarize_key("OPENAI_API_KEY"),
+                            },
+                            "timestamp": _ts,
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+
+        for candidate in candidates:
+            if candidate.exists():
+                # Prefer repo-local .env over inherited process env to avoid stale keys
+                # (common when running via launchd/daemon or with a global shell export).
+                load_dotenv(dotenv_path=candidate, override=True)
+
+        try:
+            import json as _json
+
+            _ts = int(__import__("time").time() * 1000)
+            with open(
+                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
+                "a",
+                encoding="utf-8",
+            ) as _f:
+                _f.write(
+                    _json.dumps(
+                        {
+                            "sessionId": "debug-session",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H5",
+                            "location": "config.py:_load_dotenv_for_config:after",
+                            "message": "dotenv load finished",
+                            "data": {
+                                "loaded": [str(p) for p in candidates if p.exists()],
+                                "openai_api_key": _summarize_key("OPENAI_API_KEY"),
+                            },
+                            "timestamp": _ts,
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+    except Exception:
+        # Never fail config loading due to dotenv issues.
+        pass
+
+
 def load_config(start: Path) -> Union[RepoConfig, HubConfig]:
     """
     Load the nearest config walking upward from the provided path.
@@ -195,6 +294,7 @@ def load_config(start: Path) -> Union[RepoConfig, HubConfig]:
         raise ConfigError(
             f"Missing config file; expected to find {CONFIG_FILENAME} in {start} or parents"
         )
+    _load_dotenv_for_config(config_path)
     with config_path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 

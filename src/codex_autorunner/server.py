@@ -126,12 +126,29 @@ class BasePathRouterMiddleware:
                 raw_path = scope.get("raw_path")
                 if raw_path:
                     scope["raw_path"] = b"/"
+                # Preserve the base path for downstream routing helpers.
+                if not root_path:
+                    scope["root_path"] = self.base_path
             elif path.startswith(f"{self.base_path}/"):
                 trimmed = path[len(self.base_path) :] or "/"
-                scope["path"] = trimmed
-                raw_path = scope.get("raw_path")
-                if raw_path:
-                    scope["raw_path"] = raw_path[len(self.base_path_bytes) :] or b"/"
+                # Special case: Starlette static file mounts behave best when
+                # scope["path"] still includes scope["root_path"].
+                is_static = trimmed == "/static" or trimmed.startswith("/static/")
+                if is_static:
+                    if not root_path:
+                        scope["root_path"] = self.base_path
+                else:
+                    scope["path"] = trimmed
+                    raw_path = scope.get("raw_path")
+                    if raw_path:
+                        scope["raw_path"] = raw_path[len(self.base_path_bytes) :] or b"/"
+                # Preserve the base path for downstream routing helpers.
+                if not root_path:
+                    scope["root_path"] = self.base_path
+                elif root_path == self.base_path or root_path.startswith(f"{self.base_path}/"):
+                    scope["root_path"] = root_path
+                else:
+                    scope["root_path"] = f"{root_path}{self.base_path}"
             return await self.app(scope, receive, send)
 
         if self._should_redirect(path, root_path):
@@ -388,8 +405,65 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
         opt_in: bool = Form(False),
         language: Optional[str] = Form(None),
     ):
+        try:
+            import json as _json
+            _ts = int(__import__("time").time() * 1000)
+            with open(
+                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
+                "a",
+                encoding="utf-8",
+            ) as _f:
+                _f.write(
+                    _json.dumps(
+                        {
+                            "sessionId": "debug-session",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H4",
+                            "location": "server.py:transcribe_voice:entry",
+                            "message": "voice transcribe request received",
+                            "data": {
+                                "has_file": file is not None,
+                                "filename": getattr(file, "filename", None) if file else None,
+                                "content_type": getattr(file, "content_type", None)
+                                if file
+                                else request.headers.get("content-type"),
+                                "opt_in": bool(opt_in),
+                                "language": language,
+                                "has_user_agent": bool(request.headers.get("user-agent")),
+                            },
+                            "timestamp": _ts,
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
         service = _require_voice_service()
         audio_bytes = await _read_audio_payload(file, request)
+        try:
+            import json as _json
+            _ts = int(__import__("time").time() * 1000)
+            with open(
+                "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
+                "a",
+                encoding="utf-8",
+            ) as _f:
+                _f.write(
+                    _json.dumps(
+                        {
+                            "sessionId": "debug-session",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H4",
+                            "location": "server.py:transcribe_voice:bytes",
+                            "message": "voice audio payload read",
+                            "data": {"audio_len": len(audio_bytes) if audio_bytes else 0},
+                            "timestamp": _ts,
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
         try:
             result = await asyncio.to_thread(
                 service.transcribe,
@@ -400,7 +474,36 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
                 opt_in=opt_in,
             )
         except VoiceServiceError as exc:
-            status = 400 if exc.reason in ("disabled", "empty_audio", "opt_in_required") else 502
+            try:
+                import json as _json
+                _ts = int(__import__("time").time() * 1000)
+                with open(
+                    "/Users/dazheng/workspace/codex-autorunner/.cursor/debug.log",
+                    "a",
+                    encoding="utf-8",
+                ) as _f:
+                    _f.write(
+                        _json.dumps(
+                            {
+                                "sessionId": "debug-session",
+                                "runId": "pre-fix",
+                                "hypothesisId": "H5",
+                                "location": "server.py:transcribe_voice:VoiceServiceError",
+                                "message": "voice service error",
+                                "data": {"reason": exc.reason, "detail": exc.detail},
+                                "timestamp": _ts,
+                            }
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+            if exc.reason == "unauthorized":
+                status = 401
+            elif exc.reason == "forbidden":
+                status = 403
+            else:
+                status = 400 if exc.reason in ("disabled", "empty_audio", "opt_in_required") else 502
             raise HTTPException(status_code=status, detail=exc.detail)
         return {"status": "ok", **result}
 

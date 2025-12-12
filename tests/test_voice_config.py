@@ -71,7 +71,10 @@ def test_voice_config_env_overrides_and_provider_defaults():
 
 
 def test_resolve_provider_requires_enabled_and_known_provider():
-    disabled = VoiceConfig.from_raw({"enabled": False})
+    # Avoid auto-enabling when local dev env has an API key loaded.
+    disabled = VoiceConfig.from_raw(
+        {"enabled": False}, env={"CODEX_AUTORUNNER_VOICE_ENABLED": "0"}
+    )
     with pytest.raises(ValueError):
         resolve_speech_provider(disabled)
 
@@ -95,7 +98,6 @@ def test_capture_uses_latency_mode_and_chunk_size():
         cfg,
         permission_requester=lambda: True,
     )
-    capture.acknowledge_remote_opt_in()
     capture.begin_capture()
     capture.handle_chunk(b"\x00\x01")
 
