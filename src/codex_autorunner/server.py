@@ -405,8 +405,10 @@ def create_app(
     ):
         service = _require_voice_service()
         filename: Optional[str] = None
+        content_type: Optional[str] = None
         if file is not None:
             filename = file.filename
+            content_type = file.content_type
             try:
                 audio_bytes = await file.read()
             except Exception as exc:
@@ -424,14 +426,23 @@ def create_app(
                 user_agent=request.headers.get("user-agent"),
                 language=language,
                 filename=filename,
+                content_type=content_type,
             )
         except VoiceServiceError as exc:
             if exc.reason == "unauthorized":
                 status = 401
             elif exc.reason == "forbidden":
                 status = 403
+            elif exc.reason == "audio_too_large":
+                status = 413
+            elif exc.reason == "rate_limited":
+                status = 429
             else:
-                status = 400 if exc.reason in ("disabled", "empty_audio") else 502
+                status = (
+                    400
+                    if exc.reason in ("disabled", "empty_audio", "invalid_audio")
+                    else 502
+                )
             raise HTTPException(status_code=status, detail=exc.detail)
         return {"status": "ok", **result}
 

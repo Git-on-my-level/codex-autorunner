@@ -14,7 +14,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks test check serve serve-dev launchd-hub
+.PHONY: install dev hooks test check format serve serve-dev launchd-hub
 
 install:
 	$(PYTHON) -m pip install .
@@ -30,6 +30,9 @@ test:
 
 check:
 	./scripts/check.sh
+
+format:
+	$(PYTHON) -m black src tests
 
 serve:
 	$(PYTHON) -m codex_autorunner.cli serve --host $(HOST) --port $(PORT)

@@ -31,8 +31,10 @@ class DummyProvider:
 
     def __init__(self, stream: DummyStream):
         self._stream = stream
+        self.last_session = None
 
     def start_stream(self, session):
+        self.last_session = session
         return self._stream
 
 
@@ -55,3 +57,20 @@ def test_voice_service_does_not_require_opt_in_when_warn_enabled():
 
     result = service.transcribe(b"audio bytes", client="web")
     assert result["text"] == "ignored"
+
+
+def test_voice_service_passes_filename_and_content_type_into_session():
+    cfg = VoiceConfig.from_raw({"enabled": True, "warn_on_remote_api": False})
+    provider = DummyProvider(DummyStream("ok"))
+    service = VoiceService(cfg, provider_resolver=lambda _: provider)
+
+    service.transcribe(
+        b"audio bytes",
+        client="web",
+        filename="voice.webm",
+        content_type="audio/webm;codecs=opus",
+    )
+
+    assert provider.last_session is not None
+    assert provider.last_session.filename == "voice.webm"
+    assert provider.last_session.content_type == "audio/webm;codecs=opus"

@@ -73,6 +73,7 @@ class VoiceService:
         user_agent: Optional[str] = None,
         language: Optional[str] = None,
         filename: Optional[str] = None,
+        content_type: Optional[str] = None,
     ) -> dict:
         if not self.config.enabled:
             raise VoiceServiceError("disabled", "Voice is disabled")
@@ -94,6 +95,7 @@ class VoiceService:
                 client=client,
                 user_agent=user_agent,
                 filename=filename,
+                content_type=content_type,
             ),
         )
 
@@ -117,6 +119,25 @@ class VoiceService:
                 raise VoiceServiceError(
                     buffer.error_reason,
                     f"OpenAI API key rejected ({buffer.error_reason}); check {api_key_env}",
+                )
+            if buffer.error_reason == "invalid_audio":
+                meta = ""
+                if filename or content_type:
+                    meta = f" (file={filename or 'audio'}, type={content_type or 'unknown'})"
+                raise VoiceServiceError(
+                    "invalid_audio",
+                    "OpenAI rejected the audio upload (bad request). "
+                    f"Try re-recording or switching formats/browsers{meta}.",
+                )
+            if buffer.error_reason == "audio_too_large":
+                raise VoiceServiceError(
+                    "audio_too_large",
+                    "Audio upload too large; record a shorter clip and try again.",
+                )
+            if buffer.error_reason == "rate_limited":
+                raise VoiceServiceError(
+                    "rate_limited",
+                    "OpenAI rate limited the request; wait a moment and try again.",
                 )
             raise VoiceServiceError(
                 buffer.error_reason, buffer.error_reason.replace("_", " ")
@@ -146,6 +167,7 @@ class VoiceService:
         client: Optional[str],
         user_agent: Optional[str],
         filename: Optional[str] = None,
+        content_type: Optional[str] = None,
     ) -> SpeechSessionMetadata:
         return SpeechSessionMetadata(
             session_id=str(uuid.uuid4()),
@@ -155,6 +177,7 @@ class VoiceService:
             client=client,
             user_agent=user_agent,
             filename=filename,
+            content_type=content_type,
         )
 
 

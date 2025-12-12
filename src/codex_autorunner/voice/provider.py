@@ -15,6 +15,7 @@ class SpeechSessionMetadata:
     client: Optional[str] = None  # e.g., "web", "tui"
     user_agent: Optional[str] = None
     filename: Optional[str] = None
+    content_type: Optional[str] = None
 
 
 @dataclasses.dataclass

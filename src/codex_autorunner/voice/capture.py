@@ -302,7 +302,13 @@ class PushToTalkCapture(VoiceCaptureSession):
             self.end_capture("silence")
 
     def _fail_with_retry(self, reason: str) -> bool:
-        if reason in ("unauthorized", "forbidden"):
+        if reason in (
+            "unauthorized",
+            "forbidden",
+            "invalid_audio",
+            "audio_too_large",
+            "rate_limited",
+        ):
             self.fail(reason)
             return False
         if self._retry_attempts >= self._max_retries:

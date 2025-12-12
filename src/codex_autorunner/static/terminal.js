@@ -18,6 +18,8 @@ let voiceBtn = null;
 let voiceStatus = null;
 let voiceController = null;
 let voiceKeyActive = false;
+let mobileVoiceBtn = null;
+let mobileVoiceController = null;
 
 // Mobile controls state
 let mobileControlsEl = null;
@@ -188,6 +190,12 @@ function updateButtons(connected) {
     voiceBtn.disabled = !connected;
     voiceBtn.classList.toggle("voice-disconnected", !connected);
   }
+  // Also update mobile voice button state
+  const mobileVoiceUnavailable = mobileVoiceBtn?.classList.contains("disabled");
+  if (mobileVoiceBtn && !mobileVoiceUnavailable) {
+    mobileVoiceBtn.disabled = !connected;
+    mobileVoiceBtn.classList.toggle("voice-disconnected", !connected);
+  }
   if (voiceStatus && !voiceUnavailable && !connected) {
     voiceStatus.textContent = "Connect to use voice";
     voiceStatus.classList.remove("hidden");
@@ -353,46 +361,74 @@ function sendVoiceTranscript(text) {
 function initTerminalVoice() {
   voiceBtn = document.getElementById("terminal-voice");
   voiceStatus = document.getElementById("terminal-voice-status");
-  if (!voiceBtn || !voiceStatus) return;
+  mobileVoiceBtn = document.getElementById("terminal-mobile-voice");
 
-  initVoiceInput({
-    button: voiceBtn,
-    input: null,
-    statusEl: voiceStatus,
-    onTranscript: sendVoiceTranscript,
-    onError: (msg) => {
-      if (!msg) return;
-      flash(msg, "error");
-      voiceStatus.textContent = msg;
-      voiceStatus.classList.remove("hidden");
-    },
-  })
-    .then((controller) => {
-      if (!controller) {
-        voiceBtn.closest(".terminal-voice")?.classList.add("hidden");
-        return;
-      }
-      voiceController = controller;
-      if (voiceStatus) {
-        const base = voiceStatus.textContent || "Hold to talk";
-        voiceStatus.textContent = `${base} (Alt+V)`;
+  // Initialize desktop toolbar voice button
+  if (voiceBtn && voiceStatus) {
+    initVoiceInput({
+      button: voiceBtn,
+      input: null,
+      statusEl: voiceStatus,
+      onTranscript: sendVoiceTranscript,
+      onError: (msg) => {
+        if (!msg) return;
+        flash(msg, "error");
+        voiceStatus.textContent = msg;
         voiceStatus.classList.remove("hidden");
-      }
-      window.addEventListener("keydown", handleVoiceHotkeyDown);
-      window.addEventListener("keyup", handleVoiceHotkeyUp);
-      window.addEventListener("blur", () => {
-        if (voiceKeyActive) {
-          voiceKeyActive = false;
-          voiceController?.stop();
-        }
-      });
+      },
     })
-    .catch((err) => {
-      console.error("Voice init failed", err);
-      flash("Voice capture unavailable", "error");
-      voiceStatus.textContent = "Voice unavailable";
-      voiceStatus.classList.remove("hidden");
-    });
+      .then((controller) => {
+        if (!controller) {
+          voiceBtn.closest(".terminal-voice")?.classList.add("hidden");
+          return;
+        }
+        voiceController = controller;
+        if (voiceStatus) {
+          const base = voiceStatus.textContent || "Hold to talk";
+          voiceStatus.textContent = `${base} (Alt+V)`;
+          voiceStatus.classList.remove("hidden");
+        }
+        window.addEventListener("keydown", handleVoiceHotkeyDown);
+        window.addEventListener("keyup", handleVoiceHotkeyUp);
+        window.addEventListener("blur", () => {
+          if (voiceKeyActive) {
+            voiceKeyActive = false;
+            voiceController?.stop();
+          }
+        });
+      })
+      .catch((err) => {
+        console.error("Voice init failed", err);
+        flash("Voice capture unavailable", "error");
+        voiceStatus.textContent = "Voice unavailable";
+        voiceStatus.classList.remove("hidden");
+      });
+  }
+
+  // Initialize mobile voice button (no status element - more compact)
+  if (mobileVoiceBtn) {
+    initVoiceInput({
+      button: mobileVoiceBtn,
+      input: null,
+      statusEl: null,
+      onTranscript: sendVoiceTranscript,
+      onError: (msg) => {
+        if (!msg) return;
+        flash(msg, "error");
+      },
+    })
+      .then((controller) => {
+        if (!controller) {
+          mobileVoiceBtn.classList.add("hidden");
+          return;
+        }
+        mobileVoiceController = controller;
+      })
+      .catch((err) => {
+        console.error("Mobile voice init failed", err);
+        mobileVoiceBtn.classList.add("hidden");
+      });
+  }
 }
 
 function matchesVoiceHotkey(event) {

@@ -26,4 +26,3 @@ def test_voice_transcribe_reads_uploaded_file_bytes(repo: Path) -> None:
     )
     assert res.status_code == 400, res.text
     assert res.json()["detail"] == "No audio received"
-

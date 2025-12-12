@@ -1249,12 +1249,16 @@ button.icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .voice-button svg {
   width: 16px;
   height: 16px;
+  min-width: 16px;
+  min-height: 16px;
   stroke: currentColor;
+  flex-shrink: 0;
 }
 
 /* Doc chat: keep voice/send/cancel uniform and aligned to input */
@@ -1263,11 +1267,14 @@ button.icon-btn {
   height: 26px;
   min-width: 26px;
   min-height: 26px;
+  flex-shrink: 0;
 }
 
 .doc-chat-input-row .voice-button svg {
   width: 12px;
   height: 12px;
+  min-width: 12px;
+  min-height: 12px;
 }
 
 .voice-button.voice-recording {
@@ -1307,14 +1314,15 @@ button.icon-btn {
   color: var(--muted);
 }
 
-/* Audio level meter visualization */
+/* Audio level meter visualization - positioned relative to parent */
 .voice-level-meter {
   display: inline-flex;
   align-items: flex-end;
   gap: 2px;
   height: 20px;
-  padding: 0 6px;
+  padding: 0 4px;
   vertical-align: middle;
+  flex-shrink: 0;
 }
 
 .voice-level-bar {
@@ -1710,7 +1718,17 @@ label {
 .inline-toolbar .terminal-voice .voice-button {
   width: 28px;
   height: 28px;
+  min-width: 28px;
+  min-height: 28px;
   padding: 0;
+  flex-shrink: 0;
+}
+
+.inline-toolbar .terminal-voice .voice-button svg {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
 }
 
 .inline-toolbar .terminal-voice .voice-status {
@@ -2915,6 +2933,72 @@ button.loading::after {
     border-color: #ff5566;
   }
   
+  /* Hide terminal voice from toolbar on mobile - it's in the mobile controls */
+  .inline-toolbar .terminal-voice {
+    display: none;
+  }
+  
+  /* Mobile terminal voice button - integrated into mobile controls */
+  .tmb-voice {
+    flex: 0 0 auto;
+    min-width: 40px;
+    background: var(--bg);
+    border-color: var(--border);
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  
+  .tmb-voice svg {
+    width: 14px;
+    height: 14px;
+    min-width: 14px;
+    min-height: 14px;
+    flex-shrink: 0;
+  }
+  
+  .tmb-voice.voice-recording {
+    background: #b3261e;
+    color: #fff;
+    border-color: #b3261e;
+    animation: tmb-voice-pulse 1s ease-in-out infinite;
+  }
+  
+  @keyframes tmb-voice-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+  
+  .tmb-voice.voice-sending {
+    background: rgba(108, 245, 216, 0.2);
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  
+  .tmb-voice.voice-error {
+    border-color: #d35400;
+    color: #d35400;
+  }
+  
+  .tmb-voice.disabled,
+  .tmb-voice.voice-disconnected {
+    opacity: 0.4;
+  }
+  
+  /* Level meter in mobile controls - more compact */
+  .tmb-row .voice-level-meter {
+    height: 16px;
+    padding: 0 2px;
+    gap: 1px;
+  }
+  
+  .tmb-row .voice-level-bar {
+    width: 2px;
+  }
+  
   /* Docs nav - compact chips on mobile */
   .doc-nav {
     display: flex;
@@ -3264,6 +3348,18 @@ button.loading::after {
     min-width: 32px;
     font-size: 9px;
   }
+  
+  .tmb-voice {
+    min-width: 36px;
+    padding: 4px 6px;
+  }
+  
+  .tmb-voice svg {
+    width: 12px;
+    height: 12px;
+    min-width: 12px;
+    min-height: 12px;
+  }
 
   .tab {
     padding: 12px 4px;
@@ -3539,6 +3635,16 @@ button.loading::after {
   .tmb-ctrl-combo {
     min-width: 28px;
     font-size: 9px;
+  }
+  
+  .tmb-voice {
+    min-width: 30px;
+    padding: 4px;
+  }
+  
+  .tmb-voice svg {
+    width: 12px;
+    height: 12px;
   }
   
   .doc-editor textarea {
