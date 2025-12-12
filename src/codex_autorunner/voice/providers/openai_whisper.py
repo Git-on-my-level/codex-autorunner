@@ -7,7 +7,15 @@ import time
 from io import BytesIO
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
-from ..provider import AudioChunk, SpeechProvider, SpeechSessionMetadata, TranscriptionEvent, TranscriptionStream
+import httpx
+
+from ..provider import (
+    AudioChunk,
+    SpeechProvider,
+    SpeechSessionMetadata,
+    TranscriptionEvent,
+    TranscriptionStream,
+)
 
 
 RequestFn = Callable[[bytes, Mapping[str, Any]], Dict[str, Any]]
@@ -42,7 +50,9 @@ class OpenAIWhisperProvider(SpeechProvider):
     """
 
     name = "openai_whisper"
-    supports_streaming = False  # OpenAI Whisper is request/response; we buffer chunks locally.
+    supports_streaming = (
+        False  # OpenAI Whisper is request/response; we buffer chunks locally.
+    )
 
     def __init__(
         self,
@@ -77,20 +87,21 @@ class OpenAIWhisperProvider(SpeechProvider):
             request_fn=self._request_fn,
         )
 
-    def _default_request(self, audio_bytes: bytes, payload: Mapping[str, Any]) -> Dict[str, Any]:
-        try:
-            import httpx
-        except Exception as exc:  # pragma: no cover - import failure path is simple
-            raise RuntimeError(
-                "httpx is required for the OpenAI Whisper provider; install via `pip install httpx`"
-            ) from exc
-
+    def _default_request(
+        self, audio_bytes: bytes, payload: Mapping[str, Any]
+    ) -> Dict[str, Any]:
         headers = {"Authorization": f"Bearer {payload['api_key']}"}
         url = f"{payload['base_url'].rstrip('/')}/v1/audio/transcriptions"
-        data: Dict[str, Any] = {"model": payload["model"], "temperature": payload["temperature"]}
+        data: Dict[str, Any] = {
+            "model": payload["model"],
+            "temperature": payload["temperature"],
+        }
         if payload.get("language"):
             data["language"] = payload["language"]
-        files = {"file": ("audio.webm", BytesIO(audio_bytes), "application/octet-stream")}
+
+        filename = payload.get("filename", "audio.webm")
+        files = {"file": (filename, BytesIO(audio_bytes), "application/octet-stream")}
+
         response = httpx.post(url, headers=headers, data=data, files=files, timeout=30)
         response.raise_for_status()
         return response.json()
@@ -145,17 +156,18 @@ class _OpenAIWhisperStream(TranscriptionStream):
             text = (result or {}).get("text", "") if isinstance(result, Mapping) else ""
             return [TranscriptionEvent(text=text, is_final=True, latency_ms=latency_ms)]
         except Exception as exc:
-            try:
-                import httpx  # type: ignore
-
-                if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
-                    status_code = exc.response.status_code
-            except Exception:
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+                status_code = exc.response.status_code
+            else:
                 status_code = None
-            self._logger.error("OpenAI Whisper transcription failed: %s", exc, exc_info=False)
+            self._logger.error(
+                "OpenAI Whisper transcription failed: %s", exc, exc_info=False
+            )
             # Avoid retry loops for credential errors; surface explicit reasons.
             if status_code == 401:
-                return [TranscriptionEvent(text="", is_final=True, error="unauthorized")]
+                return [
+                    TranscriptionEvent(text="", is_final=True, error="unauthorized")
+                ]
             if status_code == 403:
                 return [TranscriptionEvent(text="", is_final=True, error="forbidden")]
             return [TranscriptionEvent(text="", is_final=True, error="provider_error")]
@@ -178,6 +190,9 @@ class _OpenAIWhisperStream(TranscriptionStream):
             "temperature": self._settings.temperature,
             "language": self._settings.language or self._session.language,
         }
+        if self._session.filename:
+            payload["filename"] = self._session.filename
+
         if not self._settings.redact_request:
             payload.update(
                 {

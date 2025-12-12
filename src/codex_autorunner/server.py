@@ -18,7 +18,12 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from .config import ConfigError, HubConfig, _normalize_base_path, load_config
@@ -102,7 +107,9 @@ class BasePathRouterMiddleware:
     async def _redirect(self, scope, receive, send, target: str):
         if scope["type"] == "websocket":
             headers = [(b"location", target.encode("utf-8"))]
-            await send({"type": "http.response.start", "status": 308, "headers": headers})
+            await send(
+                {"type": "http.response.start", "status": 308, "headers": headers}
+            )
             await send({"type": "http.response.body", "body": b"", "more_body": False})
             return
         response = RedirectResponse(target, status_code=308)
@@ -141,11 +148,15 @@ class BasePathRouterMiddleware:
                     scope["path"] = trimmed
                     raw_path = scope.get("raw_path")
                     if raw_path:
-                        scope["raw_path"] = raw_path[len(self.base_path_bytes) :] or b"/"
+                        scope["raw_path"] = (
+                            raw_path[len(self.base_path_bytes) :] or b"/"
+                        )
                 # Preserve the base path for downstream routing helpers.
                 if not root_path:
                     scope["root_path"] = self.base_path
-                elif root_path == self.base_path or root_path.startswith(f"{self.base_path}/"):
+                elif root_path == self.base_path or root_path.startswith(
+                    f"{self.base_path}/"
+                ):
                     scope["root_path"] = root_path
                 else:
                     scope["root_path"] = f"{root_path}{self.base_path}"
@@ -246,12 +257,16 @@ def _static_dir() -> Path:
     return Path(resources.files("codex_autorunner")) / "static"
 
 
-def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None) -> FastAPI:
+def create_app(
+    repo_root: Optional[Path] = None, base_path: Optional[str] = None
+) -> FastAPI:
     config = load_config(repo_root or Path.cwd())
     if isinstance(config, HubConfig):
         raise ConfigError("create_app requires repo mode configuration")
     base_path = (
-        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+        _normalize_base_path(base_path)
+        if base_path is not None
+        else config.server_base_path
     )
     engine = Engine(config.root)
     manager = RunnerManager(engine)
@@ -276,7 +291,9 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
             raise HTTPException(status_code=400, detail="Voice is disabled")
         return voice_service
 
-    async def _read_audio_payload(file: Optional[UploadFile], request: Request) -> bytes:
+    async def _read_audio_payload(
+        file: Optional[UploadFile], request: Request
+    ) -> bytes:
         if file is not None:
             return await file.read()
         return await request.body()
@@ -373,7 +390,8 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
             "status": "ok",
             "kind": key,
             "content": content,
-            "agent_message": doc_chat.last_agent_message or f"Updated {key.upper()} via doc chat.",
+            "agent_message": doc_chat.last_agent_message
+            or f"Updated {key.upper()} via doc chat.",
         }
 
     @app.post("/api/docs/{kind}/chat/discard")
@@ -413,6 +431,7 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
                 client="web",
                 user_agent=request.headers.get("user-agent"),
                 language=language,
+                filename=file.filename if file else None,
             )
         except VoiceServiceError as exc:
             if exc.reason == "unauthorized":
@@ -695,7 +714,9 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
 
         forward_task = asyncio.create_task(pty_to_ws())
         input_task = asyncio.create_task(ws_to_pty())
-        await asyncio.wait([forward_task, input_task], return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait(
+            [forward_task, input_task], return_when=asyncio.FIRST_COMPLETED
+        )
         session.terminate()
         async with _terminal_lock():
             terminal_sessions.pop(session_id, None)
@@ -717,12 +738,16 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
     return app
 
 
-def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = None) -> FastAPI:
+def create_hub_app(
+    hub_root: Optional[Path] = None, base_path: Optional[str] = None
+) -> FastAPI:
     config = load_config(hub_root or Path.cwd())
     if not isinstance(config, HubConfig):
         raise ConfigError("Hub app requires hub mode configuration")
     base_path = (
-        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+        _normalize_base_path(base_path)
+        if base_path is not None
+        else config.server_base_path
     )
     supervisor = HubSupervisor(config)
     app = FastAPI(redirect_slashes=False)
@@ -847,7 +872,9 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
     @app.post("/hub/repos")
     def create_repo(payload: Optional[dict] = None):
         if not payload or not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
         repo_id = payload.get("id") or payload.get("repo_id")
         if not repo_id:
             raise HTTPException(status_code=400, detail="Missing repo id")

@@ -1,5 +1,10 @@
 from .config import DEFAULT_PROVIDER_CONFIG, LatencyMode, PushToTalkConfig, VoiceConfig
-from .capture import CaptureCallbacks, CaptureState, PushToTalkCapture, VoiceCaptureSession
+from .capture import (
+    CaptureCallbacks,
+    CaptureState,
+    PushToTalkCapture,
+    VoiceCaptureSession,
+)
 from .resolver import resolve_speech_provider
 from .provider import (
     AudioChunk,

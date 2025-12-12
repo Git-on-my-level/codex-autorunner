@@ -66,6 +66,7 @@ def test_respects_existing_root_path_with_base_prefix():
             "http_version": "1.1",
             "query_string": b"",
         }
+
         async def receive():
             return {"type": "http.request", "body": b"", "more_body": False}
 

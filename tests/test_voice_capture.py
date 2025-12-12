@@ -100,7 +100,11 @@ def test_capture_retries_and_stops_on_silence():
         {
             "enabled": True,
             "warn_on_remote_api": False,
-            "push_to_talk": {"max_ms": 1_200, "silence_auto_stop_ms": 400, "min_hold_ms": 50},
+            "push_to_talk": {
+                "max_ms": 1_200,
+                "silence_auto_stop_ms": 400,
+                "min_hold_ms": 50,
+            },
             "chunk_ms": 100,
         }
     )

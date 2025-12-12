@@ -43,7 +43,9 @@ class VoiceService:
     def config_payload(self) -> dict:
         """Expose safe config fields to the UI."""
         # Check if API key is configured for status display
-        provider_cfg = self.config.providers.get(self.config.provider or "openai_whisper", {})
+        provider_cfg = self.config.providers.get(
+            self.config.provider or "openai_whisper", {}
+        )
         api_key_env = provider_cfg.get("api_key_env", "OPENAI_API_KEY")
         has_api_key = bool(self._env.get(api_key_env))
 
@@ -70,6 +72,7 @@ class VoiceService:
         client: str = "web",
         user_agent: Optional[str] = None,
         language: Optional[str] = None,
+        filename: Optional[str] = None,
     ) -> dict:
         if not self.config.enabled:
             raise VoiceServiceError("disabled", "Voice is disabled")
@@ -90,6 +93,7 @@ class VoiceService:
                 language=language,
                 client=client,
                 user_agent=user_agent,
+                filename=filename,
             ),
         )
 
@@ -114,7 +118,9 @@ class VoiceService:
                     buffer.error_reason,
                     f"OpenAI API key rejected ({buffer.error_reason}); check {api_key_env}",
                 )
-            raise VoiceServiceError(buffer.error_reason, buffer.error_reason.replace("_", " "))
+            raise VoiceServiceError(
+                buffer.error_reason, buffer.error_reason.replace("_", " ")
+            )
 
         transcript = buffer.final_text or buffer.partial_text or ""
         return {
@@ -125,7 +131,9 @@ class VoiceService:
     def _resolve_provider(self):
         if self._provider is None:
             try:
-                self._provider = self._provider_resolver(self.config, logger=self._logger)
+                self._provider = self._provider_resolver(
+                    self.config, logger=self._logger
+                )
             except TypeError:
                 self._provider = self._provider_resolver(self.config)
         return self._provider
@@ -137,6 +145,7 @@ class VoiceService:
         language: Optional[str],
         client: Optional[str],
         user_agent: Optional[str],
+        filename: Optional[str] = None,
     ) -> SpeechSessionMetadata:
         return SpeechSessionMetadata(
             session_id=str(uuid.uuid4()),
@@ -145,6 +154,7 @@ class VoiceService:
             language=language,
             client=client,
             user_agent=user_agent,
+            filename=filename,
         )
 
 

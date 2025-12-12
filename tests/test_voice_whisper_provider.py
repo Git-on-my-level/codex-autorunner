@@ -9,7 +9,9 @@ from codex_autorunner.voice import (
 
 
 def test_openai_whisper_respects_env_and_redaction():
-    settings = OpenAIWhisperSettings(api_key_env="CUSTOM_OPENAI_KEY", temperature=0.2, language="en")
+    settings = OpenAIWhisperSettings(
+        api_key_env="CUSTOM_OPENAI_KEY", temperature=0.2, language="en"
+    )
     captured = {}
 
     def fake_request(audio_bytes, payload):
@@ -32,7 +34,11 @@ def test_openai_whisper_respects_env_and_redaction():
             client="web",
         )
     )
-    stream.send_chunk(AudioChunk(data=b"\x00\x01", sample_rate=16_000, start_ms=0, end_ms=100, sequence=0))
+    stream.send_chunk(
+        AudioChunk(
+            data=b"\x00\x01", sample_rate=16_000, start_ms=0, end_ms=100, sequence=0
+        )
+    )
     events = list(stream.flush_final())
 
     assert events and events[0].text == "hello world"
@@ -64,13 +70,46 @@ def test_openai_whisper_can_include_session_when_not_redacted():
             client="tui",
         )
     )
-    stream.send_chunk(AudioChunk(data=b"\x00", sample_rate=16_000, start_ms=0, end_ms=10, sequence=0))
+    stream.send_chunk(
+        AudioChunk(data=b"\x00", sample_rate=16_000, start_ms=0, end_ms=10, sequence=0)
+    )
     list(stream.flush_final())
 
     assert sent_payloads
     payload = sent_payloads[0]
     assert payload["session_id"] == "session-1"
     assert payload["client"] == "tui"
+
+
+def test_openai_whisper_passes_filename():
+    settings = OpenAIWhisperSettings()
+    captured = {}
+
+    def fake_request(audio_bytes, payload):
+        nonlocal captured
+        captured = dict(payload)
+        return {"text": "ok"}
+
+    provider = OpenAIWhisperProvider(
+        settings=settings,
+        env={"OPENAI_API_KEY": "token"},
+        warn_on_remote_api=False,
+        request_fn=fake_request,
+    )
+    stream = provider.start_stream(
+        SpeechSessionMetadata(
+            session_id="session-1",
+            provider="openai_whisper",
+            latency_mode="balanced",
+            filename="voice.ogg",
+        )
+    )
+    stream.send_chunk(
+        AudioChunk(data=b"\x00", sample_rate=16_000, start_ms=0, end_ms=10, sequence=0)
+    )
+    list(stream.flush_final())
+
+    assert captured["filename"] == "voice.ogg"
 
 
 def test_resolve_speech_provider_builds_openai():

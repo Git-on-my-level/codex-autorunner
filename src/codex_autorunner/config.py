@@ -271,7 +271,9 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
         log=LogConfig(
             path=root / log_cfg.get("path", DEFAULT_REPO_CONFIG["log"]["path"]),
-            max_bytes=int(log_cfg.get("max_bytes", DEFAULT_REPO_CONFIG["log"]["max_bytes"])),
+            max_bytes=int(
+                log_cfg.get("max_bytes", DEFAULT_REPO_CONFIG["log"]["max_bytes"])
+            ),
             backup_count=int(
                 log_cfg.get("backup_count", DEFAULT_REPO_CONFIG["log"]["backup_count"])
             ),
@@ -326,7 +328,9 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("codex.binary is required")
     if not isinstance(codex.get("args", []), list):
         raise ConfigError("codex.args must be a list")
-    if "terminal_args" in codex and not isinstance(codex.get("terminal_args", []), list):
+    if "terminal_args" in codex and not isinstance(
+        codex.get("terminal_args", []), list
+    ):
         raise ConfigError("codex.terminal_args must be a list if provided")
     prompt = cfg.get("prompt")
     if not isinstance(prompt, dict):

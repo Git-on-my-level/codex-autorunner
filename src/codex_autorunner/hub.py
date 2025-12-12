@@ -347,7 +347,9 @@ class HubSupervisor:
         self._runners[repo_id] = runner
         return runner
 
-    def _manifest_records(self, manifest_only: bool = False) -> Tuple[Manifest, List[DiscoveryRecord]]:
+    def _manifest_records(
+        self, manifest_only: bool = False
+    ) -> Tuple[Manifest, List[DiscoveryRecord]]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         records: List[DiscoveryRecord] = []
         for entry in manifest.repos:
@@ -406,8 +408,12 @@ class HubSupervisor:
             status=status,
             lock_status=lock_status,
             last_run_id=last_run_id,
-            last_run_started_at=runner_state.last_run_started_at if runner_state else None,
-            last_run_finished_at=runner_state.last_run_finished_at if runner_state else None,
+            last_run_started_at=(
+                runner_state.last_run_started_at if runner_state else None
+            ),
+            last_run_finished_at=(
+                runner_state.last_run_finished_at if runner_state else None
+            ),
             last_exit_code=runner_state.last_exit_code if runner_state else None,
             runner_pid=runner_state.runner_pid if runner_state else None,
         )

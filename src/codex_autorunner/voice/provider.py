@@ -14,6 +14,7 @@ class SpeechSessionMetadata:
     language: Optional[str] = None
     client: Optional[str] = None  # e.g., "web", "tui"
     user_agent: Optional[str] = None
+    filename: Optional[str] = None
 
 
 @dataclasses.dataclass
@@ -42,8 +43,7 @@ class TranscriptionEvent:
 class TranscriptionStream(Protocol):
     """Streaming handle for a single push-to-talk session."""
 
-    def send_chunk(self, chunk: AudioChunk) -> Iterable[TranscriptionEvent]:
-        ...
+    def send_chunk(self, chunk: AudioChunk) -> Iterable[TranscriptionEvent]: ...
 
     def flush_final(self) -> Iterable[TranscriptionEvent]:
         """Send end-of-input and return any remaining events."""

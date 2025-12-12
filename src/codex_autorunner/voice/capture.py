@@ -8,7 +8,12 @@ from enum import Enum
 from typing import Callable, Iterable, Optional, Protocol
 
 from .config import VoiceConfig
-from .provider import AudioChunk, SpeechProvider, SpeechSessionMetadata, TranscriptionEvent
+from .provider import (
+    AudioChunk,
+    SpeechProvider,
+    SpeechSessionMetadata,
+    TranscriptionEvent,
+)
 
 
 class CaptureState(str, Enum):
@@ -108,7 +113,9 @@ class PushToTalkCapture(VoiceCaptureSession):
             granted = bool(self._permission_requester())
         except Exception as exc:
             self.fail("permission_error")
-            self._logger.error("Microphone permission request failed: %s", exc, exc_info=False)
+            self._logger.error(
+                "Microphone permission request failed: %s", exc, exc_info=False
+            )
             return
 
         if not granted:
@@ -124,7 +131,11 @@ class PushToTalkCapture(VoiceCaptureSession):
             if not self._permission_granted:
                 return
 
-        if self._state in (CaptureState.RECORDING, CaptureState.STREAMING, CaptureState.FINALIZING):
+        if self._state in (
+            CaptureState.RECORDING,
+            CaptureState.STREAMING,
+            CaptureState.FINALIZING,
+        ):
             self.fail("already_recording")
             return
 
@@ -132,7 +143,9 @@ class PushToTalkCapture(VoiceCaptureSession):
             self._stream = self._provider.start_stream(self._build_session_metadata())
         except Exception as exc:
             self.fail("provider_error")
-            self._logger.error("Failed to start transcription stream: %s", exc, exc_info=False)
+            self._logger.error(
+                "Failed to start transcription stream: %s", exc, exc_info=False
+            )
             return
 
         now = self._now()
@@ -166,7 +179,11 @@ class PushToTalkCapture(VoiceCaptureSession):
             self._emit_state(CaptureState.STREAMING)
             self._handle_events(events)
         except Exception as exc:
-            self._logger.warning("Transcription chunk failed; will retry if allowed: %s", exc, exc_info=False)
+            self._logger.warning(
+                "Transcription chunk failed; will retry if allowed: %s",
+                exc,
+                exc_info=False,
+            )
             if not self._fail_with_retry("provider_error"):
                 return
 
@@ -191,7 +208,9 @@ class PushToTalkCapture(VoiceCaptureSession):
                 events = self._stream.flush_final()
                 self._handle_events(events)
             except Exception as exc:
-                self._logger.error("Final transcription flush failed: %s", exc, exc_info=False)
+                self._logger.error(
+                    "Final transcription flush failed: %s", exc, exc_info=False
+                )
                 if self._fail_with_retry("provider_error"):
                     continue
                 return
@@ -269,10 +288,17 @@ class PushToTalkCapture(VoiceCaptureSession):
         if self._state not in (CaptureState.RECORDING, CaptureState.STREAMING):
             return
         now = self._now()
-        if self._started_at is not None and (now - self._started_at) * 1000 >= self._config.push_to_talk.max_ms:
+        if (
+            self._started_at is not None
+            and (now - self._started_at) * 1000 >= self._config.push_to_talk.max_ms
+        ):
             self.end_capture("max_duration")
             return
-        if self._last_chunk_at is not None and (now - self._last_chunk_at) * 1000 >= self._config.push_to_talk.silence_auto_stop_ms:
+        if (
+            self._last_chunk_at is not None
+            and (now - self._last_chunk_at) * 1000
+            >= self._config.push_to_talk.silence_auto_stop_ms
+        ):
             self.end_capture("silence")
 
     def _fail_with_retry(self, reason: str) -> bool:
@@ -289,13 +315,17 @@ class PushToTalkCapture(VoiceCaptureSession):
             self._restart_stream()
             return True
         except Exception as exc:
-            self._logger.error("Retrying transcription stream failed: %s", exc, exc_info=False)
+            self._logger.error(
+                "Retrying transcription stream failed: %s", exc, exc_info=False
+            )
             self.fail(reason)
             return False
 
     def _restart_stream(self) -> None:
         self._stream = self._provider.start_stream(self._build_session_metadata())
-        replayed_state = CaptureState.RECORDING if not self._chunks else CaptureState.STREAMING
+        replayed_state = (
+            CaptureState.RECORDING if not self._chunks else CaptureState.STREAMING
+        )
         for chunk in self._chunks:
             events = self._stream.send_chunk(chunk)
             self._handle_events(events)

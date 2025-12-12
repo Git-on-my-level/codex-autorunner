@@ -66,7 +66,11 @@ class VoiceConfig:
             merged.update(raw)
             base_pt = merged.get("push_to_talk")
             pt_defaults = base_pt if isinstance(base_pt, Mapping) else {}
-            pt_overrides = raw.get("push_to_talk") if isinstance(raw.get("push_to_talk"), Mapping) else {}
+            pt_overrides = (
+                raw.get("push_to_talk")
+                if isinstance(raw.get("push_to_talk"), Mapping)
+                else {}
+            )
             merged["push_to_talk"] = {**pt_defaults, **pt_overrides}
 
             providers = merged.get("providers", {})
@@ -74,7 +78,10 @@ class VoiceConfig:
             if isinstance(providers, Mapping):
                 for key, value in providers.items():
                     if isinstance(value, Mapping):
-                        merged["providers"][key] = {**merged["providers"].get(key, {}), **dict(value)}
+                        merged["providers"][key] = {
+                            **merged["providers"].get(key, {}),
+                            **dict(value),
+                        }
 
         # Auto-enable voice if API key is available (unless explicitly disabled via env/config)
         explicit_enabled = env.get("CODEX_AUTORUNNER_VOICE_ENABLED")
@@ -82,16 +89,23 @@ class VoiceConfig:
             merged["enabled"] = _env_bool(explicit_enabled, merged["enabled"])
         elif not merged.get("enabled"):
             # Auto-enable if the provider's API key is available
-            provider_name = env.get("CODEX_AUTORUNNER_VOICE_PROVIDER", merged.get("provider", "openai_whisper"))
+            provider_name = env.get(
+                "CODEX_AUTORUNNER_VOICE_PROVIDER",
+                merged.get("provider", "openai_whisper"),
+            )
             provider_cfg = merged.get("providers", {}).get(provider_name, {})
             api_key_env = provider_cfg.get("api_key_env", "OPENAI_API_KEY")
             if env.get(api_key_env):
                 merged["enabled"] = True
-        merged["provider"] = env.get("CODEX_AUTORUNNER_VOICE_PROVIDER", merged.get("provider"))
+        merged["provider"] = env.get(
+            "CODEX_AUTORUNNER_VOICE_PROVIDER", merged.get("provider")
+        )
         merged["latency_mode"] = env.get(
             "CODEX_AUTORUNNER_VOICE_LATENCY", merged.get("latency_mode", "balanced")
         )
-        merged["chunk_ms"] = _env_int(env.get("CODEX_AUTORUNNER_VOICE_CHUNK_MS"), merged["chunk_ms"])
+        merged["chunk_ms"] = _env_int(
+            env.get("CODEX_AUTORUNNER_VOICE_CHUNK_MS"), merged["chunk_ms"]
+        )
         merged["sample_rate"] = _env_int(
             env.get("CODEX_AUTORUNNER_VOICE_SAMPLE_RATE"), merged["sample_rate"]
         )
@@ -111,12 +125,16 @@ class VoiceConfig:
 
         pt = merged.get("push_to_talk", {}) or {}
         push_to_talk = PushToTalkConfig(
-            max_ms=_env_int(env.get("CODEX_AUTORUNNER_VOICE_MAX_MS"), pt.get("max_ms", 15_000)),
+            max_ms=_env_int(
+                env.get("CODEX_AUTORUNNER_VOICE_MAX_MS"), pt.get("max_ms", 15_000)
+            ),
             silence_auto_stop_ms=_env_int(
-                env.get("CODEX_AUTORUNNER_VOICE_SILENCE_MS"), pt.get("silence_auto_stop_ms", 1_200)
+                env.get("CODEX_AUTORUNNER_VOICE_SILENCE_MS"),
+                pt.get("silence_auto_stop_ms", 1_200),
             ),
             min_hold_ms=_env_int(
-                env.get("CODEX_AUTORUNNER_VOICE_MIN_HOLD_MS"), pt.get("min_hold_ms", 150)
+                env.get("CODEX_AUTORUNNER_VOICE_MIN_HOLD_MS"),
+                pt.get("min_hold_ms", 150),
             ),
         )
 

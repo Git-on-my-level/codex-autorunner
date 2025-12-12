@@ -118,7 +118,9 @@ def ensure_can_overwrite(engine: Engine, force: bool) -> None:
             )
 
 
-def write_ingested_docs(engine: Engine, docs: Dict[str, str], force: bool = False) -> None:
+def write_ingested_docs(
+    engine: Engine, docs: Dict[str, str], force: bool = False
+) -> None:
     ensure_can_overwrite(engine, force)
     for key, content in docs.items():
         target = engine.config.doc_path(key)

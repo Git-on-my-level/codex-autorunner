@@ -16,7 +16,9 @@ class DummyStream:
         return []
 
     def flush_final(self):
-        final_text = self._text or b"".join(self.chunks).decode("utf-8", errors="ignore")
+        final_text = self._text or b"".join(self.chunks).decode(
+            "utf-8", errors="ignore"
+        )
         return [TranscriptionEvent(text=final_text, is_final=True)]
 
     def abort(self, reason=None):

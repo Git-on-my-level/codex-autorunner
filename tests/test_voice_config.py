@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from codex_autorunner.voice import PushToTalkCapture, VoiceConfig, resolve_speech_provider
+from codex_autorunner.voice import (
+    PushToTalkCapture,
+    VoiceConfig,
+    resolve_speech_provider,
+)
 
 
 class _RecorderStream:

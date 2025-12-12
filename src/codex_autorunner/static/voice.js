@@ -354,7 +354,8 @@ export async function initVoiceInput({
 
   async function transcribeBlob(blob) {
     const formData = new FormData();
-    formData.append("file", blob, "voice.webm");
+    const ext = getExtensionForMime(blob.type);
+    formData.append("file", blob, `voice.${ext}`);
     const url = resolvePath("/api/voice/transcribe");
     const res = await fetch(url, {
       method: "POST",
@@ -375,6 +376,14 @@ export async function initVoiceInput({
       throw new Error(detail);
     }
     return payload.text || "";
+  }
+
+  function getExtensionForMime(mime) {
+    if (!mime) return "webm";
+    if (mime.includes("ogg")) return "ogg";
+    if (mime.includes("mp4") || mime.includes("m4a")) return "m4a";
+    if (mime.includes("wav")) return "wav";
+    return "webm";
   }
 
   return {

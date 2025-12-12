@@ -48,7 +48,9 @@ def write_hub_config(hub_root: Path, force: bool = False) -> Path:
     return config_path
 
 
-def seed_repo_files(repo_root: Path, force: bool = False, git_required: bool = True) -> None:
+def seed_repo_files(
+    repo_root: Path, force: bool = False, git_required: bool = True
+) -> None:
     """
     Initialize a repository's .codex-autorunner directory with defaults.
     This is used by the CLI init path and hub auto-init discovery.

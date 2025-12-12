@@ -36,7 +36,9 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
         existing_entry = manifest.get(repo_id)
         added = False
         if not existing_entry:
-            existing_entry = manifest.ensure_repo(hub_config.root, child, repo_id=repo_id)
+            existing_entry = manifest.ensure_repo(
+                hub_config.root, child, repo_id=repo_id
+            )
             added = True
         repo_entry = existing_entry
         seen_ids.add(repo_entry.id)
