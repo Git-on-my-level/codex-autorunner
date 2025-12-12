@@ -51,6 +51,7 @@ launchctl kickstart -k gui/$(id -u)/com.codex.autorunner
 ```
 3) Tail the hub log to confirm it booted: `tail -n 50 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`.
 4) One-liner on this machine: `make refresh-launchd` (overrides available: `PIPX_PYTHON`, `LAUNCH_AGENT`, `LAUNCH_LABEL`).
+5) Or use the script (similar to `scripts/install-local-mac-hub.sh`): `scripts/refresh-local-mac-hub.sh`.
 
 ## Git hooks
 - Install dev tools: `pip install -e .[dev]`
