@@ -104,13 +104,15 @@ class DocChatService:
         self.engine = engine
         self._locks: Dict[str, asyncio.Lock] = {}
         self._recent_summary_cache: Optional[str] = None
-        self.patch_path = self.engine.repo_root / ".codex-autorunner" / DOC_CHAT_PATCH_NAME
-        self.backup_path = self.engine.repo_root / ".codex-autorunner" / DOC_CHAT_BACKUP_NAME
+        self.patch_path = (
+            self.engine.repo_root / ".codex-autorunner" / DOC_CHAT_PATCH_NAME
+        )
+        self.backup_path = (
+            self.engine.repo_root / ".codex-autorunner" / DOC_CHAT_BACKUP_NAME
+        )
         self.last_agent_message: Optional[str] = None
 
-    def parse_request(
-        self, kind: str, payload: Optional[dict]
-    ) -> DocChatRequest:
+    def parse_request(self, kind: str, payload: Optional[dict]) -> DocChatRequest:
         if payload is None or not isinstance(payload, dict):
             raise DocChatValidationError("invalid payload")
         key = _normalize_kind(kind)
@@ -220,7 +222,9 @@ class DocChatService:
                 stderr=STDOUT,
             )
         except FileNotFoundError:
-            raise DocChatError(f"Codex binary not found: {self.engine.config.codex_binary}")
+            raise DocChatError(
+                f"Codex binary not found: {self.engine.config.codex_binary}"
+            )
 
         try:
             stdout, _ = await asyncio.wait_for(
@@ -250,7 +254,10 @@ class DocChatService:
             return f"Updated {kind.upper()} via doc chat."
         for line in text.splitlines():
             if line.lower().startswith("agent:"):
-                return line[len("agent:") :].strip() or f"Updated {kind.upper()} via doc chat."
+                return (
+                    line[len("agent:") :].strip()
+                    or f"Updated {kind.upper()} via doc chat."
+                )
         return text.splitlines()[0].strip()
 
     def _cleanup_patch(self) -> None:
@@ -273,7 +280,9 @@ class DocChatService:
             raise DocChatError("Agent produced an empty patch")
         return text
 
-    def _normalize_apply_patch_format(self, patch_text: str) -> Tuple[str, Optional[str]]:
+    def _normalize_apply_patch_format(
+        self, patch_text: str
+    ) -> Tuple[str, Optional[str]]:
         if "*** begin patch" not in patch_text.lower():
             return patch_text, None
         lines = patch_text.splitlines()
@@ -309,7 +318,10 @@ class DocChatService:
         if not target_path:
             raise DocChatError("Patch missing target path")
         header = f"--- a/{target_path}\n+++ b/{target_path}\n"
-        return header + "\n".join(body_lines) + ("\n" if body_lines else ""), target_path
+        return (
+            header + "\n".join(body_lines) + ("\n" if body_lines else ""),
+            target_path,
+        )
 
     def _normalize_patch(self, patch_text: str, kind: str) -> Tuple[str, Optional[str]]:
         normalized, target = self._normalize_apply_patch_format(patch_text)
@@ -323,9 +335,15 @@ class DocChatService:
         )
         if has_headers:
             return patch_text
-        target_path = str(self.engine.config.doc_path(kind).relative_to(self.engine.repo_root))
+        target_path = str(
+            self.engine.config.doc_path(kind).relative_to(self.engine.repo_root)
+        )
         header = f"--- a/{target_path}\n+++ b/{target_path}\n"
-        return header + ("\n" if lines and not lines[0].startswith("@@") else "") + patch_text
+        return (
+            header
+            + ("\n" if lines and not lines[0].startswith("@@") else "")
+            + patch_text
+        )
 
     def _patch_targets(self, patch_text: str) -> List[str]:
         targets: List[str] = []
@@ -351,7 +369,9 @@ class DocChatService:
                 p = p[2:]
             normalized.append(p)
         if any(p != normalized_target for p in normalized):
-            raise DocChatError(f"Patch referenced unexpected files: {', '.join(targets)}")
+            raise DocChatError(
+                f"Patch referenced unexpected files: {', '.join(targets)}"
+            )
 
         strip = 1 if all(t.startswith(("a/", "b/")) for t in targets) else 0
         cmd = [
@@ -370,7 +390,9 @@ class DocChatService:
             text=True,
         )
         if proc.returncode != 0:
-            raise DocChatError(f"Failed to apply patch: {proc.stdout.strip() or proc.returncode}")
+            raise DocChatError(
+                f"Failed to apply patch: {proc.stdout.strip() or proc.returncode}"
+            )
         self._cleanup_patch()
 
     def apply_saved_patch(self, kind: str) -> str:
@@ -387,7 +409,9 @@ class DocChatService:
                 p = p[2:]
             normalized.append(p)
         if any(p != normalized_target for p in normalized):
-            raise DocChatError(f"Patch referenced unexpected files: {', '.join(targets)}")
+            raise DocChatError(
+                f"Patch referenced unexpected files: {', '.join(targets)}"
+            )
         if self.backup_path.exists():
             try:
                 self.backup_path.unlink()
@@ -419,7 +443,9 @@ class DocChatService:
         normalized_target = target_path
         if normalized_target.startswith(("a/", "b/")):
             normalized_target = normalized_target[2:]
-        expected = str(self.engine.config.doc_path(kind).relative_to(self.engine.repo_root))
+        expected = str(
+            self.engine.config.doc_path(kind).relative_to(self.engine.repo_root)
+        )
         if normalized_target != expected:
             return None
         return {
@@ -438,14 +464,16 @@ class DocChatService:
         message_for_log = self._compact_message(request.message)
         self._log(
             chat_id,
-            f"start kind={request.kind} path={doc_pointer} message=\"{message_for_log}\"",
+            f'start kind={request.kind} path={doc_pointer} message="{message_for_log}"',
         )
         try:
             self._cleanup_patch()
             # Backup current doc before the agent edits it.
             target_doc_path = self.engine.config.doc_path(request.kind)
             if target_doc_path.exists():
-                self.backup_path.write_text(target_doc_path.read_text(encoding="utf-8"), encoding="utf-8")
+                self.backup_path.write_text(
+                    target_doc_path.read_text(encoding="utf-8"), encoding="utf-8"
+                )
             else:
                 self.backup_path.write_text("", encoding="utf-8")
             prompt = self._build_prompt(request)
@@ -453,7 +481,11 @@ class DocChatService:
             agent_message = self._parse_agent_message(output, request.kind)
             # Generate patch from backup vs current file after agent edits.
             after_text = target_doc_path.read_text(encoding="utf-8")
-            before_text = self.backup_path.read_text(encoding="utf-8") if self.backup_path.exists() else ""
+            before_text = (
+                self.backup_path.read_text(encoding="utf-8")
+                if self.backup_path.exists()
+                else ""
+            )
             rel_path = str(target_doc_path.relative_to(self.engine.repo_root))
             patch_text = "\n".join(
                 difflib.unified_diff(
@@ -473,7 +505,7 @@ class DocChatService:
                 chat_id,
                 "result=success "
                 f"kind={request.kind} path={doc_pointer} duration_ms={duration_ms} "
-                f"message=\"{message_for_log}\"",
+                f'message="{message_for_log}"',
             )
             return {
                 "status": "ok",
@@ -489,12 +521,14 @@ class DocChatService:
                 chat_id,
                 "result=error "
                 f"kind={request.kind} path={doc_pointer} duration_ms={duration_ms} "
-                f"message=\"{message_for_log}\" detail=\"{detail}\"",
+                f'message="{message_for_log}" detail="{detail}"',
             )
             # Restore backup on error
             if self.backup_path.exists():
                 target_doc_path = self.engine.config.doc_path(request.kind)
-                atomic_write(target_doc_path, self.backup_path.read_text(encoding="utf-8"))
+                atomic_write(
+                    target_doc_path, self.backup_path.read_text(encoding="utf-8")
+                )
             self._cleanup_patch()
             return {"status": "error", "detail": str(exc)}
         except Exception as exc:  # pragma: no cover - defensive
@@ -503,7 +537,7 @@ class DocChatService:
             self._log(
                 chat_id,
                 "result=error kind={kind} path={path} duration_ms={duration_ms} "
-                "message=\"{message}\" detail=\"{detail}\"".format(
+                'message="{message}" detail="{detail}"'.format(
                     kind=request.kind,
                     path=doc_pointer,
                     duration_ms=duration_ms,

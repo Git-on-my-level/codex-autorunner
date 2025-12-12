@@ -28,7 +28,9 @@ def _seed_repo(tmp_path: Path) -> Path:
     _write_default_config(repo)
     work = repo / ".codex-autorunner"
     work.mkdir(exist_ok=True)
-    (work / "TODO.md").write_text("- [ ] first task\n- [x] done task\n", encoding="utf-8")
+    (work / "TODO.md").write_text(
+        "- [ ] first task\n- [x] done task\n", encoding="utf-8"
+    )
     (work / "PROGRESS.md").write_text("progress body\n", encoding="utf-8")
     (work / "OPINIONS.md").write_text("opinions body\n", encoding="utf-8")
     (work / "SPEC.md").write_text("spec body\n", encoding="utf-8")
@@ -89,7 +91,9 @@ def test_chat_success_writes_doc_and_returns_agent_message(
         return "Agent: cleaned"
 
     monkeypatch.setattr(DocChatService, "_run_codex_cli", fake_run)
-    monkeypatch.setattr(DocChatService, "_recent_run_summary", lambda self: "last run summary")
+    monkeypatch.setattr(
+        DocChatService, "_recent_run_summary", lambda self: "last run summary"
+    )
 
     client = _client(repo)
     res = client.post("/api/docs/todo/chat", json={"message": "rewrite the todo"})
@@ -117,12 +121,16 @@ def test_chat_success_writes_doc_and_returns_agent_message(
     assert "last run summary" in prompt
 
 
-def test_chat_validation_failure_does_not_write(repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_chat_validation_failure_does_not_write(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     existing = (repo / ".codex-autorunner" / "TODO.md").read_text(encoding="utf-8")
 
     async def fake_run(self, prompt: str, chat_id: str) -> str:  # type: ignore[override]
         # overwrite with bad content
-        (repo / ".codex-autorunner" / "TODO.md").write_text("bad content\n", encoding="utf-8")
+        (repo / ".codex-autorunner" / "TODO.md").write_text(
+            "bad content\n", encoding="utf-8"
+        )
         return "Agent: nope"
 
     monkeypatch.setattr(DocChatService, "_run_codex_cli", fake_run)
@@ -131,10 +139,14 @@ def test_chat_validation_failure_does_not_write(repo: Path, monkeypatch: pytest.
     assert res.status_code == 200
     res_discard = client.post("/api/docs/todo/chat/discard")
     assert res_discard.status_code == 200
-    assert (repo / ".codex-autorunner" / "TODO.md").read_text(encoding="utf-8") == existing
+    assert (repo / ".codex-autorunner" / "TODO.md").read_text(
+        encoding="utf-8"
+    ) == existing
 
 
-def test_prompt_includes_all_docs_and_recent_run(repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_prompt_includes_all_docs_and_recent_run(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     engine = Engine(repo)
     service = DocChatService(engine)
     monkeypatch.setattr(service, "_recent_run_summary", lambda: "recent notes")

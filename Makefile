@@ -39,32 +39,32 @@ serve-dev:
 
 launchd-hub:
 	@mkdir -p $(dir $(LAUNCH_AGENT))
-	@cat > $(LAUNCH_AGENT) <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.codex.autorunner</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/sh</string>
-    <string>-lc</string>
-    <string>PATH=$(NVM_BIN):$(LOCAL_BIN):$(PY39_BIN):$$PATH; codex-autorunner hub serve --host $(HUB_HOST) --port $(HUB_PORT) --base-path $(HUB_BASE_PATH) --path $(CAR_ROOT)</string>
-  </array>
-  <key>WorkingDirectory</key>
-  <string>$(CAR_ROOT)</string>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>$(CAR_ROOT)/.codex-autorunner/codex-autorunner-hub.log</string>
-  <key>StandardErrorPath</key>
-  <string>$(CAR_ROOT)/.codex-autorunner/codex-autorunner-hub.log</string>
-</dict>
-</plist>
-EOF
+	@cat > $(LAUNCH_AGENT) <<-'EOF'
+	<?xml version="1.0" encoding="UTF-8"?>
+	<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+	<plist version="1.0">
+	<dict>
+	  <key>Label</key>
+	  <string>com.codex.autorunner</string>
+	  <key>ProgramArguments</key>
+	  <array>
+	    <string>/bin/sh</string>
+	    <string>-lc</string>
+	    <string>PATH=$(NVM_BIN):$(LOCAL_BIN):$(PY39_BIN):$$PATH; codex-autorunner hub serve --host $(HUB_HOST) --port $(HUB_PORT) --base-path $(HUB_BASE_PATH) --path $(CAR_ROOT)</string>
+	  </array>
+	  <key>WorkingDirectory</key>
+	  <string>$(CAR_ROOT)</string>
+	  <key>RunAtLoad</key>
+	  <true/>
+	  <key>KeepAlive</key>
+	  <true/>
+	  <key>StandardOutPath</key>
+	  <string>$(CAR_ROOT)/.codex-autorunner/codex-autorunner-hub.log</string>
+	  <key>StandardErrorPath</key>
+	  <string>$(CAR_ROOT)/.codex-autorunner/codex-autorunner-hub.log</string>
+	</dict>
+	</plist>
+	EOF
 	@launchctl unload -w $(LAUNCH_AGENT) >/dev/null 2>&1 || true
 	launchctl load -w $(LAUNCH_AGENT)
 	launchctl kickstart -k gui/$$(id -u)/com.codex.autorunner

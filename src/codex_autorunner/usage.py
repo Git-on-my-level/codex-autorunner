@@ -41,8 +41,7 @@ class TokenTotals:
     def diff(self, other: "TokenTotals") -> "TokenTotals":
         return TokenTotals(
             input_tokens=self.input_tokens - other.input_tokens,
-            cached_input_tokens=self.cached_input_tokens
-            - other.cached_input_tokens,
+            cached_input_tokens=self.cached_input_tokens - other.cached_input_tokens,
             output_tokens=self.output_tokens - other.output_tokens,
             reasoning_output_tokens=self.reasoning_output_tokens
             - other.reasoning_output_tokens,
@@ -211,7 +210,9 @@ def summarize_repo_usage(
             events += 1
             if event.rate_limits:
                 latest_rate_limits = event.rate_limits
-    return UsageSummary(totals=totals, events=events, latest_rate_limits=latest_rate_limits)
+    return UsageSummary(
+        totals=totals, events=events, latest_rate_limits=latest_rate_limits
+    )
 
 
 def summarize_hub_usage(
@@ -258,7 +259,9 @@ def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except Exception as exc:
-        raise UsageError("Use ISO timestamps such as 2025-12-01 or 2025-12-01T12:00Z") from exc
+        raise UsageError(
+            "Use ISO timestamps such as 2025-12-01 or 2025-12-01T12:00Z"
+        ) from exc
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt

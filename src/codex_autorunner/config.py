@@ -1,9 +1,11 @@
 import dataclasses
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import yaml
+from dotenv import load_dotenv
 
 CONFIG_FILENAME = ".codex-autorunner/config.yml"
 CONFIG_VERSION = 2
@@ -39,6 +41,29 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 4173,
         "base_path": "",
+    },
+    "voice": {
+        "enabled": True,
+        "provider": "openai_whisper",
+        "latency_mode": "balanced",
+        "chunk_ms": 600,
+        "sample_rate": 16_000,
+        "warn_on_remote_api": True,
+        "push_to_talk": {
+            "max_ms": 15_000,
+            "silence_auto_stop_ms": 1_200,
+            "min_hold_ms": 150,
+        },
+        "providers": {
+            "openai_whisper": {
+                "api_key_env": "OPENAI_API_KEY",
+                "model": "whisper-1",
+                "base_url": None,
+                "temperature": 0,
+                "language": None,
+                "redact_request": True,
+            }
+        },
     },
     "log": {
         "path": ".codex-autorunner/codex-autorunner.log",
@@ -104,6 +129,7 @@ class RepoConfig:
     server_port: int
     server_base_path: str
     log: LogConfig
+    voice: Dict[str, Any]
 
     def doc_path(self, key: str) -> Path:
         return self.root / self.docs[key]
@@ -161,6 +187,30 @@ def find_nearest_config_path(start: Path) -> Optional[Path]:
     return None
 
 
+def _load_dotenv_for_config(config_path: Path) -> None:
+    """
+    Best-effort load of environment variables for this config root.
+
+    We intentionally load from deterministic locations rather than relying on
+    process CWD (which differs for installed entrypoints, launchd, etc.).
+    """
+    try:
+        root = config_path.parent.parent.resolve()
+        candidates = [
+            root / ".env",
+            config_path.parent / ".env",  # .codex-autorunner/.env
+        ]
+
+        for candidate in candidates:
+            if candidate.exists():
+                # Prefer repo-local .env over inherited process env to avoid stale keys
+                # (common when running via launchd/daemon or with a global shell export).
+                load_dotenv(dotenv_path=candidate, override=True)
+    except Exception:
+        # Never fail config loading due to dotenv issues.
+        pass
+
+
 def load_config(start: Path) -> Union[RepoConfig, HubConfig]:
     """
     Load the nearest config walking upward from the provided path.
@@ -171,6 +221,7 @@ def load_config(start: Path) -> Union[RepoConfig, HubConfig]:
         raise ConfigError(
             f"Missing config file; expected to find {CONFIG_FILENAME} in {start} or parents"
         )
+    _load_dotenv_for_config(config_path)
     with config_path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
@@ -194,6 +245,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         "opinions": Path(cfg["docs"]["opinions"]),
         "spec": Path(cfg["docs"]["spec"]),
     }
+    voice_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
     template_val = cfg["prompt"].get("template")
     template = root / template_val if template_val else None
     term_args = cfg["codex"].get("terminal_args") or []
@@ -219,11 +271,14 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
         log=LogConfig(
             path=root / log_cfg.get("path", DEFAULT_REPO_CONFIG["log"]["path"]),
-            max_bytes=int(log_cfg.get("max_bytes", DEFAULT_REPO_CONFIG["log"]["max_bytes"])),
+            max_bytes=int(
+                log_cfg.get("max_bytes", DEFAULT_REPO_CONFIG["log"]["max_bytes"])
+            ),
             backup_count=int(
                 log_cfg.get("backup_count", DEFAULT_REPO_CONFIG["log"]["backup_count"])
             ),
         ),
+        voice=voice_cfg,
     )
 
 
@@ -273,7 +328,9 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("codex.binary is required")
     if not isinstance(codex.get("args", []), list):
         raise ConfigError("codex.args must be a list")
-    if "terminal_args" in codex and not isinstance(codex.get("terminal_args", []), list):
+    if "terminal_args" in codex and not isinstance(
+        codex.get("terminal_args", []), list
+    ):
         raise ConfigError("codex.terminal_args must be a list if provided")
     prompt = cfg.get("prompt")
     if not isinstance(prompt, dict):
@@ -312,6 +369,9 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
     for key in ("max_bytes", "backup_count"):
         if not isinstance(log_cfg.get(key, 0), int):
             raise ConfigError(f"log.{key} must be an integer")
+    voice_cfg = cfg.get("voice", {})
+    if voice_cfg is not None and not isinstance(voice_cfg, dict):
+        raise ConfigError("voice section must be a mapping if provided")
 
 
 def _validate_hub_config(cfg: Dict[str, Any]) -> None:

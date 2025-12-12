@@ -73,7 +73,7 @@
         <div class="hub-usage-header">
           <span class="label">Usage</span>
           <span id="hub-usage-meta" class="hub-usage-path">–</span>
-          <button id="hub-usage-refresh" class="ghost sm">↻</button>
+          <button id="hub-usage-refresh" class="ghost sm icon-btn" title="Refresh usage">↻</button>
         </div>
         <div id="hub-usage-list" class="hub-usage-grid">Loading…</div>
       </section>
@@ -140,7 +140,7 @@
                 <button id="resume-run" class="ghost">Resume</button>
                 <button id="kill-run" class="danger">Kill</button>
                 <button id="reset-runner" class="ghost" title="Reset run ID, clear logs">Reset</button>
-                <button id="refresh-state" class="ghost">↻</button>
+                <button id="refresh-state" class="ghost icon-btn" title="Refresh state">↻</button>
               </div>
               <p class="muted small" id="runner-pid">PID: –</p>
             </div>
@@ -150,7 +150,7 @@
                 <span class="label">Usage</span>
                 <span class="usage-total-badge" id="usage-total">–</span>
                 <span class="usage-events-badge" id="usage-events">–</span>
-                <button id="usage-refresh" class="ghost sm">↻</button>
+                <button id="usage-refresh" class="ghost sm icon-btn" title="Refresh usage">↻</button>
               </div>
               <div class="usage-breakdown">
                 <div class="usage-stat">
@@ -179,7 +179,7 @@
             <div class="card todo-preview">
               <div class="card-header">
                 <span class="label">TODO</span>
-                <button id="refresh-preview" class="ghost sm">↻</button>
+                <button id="refresh-preview" class="ghost sm icon-btn" title="Refresh TODO preview">↻</button>
               </div>
               <ul id="todo-preview-list" class="checklist"></ul>
             </div>
@@ -229,11 +229,13 @@
                     placeholder="Chat with this doc..."
                     spellcheck="false"
                   ></textarea>
+                  <button id="doc-chat-voice" class="ghost sm voice-button" title="Hold to talk"></button>
                   <button id="doc-chat-send" class="primary sm" title="Send (Shift+Enter)">↑</button>
                   <button id="doc-chat-cancel" class="ghost sm hidden" title="Cancel">✕</button>
                 </div>
                 <div class="doc-chat-meta">
                   <span class="muted small" id="doc-chat-hint">Shift+Enter to send</span>
+                  <span class="muted small hidden voice-status" id="doc-chat-voice-status"></span>
                   <span id="doc-chat-status" class="pill pill-idle">idle</span>
                 </div>
               </div>
@@ -288,6 +290,10 @@
             <button id="terminal-connect" class="primary sm">Connect</button>
             <button id="terminal-resume" class="ghost sm">Resume</button>
             <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
+            <div class="terminal-voice">
+              <button id="terminal-voice" class="ghost sm voice-button" title="Hold to talk"></button>
+              <span class="muted small hidden voice-status" id="terminal-voice-status"></span>
+            </div>
           </div>
           <div id="terminal-container" class="terminal-container">
             <div class="terminal-overlay" id="terminal-overlay">

@@ -51,10 +51,14 @@ def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
     assert entry.added_to_manifest is True
     assert entry.initialized is True
     assert (repo_dir / ".codex-autorunner" / "config.yml").exists()
-    gitignore = (repo_dir / ".codex-autorunner" / ".gitignore").read_text(encoding="utf-8")
+    gitignore = (repo_dir / ".codex-autorunner" / ".gitignore").read_text(
+        encoding="utf-8"
+    )
     assert gitignore == GITIGNORE_CONTENT
 
-    manifest_data = yaml.safe_load((hub_root / ".codex-autorunner" / "manifest.yml").read_text())
+    manifest_data = yaml.safe_load(
+        (hub_root / ".codex-autorunner" / "manifest.yml").read_text()
+    )
     assert manifest_data["repos"][0]["path"] == "workspace/demo"
 
 

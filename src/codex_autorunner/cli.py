@@ -4,7 +4,10 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
 import typer
+
+load_dotenv()
 import uvicorn
 
 from .bootstrap import seed_hub_files, seed_repo_files
@@ -143,12 +146,16 @@ def status(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")
 
 @app.command()
 def usage(
-    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path; defaults to CWD"),
+    repo: Optional[Path] = typer.Option(
+        None, "--repo", help="Repo or hub path; defaults to CWD"
+    ),
     codex_home: Optional[Path] = typer.Option(
         None, "--codex-home", help="Override CODEX_HOME (defaults to env or ~/.codex)"
     ),
     since: Optional[str] = typer.Option(
-        None, "--since", help="ISO timestamp filter, e.g. 2025-12-01 or 2025-12-01T12:00Z"
+        None,
+        "--since",
+        help="ISO timestamp filter, e.g. 2025-12-01 or 2025-12-01T12:00Z",
     ),
     until: Optional[str] = typer.Option(
         None, "--until", help="Upper bound ISO timestamp filter"
@@ -185,7 +192,9 @@ def usage(
                 "codex_home": str(codex_root),
                 "since": since,
                 "until": until,
-                "repos": {repo_id: summary.to_dict() for repo_id, summary in per_repo.items()},
+                "repos": {
+                    repo_id: summary.to_dict() for repo_id, summary in per_repo.items()
+                },
                 "unmatched": unmatched.to_dict(),
             }
             typer.echo(json.dumps(payload, indent=2))
@@ -395,8 +404,12 @@ def edit(
 @app.command("ingest-spec")
 def ingest_spec_cmd(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-    spec: Optional[Path] = typer.Option(None, "--spec", help="Path to SPEC (defaults to configured docs.spec)"),
-    force: bool = typer.Option(False, "--force", help="Overwrite TODO/PROGRESS/OPINIONS"),
+    spec: Optional[Path] = typer.Option(
+        None, "--spec", help="Path to SPEC (defaults to configured docs.spec)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite TODO/PROGRESS/OPINIONS"
+    ),
 ):
     """Generate TODO/PROGRESS/OPINIONS from SPEC using Codex."""
     try:
@@ -446,7 +459,9 @@ def serve(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     host: Optional[str] = typer.Option(None, "--host", help="Host to bind"),
     port: Optional[int] = typer.Option(None, "--port", help="Port to bind"),
-    base_path: Optional[str] = typer.Option(None, "--base-path", help="Base path for the server"),
+    base_path: Optional[str] = typer.Option(
+        None, "--base-path", help="Base path for the server"
+    ),
 ):
     """Start the web server and UI API."""
     try:
@@ -457,9 +472,13 @@ def serve(
         bind_host = host or config.server_host
         bind_port = port or config.server_port
         normalized_base = (
-            _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+            _normalize_base_path(base_path)
+            if base_path is not None
+            else config.server_base_path
         )
-        typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}")
+        typer.echo(
+            f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}"
+        )
         uvicorn.run(
             create_hub_app(config.root, base_path=normalized_base),
             host=bind_host,
@@ -469,7 +488,9 @@ def serve(
         return
     engine = _require_repo_config(repo)
     normalized_base = (
-        _normalize_base_path(base_path) if base_path is not None else engine.config.server_base_path
+        _normalize_base_path(base_path)
+        if base_path is not None
+        else engine.config.server_base_path
     )
     app_instance = create_app(engine.repo_root, base_path=normalized_base)
     bind_host = host or engine.config.server_host
@@ -509,12 +530,16 @@ def hub_serve(
     path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
     host: Optional[str] = typer.Option(None, "--host", help="Host to bind"),
     port: Optional[int] = typer.Option(None, "--port", help="Port to bind"),
-    base_path: Optional[str] = typer.Option(None, "--base-path", help="Base path for the server"),
+    base_path: Optional[str] = typer.Option(
+        None, "--base-path", help="Base path for the server"
+    ),
 ):
     """Start the hub supervisor server."""
     config = _require_hub_config(path)
     normalized_base = (
-        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+        _normalize_base_path(base_path)
+        if base_path is not None
+        else config.server_base_path
     )
     bind_host = host or config.server_host
     bind_port = port or config.server_port

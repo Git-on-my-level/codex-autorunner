@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import threading
 import uuid
 from importlib import resources
@@ -7,8 +8,22 @@ from pathlib import Path
 from typing import Optional
 from asyncio.subprocess import PIPE, STDOUT, create_subprocess_exec
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from .config import ConfigError, HubConfig, _normalize_base_path, load_config
@@ -39,6 +54,7 @@ from .usage import (
     summarize_repo_usage,
 )
 from .manifest import load_manifest
+from .voice import VoiceConfig, VoiceService, VoiceServiceError
 
 
 class BasePathRouterMiddleware:
@@ -91,7 +107,9 @@ class BasePathRouterMiddleware:
     async def _redirect(self, scope, receive, send, target: str):
         if scope["type"] == "websocket":
             headers = [(b"location", target.encode("utf-8"))]
-            await send({"type": "http.response.start", "status": 308, "headers": headers})
+            await send(
+                {"type": "http.response.start", "status": 308, "headers": headers}
+            )
             await send({"type": "http.response.body", "body": b"", "more_body": False})
             return
         response = RedirectResponse(target, status_code=308)
@@ -115,17 +133,33 @@ class BasePathRouterMiddleware:
                 raw_path = scope.get("raw_path")
                 if raw_path:
                     scope["raw_path"] = b"/"
+                # Preserve the base path for downstream routing helpers.
+                if not root_path:
+                    scope["root_path"] = self.base_path
             elif path.startswith(f"{self.base_path}/"):
                 trimmed = path[len(self.base_path) :] or "/"
-                scope["path"] = trimmed
-                raw_path = scope.get("raw_path")
-                if raw_path:
-                    scope["raw_path"] = raw_path[len(self.base_path_bytes) :] or b"/"
-            if root_path:
-                if not root_path.startswith(self.base_path):
-                    scope["root_path"] = f"{self.base_path}{root_path}"
-            else:
-                scope["root_path"] = self.base_path
+                # Special case: Starlette static file mounts behave best when
+                # scope["path"] still includes scope["root_path"].
+                is_static = trimmed == "/static" or trimmed.startswith("/static/")
+                if is_static:
+                    if not root_path:
+                        scope["root_path"] = self.base_path
+                else:
+                    scope["path"] = trimmed
+                    raw_path = scope.get("raw_path")
+                    if raw_path:
+                        scope["raw_path"] = (
+                            raw_path[len(self.base_path_bytes) :] or b"/"
+                        )
+                # Preserve the base path for downstream routing helpers.
+                if not root_path:
+                    scope["root_path"] = self.base_path
+                elif root_path == self.base_path or root_path.startswith(
+                    f"{self.base_path}/"
+                ):
+                    scope["root_path"] = root_path
+                else:
+                    scope["root_path"] = f"{root_path}{self.base_path}"
             return await self.app(scope, receive, send)
 
         if self._should_redirect(path, root_path):
@@ -223,16 +257,21 @@ def _static_dir() -> Path:
     return Path(resources.files("codex_autorunner")) / "static"
 
 
-def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None) -> FastAPI:
+def create_app(
+    repo_root: Optional[Path] = None, base_path: Optional[str] = None
+) -> FastAPI:
     config = load_config(repo_root or Path.cwd())
     if isinstance(config, HubConfig):
         raise ConfigError("create_app requires repo mode configuration")
     base_path = (
-        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+        _normalize_base_path(base_path)
+        if base_path is not None
+        else config.server_base_path
     )
     engine = Engine(config.root)
     manager = RunnerManager(engine)
     doc_chat = DocChatService(engine)
+    voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
     terminal_sessions: dict[str, PTYSession] = {}
     terminal_max_idle_seconds = 3600
     terminal_lock: Optional[asyncio.Lock] = None
@@ -243,12 +282,33 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
             terminal_lock = asyncio.Lock()
         return terminal_lock
 
-    app = FastAPI()
+    def _voice_config_payload() -> dict:
+        service = voice_service or VoiceService(voice_config, logger=app.state.logger)
+        return service.config_payload()
+
+    def _require_voice_service() -> VoiceService:
+        if not voice_service or not voice_config.enabled:
+            raise HTTPException(status_code=400, detail="Voice is disabled")
+        return voice_service
+
+    async def _read_audio_payload(
+        file: Optional[UploadFile], request: Request
+    ) -> bytes:
+        if file is not None:
+            return await file.read()
+        return await request.body()
+
+    app = FastAPI(redirect_slashes=False)
     app.state.base_path = base_path
     app.state.logger = setup_rotating_logger(
         f"repo[{engine.repo_root}]", engine.config.log
     )
     app.state.logger.info("Repo server ready at %s", engine.repo_root)
+    try:
+        voice_service = VoiceService(voice_config, logger=app.state.logger)
+    except Exception as exc:
+        voice_service = None
+        app.state.logger.warning("Voice service unavailable: %s", exc, exc_info=False)
     static_dir = _static_dir()
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -330,7 +390,8 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
             "status": "ok",
             "kind": key,
             "content": content,
-            "agent_message": doc_chat.last_agent_message or f"Updated {key.upper()} via doc chat.",
+            "agent_message": doc_chat.last_agent_message
+            or f"Updated {key.upper()} via doc chat.",
         }
 
     @app.post("/api/docs/{kind}/chat/discard")
@@ -350,6 +411,37 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
         if not pending:
             raise HTTPException(status_code=404, detail="No pending patch")
         return pending
+
+    @app.get("/api/voice/config")
+    def get_voice_config():
+        return _voice_config_payload()
+
+    @app.post("/api/voice/transcribe")
+    async def transcribe_voice(
+        request: Request,
+        file: Optional[UploadFile] = File(None),
+        language: Optional[str] = Form(None),
+    ):
+        service = _require_voice_service()
+        audio_bytes = await _read_audio_payload(file, request)
+        try:
+            result = await asyncio.to_thread(
+                service.transcribe,
+                audio_bytes,
+                client="web",
+                user_agent=request.headers.get("user-agent"),
+                language=language,
+                filename=file.filename if file else None,
+            )
+        except VoiceServiceError as exc:
+            if exc.reason == "unauthorized":
+                status = 401
+            elif exc.reason == "forbidden":
+                status = 403
+            else:
+                status = 400 if exc.reason in ("disabled", "empty_audio") else 502
+            raise HTTPException(status_code=status, detail=exc.detail)
+        return {"status": "ok", **result}
 
     @app.post("/api/ingest-spec")
     def ingest_spec(payload: Optional[dict] = None):
@@ -622,7 +714,9 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
 
         forward_task = asyncio.create_task(pty_to_ws())
         input_task = asyncio.create_task(ws_to_pty())
-        await asyncio.wait([forward_task, input_task], return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait(
+            [forward_task, input_task], return_when=asyncio.FIRST_COMPLETED
+        )
         session.terminate()
         async with _terminal_lock():
             terminal_sessions.pop(session_id, None)
@@ -644,15 +738,19 @@ def create_app(repo_root: Optional[Path] = None, base_path: Optional[str] = None
     return app
 
 
-def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = None) -> FastAPI:
+def create_hub_app(
+    hub_root: Optional[Path] = None, base_path: Optional[str] = None
+) -> FastAPI:
     config = load_config(hub_root or Path.cwd())
     if not isinstance(config, HubConfig):
         raise ConfigError("Hub app requires hub mode configuration")
     base_path = (
-        _normalize_base_path(base_path) if base_path is not None else config.server_base_path
+        _normalize_base_path(base_path)
+        if base_path is not None
+        else config.server_base_path
     )
     supervisor = HubSupervisor(config)
-    app = FastAPI()
+    app = FastAPI(redirect_slashes=False)
     app.state.base_path = base_path
     app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.log)
     try:
@@ -670,7 +768,8 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
         if prefix in mount_errors:
             return False
         try:
-            sub_app = create_app(repo_path, base_path=base_path)
+            # Hub already handles the base path; avoid reapplying it in child apps.
+            sub_app = create_app(repo_path, base_path="")
         except ConfigError as exc:
             mount_errors[prefix] = str(exc)
             try:
@@ -773,7 +872,9 @@ def create_hub_app(hub_root: Optional[Path] = None, base_path: Optional[str] = N
     @app.post("/hub/repos")
     def create_repo(payload: Optional[dict] = None):
         if not payload or not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
         repo_id = payload.get("id") or payload.get("repo_id")
         if not repo_id:
             raise HTTPException(status_code=400, detail="Missing repo id")

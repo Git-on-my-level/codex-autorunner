@@ -1,5 +1,6 @@
 import { flash, buildWsUrl } from "./utils.js";
 import { CONSTANTS } from "./constants.js";
+import { initVoiceInput } from "./voice.js";
 
 let term = null;
 let fitAddon = null;
@@ -13,6 +14,10 @@ let inputDisposable = null;
 let intentionalDisconnect = false;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
+let voiceBtn = null;
+let voiceStatus = null;
+let voiceController = null;
+let voiceKeyActive = false;
 
 // Mobile controls state
 let mobileControlsEl = null;
@@ -178,6 +183,24 @@ function updateButtons(connected) {
   if (connectBtn) connectBtn.disabled = connected;
   if (disconnectBtn) disconnectBtn.disabled = !connected;
   if (resumeBtn) resumeBtn.disabled = connected;
+  const voiceUnavailable = voiceBtn?.classList.contains("disabled");
+  if (voiceBtn && !voiceUnavailable) {
+    voiceBtn.disabled = !connected;
+    voiceBtn.classList.toggle("voice-disconnected", !connected);
+  }
+  if (voiceStatus && !voiceUnavailable && !connected) {
+    voiceStatus.textContent = "Connect to use voice";
+    voiceStatus.classList.remove("hidden");
+  } else if (
+    voiceStatus &&
+    !voiceUnavailable &&
+    connected &&
+    voiceController &&
+    voiceStatus.textContent === "Connect to use voice"
+  ) {
+    voiceStatus.textContent = "Hold to talk (Alt+V)";
+    voiceStatus.classList.remove("hidden");
+  }
 }
 
 function handleResize() {
@@ -302,6 +325,101 @@ function disconnect() {
   setStatus("Disconnected");
   overlayEl?.classList.remove("hidden");
   updateButtons(false);
+  if (voiceKeyActive) {
+    voiceKeyActive = false;
+    voiceController?.stop();
+  }
+}
+
+function sendVoiceTranscript(text) {
+  if (!text) {
+    flash("Voice capture returned no transcript", "error");
+    return;
+  }
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    flash("Connect the terminal before using voice input", "error");
+    if (voiceStatus) {
+      voiceStatus.textContent = "Connect to send voice";
+      voiceStatus.classList.remove("hidden");
+    }
+    return;
+  }
+  const payload = text.endsWith("\n") ? text : `${text}\n`;
+  socket.send(textEncoder.encode(payload));
+  term?.focus();
+  flash("Voice transcript sent to terminal");
+}
+
+function initTerminalVoice() {
+  voiceBtn = document.getElementById("terminal-voice");
+  voiceStatus = document.getElementById("terminal-voice-status");
+  if (!voiceBtn || !voiceStatus) return;
+
+  initVoiceInput({
+    button: voiceBtn,
+    input: null,
+    statusEl: voiceStatus,
+    onTranscript: sendVoiceTranscript,
+    onError: (msg) => {
+      if (!msg) return;
+      flash(msg, "error");
+      voiceStatus.textContent = msg;
+      voiceStatus.classList.remove("hidden");
+    },
+  })
+    .then((controller) => {
+      if (!controller) {
+        voiceBtn.closest(".terminal-voice")?.classList.add("hidden");
+        return;
+      }
+      voiceController = controller;
+      if (voiceStatus) {
+        const base = voiceStatus.textContent || "Hold to talk";
+        voiceStatus.textContent = `${base} (Alt+V)`;
+        voiceStatus.classList.remove("hidden");
+      }
+      window.addEventListener("keydown", handleVoiceHotkeyDown);
+      window.addEventListener("keyup", handleVoiceHotkeyUp);
+      window.addEventListener("blur", () => {
+        if (voiceKeyActive) {
+          voiceKeyActive = false;
+          voiceController?.stop();
+        }
+      });
+    })
+    .catch((err) => {
+      console.error("Voice init failed", err);
+      flash("Voice capture unavailable", "error");
+      voiceStatus.textContent = "Voice unavailable";
+      voiceStatus.classList.remove("hidden");
+    });
+}
+
+function matchesVoiceHotkey(event) {
+  return event.key && event.key.toLowerCase() === "v" && event.altKey;
+}
+
+function handleVoiceHotkeyDown(event) {
+  if (!voiceController || voiceKeyActive) return;
+  if (!matchesVoiceHotkey(event)) return;
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    flash("Connect the terminal before using voice input", "error");
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  voiceKeyActive = true;
+  voiceController.start();
+}
+
+function handleVoiceHotkeyUp(event) {
+  if (!voiceKeyActive) return;
+  if (event && matchesVoiceHotkey(event)) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  voiceKeyActive = false;
+  voiceController?.stop();
 }
 
 export function initTerminal() {
@@ -323,4 +441,5 @@ export function initTerminal() {
   
   // Initialize mobile touch controls
   initMobileControls();
+  initTerminalVoice();
 }

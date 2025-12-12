@@ -61,6 +61,9 @@ body {
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
+  /* Ensure tabs remain clickable (avoid overlays stealing clicks). */
+  position: relative;
+  z-index: 1500;
 }
 
 .nav-brand {
@@ -115,6 +118,8 @@ body {
   padding: 2px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  position: relative;
+  z-index: 1501;
 }
 
 .tab {
@@ -785,6 +790,20 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Icon-only buttons (e.g. ↻) */
+button.icon-btn {
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
 /* TODO checklist */
 .todo-preview .checklist {
   list-style: none;
@@ -838,6 +857,12 @@ button:disabled {
   align-items: center;
   gap: 4px;
   margin-bottom: 8px;
+}
+
+.doc-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .chip {
@@ -1217,6 +1242,96 @@ button:disabled {
   font-size: 12px;
 }
 
+.voice-button {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.voice-button svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+}
+
+/* Doc chat: keep voice/send/cancel uniform and aligned to input */
+.doc-chat-input-row .voice-button {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  min-height: 26px;
+}
+
+.doc-chat-input-row .voice-button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.voice-button.voice-recording {
+  background: #b3261e;
+  color: #fff;
+  border-color: #b3261e;
+  box-shadow: 0 0 0 2px rgba(179, 38, 30, 0.2);
+}
+
+.voice-button.voice-sending {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.voice-button.voice-error {
+  border-color: #d35400;
+  color: #d35400;
+}
+
+.voice-button.voice-retry {
+  background: #fff7e6;
+  border-color: #e0c080;
+  color: #8c5b00;
+}
+
+.voice-button.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.voice-button.voice-disconnected {
+  opacity: 0.65;
+}
+
+.voice-status {
+  color: var(--muted);
+}
+
+/* Audio level meter visualization */
+.voice-level-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 20px;
+  padding: 0 6px;
+  vertical-align: middle;
+}
+
+.voice-level-bar {
+  width: 3px;
+  min-height: 3px;
+  height: 15%;
+  background: var(--accent);
+  border-radius: 1px;
+  transition: height 0.05s ease-out;
+  opacity: 0.4;
+}
+
+.voice-level-bar.active {
+  opacity: 1;
+  background: #4ade80;
+}
+
 .doc-chat-meta {
   display: flex;
   align-items: center;
@@ -1583,6 +1698,23 @@ label {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   margin-bottom: 6px;
+}
+
+.inline-toolbar .terminal-voice {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inline-toolbar .terminal-voice .voice-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.inline-toolbar .terminal-voice .voice-status {
+  white-space: nowrap;
 }
 
 /* Log viewer - maximize height (accounts for nav + toolbar + legend) */
@@ -2250,11 +2382,16 @@ button.loading::after {
 
 /* Mobile: 640px and below */
 @media (max-width: 640px) {
+  :root {
+    --mobile-top-pad: max(4px, env(safe-area-inset-top));
+    --mobile-bottom-nav: calc(52px + env(safe-area-inset-bottom, 0px));
+  }
+
   /* Safe area support for notches */
   .app-shell {
     padding: 4px;
-    padding-top: max(4px, env(safe-area-inset-top));
-    padding-bottom: calc(52px + env(safe-area-inset-bottom, 0px));
+    padding-top: var(--mobile-top-pad);
+    padding-bottom: var(--mobile-bottom-nav);
     min-height: 100vh;
     min-height: 100dvh;
   }
@@ -2804,10 +2941,52 @@ button.loading::after {
   }
   
   .doc-editor textarea {
-    min-height: 200px;
-    max-height: calc(100dvh - 320px);
+    /* Let the editor consume usable vertical space (no arbitrary cap). */
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
     font-size: 13px;
     padding: 10px;
+    resize: none;
+  }
+
+  /* Make Docs panel a fill-the-screen flex layout (avoids wasted space). */
+  #docs.panel.active {
+    display: flex;
+    flex-direction: column;
+    height: calc(100dvh - var(--mobile-top-pad) - var(--mobile-bottom-nav));
+    overflow: hidden;
+  }
+
+  #docs.panel.active .doc-editor {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  #doc-content {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  /* Patch view should also fill space when active. */
+  .doc-patch-main {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .doc-patch-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  /* Larger tap targets for icon-only buttons (refresh, etc.) */
+  button.icon-btn {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 18px;
   }
   
   .doc-actions {
@@ -3031,7 +3210,7 @@ button.loading::after {
   .toast {
     left: 8px;
     right: 8px;
-    bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(8px + var(--mobile-bottom-nav));
     text-align: center;
   }
   
@@ -3363,8 +3542,26 @@ button.loading::after {
   }
   
   .doc-editor textarea {
-    min-height: 150px;
-    max-height: calc(100vh - 180px);
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+  }
+
+  #docs.panel.active {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 90px);
+    overflow: hidden;
+  }
+
+  #docs.panel.active .doc-editor {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  #doc-content {
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   /* Compact chat for landscape */

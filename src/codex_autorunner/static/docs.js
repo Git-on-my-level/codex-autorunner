@@ -3,6 +3,7 @@ import { loadState } from "./state.js";
 import { publish } from "./bus.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
+import { initVoiceInput } from "./voice.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants & State
@@ -44,6 +45,8 @@ const chatUI = {
   input: document.getElementById("doc-chat-input"),
   send: document.getElementById("doc-chat-send"),
   cancel: document.getElementById("doc-chat-cancel"),
+  voiceBtn: document.getElementById("doc-chat-voice"),
+  voiceStatus: document.getElementById("doc-chat-voice-status"),
   hint: document.getElementById("doc-chat-hint"),
 };
 
@@ -242,6 +245,17 @@ function renderChat(kind = activeDoc) {
   chatUI.send.disabled = isRunning;
   chatUI.input.disabled = isRunning;
   chatUI.cancel.classList.toggle("hidden", !isRunning);
+  if (chatUI.voiceBtn) {
+    chatUI.voiceBtn.disabled =
+      isRunning && !chatUI.voiceBtn.classList.contains("voice-retry");
+    chatUI.voiceBtn.classList.toggle("disabled", chatUI.voiceBtn.disabled);
+    if (typeof chatUI.voiceBtn.setAttribute === "function") {
+      chatUI.voiceBtn.setAttribute(
+        "aria-disabled",
+        chatUI.voiceBtn.disabled ? "true" : "false"
+      );
+    }
+  }
 
   // Update hint text - show status inline when running
   if (isRunning) {
@@ -700,7 +714,7 @@ function renderTodoPreview(text) {
   const list = document.getElementById("todo-preview-list");
   list.innerHTML = "";
   const lines = text.split("\n").map((l) => l.trim());
-  const todos = lines.filter((l) => l.startsWith("- [")).slice(0, 8);
+  const todos = lines.filter((l) => l.startsWith("- ["));
   if (todos.length === 0) {
     const li = document.createElement("li");
     li.textContent = "No TODO items found.";
@@ -813,6 +827,43 @@ async function saveDoc() {
 // Initialization
 // ─────────────────────────────────────────────────────────────────────────────
 
+function applyVoiceTranscript(text) {
+  if (!text) {
+    flash("Voice capture returned no transcript", "error");
+    return;
+  }
+  const current = chatUI.input.value.trim();
+  const prefix = current ? current + " " : "";
+  chatUI.input.value = `${prefix}${text}`.trim();
+  autoResizeTextarea(chatUI.input);
+  chatUI.input.focus();
+  flash("Voice transcript added");
+}
+
+function initDocVoice() {
+  if (!chatUI.voiceBtn || !chatUI.input) {
+    return;
+  }
+  initVoiceInput({
+    button: chatUI.voiceBtn,
+    input: chatUI.input,
+    statusEl: chatUI.voiceStatus,
+    onTranscript: applyVoiceTranscript,
+    onError: (msg) => {
+      if (msg) {
+        flash(msg, "error");
+        if (chatUI.voiceStatus) {
+          chatUI.voiceStatus.textContent = msg;
+          chatUI.voiceStatus.classList.remove("hidden");
+        }
+      }
+    },
+  }).catch((err) => {
+    console.error("Voice init failed", err);
+    flash("Voice capture unavailable", "error");
+  });
+}
+
 export function initDocs() {
   docButtons.forEach((btn) =>
     btn.addEventListener("click", () => {
@@ -838,6 +889,7 @@ export function initDocs() {
     chatUI.patchReload.addEventListener("click", () =>
       reloadPatch(activeDoc, true)
     );
+  initDocVoice();
   reloadPatch(activeDoc, true);
 
   // Shift+Enter sends, Enter adds newline (default textarea behavior)
