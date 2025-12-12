@@ -51,6 +51,9 @@ function pickMimeType() {
     "audio/webm",
     "audio/ogg;codecs=opus",
     "audio/ogg",
+    // iOS Safari commonly prefers MP4 containers
+    "audio/mp4",
+    "audio/mp4;codecs=mp4a.40.2",
   ];
   for (const mime of candidates) {
     if (MediaRecorder.isTypeSupported(mime)) return mime;
@@ -162,12 +165,6 @@ export async function initVoiceInput({
     const holdDuration = Date.now() - state.pointerDownTime;
     state.pointerIsDown = false;
 
-    // If it was a quick click (< threshold), switch to click-toggle mode
-    if (holdDuration < CLICK_THRESHOLD_MS && state.recording) {
-      state.isClickToggleMode = true;
-      // Don't stop recording - user will click again to stop
-      return;
-    }
     // If recording hasn't started yet (e.g., waiting on getUserMedia),
     // remember that this was a click-to-toggle gesture.
     if (holdDuration < CLICK_THRESHOLD_MS && !state.recording) {

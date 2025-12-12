@@ -4,6 +4,7 @@ import dataclasses
 import logging
 import os
 import time
+import mimetypes
 from io import BytesIO
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
@@ -29,6 +30,7 @@ class OpenAIWhisperSettings:
     temperature: float = 0.0
     language: Optional[str] = None
     redact_request: bool = True
+    timeout_s: float = 60.0
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "OpenAIWhisperSettings":
@@ -39,6 +41,7 @@ class OpenAIWhisperSettings:
             temperature=float(raw.get("temperature", 0.0)),
             language=raw.get("language"),
             redact_request=bool(raw.get("redact_request", True)),
+            timeout_s=float(raw.get("timeout_s", 60.0)),
         )
 
 
@@ -100,9 +103,19 @@ class OpenAIWhisperProvider(SpeechProvider):
             data["language"] = payload["language"]
 
         filename = payload.get("filename", "audio.webm")
-        files = {"file": (filename, BytesIO(audio_bytes), "application/octet-stream")}
+        content_type, _ = mimetypes.guess_type(filename)
+        files = {
+            "file": (
+                filename,
+                BytesIO(audio_bytes),
+                content_type or "application/octet-stream",
+            )
+        }
 
-        response = httpx.post(url, headers=headers, data=data, files=files, timeout=30)
+        timeout_s = float(payload.get("timeout_s", 60.0))
+        response = httpx.post(
+            url, headers=headers, data=data, files=files, timeout=timeout_s
+        )
         response.raise_for_status()
         return response.json()
 
@@ -189,6 +202,7 @@ class _OpenAIWhisperStream(TranscriptionStream):
             "model": self._settings.model,
             "temperature": self._settings.temperature,
             "language": self._settings.language or self._session.language,
+            "timeout_s": self._settings.timeout_s,
         }
         if self._session.filename:
             payload["filename"] = self._session.filename
