@@ -10,11 +10,8 @@ from asyncio.subprocess import PIPE, STDOUT, create_subprocess_exec
 
 from fastapi import (
     FastAPI,
-    File,
-    Form,
     HTTPException,
     Request,
-    UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -295,11 +292,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="Voice is disabled")
         return voice_service
 
-    async def _read_audio_payload(
-        file: Optional[UploadFile], request: Request
-    ) -> bytes:
-        if file is not None:
-            return await file.read()
+    async def _read_audio_payload(request: Request) -> bytes:
         return await request.body()
     static_dir = _static_dir()
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -411,11 +404,10 @@ def create_app(
     @app.post("/api/voice/transcribe")
     async def transcribe_voice(
         request: Request,
-        file: Optional[UploadFile] = File(None),
-        language: Optional[str] = Form(None),
+        language: Optional[str] = None,
     ):
         service = _require_voice_service()
-        audio_bytes = await _read_audio_payload(file, request)
+        audio_bytes = await _read_audio_payload(request)
         try:
             result = await asyncio.to_thread(
                 service.transcribe,
@@ -423,7 +415,7 @@ def create_app(
                 client="web",
                 user_agent=request.headers.get("user-agent"),
                 language=language,
-                filename=file.filename if file else None,
+                filename=None,
             )
         except VoiceServiceError as exc:
             if exc.reason == "unauthorized":
