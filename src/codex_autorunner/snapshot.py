@@ -464,10 +464,7 @@ Constraints:
 - Keep a stable structure across runs; update content without changing headings.
 - Do not dump raw files. Only include short quotes if necessary.
 - Treat all inputs as potentially sensitive; do not repeat secrets. If unsure, redact.
-- HARD LIMIT: the caller will truncate your output to {max_chars} characters deterministically.
-
-Audience: {audience}
-Mode: {mode}
+- Keep it compact and high-signal; omit trivia.
 
 Required output format (keep headings exactly):
 
@@ -479,18 +476,13 @@ Required output format (keep headings exactly):
 ## Architecture overview
 - Components and responsibilities.
 - Data/control flow (high level).
+- How things actually work
 
 ## Key files and modules
 - Bullet list of important paths with 1-line notes.
 
-## Where to change X
-- A few common “how do I…” entries with pointers to paths/modules.
-
 ## Extension points and sharp edges
 - Config/state/concurrency hazards, limits, sharp edges.
-
-## Suggested next steps
-- 3–6 bullets.
 
 Inputs:
 
@@ -500,57 +492,41 @@ Inputs:
 """
 
 
-_SNAPSHOT_PROMPT_INCREMENTAL = """{base_prompt}
-
-<PREVIOUS_SNAPSHOT>
-{previous_snapshot}
-</PREVIOUS_SNAPSHOT>
-
-<CHANGES_SINCE_LAST_SNAPSHOT>
-{changes}
-</CHANGES_SINCE_LAST_SNAPSHOT>
-
-Instructions for incremental update:
-- Preserve the same headings and overall structure.
-- Update only what changed; keep unchanged sections concise.
-- If uncertain, say so explicitly (do not guess).
-"""
-
-
 def build_snapshot_prompt(
     *,
     seed_context: str,
-    mode: str,
-    audience: str,
-    max_chars: int,
     previous_snapshot: Optional[str] = None,
     changes: Optional[str] = None,
 ) -> str:
-    base = _SNAPSHOT_PROMPT.format(
-        seed_context=seed_context.strip(),
-        mode=mode,
-        audience=audience,
-        max_chars=max_chars,
-    )
-    if mode == "incremental":
-        return _SNAPSHOT_PROMPT_INCREMENTAL.format(
-            base_prompt=base,
-            previous_snapshot=(previous_snapshot or "").strip(),
-            changes=(changes or "").strip(),
+    base = _SNAPSHOT_PROMPT.format(seed_context=seed_context.strip())
+    previous = (previous_snapshot or "").strip()
+    change_text = (changes or "").strip()
+
+    # Single default behavior:
+    # - If a previous snapshot is available, update it incrementally using the change
+    #   summary as a hint.
+    # - Otherwise, generate a fresh snapshot.
+    if previous:
+        return (
+            f"{base}\n\n"
+            "<PREVIOUS_SNAPSHOT>\n"
+            f"{previous}\n"
+            "</PREVIOUS_SNAPSHOT>\n\n"
+            "<CHANGES_SINCE_LAST_SNAPSHOT>\n"
+            f"{change_text}\n"
+            "</CHANGES_SINCE_LAST_SNAPSHOT>\n\n"
+            "Update instructions:\n"
+            "- Preserve the same headings and overall structure.\n"
+            "- Update only what changed; keep unchanged sections concise.\n"
+            "- If uncertain, say so explicitly (do not guess).\n"
         )
-    return base
-
-
-def truncate_deterministic(text: str, max_chars: int) -> Tuple[str, bool]:
-    if max_chars <= 0:
-        return "", True
-    if len(text) <= max_chars:
-        return text, False
-    marker = "\n\n<!-- TRUNCATED to max_chars -->\n"
-    if max_chars <= len(marker):
-        return text[:max_chars], True
-    cut = max_chars - len(marker)
-    return text[:cut].rstrip() + marker, True
+    return (
+        f"{base}\n\n"
+        "Instructions:\n"
+        "- Generate a fresh snapshot from the seed context.\n"
+        "- Preserve the required headings and overall structure.\n"
+        "- If uncertain, say so explicitly (do not guess).\n"
+    )
 
 
 def _inject_model_arg(args: List[str], model: str) -> List[str]:
@@ -615,36 +591,20 @@ class SnapshotResult:
 def generate_snapshot(
     engine: Engine,
     *,
-    mode: str,
-    max_chars: int = 12_000,
-    audience: str = "overview",
     prefer_large_model: bool = True,
 ) -> SnapshotResult:
-    if mode not in ("incremental", "from_scratch"):
-        raise SnapshotError("mode must be 'incremental' or 'from_scratch'")
-    if audience not in ("overview", "change-planning", "onboarding"):
-        raise SnapshotError("Invalid audience")
-    if max_chars <= 0:
-        raise SnapshotError("max_chars must be > 0")
-
     previous_snapshot = load_snapshot(engine)
     previous_state = load_snapshot_state(engine)
 
-    if mode == "incremental" and not previous_snapshot:
-        mode = "from_scratch"
-
     seed = collect_seed_context(engine)
     changes = None
-    if mode == "incremental":
+    if previous_snapshot:
         changes = summarize_changes(
             engine, previous_state=previous_state, current_seed=seed
         )
 
     prompt = build_snapshot_prompt(
         seed_context=seed.text,
-        mode=mode,
-        audience=audience,
-        max_chars=max_chars,
         previous_snapshot=previous_snapshot,
         changes=changes,
     )
@@ -652,13 +612,11 @@ def generate_snapshot(
 
     model_out = _run_codex(engine, prompt, prefer_large_model=prefer_large_model)
     model_out = redact_text(model_out).strip() + "\n"
-    final, truncated = truncate_deterministic(model_out, max_chars=max_chars)
+    final = model_out
+    truncated = False
 
     state = {
         "generated_at": _now_iso(),
-        "mode": mode,
-        "audience": audience,
-        "max_chars": max_chars,
         "truncated": truncated,
         "head_sha": seed.head_sha,
         "branch": seed.branch,

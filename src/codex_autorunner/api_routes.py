@@ -200,31 +200,18 @@ def build_repo_router(static_dir: Path) -> APIRouter:
 
     @router.post("/api/snapshot")
     async def post_snapshot(request: Request, payload: Optional[dict] = None):
-        if not payload or not isinstance(payload, dict):
+        # Snapshot generation has a single default behavior now; we accept an
+        # optional JSON object for backwards compatibility, but ignore any fields.
+        if payload is not None and not isinstance(payload, dict):
             raise HTTPException(
                 status_code=400, detail="Request body must be a JSON object"
             )
-        mode = str(payload.get("mode") or "")
-        max_chars = payload.get("max_chars")
-        audience = str(payload.get("audience") or "overview")
-
-        if mode not in ("incremental", "from_scratch"):
-            raise HTTPException(status_code=400, detail="Invalid mode")
-        if max_chars is None:
-            max_chars = 12_000
-        try:
-            max_chars = int(max_chars)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="Invalid max_chars") from exc
 
         engine = request.app.state.engine
         try:
             result = await asyncio.to_thread(
                 generate_snapshot,
                 engine,
-                mode=mode,
-                max_chars=max_chars,
-                audience=audience,
             )
         except SnapshotError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

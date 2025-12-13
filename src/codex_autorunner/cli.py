@@ -454,34 +454,14 @@ def doctor_cmd(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo pa
 @app.command()
 def snapshot(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-    from_scratch: bool = typer.Option(
-        False,
-        "--from-scratch",
-        help="Regenerate snapshot instead of incremental update",
-    ),
-    max_chars: int = typer.Option(
-        12_000, "--max-chars", help="Max snapshot characters"
-    ),
-    audience: str = typer.Option(
-        "overview", "--audience", help="overview|change-planning|onboarding"
-    ),
 ):
     """Generate or update `.codex-autorunner/SNAPSHOT.md`."""
     engine = _require_repo_config(repo)
-    mode = "from_scratch"
-    if not from_scratch and load_snapshot(engine):
-        mode = "incremental"
     try:
-        result = generate_snapshot(
-            engine, mode=mode, max_chars=max_chars, audience=audience
-        )
+        result = generate_snapshot(engine)
     except SnapshotError as exc:
         raise typer.Exit(str(exc))
-    typer.echo(
-        f"Snapshot ({result.state.get('mode')}) written to .codex-autorunner/SNAPSHOT.md"
-    )
-    if result.truncated:
-        typer.echo("Note: snapshot was truncated to max_chars.")
+    typer.echo("Snapshot written to .codex-autorunner/SNAPSHOT.md")
 
 
 @app.command()

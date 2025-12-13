@@ -10,10 +10,14 @@ import { initVoiceInput } from "./voice.js";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DOC_TYPES = ["todo", "progress", "opinions", "spec"];
+const ALL_DOC_TYPES = ["todo", "progress", "opinions", "spec", "snapshot"];
+const CLEARABLE_DOCS = ["todo", "progress", "opinions"];
 const CHAT_HISTORY_LIMIT = 8;
 
 const docButtons = document.querySelectorAll(".chip[data-doc]");
 let docsCache = { todo: "", progress: "", opinions: "", spec: "" };
+let snapshotCache = { exists: false, content: "", state: {} };
+let snapshotBusy = false;
 let activeDoc = "todo";
 
 const chatDecoder = new TextDecoder();
@@ -56,6 +60,21 @@ const specIssueUI = {
   inputRow: document.getElementById("spec-issue-input-row"),
   input: document.getElementById("spec-issue-input"),
   button: document.getElementById("spec-issue-import-btn"),
+};
+
+const snapshotUI = {
+  generate: document.getElementById("snapshot-generate"),
+  update: document.getElementById("snapshot-update"),
+  regenerate: document.getElementById("snapshot-regenerate"),
+  copy: document.getElementById("snapshot-copy"),
+  refresh: document.getElementById("snapshot-refresh"),
+};
+
+const docActionsUI = {
+  standard: document.getElementById("doc-actions-standard"),
+  snapshot: document.getElementById("doc-actions-snapshot"),
+  ingest: document.getElementById("ingest-spec"),
+  clear: document.getElementById("clear-docs"),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -765,6 +784,10 @@ async function loadDocs() {
  * This prevents overwriting user edits during background refresh.
  */
 async function safeLoadDocs() {
+  // Skip auto-refresh for snapshot (it has its own refresh mechanism)
+  if (activeDoc === "snapshot") {
+    return;
+  }
   const textarea = getDocTextarea();
   if (textarea) {
     const currentValue = textarea.value;
@@ -801,15 +824,60 @@ function setDoc(kind) {
     btn.classList.toggle("active", btn.dataset.doc === kind)
   );
   const textarea = document.getElementById("doc-content");
-  textarea.value = docsCache[kind] || "";
-  document.getElementById(
-    "doc-status"
-  ).textContent = `Editing ${kind.toUpperCase()}`;
+  const isSnapshot = kind === "snapshot";
+  
+  // Handle snapshot vs regular doc display
+  if (isSnapshot) {
+    textarea.value = snapshotCache.content || "";
+    textarea.placeholder = "(snapshot will appear here)";
+    document.getElementById("doc-status").textContent = "Viewing SNAPSHOT";
+  } else {
+    textarea.value = docsCache[kind] || "";
+    textarea.placeholder = "";
+    document.getElementById("doc-status").textContent = `Editing ${kind.toUpperCase()}`;
+  }
+  
+  // Toggle spec issue import UI
   if (specIssueUI.row) {
     specIssueUI.row.classList.toggle("hidden", kind !== "spec");
   }
-  reloadPatch(kind, true);
-  renderChat(kind);
+  
+  // Toggle action button sets - snapshot has its own, others share standard
+  if (docActionsUI.standard) {
+    docActionsUI.standard.classList.toggle("hidden", isSnapshot);
+  }
+  if (docActionsUI.snapshot) {
+    docActionsUI.snapshot.classList.toggle("hidden", !isSnapshot);
+  }
+  
+  // Toggle document-specific buttons within standard actions
+  if (docActionsUI.ingest) {
+    docActionsUI.ingest.classList.toggle("hidden", kind !== "spec");
+  }
+  if (docActionsUI.clear) {
+    docActionsUI.clear.classList.toggle("hidden", !CLEARABLE_DOCS.includes(kind));
+  }
+  
+  // Toggle chat panel visibility - hide for snapshot
+  const chatPanel = document.querySelector(".doc-chat-panel");
+  if (chatPanel) {
+    chatPanel.classList.toggle("hidden", isSnapshot);
+  }
+  
+  // Toggle patch panel visibility - hide for snapshot
+  if (chatUI.patchMain) {
+    if (isSnapshot) {
+      chatUI.patchMain.classList.add("hidden");
+    }
+  }
+  
+  // Update snapshot button states when switching to snapshot
+  if (isSnapshot) {
+    renderSnapshotButtons();
+  } else {
+    reloadPatch(kind, true);
+    renderChat(kind);
+  }
 }
 
 async function importIssueToSpec() {
@@ -890,6 +958,11 @@ async function importIssueToSpec() {
 }
 
 async function saveDoc() {
+  // Snapshot is read-only, no saving
+  if (activeDoc === "snapshot") {
+    flash("Snapshot is read-only. Use Generate to update.", "error");
+    return;
+  }
   const content = document.getElementById("doc-content").value;
   const saveBtn = document.getElementById("save-doc");
   saveBtn.disabled = true;
@@ -908,6 +981,109 @@ async function saveDoc() {
   } finally {
     saveBtn.disabled = false;
     saveBtn.classList.remove("loading");
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Snapshot Functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+function setSnapshotBusy(on) {
+  snapshotBusy = on;
+  const disabled = !!on;
+  for (const btn of [snapshotUI.generate, snapshotUI.update, snapshotUI.regenerate, snapshotUI.copy, snapshotUI.refresh]) {
+    if (btn) btn.disabled = disabled;
+  }
+  const statusEl = document.getElementById("doc-status");
+  if (statusEl && activeDoc === "snapshot") {
+    statusEl.textContent = on ? "Working…" : "Viewing SNAPSHOT";
+  }
+}
+
+function renderSnapshotButtons() {
+  // Single default behavior: one "Run snapshot" action.
+  if (snapshotUI.generate) snapshotUI.generate.classList.toggle("hidden", false);
+  if (snapshotUI.update) snapshotUI.update.classList.toggle("hidden", true);
+  if (snapshotUI.regenerate) snapshotUI.regenerate.classList.toggle("hidden", true);
+  if (snapshotUI.copy) snapshotUI.copy.disabled = snapshotBusy || !(snapshotCache.content || "").trim();
+}
+
+async function loadSnapshot({ notify = false } = {}) {
+  if (snapshotBusy) return;
+  try {
+    setSnapshotBusy(true);
+    const data = await api("/api/snapshot");
+    snapshotCache = {
+      exists: !!data?.exists,
+      content: data?.content || "",
+      state: data?.state || {},
+    };
+    if (activeDoc === "snapshot") {
+      const textarea = getDocTextarea();
+      if (textarea) textarea.value = snapshotCache.content || "";
+    }
+    renderSnapshotButtons();
+    if (notify) flash(snapshotCache.exists ? "Snapshot loaded" : "No snapshot yet");
+  } catch (err) {
+    flash(err?.message || "Failed to load snapshot");
+  } finally {
+    setSnapshotBusy(false);
+  }
+}
+
+async function runSnapshot() {
+  if (snapshotBusy) return;
+  try {
+    setSnapshotBusy(true);
+    const data = await api("/api/snapshot", {
+      method: "POST",
+      body: {},
+    });
+    snapshotCache = {
+      exists: true,
+      content: data?.content || "",
+      state: data?.state || {},
+    };
+    if (activeDoc === "snapshot") {
+      const textarea = getDocTextarea();
+      if (textarea) textarea.value = snapshotCache.content || "";
+    }
+    renderSnapshotButtons();
+    flash("Snapshot generated");
+  } catch (err) {
+    flash(err?.message || "Snapshot generation failed");
+  } finally {
+    setSnapshotBusy(false);
+  }
+}
+
+async function copySnapshotToClipboard() {
+  const text = snapshotCache.content || "";
+  if (!text.trim()) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      flash("Copied to clipboard");
+      return;
+    }
+  } catch {
+    // fall through
+  }
+  try {
+    const textarea = getDocTextarea();
+    if (textarea && activeDoc === "snapshot") {
+      textarea.focus();
+      textarea.select();
+      const ok = document.execCommand("copy");
+      flash(ok ? "Copied to clipboard" : "Copy failed");
+      try {
+        textarea.setSelectionRange(0, 0);
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    flash("Copy failed");
   }
 }
 
@@ -959,7 +1135,13 @@ export function initDocs() {
     })
   );
   document.getElementById("save-doc").addEventListener("click", saveDoc);
-  document.getElementById("reload-doc").addEventListener("click", loadDocs);
+  document.getElementById("reload-doc").addEventListener("click", () => {
+    if (activeDoc === "snapshot") {
+      loadSnapshot({ notify: true });
+    } else {
+      loadDocs();
+    }
+  });
   document
     .getElementById("refresh-preview")
     .addEventListener("click", loadDocs);
@@ -1006,6 +1188,24 @@ export function initDocs() {
       }
     });
   }
+  
+  // Snapshot event handlers
+  if (snapshotUI.generate) {
+    snapshotUI.generate.addEventListener("click", () => runSnapshot());
+  }
+  if (snapshotUI.update) {
+    snapshotUI.update.addEventListener("click", () => runSnapshot());
+  }
+  if (snapshotUI.regenerate) {
+    snapshotUI.regenerate.addEventListener("click", () => runSnapshot());
+  }
+  if (snapshotUI.copy) {
+    snapshotUI.copy.addEventListener("click", copySnapshotToClipboard);
+  }
+  if (snapshotUI.refresh) {
+    snapshotUI.refresh.addEventListener("click", () => loadSnapshot({ notify: true }));
+  }
+  
   initDocVoice();
   reloadPatch(activeDoc, true);
 
@@ -1087,6 +1287,7 @@ export function initDocs() {
   });
 
   loadDocs();
+  loadSnapshot().catch(() => {}); // Pre-load snapshot data
   renderChat(activeDoc);
 
   // Register auto-refresh for docs (only when docs tab is active)

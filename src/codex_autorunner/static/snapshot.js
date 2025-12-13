@@ -8,8 +8,6 @@ const UI = {
   regenerate: document.getElementById("snapshot-regenerate"),
   copy: document.getElementById("snapshot-copy"),
   refresh: document.getElementById("snapshot-refresh"),
-  audience: document.getElementById("snapshot-audience"),
-  maxChars: document.getElementById("snapshot-max-chars"),
 };
 
 let latest = { exists: false, content: "", state: {} };
@@ -28,9 +26,11 @@ function setBusy(on) {
 function render() {
   if (!UI.content) return;
   UI.content.value = latest.content || "";
-  if (UI.generate) UI.generate.classList.toggle("hidden", latest.exists);
-  if (UI.update) UI.update.classList.toggle("hidden", !latest.exists);
-  if (UI.regenerate) UI.regenerate.classList.toggle("hidden", !latest.exists);
+  // Single default behavior: one "Run snapshot" action, regardless of whether a
+  // snapshot already exists.
+  if (UI.generate) UI.generate.classList.toggle("hidden", false);
+  if (UI.update) UI.update.classList.toggle("hidden", true);
+  if (UI.regenerate) UI.regenerate.classList.toggle("hidden", true);
   if (UI.copy) UI.copy.disabled = busy || !(latest.content || "").trim();
 }
 
@@ -53,21 +53,13 @@ async function loadSnapshot({ notify = false } = {}) {
   }
 }
 
-function readParams() {
-  const audience = (UI.audience?.value || "overview").trim() || "overview";
-  const maxCharsRaw = (UI.maxChars?.value || "").trim();
-  const maxChars = maxCharsRaw ? Number(maxCharsRaw) : 12000;
-  return { audience, max_chars: maxChars };
-}
-
-async function runSnapshot(mode) {
+async function runSnapshot() {
   if (busy) return;
   try {
     setBusy(true);
-    const params = readParams();
     const data = await api("/api/snapshot", {
       method: "POST",
-      body: { mode, ...params },
+      body: {},
     });
     latest = {
       exists: true,
@@ -75,7 +67,7 @@ async function runSnapshot(mode) {
       state: data?.state || {},
     };
     render();
-    flash(data?.truncated ? "Snapshot generated (truncated)" : "Snapshot generated");
+    flash("Snapshot generated");
   } catch (err) {
     flash(err?.message || "Snapshot generation failed");
   } finally {
@@ -114,9 +106,9 @@ async function copyToClipboard() {
 export function initSnapshot() {
   if (!UI.content) return;
 
-  UI.generate?.addEventListener("click", () => runSnapshot("from_scratch"));
-  UI.update?.addEventListener("click", () => runSnapshot("incremental"));
-  UI.regenerate?.addEventListener("click", () => runSnapshot("from_scratch"));
+  UI.generate?.addEventListener("click", () => runSnapshot());
+  UI.update?.addEventListener("click", () => runSnapshot());
+  UI.regenerate?.addEventListener("click", () => runSnapshot());
   UI.copy?.addEventListener("click", copyToClipboard);
   UI.refresh?.addEventListener("click", () => loadSnapshot({ notify: true }));
 

@@ -99,9 +99,7 @@ def test_summarize_changes_falls_back_to_seed_hash_diffs(repo: Path) -> None:
     assert "`a.txt`" in out
 
 
-def test_generate_snapshot_persists_state_and_truncates(
-    repo: Path, monkeypatch
-) -> None:
+def test_generate_snapshot_persists_state(repo: Path, monkeypatch) -> None:
     from codex_autorunner import snapshot as snapshot_mod
 
     def _fake_run_codex(*_args, **_kwargs) -> str:
@@ -110,13 +108,11 @@ def test_generate_snapshot_persists_state_and_truncates(
     monkeypatch.setattr(snapshot_mod, "_run_codex", _fake_run_codex)
 
     engine = Engine(repo)
-    result = generate_snapshot(
-        engine, mode="from_scratch", max_chars=120, audience="overview"
-    )
+    result = generate_snapshot(engine)
 
     snap_path = repo / ".codex-autorunner" / "SNAPSHOT.md"
     state_path = repo / ".codex-autorunner" / "snapshot_state.json"
     assert snap_path.exists()
     assert state_path.exists()
-    assert result.truncated is True
-    assert "<!-- TRUNCATED to max_chars -->" in snap_path.read_text(encoding="utf-8")
+    assert result.truncated is False
+    assert "<!-- TRUNCATED" not in snap_path.read_text(encoding="utf-8")

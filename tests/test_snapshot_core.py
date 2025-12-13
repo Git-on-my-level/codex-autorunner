@@ -5,7 +5,6 @@ from codex_autorunner.engine import Engine
 from codex_autorunner.snapshot import (
     collect_seed_context,
     redact_text,
-    truncate_deterministic,
 )
 
 
@@ -16,15 +15,6 @@ def test_redaction_scrubs_common_tokens() -> None:
     assert "ghp_1234567890" not in out
     assert "AKIA1234567890ABCDEF" not in out
     assert "eyJhbGciOiJIUzI1NiJ9." not in out
-
-
-def test_truncation_is_deterministic_and_bounded() -> None:
-    text = "a" * 100
-    out1, truncated1 = truncate_deterministic(text, max_chars=30)
-    out2, truncated2 = truncate_deterministic(text, max_chars=30)
-    assert truncated1 and truncated2
-    assert out1 == out2
-    assert len(out1) <= 30
 
 
 def test_collect_seed_context_avoids_secret_paths_and_bounds_excerpts(

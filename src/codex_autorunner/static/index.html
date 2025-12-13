@@ -225,6 +225,7 @@
             <button class="chip" data-doc="progress">PROGRESS</button>
             <button class="chip" data-doc="opinions">OPINIONS</button>
             <button class="chip" data-doc="spec">SPEC</button>
+            <button class="chip" data-doc="snapshot">SNAPSHOT</button>
             <span class="muted" id="doc-status"></span>
           </div>
           <div id="spec-issue-import" class="spec-issue-import hidden">
@@ -260,11 +261,16 @@
               <div id="doc-patch-body" class="doc-patch-body">(no patch)</div>
             </div>
             <textarea id="doc-content" spellcheck="false"></textarea>
-            <div class="doc-actions">
+            <div class="doc-actions" id="doc-actions-standard">
               <button id="save-doc" class="primary" data-short="Save">Save</button>
               <button id="reload-doc" class="ghost" data-short="Reload">Reload</button>
-              <button id="ingest-spec" class="ghost" data-short="Ingest">Ingest SPEC → Docs</button>
-              <button id="clear-docs" class="danger" data-short="Clear">Clear TODO/PROGRESS/OPINIONS</button>
+              <button id="ingest-spec" class="ghost hidden" data-short="Ingest">Ingest SPEC → Docs</button>
+              <button id="clear-docs" class="danger hidden" data-short="Clear">Clear TODO/PROGRESS/OPINIONS</button>
+            </div>
+            <div class="doc-actions hidden" id="doc-actions-snapshot">
+              <button id="snapshot-generate" class="primary sm">Run snapshot</button>
+              <button id="snapshot-copy" class="ghost sm">Copy to clipboard</button>
+              <button id="snapshot-refresh" class="ghost sm">Reload</button>
             </div>
             <div class="doc-chat-panel">
               <div class="doc-chat-compose">
@@ -297,33 +303,6 @@
                 <div class="doc-chat-history" id="doc-chat-history"></div>
               </details>
             </div>
-          </div>
-        </section>
-
-        <section id="snapshot" class="panel">
-          <div class="inline-toolbar">
-            <span class="label">Snapshot</span>
-            <span class="muted small" id="snapshot-status"></span>
-            <label class="muted small"
-              >Audience
-              <select id="snapshot-audience">
-                <option value="overview" selected>overview</option>
-                <option value="change-planning">change-planning</option>
-                <option value="onboarding">onboarding</option>
-              </select>
-            </label>
-            <label class="muted small"
-              >Max chars
-              <input id="snapshot-max-chars" type="number" min="1000" step="500" value="12000" />
-            </label>
-            <button id="snapshot-generate" class="primary sm">Generate snapshot</button>
-            <button id="snapshot-update" class="primary sm hidden">Update snapshot (incremental)</button>
-            <button id="snapshot-regenerate" class="ghost sm hidden">Regenerate snapshot (from scratch)</button>
-            <button id="snapshot-copy" class="ghost sm">Copy to clipboard</button>
-            <button id="snapshot-refresh" class="ghost sm">Reload</button>
-          </div>
-          <div class="doc-editor snapshot-editor">
-            <textarea id="snapshot-content" spellcheck="false" placeholder="(snapshot will appear here)"></textarea>
           </div>
         </section>
 
