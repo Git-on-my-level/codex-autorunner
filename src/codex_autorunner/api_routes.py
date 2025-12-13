@@ -156,7 +156,6 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     def _github(request: Request) -> GitHubService:
         engine = request.app.state.engine
         return GitHubService(engine.repo_root, raw_config=engine.config.raw)
-
     @router.get("/", include_in_schema=False)
     def index(request: Request):
         index_path = static_dir / "index.html"
@@ -589,7 +588,6 @@ def build_repo_router(static_dir: Path) -> APIRouter:
             raise HTTPException(status_code=exc.status_code, detail=str(exc))
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
-
     @router.get("/api/state/stream")
     async def stream_state(request: Request):
         engine = request.app.state.engine
