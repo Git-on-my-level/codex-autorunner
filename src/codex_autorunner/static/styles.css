@@ -915,6 +915,19 @@ button.icon-btn {
   gap: 8px;
   align-items: center;
   margin: 0 0 8px;
+  flex-wrap: wrap;
+}
+
+.spec-issue-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.spec-issue-input-row.hidden {
+  display: none;
 }
 
 .spec-issue-import input {
@@ -925,6 +938,7 @@ button.icon-btn {
   background: var(--bg);
   color: var(--text);
   font-size: 12px;
+  min-width: 200px;
 }
 
 .doc-editor {

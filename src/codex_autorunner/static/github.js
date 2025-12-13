@@ -50,7 +50,6 @@ async function loadGitHubStatus() {
   const openPrBtn = $("github-open-pr");
   const openFilesBtn = $("github-open-pr-files");
   const copyPrBtn = $("github-copy-pr");
-  const navPrBtn = $("nav-github-pr");
 
   try {
     const data = await api("/api/github/status");
@@ -100,7 +99,6 @@ async function loadGitHubStatus() {
     if (openPrBtn) openPrBtn.disabled = !hasPr;
     if (openFilesBtn) openFilesBtn.disabled = !hasPr;
     if (copyPrBtn) copyPrBtn.disabled = !hasPr;
-    if (navPrBtn) navPrBtn.disabled = !hasPr;
 
     if (openPrBtn) {
       openPrBtn.onclick = () => {
@@ -110,13 +108,6 @@ async function loadGitHubStatus() {
     }
     if (openFilesBtn) {
       openFilesBtn.onclick = () => {
-        const files = prLinks?.files || (prUrl ? `${prUrl}/files` : null);
-        if (!files) return;
-        window.open(files, "_blank", "noopener,noreferrer");
-      };
-    }
-    if (navPrBtn) {
-      navPrBtn.onclick = () => {
         const files = prLinks?.files || (prUrl ? `${prUrl}/files` : null);
         if (!files) return;
         window.open(files, "_blank", "noopener,noreferrer");
@@ -138,7 +129,6 @@ async function loadGitHubStatus() {
     statusPill(pill, "error");
     setText(note, err.message || "Failed to load GitHub status");
     if (syncBtn) syncBtn.disabled = true;
-    if (navPrBtn) navPrBtn.disabled = true;
   }
 }
 

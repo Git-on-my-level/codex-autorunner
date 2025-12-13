@@ -56,7 +56,7 @@ serve:
 	$(PYTHON) -m codex_autorunner.cli serve --host $(HOST) --port $(PORT)
 
 serve-dev: venv-dev
-	$(VENV_PYTHON) -m uvicorn codex_autorunner.server:create_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir src --reload-dir .codex-autorunner
+	$(VENV_PYTHON) -m uvicorn codex_autorunner.server:create_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir src --reload-dir .codex-autorunner --reload-exclude '**/worktrees/**'
 
 launchd-hub:
 	@LABEL="$(LAUNCH_LABEL)" \

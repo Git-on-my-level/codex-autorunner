@@ -52,6 +52,8 @@ const chatUI = {
 
 const specIssueUI = {
   row: document.getElementById("spec-issue-import"),
+  toggle: document.getElementById("spec-issue-import-toggle"),
+  inputRow: document.getElementById("spec-issue-input-row"),
   input: document.getElementById("spec-issue-input"),
   button: document.getElementById("spec-issue-import-btn"),
 };
@@ -859,6 +861,16 @@ async function importIssueToSpec() {
       entry.status = "done";
     }
     state.status = "idle";
+    // Hide input row and reset toggle after successful import
+    if (specIssueUI.inputRow) {
+      specIssueUI.inputRow.classList.add("hidden");
+    }
+    if (specIssueUI.toggle) {
+      specIssueUI.toggle.textContent = "Import Issue → SPEC";
+    }
+    if (specIssueUI.input) {
+      specIssueUI.input.value = "";
+    }
     flash("Imported issue into pending SPEC patch");
   } catch (err) {
     const message = err?.message || "Issue import failed";
@@ -965,6 +977,20 @@ export function initDocs() {
     chatUI.patchReload.addEventListener("click", () =>
       reloadPatch(activeDoc, true)
     );
+  if (specIssueUI.toggle) {
+    specIssueUI.toggle.addEventListener("click", () => {
+      if (specIssueUI.inputRow) {
+        const isHidden = specIssueUI.inputRow.classList.toggle("hidden");
+        if (!isHidden && specIssueUI.input) {
+          specIssueUI.input.focus();
+        }
+        // Update toggle button text
+        specIssueUI.toggle.textContent = isHidden
+          ? "Import Issue → SPEC"
+          : "Cancel";
+      }
+    });
+  }
   if (specIssueUI.button) {
     specIssueUI.button.addEventListener("click", () => {
       if (activeDoc !== "spec") setDoc("spec");

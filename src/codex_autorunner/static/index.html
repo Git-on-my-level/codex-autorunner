@@ -97,9 +97,6 @@
         <div class="tabs">
           <!-- Tabs will be injected here by tabs.js -->
         </div>
-        <div class="nav-actions">
-          <button id="nav-github-pr" class="ghost sm" title="Open PR files" disabled>PR</button>
-        </div>
       </nav>
 
       <main>
@@ -230,14 +227,17 @@
             <span class="muted" id="doc-status"></span>
           </div>
           <div id="spec-issue-import" class="spec-issue-import hidden">
-            <input
-              id="spec-issue-input"
-              type="text"
-              spellcheck="false"
-              autocomplete="off"
-              placeholder="Issue number or URL (e.g. 123 or https://github.com/org/repo/issues/123)"
-            />
-            <button id="spec-issue-import-btn" class="primary sm">Import Issue → SPEC</button>
+            <button id="spec-issue-import-toggle" class="ghost sm">Import Issue → SPEC</button>
+            <div id="spec-issue-input-row" class="spec-issue-input-row hidden">
+              <input
+                id="spec-issue-input"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="Issue number or URL (e.g. 123 or https://github.com/org/repo/issues/123)"
+              />
+              <button id="spec-issue-import-btn" class="primary sm">Import</button>
+            </div>
           </div>
           <div class="doc-editor">
             <div id="doc-patch-main" class="doc-patch-main hidden">
