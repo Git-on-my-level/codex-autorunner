@@ -28,7 +28,9 @@ def test_snapshot_defaults_to_from_scratch_when_missing(
         )()
 
     monkeypatch.setattr("codex_autorunner.cli.load_snapshot", fake_load_snapshot)
-    monkeypatch.setattr("codex_autorunner.cli.generate_snapshot", fake_generate_snapshot)
+    monkeypatch.setattr(
+        "codex_autorunner.cli.generate_snapshot", fake_generate_snapshot
+    )
 
     result = runner.invoke(app, ["snapshot", "--repo", str(repo)])
     assert result.exit_code == 0, result.stdout
@@ -52,7 +54,9 @@ def test_snapshot_defaults_to_incremental_when_present(
         )()
 
     monkeypatch.setattr("codex_autorunner.cli.load_snapshot", fake_load_snapshot)
-    monkeypatch.setattr("codex_autorunner.cli.generate_snapshot", fake_generate_snapshot)
+    monkeypatch.setattr(
+        "codex_autorunner.cli.generate_snapshot", fake_generate_snapshot
+    )
 
     result = runner.invoke(app, ["snapshot", "--repo", str(repo)])
     assert result.exit_code == 0, result.stdout
@@ -76,7 +80,9 @@ def test_snapshot_from_scratch_flag_overrides_incremental(
         )()
 
     monkeypatch.setattr("codex_autorunner.cli.load_snapshot", fake_load_snapshot)
-    monkeypatch.setattr("codex_autorunner.cli.generate_snapshot", fake_generate_snapshot)
+    monkeypatch.setattr(
+        "codex_autorunner.cli.generate_snapshot", fake_generate_snapshot
+    )
 
     result = runner.invoke(app, ["snapshot", "--repo", str(repo), "--from-scratch"])
     assert result.exit_code == 0, result.stdout

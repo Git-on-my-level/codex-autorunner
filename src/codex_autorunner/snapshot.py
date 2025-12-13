@@ -41,7 +41,9 @@ _REDACTIONS: List[Tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AKIA[REDACTED]"),
     # JWT-ish blobs.
     (
-        re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
+        re.compile(
+            r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
+        ),
         "[JWT_REDACTED]",
     ),
 ]
@@ -166,7 +168,8 @@ def _iter_files_fs(repo_root: Path, *, max_files: int = 5000) -> List[str]:
         dirs[:] = [
             d
             for d in sorted(dirs)
-            if d not in _DEFAULT_IGNORED_DIRS and not (Path(rel_root) / d).parts[:1] == (".git",)
+            if d not in _DEFAULT_IGNORED_DIRS
+            and not (Path(rel_root) / d).parts[:1] == (".git",)
         ]
         for f in sorted(files):
             rel = str(Path(rel_root) / f) if rel_root else f
@@ -448,7 +451,9 @@ def summarize_changes(
     if prev_sha and not git_ok:
         return "No VCS change summary available (git not detected).\n"
     if not prev_sha:
-        return "No previous snapshot SHA recorded; treating as best-effort incremental.\n"
+        return (
+            "No previous snapshot SHA recorded; treating as best-effort incremental.\n"
+        )
     return "No changes detected (best-effort).\n"
 
 
@@ -565,9 +570,9 @@ def _run_codex(engine: Engine, prompt: str, *, prefer_large_model: bool) -> str:
     args = list(engine.config.codex_args)
     model = None
     if prefer_large_model:
-        model = (((engine.config.raw or {}).get("codex") or {}).get("models") or {}).get(
-            "large"
-        )
+        model = (
+            ((engine.config.raw or {}).get("codex") or {}).get("models") or {}
+        ).get("large")
     if model:
         args = _inject_model_arg(args, model)
     cmd = [engine.config.codex_binary] + args + [prompt]
@@ -631,7 +636,9 @@ def generate_snapshot(
     seed = collect_seed_context(engine)
     changes = None
     if mode == "incremental":
-        changes = summarize_changes(engine, previous_state=previous_state, current_seed=seed)
+        changes = summarize_changes(
+            engine, previous_state=previous_state, current_seed=seed
+        )
 
     prompt = build_snapshot_prompt(
         seed_context=seed.text,
@@ -661,7 +668,10 @@ def generate_snapshot(
         "seed_file_hashes": seed.file_hashes,
     }
 
-    atomic_write(engine.repo_root / SNAPSHOT_PATH, final if final.endswith("\n") else final + "\n")
+    atomic_write(
+        engine.repo_root / SNAPSHOT_PATH,
+        final if final.endswith("\n") else final + "\n",
+    )
     atomic_write(
         engine.repo_root / SNAPSHOT_STATE_PATH,
         json.dumps(state, indent=2, sort_keys=True) + "\n",

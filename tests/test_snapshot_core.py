@@ -2,7 +2,11 @@ from pathlib import Path
 
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.engine import Engine
-from codex_autorunner.snapshot import collect_seed_context, redact_text, truncate_deterministic
+from codex_autorunner.snapshot import (
+    collect_seed_context,
+    redact_text,
+    truncate_deterministic,
+)
 
 
 def test_redaction_scrubs_common_tokens() -> None:
@@ -23,14 +27,18 @@ def test_truncation_is_deterministic_and_bounded() -> None:
     assert len(out1) <= 30
 
 
-def test_collect_seed_context_avoids_secret_paths_and_bounds_excerpts(tmp_path: Path) -> None:
+def test_collect_seed_context_avoids_secret_paths_and_bounds_excerpts(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".git").mkdir()
     seed_repo_files(repo, git_required=False)
 
     # Secret-ish files: should not appear in tree outline.
-    (repo / ".env").write_text("OPENAI_API_KEY=sk-1234567890abcdefghijkl\n", encoding="utf-8")
+    (repo / ".env").write_text(
+        "OPENAI_API_KEY=sk-1234567890abcdefghijkl\n", encoding="utf-8"
+    )
     (repo / "secret.pem").write_text("-----BEGIN PRIVATE KEY-----\n", encoding="utf-8")
 
     # Normal source file: should be visible.

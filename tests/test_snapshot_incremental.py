@@ -51,12 +51,16 @@ def test_summarize_changes_prefers_git_diff_name_status(git_repo: Path) -> None:
         branch=None,
         seed_hash="seedhash",
     )
-    out = summarize_changes(engine, previous_state={"head_sha": prev_sha}, current_seed=seed)
+    out = summarize_changes(
+        engine, previous_state={"head_sha": prev_sha}, current_seed=seed
+    )
     assert "git diff --name-status" in out
     assert "README.md" in out
 
 
-def test_summarize_changes_falls_back_to_git_status_for_working_tree(git_repo: Path) -> None:
+def test_summarize_changes_falls_back_to_git_status_for_working_tree(
+    git_repo: Path,
+) -> None:
     engine = Engine(git_repo)
     prev_sha = _run(["git", "rev-parse", "HEAD"], git_repo).strip()
     (git_repo / "README.md").write_text("uncommitted\n", encoding="utf-8")
@@ -69,7 +73,9 @@ def test_summarize_changes_falls_back_to_git_status_for_working_tree(git_repo: P
         branch=None,
         seed_hash="seedhash",
     )
-    out = summarize_changes(engine, previous_state={"head_sha": prev_sha}, current_seed=seed)
+    out = summarize_changes(
+        engine, previous_state={"head_sha": prev_sha}, current_seed=seed
+    )
     assert "git status --porcelain" in out
     assert "README.md" in out
 
@@ -93,7 +99,9 @@ def test_summarize_changes_falls_back_to_seed_hash_diffs(repo: Path) -> None:
     assert "`a.txt`" in out
 
 
-def test_generate_snapshot_persists_state_and_truncates(repo: Path, monkeypatch) -> None:
+def test_generate_snapshot_persists_state_and_truncates(
+    repo: Path, monkeypatch
+) -> None:
     from codex_autorunner import snapshot as snapshot_mod
 
     def _fake_run_codex(*_args, **_kwargs) -> str:
@@ -102,7 +110,9 @@ def test_generate_snapshot_persists_state_and_truncates(repo: Path, monkeypatch)
     monkeypatch.setattr(snapshot_mod, "_run_codex", _fake_run_codex)
 
     engine = Engine(repo)
-    result = generate_snapshot(engine, mode="from_scratch", max_chars=120, audience="overview")
+    result = generate_snapshot(
+        engine, mode="from_scratch", max_chars=120, audience="overview"
+    )
 
     snap_path = repo / ".codex-autorunner" / "SNAPSHOT.md"
     state_path = repo / ".codex-autorunner" / "snapshot_state.json"

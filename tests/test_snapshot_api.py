@@ -24,10 +24,14 @@ def test_get_snapshot_when_missing(repo: Path) -> None:
     assert isinstance(payload["state"], dict)
 
 
-def test_post_snapshot_persists_and_loads(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_post_snapshot_persists_and_loads(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from codex_autorunner import snapshot as snapshot_mod
 
-    monkeypatch.setattr(snapshot_mod, "_run_codex", lambda *a, **k: "# Snapshot\n\nHello\n")
+    monkeypatch.setattr(
+        snapshot_mod, "_run_codex", lambda *a, **k: "# Snapshot\n\nHello\n"
+    )
 
     client = _client(repo)
     res = client.post(
@@ -57,7 +61,9 @@ def test_post_snapshot_incremental_falls_back_when_missing(
 ) -> None:
     from codex_autorunner import snapshot as snapshot_mod
 
-    monkeypatch.setattr(snapshot_mod, "_run_codex", lambda *a, **k: "# Snapshot\n\nHi\n")
+    monkeypatch.setattr(
+        snapshot_mod, "_run_codex", lambda *a, **k: "# Snapshot\n\nHi\n"
+    )
 
     client = _client(repo)
     res = client.post(
@@ -67,4 +73,3 @@ def test_post_snapshot_incremental_falls_back_when_missing(
     assert res.status_code == 200, res.text
     payload = res.json()
     assert payload["state"]["mode"] == "from_scratch"
-
