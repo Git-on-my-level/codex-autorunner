@@ -1,6 +1,14 @@
 import { api, flash, statusPill, confirmModal } from "./utils.js";
 import { subscribe } from "./bus.js";
-import { loadState, startRun, stopRun, resumeRun, killRun, resetRunner, startStatePolling } from "./state.js";
+import {
+  loadState,
+  startRun,
+  stopRun,
+  resumeRun,
+  killRun,
+  resetRunner,
+  startStatePolling,
+} from "./state.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 
@@ -8,12 +16,18 @@ function renderState(state) {
   if (!state) return;
   statusPill(document.getElementById("runner-status"), state.status);
   document.getElementById("last-run-id").textContent = state.last_run_id ?? "–";
-  document.getElementById("last-exit-code").textContent = state.last_exit_code ?? "–";
-  document.getElementById("last-start").textContent = state.last_run_started_at ?? "–";
-  document.getElementById("last-finish").textContent = state.last_run_finished_at ?? "–";
-  document.getElementById("todo-count").textContent = state.outstanding_count ?? "–";
+  document.getElementById("last-exit-code").textContent =
+    state.last_exit_code ?? "–";
+  document.getElementById("last-start").textContent =
+    state.last_run_started_at ?? "–";
+  document.getElementById("last-finish").textContent =
+    state.last_run_finished_at ?? "–";
+  document.getElementById("todo-count").textContent =
+    state.outstanding_count ?? "–";
   document.getElementById("done-count").textContent = state.done_count ?? "–";
-  document.getElementById("runner-pid").textContent = `Runner pid: ${state.runner_pid ?? "–"}`;
+  document.getElementById("runner-pid").textContent = `Runner pid: ${
+    state.runner_pid ?? "–"
+  }`;
 }
 
 function setUsageLoading(loading) {
@@ -52,15 +66,24 @@ function renderUsage(data) {
 
   if (totalEl) totalEl.textContent = formatTokensCompact(totals.total_tokens);
   if (inputEl) inputEl.textContent = formatTokensCompact(totals.input_tokens);
-  if (cachedEl) cachedEl.textContent = formatTokensCompact(totals.cached_input_tokens);
-  if (outputEl) outputEl.textContent = formatTokensCompact(totals.output_tokens);
-  if (reasoningEl) reasoningEl.textContent = formatTokensCompact(totals.reasoning_output_tokens);
+  if (cachedEl)
+    cachedEl.textContent = formatTokensCompact(totals.cached_input_tokens);
+  if (outputEl)
+    outputEl.textContent = formatTokensCompact(totals.output_tokens);
+  if (reasoningEl)
+    reasoningEl.textContent = formatTokensCompact(
+      totals.reasoning_output_tokens
+    );
 
   if (ratesEl) {
     if (rate) {
       const primary = rate.primary || {};
       const secondary = rate.secondary || {};
-      ratesEl.textContent = `${primary.used_percent ?? "–"}%/${primary.window_minutes ?? ""}m · ${secondary.used_percent ?? "–"}%/${secondary.window_minutes ?? ""}m`;
+      ratesEl.textContent = `${primary.used_percent ?? "–"}%/${
+        primary.window_minutes ?? ""
+      }m · ${secondary.used_percent ?? "–"}%/${
+        secondary.window_minutes ?? ""
+      }m`;
     } else {
       ratesEl.textContent = "–";
     }
@@ -105,7 +128,9 @@ export function initDashboard() {
   bindAction("resume-run", resumeRun);
   bindAction("kill-run", killRun);
   bindAction("reset-runner", async () => {
-    const confirmed = await confirmModal("Reset runner? This will clear all logs and reset run ID to 1.");
+    const confirmed = await confirmModal(
+      "Reset runner? This will clear all logs and reset run ID to 1."
+    );
     if (confirmed) await resetRunner();
   });
   bindAction("refresh-state", loadState);
