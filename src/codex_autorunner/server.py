@@ -223,6 +223,12 @@ def create_app(
     doc_chat = DocChatService(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
     terminal_max_idle_seconds = 3600
+    # Python 3.9 raises if no current event loop exists when constructing asyncio primitives.
+    # This happens in unit tests that build the app from a sync context.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
     terminal_lock = asyncio.Lock()
 
     app = FastAPI(redirect_slashes=False)

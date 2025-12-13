@@ -11,6 +11,7 @@ An autorunner that uses the Codex CLI to work on large tasks via a simple loop. 
 - Runs Codex in a loop against the repo, streaming logs.
 - Tracks state, logs, and config under `.codex-autorunner/`.
 - Exposes an HTTP API and web UI for docs, logs, runner control, and a Codex TUI terminal.
+- Generates a pasteable repo snapshot (`.codex-autorunner/SNAPSHOT.md`) for sharing with other LLM chats.
 
 CLI commands are available as `codex-autorunner` or the shorter `car`.
 
@@ -69,4 +70,9 @@ launchctl kickstart -k gui/$(id -u)/com.codex.autorunner
 - `edit` — open TODO/PROGRESS/OPINIONS/SPEC in `$EDITOR`.
 - `ingest-spec` — generate TODO/PROGRESS/OPINIONS from SPEC using Codex (use `--force` to overwrite).
 - `clear-docs` — reset TODO/PROGRESS/OPINIONS to empty templates (type CLEAR to confirm).
+- `snapshot` — generate/update `.codex-autorunner/SNAPSHOT.md` (incremental by default when one exists; use `--from-scratch` to regenerate).
 - `serve` — start the HTTP API (FastAPI) on host/port from config (defaults 127.0.0.1:4173).
+
+## Snapshot (repo briefing)
+- Web UI: open the Snapshot tab. If no snapshot exists, you’ll see “Generate snapshot”; otherwise you’ll see “Update snapshot (incremental)” and “Regenerate snapshot (from scratch)”, plus “Copy to clipboard”.
+- CLI: `codex-autorunner snapshot` (or `car snapshot`) writes `.codex-autorunner/SNAPSHOT.md` and `.codex-autorunner/snapshot_state.json`.

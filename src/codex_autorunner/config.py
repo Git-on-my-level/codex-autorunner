@@ -5,7 +5,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import yaml
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover
+
+    def load_dotenv(*_args, **_kwargs):  # type: ignore[no-redef]
+        return False
+
 
 CONFIG_FILENAME = ".codex-autorunner/config.yml"
 CONFIG_VERSION = 2
