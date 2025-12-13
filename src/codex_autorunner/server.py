@@ -452,6 +452,69 @@ def create_hub_app(
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(config.root))
 
+    @app.post("/hub/worktrees/create")
+    def create_worktree(payload: Optional[dict] = None):
+        if not payload or not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
+        base_repo_id = payload.get("base_repo_id") or payload.get("baseRepoId")
+        branch = payload.get("branch")
+        force = bool(payload.get("force", False))
+        if not base_repo_id or not branch:
+            raise HTTPException(
+                status_code=400, detail="Missing base_repo_id or branch"
+            )
+        try:
+            app.state.logger.info(
+                "Hub create worktree base=%s branch=%s force=%s",
+                base_repo_id,
+                branch,
+                force,
+            )
+        except Exception:
+            pass
+        try:
+            snapshot = supervisor.create_worktree(
+                base_repo_id=str(base_repo_id), branch=str(branch), force=force
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        _refresh_mounts([snapshot])
+        return _add_mount_info(snapshot.to_dict(config.root))
+
+    @app.post("/hub/worktrees/cleanup")
+    def cleanup_worktree(payload: Optional[dict] = None):
+        if not payload or not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
+        worktree_repo_id = payload.get("worktree_repo_id") or payload.get(
+            "worktreeRepoId"
+        )
+        if not worktree_repo_id:
+            raise HTTPException(status_code=400, detail="Missing worktree_repo_id")
+        delete_branch = bool(payload.get("delete_branch", False))
+        delete_remote = bool(payload.get("delete_remote", False))
+        try:
+            app.state.logger.info(
+                "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s",
+                worktree_repo_id,
+                delete_branch,
+                delete_remote,
+            )
+        except Exception:
+            pass
+        try:
+            supervisor.cleanup_worktree(
+                worktree_repo_id=str(worktree_repo_id),
+                delete_branch=delete_branch,
+                delete_remote=delete_remote,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"status": "ok"}
+
     @app.post("/hub/repos/{repo_id}/run")
     def run_repo(repo_id: str, payload: Optional[dict] = None):
         once = False

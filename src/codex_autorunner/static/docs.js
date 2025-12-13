@@ -847,7 +847,7 @@ async function importIssueToSpec() {
 
     const res = await api("/api/github/spec/from-issue", {
       method: "POST",
-      body: { issue, mode: "worktree" },
+      body: { issue },
     });
     applyChatResult(res, state, entry, "spec");
     if (res?.content) {

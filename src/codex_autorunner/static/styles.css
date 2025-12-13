@@ -461,6 +461,30 @@ main {
   gap: 4px;
 }
 
+/* Hub worktrees (worktree repos grouped under a base repo) */
+.hub-worktree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+  margin-top: 4px;
+  margin-bottom: 6px;
+}
+
+.hub-worktree-row-inner {
+  display: block;
+}
+
+.hub-worktree-card {
+  padding-left: 8px;
+}
+
+.hub-worktree-orphans {
+  margin: 8px 0 4px;
+}
+
 /* Legacy hub-usage-list styles removed - using hub-usage-grid now */
 
 /* Repo card - compact single-row layout */

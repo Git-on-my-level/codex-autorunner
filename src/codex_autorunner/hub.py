@@ -2,6 +2,7 @@ import dataclasses
 import enum
 import threading
 import subprocess
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -38,6 +39,9 @@ class RepoSnapshot:
     display_name: str
     enabled: bool
     auto_run: bool
+    kind: str  # base|worktree
+    worktree_of: Optional[str]
+    branch: Optional[str]
     exists_on_disk: bool
     initialized: bool
     init_error: Optional[str]
@@ -60,6 +64,9 @@ class RepoSnapshot:
             "display_name": self.display_name,
             "enabled": self.enabled,
             "auto_run": self.auto_run,
+            "kind": self.kind,
+            "worktree_of": self.worktree_of,
+            "branch": self.branch,
             "exists_on_disk": self.exists_on_disk,
             "initialized": self.initialized,
             "init_error": self.init_error,
@@ -323,10 +330,151 @@ class HubSupervisor:
             raise ValueError(f"git init failed for {target}")
 
         seed_repo_files(target, force=force)
-        manifest.ensure_repo(self.hub_config.root, target, repo_id=repo_id)
+        manifest.ensure_repo(self.hub_config.root, target, repo_id=repo_id, kind="base")
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
 
         return self._snapshot_for_repo(repo_id)
+
+    def create_worktree(
+        self,
+        *,
+        base_repo_id: str,
+        branch: str,
+        force: bool = False,
+    ) -> RepoSnapshot:
+        """
+        Create a git worktree under hub.worktrees_root and register it as a hub repo entry.
+        Worktrees are treated as full repos (own .codex-autorunner docs/state).
+        """
+        branch = (branch or "").strip()
+        if not branch:
+            raise ValueError("branch is required")
+
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        base = manifest.get(base_repo_id)
+        if not base or base.kind != "base":
+            raise ValueError(f"Base repo not found: {base_repo_id}")
+        base_path = (self.hub_config.root / base.path).resolve()
+        if not base_path.exists():
+            raise ValueError(f"Base repo missing on disk: {base_repo_id}")
+
+        self.hub_config.worktrees_root.mkdir(parents=True, exist_ok=True)
+        safe_branch = re.sub(r"[^a-zA-Z0-9._/-]+", "-", branch).strip("-") or "work"
+        repo_id = f"{base_repo_id}--{safe_branch.replace('/', '-')}"
+        if manifest.get(repo_id) and not force:
+            raise ValueError(f"Worktree repo already exists: {repo_id}")
+        worktree_path = (self.hub_config.worktrees_root / repo_id).resolve()
+        if worktree_path.exists() and not force:
+            raise ValueError(f"Worktree path already exists: {worktree_path}")
+
+        # Create the worktree (branch may or may not exist locally).
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        exists = subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            cwd=base_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if exists.returncode == 0:
+            proc = subprocess.run(
+                ["git", "worktree", "add", str(worktree_path), branch],
+                cwd=base_path,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            proc = subprocess.run(
+                ["git", "worktree", "add", "-b", branch, str(worktree_path)],
+                cwd=base_path,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        if proc.returncode != 0:
+            detail = (
+                proc.stderr or proc.stdout or ""
+            ).strip() or f"exit {proc.returncode}"
+            raise ValueError(f"git worktree add failed: {detail}")
+
+        seed_repo_files(worktree_path, force=force, git_required=False)
+        manifest.ensure_repo(
+            self.hub_config.root,
+            worktree_path,
+            repo_id=repo_id,
+            kind="worktree",
+            worktree_of=base_repo_id,
+            branch=branch,
+        )
+        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        return self._snapshot_for_repo(repo_id)
+
+    def cleanup_worktree(
+        self,
+        *,
+        worktree_repo_id: str,
+        delete_branch: bool = False,
+        delete_remote: bool = False,
+    ) -> None:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        entry = manifest.get(worktree_repo_id)
+        if not entry or entry.kind != "worktree":
+            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
+        if not entry.worktree_of:
+            raise ValueError("Worktree repo is missing worktree_of metadata")
+        base = manifest.get(entry.worktree_of)
+        if not base or base.kind != "base":
+            raise ValueError(f"Base repo not found: {entry.worktree_of}")
+
+        base_path = (self.hub_config.root / base.path).resolve()
+        worktree_path = (self.hub_config.root / entry.path).resolve()
+
+        # Stop any runner first.
+        runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
+        if runner:
+            runner.stop()
+
+        # Remove worktree from base repo.
+        proc = subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree_path)],
+            cwd=base_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            detail = (
+                proc.stderr or proc.stdout or ""
+            ).strip() or f"exit {proc.returncode}"
+            raise ValueError(f"git worktree remove failed: {detail}")
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=base_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        if delete_branch and entry.branch:
+            subprocess.run(
+                ["git", "branch", "-D", entry.branch],
+                cwd=base_path,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        if delete_remote and entry.branch:
+            subprocess.run(
+                ["git", "push", "origin", "--delete", entry.branch],
+                cwd=base_path,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        manifest.repos = [r for r in manifest.repos if r.id != worktree_repo_id]
+        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
 
     def _ensure_runner(
         self, repo_id: str, allow_uninitialized: bool = False
@@ -402,6 +550,9 @@ class HubSupervisor:
             display_name=repo_path.name,
             enabled=record.repo.enabled,
             auto_run=record.repo.auto_run,
+            kind=record.repo.kind,
+            worktree_of=record.repo.worktree_of,
+            branch=record.repo.branch,
             exists_on_disk=record.exists_on_disk,
             initialized=record.initialized,
             init_error=record.init_error,

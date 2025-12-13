@@ -81,6 +81,7 @@ async function loadGitHubStatus() {
       title: repo?.url || "",
     });
     setText($("github-branch"), git.branch || "–");
+    setText($("github-checkout"), git.is_worktree ? "worktree" : "main");
 
     setLink($("github-issue-link"), {
       href: issue?.url,
@@ -122,8 +123,8 @@ async function loadGitHubStatus() {
     }
 
     if (syncBtn) {
-      const preferredMode = link.preferredMode || "worktree";
-      syncBtn.dataset.mode = preferredMode;
+      // Repo mode: PR sync always operates on the current working tree/branch.
+      syncBtn.dataset.mode = "current";
     }
   } catch (err) {
     statusPill(pill, "error");
@@ -135,7 +136,6 @@ async function loadGitHubStatus() {
 async function syncPr() {
   const syncBtn = $("github-sync-pr");
   const note = $("github-note");
-  const mode = syncBtn?.dataset?.mode || "worktree";
   if (!syncBtn) return;
 
   syncBtn.disabled = true;
@@ -143,7 +143,7 @@ async function syncPr() {
   try {
     const res = await api("/api/github/pr/sync", {
       method: "POST",
-      body: { mode, draft: true },
+      body: { draft: true },
     });
     const links = res.links || {};
     const url = links.files || links.url || null;
@@ -153,7 +153,7 @@ async function syncPr() {
     } else {
       flash("Synced PR");
     }
-    setText(note, res.meta?.diff_apply?.warnings?.join(" ") || "");
+    setText(note, "");
     await loadGitHubStatus();
   } catch (err) {
     flash(err.message || "PR sync failed", "error");

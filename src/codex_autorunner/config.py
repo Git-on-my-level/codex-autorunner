@@ -39,7 +39,6 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     },
     "github": {
         "enabled": True,
-        "worktree_default": True,
         "pr_draft_default": True,
         "sync_commit_mode": "auto",  # none|auto|always
     },
@@ -88,6 +87,8 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "mode": "hub",
     "hub": {
         "repos_root": ".",
+        # Hub-managed git worktrees live here (depth=1 scan). Each worktree is treated as a repo.
+        "worktrees_root": "worktrees",
         "manifest": ".codex-autorunner/manifest.yml",
         "discover_depth": 1,
         "auto_init_missing": True,
@@ -156,6 +157,7 @@ class HubConfig:
     version: int
     mode: str
     repos_root: Path
+    worktrees_root: Path
     manifest_path: Path
     discover_depth: int
     auto_init_missing: bool
@@ -333,6 +335,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         version=int(cfg["version"]),
         mode="hub",
         repos_root=(root / hub_cfg["repos_root"]).resolve(),
+        worktrees_root=(root / hub_cfg["worktrees_root"]).resolve(),
         manifest_path=root / hub_cfg["manifest"],
         discover_depth=int(hub_cfg["discover_depth"]),
         auto_init_missing=bool(hub_cfg["auto_init_missing"]),
@@ -405,10 +408,6 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
     if isinstance(github, dict):
         if "enabled" in github and not isinstance(github.get("enabled"), bool):
             raise ConfigError("github.enabled must be boolean")
-        if "worktree_default" in github and not isinstance(
-            github.get("worktree_default"), bool
-        ):
-            raise ConfigError("github.worktree_default must be boolean")
         if "pr_draft_default" in github and not isinstance(
             github.get("pr_draft_default"), bool
         ):
@@ -460,6 +459,8 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("hub section must be a mapping")
     if not isinstance(hub_cfg.get("repos_root", ""), str):
         raise ConfigError("hub.repos_root must be a string path")
+    if not isinstance(hub_cfg.get("worktrees_root", ""), str):
+        raise ConfigError("hub.worktrees_root must be a string path")
     if not isinstance(hub_cfg.get("manifest", ""), str):
         raise ConfigError("hub.manifest must be a string path")
     if hub_cfg.get("discover_depth") not in (None, 1):

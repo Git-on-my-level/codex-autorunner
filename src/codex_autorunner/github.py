@@ -4,7 +4,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 from .utils import atomic_write, ensure_executable, read_json
 
@@ -101,136 +101,10 @@ def parse_issue_input(issue: str) -> Tuple[Optional[str], int]:
     return slug, int(m.group("num"))
 
 
-class WorktreeManager:
-    def __init__(self, repo_root: Path):
-        self.repo_root = repo_root
-        self.worktrees_root = repo_root / ".codex-autorunner" / "worktrees"
-
-    def worktree_path(self, key: str) -> Path:
-        safe = re.sub(r"[^a-zA-Z0-9._-]+", "-", key).strip("-") or "work"
-        return self.worktrees_root / safe
-
-    def list_worktrees(self) -> list[dict]:
-        proc = _run(
-            ["git", "worktree", "list", "--porcelain"], cwd=self.repo_root, check=True
-        )
-        entries: list[dict] = []
-        current: dict[str, Any] = {}
-        for line in (proc.stdout or "").splitlines():
-            if not line.strip():
-                continue
-            if line.startswith("worktree "):
-                if current:
-                    entries.append(current)
-                current = {"path": line.split(" ", 1)[1].strip()}
-            elif " " in line:
-                k, v = line.split(" ", 1)
-                current[k.strip()] = v.strip()
-        if current:
-            entries.append(current)
-        return entries
-
-    def ensure_worktree(self, *, branch: str, key: str) -> Path:
-        target = self.worktree_path(key)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # If already present, assume valid.
-        if target.exists():
-            return target
-        # Create a new worktree. If branch exists, don't pass -b.
-        exists = _run(
-            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
-            cwd=self.repo_root,
-            check=False,
-        )
-        if exists.returncode == 0:
-            _run(
-                ["git", "worktree", "add", str(target), branch],
-                cwd=self.repo_root,
-                check=True,
-            )
-        else:
-            _run(
-                ["git", "worktree", "add", "-b", branch, str(target)],
-                cwd=self.repo_root,
-                check=True,
-            )
-        return target
-
-    def apply_best_effort_diffs(self, *, from_repo: Path, to_worktree: Path) -> dict:
-        """
-        Best-effort: copy working tree diffs (unstaged + staged) into worktree via git apply.
-        Does not mutate the source repo.
-        """
-        status = (
-            _run(["git", "status", "--porcelain"], cwd=from_repo, check=True).stdout
-            or ""
-        )
-        has_untracked = any(line.startswith("??") for line in status.splitlines())
-        warnings: list[str] = []
-        if has_untracked:
-            warnings.append(
-                "Untracked files are not copied into worktree (best-effort diff only)."
-            )
-
-        unstaged = _run(["git", "diff"], cwd=from_repo, check=True).stdout or ""
-        staged = (
-            _run(["git", "diff", "--cached"], cwd=from_repo, check=True).stdout or ""
-        )
-        applied = {
-            "unstaged_applied": False,
-            "staged_applied": False,
-            "warnings": warnings,
-        }
-
-        # Apply staged first (so index-meaningful changes land)
-        if staged.strip():
-            try:
-                proc = subprocess.run(
-                    ["git", "apply", "--index", "--whitespace=nowarn", "-"],
-                    cwd=str(to_worktree),
-                    input=staged,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                )
-            except Exception as exc:
-                raise GitHubError(
-                    "Failed to apply staged diff to worktree", status_code=500
-                ) from exc
-            if proc.returncode != 0:
-                detail = (proc.stderr or proc.stdout or "").strip()
-                raise GitHubError(f"Failed to apply staged diff to worktree: {detail}")
-            applied["staged_applied"] = True
-
-        if unstaged.strip():
-            try:
-                proc2 = subprocess.run(
-                    ["git", "apply", "--whitespace=nowarn", "-"],
-                    cwd=str(to_worktree),
-                    input=unstaged,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                )
-            except Exception as exc:
-                raise GitHubError(
-                    "Failed to apply unstaged diff to worktree", status_code=500
-                ) from exc
-            if proc2.returncode != 0:
-                detail = (proc2.stderr or proc2.stdout or "").strip()
-                raise GitHubError(
-                    f"Failed to apply unstaged diff to worktree: {detail}"
-                )
-            applied["unstaged_applied"] = True
-
-        return applied
-
-
 class GitHubService:
     def __init__(self, repo_root: Path, raw_config: Optional[dict] = None):
         self.repo_root = repo_root
         self.raw_config = raw_config or {}
-        self.worktree = WorktreeManager(repo_root)
         self.github_path = repo_root / ".codex-autorunner" / "github.json"
 
     # ── persistence ────────────────────────────────────────────────────────────
@@ -376,6 +250,7 @@ class GitHubService:
                 repo = None
         branch = self.current_branch()
         clean = self.is_clean()
+        is_worktree = (self.repo_root / ".git").is_file()
         pr = None
         if authed:
             pr = self.pr_for_branch(branch=branch) or None
@@ -390,7 +265,7 @@ class GitHubService:
                 if repo
                 else None
             ),
-            "git": {"branch": branch, "clean": clean},
+            "git": {"branch": branch, "clean": clean, "is_worktree": is_worktree},
             "link": link or {},
             "pr": pr,
         }
@@ -418,37 +293,9 @@ class GitHubService:
         state["updatedAtMs"] = _now_ms()
         return self.write_link_state(state)
 
-    def choose_mode(self, requested: str) -> str:
-        mode = (requested or "").strip().lower()
-        if mode not in ("worktree", "current"):
-            mode = "worktree"
-        return mode
-
-    def ensure_safe_cwd(self, *, mode: str, branch: str, key: str) -> Tuple[Path, dict]:
-        """
-        Returns (cwd_for_ops, meta)
-        """
-        if mode == "current":
-            if not self.is_clean():
-                raise GitHubError(
-                    "Working tree is not clean; switch to worktree mode to avoid touching unstaged changes.",
-                    status_code=409,
-                )
-            return self.repo_root, {"mode": "current"}
-
-        wt = self.worktree.ensure_worktree(branch=branch, key=key)
-        meta = {"mode": "worktree", "path": str(wt)}
-        # If current tree has diffs, best-effort copy them into worktree (read-only on source).
-        if not self.is_clean():
-            meta["diff_apply"] = self.worktree.apply_best_effort_diffs(
-                from_repo=self.repo_root, to_worktree=wt
-            )
-        return wt, meta
-
     def sync_pr(
         self,
         *,
-        mode: str,
         draft: bool = True,
         title: Optional[str] = None,
         body: Optional[str] = None,
@@ -464,11 +311,9 @@ class GitHubService:
         base = repo.default_branch or "main"
         state = self.read_link_state() or {}
         issue_num = ((state.get("issue") or {}) or {}).get("number")
-        key = f"issue-{issue_num}" if issue_num else "car"
-        head_branch = state.get("headBranch") or f"car/{key}"
-        mode = self.choose_mode(mode)
-
-        cwd, meta = self.ensure_safe_cwd(mode=mode, branch=head_branch, key=head_branch)
+        head_branch = self.current_branch()
+        cwd = self.repo_root
+        meta = {"mode": "current"}
         # Decide commit behavior
         github_cfg = (
             (self.raw_config.get("github") or {})
@@ -542,14 +387,13 @@ class GitHubService:
                 "headRefName": pr.get("headRefName") or head_branch,
                 "baseRefName": pr.get("baseRefName") or base,
             }
-        state["preferredMode"] = mode
         state["updatedAtMs"] = _now_ms()
         self.write_link_state(state)
 
         out = {
             "status": "ok",
             "repo": repo.name_with_owner,
-            "mode": mode,
+            "mode": "current",
             "meta": meta,
             "pr": pr,
         }

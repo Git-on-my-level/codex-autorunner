@@ -470,7 +470,6 @@ def build_repo_router(static_dir: Path) -> APIRouter:
                 status_code=400, detail="Request body must be a JSON object"
             )
         issue = payload.get("issue")
-        mode = payload.get("mode") or "worktree"
         if not issue:
             raise HTTPException(status_code=400, detail="Missing issue")
 
@@ -508,7 +507,7 @@ def build_repo_router(static_dir: Path) -> APIRouter:
             if result.get("status") != "ok":
                 detail = result.get("detail") or "SPEC generation failed"
                 raise HTTPException(status_code=500, detail=detail)
-            result["github"] = {"issue": link_state.get("issue"), "mode": str(mode)}
+            result["github"] = {"issue": link_state.get("issue")}
             return result
         except GitHubError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc))
@@ -524,14 +523,17 @@ def build_repo_router(static_dir: Path) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="Request body must be a JSON object"
             )
-        mode = payload.get("mode") or "worktree"
+        if payload.get("mode") is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Repo mode does not support worktrees; create a hub worktree repo instead.",
+            )
         draft = bool(payload.get("draft", True))
         title = payload.get("title")
         body = payload.get("body")
         try:
             return await asyncio.to_thread(
                 _github(request).sync_pr,
-                mode=str(mode),
                 draft=draft,
                 title=str(title) if title else None,
                 body=str(body) if body else None,
