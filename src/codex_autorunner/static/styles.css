@@ -1066,6 +1066,10 @@ button.icon-btn {
   border-color: var(--accent);
 }
 
+.snapshot-editor textarea {
+  min-height: calc(100vh - 190px);
+}
+
 .doc-patch-main {
   border: 1px solid var(--border);
   border-radius: var(--radius);

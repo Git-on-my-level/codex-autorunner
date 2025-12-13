@@ -7,6 +7,7 @@ import { initLogs } from "./logs.js";
 import { initTerminal } from "./terminal.js";
 import { loadState } from "./state.js";
 import { initGitHub } from "./github.js";
+import { initSnapshot } from "./snapshot.js";
 
 function initRepoShell() {
   // If this is a repo under a hub, show back button and repo name
@@ -32,6 +33,7 @@ function initRepoShell() {
 
   registerTab("dashboard", "Dashboard");
   registerTab("docs", "Docs");
+  registerTab("snapshot", "Snapshot");
   registerTab("logs", "Logs");
   registerTab("terminal", "Terminal");
 
@@ -39,6 +41,7 @@ function initRepoShell() {
   initDashboard();
   initGitHub();
   initDocs();
+  initSnapshot();
   initLogs();
   initTerminal();
 

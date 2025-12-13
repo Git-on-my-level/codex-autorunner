@@ -39,6 +39,7 @@ from .usage import (
     summarize_repo_usage,
 )
 from .utils import atomic_write
+from .snapshot import SnapshotError, generate_snapshot, load_snapshot, load_snapshot_state
 from .voice import VoiceService, VoiceServiceError
 from .engine import LockError
 from .github import GitHubError, GitHubService
@@ -184,6 +185,52 @@ def build_repo_router(static_dir: Path) -> APIRouter:
         content = payload.get("content", "")
         atomic_write(engine.config.doc_path(key), content)
         return {"kind": key, "content": content}
+
+    @router.get("/api/snapshot")
+    def get_snapshot(request: Request):
+        engine = request.app.state.engine
+        content = load_snapshot(engine)
+        state = load_snapshot_state(engine)
+        return {"exists": bool(content), "content": content or "", "state": state or {}}
+
+    @router.post("/api/snapshot")
+    async def post_snapshot(request: Request, payload: Optional[dict] = None):
+        if not payload or not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400, detail="Request body must be a JSON object"
+            )
+        mode = str(payload.get("mode") or "")
+        max_chars = payload.get("max_chars")
+        audience = str(payload.get("audience") or "overview")
+
+        if mode not in ("incremental", "from_scratch"):
+            raise HTTPException(status_code=400, detail="Invalid mode")
+        if max_chars is None:
+            max_chars = 12_000
+        try:
+            max_chars = int(max_chars)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid max_chars") from exc
+
+        engine = request.app.state.engine
+        try:
+            result = await asyncio.to_thread(
+                generate_snapshot,
+                engine,
+                mode=mode,
+                max_chars=max_chars,
+                audience=audience,
+            )
+        except SnapshotError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        return {
+            "content": result.content,
+            "truncated": result.truncated,
+            "state": result.state,
+        }
 
     @router.post("/api/docs/{kind}/chat")
     async def chat_doc(kind: str, request: Request, payload: Optional[dict] = None):
