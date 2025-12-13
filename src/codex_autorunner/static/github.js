@@ -47,7 +47,6 @@ async function loadGitHubStatus() {
   const pill = $("github-status-pill");
   const note = $("github-note");
   const syncBtn = $("github-sync-pr");
-  const openPrBtn = $("github-open-pr");
   const openFilesBtn = $("github-open-pr-files");
   const copyPrBtn = $("github-copy-pr");
 
@@ -71,7 +70,7 @@ async function loadGitHubStatus() {
       if (syncBtn) syncBtn.disabled = true;
     } else {
       statusPill(pill, "idle");
-      setText(note, git.clean ? "Clean working tree." : "Working tree has local changes.");
+      setText(note, git.clean ? "Clean working tree." : "Uncommitted changes.");
       if (syncBtn) syncBtn.disabled = false;
     }
 
@@ -81,7 +80,6 @@ async function loadGitHubStatus() {
       title: repo?.url || "",
     });
     setText($("github-branch"), git.branch || "–");
-    setText($("github-checkout"), git.is_worktree ? "worktree" : "main");
 
     setLink($("github-issue-link"), {
       href: issue?.url,
@@ -97,16 +95,9 @@ async function loadGitHubStatus() {
     });
 
     const hasPr = !!prUrl;
-    if (openPrBtn) openPrBtn.disabled = !hasPr;
     if (openFilesBtn) openFilesBtn.disabled = !hasPr;
     if (copyPrBtn) copyPrBtn.disabled = !hasPr;
 
-    if (openPrBtn) {
-      openPrBtn.onclick = () => {
-        if (!prUrl) return;
-        window.open(prUrl, "_blank", "noopener,noreferrer");
-      };
-    }
     if (openFilesBtn) {
       openFilesBtn.onclick = () => {
         const files = prLinks?.files || (prUrl ? `${prUrl}/files` : null);
@@ -145,14 +136,8 @@ async function syncPr() {
       method: "POST",
       body: { draft: true },
     });
-    const links = res.links || {};
-    const url = links.files || links.url || null;
-    if (url) {
-      window.open(url, "_blank", "noopener,noreferrer");
-      flash("Synced PR (opened in new tab)");
-    } else {
-      flash("Synced PR");
-    }
+    const created = res.created;
+    flash(created ? "PR created" : "PR synced");
     setText(note, "");
     await loadGitHubStatus();
   } catch (err) {

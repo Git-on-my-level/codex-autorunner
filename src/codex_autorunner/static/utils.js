@@ -162,9 +162,14 @@ export function createPoller(fn, intervalMs, { immediate = true } = {}) {
  * Show a custom confirmation modal dialog.
  * Works consistently across desktop and mobile.
  * @param {string} message - The confirmation message to display
+ * @param {Object} [options] - Optional configuration
+ * @param {string} [options.confirmText="Confirm"] - Text for the confirm button
+ * @param {string} [options.cancelText="Cancel"] - Text for the cancel button
+ * @param {boolean} [options.danger=true] - Whether to style confirm as danger
  * @returns {Promise<boolean>} - Resolves to true if confirmed, false if cancelled
  */
-export function confirmModal(message) {
+export function confirmModal(message, options = {}) {
+  const { confirmText = "Confirm", cancelText = "Cancel", danger = true } = options;
   return new Promise((resolve) => {
     const overlay = document.getElementById("confirm-modal");
     const messageEl = document.getElementById("confirm-modal-message");
@@ -172,6 +177,9 @@ export function confirmModal(message) {
     const cancelBtn = document.getElementById("confirm-modal-cancel");
 
     messageEl.textContent = message;
+    okBtn.textContent = confirmText;
+    cancelBtn.textContent = cancelText;
+    okBtn.className = danger ? "danger" : "primary";
     overlay.hidden = false;
 
     const cleanup = () => {
@@ -216,5 +224,79 @@ export function confirmModal(message) {
 
     // Focus the cancel button for safety (less destructive default)
     cancelBtn.focus();
+  });
+}
+
+/**
+ * Show a custom input modal dialog.
+ * Works consistently across desktop and mobile.
+ * @param {string} message - The prompt message to display
+ * @param {Object} [options] - Optional configuration
+ * @param {string} [options.placeholder=""] - Placeholder text for input
+ * @param {string} [options.defaultValue=""] - Default value for input
+ * @param {string} [options.confirmText="OK"] - Text for the confirm button
+ * @param {string} [options.cancelText="Cancel"] - Text for the cancel button
+ * @returns {Promise<string|null>} - Resolves to the input value, or null if cancelled
+ */
+export function inputModal(message, options = {}) {
+  const { placeholder = "", defaultValue = "", confirmText = "OK", cancelText = "Cancel" } = options;
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("input-modal");
+    const messageEl = document.getElementById("input-modal-message");
+    const inputEl = document.getElementById("input-modal-input");
+    const okBtn = document.getElementById("input-modal-ok");
+    const cancelBtn = document.getElementById("input-modal-cancel");
+
+    messageEl.textContent = message;
+    inputEl.placeholder = placeholder;
+    inputEl.value = defaultValue;
+    okBtn.textContent = confirmText;
+    cancelBtn.textContent = cancelText;
+    overlay.hidden = false;
+
+    const cleanup = () => {
+      overlay.hidden = true;
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onOverlayClick);
+      document.removeEventListener("keydown", onKeydown);
+    };
+
+    const onOk = () => {
+      const value = inputEl.value.trim();
+      cleanup();
+      resolve(value || null);
+    };
+
+    const onCancel = () => {
+      cleanup();
+      resolve(null);
+    };
+
+    const onOverlayClick = (e) => {
+      if (e.target === overlay) {
+        cleanup();
+        resolve(null);
+      }
+    };
+
+    const onKeydown = (e) => {
+      if (e.key === "Escape") {
+        cleanup();
+        resolve(null);
+      } else if (e.key === "Enter" && document.activeElement === inputEl) {
+        e.preventDefault();
+        onOk();
+      }
+    };
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onOverlayClick);
+    document.addEventListener("keydown", onKeydown);
+
+    // Focus the input field
+    inputEl.focus();
+    inputEl.select();
   });
 }

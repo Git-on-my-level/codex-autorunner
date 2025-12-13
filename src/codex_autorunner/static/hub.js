@@ -1,4 +1,11 @@
-import { api, flash, statusPill, resolvePath } from "./utils.js";
+import {
+  api,
+  flash,
+  statusPill,
+  resolvePath,
+  confirmModal,
+  inputModal,
+} from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 
@@ -159,10 +166,15 @@ function buildActions(repo) {
     actions.push({ key: "init", label: "Init", kind: "primary" });
   }
   if (!missing && kind === "base") {
-    actions.push({ key: "new_worktree", label: "New worktree", kind: "ghost" });
+    actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
   }
   if (!missing && kind === "worktree") {
-    actions.push({ key: "cleanup_worktree", label: "Cleanup", kind: "ghost" });
+    actions.push({
+      key: "cleanup_worktree",
+      label: "Cleanup",
+      kind: "ghost",
+      title: "Remove worktree and delete branch",
+    });
   }
   if (!missing && repo.initialized && repo.status !== "running") {
     actions.push({ key: "run", label: "Run", kind: "primary" });
@@ -232,7 +244,11 @@ function renderRepos(repos) {
     const actions = buildActions(repo)
       .map(
         (action) =>
-          `<button class="${action.kind} sm" data-action="${action.key}" data-repo="${repo.id}">${action.label}</button>`
+          `<button class="${action.kind} sm" data-action="${
+            action.key
+          }" data-repo="${repo.id}"${
+            action.title ? ` title="${action.title}"` : ""
+          }>${action.label}</button>`
       )
       .join("");
 
@@ -467,7 +483,10 @@ async function handleRepoAction(repoId, action) {
       init: `/hub/repos/${repoId}/init`,
     };
     if (action === "new_worktree") {
-      const branch = window.prompt("New worktree branch name:");
+      const branch = await inputModal("New worktree branch name:", {
+        placeholder: "feature/my-branch",
+        confirmText: "Create",
+      });
       if (!branch) return;
       const created = await api("/hub/worktrees/create", {
         method: "POST",
@@ -481,13 +500,20 @@ async function handleRepoAction(repoId, action) {
       return;
     }
     if (action === "cleanup_worktree") {
-      const ok = window.confirm(`Cleanup worktree ${repoId}?`);
+      // Extract display name for clearer messaging
+      const displayName = repoId.includes("--")
+        ? repoId.split("--").pop()
+        : repoId;
+      const ok = await confirmModal(
+        `Remove worktree "${displayName}"? This will delete the worktree directory and its branch.`,
+        { confirmText: "Remove", danger: true }
+      );
       if (!ok) return;
       await api("/hub/worktrees/cleanup", {
         method: "POST",
         body: { worktree_repo_id: repoId },
       });
-      flash(`Cleaned up worktree: ${repoId}`);
+      flash(`Removed worktree: ${repoId}`);
       await refreshHub();
       return;
     }

@@ -199,23 +199,20 @@
                   <span id="github-branch" class="github-mono">–</span>
                 </div>
                 <div class="github-row">
-                  <span class="muted">Checkout</span>
-                  <span id="github-checkout" class="github-mono">–</span>
-                </div>
-                <div class="github-row">
                   <span class="muted">Issue</span>
                   <a id="github-issue-link" class="github-link muted">–</a>
                 </div>
                 <div class="github-row">
                   <span class="muted">PR</span>
-                  <a id="github-pr-link" class="github-link muted">–</a>
+                  <span class="github-pr-group">
+                    <a id="github-pr-link" class="github-link muted">–</a>
+                    <button id="github-open-pr-files" class="ghost icon-btn-inline" disabled title="View changed files">📄</button>
+                    <button id="github-copy-pr" class="ghost icon-btn-inline" disabled title="Copy PR link">📋</button>
+                  </span>
                 </div>
               </div>
-              <div class="actions">
-                <button id="github-open-pr" class="ghost sm" disabled>Open PR</button>
-                <button id="github-open-pr-files" class="ghost sm" disabled>Files</button>
+              <div class="actions github-actions">
                 <button id="github-sync-pr" class="primary sm">Sync PR</button>
-                <button id="github-copy-pr" class="ghost sm" disabled>Copy PR</button>
               </div>
               <p id="github-note" class="muted small">–</p>
             </div>
@@ -382,6 +379,18 @@
         <div class="modal-actions">
           <button id="confirm-modal-cancel" class="ghost">Cancel</button>
           <button id="confirm-modal-ok" class="danger">Confirm</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Input Modal -->
+    <div id="input-modal" class="modal-overlay" hidden>
+      <div class="modal-dialog modal-input">
+        <p id="input-modal-message"></p>
+        <input type="text" id="input-modal-input" autocomplete="off" spellcheck="false" />
+        <div class="modal-actions">
+          <button id="input-modal-cancel" class="ghost">Cancel</button>
+          <button id="input-modal-ok" class="primary">OK</button>
         </div>
       </div>
     </div>
