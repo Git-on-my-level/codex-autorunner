@@ -4,7 +4,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from .utils import atomic_write, ensure_executable, read_json
 
@@ -54,6 +54,141 @@ def _run(
             f"Command failed: {' '.join(args)}: {detail}", status_code=400
         )
     return proc
+
+
+def _tail_lines(text: str, *, max_lines: int = 60, max_chars: int = 6000) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    lines = raw.splitlines()
+    tail = "\n".join(lines[-max_lines:])
+    if len(tail) > max_chars:
+        return tail[-max_chars:]
+    return tail
+
+
+def _sanitize_cmd(args: list[str]) -> str:
+    # Best-effort sanitization: redact obvious tokens if ever present.
+    redacted: list[str] = []
+    for a in args:
+        if any(
+            k in a.lower() for k in ("token", "apikey", "api_key", "password", "secret")
+        ):
+            redacted.append("<redacted>")
+        else:
+            redacted.append(a)
+    return " ".join(redacted)
+
+
+def _get_nested(d: Any, *keys: str, default: Any = None) -> Any:
+    cur: Any = d
+    for k in keys:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(k)
+    return cur if cur is not None else default
+
+
+def _build_sync_agent_prompt(
+    *,
+    repo_root: Path,
+    branch: str,
+    issue_num: Optional[int],
+) -> str:
+    issue_hint = f"issue #{issue_num}" if issue_num else "the linked issue (if any)"
+    return f"""You are syncing the local git branch to the remote to prepare for a GitHub PR.
+
+Repository: {repo_root}
+Branch: {branch}
+Context: {issue_hint}
+
+Rules (safety):
+- Do NOT discard changes. Do NOT run destructive commands like `git reset --hard`, `git clean -fdx`, or delete files indiscriminately.
+- Do NOT force-push.
+- Prefer minimal, safe changes that preserve intent.
+
+Tasks:
+1) If there is a Makefile or standard tooling, run formatting/lint/tests best-effort. Prefer (in this order) `make fmt`, `make format`, `make lint`, `make test` when targets exist.
+2) Check `git status`. If there are unstaged/uncommitted changes and committing is appropriate, stage and commit them.
+   - Use a descriptive commit message based on the diff; include the issue number if available.
+3) Push the current branch to `origin`.
+   - Ensure upstream is set (e.g., `git push -u origin {branch}`).
+4) If push is rejected (non-fast-forward/remote updated), do a safe `git pull --rebase`.
+   - If there are rebase conflicts, resolve them by editing files to incorporate both sides correctly.
+   - Continue the rebase (`git rebase --continue`) until it completes.
+   - Re-run formatting if needed after conflict resolution.
+   - Retry push.
+5) Do not stop until the branch is successfully pushed.
+
+When finished, print a short summary of what you did.
+"""
+
+
+def _run_codex_sync_agent(
+    *,
+    repo_root: Path,
+    raw_config: dict,
+    prompt: str,
+) -> None:
+    codex_cfg = raw_config.get("codex") if isinstance(raw_config, dict) else None
+    codex_cfg = codex_cfg if isinstance(codex_cfg, dict) else {}
+    binary = str(codex_cfg.get("binary") or "codex")
+    base_args = codex_cfg.get("args") if isinstance(codex_cfg.get("args"), list) else []
+
+    # Strip any existing --model flags from base args to avoid ambiguity; this flow
+    # deliberately uses the configured "small" model (or no model when unset).
+    cleaned_args: list[str] = []
+    skip_next = False
+    for a in [str(x) for x in base_args]:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == "--model":
+            skip_next = True
+            continue
+        cleaned_args.append(a)
+
+    # Use the "small" model for this use-case when configured; if unset/null, omit --model.
+    models = _get_nested(raw_config, "codex", "models", default=None)
+    if isinstance(models, dict) and "small" in models:
+        model_small = models.get("small")
+    else:
+        model_small = "gpt-5.1-codex-mini"
+    model_flag: list[str] = ["--model", str(model_small)] if model_small else []
+
+    cmd = [binary, *model_flag, *cleaned_args, prompt]
+
+    github_cfg = raw_config.get("github") if isinstance(raw_config, dict) else None
+    github_cfg = github_cfg if isinstance(github_cfg, dict) else {}
+    timeout_seconds = int(github_cfg.get("sync_agent_timeout_seconds", 1800))
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo_root),
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise GitHubError(f"Missing binary: {binary}", status_code=500) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise GitHubError(
+            f"Codex sync agent timed out after {timeout_seconds}s: {_sanitize_cmd(cmd[:-1])}",
+            status_code=504,
+        ) from exc
+
+    if proc.returncode != 0:
+        stdout_tail = _tail_lines(proc.stdout or "")
+        stderr_tail = _tail_lines(proc.stderr or "")
+        detail = stderr_tail or stdout_tail or f"exit {proc.returncode}"
+        raise GitHubError(
+            "Codex sync agent failed.\n"
+            f"cmd: {_sanitize_cmd(cmd[:-1])}\n"
+            f"detail:\n{detail}",
+            status_code=400,
+        )
 
 
 @dataclass
@@ -326,24 +461,20 @@ class GitHubService:
 
         dirty = not self.is_clean(cwd=cwd)
         if commit_mode in ("always", "auto") and dirty:
-            _run(["git", "add", "-A"], cwd=cwd, check=True)
-            msg = "[codex] github sync"
-            if issue_num:
-                msg = f"[codex] github sync (issue #{issue_num})"
-            _run(["git", "commit", "-m", msg], cwd=cwd, check=True)
-            dirty = not self.is_clean(cwd=cwd)
+            # Commit/push is handled by the sync agent below.
+            pass
         if commit_mode == "none" and dirty:
             raise GitHubError(
                 "Uncommitted changes present; commit them before syncing PR.",
                 status_code=409,
             )
 
-        # Push branch
-        _run(
-            ["git", "push", "-u", "origin", head_branch],
-            cwd=cwd,
-            check=True,
-            timeout_seconds=120,
+        # Agentic sync (format/lint/test, commit if needed, push; resolve rebase conflicts if any)
+        prompt = _build_sync_agent_prompt(
+            repo_root=self.repo_root, branch=head_branch, issue_num=issue_num
+        )
+        _run_codex_sync_agent(
+            repo_root=self.repo_root, raw_config=self.raw_config, prompt=prompt
         )
 
         # Find/create PR

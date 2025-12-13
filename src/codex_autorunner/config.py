@@ -23,6 +23,13 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "binary": "codex",
         "args": ["--yolo", "exec", "--sandbox", "danger-full-access"],
         "terminal_args": ["--yolo"],
+        # Optional model tiers for different Codex invocations.
+        # If codex.models.large is unset/null, callers should avoid passing --model
+        # so Codex uses the user's default/global profile model.
+        "models": {
+            "small": "gpt-5.1-codex-mini",
+            "large": None,
+        },
     },
     "prompt": {
         "prev_run_max_chars": 6000,
@@ -41,6 +48,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "enabled": True,
         "pr_draft_default": True,
         "sync_commit_mode": "auto",  # none|auto|always
+        # Bounds the agentic sync step in GitHubService.sync_pr (seconds).
+        "sync_agent_timeout_seconds": 1800,
     },
     "server": {
         "host": "127.0.0.1",
@@ -383,6 +392,18 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         codex.get("terminal_args", []), list
     ):
         raise ConfigError("codex.terminal_args must be a list if provided")
+    if "models" in codex:
+        models = codex.get("models")
+        if models is not None and not isinstance(models, dict):
+            raise ConfigError("codex.models must be a mapping or null if provided")
+        if isinstance(models, dict):
+            for key in ("small", "large"):
+                if (
+                    key in models
+                    and models.get(key) is not None
+                    and not isinstance(models.get(key), str)
+                ):
+                    raise ConfigError(f"codex.models.{key} must be a string or null")
     prompt = cfg.get("prompt")
     if not isinstance(prompt, dict):
         raise ConfigError("prompt section must be a mapping")
@@ -416,6 +437,10 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
             github.get("sync_commit_mode"), str
         ):
             raise ConfigError("github.sync_commit_mode must be a string")
+        if "sync_agent_timeout_seconds" in github and not isinstance(
+            github.get("sync_agent_timeout_seconds"), int
+        ):
+            raise ConfigError("github.sync_agent_timeout_seconds must be an integer")
     server = cfg.get("server")
     if not isinstance(server, dict):
         raise ConfigError("server section must be a mapping")
