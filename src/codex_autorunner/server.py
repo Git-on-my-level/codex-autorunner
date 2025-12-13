@@ -223,13 +223,13 @@ def create_app(
     doc_chat = DocChatService(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
     terminal_max_idle_seconds = 3600
-    # Python 3.9 raises if no current event loop exists when constructing asyncio primitives.
-    # This happens in unit tests that build the app from a sync context.
+    # Construct asyncio primitives without assuming a loop already exists.
+    # This comes up in unit tests (sync context) and when mounting from a worker thread.
     try:
-        asyncio.get_event_loop()
+        terminal_lock = asyncio.Lock()
     except RuntimeError:
         asyncio.set_event_loop(asyncio.new_event_loop())
-    terminal_lock = asyncio.Lock()
+        terminal_lock = asyncio.Lock()
 
     app = FastAPI(redirect_slashes=False)
     app.state.base_path = base_path
@@ -401,7 +401,7 @@ def create_hub_app(
         }
 
     @app.get("/hub/repos")
-    def list_repos():
+    async def list_repos():
         try:
             app.state.logger.info("Hub list_repos")
         except Exception:
@@ -414,7 +414,7 @@ def create_hub_app(
         }
 
     @app.post("/hub/repos/scan")
-    def scan_repos():
+    async def scan_repos():
         try:
             app.state.logger.info("Hub scan_repos")
         except Exception:
@@ -427,7 +427,7 @@ def create_hub_app(
         }
 
     @app.post("/hub/repos")
-    def create_repo(payload: Optional[dict] = None):
+    async def create_repo(payload: Optional[dict] = None):
         if not payload or not isinstance(payload, dict):
             raise HTTPException(
                 status_code=400, detail="Request body must be a JSON object"
@@ -459,7 +459,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/worktrees/create")
-    def create_worktree(payload: Optional[dict] = None):
+    async def create_worktree(payload: Optional[dict] = None):
         if not payload or not isinstance(payload, dict):
             raise HTTPException(
                 status_code=400, detail="Request body must be a JSON object"
@@ -490,7 +490,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/worktrees/cleanup")
-    def cleanup_worktree(payload: Optional[dict] = None):
+    async def cleanup_worktree(payload: Optional[dict] = None):
         if not payload or not isinstance(payload, dict):
             raise HTTPException(
                 status_code=400, detail="Request body must be a JSON object"
@@ -522,7 +522,7 @@ def create_hub_app(
         return {"status": "ok"}
 
     @app.post("/hub/repos/{repo_id}/run")
-    def run_repo(repo_id: str, payload: Optional[dict] = None):
+    async def run_repo(repo_id: str, payload: Optional[dict] = None):
         once = False
         if payload and isinstance(payload, dict):
             once = bool(payload.get("once", False))
@@ -540,7 +540,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/repos/{repo_id}/stop")
-    def stop_repo(repo_id: str):
+    async def stop_repo(repo_id: str):
         try:
             app.state.logger.info("Hub stop %s", repo_id)
         except Exception:
@@ -552,7 +552,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/repos/{repo_id}/resume")
-    def resume_repo(repo_id: str, payload: Optional[dict] = None):
+    async def resume_repo(repo_id: str, payload: Optional[dict] = None):
         once = False
         if payload and isinstance(payload, dict):
             once = bool(payload.get("once", False))
@@ -570,7 +570,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/repos/{repo_id}/kill")
-    def kill_repo(repo_id: str):
+    async def kill_repo(repo_id: str):
         try:
             app.state.logger.info("Hub kill %s", repo_id)
         except Exception:
@@ -582,7 +582,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(config.root))
 
     @app.post("/hub/repos/{repo_id}/init")
-    def init_repo(repo_id: str):
+    async def init_repo(repo_id: str):
         try:
             app.state.logger.info("Hub init %s", repo_id)
         except Exception:

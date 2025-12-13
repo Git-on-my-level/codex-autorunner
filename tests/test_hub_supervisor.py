@@ -94,6 +94,36 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
     assert state["status"] == "idle"
 
 
+def test_hub_init_endpoint_mounts_repo(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["hub"]["auto_init_missing"] = False
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    scan_resp = client.post("/hub/repos/scan")
+    assert scan_resp.status_code == 200
+    scan_payload = scan_resp.json()
+    demo = next(r for r in scan_payload["repos"] if r["id"] == "demo")
+    assert demo["initialized"] is False
+
+    init_resp = client.post("/hub/repos/demo/init")
+    assert init_resp.status_code == 200
+    init_payload = init_resp.json()
+    assert init_payload["initialized"] is True
+    assert init_payload["mounted"] is True
+    assert init_payload.get("mount_error") is None
+
+    state_resp = client.get("/repos/demo/api/state")
+    assert state_resp.status_code == 200
+
+
 def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))

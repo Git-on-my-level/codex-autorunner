@@ -2,7 +2,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Sequence
 
 
 class RepoNotFoundError(Exception):
@@ -32,8 +32,64 @@ def read_json(path: Path) -> Optional[dict]:
         return json.load(f)
 
 
+def _default_path_prefixes() -> list[str]:
+    """
+    launchd and other non-interactive runners often have a minimal PATH that
+    excludes Homebrew/MacPorts locations.
+    """
+    candidates = [
+        "/opt/homebrew/bin",  # Apple Silicon Homebrew
+        "/usr/local/bin",  # Intel Homebrew + common user installs
+        "/opt/local/bin",  # MacPorts
+    ]
+    return [p for p in candidates if os.path.isdir(p)]
+
+
+def augmented_path(path: Optional[str] = None) -> str:
+    prefixes = _default_path_prefixes()
+    existing = [p for p in (path or "").split(os.pathsep) if p]
+    merged: list[str] = []
+    for p in prefixes + existing:
+        if p and p not in merged:
+            merged.append(p)
+    return os.pathsep.join(merged)
+
+
+def subprocess_env(extra_paths: Optional[Sequence[str]] = None) -> Dict[str, str]:
+    env = dict(os.environ)
+    path = env.get("PATH")
+    merged = augmented_path(path)
+    if extra_paths:
+        extra = [p for p in extra_paths if p]
+        if extra:
+            merged = augmented_path(os.pathsep.join(extra + [merged]))
+    env["PATH"] = merged
+    return env
+
+
+def resolve_executable(binary: str) -> Optional[str]:
+    """
+    Resolve an executable path in a way that's resilient to minimal PATHs.
+    Returns an absolute path if found, else None.
+    """
+    if not binary:
+        return None
+    # If explicitly provided a path, respect it.
+    if os.path.sep in binary or (os.path.altsep and os.path.altsep in binary):
+        candidate = Path(binary).expanduser()
+        if candidate.is_file() and os.access(str(candidate), os.X_OK):
+            return str(candidate)
+        return None
+
+    resolved = shutil.which(binary)
+    if resolved:
+        return resolved
+    resolved = shutil.which(binary, path=augmented_path(os.environ.get("PATH")))
+    return resolved
+
+
 def ensure_executable(binary: str) -> bool:
-    return shutil.which(binary) is not None
+    return resolve_executable(binary) is not None
 
 
 def default_editor() -> str:

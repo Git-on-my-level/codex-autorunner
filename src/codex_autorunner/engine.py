@@ -14,7 +14,12 @@ from .config import Config, ConfigError, load_config
 from .docs import DocsManager
 from .prompt import build_prompt
 from .state import RunnerState, load_state, now_iso, save_state
-from .utils import ensure_executable, find_repo_root
+from .utils import (
+    ensure_executable,
+    find_repo_root,
+    resolve_executable,
+    subprocess_env,
+)
 
 
 class LockError(Exception):
@@ -190,18 +195,22 @@ class Engine:
         self.log_path.write_text("", encoding="utf-8")
 
     def run_codex_cli(self, prompt: str, run_id: int) -> int:
-        cmd = [self.config.codex_binary] + self.config.codex_args + [prompt]
+        resolved = resolve_executable(self.config.codex_binary)
+        if not resolved:
+            raise ConfigError(f"Codex binary not found: {self.config.codex_binary}")
+        cmd = [resolved] + self.config.codex_args + [prompt]
         try:
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(self.repo_root),
+                env=subprocess_env(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
             )
         except FileNotFoundError:
-            raise ConfigError(f"Codex binary not found: {self.config.codex_binary}")
+            raise ConfigError(f"Codex binary not found: {resolved}")
 
         if proc.stdout:
             for line in proc.stdout:

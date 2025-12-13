@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-from .utils import atomic_write, ensure_executable, read_json
+from .utils import (
+    atomic_write,
+    read_json,
+    resolve_executable,
+    subprocess_env,
+)
 
 
 class GitHubError(Exception):
@@ -29,6 +34,7 @@ def _run(
     cwd: Path,
     timeout_seconds: int = 30,
     check: bool = True,
+    env: Optional[dict[str, str]] = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         proc = subprocess.run(
@@ -37,6 +43,7 @@ def _run(
             text=True,
             capture_output=True,
             timeout=timeout_seconds,
+            env=env or subprocess_env(),
             check=False,
         )
     except FileNotFoundError as exc:
@@ -156,7 +163,11 @@ def _run_codex_sync_agent(
         model_small = "gpt-5.1-codex-mini"
     model_flag: list[str] = ["--model", str(model_small)] if model_small else []
 
-    cmd = [binary, *model_flag, *cleaned_args, prompt]
+    resolved = resolve_executable(binary)
+    if not resolved:
+        raise GitHubError(f"Missing binary: {binary}", status_code=500)
+
+    cmd = [resolved, *model_flag, *cleaned_args, prompt]
 
     github_cfg = raw_config.get("github") if isinstance(raw_config, dict) else None
     github_cfg = github_cfg if isinstance(github_cfg, dict) else {}
@@ -169,10 +180,11 @@ def _run_codex_sync_agent(
             text=True,
             capture_output=True,
             timeout=timeout_seconds,
+            env=subprocess_env(),
             check=False,
         )
     except FileNotFoundError as exc:
-        raise GitHubError(f"Missing binary: {binary}", status_code=500) from exc
+        raise GitHubError(f"Missing binary: {resolved}", status_code=500) from exc
     except subprocess.TimeoutExpired as exc:
         raise GitHubError(
             f"Codex sync agent timed out after {timeout_seconds}s: {_sanitize_cmd(cmd[:-1])}",
@@ -241,6 +253,32 @@ class GitHubService:
         self.repo_root = repo_root
         self.raw_config = raw_config or {}
         self.github_path = repo_root / ".codex-autorunner" / "github.json"
+        self.gh_bin = self._resolve_gh_bin()
+
+    def _resolve_gh_bin(self) -> Optional[str]:
+        cfg = self.raw_config if isinstance(self.raw_config, dict) else {}
+        github_cfg = cfg.get("github") if isinstance(cfg.get("github"), dict) else {}
+        override = (
+            str(github_cfg.get("gh_path")).strip() if github_cfg.get("gh_path") else ""
+        )
+        return resolve_executable(override or "gh")
+
+    def _gh(
+        self,
+        args: list[str],
+        *,
+        cwd: Optional[Path] = None,
+        timeout_seconds: int = 30,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        if not self.gh_bin:
+            raise GitHubError("GitHub CLI (gh) not available", status_code=500)
+        return _run(
+            [self.gh_bin] + args,
+            cwd=cwd or self.repo_root,
+            timeout_seconds=timeout_seconds,
+            check=check,
+        )
 
     # ── persistence ────────────────────────────────────────────────────────────
     def read_link_state(self) -> dict:
@@ -254,25 +292,19 @@ class GitHubService:
 
     # ── capability/status ──────────────────────────────────────────────────────
     def gh_available(self) -> bool:
-        return ensure_executable("gh")
+        return self.gh_bin is not None
 
     def gh_authenticated(self) -> bool:
         if not self.gh_available():
             return False
-        proc = _run(
-            ["gh", "auth", "status"],
-            cwd=self.repo_root,
-            check=False,
-            timeout_seconds=10,
-        )
+        proc = self._gh(["auth", "status"], check=False, timeout_seconds=10)
         return proc.returncode == 0
 
     def repo_info(self) -> RepoInfo:
-        proc = _run(
-            ["gh", "repo", "view", "--json", "nameWithOwner,url,defaultBranchRef"],
-            cwd=self.repo_root,
-            check=True,
+        proc = self._gh(
+            ["repo", "view", "--json", "nameWithOwner,url,defaultBranchRef"],
             timeout_seconds=15,
+            check=True,
         )
         try:
             payload = json.loads(proc.stdout or "{}")
@@ -286,23 +318,28 @@ class GitHubService:
         proc = _run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=cwd or self.repo_root,
-            check=True,
+            check=False,
         )
+        if proc.returncode != 0:
+            return "HEAD"
         return (proc.stdout or "").strip() or "HEAD"
 
     def is_clean(self, *, cwd: Optional[Path] = None) -> bool:
         proc = _run(
-            ["git", "status", "--porcelain"], cwd=cwd or self.repo_root, check=True
+            ["git", "status", "--porcelain"],
+            cwd=cwd or self.repo_root,
+            check=False,
         )
+        if proc.returncode != 0:
+            return False
         return not bool((proc.stdout or "").strip())
 
     def pr_for_branch(
         self, *, branch: str, cwd: Optional[Path] = None
     ) -> Optional[dict]:
         cwd = cwd or self.repo_root
-        proc = _run(
+        proc = self._gh(
             [
-                "gh",
                 "pr",
                 "view",
                 "--json",
@@ -317,9 +354,8 @@ class GitHubService:
                 return json.loads(proc.stdout or "{}") or None
             except json.JSONDecodeError:
                 return None
-        proc2 = _run(
+        proc2 = self._gh(
             [
-                "gh",
                 "pr",
                 "list",
                 "--head",
@@ -342,9 +378,8 @@ class GitHubService:
         return arr[0] if arr else None
 
     def issue_view(self, *, number: int, cwd: Optional[Path] = None) -> dict:
-        proc = _run(
+        proc = self._gh(
             [
-                "gh",
                 "issue",
                 "view",
                 str(number),
@@ -387,7 +422,7 @@ class GitHubService:
         clean = self.is_clean()
         is_worktree = (self.repo_root / ".git").is_file()
         pr = None
-        if authed:
+        if authed and branch != "HEAD":
             pr = self.pr_for_branch(branch=branch) or None
         payload = {
             "gh": {"available": gh_ok, "authenticated": authed},
@@ -435,8 +470,6 @@ class GitHubService:
         title: Optional[str] = None,
         body: Optional[str] = None,
     ) -> dict:
-        if not self.gh_available():
-            raise GitHubError("GitHub CLI (gh) not available", status_code=500)
         if not self.gh_authenticated():
             raise GitHubError(
                 "GitHub CLI not authenticated (run `gh auth login`)", status_code=401
@@ -447,6 +480,11 @@ class GitHubService:
         state = self.read_link_state() or {}
         issue_num = ((state.get("issue") or {}) or {}).get("number")
         head_branch = self.current_branch()
+        if head_branch == "HEAD":
+            raise GitHubError(
+                "Unable to determine current git branch (repo may have no commits). Create an initial commit and try again.",
+                status_code=409,
+            )
         cwd = self.repo_root
         meta = {"mode": "current"}
         # Decide commit behavior
@@ -480,7 +518,7 @@ class GitHubService:
         # Find/create PR
         pr = self.pr_for_branch(branch=head_branch, cwd=cwd)
         if not pr:
-            args = ["gh", "pr", "create", "--base", base]
+            args = ["pr", "create", "--base", base]
             if draft:
                 args.append("--draft")
             if title:
@@ -489,7 +527,7 @@ class GitHubService:
                 args += ["--body", body]
             else:
                 args.append("--fill")
-            proc = _run(args, cwd=cwd, check=True, timeout_seconds=60)
+            proc = self._gh(args, cwd=cwd, check=True, timeout_seconds=60)
             # gh pr create returns URL on stdout typically
             url = (
                 (proc.stdout or "").strip().splitlines()[-1].strip()

@@ -52,14 +52,14 @@ def test_sync_pr_invokes_codex_with_small_model(
     def fake_run(cmd, **kwargs):
         run_calls.append({"cmd": cmd, "kwargs": kwargs})
         # Codex agent run
-        if cmd and cmd[0] == "codex":
+        if cmd and Path(cmd[0]).name == "codex":
             assert "--model" in cmd
             assert "gpt-5.1-codex-mini" in cmd
             assert kwargs["cwd"] == str(repo_root)
             assert kwargs["timeout"] == 123
             return _ok_completed(stdout="done")
         # gh pr create
-        if cmd[:3] == ["gh", "pr", "create"]:
+        if len(cmd) >= 3 and Path(cmd[0]).name == "gh" and cmd[1:3] == ["pr", "create"]:
             return _ok_completed(stdout="https://github.com/o/r/pull/1\n")
         return _ok_completed()
 
@@ -67,7 +67,7 @@ def test_sync_pr_invokes_codex_with_small_model(
 
     out = svc.sync_pr(draft=True)
     assert out["status"] == "ok"
-    assert any(c["cmd"] and c["cmd"][0] == "codex" for c in run_calls)
+    assert any(c["cmd"] and Path(c["cmd"][0]).name == "codex" for c in run_calls)
 
 
 def test_sync_pr_omits_model_when_small_is_null(
@@ -103,10 +103,10 @@ def test_sync_pr_omits_model_when_small_is_null(
     monkeypatch.setattr(svc, "read_link_state", lambda: {})
 
     def fake_run(cmd, **kwargs):
-        if cmd and cmd[0] == "codex":
+        if cmd and Path(cmd[0]).name == "codex":
             assert "--model" not in cmd
             return _ok_completed(stdout="done")
-        if cmd[:3] == ["gh", "pr", "create"]:
+        if len(cmd) >= 3 and Path(cmd[0]).name == "gh" and cmd[1:3] == ["pr", "create"]:
             return _ok_completed(stdout="https://github.com/o/r/pull/1\n")
         return _ok_completed()
 
@@ -148,11 +148,11 @@ def test_sync_pr_surfaces_agent_failure(
     gh_called = {"pr_create": False}
 
     def fake_run(cmd, **kwargs):
-        if cmd and cmd[0] == "codex":
+        if cmd and Path(cmd[0]).name == "codex":
             return subprocess.CompletedProcess(
                 args=cmd, returncode=3, stdout="some stdout\n", stderr="agent failed\n"
             )
-        if cmd[:3] == ["gh", "pr", "create"]:
+        if len(cmd) >= 3 and Path(cmd[0]).name == "gh" and cmd[1:3] == ["pr", "create"]:
             gh_called["pr_create"] = True
             return _ok_completed(stdout="https://github.com/o/r/pull/1\n")
         return _ok_completed()
