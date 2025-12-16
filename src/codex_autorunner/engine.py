@@ -10,6 +10,7 @@ import json
 import signal
 import traceback
 
+from .about_car import ensure_about_car_file
 from .config import Config, ConfigError, load_config
 from .docs import DocsManager
 from .prompt import build_prompt
@@ -38,6 +39,12 @@ class Engine:
         self.state_path = self.repo_root / ".codex-autorunner" / "state.json"
         self.log_path = self.config.log.path
         self.lock_path = self.repo_root / ".codex-autorunner" / "lock"
+        # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
+        try:
+            ensure_about_car_file(self.config)
+        except Exception:
+            # Never fail Engine creation due to a best-effort helper doc.
+            pass
 
     @staticmethod
     def from_cwd(repo: Optional[Path] = None) -> "Engine":

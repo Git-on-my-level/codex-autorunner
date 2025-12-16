@@ -3,6 +3,7 @@ from typing import Optional
 
 import yaml
 
+from .about_car import ensure_about_car_file_for_repo
 from .config import CONFIG_FILENAME, DEFAULT_REPO_CONFIG, DEFAULT_HUB_CONFIG
 from .manifest import load_manifest
 from .utils import atomic_write
@@ -82,6 +83,18 @@ def seed_repo_files(
     _seed_doc(ca_dir / "PROGRESS.md", force, "# Progress\n\n")
     _seed_doc(ca_dir / "OPINIONS.md", force, sample_opinions())
     _seed_doc(ca_dir / "SPEC.md", force, sample_spec())
+
+    # Seed an always-available briefing doc for interactive Codex sessions.
+    ensure_about_car_file_for_repo(
+        repo_root,
+        doc_paths={
+            "todo": ca_dir / "TODO.md",
+            "progress": ca_dir / "PROGRESS.md",
+            "opinions": ca_dir / "OPINIONS.md",
+            "spec": ca_dir / "SPEC.md",
+        },
+        force=force,
+    )
 
 
 def seed_hub_files(hub_root: Path, force: bool = False) -> None:
