@@ -23,6 +23,27 @@ def sample_spec() -> str:
     return """# Spec\n\n## Context\n- Add project background and goals here.\n\n## Requirements\n- Requirement 1\n- Requirement 2\n\n## Non-goals\n- Out of scope items\n"""
 
 
+def sample_summary() -> str:
+    return """# Summary
+
+This doc is the **user-facing report and handoff** for work done by CAR agents.
+
+Use it for:
+- Anything that requires **user action** or an **external party** (not agents).
+- Unresolved decisions or blockers that agents can’t finish autonomously.
+- A final condensed report once TODO is complete.
+
+## External/user actions
+- (none)
+
+## Open questions / blockers
+- (none)
+
+## Final report
+- (pending)
+"""
+
+
 def _seed_doc(path: Path, force: bool, content: str) -> None:
     if path.exists() and not force:
         return
@@ -83,6 +104,7 @@ def seed_repo_files(
     _seed_doc(ca_dir / "PROGRESS.md", force, "# Progress\n\n")
     _seed_doc(ca_dir / "OPINIONS.md", force, sample_opinions())
     _seed_doc(ca_dir / "SPEC.md", force, sample_spec())
+    _seed_doc(ca_dir / "SUMMARY.md", force, sample_summary())
 
     # Seed an always-available briefing doc for interactive Codex sessions.
     ensure_about_car_file_for_repo(
@@ -92,6 +114,7 @@ def seed_repo_files(
             "progress": ca_dir / "PROGRESS.md",
             "opinions": ca_dir / "OPINIONS.md",
             "spec": ca_dir / "SPEC.md",
+            "summary": ca_dir / "SUMMARY.md",
         },
         force=force,
     )

@@ -25,6 +25,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "progress": ".codex-autorunner/PROGRESS.md",
         "opinions": ".codex-autorunner/OPINIONS.md",
         "spec": ".codex-autorunner/SPEC.md",
+        "summary": ".codex-autorunner/SUMMARY.md",
     },
     "codex": {
         "binary": "codex",
@@ -277,6 +278,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         "progress": Path(cfg["docs"]["progress"]),
         "opinions": Path(cfg["docs"]["opinions"]),
         "spec": Path(cfg["docs"]["spec"]),
+        "summary": Path(cfg["docs"]["summary"]),
     }
     voice_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
     template_val = cfg["prompt"].get("template")
@@ -385,7 +387,7 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
     docs = cfg.get("docs")
     if not isinstance(docs, dict):
         raise ConfigError("docs must be a mapping")
-    for key in ("todo", "progress", "opinions", "spec"):
+    for key in ("todo", "progress", "opinions", "spec", "summary"):
         if not isinstance(docs.get(key), str) or not docs[key]:
             raise ConfigError(f"docs.{key} must be a non-empty string path")
     codex = cfg.get("codex")

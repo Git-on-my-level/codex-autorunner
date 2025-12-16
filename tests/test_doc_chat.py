@@ -34,6 +34,7 @@ def _seed_repo(tmp_path: Path) -> Path:
     (work / "PROGRESS.md").write_text("progress body\n", encoding="utf-8")
     (work / "OPINIONS.md").write_text("opinions body\n", encoding="utf-8")
     (work / "SPEC.md").write_text("spec body\n", encoding="utf-8")
+    (work / "SUMMARY.md").write_text("summary body\n", encoding="utf-8")
     return repo
 
 
@@ -119,6 +120,51 @@ def test_chat_success_writes_doc_and_returns_agent_message(
     assert "User request: rewrite the todo" in prompt
     assert "<TARGET_DOC>" in prompt and "</TARGET_DOC>" in prompt
     assert "last run summary" in prompt
+
+
+def test_api_docs_includes_summary(repo: Path):
+    client = _client(repo)
+    res = client.get("/api/docs")
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert set(data.keys()) >= {"todo", "progress", "opinions", "spec", "summary"}
+    assert data["summary"] == "summary body\n"
+
+
+def test_chat_accepts_summary_kind(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    prompts: list[str] = []
+
+    async def fake_run(self, prompt: str, chat_id: str) -> str:  # type: ignore[override]
+        prompts.append(prompt)
+        path = self.engine.config.doc_path("summary")
+        path.write_text("summary updated\n", encoding="utf-8")
+        return "Agent: summarized"
+
+    monkeypatch.setattr(DocChatService, "_run_codex_cli", fake_run)
+    monkeypatch.setattr(
+        DocChatService, "_recent_run_summary", lambda self: "last run summary"
+    )
+
+    client = _client(repo)
+    res = client.post("/api/docs/summary/chat", json={"message": "rewrite the summary"})
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["status"] == "ok"
+    assert data["agent_message"] == "summarized"
+    assert "summary updated" in data["patch"]
+
+    doc_path = repo / ".codex-autorunner" / "SUMMARY.md"
+    assert "summary updated" in doc_path.read_text(encoding="utf-8")
+
+    res_apply = client.post("/api/docs/summary/chat/apply")
+    assert res_apply.status_code == 200, res_apply.text
+    applied = res_apply.json()
+    assert applied["content"].strip() == "summary updated"
+    assert applied["agent_message"] == "summarized"
+
+    prompt = prompts[0]
+    assert "Target doc: SUMMARY" in prompt
+    assert "User request: rewrite the summary" in prompt
 
 
 def test_chat_validation_failure_does_not_write(

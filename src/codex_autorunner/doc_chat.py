@@ -16,7 +16,7 @@ from .state import load_state
 from .utils import atomic_write
 from .prompts import DOC_CHAT_PROMPT_TEMPLATE
 
-ALLOWED_DOC_KINDS = ("todo", "progress", "opinions", "spec")
+ALLOWED_DOC_KINDS = ("todo", "progress", "opinions", "spec", "summary")
 DOC_CHAT_TIMEOUT_SECONDS = 180
 DOC_CHAT_PATCH_NAME = "doc-chat.patch"
 DOC_CHAT_BACKUP_NAME = "doc-chat.backup"

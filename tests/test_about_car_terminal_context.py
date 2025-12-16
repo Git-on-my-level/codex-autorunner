@@ -12,6 +12,7 @@ def test_about_car_is_seeded(repo: Path):
     assert ABOUT_CAR_GENERATED_MARKER in text
     assert "ABOUT_CAR" in text
     assert ".codex-autorunner/TODO.md" in text
+    assert ".codex-autorunner/SUMMARY.md" in text
     assert "add this to the TODOs" in text
 
 

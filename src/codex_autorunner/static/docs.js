@@ -9,13 +9,13 @@ import { initVoiceInput } from "./voice.js";
 // Constants & State
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DOC_TYPES = ["todo", "progress", "opinions", "spec"];
-const ALL_DOC_TYPES = ["todo", "progress", "opinions", "spec", "snapshot"];
+const DOC_TYPES = ["todo", "progress", "opinions", "spec", "summary"];
+const ALL_DOC_TYPES = ["todo", "progress", "opinions", "spec", "summary", "snapshot"];
 const CLEARABLE_DOCS = ["todo", "progress", "opinions"];
 const CHAT_HISTORY_LIMIT = 8;
 
 const docButtons = document.querySelectorAll(".chip[data-doc]");
-let docsCache = { todo: "", progress: "", opinions: "", spec: "" };
+let docsCache = { todo: "", progress: "", opinions: "", spec: "", summary: "" };
 let snapshotCache = { exists: false, content: "", state: {} };
 let snapshotBusy = false;
 let activeDoc = "todo";

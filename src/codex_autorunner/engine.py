@@ -13,9 +13,10 @@ import traceback
 from .about_car import ensure_about_car_file
 from .config import Config, ConfigError, load_config
 from .docs import DocsManager
-from .prompt import build_prompt
+from .prompt import build_final_summary_prompt, build_prompt
 from .state import RunnerState, load_state, now_iso, save_state
 from .utils import (
+    atomic_write,
     ensure_executable,
     find_repo_root,
     resolve_executable,
@@ -29,6 +30,10 @@ class LockError(Exception):
 
 def timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+SUMMARY_FINALIZED_MARKER = "CAR:SUMMARY_FINALIZED"
+SUMMARY_FINALIZED_MARKER_PREFIX = f"<!-- {SUMMARY_FINALIZED_MARKER}"
 
 
 class Engine:
@@ -87,6 +92,67 @@ class Engine:
 
     def todos_done(self) -> bool:
         return self.docs.todos_done()
+
+    def summary_finalized(self) -> bool:
+        """Return True if SUMMARY.md contains the finalization marker."""
+        try:
+            text = self.docs.read_doc("summary")
+        except Exception:
+            return False
+        return SUMMARY_FINALIZED_MARKER in (text or "")
+
+    def _stamp_summary_finalized(self, run_id: int) -> None:
+        """
+        Append an idempotency marker to SUMMARY.md so the final summary job runs only once.
+        Users may remove the marker to force regeneration.
+        """
+        path = self.config.doc_path("summary")
+        try:
+            existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        except Exception:
+            existing = ""
+        if SUMMARY_FINALIZED_MARKER in existing:
+            return
+        stamp = f"{SUMMARY_FINALIZED_MARKER_PREFIX} run_id={int(run_id)} -->\n"
+        new_text = existing
+        if new_text and not new_text.endswith("\n"):
+            new_text += "\n"
+        # Keep a blank line before the marker for readability.
+        if new_text and not new_text.endswith("\n\n"):
+            new_text += "\n"
+        new_text += stamp
+        atomic_write(path, new_text)
+
+    def _run_final_summary_job(self, run_id: int) -> int:
+        """
+        Run a dedicated Codex invocation that produces/updates SUMMARY.md as the final user report.
+        """
+        prev_output = self.extract_prev_output(run_id - 1)
+        prompt = build_final_summary_prompt(self.config, self.docs, prev_output)
+
+        self._update_state("running", run_id, None, started=True)
+        self._ensure_log_path()
+        self._maybe_rotate_log()
+        with self.log_path.open("a", encoding="utf-8") as f:
+            f.write(f"=== run {run_id} start ===\n")
+
+        exit_code = self.run_codex_cli(prompt, run_id)
+
+        with self.log_path.open("a", encoding="utf-8") as f:
+            f.write(f"=== run {run_id} end (code {exit_code}) ===\n")
+
+        self._update_state(
+            "error" if exit_code != 0 else "idle",
+            run_id,
+            exit_code,
+            finished=True,
+        )
+
+        if exit_code == 0:
+            self._stamp_summary_finalized(run_id)
+            if self.config.git_auto_commit:
+                self.maybe_git_commit(run_id)
+        return exit_code
 
     def extract_prev_output(self, run_id: int) -> Optional[str]:
         if not self.log_path.exists() or run_id <= 0:
@@ -237,6 +303,7 @@ class Engine:
             self.config.doc_path("progress"),
             self.config.doc_path("opinions"),
             self.config.doc_path("spec"),
+            self.config.doc_path("summary"),
         ]
         add_cmd = ["git", "add"] + [
             str(p.relative_to(self.repo_root)) for p in paths if p.exists()
@@ -251,6 +318,7 @@ class Engine:
     ) -> None:
         state = load_state(self.state_path)
         run_id = (state.last_run_id or 0) + 1
+        last_exit_code: Optional[int] = state.last_exit_code
         start_wallclock = time.time()
         target_runs = (
             stop_after_runs
@@ -276,9 +344,15 @@ class Engine:
                         break
 
                 if self.todos_done():
-                    self._update_state(
-                        "idle", run_id - 1, state.last_exit_code, finished=True
-                    )
+                    if not self.summary_finalized():
+                        exit_code = self._run_final_summary_job(run_id)
+                        last_exit_code = exit_code
+                    else:
+                        current = load_state(self.state_path)
+                        last_exit_code = current.last_exit_code
+                        self._update_state(
+                            "idle", run_id - 1, last_exit_code, finished=True
+                        )
                     break
 
                 prev_output = self.extract_prev_output(run_id - 1)
@@ -301,11 +375,18 @@ class Engine:
                     exit_code,
                     finished=True,
                 )
+                last_exit_code = exit_code
 
                 if self.config.git_auto_commit and exit_code == 0:
                     self.maybe_git_commit(run_id)
 
                 if exit_code != 0:
+                    break
+
+                # If TODO is now complete, run the final report job once and stop.
+                if self.todos_done() and not self.summary_finalized():
+                    exit_code = self._run_final_summary_job(run_id + 1)
+                    last_exit_code = exit_code
                     break
 
                 if target_runs is not None and run_id >= target_runs:

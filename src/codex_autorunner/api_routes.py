@@ -182,13 +182,14 @@ def build_repo_router(static_dir: Path) -> APIRouter:
             "progress": engine.docs.read_doc("progress"),
             "opinions": engine.docs.read_doc("opinions"),
             "spec": engine.docs.read_doc("spec"),
+            "summary": engine.docs.read_doc("summary"),
         }
 
     @router.put("/api/docs/{kind}")
     def put_doc(kind: str, payload: dict, request: Request):
         engine = request.app.state.engine
         key = kind.lower()
-        if key not in ("todo", "progress", "opinions", "spec"):
+        if key not in ("todo", "progress", "opinions", "spec", "summary"):
             raise HTTPException(status_code=400, detail="invalid doc kind")
         content = payload.get("content", "")
         atomic_write(engine.config.doc_path(key), content)

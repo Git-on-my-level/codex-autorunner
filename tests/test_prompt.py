@@ -18,4 +18,5 @@ def test_prompt_calls_out_work_doc_paths(tmp_path: Path) -> None:
     assert ".codex-autorunner/PROGRESS.md" in prompt
     assert ".codex-autorunner/OPINIONS.md" in prompt
     assert ".codex-autorunner/SPEC.md" in prompt
+    assert ".codex-autorunner/SUMMARY.md" in prompt
     assert "Edit these files directly; do not create new copies elsewhere" in prompt

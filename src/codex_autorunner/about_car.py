@@ -27,6 +27,7 @@ def build_about_car_markdown(
     progress_path: Path,
     opinions_path: Path,
     spec_path: Path,
+    summary_path: Path,
     config_path: Optional[Path] = None,
 ) -> str:
     config_path = config_path or (repo_root / ".codex-autorunner" / "config.yml")
@@ -34,6 +35,7 @@ def build_about_car_markdown(
     progress_disp = _display_path(repo_root, progress_path)
     opinions_disp = _display_path(repo_root, opinions_path)
     spec_disp = _display_path(repo_root, spec_path)
+    summary_disp = _display_path(repo_root, summary_path)
     config_disp = _display_path(repo_root, config_path)
 
     return (
@@ -50,10 +52,12 @@ def build_about_car_markdown(
         "- **OPINIONS** — constraints + style guidelines: "
         f"`{opinions_disp}`\n"
         "- **SPEC** — source-of-truth requirements and scope: "
-        f"`{spec_disp}`\n\n"
+        f"`{spec_disp}`\n"
+        "- **SUMMARY** — user-facing report + external/user action items: "
+        f"`{summary_disp}`\n\n"
         "## Critical rules\n"
         f"- When the user says **\"add this to the TODOs\"**, edit `{todo_disp}`.\n"
-        "- Do **not** create new copies of TODO/PROGRESS/OPINIONS/SPEC elsewhere in the repo.\n"
+        "- Do **not** create new copies of TODO/PROGRESS/OPINIONS/SPEC/SUMMARY elsewhere in the repo.\n"
         "- Treat `.codex-autorunner/` as intentional project structure even though it is hidden/gitignored.\n\n"
         "## How CAR works (short)\n"
         "- `car run/once` repeatedly runs Codex non-interactively, feeding it the work docs (and the prior run tail).\n"
@@ -83,6 +87,7 @@ def ensure_about_car_file_for_repo(
         progress_path=doc_paths["progress"],
         opinions_path=doc_paths["opinions"],
         spec_path=doc_paths["spec"],
+        summary_path=doc_paths["summary"],
         config_path=repo_root / ".codex-autorunner" / "config.yml",
     )
     if content and not content.endswith("\n"):
@@ -111,6 +116,7 @@ def ensure_about_car_file(config: Config, *, force: bool = False) -> Path:
         "progress": config.doc_path("progress"),
         "opinions": config.doc_path("opinions"),
         "spec": config.doc_path("spec"),
+        "summary": config.doc_path("summary"),
     }
     return ensure_about_car_file_for_repo(repo_root, doc_paths=docs, force=force)
 

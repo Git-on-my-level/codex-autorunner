@@ -28,6 +28,13 @@ function renderState(state) {
   document.getElementById("runner-pid").textContent = `Runner pid: ${
     state.runner_pid ?? "–"
   }`;
+
+  // Show "Summary" CTA when TODO is fully complete.
+  const summaryBtn = document.getElementById("open-summary");
+  if (summaryBtn) {
+    const done = Number(state.outstanding_count ?? NaN) === 0;
+    summaryBtn.classList.toggle("hidden", !done);
+  }
 }
 
 function setUsageLoading(loading) {
@@ -135,6 +142,16 @@ export function initDashboard() {
   });
   bindAction("refresh-state", loadState);
   bindAction("usage-refresh", loadUsage);
+
+  const summaryBtn = document.getElementById("open-summary");
+  if (summaryBtn) {
+    summaryBtn.addEventListener("click", () => {
+      const docsTab = document.querySelector('.tab[data-target="docs"]');
+      if (docsTab) docsTab.click();
+      const summaryChip = document.querySelector('.chip[data-doc="summary"]');
+      if (summaryChip) summaryChip.click();
+    });
+  }
 
   // Initial load
   loadUsage();
