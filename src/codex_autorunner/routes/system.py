@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from ..config import HubConfig
+from ..git_utils import GitError, run_git
 
 
 def _run_cmd(cmd: list[str], cwd: Path) -> None:
@@ -24,6 +25,92 @@ def _run_cmd(cmd: list[str], cwd: Path) -> None:
         # Include stdout/stderr in the error message for debugging
         detail = f"Command failed: {' '.join(cmd)}\nStdout: {e.stdout}\nStderr: {e.stderr}"
         raise RuntimeError(detail) from e
+
+
+def _find_git_root(start: Path) -> Path | None:
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _system_update_check(*, repo_url: str) -> dict:
+    module_dir = Path(__file__).resolve().parent
+    repo_root = _find_git_root(module_dir)
+    if repo_root is None:
+        return {
+            "status": "ok",
+            "update_available": True,
+            "message": "No local git state found; update may be available.",
+        }
+
+    try:
+        local_sha = run_git(["rev-parse", "HEAD"], repo_root, check=True).stdout.strip()
+    except GitError as exc:
+        return {
+            "status": "ok",
+            "update_available": True,
+            "message": f"Unable to read local git state ({exc}); update may be available.",
+        }
+
+    try:
+        run_git(
+            ["fetch", "--quiet", repo_url, "main"],
+            repo_root,
+            timeout_seconds=60,
+            check=True,
+        )
+        remote_sha = run_git(["rev-parse", "FETCH_HEAD"], repo_root, check=True).stdout.strip()
+    except GitError as exc:
+        return {
+            "status": "ok",
+            "update_available": True,
+            "message": f"Unable to check remote updates ({exc}); you can try updating anyway.",
+            "local_commit": local_sha,
+        }
+
+    if not remote_sha or not local_sha:
+        return {
+            "status": "ok",
+            "update_available": True,
+            "message": "Unable to determine update status; you can try updating anyway.",
+        }
+
+    if remote_sha == local_sha:
+        return {
+            "status": "ok",
+            "update_available": False,
+            "message": "No update available (already up to date).",
+            "local_commit": local_sha,
+            "remote_commit": remote_sha,
+        }
+
+    local_is_ancestor = (
+        run_git(["merge-base", "--is-ancestor", local_sha, remote_sha], repo_root).returncode
+        == 0
+    )
+    remote_is_ancestor = (
+        run_git(["merge-base", "--is-ancestor", remote_sha, local_sha], repo_root).returncode
+        == 0
+    )
+
+    if local_is_ancestor:
+        message = "Update available."
+        update_available = True
+    elif remote_is_ancestor:
+        message = "No update available (local version is ahead of remote)."
+        update_available = False
+    else:
+        message = "Update available (local version diverged from remote)."
+        update_available = True
+
+    return {
+        "status": "ok",
+        "update_available": update_available,
+        "message": message,
+        "local_commit": local_sha,
+        "remote_commit": remote_sha,
+    }
 
 
 def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Logger) -> None:
@@ -67,6 +154,31 @@ def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Lo
 
 def build_system_routes() -> APIRouter:
     router = APIRouter()
+
+    @router.get("/system/update/check")
+    async def system_update_check(request: Request):
+        """
+        Check if an update is available by comparing local git state vs remote.
+        If local git state is unavailable, report that an update may be available.
+        """
+        try:
+            config = request.app.state.config
+        except AttributeError:
+            config = None
+
+        repo_url = "https://github.com/Git-on-my-level/codex-autorunner.git"
+        if config and isinstance(config, HubConfig):
+            configured_url = getattr(config, "update_repo_url", None)
+            if configured_url:
+                repo_url = configured_url
+
+        try:
+            return _system_update_check(repo_url=repo_url)
+        except Exception as e:
+            logger = getattr(getattr(request.app, "state", None), "logger", None)
+            if logger:
+                logger.error("Update check error: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/system/update")
     async def system_update(request: Request, background_tasks: BackgroundTasks):

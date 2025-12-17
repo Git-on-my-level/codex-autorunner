@@ -160,13 +160,33 @@ async function handleSystemUpdate(btnId) {
   const btn = document.getElementById(btnId);
   if (!btn) return;
 
-  const confirmed = await confirmModal(
-    "Update Codex Autorunner? The service will restart."
-  );
-  if (!confirmed) return;
-
-  btn.disabled = true;
   const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Checking...";
+
+  let check;
+  try {
+    check = await api("/system/update/check");
+  } catch (err) {
+    check = { update_available: true, message: err.message || "Unable to check for updates." };
+  }
+
+  if (!check?.update_available) {
+    flash(check?.message || "No update available.");
+    btn.disabled = false;
+    btn.textContent = originalText;
+    return;
+  }
+
+  const confirmed = await confirmModal(
+    `${check?.message || "Update available."} Update Codex Autorunner? The service will restart.`
+  );
+  if (!confirmed) {
+    btn.disabled = false;
+    btn.textContent = originalText;
+    return;
+  }
+
   btn.textContent = "Updating...";
 
   try {
