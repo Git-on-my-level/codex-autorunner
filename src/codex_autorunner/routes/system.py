@@ -2,8 +2,10 @@ import logging
 import os
 import shutil
 import subprocess
+import importlib.metadata
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
@@ -35,9 +37,63 @@ def _find_git_root(start: Path) -> Optional[Path]:
     return None
 
 
-def _system_update_check(*, repo_url: str) -> dict:
-    module_dir = Path(__file__).resolve().parent
+def _find_git_root_from_install_metadata() -> Optional[Path]:
+    """
+    Best-effort: when installed from a local directory, pip may record a PEP 610
+    direct URL which can point back to a working tree that has a .git directory.
+    """
+    try:
+        dist = importlib.metadata.distribution("codex-autorunner")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+    direct_url = dist.read_text("direct_url.json")
+    if not direct_url:
+        return None
+
+    try:
+        import json
+
+        payload = json.loads(direct_url)
+    except Exception:
+        return None
+
+    raw_url = payload.get("url")
+    if not isinstance(raw_url, str) or not raw_url:
+        return None
+
+    parsed = urlparse(raw_url)
+    if parsed.scheme != "file":
+        return None
+
+    candidate = Path(unquote(parsed.path)).expanduser()
+    if not candidate.exists():
+        return None
+
+    return _find_git_root(candidate)
+
+
+def _resolve_local_repo_root(*, module_dir: Path, update_cache_dir: Path) -> Optional[Path]:
     repo_root = _find_git_root(module_dir)
+    if repo_root is not None:
+        return repo_root
+
+    if (update_cache_dir / ".git").exists():
+        return update_cache_dir
+
+    return _find_git_root_from_install_metadata()
+
+
+def _system_update_check(
+    *,
+    repo_url: str,
+    module_dir: Optional[Path] = None,
+    update_cache_dir: Optional[Path] = None,
+) -> dict:
+    module_dir = module_dir or Path(__file__).resolve().parent
+    update_cache_dir = update_cache_dir or (Path.home() / ".codex-autorunner" / "update_cache")
+
+    repo_root = _resolve_local_repo_root(module_dir=module_dir, update_cache_dir=update_cache_dir)
     if repo_root is None:
         return {
             "status": "ok",
@@ -132,7 +188,9 @@ def _system_update_worker(*, repo_url: str, update_dir: Path, logger: logging.Lo
         _run_cmd(["./scripts/check.sh"], cwd=update_dir)
 
         logger.info("Refreshing launchd service...")
-        refresh_script = update_dir / "scripts" / "refresh-local-mac-hub.sh"
+        refresh_script = update_dir / "scripts" / "safe-refresh-local-mac-hub.sh"
+        if not refresh_script.exists():
+            refresh_script = update_dir / "scripts" / "refresh-local-mac-hub.sh"
 
         env = os.environ.copy()
         env["PACKAGE_SRC"] = str(update_dir)
