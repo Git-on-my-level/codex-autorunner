@@ -41,19 +41,23 @@ CLI commands are available as `codex-autorunner` or the shorter `car`.
 
 ## Refresh a launchd hub to the current branch
 When you change code in this repo and want the launchd-managed hub to run it:
-1) Reinstall into the launchd venv (pipx default paths shown; adjust if your label/paths differ):
+1) Recommended: run the safe refresher, which installs into a new venv, flips `~/.local/pipx/venvs/codex-autorunner.current`, restarts launchd, health-checks, and auto-rolls back on failure:
+```
+make refresh-launchd
+```
+
+2) Manual path (no rollback): reinstall into the launchd venv (pipx default paths shown; adjust if your label/paths differ):
 ```
 $HOME/.local/pipx/venvs/codex-autorunner/bin/python -m pip install --force-reinstall /path/to/your/codex-autorunner
 ```
-2) Restart the agent so it picks up the new bits (default label is `com.codex.autorunner`; default plist `~/Library/LaunchAgents/com.codex.autorunner.plist`):
+3) Restart the agent so it picks up the new bits (default label is `com.codex.autorunner`; default plist `~/Library/LaunchAgents/com.codex.autorunner.plist`):
 ```
 launchctl unload ~/Library/LaunchAgents/com.codex.autorunner.plist 2>/dev/null || true
 launchctl load -w ~/Library/LaunchAgents/com.codex.autorunner.plist
 launchctl kickstart -k gui/$(id -u)/com.codex.autorunner
 ```
-3) Tail the hub log to confirm it booted: `tail -n 50 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`.
-4) One-liner on this machine: `make refresh-launchd` (overrides available: `PIPX_PYTHON`, `LAUNCH_AGENT`, `LAUNCH_LABEL`).
-5) Or use the script (similar to `scripts/install-local-mac-hub.sh`): `scripts/refresh-local-mac-hub.sh`.
+4) Tail the hub log to confirm it booted: `tail -n 50 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`.
+5) Legacy script/Makefile target (no rollback): `make unsafe-refresh-launchd` or `scripts/refresh-local-mac-hub.sh`.
 
 ## Git hooks
 - Install dev tools: `pip install -e .[dev]`

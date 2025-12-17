@@ -61,7 +61,7 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
 
             repo_path = (hub_config.root / repo_entry.path).resolve()
             initialized = (repo_path / ".codex-autorunner" / "config.yml").exists()
-            init_error: str | None = None
+            init_error: Optional[str] = None
             if hub_config.auto_init_missing and repo_path.exists() and not initialized:
                 try:
                     seed_repo_files(repo_path, force=False, git_required=False)

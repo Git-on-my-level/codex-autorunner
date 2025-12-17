@@ -23,6 +23,13 @@ fi
 echo "Installing codex-autorunner from ${PACKAGE_SRC} via pipx..."
 pipx install --force "${PACKAGE_SRC}"
 
+PIPX_ROOT="${PIPX_ROOT:-$HOME/.local/pipx}"
+PIPX_VENV="${PIPX_VENV:-$PIPX_ROOT/venvs/codex-autorunner}"
+CURRENT_VENV_LINK="${CURRENT_VENV_LINK:-$PIPX_ROOT/venvs/codex-autorunner.current}"
+if [[ -d "${PIPX_VENV}" ]]; then
+  ln -sfn "${PIPX_VENV}" "${CURRENT_VENV_LINK}"
+fi
+
 echo "Ensuring hub workspace at ${WORKSPACE}..."
 mkdir -p "${WORKSPACE}"
 codex-autorunner init --mode hub --path "${WORKSPACE}"
@@ -40,7 +47,7 @@ cat > "${PLIST_PATH}" <<EOF
   <array>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <string>codex-autorunner hub serve --host ${HOST} --port ${PORT} --path ${WORKSPACE}</string>
+    <string>${CURRENT_VENV_LINK}/bin/codex-autorunner hub serve --host ${HOST} --port ${PORT} --path ${WORKSPACE}</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${WORKSPACE}</string>

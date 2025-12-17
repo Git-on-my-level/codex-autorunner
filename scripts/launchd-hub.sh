@@ -15,6 +15,7 @@ set -euo pipefail
 #   NVM_BIN       Node bin path to prepend (default: ~/.nvm/versions/node/v22.12.0/bin)
 #   LOCAL_BIN     Local bin path to prepend (default: ~/.local/bin)
 #   PY39_BIN      Python bin path to prepend (default: ~/Library/Python/3.9/bin)
+#   HUB_BIN       Full path to codex-autorunner binary (default: ~/.local/pipx/venvs/codex-autorunner.current/bin/codex-autorunner)
 
 LABEL="${LABEL:-com.codex.autorunner}"
 LAUNCH_AGENT="${LAUNCH_AGENT:-$HOME/Library/LaunchAgents/${LABEL}.plist}"
@@ -26,6 +27,16 @@ HUB_BASE_PATH="${HUB_BASE_PATH:-/car}"
 NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
 LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
 PY39_BIN="${PY39_BIN:-$HOME/Library/Python/3.9/bin}"
+HUB_BIN="${HUB_BIN:-$HOME/.local/pipx/venvs/codex-autorunner.current/bin/codex-autorunner}"
+
+if [[ ! -x "${HUB_BIN}" ]]; then
+  fallback="$HOME/.local/pipx/venvs/codex-autorunner/bin/codex-autorunner"
+  if [[ -x "${fallback}" ]]; then
+    mkdir -p "$HOME/.local/pipx/venvs"
+    ln -sfn "$HOME/.local/pipx/venvs/codex-autorunner" "$HOME/.local/pipx/venvs/codex-autorunner.current"
+    HUB_BIN="$HOME/.local/pipx/venvs/codex-autorunner.current/bin/codex-autorunner"
+  fi
+fi
 
 mkdir -p "$(dirname "${LAUNCH_AGENT}")"
 mkdir -p "${CAR_ROOT}/.codex-autorunner"
@@ -42,7 +53,7 @@ cat > "${LAUNCH_AGENT}" <<EOF
   <array>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <string>PATH=${NVM_BIN}:${LOCAL_BIN}:${PY39_BIN}:\$PATH; codex-autorunner hub serve --host ${HUB_HOST} --port ${HUB_PORT} --base-path ${HUB_BASE_PATH} --path ${CAR_ROOT}</string>
+    <string>PATH=${NVM_BIN}:${LOCAL_BIN}:${PY39_BIN}:\$PATH; ${HUB_BIN} hub serve --host ${HUB_HOST} --port ${HUB_PORT} --base-path ${HUB_BASE_PATH} --path ${CAR_ROOT}</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${CAR_ROOT}</string>

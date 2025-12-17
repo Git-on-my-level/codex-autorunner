@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
@@ -27,7 +28,7 @@ def _run_cmd(cmd: list[str], cwd: Path) -> None:
         raise RuntimeError(detail) from e
 
 
-def _find_git_root(start: Path) -> Path | None:
+def _find_git_root(start: Path) -> Optional[Path]:
     for candidate in (start, *start.parents):
         if (candidate / ".git").exists():
             return candidate

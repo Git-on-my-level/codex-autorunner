@@ -8,7 +8,7 @@
   <array>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <string>codex-autorunner hub serve --host 0.0.0.0 --port 4173 --path /Users/you/car-workspace</string>
+    <string>/Users/you/.local/pipx/venvs/codex-autorunner.current/bin/codex-autorunner hub serve --host 0.0.0.0 --port 4173 --path /Users/you/car-workspace</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/you/car-workspace</string>

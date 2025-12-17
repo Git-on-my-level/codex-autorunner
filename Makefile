@@ -77,4 +77,13 @@ refresh-launchd:
 		PACKAGE_SRC="$(CURDIR)" \
 		PIPX_VENV="$(PIPX_VENV)" \
 		PIPX_PYTHON="$(PIPX_PYTHON)" \
+		scripts/safe-refresh-local-mac-hub.sh
+
+.PHONY: unsafe-refresh-launchd
+unsafe-refresh-launchd:
+	@LABEL="$(LAUNCH_LABEL)" \
+		PLIST_PATH="$(LAUNCH_AGENT)" \
+		PACKAGE_SRC="$(CURDIR)" \
+		PIPX_VENV="$(PIPX_VENV)" \
+		PIPX_PYTHON="$(PIPX_PYTHON)" \
 		scripts/refresh-local-mac-hub.sh
