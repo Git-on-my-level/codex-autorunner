@@ -223,3 +223,4 @@ def build_docs_routes() -> APIRouter:
         }
 
     return router
+

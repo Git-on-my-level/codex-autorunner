@@ -17,6 +17,7 @@ from .base import build_base_routes
 from .docs import build_docs_routes
 from .github import build_github_routes
 from .repos import build_repos_routes
+from .system import build_system_routes
 from .voice import build_voice_routes
 
 
@@ -37,9 +38,11 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     router.include_router(build_docs_routes())
     router.include_router(build_github_routes())
     router.include_router(build_repos_routes())
+    router.include_router(build_system_routes())
     router.include_router(build_voice_routes())
 
     return router
 
 
 __all__ = ["build_repo_router"]
+

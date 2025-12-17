@@ -141,6 +141,66 @@ async function loadUsage() {
   }
 }
 
+async function handleSystemUpdate(btnId) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+
+  const confirmed = await confirmModal(
+    "Update Codex Autorunner? The service will restart."
+  );
+  if (!confirmed) return;
+
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = "Updating...";
+
+  try {
+    const res = await api("/system/update", { method: "POST" });
+    flash(res.message || "Update started. Reloading...", "success");
+    // Disable interaction
+    document.body.style.pointerEvents = "none";
+    // Wait for restart (approx 5-10s) then reload
+    setTimeout(() => {
+      window.location.reload();
+    }, 8000);
+  } catch (err) {
+    flash(err.message || "Update failed", "error");
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+function initSettings() {
+  const settingsBtn = document.getElementById("repo-settings");
+  const modal = document.getElementById("repo-settings-modal");
+  const closeBtn = document.getElementById("repo-settings-close");
+  const updateBtn = document.getElementById("repo-update-btn");
+
+  if (settingsBtn && modal) {
+    settingsBtn.addEventListener("click", () => {
+      modal.hidden = false;
+    });
+  }
+
+  if (closeBtn && modal) {
+    closeBtn.addEventListener("click", () => {
+      modal.hidden = true;
+    });
+  }
+
+  if (modal) {
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.hidden = true;
+    });
+  }
+
+  if (updateBtn) {
+    updateBtn.addEventListener("click", () =>
+      handleSystemUpdate("repo-update-btn")
+    );
+  }
+}
+
 function bindAction(buttonId, action) {
   const btn = document.getElementById(buttonId);
   btn.addEventListener("click", async () => {
@@ -158,6 +218,7 @@ function bindAction(buttonId, action) {
 }
 
 export function initDashboard() {
+  initSettings();
   subscribe("state:update", renderState);
   bindAction("start-run", () => startRun(false));
   bindAction("start-once", () => startRun(true));

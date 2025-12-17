@@ -228,3 +228,4 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             pass
 
     return router
+

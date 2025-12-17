@@ -39,6 +39,7 @@ from .usage import (
 from .manifest import load_manifest
 from .voice import VoiceConfig, VoiceService, VoiceServiceError
 from .api_routes import build_repo_router, ActiveSession
+from .routes.system import build_system_routes
 
 
 class BasePathRouterMiddleware:
@@ -248,6 +249,7 @@ def create_app(
         app.state.logger.warning("Voice service unavailable: %s", exc, exc_info=False)
     # Store shared state for routers/handlers.
     app.state.engine = engine
+    app.state.config = engine.config  # Expose config consistently
     app.state.manager = manager
     app.state.doc_chat = doc_chat
     app.state.voice_config = voice_config
@@ -312,6 +314,7 @@ def create_hub_app(
     app.state.base_path = base_path
     # Hub server/system logs (separate from any repo agent logs).
     app.state.logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
+    app.state.config = config  # Expose config for route modules
     try:
         app.state.logger.info("Hub app ready at %s", config.root)
     except Exception:
@@ -604,6 +607,8 @@ def create_hub_app(
                 status_code=500, detail="Static UI assets missing; reinstall package"
             )
         return FileResponse(index_path)
+
+    app.include_router(build_system_routes())
 
     if base_path:
         app = BasePathRouterMiddleware(app, base_path)

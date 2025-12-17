@@ -156,6 +156,66 @@ async function loadHubUsage() {
   }
 }
 
+async function handleSystemUpdate(btnId) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+
+  const confirmed = await confirmModal(
+    "Update Codex Autorunner? The service will restart."
+  );
+  if (!confirmed) return;
+
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = "Updating...";
+
+  try {
+    const res = await api("/system/update", { method: "POST" });
+    flash(res.message || "Update started. Reloading...", "success");
+    // Disable interaction
+    document.body.style.pointerEvents = "none";
+    // Wait for restart (approx 5-10s) then reload
+    setTimeout(() => {
+      window.location.reload();
+    }, 8000);
+  } catch (err) {
+    flash(err.message || "Update failed", "error");
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+function initHubSettings() {
+  const settingsBtn = document.getElementById("hub-settings");
+  const modal = document.getElementById("hub-settings-modal");
+  const closeBtn = document.getElementById("hub-settings-close");
+  const updateBtn = document.getElementById("hub-update-btn");
+
+  if (settingsBtn && modal) {
+    settingsBtn.addEventListener("click", () => {
+      modal.hidden = false;
+    });
+  }
+
+  if (closeBtn && modal) {
+    closeBtn.addEventListener("click", () => {
+      modal.hidden = true;
+    });
+  }
+
+  if (modal) {
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.hidden = true;
+    });
+  }
+
+  if (updateBtn) {
+    updateBtn.addEventListener("click", () =>
+      handleSystemUpdate("hub-update-btn")
+    );
+  }
+}
+
 function buildActions(repo) {
   const actions = [];
   const missing = !repo.exists_on_disk;
@@ -532,6 +592,7 @@ async function handleRepoAction(repoId, action) {
 }
 
 function attachHubHandlers() {
+  initHubSettings();
   const scanBtn = document.getElementById("hub-scan");
   const refreshBtn = document.getElementById("hub-refresh");
   const quickScanBtn = document.getElementById("hub-quick-scan");

@@ -51,6 +51,7 @@
           <button id="hub-new-repo" class="primary sm">+ New</button>
           <button id="hub-scan" class="sm">Scan</button>
           <button id="hub-refresh" class="ghost sm">Refresh</button>
+          <button id="hub-settings" class="ghost sm icon-btn" title="Settings">⚙</button>
         </div>
       </header>
 
@@ -96,6 +97,9 @@
         <span class="nav-brand">CAR</span>
         <div class="tabs">
           <!-- Tabs will be injected here by tabs.js -->
+        </div>
+        <div class="nav-actions">
+          <button id="repo-settings" class="ghost sm icon-btn" title="Settings">⚙</button>
         </div>
       </nav>
 
@@ -467,6 +471,46 @@
         <div class="modal-actions">
           <button id="create-repo-cancel" class="ghost">Cancel</button>
           <button id="create-repo-submit" class="primary">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hub Settings Modal -->
+    <div id="hub-settings-modal" class="modal-overlay" hidden>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <span class="label">Hub Settings</span>
+        </div>
+        <div class="modal-body">
+          <p class="muted small">System-wide settings for Codex Autorunner.</p>
+          <div class="form-group">
+            <label>System Update</label>
+            <button id="hub-update-btn" class="primary sm">Update CAR</button>
+            <span class="form-hint">Pull latest code and restart service</span>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="hub-settings-close" class="ghost">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Repo Settings Modal -->
+    <div id="repo-settings-modal" class="modal-overlay" hidden>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <span class="label">Repo Settings</span>
+        </div>
+        <div class="modal-body">
+          <p class="muted small">Settings for the current repository session.</p>
+          <div class="form-group">
+            <label>System Update</label>
+            <button id="repo-update-btn" class="primary sm">Update CAR</button>
+            <span class="form-hint">Pull latest code and restart service</span>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="repo-settings-close" class="ghost">Close</button>
         </div>
       </div>
     </div>

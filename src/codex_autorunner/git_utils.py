@@ -164,3 +164,4 @@ def git_status_porcelain(repo_root: Path) -> Optional[str]:
     if proc.returncode != 0:
         return None
     return (proc.stdout or "").strip()
+

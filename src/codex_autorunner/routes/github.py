@@ -132,3 +132,4 @@ def build_github_routes() -> APIRouter:
             raise HTTPException(status_code=500, detail=str(exc))
 
     return router
+
