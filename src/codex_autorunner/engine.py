@@ -123,13 +123,16 @@ class Engine:
         new_text += stamp
         atomic_write(path, new_text)
 
-    def _run_final_summary_job(self, run_id: int) -> int:
+    def _execute_run_step(self, prompt: str, run_id: int) -> int:
         """
-        Run a dedicated Codex invocation that produces/updates SUMMARY.md as the final user report.
+        Execute a single run step:
+        1. Update state to 'running'
+        2. Log start
+        3. Run Codex CLI
+        4. Log end
+        5. Update state to 'idle' or 'error'
+        6. Commit if successful and auto-commit is enabled
         """
-        prev_output = self.extract_prev_output(run_id - 1)
-        prompt = build_final_summary_prompt(self.config, self.docs, prev_output)
-
         self._update_state("running", run_id, None, started=True)
         self._ensure_log_path()
         self._maybe_rotate_log()
@@ -148,10 +151,23 @@ class Engine:
             finished=True,
         )
 
+        if exit_code == 0 and self.config.git_auto_commit:
+            self.maybe_git_commit(run_id)
+
+        return exit_code
+
+    def _run_final_summary_job(self, run_id: int) -> int:
+        """
+        Run a dedicated Codex invocation that produces/updates SUMMARY.md as the final user report.
+        """
+        prev_output = self.extract_prev_output(run_id - 1)
+        prompt = build_final_summary_prompt(self.config, self.docs, prev_output)
+
+        exit_code = self._execute_run_step(prompt, run_id)
+
         if exit_code == 0:
             self._stamp_summary_finalized(run_id)
-            if self.config.git_auto_commit:
-                self.maybe_git_commit(run_id)
+            # Commit is already handled by _execute_run_step if auto-commit is enabled.
         return exit_code
 
     def extract_prev_output(self, run_id: int) -> Optional[str]:
@@ -358,27 +374,8 @@ class Engine:
                 prev_output = self.extract_prev_output(run_id - 1)
                 prompt = build_prompt(self.config, self.docs, prev_output)
 
-                self._update_state("running", run_id, None, started=True)
-                self._ensure_log_path()
-                self._maybe_rotate_log()
-                with self.log_path.open("a", encoding="utf-8") as f:
-                    f.write(f"=== run {run_id} start ===\n")
-
-                exit_code = self.run_codex_cli(prompt, run_id)
-
-                with self.log_path.open("a", encoding="utf-8") as f:
-                    f.write(f"=== run {run_id} end (code {exit_code}) ===\n")
-
-                self._update_state(
-                    "error" if exit_code != 0 else "idle",
-                    run_id,
-                    exit_code,
-                    finished=True,
-                )
+                exit_code = self._execute_run_step(prompt, run_id)
                 last_exit_code = exit_code
-
-                if self.config.git_auto_commit and exit_code == 0:
-                    self.maybe_git_commit(run_id)
 
                 if exit_code != 0:
                     break

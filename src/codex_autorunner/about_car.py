@@ -56,7 +56,7 @@ def build_about_car_markdown(
         "- **SUMMARY** — user-facing report + external/user action items: "
         f"`{summary_disp}`\n\n"
         "## Critical rules\n"
-        f"- When the user says **\"add this to the TODOs\"**, edit `{todo_disp}`.\n"
+        f'- When the user says **"add this to the TODOs"**, edit `{todo_disp}`.\n'
         "- Do **not** create new copies of TODO/PROGRESS/OPINIONS/SPEC/SUMMARY elsewhere in the repo.\n"
         "- Treat `.codex-autorunner/` as intentional project structure even though it is hidden/gitignored.\n\n"
         "## How CAR works (short)\n"
@@ -119,5 +119,3 @@ def ensure_about_car_file(config: Config, *, force: bool = False) -> Path:
         "summary": config.doc_path("summary"),
     }
     return ensure_about_car_file_for_repo(repo_root, doc_paths=docs, force=force)
-
-

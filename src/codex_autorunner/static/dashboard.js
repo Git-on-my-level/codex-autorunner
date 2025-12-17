@@ -53,6 +53,25 @@ function formatTokensCompact(val) {
   return num.toLocaleString();
 }
 
+function renderUsageProgressBar(container, percent, windowMinutes) {
+  if (!container) return;
+  
+  const pct = typeof percent === "number" ? Math.min(100, Math.max(0, percent)) : 0;
+  const hasData = typeof percent === "number";
+  
+  // Determine color based on percentage
+  let barClass = "usage-bar-ok";
+  if (pct >= 90) barClass = "usage-bar-critical";
+  else if (pct >= 70) barClass = "usage-bar-warning";
+  
+  container.innerHTML = `
+    <div class="usage-progress-bar ${hasData ? "" : "usage-progress-bar-empty"}">
+      <div class="usage-progress-fill ${barClass}" style="width: ${pct}%"></div>
+    </div>
+    <span class="usage-progress-label">${hasData ? `${pct}%` : "–"}${windowMinutes ? `/${windowMinutes}m` : ""}</span>
+  `;
+}
+
 function renderUsage(data) {
   const totals = data?.totals || {};
   const events = data?.events ?? 0;
@@ -70,6 +89,8 @@ function renderUsage(data) {
   const reasoningEl = document.getElementById("usage-reasoning");
   const ratesEl = document.getElementById("usage-rates");
   const metaEl = document.getElementById("usage-meta");
+  const primaryBarEl = document.getElementById("usage-rate-primary");
+  const secondaryBarEl = document.getElementById("usage-rate-secondary");
 
   if (totalEl) totalEl.textContent = formatTokensCompact(totals.total_tokens);
   if (inputEl) inputEl.textContent = formatTokensCompact(totals.input_tokens);
@@ -82,19 +103,28 @@ function renderUsage(data) {
       totals.reasoning_output_tokens
     );
 
-  if (ratesEl) {
-    if (rate) {
-      const primary = rate.primary || {};
-      const secondary = rate.secondary || {};
+  // Render progress bars for rate limits
+  if (rate) {
+    const primary = rate.primary || {};
+    const secondary = rate.secondary || {};
+    
+    renderUsageProgressBar(primaryBarEl, primary.used_percent, primary.window_minutes);
+    renderUsageProgressBar(secondaryBarEl, secondary.used_percent, secondary.window_minutes);
+    
+    // Also update text fallback
+    if (ratesEl) {
       ratesEl.textContent = `${primary.used_percent ?? "–"}%/${
         primary.window_minutes ?? ""
       }m · ${secondary.used_percent ?? "–"}%/${
         secondary.window_minutes ?? ""
       }m`;
-    } else {
-      ratesEl.textContent = "–";
     }
+  } else {
+    renderUsageProgressBar(primaryBarEl, null, null);
+    renderUsageProgressBar(secondaryBarEl, null, null);
+    if (ratesEl) ratesEl.textContent = "–";
   }
+  
   if (metaEl) metaEl.textContent = codexHome;
 }
 

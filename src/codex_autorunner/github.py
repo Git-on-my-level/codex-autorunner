@@ -12,6 +12,13 @@ from .utils import (
     resolve_executable,
     subprocess_env,
 )
+from .git_utils import (
+    run_git,
+    git_available,
+    git_branch,
+    git_is_clean,
+    GitError,
+)
 from .prompts import build_sync_agent_prompt
 from .prompts import build_github_issue_to_spec_prompt
 
@@ -282,24 +289,11 @@ class GitHubService:
         return _parse_repo_info(payload)
 
     def current_branch(self, *, cwd: Optional[Path] = None) -> str:
-        proc = _run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=cwd or self.repo_root,
-            check=False,
-        )
-        if proc.returncode != 0:
-            return "HEAD"
-        return (proc.stdout or "").strip() or "HEAD"
+        branch = git_branch(cwd or self.repo_root)
+        return branch or "HEAD"
 
     def is_clean(self, *, cwd: Optional[Path] = None) -> bool:
-        proc = _run(
-            ["git", "status", "--porcelain"],
-            cwd=cwd or self.repo_root,
-            check=False,
-        )
-        if proc.returncode != 0:
-            return False
-        return not bool((proc.stdout or "").strip())
+        return git_is_clean(cwd or self.repo_root)
 
     def pr_for_branch(
         self, *, branch: str, cwd: Optional[Path] = None

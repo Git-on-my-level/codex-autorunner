@@ -11,10 +11,14 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from .engine import Engine
 from .utils import atomic_write, read_json
 from .prompts import SNAPSHOT_PROMPT as _SNAPSHOT_PROMPT
-
-
-SNAPSHOT_PATH = Path(".codex-autorunner/SNAPSHOT.md")
-SNAPSHOT_STATE_PATH = Path(".codex-autorunner/snapshot_state.json")
+from .git_utils import (
+    git_available,
+    git_head_sha,
+    git_branch,
+    git_ls_files,
+    git_diff_name_status,
+    git_status_porcelain,
+)
 
 
 class SnapshotError(Exception):
@@ -108,56 +112,6 @@ def _is_probably_binary(blob: bytes) -> bool:
         return False
     control = sum(1 for b in sample if b < 9 or (13 < b < 32))
     return (control / len(sample)) > 0.3
-
-
-def _git(args: List[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git"] + args,
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-    )
-
-
-def _git_available(repo_root: Path) -> bool:
-    if not (repo_root / ".git").exists():
-        return False
-    proc = _git(["rev-parse", "--is-inside-work-tree"], repo_root)
-    return proc.returncode == 0
-
-
-def _git_head_sha(repo_root: Path) -> Optional[str]:
-    proc = _git(["rev-parse", "HEAD"], repo_root)
-    sha = (proc.stdout or "").strip()
-    return sha if proc.returncode == 0 and sha else None
-
-
-def _git_branch(repo_root: Path) -> Optional[str]:
-    proc = _git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root)
-    branch = (proc.stdout or "").strip()
-    if proc.returncode != 0 or not branch:
-        return None
-    if branch == "HEAD":
-        return None
-    return branch
-
-
-def _iter_files_git(repo_root: Path) -> List[str]:
-    proc = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=str(repo_root),
-        capture_output=True,
-    )
-    if proc.returncode != 0:
-        return []
-    paths = [p for p in proc.stdout.split(b"\x00") if p]
-    decoded: List[str] = []
-    for p in paths:
-        try:
-            decoded.append(p.decode("utf-8"))
-        except UnicodeDecodeError:
-            decoded.append(p.decode("utf-8", errors="replace"))
-    return decoded
 
 
 def _iter_files_fs(repo_root: Path, *, max_files: int = 5000) -> List[str]:
@@ -312,11 +266,11 @@ def collect_seed_context(
     per_doc_max_chars: int = 2000,
 ) -> SeedContext:
     repo_root = engine.repo_root
-    git_ok = _git_available(repo_root)
-    head_sha = _git_head_sha(repo_root) if git_ok else None
-    branch = _git_branch(repo_root) if git_ok else None
+    git_ok = git_available(repo_root)
+    head_sha = git_head_sha(repo_root) if git_ok else None
+    branch = git_branch(repo_root) if git_ok else None
 
-    files = _iter_files_git(repo_root) if git_ok else _iter_files_fs(repo_root)
+    files = git_ls_files(repo_root) if git_ok else _iter_files_fs(repo_root)
     tree = _build_tree_outline(
         files, max_depth=tree_max_depth, max_entries=tree_max_entries
     )
@@ -410,16 +364,16 @@ def summarize_changes(
     max_lines: int = 60,
 ) -> str:
     repo_root = engine.repo_root
-    git_ok = _git_available(repo_root)
+    git_ok = git_available(repo_root)
     prev_sha = None
     if previous_state:
         prev_sha = previous_state.get("head_sha")
 
     if git_ok and prev_sha:
-        proc = _git(["diff", "--name-status", f"{prev_sha}..HEAD"], repo_root)
-        diff_lines = (proc.stdout or "").strip().splitlines()
+        diff_output = git_diff_name_status(repo_root, prev_sha, "HEAD")
+        diff_lines = (diff_output or "").strip().splitlines()
         diff_lines = [ln for ln in diff_lines if ln.strip()]
-        if proc.returncode == 0 and diff_lines:
+        if diff_lines:
             head = "\n".join(diff_lines[:max_lines])
             tail = "\n… (truncated)\n" if len(diff_lines) > max_lines else "\n"
             return (
@@ -427,10 +381,10 @@ def summarize_changes(
                 f"```text\n{head}{tail}```\n"
             )
 
-        status = _git(["status", "--porcelain"], repo_root)
-        status_lines = (status.stdout or "").strip().splitlines()
+        status_output = git_status_porcelain(repo_root)
+        status_lines = (status_output or "").strip().splitlines()
         status_lines = [ln for ln in status_lines if ln.strip()]
-        if status.returncode == 0 and status_lines:
+        if status_lines:
             head = "\n".join(status_lines[:max_lines])
             tail = "\n… (truncated)\n" if len(status_lines) > max_lines else "\n"
             return f"Working tree status (git status --porcelain):\n```text\n{head}{tail}```\n"
@@ -537,14 +491,14 @@ def _run_codex(engine: Engine, prompt: str, *, prefer_large_model: bool) -> str:
 
 
 def load_snapshot(engine: Engine) -> Optional[str]:
-    path = engine.repo_root / SNAPSHOT_PATH
+    path = engine.config.doc_path("snapshot")
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8")
 
 
 def load_snapshot_state(engine: Engine) -> Optional[dict]:
-    return read_json(engine.repo_root / SNAPSHOT_STATE_PATH)
+    return read_json(engine.config.doc_path("snapshot_state"))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -593,11 +547,11 @@ def generate_snapshot(
     }
 
     atomic_write(
-        engine.repo_root / SNAPSHOT_PATH,
+        engine.config.doc_path("snapshot"),
         final if final.endswith("\n") else final + "\n",
     )
     atomic_write(
-        engine.repo_root / SNAPSHOT_STATE_PATH,
+        engine.config.doc_path("snapshot_state"),
         json.dumps(state, indent=2, sort_keys=True) + "\n",
     )
     return SnapshotResult(content=final, truncated=truncated, state=state)

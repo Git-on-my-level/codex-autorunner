@@ -50,5 +50,3 @@ def test_terminal_resume_cmd_does_not_seed_about_prompt(repo: Path, monkeypatch)
     cmd = build_codex_terminal_cmd(engine, resume_mode=True)
     assert "resume" in cmd
     assert about_text not in cmd
-
-

@@ -268,6 +268,75 @@ main {
   opacity: 0.7;
   padding-top: 4px;
   border-top: 1px solid var(--border);
+  margin-top: 6px;
+}
+
+/* Usage Progress Bars */
+.usage-rates-visual {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.usage-rate-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-rate-label {
+  font-size: 9px;
+  color: var(--muted);
+  width: 45px;
+  flex-shrink: 0;
+}
+
+.usage-rate-bar-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--bg);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid var(--border);
+}
+
+.usage-progress-bar-empty {
+  opacity: 0.5;
+}
+
+.usage-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.usage-bar-ok {
+  background: var(--accent);
+}
+
+.usage-bar-warning {
+  background: #ffcc00;
+}
+
+.usage-bar-critical {
+  background: #ff5566;
+}
+
+.usage-progress-label {
+  font-size: 9px;
+  color: var(--text);
+  font-family: monospace;
+  min-width: 50px;
+  text-align: right;
 }
 
 /* ===== Compact Hub Usage Section ===== */

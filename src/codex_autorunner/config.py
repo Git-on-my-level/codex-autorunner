@@ -26,6 +26,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "opinions": ".codex-autorunner/OPINIONS.md",
         "spec": ".codex-autorunner/SPEC.md",
         "summary": ".codex-autorunner/SUMMARY.md",
+        "snapshot": ".codex-autorunner/SNAPSHOT.md",
+        "snapshot_state": ".codex-autorunner/snapshot_state.json",
     },
     "codex": {
         "binary": "codex",
@@ -279,6 +281,10 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         "opinions": Path(cfg["docs"]["opinions"]),
         "spec": Path(cfg["docs"]["spec"]),
         "summary": Path(cfg["docs"]["summary"]),
+        "snapshot": Path(cfg["docs"].get("snapshot", ".codex-autorunner/SNAPSHOT.md")),
+        "snapshot_state": Path(
+            cfg["docs"].get("snapshot_state", ".codex-autorunner/snapshot_state.json")
+        ),
     }
     voice_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
     template_val = cfg["prompt"].get("template")

@@ -1,0 +1,112 @@
+"""
+Repository run control routes: start, stop, resume, reset, kill.
+"""
+
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Request
+
+from ..engine import LockError, clear_stale_lock
+from ..state import RunnerState, load_state, now_iso, save_state
+
+
+def build_repos_routes() -> APIRouter:
+    """Build routes for run control."""
+    router = APIRouter()
+
+    @router.post("/api/run/start")
+    def start_run(request: Request, payload: Optional[dict] = None):
+        manager = request.app.state.manager
+        logger = request.app.state.logger
+        once = False
+        if payload and isinstance(payload, dict):
+            once = bool(payload.get("once", False))
+        try:
+            logger.info("run/start once=%s", once)
+        except Exception:
+            pass
+        try:
+            manager.start(once=once)
+        except LockError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return {"running": manager.running, "once": once}
+
+    @router.post("/api/run/stop")
+    def stop_run(request: Request):
+        manager = request.app.state.manager
+        logger = request.app.state.logger
+        try:
+            logger.info("run/stop requested")
+        except Exception:
+            pass
+        manager.stop()
+        return {"running": manager.running}
+
+    @router.post("/api/run/kill")
+    def kill_run(request: Request):
+        engine = request.app.state.engine
+        manager = request.app.state.manager
+        logger = request.app.state.logger
+        try:
+            logger.info("run/kill requested")
+        except Exception:
+            pass
+        manager.kill()
+        state = load_state(engine.state_path)
+        new_state = RunnerState(
+            last_run_id=state.last_run_id,
+            status="error",
+            last_exit_code=137,
+            last_run_started_at=state.last_run_started_at,
+            last_run_finished_at=now_iso(),
+            runner_pid=None,
+        )
+        save_state(engine.state_path, new_state)
+        engine.release_lock()
+        return {"running": manager.running}
+
+    @router.post("/api/run/resume")
+    def resume_run(request: Request, payload: Optional[dict] = None):
+        engine = request.app.state.engine
+        manager = request.app.state.manager
+        logger = request.app.state.logger
+        once = False
+        if payload and isinstance(payload, dict):
+            once = bool(payload.get("once", False))
+        try:
+            logger.info("run/resume once=%s", once)
+        except Exception:
+            pass
+        clear_stale_lock(engine.lock_path)
+        manager.stop_flag.clear()
+        manager.start(once=once)
+        return {"running": manager.running, "once": once}
+
+    @router.post("/api/run/reset")
+    def reset_runner(request: Request):
+        engine = request.app.state.engine
+        manager = request.app.state.manager
+        logger = request.app.state.logger
+        if manager.running:
+            raise HTTPException(
+                status_code=409, detail="Cannot reset while runner is active"
+            )
+        try:
+            logger.info("run/reset requested")
+        except Exception:
+            pass
+        engine.lock_path.unlink(missing_ok=True)
+        initial_state = RunnerState(
+            last_run_id=None,
+            status="idle",
+            last_exit_code=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            runner_pid=None,
+        )
+        save_state(engine.state_path, initial_state)
+        if engine.log_path.exists():
+            engine.log_path.unlink()
+        return {"status": "ok", "message": "Runner reset complete"}
+
+    return router
