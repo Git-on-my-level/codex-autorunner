@@ -278,6 +278,7 @@ export function initDashboard() {
 
   // Initial load
   loadUsage();
+  loadVersion();
   startStatePolling();
 
   // Register auto-refresh for usage data (every 60s, only when dashboard tab is active)
@@ -288,4 +289,16 @@ export function initDashboard() {
     refreshOnActivation: true,
     immediate: false, // Already called loadUsage() above
   });
+}
+
+async function loadVersion() {
+  const versionEl = document.getElementById("repo-version");
+  if (!versionEl) return;
+  try {
+    const data = await api("/api/version", { method: "GET" });
+    const version = data?.asset_version || "";
+    versionEl.textContent = version ? `v${version}` : "v–";
+  } catch (_err) {
+    versionEl.textContent = "v–";
+  }
 }

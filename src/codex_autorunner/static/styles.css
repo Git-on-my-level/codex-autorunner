@@ -730,6 +730,12 @@ a.hub-pr-pill:hover {
   border-bottom: 1px solid var(--border);
 }
 
+.card-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .label {
   color: var(--muted);
   letter-spacing: 0.06em;
@@ -737,6 +743,13 @@ a.hub-pr-pill:hover {
   text-transform: uppercase;
   font-weight: 500;
   user-select: none;
+}
+
+.hub-version,
+.version-label {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
 }
 
 /* Status pills */

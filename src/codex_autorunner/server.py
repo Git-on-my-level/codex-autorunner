@@ -422,6 +422,10 @@ def create_hub_app(
             "repos": [_add_mount_info(repo.to_dict(config.root)) for repo in snapshots],
         }
 
+    @app.get("/hub/version")
+    def hub_version():
+        return {"asset_version": app.state.asset_version}
+
     @app.post("/hub/repos/scan")
     async def scan_repos():
         try:

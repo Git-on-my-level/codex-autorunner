@@ -78,6 +78,7 @@
         <div class="hub-hero-text">
           <h1>CAR Hub</h1>
           <span id="hub-last-scan" class="pill pill-small pill-idle">–</span>
+          <span id="hub-version" class="hub-version">v–</span>
         </div>
         <div class="hub-hero-actions">
           <button id="hub-new-repo" class="primary sm">+ New</button>
@@ -140,7 +141,10 @@
           <div class="cards">
             <div class="card status-card">
               <div class="card-header">
-                <span class="label">Runner Status</span>
+                <div class="card-header-left">
+                  <span class="label">Runner Status</span>
+                  <span id="repo-version" class="version-label">v–</span>
+                </div>
                 <span id="runner-status" class="pill pill-idle">idle</span>
               </div>
               <div class="grid-two">

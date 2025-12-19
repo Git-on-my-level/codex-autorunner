@@ -20,6 +20,7 @@ const missingEl = document.getElementById("hub-count-missing");
 const hubUsageList = document.getElementById("hub-usage-list");
 const hubUsageMeta = document.getElementById("hub-usage-meta");
 const hubUsageRefresh = document.getElementById("hub-usage-refresh");
+const hubVersionEl = document.getElementById("hub-version");
 
 function formatRunSummary(repo) {
   if (!repo.initialized) return "Not initialized";
@@ -724,10 +725,22 @@ async function silentRefreshHub() {
   }
 }
 
+async function loadHubVersion() {
+  if (!hubVersionEl) return;
+  try {
+    const data = await api("/hub/version", { method: "GET" });
+    const version = data?.asset_version || "";
+    hubVersionEl.textContent = version ? `v${version}` : "v–";
+  } catch (_err) {
+    hubVersionEl.textContent = "v–";
+  }
+}
+
 export function initHub() {
   if (!repoListEl) return;
   attachHubHandlers();
   refreshHub();
+  loadHubVersion();
 
   // Register auto-refresh for hub repo list
   // Hub is a top-level page so we use tabId: null (global)
