@@ -415,7 +415,8 @@ export class TerminalManager {
     let bottom = 0;
     if (window.visualViewport) {
       const vv = window.visualViewport;
-      bottom = Math.max(0, viewportHeight - (vv.height + vv.offsetTop));
+      const referenceHeight = Math.max(this.baseViewportHeight, viewportHeight);
+      bottom = Math.max(0, referenceHeight - (vv.height + vv.offsetTop));
     }
     const keyboardFallback = window.visualViewport
       ? 0

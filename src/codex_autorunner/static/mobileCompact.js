@@ -38,7 +38,8 @@ function updateViewportInset() {
   let bottom = 0;
   if (window.visualViewport) {
     const vv = window.visualViewport;
-    bottom = Math.max(0, viewportHeight - (vv.height + vv.offsetTop));
+    const referenceHeight = Math.max(baseViewportHeight, viewportHeight);
+    bottom = Math.max(0, referenceHeight - (vv.height + vv.offsetTop));
   }
   const keyboardFallback = window.visualViewport
     ? 0
@@ -47,12 +48,21 @@ function updateViewportInset() {
   document.documentElement.style.setProperty("--vv-bottom", `${inset}px`);
 }
 
+function isTerminalComposeOpen() {
+  const panel = document.getElementById("terminal");
+  const input = document.getElementById("terminal-text-input");
+  if (!panel || !input) return false;
+  if (!panel.classList.contains("active")) return false;
+  if (input.classList.contains("hidden")) return false;
+  return isVisible(input);
+}
+
 function updateComposeFixed() {
   if (!isMobileViewport()) {
     setMobileComposeFixed(false);
     return;
   }
-  const enabled = isComposeFocused() || hasComposeDraft();
+  const enabled = isComposeFocused() || hasComposeDraft() || isTerminalComposeOpen();
   setMobileComposeFixed(enabled);
 }
 
