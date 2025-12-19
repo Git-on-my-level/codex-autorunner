@@ -3042,6 +3042,21 @@ button.loading::after {
   html.mobile-chrome-hidden #docs .doc-chat-meta {
     display: none;
   }
+
+  html.mobile-compose-fixed #terminal .terminal-text-input,
+  html.mobile-compose-fixed #docs .doc-chat-compose {
+    position: fixed;
+    left: 4px;
+    right: 4px;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + var(--vv-bottom, 0px));
+    margin: 0;
+    z-index: 120;
+  }
+
+  html.mobile-compose-fixed #terminal.panel.active,
+  html.mobile-compose-fixed #docs.panel.active {
+    padding-bottom: calc(90px + var(--vv-bottom, 0px));
+  }
   
   .tabs {
     border: none;

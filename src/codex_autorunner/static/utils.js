@@ -170,6 +170,10 @@ export function setMobileChromeHidden(hidden) {
   document.documentElement.classList.toggle("mobile-chrome-hidden", Boolean(hidden));
 }
 
+export function setMobileComposeFixed(enabled) {
+  document.documentElement.classList.toggle("mobile-compose-fixed", Boolean(enabled));
+}
+
 /**
  * Show a custom confirmation modal dialog.
  * Works consistently across desktop and mobile.

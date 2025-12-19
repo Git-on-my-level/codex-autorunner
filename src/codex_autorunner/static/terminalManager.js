@@ -402,10 +402,11 @@ export class TerminalManager {
   }
 
   _updateViewportInsets() {
-    if (!this.terminalSectionEl || !window.visualViewport) return;
+    if (!window.visualViewport) return;
     const vv = window.visualViewport;
     const bottom = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
-    this.terminalSectionEl.style.setProperty("--vv-bottom", `${bottom}px`);
+    document.documentElement.style.setProperty("--vv-bottom", `${bottom}px`);
+    this.terminalSectionEl?.style.setProperty("--vv-bottom", `${bottom}px`);
   }
 
   _updateComposerSticky() {
