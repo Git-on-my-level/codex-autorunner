@@ -12,91 +12,8 @@ let baseViewportHeight = window.innerHeight;
 const FORM_FIELD_SELECTOR = "input, textarea, select, [contenteditable=\"true\"]";
 const terminalFieldSuppression = {
   active: false,
-  touched: new Set(),
+  replacements: new Map(), // Map<placeholder, originalElement>
 };
-
-function isVisible(el) {
-  if (!el) return false;
-  return Boolean(el.offsetParent || el.getClientRects().length);
-}
-
-function isComposeFocused() {
-  const el = document.activeElement;
-  if (!el || !(el instanceof HTMLElement)) return false;
-  return el.matches(COMPOSE_INPUT_SELECTOR);
-}
-
-function hasComposeDraft() {
-  const inputs = Array.from(document.querySelectorAll(COMPOSE_INPUT_SELECTOR));
-  return inputs.some((input) => {
-    if (!(input instanceof HTMLTextAreaElement)) return false;
-    if (!isVisible(input)) return false;
-    return Boolean(input.value && input.value.trim());
-  });
-}
-
-function updateViewportInset() {
-  const viewportHeight = window.innerHeight;
-  if (viewportHeight > baseViewportHeight) {
-    baseViewportHeight = viewportHeight;
-  }
-  let bottom = 0;
-  if (window.visualViewport) {
-    const vv = window.visualViewport;
-    const referenceHeight = Math.max(baseViewportHeight, viewportHeight);
-    bottom = Math.max(0, referenceHeight - (vv.height + vv.offsetTop));
-  }
-  const keyboardFallback = window.visualViewport
-    ? 0
-    : Math.max(0, baseViewportHeight - viewportHeight);
-  const inset = bottom || keyboardFallback;
-  document.documentElement.style.setProperty("--vv-bottom", `${inset}px`);
-}
-
-function isTerminalComposeOpen() {
-  const panel = document.getElementById("terminal");
-  const input = document.getElementById("terminal-text-input");
-  if (!panel || !input) return false;
-  if (!panel.classList.contains("active")) return false;
-  if (input.classList.contains("hidden")) return false;
-  return true;
-}
-
-function updateComposeFixed() {
-  if (!isMobileViewport()) {
-    setMobileComposeFixed(false);
-    return;
-  }
-  const enabled = isComposeFocused() || hasComposeDraft() || isTerminalComposeOpen();
-  setMobileComposeFixed(enabled);
-  // Always update viewport inset when compose state changes so the composer
-  // is positioned correctly above the keyboard even when not focused.
-  if (enabled) {
-    updateViewportInset();
-    updateMobileControlsOffset();
-  }
-}
-
-/**
- * Measure the actual height of the terminal text input panel and set a CSS
- * variable so the mobile controls can be positioned exactly above it.
- */
-function updateMobileControlsOffset() {
-  const textInput = document.getElementById("terminal-text-input");
-  const mobileControls = document.getElementById("terminal-mobile-controls");
-  if (!textInput || !mobileControls) return;
-  
-  // Get the actual rendered height of the text input panel
-  const textInputHeight = textInput.offsetHeight || 0;
-  // Add a small gap between controls and text input
-  const offset = textInputHeight + 4;
-  document.documentElement.style.setProperty("--compose-input-height", `${offset}px`);
-  
-  // Also set the total height for padding-bottom calculation
-  const controlsHeight = mobileControls.offsetHeight || 0;
-  const totalHeight = textInputHeight + controlsHeight + 8;
-  document.documentElement.style.setProperty("--compose-total-height", `${totalHeight}px`);
-}
 
 function isTerminalTextarea(el) {
   return Boolean(el && el instanceof HTMLElement && el.id === "terminal-textarea");
@@ -106,62 +23,44 @@ function suppressOtherFormFields(activeEl) {
   if (terminalFieldSuppression.active) return;
   if (!activeEl || !(activeEl instanceof HTMLElement)) return;
   terminalFieldSuppression.active = true;
+  
   const fields = Array.from(document.querySelectorAll(FORM_FIELD_SELECTOR));
   fields.forEach((field) => {
     if (!(field instanceof HTMLElement)) return;
     if (field === activeEl) return;
-    // Skip already-suppressed fields
-    if (field.dataset?.codexFieldSuppressed === "1") return;
-    // Skip true hidden inputs (type="hidden")
+    // Skip true hidden inputs (type="hidden") as they don't trigger the bar
     if (field instanceof HTMLInputElement && field.type === "hidden") return;
-    // NOTE: We intentionally do NOT skip non-visible fields here.
-    // iOS may still detect them for the keyboard accessory bar even if they
-    // are in inactive panels or have display:none ancestors. Suppressing ALL
-    // form fields (except the active one) ensures iOS sees only one input.
-    if (field.hasAttribute("tabindex")) {
-      field.dataset.codexPrevTabindex = field.getAttribute("tabindex") || "";
+    
+    // For iOS to hide the accessory bar, the focused element must be the ONLY
+    // focusable element in the DOM. Even "display: none" or "disabled" inputs
+    // can trigger the bar in some heuristics.
+    // The safest way is to temporarily remove them from the DOM.
+    
+    // Create a placeholder. If the field is visible, we should try to preserve layout,
+    // but usually in the terminal view other inputs are hidden or in other panels.
+    // We'll use a hidden span as a marker.
+    const placeholder = document.createElement("span");
+    placeholder.style.display = "none";
+    placeholder.dataset.codexPlaceholder = "1";
+    
+    if (field.parentNode) {
+        terminalFieldSuppression.replacements.set(placeholder, field);
+        field.replaceWith(placeholder);
     }
-    field.dataset.codexFieldSuppressed = "1";
-    field.setAttribute("tabindex", "-1");
-    if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) {
-      if (field.disabled) {
-        field.dataset.codexPrevDisabled = "1";
-      }
-      field.disabled = true;
-    } else if (field.getAttribute("contenteditable") === "true") {
-      field.dataset.codexPrevContenteditable = "true";
-      field.setAttribute("contenteditable", "false");
-    }
-    terminalFieldSuppression.touched.add(field);
   });
 }
 
 function restoreFormFields() {
   if (!terminalFieldSuppression.active) return;
-  terminalFieldSuppression.touched.forEach((field) => {
-    if (!(field instanceof HTMLElement)) return;
-    if (field.dataset.codexFieldSuppressed !== "1") return;
-    const prev = field.dataset.codexPrevTabindex;
-    if (prev === undefined) {
-      field.removeAttribute("tabindex");
-    } else {
-      field.setAttribute("tabindex", prev);
-    }
-    delete field.dataset.codexPrevTabindex;
-    delete field.dataset.codexFieldSuppressed;
-    if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) {
-      if (field.dataset.codexPrevDisabled === "1") {
-        field.disabled = true;
-      } else {
-        field.disabled = false;
+  
+  // Restore elements from placeholders
+  for (const [placeholder, field] of terminalFieldSuppression.replacements) {
+      if (placeholder.parentNode) {
+          placeholder.replaceWith(field);
       }
-      delete field.dataset.codexPrevDisabled;
-    } else if (field.dataset.codexPrevContenteditable === "true") {
-      field.setAttribute("contenteditable", "true");
-      delete field.dataset.codexPrevContenteditable;
-    }
-  });
-  terminalFieldSuppression.touched.clear();
+  }
+  
+  terminalFieldSuppression.replacements.clear();
   terminalFieldSuppression.active = false;
 }
 
