@@ -9,6 +9,11 @@ import { getTerminalManager } from "./terminal.js";
 const COMPOSE_INPUT_SELECTOR = "#doc-chat-input, #terminal-textarea";
 const SEND_BUTTON_SELECTOR = "#doc-chat-send, #terminal-text-send";
 let baseViewportHeight = window.innerHeight;
+const FORM_FIELD_SELECTOR = "input, textarea, select, [contenteditable=\"true\"]";
+const terminalFieldSuppression = {
+  active: false,
+  touched: new Set(),
+};
 
 function isVisible(el) {
   if (!el) return false;
@@ -66,6 +71,47 @@ function updateComposeFixed() {
   setMobileComposeFixed(enabled);
 }
 
+function isTerminalTextarea(el) {
+  return Boolean(el && el instanceof HTMLElement && el.id === "terminal-textarea");
+}
+
+function suppressOtherFormFields(activeEl) {
+  if (terminalFieldSuppression.active) return;
+  if (!activeEl || !(activeEl instanceof HTMLElement)) return;
+  terminalFieldSuppression.active = true;
+  const fields = Array.from(document.querySelectorAll(FORM_FIELD_SELECTOR));
+  fields.forEach((field) => {
+    if (!(field instanceof HTMLElement)) return;
+    if (field === activeEl) return;
+    if (!isVisible(field)) return;
+    if (field.dataset?.codexFieldSuppressed === "1") return;
+    if (field.hasAttribute("tabindex")) {
+      field.dataset.codexPrevTabindex = field.getAttribute("tabindex") || "";
+    }
+    field.dataset.codexFieldSuppressed = "1";
+    field.setAttribute("tabindex", "-1");
+    terminalFieldSuppression.touched.add(field);
+  });
+}
+
+function restoreFormFields() {
+  if (!terminalFieldSuppression.active) return;
+  terminalFieldSuppression.touched.forEach((field) => {
+    if (!(field instanceof HTMLElement)) return;
+    if (field.dataset.codexFieldSuppressed !== "1") return;
+    const prev = field.dataset.codexPrevTabindex;
+    if (prev === undefined) {
+      field.removeAttribute("tabindex");
+    } else {
+      field.setAttribute("tabindex", prev);
+    }
+    delete field.dataset.codexPrevTabindex;
+    delete field.dataset.codexFieldSuppressed;
+  });
+  terminalFieldSuppression.touched.clear();
+  terminalFieldSuppression.active = false;
+}
+
 export function initMobileCompact() {
   setMobileChromeHidden(false);
 
@@ -101,8 +147,9 @@ export function initMobileCompact() {
       setMobileChromeHidden(false); // Ensure chrome is shown (or hidden? logic seems to be "hide chrome when focused" in maybeHide?)
       
       // If we are focusing the terminal input, switch to mobile view
-      if (target.id === "terminal-textarea") {
+      if (isTerminalTextarea(target)) {
          getTerminalManager()?.enterMobileInputMode();
+         suppressOtherFormFields(target);
       }
     },
     true
@@ -119,6 +166,7 @@ export function initMobileCompact() {
         if (isComposeFocused()) return;
         show();
         getTerminalManager()?.exitMobileInputMode();
+        restoreFormFields();
       }, 50); // Slight increase to ensure reliable restore
     },
     true
