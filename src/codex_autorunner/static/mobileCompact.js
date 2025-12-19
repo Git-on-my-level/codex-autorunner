@@ -45,6 +45,8 @@ function updateComposeFixed() {
 }
 
 export function initMobileCompact() {
+  setMobileChromeHidden(false);
+
   const maybeHide = () => {
     if (!isMobileViewport()) return;
     if (!(isComposeFocused() || hasComposeDraft())) return;
@@ -119,7 +121,16 @@ export function initMobileCompact() {
     updateViewportInset();
   }
 
-  window.addEventListener("resize", updateComposeFixed, { passive: true });
+  window.addEventListener(
+    "resize",
+    () => {
+      if (!isMobileViewport()) {
+        setMobileChromeHidden(false);
+      }
+      updateComposeFixed();
+    },
+    { passive: true }
+  );
 
   subscribe("tab:change", () => {
     show();
