@@ -8,6 +8,7 @@ import { getTerminalManager } from "./terminal.js";
 
 const COMPOSE_INPUT_SELECTOR = "#doc-chat-input, #terminal-textarea";
 const SEND_BUTTON_SELECTOR = "#doc-chat-send, #terminal-text-send";
+let baseViewportHeight = window.innerHeight;
 
 function isVisible(el) {
   if (!el) return false;
@@ -30,10 +31,18 @@ function hasComposeDraft() {
 }
 
 function updateViewportInset() {
-  if (!window.visualViewport) return;
-  const vv = window.visualViewport;
-  const bottom = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
-  document.documentElement.style.setProperty("--vv-bottom", `${bottom}px`);
+  const viewportHeight = window.innerHeight;
+  if (viewportHeight > baseViewportHeight) {
+    baseViewportHeight = viewportHeight;
+  }
+  let bottom = 0;
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+    bottom = Math.max(0, viewportHeight - (vv.height + vv.offsetTop));
+  }
+  const keyboardFallback = Math.max(0, baseViewportHeight - viewportHeight);
+  const inset = Math.max(bottom, keyboardFallback);
+  document.documentElement.style.setProperty("--vv-bottom", `${inset}px`);
 }
 
 function updateComposeFixed() {

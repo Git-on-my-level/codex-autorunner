@@ -101,6 +101,9 @@ export class TerminalManager {
     this.mobileViewEl = null;
     this.ctrlActive = false;
     this.altActive = false;
+    this.baseViewportHeight = window.innerHeight;
+    this.suppressNextSendClick = false;
+    this.lastSendTapAt = 0;
 
     // Bind methods that are used as callbacks
     this._handleResize = this._handleResize.bind(this);
@@ -405,11 +408,19 @@ export class TerminalManager {
   }
 
   _updateViewportInsets() {
-    if (!window.visualViewport) return;
-    const vv = window.visualViewport;
-    const bottom = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
-    document.documentElement.style.setProperty("--vv-bottom", `${bottom}px`);
-    this.terminalSectionEl?.style.setProperty("--vv-bottom", `${bottom}px`);
+    const viewportHeight = window.innerHeight;
+    if (viewportHeight > this.baseViewportHeight) {
+      this.baseViewportHeight = viewportHeight;
+    }
+    let bottom = 0;
+    if (window.visualViewport) {
+      const vv = window.visualViewport;
+      bottom = Math.max(0, viewportHeight - (vv.height + vv.offsetTop));
+    }
+    const keyboardFallback = Math.max(0, this.baseViewportHeight - viewportHeight);
+    const inset = Math.max(bottom, keyboardFallback);
+    document.documentElement.style.setProperty("--vv-bottom", `${inset}px`);
+    this.terminalSectionEl?.style.setProperty("--vv-bottom", `${inset}px`);
   }
 
   _updateComposerSticky() {
@@ -1029,6 +1040,23 @@ export class TerminalManager {
     });
 
     this.textInputSendBtn.addEventListener("click", () => {
+      if (this.suppressNextSendClick) {
+        this.suppressNextSendClick = false;
+        return;
+      }
+      if (this.textInputSendBtn?.disabled) {
+        flash("Connect the terminal first", "error");
+        return;
+      }
+      this._sendFromTextarea();
+    });
+    this.textInputSendBtn.addEventListener("pointerup", (e) => {
+      if (e.pointerType !== "touch") return;
+      e.preventDefault();
+      const now = Date.now();
+      if (now - this.lastSendTapAt < 300) return;
+      this.lastSendTapAt = now;
+      this.suppressNextSendClick = true;
       if (this.textInputSendBtn?.disabled) {
         flash("Connect the terminal first", "error");
         return;
