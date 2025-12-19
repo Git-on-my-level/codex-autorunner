@@ -2380,6 +2380,7 @@ label {
   height: calc(100vh - 100px);
   height: calc(100dvh - 100px);
   overflow: hidden;
+  touch-action: pan-y;
 }
 
 /* ===== MOBILE TERMINAL CONTROLS ===== */
@@ -2405,6 +2406,32 @@ label {
   padding: 6px;
 }
 
+.terminal-jump-btn {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(108, 245, 216, 0.12);
+  border: 1px solid rgba(108, 245, 216, 0.3);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: transform 0.15s ease, opacity 0.15s ease;
+  z-index: 4;
+}
+
+.terminal-jump-btn:hover {
+  background: rgba(108, 245, 216, 0.2);
+  transform: translateY(-1px);
+}
+
+.terminal-jump-btn:active {
+  transform: translateY(0);
+}
+
 /* ===== TERMINAL TEXT INPUT (optional panel) ===== */
 #terminal-text-input-toggle[aria-expanded="true"] {
   background: rgba(108, 245, 216, 0.12);
@@ -2421,6 +2448,13 @@ label {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+#terminal.composer-sticky .terminal-text-input {
+  position: sticky;
+  bottom: calc(env(safe-area-inset-bottom) + var(--vv-bottom, 0px));
+  z-index: 8;
+  box-shadow: 0 -10px 24px rgba(0, 0, 0, 0.45);
 }
 
 .terminal-text-input-title {

@@ -6,6 +6,8 @@ const textEncoder = new TextEncoder();
 
 const TEXT_INPUT_STORAGE_KEYS = Object.freeze({
   enabled: "codex_terminal_text_input_enabled",
+  draft: "codex_terminal_text_input_draft",
+  pending: "codex_terminal_text_input_pending",
 });
 
 const TEXT_INPUT_SIZE_LIMITS = Object.freeze({
@@ -68,6 +70,7 @@ export class TerminalManager {
     this.connectBtn = null;
     this.disconnectBtn = null;
     this.resumeBtn = null;
+    this.jumpBottomBtn = null;
 
     // Voice state
     this.voiceBtn = null;
@@ -87,6 +90,9 @@ export class TerminalManager {
     this.textInputTextareaEl = null;
     this.textInputSendBtn = null;
     this.textInputEnabled = false;
+    this.textInputPending = null;
+    this.textInputSendBtnLabel = null;
+    this.textInputHintBase = null;
 
     // Mobile controls state
     this.mobileControlsEl = null;
@@ -117,6 +123,7 @@ export class TerminalManager {
     this.connectBtn = document.getElementById("terminal-connect");
     this.disconnectBtn = document.getElementById("terminal-disconnect");
     this.resumeBtn = document.getElementById("terminal-resume");
+    this.jumpBottomBtn = document.getElementById("terminal-jump-bottom");
 
     if (!this.statusEl || !this.connectBtn || !this.disconnectBtn || !this.resumeBtn) {
       return;
@@ -125,6 +132,11 @@ export class TerminalManager {
     this.connectBtn.addEventListener("click", () => this.connect({ mode: "new" }));
     this.resumeBtn.addEventListener("click", () => this.connect({ mode: "resume" }));
     this.disconnectBtn.addEventListener("click", () => this.disconnect());
+    this.jumpBottomBtn?.addEventListener("click", () => {
+      this.term?.scrollToBottom();
+      this._updateJumpBottomVisibility();
+      this.term?.focus();
+    });
     this._updateButtons(false);
     this._setStatus("Disconnected");
 
@@ -161,6 +173,85 @@ export class TerminalManager {
     return window.innerWidth < 640 ? 10 : 13;
   }
 
+  _updateJumpBottomVisibility() {
+    if (!this.jumpBottomBtn || !this.term) return;
+    const buffer = this.term.buffer?.active;
+    if (!buffer) {
+      this.jumpBottomBtn.classList.add("hidden");
+      return;
+    }
+    const atBottom = buffer.viewportY >= buffer.baseY;
+    this.jumpBottomBtn.classList.toggle("hidden", atBottom);
+  }
+
+  _initTouchTerminalScroll(container) {
+    if (!this.isTouchDevice()) return;
+    let tracking = false;
+    let lastX = 0;
+    let lastY = 0;
+    let remainderPx = 0;
+
+    const estimateCellHeight = () => {
+      const internal =
+        this.term?._core?._renderService?.dimensions?.actualCellHeight ??
+        this.term?._core?._renderService?.dimensions?.css?.cellHeight;
+      if (typeof internal === "number" && internal > 0) return internal;
+      const fontSize = Number.parseFloat(getComputedStyle(container).fontSize || "12");
+      return fontSize > 0 ? fontSize * 1.25 : 15;
+    };
+
+    container.addEventListener(
+      "touchstart",
+      (e) => {
+        if (!this.term) return;
+        if (e.touches.length !== 1) return;
+        tracking = true;
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+        remainderPx = 0;
+      },
+      { passive: true }
+    );
+
+    container.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!tracking || !this.term) return;
+        if (e.touches.length !== 1) return;
+        const x = e.touches[0].clientX;
+        const y = e.touches[0].clientY;
+        const dx = x - lastX;
+        const dy = y - lastY;
+        lastX = x;
+        lastY = y;
+
+        if (Math.abs(dx) > Math.abs(dy)) {
+          return;
+        }
+
+        e.preventDefault();
+        remainderPx += dy;
+        const cellHeight = estimateCellHeight();
+        const lines = Math.trunc(remainderPx / cellHeight);
+        if (lines !== 0) {
+          remainderPx -= lines * cellHeight;
+          // Finger down should scroll up (toward earlier output).
+          this.term.scrollLines(-lines);
+          this._updateJumpBottomVisibility();
+        }
+      },
+      { passive: false }
+    );
+
+    container.addEventListener(
+      "touchend",
+      () => {
+        tracking = false;
+      },
+      { passive: true }
+    );
+  }
+
   /**
    * Ensure xterm terminal is initialized
    */
@@ -191,6 +282,9 @@ export class TerminalManager {
     this.term.loadAddon(this.fitAddon);
     this.term.open(container);
     this.term.write('Press "New" or "Resume" to launch Codex TUI...\r\n');
+    this.term.onScroll(() => this._updateJumpBottomVisibility());
+    this._updateJumpBottomVisibility();
+    this._initTouchTerminalScroll(container);
 
     if (!this.inputDisposable) {
       this.inputDisposable = this.term.onData((data) => {
@@ -301,9 +395,28 @@ export class TerminalManager {
     this.resizeRaf = requestAnimationFrame(() => {
       this.resizeRaf = requestAnimationFrame(() => {
         this.resizeRaf = null;
+        this._updateViewportInsets();
         this._handleResize();
       });
     });
+  }
+
+  _updateViewportInsets() {
+    if (!this.terminalSectionEl || !window.visualViewport) return;
+    const vv = window.visualViewport;
+    const bottom = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+    this.terminalSectionEl.style.setProperty("--vv-bottom", `${bottom}px`);
+  }
+
+  _updateComposerSticky() {
+    if (!this.terminalSectionEl) return;
+    if (!this.isTouchDevice() || !this.textInputEnabled || !this.textInputTextareaEl) {
+      this.terminalSectionEl.classList.remove("composer-sticky");
+      return;
+    }
+    const hasText = Boolean((this.textInputTextareaEl.value || "").trim());
+    const focused = document.activeElement === this.textInputTextareaEl;
+    this.terminalSectionEl.classList.toggle("composer-sticky", hasText || focused);
   }
 
   /**
@@ -377,10 +490,25 @@ export class TerminalManager {
       else this._setStatus("Connected");
 
       this._updateButtons(true);
+      this._updateTextInputSendUi();
       this.fitAddon.fit();
       this._handleResize();
 
       if (isResume) this.term?.write("\r\nLaunching codex resume...\r\n");
+
+      if (this.textInputPending) {
+        try {
+          this.socket.send(
+            JSON.stringify({
+              type: "input",
+              id: this.textInputPending.id,
+              data: this.textInputPending.payload,
+            })
+          );
+        } catch (_err) {
+          // ignore
+        }
+      }
     };
 
     this.socket.onmessage = (event) => {
@@ -390,6 +518,23 @@ export class TerminalManager {
           if (payload.type === "hello") {
             if (payload.session_id) {
               localStorage.setItem("codex_terminal_session_id", payload.session_id);
+            }
+          } else if (payload.type === "ack") {
+            const ackId = payload.id;
+            if (this.textInputPending && ackId === this.textInputPending.id) {
+              if (payload.ok === false) {
+                flash(payload.message || "Send failed; your text is preserved", "error");
+                this._updateTextInputSendUi();
+              } else {
+                const current = this.textInputTextareaEl?.value || "";
+                if (current === this.textInputPending.originalText) {
+                  if (this.textInputTextareaEl) {
+                    this.textInputTextareaEl.value = "";
+                    this._persistTextInputDraft();
+                  }
+                }
+                this._clearPendingTextInput();
+              }
             }
           } else if (payload.type === "exit") {
             this.term?.write(
@@ -430,11 +575,16 @@ export class TerminalManager {
 
     this.socket.onclose = () => {
       this._updateButtons(false);
+      this._updateTextInputSendUi();
 
       if (this.intentionalDisconnect) {
         this._setStatus("Disconnected");
         this.overlayEl?.classList.remove("hidden");
         return;
+      }
+
+      if (this.textInputPending) {
+        flash("Send not confirmed; your text is preserved and will retry on reconnect", "info");
       }
 
       // Auto-reconnect logic
@@ -512,6 +662,80 @@ export class TerminalManager {
     return (text || "").replace(/\r\n?/g, "\n");
   }
 
+  _updateTextInputSendUi() {
+    if (!this.textInputSendBtn) return;
+    const connected = Boolean(this.socket && this.socket.readyState === WebSocket.OPEN);
+    const pending = Boolean(this.textInputPending);
+    this.textInputSendBtn.disabled = !connected || pending;
+    if (this.textInputSendBtnLabel === null) {
+      this.textInputSendBtnLabel = this.textInputSendBtn.textContent || "Send";
+    }
+    this.textInputSendBtn.textContent = pending ? "Sending…" : this.textInputSendBtnLabel;
+
+    const hintEl = document.getElementById("terminal-text-hint");
+    if (!hintEl) return;
+    if (this.textInputHintBase === null) {
+      this.textInputHintBase = hintEl.textContent || "";
+    }
+    if (pending) {
+      hintEl.textContent = "Sending… Your text will stay here until confirmed.";
+    } else {
+      hintEl.textContent = this.textInputHintBase;
+    }
+  }
+
+  _persistTextInputDraft() {
+    if (!this.textInputTextareaEl) return;
+    try {
+      localStorage.setItem(TEXT_INPUT_STORAGE_KEYS.draft, this.textInputTextareaEl.value || "");
+    } catch (_err) {
+      // ignore
+    }
+  }
+
+  _restoreTextInputDraft() {
+    if (!this.textInputTextareaEl) return;
+    if (this.textInputTextareaEl.value) return;
+    try {
+      const draft = localStorage.getItem(TEXT_INPUT_STORAGE_KEYS.draft);
+      if (draft) this.textInputTextareaEl.value = draft;
+    } catch (_err) {
+      // ignore
+    }
+  }
+
+  _loadPendingTextInput() {
+    try {
+      const raw = localStorage.getItem(TEXT_INPUT_STORAGE_KEYS.pending);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      if (typeof parsed.id !== "string" || typeof parsed.payload !== "string") return null;
+      if (typeof parsed.originalText !== "string") return null;
+      return parsed;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  _savePendingTextInput(pending) {
+    try {
+      localStorage.setItem(TEXT_INPUT_STORAGE_KEYS.pending, JSON.stringify(pending));
+    } catch (_err) {
+      // ignore
+    }
+  }
+
+  _clearPendingTextInput() {
+    this.textInputPending = null;
+    try {
+      localStorage.removeItem(TEXT_INPUT_STORAGE_KEYS.pending);
+    } catch (_err) {
+      // ignore
+    }
+    this._updateTextInputSendUi();
+  }
+
   _sendText(text, options = {}) {
     const appendNewline = Boolean(options.appendNewline);
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
@@ -545,6 +769,65 @@ export class TerminalManager {
     return true;
   }
 
+  _sendTextWithAck(text, options = {}) {
+    const appendNewline = Boolean(options.appendNewline);
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      flash("Connect the terminal first", "error");
+      return false;
+    }
+
+    let payload = this._normalizeNewlines(text);
+    if (!payload) return false;
+
+    const originalText = payload;
+    if (appendNewline && !payload.endsWith("\n")) {
+      payload = `${payload}\n`;
+    }
+
+    const encoded = textEncoder.encode(payload);
+    if (encoded.byteLength > TEXT_INPUT_SIZE_LIMITS.maxBytes) {
+      flash(
+        `Text is too large to send (${Math.round(encoded.byteLength / 1024)}KB).`,
+        "error"
+      );
+      return false;
+    }
+    if (encoded.byteLength > TEXT_INPUT_SIZE_LIMITS.warnBytes) {
+      flash(
+        `Large paste (${Math.round(encoded.byteLength / 1024)}KB); sending may be slow.`,
+        "info"
+      );
+    }
+
+    const id =
+      (window.crypto && typeof window.crypto.randomUUID === "function" && window.crypto.randomUUID()) ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    this.textInputPending = {
+      id,
+      payload,
+      originalText,
+      sentAt: Date.now(),
+    };
+    this._savePendingTextInput(this.textInputPending);
+    this._updateTextInputSendUi();
+
+    try {
+      this.socket.send(
+        JSON.stringify({
+          type: "input",
+          id,
+          data: payload,
+        })
+      );
+      return true;
+    } catch (_err) {
+      flash("Send failed; your text is preserved", "error");
+      this._updateTextInputSendUi();
+      return false;
+    }
+  }
+
   _setTextInputEnabled(enabled, options = {}) {
     this.textInputEnabled = Boolean(enabled);
     this._writeBoolToStorage(TEXT_INPUT_STORAGE_KEYS.enabled, this.textInputEnabled);
@@ -562,6 +845,7 @@ export class TerminalManager {
       this.textInputEnabled ? "false" : "true"
     );
     this.terminalSectionEl?.classList.toggle("text-input-open", this.textInputEnabled);
+    this._updateComposerSticky();
 
     // The panel changes the terminal container height via CSS; refit xterm
     this._scheduleResizeAfterLayout();
@@ -576,18 +860,15 @@ export class TerminalManager {
   }
 
   _updateTextInputConnected(connected) {
-    if (this.textInputSendBtn) this.textInputSendBtn.disabled = !connected;
     if (this.textInputTextareaEl) this.textInputTextareaEl.disabled = false;
+    this._updateTextInputSendUi();
   }
 
   _sendFromTextarea() {
     const text = this.textInputTextareaEl?.value || "";
-    const ok = this._sendText(text, { appendNewline: true });
+    this._persistTextInputDraft();
+    const ok = this._sendTextWithAck(text, { appendNewline: true });
     if (!ok) return;
-
-    if (this.textInputTextareaEl) {
-      this.textInputTextareaEl.value = "";
-    }
 
     if (this.isTouchDevice()) {
       requestAnimationFrame(() => {
@@ -643,7 +924,30 @@ export class TerminalManager {
       this._sendFromTextarea();
     });
 
+    this.textInputTextareaEl.addEventListener("input", () => {
+      this._persistTextInputDraft();
+      this._updateComposerSticky();
+    });
+
+    this.textInputTextareaEl.addEventListener("focus", () => {
+      this._updateComposerSticky();
+      this._updateViewportInsets();
+    });
+
+    this.textInputTextareaEl.addEventListener("blur", () => {
+      // Wait a tick so activeElement updates.
+      setTimeout(() => this._updateComposerSticky(), 0);
+    });
+
+    this.textInputPending = this._loadPendingTextInput();
+    this._restoreTextInputDraft();
+    if (this.textInputPending && this.textInputTextareaEl && !this.textInputTextareaEl.value) {
+      this.textInputTextareaEl.value = this.textInputPending.originalText || "";
+    }
+
     this._setTextInputEnabled(this.textInputEnabled, { focus: false });
+    this._updateViewportInsets();
+    this._updateComposerSticky();
     this._updateTextInputConnected(
       Boolean(this.socket && this.socket.readyState === WebSocket.OPEN)
     );
@@ -749,10 +1053,40 @@ export class TerminalManager {
 
   // ==================== VOICE INPUT ====================
 
+  _insertTranscriptIntoTextInput(text) {
+    if (!text) return false;
+    if (!this.textInputTextareaEl) return false;
+
+    if (!this.textInputEnabled) {
+      this._setTextInputEnabled(true, { focus: true, focusTextarea: true });
+    }
+
+    const transcript = String(text).trim();
+    if (!transcript) return false;
+
+    const existing = this.textInputTextareaEl.value || "";
+    let next = existing;
+    if (existing && !/\s$/.test(existing)) {
+      next += " ";
+    }
+    next += transcript;
+    this.textInputTextareaEl.value = next;
+    this._persistTextInputDraft();
+    this._updateComposerSticky();
+    this._safeFocus(this.textInputTextareaEl);
+    return true;
+  }
+
   _sendVoiceTranscript(text) {
     if (!text) {
       flash("Voice capture returned no transcript", "error");
       return;
+    }
+    if (this.isTouchDevice() || this.textInputEnabled) {
+      if (this._insertTranscriptIntoTextInput(text)) {
+        flash("Voice transcript added to text input");
+        return;
+      }
     }
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       flash("Connect the terminal before using voice input", "error");
@@ -868,5 +1202,3 @@ export class TerminalManager {
     }
   }
 }
-
-

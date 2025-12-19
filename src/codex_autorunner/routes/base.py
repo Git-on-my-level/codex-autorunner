@@ -196,6 +196,49 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         rows = int(payload.get("rows", 0))
                         if cols > 0 and rows > 0:
                             active_session.pty.resize(cols, rows)
+                    elif payload.get("type") == "input":
+                        input_id = payload.get("id")
+                        data = payload.get("data")
+                        if not input_id or not isinstance(input_id, str):
+                            await ws.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "error",
+                                        "message": "invalid input id",
+                                    }
+                                )
+                            )
+                            continue
+                        if data is None or not isinstance(data, str):
+                            await ws.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "ack",
+                                        "id": input_id,
+                                        "ok": False,
+                                        "message": "invalid input data",
+                                    }
+                                )
+                            )
+                            continue
+                        encoded = data.encode("utf-8", errors="replace")
+                        if len(encoded) > 1024 * 1024:
+                            await ws.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "ack",
+                                        "id": input_id,
+                                        "ok": False,
+                                        "message": "input too large",
+                                    }
+                                )
+                            )
+                            continue
+                        if active_session.mark_input_id_seen(input_id):
+                            active_session.pty.write(encoded)
+                        await ws.send_text(
+                            json.dumps({"type": "ack", "id": input_id, "ok": True})
+                        )
                     elif payload.get("type") == "ping":
                         await ws.send_text(json.dumps({"type": "pong"}))
             except WebSocketDisconnect:
@@ -228,4 +271,3 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             pass
 
     return router
-

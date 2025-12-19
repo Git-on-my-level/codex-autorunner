@@ -89,7 +89,22 @@ class ActiveSession:
         self.subscribers: set[asyncio.Queue] = set()
         self.lock = asyncio.Lock()
         self.loop = loop
+        # Track recently-seen input IDs (from web UI) to make "send" retries idempotent.
+        self._seen_input_ids_max = 256
+        self._seen_input_ids: collections.deque[str] = collections.deque()
+        self._seen_input_ids_set: set[str] = set()
         self._setup_reader()
+
+    def mark_input_id_seen(self, input_id: str) -> bool:
+        """Return True if this is the first time we've seen input_id."""
+        if input_id in self._seen_input_ids_set:
+            return False
+        self._seen_input_ids_set.add(input_id)
+        self._seen_input_ids.append(input_id)
+        while len(self._seen_input_ids) > self._seen_input_ids_max:
+            dropped = self._seen_input_ids.popleft()
+            self._seen_input_ids_set.discard(dropped)
+        return True
 
     def _setup_reader(self):
         self.loop.add_reader(self.pty.fd, self._read_callback)
