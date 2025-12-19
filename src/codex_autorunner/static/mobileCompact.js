@@ -9,6 +9,7 @@ import { getTerminalManager } from "./terminal.js";
 const COMPOSE_INPUT_SELECTOR = "#doc-chat-input, #terminal-textarea";
 const SEND_BUTTON_SELECTOR = "#doc-chat-send, #terminal-text-send";
 let baseViewportHeight = window.innerHeight;
+let viewportPoll = null;
 
 function isVisible(el) {
   if (!el) return false;
@@ -144,6 +145,10 @@ export function initMobileCompact() {
       updateComposeFixed();
       setMobileChromeHidden(false);
 
+      // Start polling for viewport changes (keyboard animation)
+      if (viewportPoll) clearInterval(viewportPoll);
+      viewportPoll = setInterval(updateViewportInset, 100);
+
       // If we are focusing the terminal input, switch to mobile view
       if (isTerminalTextarea(target)) {
         getTerminalManager()?.enterMobileInputMode();
@@ -159,6 +164,12 @@ export function initMobileCompact() {
       const target = e.target;
       if (!(target instanceof HTMLElement)) return;
       if (!target.matches(COMPOSE_INPUT_SELECTOR)) return;
+
+      if (viewportPoll) {
+        clearInterval(viewportPoll);
+        viewportPoll = null;
+      }
+
       setTimeout(() => {
         // Always update viewport inset - keyboard may still be visible or transitioning
         updateViewportInset();
