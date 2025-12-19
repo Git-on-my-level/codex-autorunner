@@ -177,7 +177,9 @@ export function initMobileCompact() {
       const target = e.target;
       if (!(target instanceof HTMLElement)) return;
       if (!target.closest(SEND_BUTTON_SELECTOR)) return;
-      show();
+      // Defer show() to allow the click event to reach the button listener (bubbling phase)
+      // before potentially forcing a reflow that cancels the event.
+      requestAnimationFrame(() => show());
     },
     true
   );

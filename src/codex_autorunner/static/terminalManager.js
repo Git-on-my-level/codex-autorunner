@@ -917,11 +917,17 @@ export class TerminalManager {
   }
 
   _sendFromTextarea() {
-    if (this.textInputPending) {
-      this._retryPendingTextInput();
-      return;
-    }
     const text = this.textInputTextareaEl?.value || "";
+    if (this.textInputPending) {
+      const normalized = this._normalizeNewlines(text);
+      if (normalized && normalized !== this.textInputPending.originalText) {
+        // New draft should be sendable even if a previous payload is pending.
+        this._clearPendingTextInput();
+      } else {
+        this._retryPendingTextInput();
+        return;
+      }
+    }
     this._persistTextInputDraft();
     const ok = this._sendTextWithAck(text, { appendNewline: true });
     if (!ok) return;
@@ -1026,6 +1032,10 @@ export class TerminalManager {
     this.textInputImageBtn = document.getElementById("terminal-text-image");
     this.textInputImageInputEl = document.getElementById("terminal-text-image-input");
 
+    if (this.textInputSendBtn) {
+      console.log("TerminalManager: initialized send button");
+    }
+
     if (
       !this.terminalSectionEl ||
       !this.textInputToggleBtn ||
@@ -1045,40 +1055,24 @@ export class TerminalManager {
       this._setTextInputEnabled(!this.textInputEnabled, { focus: true, focusTextarea: true });
     });
 
-    this.textInputSendBtn.addEventListener("click", () => {
-      if (this.suppressNextSendClick) {
-        this.suppressNextSendClick = false;
-        return;
-      }
+    const triggerSend = () => {
       if (this.textInputSendBtn?.disabled) {
         flash("Connect the terminal first", "error");
         return;
       }
-      this._sendFromTextarea();
-    });
-    this.textInputSendBtn.addEventListener("pointerup", (e) => {
-      if (e.pointerType !== "touch") return;
-      e.preventDefault();
       const now = Date.now();
+      // Debounce to prevent double-firing from touch+click or rapid taps
       if (now - this.lastSendTapAt < 300) return;
       this.lastSendTapAt = now;
-      this.suppressNextSendClick = true;
-      if (this.textInputSendBtn?.disabled) {
-        flash("Connect the terminal first", "error");
-        return;
-      }
+      console.log("TerminalManager: sending text input");
       this._sendFromTextarea();
-    });
-
-    this.textInputTextareaEl.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" || e.shiftKey) return;
-      if (e.isComposing) return;
-      const value = this.textInputTextareaEl?.value || "";
-      if (this._normalizeNewlines(value).includes("\n")) {
-        return;
-      }
+    };
+    this.textInputSendBtn.addEventListener("touchend", (e) => {
       e.preventDefault();
-      this._sendFromTextarea();
+      triggerSend();
+    });
+    this.textInputSendBtn.addEventListener("click", () => {
+      triggerSend();
     });
 
     this.textInputTextareaEl.addEventListener("input", () => {

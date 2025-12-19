@@ -3552,6 +3552,7 @@ button.loading::after {
     flex: 0 0 32px;
     font-size: 14px;
     padding: 5px 3px;
+    order: 3;
   }
   
   /* Enter key - primary action */
@@ -3571,10 +3572,15 @@ button.loading::after {
   .tmb-ctrl-combo {
     flex: 0 0 auto;
     min-width: 32px;
+    order: 1;
     background: rgba(255, 85, 102, 0.08);
     border-color: rgba(255, 85, 102, 0.25);
     color: #ff8899;
     font-weight: 600;
+  }
+
+  .tmb-bksp {
+    order: 2;
   }
   
   .tmb-ctrl-combo:active {
