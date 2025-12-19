@@ -670,9 +670,10 @@ export class TerminalManager {
     if (!this.textInputSendBtn) return;
     const connected = Boolean(this.socket && this.socket.readyState === WebSocket.OPEN);
     const pending = Boolean(this.textInputPending);
-    this.textInputSendBtn.disabled = pending;
+    this.textInputSendBtn.disabled = false;
     this.textInputSendBtn.setAttribute("aria-disabled", connected ? "false" : "true");
     this.textInputSendBtn.classList.toggle("disconnected", !connected);
+    this.textInputSendBtn.classList.toggle("pending", pending);
     if (this.textInputSendBtnLabel === null) {
       this.textInputSendBtnLabel = this.textInputSendBtn.textContent || "Send";
     }
@@ -814,6 +815,7 @@ export class TerminalManager {
       payload,
       originalText,
       sentAt: Date.now(),
+      lastRetryAt: null,
     };
     this._savePendingTextInput(this.textInputPending);
     this._updateTextInputSendUi();
@@ -831,6 +833,33 @@ export class TerminalManager {
       flash("Send failed; your text is preserved", "error");
       this._updateTextInputSendUi();
       return false;
+    }
+  }
+
+  _retryPendingTextInput() {
+    if (!this.textInputPending) return;
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      flash("Reconnect to resend pending input", "error");
+      return;
+    }
+    const now = Date.now();
+    const lastRetryAt = this.textInputPending.lastRetryAt || 0;
+    if (now - lastRetryAt < 1500) {
+      return;
+    }
+    this.textInputPending.lastRetryAt = now;
+    this._savePendingTextInput(this.textInputPending);
+    try {
+      this.socket.send(
+        JSON.stringify({
+          type: "input",
+          id: this.textInputPending.id,
+          data: this.textInputPending.payload,
+        })
+      );
+      flash("Retrying send…", "info");
+    } catch (_err) {
+      flash("Retry failed; your text is preserved", "error");
     }
   }
 
@@ -871,6 +900,10 @@ export class TerminalManager {
   }
 
   _sendFromTextarea() {
+    if (this.textInputPending) {
+      this._retryPendingTextInput();
+      return;
+    }
     const text = this.textInputTextareaEl?.value || "";
     this._persistTextInputDraft();
     const ok = this._sendTextWithAck(text, { appendNewline: true });

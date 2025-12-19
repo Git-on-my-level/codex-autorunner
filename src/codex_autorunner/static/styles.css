@@ -3126,14 +3126,14 @@ button.loading::after {
     position: fixed;
     left: 4px;
     right: 4px;
-    bottom: calc(var(--mobile-bottom-nav) + var(--vv-bottom, 0px));
+    bottom: max(var(--mobile-bottom-nav), var(--vv-bottom, 0px));
     margin: 0;
     z-index: 120;
   }
 
   html.mobile-compose-fixed #terminal.panel.active,
   html.mobile-compose-fixed #docs.panel.active {
-    padding-bottom: calc(86px + var(--mobile-bottom-nav) + var(--vv-bottom, 0px));
+    padding-bottom: calc(86px + max(var(--mobile-bottom-nav), var(--vv-bottom, 0px)));
   }
   
   .tabs {
@@ -3455,11 +3455,11 @@ button.loading::after {
 
   html.mobile-compose-fixed #terminal .terminal-text-input {
     position: fixed;
-    bottom: calc(var(--mobile-bottom-nav) + var(--vv-bottom, 0px));
+    bottom: max(var(--mobile-bottom-nav), var(--vv-bottom, 0px));
   }
 
   html.mobile-compose-fixed #terminal.panel.active {
-    padding-bottom: calc(var(--mobile-bottom-nav) + var(--vv-bottom, 0px));
+    padding-bottom: max(var(--mobile-bottom-nav), var(--vv-bottom, 0px));
   }
 
   /* Mobile terminal control bar */
