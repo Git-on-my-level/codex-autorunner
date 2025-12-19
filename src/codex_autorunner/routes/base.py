@@ -49,6 +49,10 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             "runner_pid": state.runner_pid,
         }
 
+    @router.get("/api/version")
+    def get_version(request: Request):
+        return {"asset_version": request.app.state.asset_version}
+
     @router.get("/api/state/stream")
     async def stream_state_endpoint(request: Request):
         engine = request.app.state.engine

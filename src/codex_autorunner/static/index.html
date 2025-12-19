@@ -55,6 +55,20 @@
 
         addStylesheet("static/styles.css");
         addStylesheet("static/vendor/xterm.css");
+
+        if (!params.get("v")) {
+          fetch("api/version", { cache: "no-store" })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data) => {
+              const assetVersion = data && data.asset_version;
+              if (assetVersion && assetVersion !== version) {
+                const next = new URL(window.location.href);
+                next.searchParams.set("v", assetVersion);
+                window.location.replace(next.toString());
+              }
+            })
+            .catch(() => {});
+        }
       })();
     </script>
   </head>
