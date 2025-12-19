@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from ..pty_session import ActiveSession, PTYSession
 from ..state import load_state
-from ..static_assets import render_index_html
+from ..static_assets import index_response_headers, render_index_html
 from .shared import build_codex_terminal_cmd, log_stream, state_stream
 
 
@@ -29,7 +29,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 status_code=500, detail="Static UI assets missing; reinstall package"
             )
         html = render_index_html(static_dir, request.app.state.asset_version)
-        return HTMLResponse(html)
+        return HTMLResponse(html, headers=index_response_headers())
 
     @router.get("/api/state")
     def get_state(request: Request):

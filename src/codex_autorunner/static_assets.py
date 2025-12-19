@@ -30,3 +30,11 @@ def render_index_html(static_dir: Path, version: Optional[str]) -> str:
     if version:
         text = text.replace(_ASSET_VERSION_TOKEN, version)
     return text
+
+
+def index_response_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }

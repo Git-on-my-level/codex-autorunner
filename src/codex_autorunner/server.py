@@ -38,7 +38,7 @@ from .usage import (
     summarize_repo_usage,
 )
 from .manifest import load_manifest
-from .static_assets import asset_version, render_index_html
+from .static_assets import asset_version, index_response_headers, render_index_html
 from .voice import VoiceConfig, VoiceService, VoiceServiceError
 from .api_routes import build_repo_router, ActiveSession
 from .routes.system import build_system_routes
@@ -611,7 +611,7 @@ def create_hub_app(
                 status_code=500, detail="Static UI assets missing; reinstall package"
             )
         html = render_index_html(static_dir, app.state.asset_version)
-        return HTMLResponse(html)
+        return HTMLResponse(html, headers=index_response_headers())
 
     app.include_router(build_system_routes())
 
