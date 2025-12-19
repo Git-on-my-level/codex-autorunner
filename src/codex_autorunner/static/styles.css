@@ -3131,9 +3131,27 @@ button.loading::after {
     z-index: 120;
   }
 
-  html.mobile-compose-fixed #terminal.panel.active,
+  /* Also fix-position mobile controls above the text input when compose is open */
+  html.mobile-compose-fixed #terminal .terminal-mobile-controls {
+    position: fixed;
+    left: 4px;
+    right: 4px;
+    /* Position above the text input using dynamically measured height */
+    bottom: calc(var(--compose-input-height, 100px) + max(var(--mobile-bottom-nav), var(--vv-bottom, 0px)));
+    margin: 0;
+    z-index: 119;
+    background: var(--bg);
+    border-radius: var(--radius);
+    padding: 4px;
+  }
+
+  /* When compose is fixed, shrink terminal container so it stops above the fixed elements */
+  html.mobile-compose-fixed #terminal .terminal-container {
+    margin-bottom: var(--compose-total-height, 180px);
+  }
+
   html.mobile-compose-fixed #docs.panel.active {
-    padding-bottom: calc(86px + max(var(--mobile-bottom-nav), var(--vv-bottom, 0px)));
+    padding-bottom: calc(100px + max(var(--mobile-bottom-nav), var(--vv-bottom, 0px)));
   }
   
   .tabs {
@@ -3458,8 +3476,17 @@ button.loading::after {
     bottom: max(var(--mobile-bottom-nav), var(--vv-bottom, 0px));
   }
 
-  html.mobile-compose-fixed #terminal.panel.active {
-    padding-bottom: max(var(--mobile-bottom-nav), var(--vv-bottom, 0px));
+  html.mobile-compose-fixed #terminal .terminal-mobile-controls {
+    position: fixed;
+    left: 4px;
+    right: 4px;
+    bottom: calc(var(--compose-input-height, 100px) + max(var(--mobile-bottom-nav), var(--vv-bottom, 0px)));
+    z-index: 119;
+    margin: 0;
+  }
+
+  html.mobile-compose-fixed #terminal .terminal-container {
+    margin-bottom: var(--compose-total-height, 180px);
   }
 
   /* Mobile terminal control bar */
