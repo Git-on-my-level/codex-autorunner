@@ -1,6 +1,7 @@
 import { api, flash, buildWsUrl, isMobileViewport } from "./utils.js";
 import { CONSTANTS } from "./constants.js";
 import { initVoiceInput } from "./voice.js";
+import { publish } from "./bus.js";
 
 const textEncoder = new TextEncoder();
 
@@ -104,6 +105,7 @@ export class TerminalManager {
     this.baseViewportHeight = window.innerHeight;
     this.suppressNextSendClick = false;
     this.lastSendTapAt = 0;
+    this.textInputWasFocused = false;
 
     // Bind methods that are used as callbacks
     this._handleResize = this._handleResize.bind(this);
@@ -880,6 +882,7 @@ export class TerminalManager {
   _setTextInputEnabled(enabled, options = {}) {
     this.textInputEnabled = Boolean(enabled);
     this._writeBoolToStorage(TEXT_INPUT_STORAGE_KEYS.enabled, this.textInputEnabled);
+    publish("terminal:compose", { open: this.textInputEnabled });
 
     const focus = options.focus !== false;
     const shouldFocusTextarea = focus && (this.isTouchDevice() || options.focusTextarea);
@@ -1112,6 +1115,7 @@ export class TerminalManager {
     }
 
     this.textInputTextareaEl.addEventListener("focus", () => {
+      this.textInputWasFocused = true;
       this._updateComposerSticky();
       this._updateViewportInsets();
       if (this.isTouchDevice() && isMobileViewport()) {
@@ -1122,6 +1126,9 @@ export class TerminalManager {
     this.textInputTextareaEl.addEventListener("blur", () => {
       // Wait a tick so activeElement updates.
       setTimeout(() => {
+        if (document.activeElement !== this.textInputTextareaEl) {
+          this.textInputWasFocused = false;
+        }
         this._updateComposerSticky();
         if (this.isTouchDevice() && isMobileViewport()) {
           this.exitMobileInputMode();
@@ -1247,7 +1254,7 @@ export class TerminalManager {
       const ctrlChar = btn.dataset.ctrl;
       if (ctrlChar) {
         this._sendCtrl(ctrlChar);
-        if (this.isTouchDevice() && this.textInputEnabled) {
+        if (this.isTouchDevice() && this.textInputEnabled && this.textInputWasFocused) {
           setTimeout(() => this._safeFocus(this.textInputTextareaEl), 0);
         }
         return;
@@ -1257,7 +1264,7 @@ export class TerminalManager {
       const seq = btn.dataset.seq;
       if (seq) {
         this._sendKey(seq);
-        if (this.isTouchDevice() && this.textInputEnabled) {
+        if (this.isTouchDevice() && this.textInputEnabled && this.textInputWasFocused) {
           setTimeout(() => this._safeFocus(this.textInputTextareaEl), 0);
         }
         return;

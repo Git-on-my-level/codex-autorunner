@@ -237,5 +237,10 @@ export function initMobileCompact() {
     show();
   });
 
+  subscribe("terminal:compose", () => {
+    updateViewportInset();
+    updateComposeFixed();
+  });
+
   updateComposeFixed();
 }
