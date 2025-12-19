@@ -27,7 +27,11 @@ function suppressOtherFormFields(activeEl) {
   const fields = Array.from(document.querySelectorAll(FORM_FIELD_SELECTOR));
   fields.forEach((field) => {
     if (!(field instanceof HTMLElement)) return;
+    
+    // Crucial: do not remove the active terminal textarea itself!
     if (field === activeEl) return;
+    if (field.id === "terminal-textarea") return;
+    
     // Skip true hidden inputs (type="hidden") as they don't trigger the bar
     if (field instanceof HTMLInputElement && field.type === "hidden") return;
     
