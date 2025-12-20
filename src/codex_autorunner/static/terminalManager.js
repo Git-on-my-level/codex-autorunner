@@ -99,7 +99,6 @@ export class TerminalManager {
 
     // Mobile controls state
     this.mobileControlsEl = null;
-    this.mobileViewEl = null;
     this.ctrlActive = false;
     this.altActive = false;
     this.baseViewportHeight = window.innerHeight;
@@ -407,6 +406,10 @@ export class TerminalManager {
         this._handleResize();
       });
     });
+  }
+
+  scheduleResizeAfterLayout() {
+    this._scheduleResizeAfterLayout();
   }
 
   _updateViewportInsets() {
@@ -749,6 +752,23 @@ export class TerminalManager {
     }
   }
 
+  _queuePendingTextInput(payload, originalText) {
+    const id =
+      (window.crypto && typeof window.crypto.randomUUID === "function" && window.crypto.randomUUID()) ||
+      `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    this.textInputPending = {
+      id,
+      payload,
+      originalText,
+      sentAt: Date.now(),
+      lastRetryAt: null,
+    };
+    this._savePendingTextInput(this.textInputPending);
+    this._updateTextInputSendUi();
+    return id;
+  }
+
   _clearPendingTextInput() {
     this.textInputPending = null;
     try {
@@ -794,10 +814,6 @@ export class TerminalManager {
 
   _sendTextWithAck(text, options = {}) {
     const appendNewline = Boolean(options.appendNewline);
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      flash("Connect the terminal first", "error");
-      return false;
-    }
 
     let payload = this._normalizeNewlines(text);
     if (!payload) return false;
@@ -822,19 +838,21 @@ export class TerminalManager {
       );
     }
 
-    const id =
-      (window.crypto && typeof window.crypto.randomUUID === "function" && window.crypto.randomUUID()) ||
-      `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const socketOpen = Boolean(this.socket && this.socket.readyState === WebSocket.OPEN);
+    if (!socketOpen) {
+      const savedSessionId = localStorage.getItem("codex_terminal_session_id");
+      if (!savedSessionId) {
+        flash("Connect the terminal first", "error");
+        return false;
+      }
+      this._queuePendingTextInput(payload, originalText);
+      if (!this.socket || this.socket.readyState !== WebSocket.CONNECTING) {
+        this.connect({ mode: "attach", quiet: true });
+      }
+      return true;
+    }
 
-    this.textInputPending = {
-      id,
-      payload,
-      originalText,
-      sentAt: Date.now(),
-      lastRetryAt: null,
-    };
-    this._savePendingTextInput(this.textInputPending);
-    this._updateTextInputSendUi();
+    const id = this._queuePendingTextInput(payload, originalText);
 
     try {
       this.socket.send(
@@ -1124,7 +1142,7 @@ export class TerminalManager {
       this._updateComposerSticky();
       this._updateViewportInsets();
       if (this.isTouchDevice() && isMobileViewport()) {
-        this.enterMobileInputMode();
+        this._scheduleResizeAfterLayout();
       }
     });
 
@@ -1136,7 +1154,7 @@ export class TerminalManager {
         }
         this._updateComposerSticky();
         if (this.isTouchDevice() && isMobileViewport()) {
-          this.exitMobileInputMode();
+          this._scheduleResizeAfterLayout();
         }
       }, 0);
     });
@@ -1171,6 +1189,13 @@ export class TerminalManager {
     this._updateTextInputConnected(
       Boolean(this.socket && this.socket.readyState === WebSocket.OPEN)
     );
+
+    if (this.textInputPending) {
+      const savedSessionId = localStorage.getItem("codex_terminal_session_id");
+      if (savedSessionId && (!this.socket || this.socket.readyState !== WebSocket.OPEN)) {
+        this.connect({ mode: "attach", quiet: true });
+      }
+    }
   }
 
   // ==================== MOBILE CONTROLS ====================
@@ -1210,22 +1235,6 @@ export class TerminalManager {
 
   _initMobileControls() {
     this.mobileControlsEl = document.getElementById("terminal-mobile-controls");
-    
-    // Create mobile view container if it doesn't exist
-    if (!document.getElementById("mobile-terminal-view")) {
-      this.mobileViewEl = document.createElement("div");
-      this.mobileViewEl.id = "mobile-terminal-view";
-      this.mobileViewEl.className = "mobile-terminal-view hidden";
-      document.body.appendChild(this.mobileViewEl);
-    } else {
-      this.mobileViewEl = document.getElementById("mobile-terminal-view");
-    }
-    if (this.mobileViewScrollTop === undefined) {
-      this.mobileViewScrollTop = null;
-    }
-    this.mobileViewEl?.addEventListener("scroll", () => {
-      this.mobileViewScrollTop = this.mobileViewEl.scrollTop;
-    });
 
     if (!this.mobileControlsEl) return;
 
@@ -1286,266 +1295,6 @@ export class TerminalManager {
       },
       { passive: true }
     );
-  }
-
-  _getAnsiColor(index) {
-    // 0-15: Theme colors
-    const theme = CONSTANTS.THEME.XTERM;
-    const basic = [
-      theme.black,
-      theme.red,
-      theme.green,
-      theme.yellow,
-      theme.blue,
-      theme.magenta,
-      theme.cyan,
-      theme.white,
-      theme.brightBlack,
-      theme.brightRed,
-      theme.brightGreen,
-      theme.brightYellow,
-      theme.brightBlue,
-      theme.brightMagenta,
-      theme.brightCyan,
-      theme.brightWhite,
-    ];
-    if (index >= 0 && index < 16) return basic[index];
-
-    // 16-231: 6x6x6 Cube
-    if (index >= 16 && index < 232) {
-      let i = index - 16;
-      let b = i % 6;
-      let g = Math.floor(i / 6) % 6;
-      let r = Math.floor(i / 36);
-      const toHex = (v) => (v ? v * 40 + 55 : 0).toString(16).padStart(2, "0");
-      return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-    }
-
-    // 232-255: Grayscale
-    if (index >= 232 && index < 256) {
-      let i = index - 232;
-      const v = (i * 10 + 8).toString(16).padStart(2, "0");
-      return `#${v}${v}${v}`;
-    }
-
-    return null;
-  }
-
-  _renderLineAsHtml(line, cell) {
-    if (!line) return "";
-    let html = "";
-    let lastStyle = null;
-    let spanOpen = false;
-    const useLoader = typeof line.loadCell === "function";
-
-    const loadCell = (index) => {
-      if (useLoader) {
-        line.loadCell(index, cell);
-      } else {
-        line.getCell(index, cell);
-      }
-    };
-
-    // Find last non-empty index
-    const lineLength = Number.isInteger(line.length)
-      ? line.length
-      : typeof line.getTrimmedLength === "function"
-      ? line.getTrimmedLength()
-      : 0;
-    let lastIndex = lineLength - 1;
-    while (lastIndex >= 0) {
-      try {
-        loadCell(lastIndex);
-        const hasContent = (cell.getChars() || "").trim().length > 0;
-        const bgMode = typeof cell.getBgColorMode === "function" ? cell.getBgColorMode() : cell.getBgColorMode;
-        const hasBg = bgMode !== 0 && bgMode !== undefined;
-        if (hasContent || hasBg) break;
-      } catch (e) {
-        break;
-      }
-      lastIndex--;
-    }
-
-    lastIndex = Math.max(lastIndex, 0);
-
-    for (let i = 0; i <= lastIndex; i++) {
-      try {
-        loadCell(i);
-      } catch (e) {
-        continue;
-      }
-      
-      const char = cell.getChars() || " ";
-      const width = cell.getWidth();
-      if (width === 0 && char === "") continue;
-
-      let style = "";
-
-      // Foreground
-      let fgMode = typeof cell.getFgColorMode === "function" ? cell.getFgColorMode() : cell.getFgColorMode;
-      let fgColor = typeof cell.getFgColor === "function" ? cell.getFgColor() : cell.getFgColor;
-      
-      // Fallback for older xterm or different internal structures
-      if (fgMode === undefined && cell.fg !== undefined) {
-          // In some versions, fg is a packed 32-bit integer
-          // [2 bits mode][21 bits color][...]
-          // This is getting complex, but let's try to detect if it's just an index
-          if (cell.fg < 256) {
-              fgMode = 1;
-              fgColor = cell.fg;
-          }
-      }
-
-      if (fgMode === 1 || fgMode === 2) {
-        const hex = this._getAnsiColor(fgColor);
-        if (hex) style += `color:${hex};`;
-      } else if (fgMode === 3) {
-        const r = (fgColor >>> 16) & 0xff;
-        const g = (fgColor >>> 8) & 0xff;
-        const b = fgColor & 0xff;
-        style += `color:rgb(${r},${g},${b});`;
-      }
-
-      // Background
-      let bgMode = typeof cell.getBgColorMode === "function" ? cell.getBgColorMode() : cell.getBgColorMode;
-      let bgColor = typeof cell.getBgColor === "function" ? cell.getBgColor() : cell.getBgColor;
-
-      if (bgMode === undefined && cell.bg !== undefined) {
-          if (cell.bg < 256) {
-              bgMode = 1;
-              bgColor = cell.bg;
-          }
-      }
-      
-      if (bgMode === 1 || bgMode === 2) {
-        const hex = this._getAnsiColor(bgColor);
-        if (hex) style += `background-color:${hex};`;
-      } else if (bgMode === 3) {
-        const r = (bgColor >>> 16) & 0xff;
-        const g = (bgColor >>> 8) & 0xff;
-        const b = bgColor & 0xff;
-        style += `background-color:rgb(${r},${g},${b});`;
-      }
-
-      if (typeof cell.isBold === "function" && cell.isBold()) style += "font-weight:700;";
-      else if (cell.isBold === true) style += "font-weight:700;";
-      
-      if (typeof cell.isItalic === "function" && cell.isItalic()) style += "font-style:italic;";
-      else if (cell.isItalic === true) style += "font-style:italic;";
-      
-      if (typeof cell.isUnderline === "function" && cell.isUnderline()) style += "text-decoration:underline;";
-      else if (cell.isUnderline === true) style += "text-decoration:underline;";
-
-      const isInverse = (typeof cell.isInverse === "function" ? cell.isInverse() : cell.isInverse) === true;
-      if (isInverse) {
-          // Swap style colors if they exist, or use a generic swap
-          // This is a bit simplified but usually works
-          style += "filter: invert(1) hue-rotate(180deg);";
-      }
-
-      if (style !== lastStyle) {
-        if (spanOpen) html += "</span>";
-        if (style) {
-          html += `<span style="${style}">`;
-          spanOpen = true;
-        } else {
-          spanOpen = false;
-        }
-        lastStyle = style;
-      }
-
-      if (char === " ") html += "&nbsp;";
-      else if (char === "&") html += "&amp;";
-      else if (char === "<") html += "&lt;";
-      else if (char === ">") html += "&gt;";
-      else html += char;
-    }
-
-    if (spanOpen) html += "</span>";
-    return html;
-  }
-
-  enterMobileInputMode() {
-    if (!this.term || !this.mobileViewEl) return;
-    
-    const buffer = this.term.buffer.active;
-    const coreBuffer = this.term?._core?.bufferService?.buffer;
-    const useCore = Boolean(coreBuffer && coreBuffer.lines && typeof coreBuffer.lines.get === "function");
-    const rows = this.term.rows || buffer.length || 0;
-    const maxIndex = useCore
-      ? coreBuffer.lines.length - 1
-      : buffer.length - 1;
-    const totalLines = Math.min(
-      maxIndex,
-      useCore ? coreBuffer.ybase + rows - 1 : buffer.baseY + rows - 1
-    );
-    const start = Math.max(0, totalLines - 500);
-    
-    let cell;
-    // Prefer the internal buffer cell when available to preserve ANSI colors.
-    try {
-      if (useCore && typeof coreBuffer.getNullCell === "function") {
-        cell = coreBuffer.getNullCell();
-      } else if (!useCore && typeof buffer.getNullCell === "function") {
-        cell = buffer.getNullCell();
-      } else {
-        // xterm fallback: getCell(0) may return a reusable cell.
-        const line0 = useCore ? coreBuffer.lines.get(0) : buffer.getLine(0);
-        if (line0 && typeof line0.getCell === "function") {
-          const probe = line0.getCell(0);
-          if (probe) cell = probe;
-        }
-      }
-    } catch (e) {
-      console.warn("Could not initialize cell for HTML rendering", e);
-    }
-
-    if (!cell) {
-      console.log("Falling back to plain text rendering");
-      let content = "";
-      for (let i = start; i <= totalLines; i++) {
-        const line = buffer.getLine(i);
-        if (line) content += line.translateToString(true) + "\n";
-      }
-      this.mobileViewEl.textContent = content;
-      this.mobileViewEl.classList.remove("hidden");
-      requestAnimationFrame(() => {
-        if (this.mobileViewScrollTop !== null) {
-          this.mobileViewEl.scrollTop = this.mobileViewScrollTop;
-        } else {
-          this.mobileViewEl.scrollTop = this.mobileViewEl.scrollHeight;
-        }
-      });
-      return;
-    }
-    
-    let html = "";
-    for (let i = start; i <= totalLines; i++) {
-      const line = useCore ? coreBuffer.lines.get(i) : buffer.getLine(i);
-      if (line) {
-        const lineHtml = this._renderLineAsHtml(line, cell);
-        html += `<div class="mobile-terminal-line">${lineHtml || "&nbsp;"}</div>`;
-      }
-    }
-    
-    this.mobileViewEl.innerHTML = html;
-    this.mobileViewEl.classList.remove("hidden");
-    
-    requestAnimationFrame(() => {
-      if (this.mobileViewScrollTop !== null) {
-        this.mobileViewEl.scrollTop = this.mobileViewScrollTop;
-      } else {
-        this.mobileViewEl.scrollTop = this.mobileViewEl.scrollHeight;
-      }
-    });
-  }
-
-  exitMobileInputMode() {
-    if (!this.mobileViewEl) return;
-    if (this.mobileViewEl.classList.contains("hidden")) return;
-    this.mobileViewScrollTop = this.mobileViewEl.scrollTop;
-    this.mobileViewEl.classList.add("hidden");
-    this.mobileViewEl.innerHTML = "";
   }
 
   // ==================== VOICE INPUT ====================

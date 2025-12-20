@@ -149,9 +149,8 @@ export function initMobileCompact() {
       if (viewportPoll) clearInterval(viewportPoll);
       viewportPoll = setInterval(updateViewportInset, 100);
 
-      // If we are focusing the terminal input, switch to mobile view
       if (isTerminalTextarea(target)) {
-        getTerminalManager()?.enterMobileInputMode();
+        getTerminalManager()?.scheduleResizeAfterLayout?.();
       }
     },
     true
@@ -175,7 +174,7 @@ export function initMobileCompact() {
         updateViewportInset();
         if (isComposeFocused()) return;
         show();
-        getTerminalManager()?.exitMobileInputMode();
+        getTerminalManager()?.scheduleResizeAfterLayout?.();
       }, 50);
     },
     true

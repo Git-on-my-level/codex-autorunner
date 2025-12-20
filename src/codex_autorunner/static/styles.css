@@ -3996,44 +3996,6 @@ button.loading::after {
     left: 2px;
   }
   
-  /* ===== MOBILE TERMINAL TALL VIEW ===== */
-  .mobile-terminal-view {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: var(--bg);
-    z-index: 100; /* Below input (z-index 120) */
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 10px;
-    padding-bottom: calc(100px + env(safe-area-inset-bottom) + var(--vv-bottom, 0px));
-    font-family: "JetBrains Mono", monospace;
-    font-size: 10px;
-    line-height: 1.15;
-    letter-spacing: 0;
-    font-variant-ligatures: none;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    color: var(--text);
-    -webkit-overflow-scrolling: touch;
-  }
-  .mobile-terminal-view > div {
-    white-space: pre-wrap;
-    font-family: inherit;
-  }
-  .mobile-terminal-line {
-    margin: 0;
-    padding: 0;
-    line-height: inherit;
-    white-space: pre-wrap;
-    word-break: break-word;
-    overflow-wrap: anywhere;
-  }
-  .mobile-terminal-view.hidden {
-    display: none;
-  }
 }
 
 /* Ultra-small screens */
