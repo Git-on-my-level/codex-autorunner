@@ -316,7 +316,7 @@ export async function initVoiceInput({
       if (state.stopTimeout) {
         clearTimeout(state.stopTimeout);
       }
-      state.stopTimeout = window.setTimeout(() => {
+      state.stopTimeout = setTimeout(() => {
         if (!state.sending) return;
         state.stopTimedOut = true;
         state.sending = false;
@@ -434,14 +434,18 @@ export async function initVoiceInput({
   function cleanupRecorder(state) {
     if (state.recorder) {
       if (state.recorderStopHandler) {
-        state.recorder.removeEventListener("stop", state.recorderStopHandler);
+        if (typeof state.recorder.removeEventListener === "function") {
+          state.recorder.removeEventListener("stop", state.recorderStopHandler);
+        }
         state.recorderStopHandler = null;
       }
       if (state.recorderDataHandler) {
-        state.recorder.removeEventListener(
-          "dataavailable",
-          state.recorderDataHandler
-        );
+        if (typeof state.recorder.removeEventListener === "function") {
+          state.recorder.removeEventListener(
+            "dataavailable",
+            state.recorderDataHandler
+          );
+        }
         state.recorderDataHandler = null;
       }
     }
@@ -509,9 +513,19 @@ function setStatus(el, text) {
   el.classList.toggle("hidden", !text);
 }
 
+function safeRemoveAttribute(el, name) {
+  if (!el || typeof el.removeAttribute !== "function") return;
+  el.removeAttribute(name);
+}
+
+function safeSetAttribute(el, name, value) {
+  if (!el || typeof el.setAttribute !== "function") return;
+  el.setAttribute(name, value);
+}
+
 function resetButton(button) {
   button.disabled = false;
-  button.removeAttribute("aria-busy");
+  safeRemoveAttribute(button, "aria-busy");
   button.classList.remove(
     "voice-recording",
     "voice-sending",
@@ -522,21 +536,21 @@ function resetButton(button) {
 }
 
 function setButtonRecording(button) {
-  button.removeAttribute("aria-busy");
+  safeRemoveAttribute(button, "aria-busy");
   button.classList.add("voice-recording");
   button.classList.remove("voice-sending", "voice-error");
   button.innerHTML = MIC_ICON_SVG;
 }
 
 function setButtonSending(button) {
-  button.setAttribute("aria-busy", "true");
+  safeSetAttribute(button, "aria-busy", "true");
   button.classList.add("voice-sending");
   button.classList.remove("voice-recording", "voice-error");
   button.innerHTML = SENDING_ICON_SVG;
 }
 
 function setButtonError(button, hasPending) {
-  button.removeAttribute("aria-busy");
+  safeRemoveAttribute(button, "aria-busy");
   button.classList.remove("voice-recording", "voice-sending");
   button.classList.add("voice-error");
   if (hasPending) {

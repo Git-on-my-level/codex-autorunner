@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 
 from ..engine import LockError, clear_stale_lock
-from ..state import RunnerState, load_state, now_iso, save_state
+from ..state import RunnerState, load_state, now_iso, save_state, state_lock
 
 
 def build_repos_routes() -> APIRouter:
@@ -52,16 +52,19 @@ def build_repos_routes() -> APIRouter:
         except Exception:
             pass
         manager.kill()
-        state = load_state(engine.state_path)
-        new_state = RunnerState(
-            last_run_id=state.last_run_id,
-            status="error",
-            last_exit_code=137,
-            last_run_started_at=state.last_run_started_at,
-            last_run_finished_at=now_iso(),
-            runner_pid=None,
-        )
-        save_state(engine.state_path, new_state)
+        with state_lock(engine.state_path):
+            state = load_state(engine.state_path)
+            new_state = RunnerState(
+                last_run_id=state.last_run_id,
+                status="error",
+                last_exit_code=137,
+                last_run_started_at=state.last_run_started_at,
+                last_run_finished_at=now_iso(),
+                runner_pid=None,
+                sessions=state.sessions,
+                repo_to_session=state.repo_to_session,
+            )
+            save_state(engine.state_path, new_state)
         engine.release_lock()
         return {"running": manager.running}
 
@@ -95,19 +98,22 @@ def build_repos_routes() -> APIRouter:
             logger.info("run/reset requested")
         except Exception:
             pass
-        engine.lock_path.unlink(missing_ok=True)
-        initial_state = RunnerState(
-            last_run_id=None,
-            status="idle",
-            last_exit_code=None,
-            last_run_started_at=None,
-            last_run_finished_at=None,
-            runner_pid=None,
-        )
-        save_state(engine.state_path, initial_state)
+        with state_lock(engine.state_path):
+            current_state = load_state(engine.state_path)
+            engine.lock_path.unlink(missing_ok=True)
+            initial_state = RunnerState(
+                last_run_id=None,
+                status="idle",
+                last_exit_code=None,
+                last_run_started_at=None,
+                last_run_finished_at=None,
+                runner_pid=None,
+                sessions=current_state.sessions,
+                repo_to_session=current_state.repo_to_session,
+            )
+            save_state(engine.state_path, initial_state)
         if engine.log_path.exists():
             engine.log_path.unlink()
         return {"status": "ok", "message": "Runner reset complete"}
 
     return router
-

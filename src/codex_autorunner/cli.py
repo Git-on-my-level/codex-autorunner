@@ -16,6 +16,7 @@ import typer
 
 load_dotenv()
 import uvicorn
+import httpx
 
 from .bootstrap import seed_hub_files, seed_repo_files
 from .config import ConfigError, HubConfig, _normalize_base_path, load_config
@@ -23,7 +24,7 @@ from .engine import Engine, LockError, clear_stale_lock, doctor
 from .hub import HubSupervisor
 from .manifest import load_manifest
 from .server import create_app, create_hub_app
-from .state import load_state, save_state, RunnerState, now_iso
+from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import RepoNotFoundError, default_editor, find_repo_root
 from .spec_ingest import (
     SpecIngestError,
@@ -62,6 +63,20 @@ def _require_hub_config(path: Optional[Path]) -> HubConfig:
     if not isinstance(config, HubConfig):
         raise typer.Exit("This command requires hub mode (config.mode=hub).")
     return config
+
+
+def _build_server_url(config, path: str) -> str:
+    base_path = config.server_base_path or ""
+    if base_path.endswith("/") and path.startswith("/"):
+        base_path = base_path[:-1]
+    return f"http://{config.server_host}:{config.server_port}{base_path}{path}"
+
+
+def _request_json(method: str, url: str, payload: Optional[dict] = None) -> dict:
+    response = httpx.request(method, url, json=payload, timeout=2.0)
+    response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, dict) else {}
 
 
 app.add_typer(hub_app, name="hub")
@@ -142,6 +157,8 @@ def status(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")
     engine = _require_repo_config(repo)
     state = load_state(engine.state_path)
     outstanding, _ = engine.docs.todos()
+    session_id = state.repo_to_session.get(str(engine.repo_root))
+    session_record = state.sessions.get(session_id) if session_id else None
     typer.echo(f"Repo: {engine.repo_root}")
     typer.echo(f"Status: {state.status}")
     typer.echo(f"Last run id: {state.last_run_id}")
@@ -149,7 +166,113 @@ def status(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")
     typer.echo(f"Last start: {state.last_run_started_at}")
     typer.echo(f"Last finish: {state.last_run_finished_at}")
     typer.echo(f"Runner pid: {state.runner_pid}")
+    if session_id:
+        detail = ""
+        if session_record:
+            detail = (
+                f" (status={session_record.status}, last_seen={session_record.last_seen_at})"
+            )
+        typer.echo(f"Terminal session: {session_id}{detail}")
+    else:
+        typer.echo("Terminal session: none")
     typer.echo(f"Outstanding TODO items: {len(outstanding)}")
+
+
+@app.command()
+def sessions(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+):
+    """List active terminal sessions."""
+    engine = _require_repo_config(repo)
+    config = engine.config
+    url = _build_server_url(config, "/api/sessions")
+    payload = None
+    source = "server"
+    try:
+        payload = _request_json("GET", url)
+    except Exception:
+        state = load_state(engine.state_path)
+        payload = {
+            "sessions": [
+                {
+                    "session_id": session_id,
+                    "repo_path": record.repo_path,
+                    "created_at": record.created_at,
+                    "last_seen_at": record.last_seen_at,
+                    "status": record.status,
+                    "alive": None,
+                }
+                for session_id, record in state.sessions.items()
+            ],
+            "repo_to_session": dict(state.repo_to_session),
+        }
+        source = "state"
+
+    if output_json:
+        if source != "server":
+            payload["source"] = source
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    sessions_payload = payload.get("sessions", []) if isinstance(payload, dict) else []
+    typer.echo(f"Sessions ({source}): {len(sessions_payload)}")
+    for entry in sessions_payload:
+        if not isinstance(entry, dict):
+            continue
+        session_id = entry.get("session_id") or "unknown"
+        repo_path = entry.get("repo_path") or "unknown"
+        status = entry.get("status") or "unknown"
+        last_seen = entry.get("last_seen_at") or "unknown"
+        alive = entry.get("alive")
+        alive_text = "unknown" if alive is None else str(bool(alive))
+        typer.echo(
+            f"- {session_id}: repo={repo_path} status={status} last_seen={last_seen} alive={alive_text}"
+        )
+
+
+@app.command("stop-session")
+def stop_session(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    session_id: Optional[str] = typer.Option(
+        None, "--session", help="Session id to stop"
+    ),
+):
+    """Stop a terminal session by id or repo path."""
+    engine = _require_repo_config(repo)
+    config = engine.config
+    payload: dict[str, str] = {}
+    if session_id:
+        payload["session_id"] = session_id
+    else:
+        payload["repo_path"] = str(engine.repo_root)
+
+    url = _build_server_url(config, "/api/sessions/stop")
+    try:
+        response = _request_json("POST", url, payload)
+        stopped_id = response.get("session_id", payload.get("session_id", ""))
+        typer.echo(f"Stopped session {stopped_id}")
+        return
+    except Exception:
+        pass
+
+    with state_lock(engine.state_path):
+        state = load_state(engine.state_path)
+        target_id = payload.get("session_id")
+        if not target_id:
+            repo_lookup = payload.get("repo_path")
+            if repo_lookup:
+                target_id = state.repo_to_session.get(repo_lookup)
+        if not target_id:
+            raise typer.Exit("Session not found (server unavailable)")
+        state.sessions.pop(target_id, None)
+        state.repo_to_session = {
+            repo_key: sid
+            for repo_key, sid in state.repo_to_session.items()
+            if sid != target_id
+        }
+        save_state(engine.state_path, state)
+    typer.echo(f"Stopped session {target_id} (state only)")
 
 
 @app.command()
@@ -308,16 +431,19 @@ def kill(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")):
     """Force-kill a running autorunner and clear stale lock/state."""
     engine = _require_repo_config(repo)
     pid = engine.kill_running_process()
-    state = load_state(engine.state_path)
-    new_state = RunnerState(
-        last_run_id=state.last_run_id,
-        status="error",
-        last_exit_code=137,
-        last_run_started_at=state.last_run_started_at,
-        last_run_finished_at=now_iso(),
-        runner_pid=None,
-    )
-    save_state(engine.state_path, new_state)
+    with state_lock(engine.state_path):
+        state = load_state(engine.state_path)
+        new_state = RunnerState(
+            last_run_id=state.last_run_id,
+            status="error",
+            last_exit_code=137,
+            last_run_started_at=state.last_run_started_at,
+            last_run_finished_at=now_iso(),
+            runner_pid=None,
+            sessions=state.sessions,
+            repo_to_session=state.repo_to_session,
+        )
+        save_state(engine.state_path, new_state)
     engine.release_lock()
     if pid:
         typer.echo(f"Sent SIGTERM to pid {pid}")

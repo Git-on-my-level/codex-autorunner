@@ -16,7 +16,7 @@ from .config import Config, ConfigError, load_config
 from .docs import DocsManager
 from .lock_utils import process_alive, read_lock_info, write_lock_info
 from .prompt import build_final_summary_prompt, build_prompt
-from .state import RunnerState, load_state, now_iso, save_state
+from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
     atomic_write,
     ensure_executable,
@@ -444,26 +444,29 @@ class Engine:
         started: bool = False,
         finished: bool = False,
     ) -> None:
-        current = load_state(self.state_path)
-        last_run_started_at = current.last_run_started_at
-        last_run_finished_at = current.last_run_finished_at
-        runner_pid = current.runner_pid
-        if started:
-            last_run_started_at = now_iso()
-            last_run_finished_at = None
-            runner_pid = os.getpid()
-        if finished:
-            last_run_finished_at = now_iso()
-            runner_pid = None
-        new_state = RunnerState(
-            last_run_id=run_id,
-            status=status,
-            last_exit_code=exit_code,
-            last_run_started_at=last_run_started_at,
-            last_run_finished_at=last_run_finished_at,
-            runner_pid=runner_pid,
-        )
-        save_state(self.state_path, new_state)
+        with state_lock(self.state_path):
+            current = load_state(self.state_path)
+            last_run_started_at = current.last_run_started_at
+            last_run_finished_at = current.last_run_finished_at
+            runner_pid = current.runner_pid
+            if started:
+                last_run_started_at = now_iso()
+                last_run_finished_at = None
+                runner_pid = os.getpid()
+            if finished:
+                last_run_finished_at = now_iso()
+                runner_pid = None
+            new_state = RunnerState(
+                last_run_id=run_id,
+                status=status,
+                last_exit_code=exit_code,
+                last_run_started_at=last_run_started_at,
+                last_run_finished_at=last_run_finished_at,
+                runner_pid=runner_pid,
+                sessions=current.sessions,
+                repo_to_session=current.repo_to_session,
+            )
+            save_state(self.state_path, new_state)
 
 
 def clear_stale_lock(lock_path: Path) -> None:
