@@ -1215,7 +1215,11 @@ export class TerminalManager {
 
   async _uploadTerminalImage(file) {
     if (!file) return;
-    if (!file.type || !file.type.startsWith("image/")) {
+    const fileName = (file.name || "").toLowerCase();
+    const looksLikeImage =
+      (file.type && file.type.startsWith("image/")) ||
+      /\.(png|jpe?g|gif|webp|heic|heif)$/.test(fileName);
+    if (!looksLikeImage) {
       flash("That file is not an image", "error");
       return;
     }
@@ -1250,9 +1254,12 @@ export class TerminalManager {
 
   async _handleImageFiles(files) {
     if (!files || files.length === 0) return;
-    const images = Array.from(files).filter(
-      (file) => file && file.type && file.type.startsWith("image/")
-    );
+    const images = Array.from(files).filter((file) => {
+      if (!file) return false;
+      if (file.type && file.type.startsWith("image/")) return true;
+      const fileName = (file.name || "").toLowerCase();
+      return /\.(png|jpe?g|gif|webp|heic|heif)$/.test(fileName);
+    });
     if (!images.length) {
       flash("No image found in clipboard", "error");
       return;
