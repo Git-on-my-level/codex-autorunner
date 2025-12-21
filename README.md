@@ -70,6 +70,8 @@ launchctl kickstart -k gui/$(id -u)/com.codex.autorunner
 - `resume` — clear stale lock/state and restart; `--once` for a single run.
 - `kill` — SIGTERM the running loop and mark state error.
 - `status` — show current state and outstanding TODO count.
+- `sessions` — list terminal sessions (server-backed when available).
+- `stop-session` — stop a terminal session by repo (`--repo`) or id (`--session`).
 - `log` — view logs (tail or specific run).
 - `edit` — open TODO/PROGRESS/OPINIONS/SPEC in `$EDITOR`.
 - `ingest-spec` — generate TODO/PROGRESS/OPINIONS from SPEC using Codex (use `--force` to overwrite).

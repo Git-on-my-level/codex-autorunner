@@ -1,7 +1,9 @@
 import asyncio
+from datetime import datetime, timezone
 import logging
 import os
 import threading
+import time
 from importlib import resources
 from pathlib import Path
 from typing import Optional
@@ -29,7 +31,10 @@ from .engine import Engine, LockError, doctor
 from .logging_utils import safe_log, setup_rotating_logger
 from .doc_chat import DocChatService
 from .hub import HubSupervisor
-from .state import load_state, save_state, RunnerState, now_iso
+from .state import (
+    load_state,
+    persist_session_registry,
+)
 from .utils import find_repo_root
 from .usage import (
     UsageError,
@@ -211,6 +216,59 @@ def _static_dir() -> Path:
     return Path(resources.files("codex_autorunner")) / "static"
 
 
+def _parse_last_seen_at(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc).timestamp()
+
+
+def _session_last_touch(session: ActiveSession, record) -> float:
+    last_seen = _parse_last_seen_at(getattr(record, "last_seen_at", None))
+    if last_seen is None:
+        return session.pty.last_active
+    return max(last_seen, session.pty.last_active)
+
+
+def _prune_terminal_registry(
+    state_path: Path,
+    terminal_sessions: dict[str, ActiveSession],
+    session_registry: dict,
+    repo_to_session: dict[str, str],
+    max_idle_seconds: Optional[int],
+) -> bool:
+    now = time.time()
+    removed_any = False
+    for session_id, session in list(terminal_sessions.items()):
+        if not session.pty.isalive():
+            session.close()
+            terminal_sessions.pop(session_id, None)
+            session_registry.pop(session_id, None)
+            removed_any = True
+            continue
+        if max_idle_seconds is not None and max_idle_seconds > 0:
+            last_touch = _session_last_touch(session, session_registry.get(session_id))
+            if now - last_touch > max_idle_seconds:
+                session.close()
+                terminal_sessions.pop(session_id, None)
+                session_registry.pop(session_id, None)
+                removed_any = True
+    for session_id in list(session_registry.keys()):
+        if session_id not in terminal_sessions:
+            session_registry.pop(session_id, None)
+            removed_any = True
+    for repo_path, session_id in list(repo_to_session.items()):
+        if session_id not in session_registry:
+            repo_to_session.pop(repo_path, None)
+            removed_any = True
+    if removed_any:
+        persist_session_registry(state_path, session_registry, repo_to_session)
+    return removed_any
+
+
 def create_app(
     repo_root: Optional[Path] = None, base_path: Optional[str] = None
 ) -> FastAPI:
@@ -226,9 +284,9 @@ def create_app(
     manager = RunnerManager(engine)
     doc_chat = DocChatService(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
-    # Safety net for leaked sessions (e.g. user closes tab and never returns).
-    # PTYSession updates last_active on read/write/resize, so this is "idle time".
-    terminal_max_idle_seconds = 24 * 3600
+    terminal_max_idle_seconds = config.terminal_idle_timeout_seconds
+    if terminal_max_idle_seconds is not None and terminal_max_idle_seconds <= 0:
+        terminal_max_idle_seconds = None
     # Construct asyncio primitives without assuming a loop already exists.
     # This comes up in unit tests (sync context) and when mounting from a worker thread.
     try:
@@ -270,6 +328,21 @@ def create_app(
     app.state.terminal_sessions = {}
     app.state.terminal_max_idle_seconds = terminal_max_idle_seconds
     app.state.terminal_lock = terminal_lock
+    app.state.session_registry = {}
+    app.state.repo_to_session = {}
+    app.state.session_state_last_write = 0.0
+    app.state.session_state_dirty = False
+    initial_state = load_state(engine.state_path)
+    app.state.session_registry = dict(initial_state.sessions)
+    app.state.repo_to_session = dict(initial_state.repo_to_session)
+    if app.state.session_registry or app.state.repo_to_session:
+        _prune_terminal_registry(
+            engine.state_path,
+            app.state.terminal_sessions,
+            app.state.session_registry,
+            app.state.repo_to_session,
+            terminal_max_idle_seconds,
+        )
 
     static_dir = _static_dir()
     app.state.asset_version = asset_version(static_dir)
@@ -284,15 +357,13 @@ def create_app(
                 await asyncio.sleep(600)  # Check every 10 mins
                 try:
                     async with app.state.terminal_lock:
-                        to_remove = []
-                        for sid, session in app.state.terminal_sessions.items():
-                            if session.pty.is_stale(
-                                app.state.terminal_max_idle_seconds
-                            ):
-                                session.close()
-                                to_remove.append(sid)
-                        for sid in to_remove:
-                            app.state.terminal_sessions.pop(sid, None)
+                        _prune_terminal_registry(
+                            engine.state_path,
+                            app.state.terminal_sessions,
+                            app.state.session_registry,
+                            app.state.repo_to_session,
+                            app.state.terminal_max_idle_seconds,
+                        )
                 except Exception as exc:
                     safe_log(
                         app.state.logger,
@@ -309,6 +380,13 @@ def create_app(
             for session in app.state.terminal_sessions.values():
                 session.close()
             app.state.terminal_sessions.clear()
+            app.state.session_registry.clear()
+            app.state.repo_to_session.clear()
+            persist_session_registry(
+                engine.state_path,
+                app.state.session_registry,
+                app.state.repo_to_session,
+            )
 
     if base_path:
         app = BasePathRouterMiddleware(app, base_path)

@@ -66,6 +66,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "port": 4173,
         "base_path": "",
     },
+    "terminal": {
+        "idle_timeout_seconds": None,
+    },
     "voice": {
         "enabled": True,
         "provider": "openai_whisper",
@@ -163,6 +166,7 @@ class RepoConfig:
     server_host: str
     server_port: int
     server_base_path: str
+    terminal_idle_timeout_seconds: Optional[int]
     log: LogConfig
     server_log: LogConfig
     voice: Dict[str, Any]
@@ -293,6 +297,12 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     template_val = cfg["prompt"].get("template")
     template = root / template_val if template_val else None
     term_args = cfg["codex"].get("terminal_args") or []
+    terminal_cfg = cfg.get("terminal") if isinstance(cfg.get("terminal"), dict) else {}
+    idle_timeout_seconds = terminal_cfg.get("idle_timeout_seconds")
+    if idle_timeout_seconds is not None:
+        idle_timeout_seconds = int(idle_timeout_seconds)
+        if idle_timeout_seconds <= 0:
+            idle_timeout_seconds = None
     log_cfg = cfg.get("log", {})
     server_log_cfg = cfg.get("server_log", {}) or {}
     return RepoConfig(
@@ -314,6 +324,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
+        terminal_idle_timeout_seconds=idle_timeout_seconds,
         log=LogConfig(
             path=root / log_cfg.get("path", DEFAULT_REPO_CONFIG["log"]["path"]),
             max_bytes=int(
@@ -469,6 +480,19 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.port must be an integer")
     if "base_path" in server and not isinstance(server.get("base_path", ""), str):
         raise ConfigError("server.base_path must be a string if provided")
+    terminal_cfg = cfg.get("terminal")
+    if terminal_cfg is not None:
+        if not isinstance(terminal_cfg, dict):
+            raise ConfigError("terminal section must be a mapping if provided")
+        idle_timeout_seconds = terminal_cfg.get("idle_timeout_seconds")
+        if idle_timeout_seconds is not None and not isinstance(
+            idle_timeout_seconds, int
+        ):
+            raise ConfigError(
+                "terminal.idle_timeout_seconds must be an integer or null"
+            )
+        if isinstance(idle_timeout_seconds, int) and idle_timeout_seconds < 0:
+            raise ConfigError("terminal.idle_timeout_seconds must be >= 0")
     log_cfg = cfg.get("log")
     if not isinstance(log_cfg, dict):
         raise ConfigError("log section must be a mapping")

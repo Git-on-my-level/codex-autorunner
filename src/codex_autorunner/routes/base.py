@@ -5,6 +5,7 @@ Base routes: Index, state streaming, WebSocket terminal, and logs.
 import asyncio
 import logging
 import json
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -13,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from ..pty_session import ActiveSession, PTYSession
-from ..state import load_state
+from ..state import SessionRecord, load_state, now_iso, persist_session_registry
 from ..static_assets import index_response_headers, render_index_html
 from ..logging_utils import safe_log
 from .shared import build_codex_terminal_cmd, log_stream, state_stream
@@ -97,6 +98,10 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         engine = app.state.engine
         terminal_sessions: dict[str, ActiveSession] = app.state.terminal_sessions
         terminal_lock: asyncio.Lock = app.state.terminal_lock
+        session_registry: dict[str, SessionRecord] = app.state.session_registry
+        repo_to_session: dict[str, str] = app.state.repo_to_session
+        repo_path = str(engine.repo_root)
+        state_path = engine.state_path
 
         client_session_id = ws.query_params.get("session_id")
         close_session_id = ws.query_params.get("close_session_id")
@@ -104,6 +109,31 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         attach_only = mode == "attach"
         session_id = None
         active_session: Optional[ActiveSession] = None
+        seen_update_interval = 5.0
+
+        def _mark_dirty() -> None:
+            app.state.session_state_dirty = True
+
+        def _maybe_persist_sessions(force: bool = False) -> None:
+            now = time.time()
+            last_write = app.state.session_state_last_write
+            if not force and not app.state.session_state_dirty:
+                return
+            if not force and now - last_write < seen_update_interval:
+                return
+            persist_session_registry(state_path, session_registry, repo_to_session)
+            app.state.session_state_last_write = now
+            app.state.session_state_dirty = False
+
+        def _touch_session(session_id: str) -> None:
+            record = session_registry.get(session_id)
+            if not record:
+                return
+            record.last_seen_at = now_iso()
+            if record.status != "active":
+                record.status = "active"
+            _mark_dirty()
+            _maybe_persist_sessions()
 
         async with terminal_lock:
             if client_session_id and client_session_id in terminal_sessions:
@@ -111,11 +141,32 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 if not active_session.pty.isalive():
                     active_session.close()
                     terminal_sessions.pop(client_session_id, None)
+                    session_registry.pop(client_session_id, None)
+                    repo_to_session = {
+                        repo: sid
+                        for repo, sid in repo_to_session.items()
+                        if sid != client_session_id
+                    }
+                    app.state.repo_to_session = repo_to_session
                     active_session = None
+                    _mark_dirty()
                 else:
                     session_id = client_session_id
 
             if not active_session:
+                mapped_session_id = repo_to_session.get(repo_path)
+                if mapped_session_id:
+                    mapped_session = terminal_sessions.get(mapped_session_id)
+                    if mapped_session and mapped_session.pty.isalive():
+                        active_session = mapped_session
+                        session_id = mapped_session_id
+                    else:
+                        if mapped_session:
+                            mapped_session.close()
+                        terminal_sessions.pop(mapped_session_id, None)
+                        session_registry.pop(mapped_session_id, None)
+                        repo_to_session.pop(repo_path, None)
+                        _mark_dirty()
                 if attach_only:
                     await ws.send_text(
                         json.dumps(
@@ -139,6 +190,14 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         await session_to_close.wait_closed()
                     finally:
                         terminal_sessions.pop(close_session_id, None)
+                        session_registry.pop(close_session_id, None)
+                        repo_to_session = {
+                            repo: sid
+                            for repo, sid in repo_to_session.items()
+                            if sid != close_session_id
+                        }
+                        app.state.repo_to_session = repo_to_session
+                        _mark_dirty()
                 session_id = str(uuid.uuid4())
                 resume_mode = mode == "resume"
                 cmd = build_codex_terminal_cmd(engine, resume_mode=resume_mode)
@@ -148,6 +207,14 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         session_id, pty, asyncio.get_running_loop()
                     )
                     terminal_sessions[session_id] = active_session
+                    session_registry[session_id] = SessionRecord(
+                        repo_path=repo_path,
+                        created_at=now_iso(),
+                        last_seen_at=now_iso(),
+                        status="active",
+                    )
+                    repo_to_session[repo_path] = session_id
+                    _mark_dirty()
                 except FileNotFoundError:
                     await ws.send_text(
                         json.dumps(
@@ -159,6 +226,19 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     )
                     await ws.close()
                     return
+            if active_session:
+                if session_id and session_id not in session_registry:
+                    session_registry[session_id] = SessionRecord(
+                        repo_path=repo_path,
+                        created_at=now_iso(),
+                        last_seen_at=now_iso(),
+                        status="active",
+                    )
+                    _mark_dirty()
+                if session_id and repo_to_session.get(repo_path) != session_id:
+                    repo_to_session[repo_path] = session_id
+                    _mark_dirty()
+                _maybe_persist_sessions(force=True)
 
         await ws.send_text(json.dumps({"type": "hello", "session_id": session_id}))
         queue = active_session.add_subscriber()
@@ -170,6 +250,12 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     if data is None:
                         if active_session:
                             exit_code = active_session.pty.exit_code()
+                            if session_id:
+                                record = session_registry.get(session_id)
+                                if record:
+                                    record.status = "closed"
+                                    record.last_seen_at = now_iso()
+                                    _mark_dirty()
                             await ws.send_text(
                                 json.dumps(
                                     {
@@ -181,6 +267,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                             )
                         break
                     await ws.send_bytes(data)
+                    if session_id:
+                        _touch_session(session_id)
             except Exception:
                 safe_log(logger, logging.WARNING, "Terminal PTY to WS bridge failed")
 
@@ -192,6 +280,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         break
                     if msg.get("bytes") is not None:
                         active_session.pty.write(msg["bytes"])
+                        if session_id:
+                            _touch_session(session_id)
                         continue
                     text = msg.get("text")
                     if not text:
@@ -248,8 +338,12 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         await ws.send_text(
                             json.dumps({"type": "ack", "id": input_id, "ok": True})
                         )
+                        if session_id:
+                            _touch_session(session_id)
                     elif payload.get("type") == "ping":
                         await ws.send_text(json.dumps({"type": "pong"}))
+                        if session_id:
+                            _touch_session(session_id)
             except WebSocketDisconnect:
                 pass
             except Exception:
@@ -271,6 +365,18 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             if not active_session.pty.isalive():
                 async with terminal_lock:
                     terminal_sessions.pop(session_id, None)
+                    if session_id:
+                        session_registry.pop(session_id, None)
+                        repo_to_session = {
+                            repo: sid
+                            for repo, sid in repo_to_session.items()
+                            if sid != session_id
+                        }
+                        app.state.repo_to_session = repo_to_session
+                        _mark_dirty()
+            if session_id:
+                _touch_session(session_id)
+            _maybe_persist_sessions(force=True)
 
         forward_task.cancel()
         input_task.cancel()
