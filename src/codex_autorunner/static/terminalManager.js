@@ -109,6 +109,9 @@ export class TerminalManager {
     this.savedViewportY = null;
     this.savedAtBottom = null;
     this.mobileViewEl = null;
+    // Mobile compose view: a read-only, scrollable mirror of the terminal buffer.
+    // Purpose: when the text input is focused on touch devices, allow easy browsing
+    // without fighting the on-screen keyboard or accidentally sending keystrokes to the TUI.
     this.mobileViewActive = false;
     this.mobileViewScrollTop = null;
     this.mobileViewAtBottom = true;
@@ -363,6 +366,8 @@ export class TerminalManager {
     if (!this.mobileViewActive || !this.mobileViewEl || !this.term) return;
     const buffer = this.term.buffer?.active;
     if (!buffer) return;
+    // This view mirrors the live buffer as plain text; it is intentionally read-only
+    // and is hidden whenever the user wants to interact with the real TUI.
     if (!this.mobileViewEl.classList.contains("hidden")) {
       const threshold = 4;
       this.mobileViewAtBottom =
@@ -1283,6 +1288,8 @@ export class TerminalManager {
       this._captureTerminalScrollState();
       this.deferScrollRestore = true;
       if (this.isTouchDevice() && isMobileViewport()) {
+        // Enter the mobile scroll-only view when composing; keep the real TUI visible
+        // only when the user is not focused on the text input.
         this._scheduleResizeAfterLayout();
         this._setMobileViewActive(true);
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
@@ -1306,6 +1313,7 @@ export class TerminalManager {
         this._captureTerminalScrollState();
         this.deferScrollRestore = true;
         if (this.isTouchDevice() && isMobileViewport()) {
+          // Exit the scroll-only view so taps go directly to the TUI again.
           this._scheduleResizeAfterLayout();
           this._setMobileViewActive(false);
         }
