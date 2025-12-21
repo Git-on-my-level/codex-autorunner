@@ -294,7 +294,18 @@ export async function initVoiceInput({
     }
 
     try {
-      state.recorder.start(config.chunk_ms || 600);
+      const chunkMs =
+        typeof config.chunk_ms === "number" && config.chunk_ms > 0
+          ? config.chunk_ms
+          : 600;
+      const mime = (state.recorder && state.recorder.mimeType) || mimeType || "";
+      const shouldChunk = !/mp4|m4a/i.test(mime);
+      if (shouldChunk) {
+        state.recorder.start(chunkMs);
+      } else {
+        // MP4 containers on some browsers fail when concatenated; use single blob.
+        state.recorder.start();
+      }
     } catch (err) {
       state.recording = false;
       state.lastError = "Unable to start recorder";
