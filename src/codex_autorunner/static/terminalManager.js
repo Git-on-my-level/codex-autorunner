@@ -1014,7 +1014,15 @@ export class TerminalManager {
   _retryPendingTextInput() {
     if (!this.textInputPending) return;
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      flash("Reconnect to resend pending input", "error");
+      const savedSessionId = localStorage.getItem("codex_terminal_session_id");
+      if (!this.socket || this.socket.readyState !== WebSocket.CONNECTING) {
+        if (savedSessionId) {
+          this.connect({ mode: "attach", quiet: true });
+        } else {
+          this.connect({ mode: "new", quiet: true });
+        }
+      }
+      flash("Reconnecting to resend pending input…", "info");
       return;
     }
     const now = Date.now();
