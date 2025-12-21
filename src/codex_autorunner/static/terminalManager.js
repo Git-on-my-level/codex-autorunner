@@ -841,13 +841,13 @@ export class TerminalManager {
     const socketOpen = Boolean(this.socket && this.socket.readyState === WebSocket.OPEN);
     if (!socketOpen) {
       const savedSessionId = localStorage.getItem("codex_terminal_session_id");
-      if (!savedSessionId) {
-        flash("Connect the terminal first", "error");
-        return false;
-      }
       this._queuePendingTextInput(payload, originalText);
       if (!this.socket || this.socket.readyState !== WebSocket.CONNECTING) {
-        this.connect({ mode: "attach", quiet: true });
+        if (savedSessionId) {
+          this.connect({ mode: "attach", quiet: true });
+        } else {
+          this.connect({ mode: "new", quiet: true });
+        }
       }
       return true;
     }
