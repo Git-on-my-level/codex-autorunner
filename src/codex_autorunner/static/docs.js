@@ -4,6 +4,7 @@ import { publish } from "./bus.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { initVoiceInput } from "./voice.js";
+import { renderTodoPreview } from "./todoPreview.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants & State
@@ -734,35 +735,6 @@ function applyChatResult(payload, state, entry, kind = activeDoc) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TODO Preview
-// ─────────────────────────────────────────────────────────────────────────────
-
-function renderTodoPreview(text) {
-  const list = document.getElementById("todo-preview-list");
-  list.innerHTML = "";
-  const lines = text.split("\n").map((l) => l.trim());
-  const todos = lines.filter((l) => l.startsWith("- ["));
-  if (todos.length === 0) {
-    const li = document.createElement("li");
-    li.textContent = "No TODO items found.";
-    list.appendChild(li);
-    return;
-  }
-  todos.forEach((line) => {
-    const li = document.createElement("li");
-    const box = document.createElement("div");
-    box.className = "box";
-    const done = line.toLowerCase().startsWith("- [x]");
-    if (done) box.classList.add("done");
-    const textSpan = document.createElement("span");
-    textSpan.textContent = line.substring(5).trim();
-    li.appendChild(box);
-    li.appendChild(textSpan);
-    list.appendChild(li);
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Doc CRUD Operations
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1142,9 +1114,6 @@ export function initDocs() {
       loadDocs();
     }
   });
-  document
-    .getElementById("refresh-preview")
-    .addEventListener("click", loadDocs);
   document.getElementById("ingest-spec").addEventListener("click", ingestSpec);
   document.getElementById("clear-docs").addEventListener("click", clearDocs);
   chatUI.send.addEventListener("click", sendDocChat);
@@ -1289,6 +1258,8 @@ export function initDocs() {
   loadDocs();
   loadSnapshot().catch(() => {}); // Pre-load snapshot data
   renderChat(activeDoc);
+  document.body.dataset.docsReady = "true";
+  publish("docs:ready");
 
   // Register auto-refresh for docs (only when docs tab is active)
   // Uses a smart refresh that checks for unsaved changes

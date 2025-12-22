@@ -1,6 +1,7 @@
 import { api, flash, statusPill, confirmModal } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";
+import { renderTodoPreview } from "./todoPreview.js";
 import {
   loadState,
   startRun,
@@ -14,6 +15,7 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
+let pendingSummaryOpen = false;
 
 function renderState(state) {
   if (!state) return;
@@ -38,6 +40,33 @@ function renderState(state) {
   if (summaryBtn) {
     const done = Number(state.outstanding_count ?? NaN) === 0;
     summaryBtn.classList.toggle("hidden", !done);
+  }
+}
+
+function updateTodoPreview(content) {
+  renderTodoPreview(content || "");
+  if (content !== undefined) {
+    saveToCache("todo-doc", content || "");
+  }
+}
+
+function handleDocsEvent(payload) {
+  if (!payload) return;
+  if (payload.kind === "todo") {
+    updateTodoPreview(payload.content || "");
+    return;
+  }
+  if (typeof payload.todo === "string") {
+    updateTodoPreview(payload.todo);
+  }
+}
+
+async function loadTodoPreview() {
+  try {
+    const data = await api("/api/docs");
+    updateTodoPreview(data?.todo || "");
+  } catch (err) {
+    flash(err.message || "Failed to load TODO preview", "error");
   }
 }
 
@@ -244,9 +273,29 @@ function bindAction(buttonId, action) {
   });
 }
 
+function isDocsReady() {
+  return document.body?.dataset?.docsReady === "true";
+}
+
+function openSummaryDoc() {
+  const summaryChip = document.querySelector('.chip[data-doc="summary"]');
+  if (summaryChip) summaryChip.click();
+}
+
 export function initDashboard() {
   initSettings();
   subscribe("state:update", renderState);
+  subscribe("docs:updated", handleDocsEvent);
+  subscribe("docs:loaded", handleDocsEvent);
+  subscribe("docs:ready", () => {
+    if (!isDocsReady()) {
+      document.body.dataset.docsReady = "true";
+    }
+    if (pendingSummaryOpen) {
+      pendingSummaryOpen = false;
+      openSummaryDoc();
+    }
+  });
   bindAction("start-run", () => startRun(false));
   bindAction("start-once", () => startRun(true));
   bindAction("stop-run", stopRun);
@@ -260,6 +309,7 @@ export function initDashboard() {
   });
   bindAction("refresh-state", loadState);
   bindAction("usage-refresh", loadUsage);
+  bindAction("refresh-preview", loadTodoPreview);
 
   // Try loading from cache first
   const cachedState = loadFromCache("state");
@@ -268,18 +318,27 @@ export function initDashboard() {
   const cachedUsage = loadFromCache("usage");
   if (cachedUsage) renderUsage(cachedUsage);
 
+  const cachedTodo = loadFromCache("todo-doc");
+  if (typeof cachedTodo === "string") {
+    updateTodoPreview(cachedTodo);
+  }
+
   const summaryBtn = document.getElementById("open-summary");
   if (summaryBtn) {
     summaryBtn.addEventListener("click", () => {
       const docsTab = document.querySelector('.tab[data-target="docs"]');
       if (docsTab) docsTab.click();
-      const summaryChip = document.querySelector('.chip[data-doc="summary"]');
-      if (summaryChip) summaryChip.click();
+      if (isDocsReady()) {
+        requestAnimationFrame(openSummaryDoc);
+      } else {
+        pendingSummaryOpen = true;
+      }
     });
   }
 
   // Initial load
   loadUsage();
+  loadTodoPreview();
   loadVersion();
   checkUpdateStatus();
   startStatePolling();
