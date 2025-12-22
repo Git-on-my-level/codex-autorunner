@@ -841,12 +841,16 @@ export class TerminalManager {
                 flash(payload.message || "Send failed; your text is preserved", "error");
                 this._updateTextInputSendUi();
               } else {
+                const shouldSendEnter = this.textInputPending.sendEnter;
                 const current = this.textInputTextareaEl?.value || "";
                 if (current === this.textInputPending.originalText) {
                   if (this.textInputTextareaEl) {
                     this.textInputTextareaEl.value = "";
                     this._persistTextInputDraft();
                   }
+                }
+                if (shouldSendEnter) {
+                  this._sendEnterForTextInput();
                 }
                 this._clearPendingTextInput();
               }
@@ -1040,6 +1044,7 @@ export class TerminalManager {
       if (!parsed || typeof parsed !== "object") return null;
       if (typeof parsed.id !== "string" || typeof parsed.payload !== "string") return null;
       if (typeof parsed.originalText !== "string") return null;
+      if (parsed.sendEnter !== undefined && typeof parsed.sendEnter !== "boolean") return null;
       return parsed;
     } catch (_err) {
       return null;
@@ -1054,7 +1059,8 @@ export class TerminalManager {
     }
   }
 
-  _queuePendingTextInput(payload, originalText) {
+  _queuePendingTextInput(payload, originalText, options = {}) {
+    const sendEnter = Boolean(options.sendEnter);
     const id =
       (window.crypto && typeof window.crypto.randomUUID === "function" && window.crypto.randomUUID()) ||
       `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1065,6 +1071,7 @@ export class TerminalManager {
       originalText,
       sentAt: Date.now(),
       lastRetryAt: null,
+      sendEnter,
     };
     this._savePendingTextInput(this.textInputPending);
     this._updateTextInputSendUi();
@@ -1115,8 +1122,15 @@ export class TerminalManager {
     return true;
   }
 
+  _sendEnterForTextInput() {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    this._markSessionActive();
+    this.socket.send(textEncoder.encode("\r"));
+  }
+
   _sendTextWithAck(text, options = {}) {
     const appendNewline = Boolean(options.appendNewline);
+    const sendEnter = Boolean(options.sendEnter);
 
     let payload = this._normalizeNewlines(text);
     if (!payload) return false;
@@ -1144,7 +1158,7 @@ export class TerminalManager {
     const socketOpen = Boolean(this.socket && this.socket.readyState === WebSocket.OPEN);
     if (!socketOpen) {
       const savedSessionId = this._getSavedSessionId();
-      this._queuePendingTextInput(payload, originalText);
+      this._queuePendingTextInput(payload, originalText, { sendEnter });
       if (!this.socket || this.socket.readyState !== WebSocket.CONNECTING) {
         if (savedSessionId) {
           this.connect({ mode: "attach", quiet: true });
@@ -1155,7 +1169,7 @@ export class TerminalManager {
       return true;
     }
 
-    const id = this._queuePendingTextInput(payload, originalText);
+    const id = this._queuePendingTextInput(payload, originalText, { sendEnter });
 
     try {
       this.socket.send(
@@ -1261,7 +1275,9 @@ export class TerminalManager {
       }
     }
     this._persistTextInputDraft();
-    const ok = this._sendTextWithAck(text, { appendNewline: true });
+    const normalized = this._normalizeNewlines(text);
+    const needsEnter = Boolean(normalized && !normalized.endsWith("\n"));
+    const ok = this._sendTextWithAck(text, { appendNewline: false, sendEnter: needsEnter });
     if (!ok) return;
     this._scrollToBottomIfNearBottom();
 
