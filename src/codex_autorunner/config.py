@@ -16,6 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 CONFIG_FILENAME = ".codex-autorunner/config.yml"
 CONFIG_VERSION = 2
+TWELVE_HOUR_SECONDS = 12 * 60 * 60
 
 DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
@@ -67,7 +68,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "base_path": "",
     },
     "terminal": {
-        "idle_timeout_seconds": None,
+        "idle_timeout_seconds": TWELVE_HOUR_SECONDS,
     },
     "voice": {
         "enabled": True,
@@ -107,6 +108,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
     "mode": "hub",
+    "terminal": {
+        "idle_timeout_seconds": TWELVE_HOUR_SECONDS,
+    },
     "hub": {
         "repos_root": ".",
         # Hub-managed git worktrees live here (depth=1 scan). Each worktree is treated as a repo.

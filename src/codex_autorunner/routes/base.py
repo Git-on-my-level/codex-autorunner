@@ -40,6 +40,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
     def get_state(request: Request):
         engine = request.app.state.engine
         manager = request.app.state.manager
+        config = request.app.state.config
         state = load_state(engine.state_path)
         outstanding, done = engine.docs.todos()
         return {
@@ -52,6 +53,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             "done_count": len(done),
             "running": manager.running,
             "runner_pid": state.runner_pid,
+            "terminal_idle_timeout_seconds": config.terminal_idle_timeout_seconds,
         }
 
     @router.get("/api/version")

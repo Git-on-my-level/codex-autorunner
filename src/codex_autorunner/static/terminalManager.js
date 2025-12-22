@@ -1,7 +1,7 @@
 import { api, flash, buildWsUrl, isMobileViewport } from "./utils.js";
 import { CONSTANTS } from "./constants.js";
 import { initVoiceInput } from "./voice.js";
-import { publish } from "./bus.js";
+import { publish, subscribe } from "./bus.js";
 import { REPO_ID, BASE_PATH } from "./env.js";
 
 const textEncoder = new TextEncoder();
@@ -19,6 +19,7 @@ const TEXT_INPUT_SIZE_LIMITS = Object.freeze({
 
 const LEGACY_SESSION_STORAGE_KEY = "codex_terminal_session_id";
 const SESSION_STORAGE_PREFIX = "codex_terminal_session_id:";
+const SESSION_STORAGE_TS_PREFIX = "codex_terminal_session_ts:";
 
 const TOUCH_OVERRIDE = (() => {
   try {
@@ -70,6 +71,8 @@ export class TerminalManager {
     this.suppressNextNotFoundFlash = false;
     this.currentSessionId = null;
     this.statusBase = "Disconnected";
+    this.terminalIdleTimeoutSeconds = null;
+    this.sessionNotFound = false;
 
     // UI element references
     this.statusEl = null;
@@ -176,6 +179,18 @@ export class TerminalManager {
     this._initTerminalVoice();
     this._initTextInputPanel();
 
+    subscribe("state:update", (state) => {
+      if (
+        state &&
+        Object.prototype.hasOwnProperty.call(state, "terminal_idle_timeout_seconds")
+      ) {
+        this.terminalIdleTimeoutSeconds = state.terminal_idle_timeout_seconds;
+      }
+    });
+    if (this.terminalIdleTimeoutSeconds === null) {
+      this._loadTerminalIdleTimeout().catch(() => {});
+    }
+
     // Auto-connect if session ID exists
     if (this._getSavedSessionId()) {
       this.connect({ mode: "attach" });
@@ -214,14 +229,71 @@ export class TerminalManager {
     return REPO_ID || BASE_PATH || window.location.pathname || "default";
   }
 
+  async _loadTerminalIdleTimeout() {
+    try {
+      const data = await api(CONSTANTS.API.STATE_ENDPOINT);
+      if (
+        data &&
+        Object.prototype.hasOwnProperty.call(data, "terminal_idle_timeout_seconds")
+      ) {
+        this.terminalIdleTimeoutSeconds = data.terminal_idle_timeout_seconds;
+      }
+    } catch (_err) {
+      // ignore
+    }
+  }
+
   _getSessionStorageKey() {
     return `${SESSION_STORAGE_PREFIX}${this._getRepoStorageKey()}`;
+  }
+
+  _getSessionTimestampKey() {
+    return `${SESSION_STORAGE_TS_PREFIX}${this._getRepoStorageKey()}`;
+  }
+
+  _getSavedSessionTimestamp() {
+    const raw = localStorage.getItem(this._getSessionTimestampKey());
+    if (!raw) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return null;
+    return parsed;
+  }
+
+  _setSavedSessionTimestamp(stamp) {
+    if (!stamp) return;
+    localStorage.setItem(this._getSessionTimestampKey(), String(stamp));
+  }
+
+  _clearSavedSessionTimestamp() {
+    localStorage.removeItem(this._getSessionTimestampKey());
+  }
+
+  _isSessionStale(lastActiveAt) {
+    if (lastActiveAt === null || lastActiveAt === undefined) return false;
+    if (
+      this.terminalIdleTimeoutSeconds === null ||
+      this.terminalIdleTimeoutSeconds === undefined
+    ) {
+      return false;
+    }
+    if (typeof this.terminalIdleTimeoutSeconds !== "number") return false;
+    if (this.terminalIdleTimeoutSeconds <= 0) return false;
+    const maxAgeMs = this.terminalIdleTimeoutSeconds * 1000;
+    return Date.now() - lastActiveAt > maxAgeMs;
   }
 
   _getSavedSessionId() {
     const scopedKey = this._getSessionStorageKey();
     const scoped = localStorage.getItem(scopedKey);
-    if (scoped) return scoped;
+    if (scoped) {
+      const lastActiveAt = this._getSavedSessionTimestamp();
+      if (this._isSessionStale(lastActiveAt)) {
+        this._clearSavedSessionId();
+        this._clearSavedSessionTimestamp();
+        return null;
+      }
+      return scoped;
+    }
     const legacy = localStorage.getItem(LEGACY_SESSION_STORAGE_KEY);
     if (!legacy) return null;
     const hasScoped = Object.keys(localStorage).some((key) =>
@@ -229,6 +301,7 @@ export class TerminalManager {
     );
     if (!hasScoped) {
       localStorage.setItem(scopedKey, legacy);
+      this._setSavedSessionTimestamp(Date.now());
       localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
       return legacy;
     }
@@ -238,10 +311,16 @@ export class TerminalManager {
   _setSavedSessionId(sessionId) {
     if (!sessionId) return;
     localStorage.setItem(this._getSessionStorageKey(), sessionId);
+    this._setSavedSessionTimestamp(Date.now());
   }
 
   _clearSavedSessionId() {
     localStorage.removeItem(this._getSessionStorageKey());
+    this._clearSavedSessionTimestamp();
+  }
+
+  _markSessionActive() {
+    this._setSavedSessionTimestamp(Date.now());
   }
 
   _setCurrentSessionId(sessionId) {
@@ -497,6 +576,7 @@ export class TerminalManager {
     if (!this.inputDisposable) {
       this.inputDisposable = this.term.onData((data) => {
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+        this._markSessionActive();
         this.socket.send(textEncoder.encode(data));
       });
     }
@@ -656,6 +736,7 @@ export class TerminalManager {
     const isResume = mode === "resume";
     const quiet = Boolean(options.quiet);
 
+    this.sessionNotFound = false;
     if (!this._ensureTerminal()) return;
     if (this.socket && this.socket.readyState === WebSocket.OPEN) return;
 
@@ -701,6 +782,7 @@ export class TerminalManager {
     this.socket.onopen = () => {
       this.reconnectAttempts = 0;
       this.overlayEl?.classList.add("hidden");
+      this._markSessionActive();
 
       // On attach, clear the local terminal first
       if (isAttach && this.term) {
@@ -742,6 +824,7 @@ export class TerminalManager {
     };
 
     this.socket.onmessage = (event) => {
+      this._markSessionActive();
       if (typeof event.data === "string") {
         try {
           const payload = JSON.parse(event.data);
@@ -750,6 +833,7 @@ export class TerminalManager {
               this._setSavedSessionId(payload.session_id);
               this._setCurrentSessionId(payload.session_id);
             }
+            this._markSessionActive();
           } else if (payload.type === "ack") {
             const ackId = payload.id;
             if (this.textInputPending && ackId === this.textInputPending.id) {
@@ -774,12 +858,15 @@ export class TerminalManager {
               }] \r\n`
             );
             this._clearSavedSessionId();
+            this._clearSavedSessionTimestamp();
             this._setCurrentSessionId(null);
             this.intentionalDisconnect = true;
             this.disconnect();
           } else if (payload.type === "error") {
             if (payload.message && payload.message.includes("Session not found")) {
+              this.sessionNotFound = true;
               this._clearSavedSessionId();
+              this._clearSavedSessionTimestamp();
               this._setCurrentSessionId(null);
               if (this.lastConnectMode === "attach") {
                 if (!this.suppressNextNotFoundFlash) {
@@ -789,6 +876,8 @@ export class TerminalManager {
                 this.disconnect();
                 return;
               }
+              this._updateTextInputSendUi();
+              return;
             }
             flash(payload.message || "Terminal error", "error");
           }
@@ -899,8 +988,9 @@ export class TerminalManager {
     if (!this.textInputSendBtn) return;
     const connected = Boolean(this.socket && this.socket.readyState === WebSocket.OPEN);
     const pending = Boolean(this.textInputPending);
-    this.textInputSendBtn.disabled = false;
-    this.textInputSendBtn.setAttribute("aria-disabled", connected ? "false" : "true");
+    this.textInputSendBtn.disabled = this.sessionNotFound && !connected;
+    const ariaDisabled = this.textInputSendBtn.disabled || !connected;
+    this.textInputSendBtn.setAttribute("aria-disabled", ariaDisabled ? "true" : "false");
     this.textInputSendBtn.classList.toggle("disconnected", !connected);
     this.textInputSendBtn.classList.toggle("pending", pending);
     if (this.textInputSendBtnLabel === null) {
@@ -915,6 +1005,8 @@ export class TerminalManager {
     }
     if (pending) {
       hintEl.textContent = "Sending… Your text will stay here until confirmed.";
+    } else if (this.sessionNotFound && !connected) {
+      hintEl.textContent = "Session expired. Click New or Resume to reconnect.";
     } else {
       hintEl.textContent = this.textInputHintBase;
     }
@@ -1018,6 +1110,7 @@ export class TerminalManager {
       );
     }
 
+    this._markSessionActive();
     this.socket.send(encoded);
     return true;
   }
@@ -1072,6 +1165,7 @@ export class TerminalManager {
           data: payload,
         })
       );
+      this._markSessionActive();
       return true;
     } catch (_err) {
       flash("Send failed; your text is preserved", "error");
@@ -1457,6 +1551,7 @@ export class TerminalManager {
       }
     }
 
+    this._markSessionActive();
     this.socket.send(textEncoder.encode(seq));
 
     // Reset modifiers after sending
@@ -1468,6 +1563,7 @@ export class TerminalManager {
   _sendCtrl(char) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     const code = char.toUpperCase().charCodeAt(0) - 64;
+    this._markSessionActive();
     this.socket.send(textEncoder.encode(String.fromCharCode(code)));
   }
 

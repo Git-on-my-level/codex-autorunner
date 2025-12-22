@@ -93,6 +93,7 @@ async def state_stream(engine, manager, logger=None):
     """SSE stream generator for state updates."""
     last_payload = None
     last_error_log_at = 0.0
+    terminal_idle_timeout_seconds = engine.config.terminal_idle_timeout_seconds
     while True:
         try:
             state = await asyncio.to_thread(load_state, engine.state_path)
@@ -107,6 +108,7 @@ async def state_stream(engine, manager, logger=None):
                 "done_count": len(done),
                 "running": manager.running,
                 "runner_pid": state.runner_pid,
+                "terminal_idle_timeout_seconds": terminal_idle_timeout_seconds,
             }
             if payload != last_payload:
                 yield f"data: {json.dumps(payload)}\n\n"
@@ -121,4 +123,3 @@ async def state_stream(engine, manager, logger=None):
                 except Exception:
                     pass
         await asyncio.sleep(1.0)
-

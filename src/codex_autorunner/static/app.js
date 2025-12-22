@@ -44,17 +44,30 @@ function initRepoShell() {
       initDocs();
     } else if (tabId === "logs") {
       initLogs();
-    } else if (tabId === "terminal") {
-      initTerminal();
     }
     initializedTabs.add(tabId);
   };
 
   subscribe("tab:change", (tabId) => {
+    if (tabId === "terminal") {
+      initTerminal();
+    }
     lazyInit(tabId);
   });
 
   initTabs();
+  const activePanel = document.querySelector(".panel.active");
+  if (activePanel?.id) {
+    lazyInit(activePanel.id);
+  }
+  const terminalPanel = document.getElementById("terminal");
+  terminalPanel?.addEventListener(
+    "pointerdown",
+    () => {
+      lazyInit("terminal");
+    },
+    { once: true }
+  );
   initDashboard();
   initGitHub();
   initMobileCompact();
