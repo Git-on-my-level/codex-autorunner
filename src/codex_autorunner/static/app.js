@@ -8,6 +8,7 @@ import { initTerminal } from "./terminal.js";
 import { loadState } from "./state.js";
 import { initGitHub } from "./github.js";
 import { initMobileCompact } from "./mobileCompact.js";
+import { subscribe } from "./bus.js";
 
 function initRepoShell() {
   // If this is a repo under a hub, show back button and repo name
@@ -36,12 +37,26 @@ function initRepoShell() {
   registerTab("logs", "Logs");
   registerTab("terminal", "Terminal");
 
+  const initializedTabs = new Set();
+  const lazyInit = (tabId) => {
+    if (initializedTabs.has(tabId)) return;
+    if (tabId === "docs") {
+      initDocs();
+    } else if (tabId === "logs") {
+      initLogs();
+    } else if (tabId === "terminal") {
+      initTerminal();
+    }
+    initializedTabs.add(tabId);
+  };
+
+  subscribe("tab:change", (tabId) => {
+    lazyInit(tabId);
+  });
+
   initTabs();
   initDashboard();
   initGitHub();
-  initDocs();
-  initLogs();
-  initTerminal();
   initMobileCompact();
 
   loadState();

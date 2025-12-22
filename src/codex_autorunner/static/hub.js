@@ -8,9 +8,17 @@ import {
 } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
+import { HUB_BASE } from "./env.js";
 
 let hubData = { repos: [], last_scan_at: null };
 const repoPrCache = new Map();
+const repoPrFetches = new Set();
+const prefetchedUrls = new Set();
+
+const HUB_CACHE_TTL_MS = 30000;
+const HUB_CACHE_KEY = `car:hub:${HUB_BASE || "/"}`;
+const HUB_USAGE_CACHE_KEY = `car:hub-usage:${HUB_BASE || "/"}`;
+const PR_CACHE_TTL_MS = 120000;
 
 const repoListEl = document.getElementById("hub-repo-list");
 const lastScanEl = document.getElementById("hub-last-scan");
@@ -22,6 +30,28 @@ const hubUsageMeta = document.getElementById("hub-usage-meta");
 const hubUsageRefresh = document.getElementById("hub-usage-refresh");
 const hubVersionEl = document.getElementById("hub-version");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
+
+function saveSessionCache(key, value) {
+  try {
+    const payload = { at: Date.now(), value };
+    sessionStorage.setItem(key, JSON.stringify(payload));
+  } catch (_err) {
+    // ignore session storage issues
+  }
+}
+
+function loadSessionCache(key, maxAgeMs) {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const payload = JSON.parse(raw);
+    if (!payload || typeof payload.at !== "number") return null;
+    if (maxAgeMs && Date.now() - payload.at > maxAgeMs) return null;
+    return payload.value;
+  } catch (_err) {
+    return null;
+  }
+}
 
 function formatRunSummary(repo) {
   if (!repo.initialized) return "Not initialized";
@@ -150,6 +180,7 @@ async function loadHubUsage() {
   try {
     const data = await api("/hub/usage");
     renderHubUsage(data);
+    saveSessionCache(HUB_USAGE_CACHE_KEY, data);
   } catch (err) {
     flash(err.message || "Failed to load usage", "error");
     renderHubUsage(null);
@@ -383,7 +414,7 @@ function renderRepos(repos) {
         : "";
 
     // Best-effort PR pill for mounted repos (does not block rendering).
-    const prInfo = repoPrCache.get(repo.id);
+    const prInfo = repoPrCache.get(repo.id)?.data;
     const prPill = prInfo?.links?.files
       ? `<a class="pill pill-small hub-pr-pill" href="${
           prInfo.links.files
@@ -466,13 +497,25 @@ async function refreshRepoPrCache(repos) {
   const mounted = (repos || []).filter((r) => r && r.mounted === true);
   if (!mounted.length) return;
   const tasks = mounted.map(async (repo) => {
+    const cached = repoPrCache.get(repo.id);
+    if (
+      cached &&
+      typeof cached.fetchedAt === "number" &&
+      Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS
+    ) {
+      return;
+    }
+    if (repoPrFetches.has(repo.id)) return;
+    repoPrFetches.add(repo.id);
     try {
       const pr = await api(`/repos/${repo.id}/api/github/pr`, {
         method: "GET",
       });
-      repoPrCache.set(repo.id, pr);
+      repoPrCache.set(repo.id, { data: pr, fetchedAt: Date.now() });
     } catch (err) {
       // Best-effort: ignore GitHub errors so hub stays fast.
+    } finally {
+      repoPrFetches.delete(repo.id);
     }
   });
   await Promise.allSettled(tasks);
@@ -486,6 +529,7 @@ async function refreshHub({ scan = false } = {}) {
     const path = scan ? "/hub/repos/scan" : "/hub/repos";
     const data = await api(path, { method: scan ? "POST" : "GET" });
     hubData = data;
+    saveSessionCache(HUB_CACHE_KEY, hubData);
     renderSummary(data.repos || []);
     renderRepos(data.repos || []);
     refreshRepoPrCache(data.repos || []).catch(() => {});
@@ -702,6 +746,24 @@ function attachHubHandlers() {
       }
     }
   });
+
+  repoListEl?.addEventListener("mouseover", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const card = target.closest(".hub-repo-clickable");
+    if (card && card.dataset.href) {
+      prefetchRepo(card.dataset.href);
+    }
+  });
+
+  repoListEl?.addEventListener("pointerdown", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const card = target.closest(".hub-repo-clickable");
+    if (card && card.dataset.href) {
+      prefetchRepo(card.dataset.href);
+    }
+  });
 }
 
 /**
@@ -711,12 +773,14 @@ async function silentRefreshHub() {
   try {
     const data = await api("/hub/repos", { method: "GET" });
     hubData = data;
+    saveSessionCache(HUB_CACHE_KEY, hubData);
     renderSummary(data.repos || []);
     renderRepos(data.repos || []);
     // Also refresh usage silently
     try {
       const usageData = await api("/hub/usage");
       renderHubUsage(usageData);
+      saveSessionCache(HUB_USAGE_CACHE_KEY, usageData);
     } catch (err) {
       // Silently ignore usage errors
     }
@@ -752,9 +816,25 @@ async function checkUpdateStatus() {
   }
 }
 
+function prefetchRepo(url) {
+  if (!url || prefetchedUrls.has(url)) return;
+  prefetchedUrls.add(url);
+  fetch(url, { method: "GET", headers: { "x-prefetch": "1" } }).catch(() => {});
+}
+
 export function initHub() {
   if (!repoListEl) return;
   attachHubHandlers();
+  const cachedHub = loadSessionCache(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
+  if (cachedHub) {
+    hubData = cachedHub;
+    renderSummary(cachedHub.repos || []);
+    renderRepos(cachedHub.repos || []);
+  }
+  const cachedUsage = loadSessionCache(HUB_USAGE_CACHE_KEY, HUB_CACHE_TTL_MS);
+  if (cachedUsage) {
+    renderHubUsage(cachedUsage);
+  }
   refreshHub();
   loadHubVersion();
   checkUpdateStatus();

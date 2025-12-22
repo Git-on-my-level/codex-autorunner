@@ -3,6 +3,7 @@ import enum
 import threading
 import subprocess
 import re
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -230,6 +231,8 @@ class HubSupervisor:
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
         self._runners: Dict[str, RepoRunner] = {}
         self.state = load_hub_state(self.state_path, self.hub_config.root)
+        self._list_cache_at: Optional[float] = None
+        self._list_cache: Optional[List[RepoSnapshot]] = None
 
     @classmethod
     def from_path(cls, path: Path) -> "HubSupervisor":
@@ -239,17 +242,23 @@ class HubSupervisor:
         return cls(config)
 
     def scan(self) -> List[RepoSnapshot]:
+        self._invalidate_list_cache()
         manifest, records = discover_and_init(self.hub_config)
         snapshots = self._build_snapshots(records)
         self.state = HubState(last_scan_at=now_iso(), repos=snapshots)
         save_hub_state(self.state_path, self.state, self.hub_config.root)
         return snapshots
 
-    def list_repos(self) -> List[RepoSnapshot]:
+    def list_repos(self, *, use_cache: bool = True) -> List[RepoSnapshot]:
+        if use_cache and self._list_cache and self._list_cache_at is not None:
+            if time.monotonic() - self._list_cache_at < 2.0:
+                return self._list_cache
         manifest, records = self._manifest_records(manifest_only=True)
         snapshots = self._build_snapshots(records)
         self.state = HubState(last_scan_at=self.state.last_scan_at, repos=snapshots)
         save_hub_state(self.state_path, self.state, self.hub_config.root)
+        self._list_cache = snapshots
+        self._list_cache_at = time.monotonic()
         return snapshots
 
     def run_repo(self, repo_id: str, once: bool = False) -> RepoSnapshot:
@@ -275,6 +284,7 @@ class HubSupervisor:
         return self._snapshot_for_repo(repo_id)
 
     def init_repo(self, repo_id: str) -> RepoSnapshot:
+        self._invalidate_list_cache()
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         repo = manifest.get(repo_id)
         if not repo:
@@ -292,6 +302,7 @@ class HubSupervisor:
         git_init: bool = True,
         force: bool = False,
     ) -> RepoSnapshot:
+        self._invalidate_list_cache()
         base_dir = self.hub_config.repos_root
         target = repo_path if repo_path is not None else Path(repo_id)
         if not target.is_absolute():
@@ -336,6 +347,7 @@ class HubSupervisor:
         branch: str,
         force: bool = False,
     ) -> RepoSnapshot:
+        self._invalidate_list_cache()
         """
         Create a git worktree under hub.worktrees_root and register it as a hub repo entry.
         Worktrees are treated as full repos (own .codex-autorunner docs/state).
@@ -411,6 +423,7 @@ class HubSupervisor:
         delete_branch: bool = False,
         delete_remote: bool = False,
     ) -> None:
+        self._invalidate_list_cache()
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         entry = manifest.get(worktree_repo_id)
         if not entry or entry.kind != "worktree":
@@ -523,8 +536,12 @@ class HubSupervisor:
         if not record:
             raise ValueError(f"Repo {repo_id} not found in manifest")
         snapshot = self._snapshot_from_record(record)
-        self.list_repos()
+        self.list_repos(use_cache=False)
         return snapshot
+
+    def _invalidate_list_cache(self) -> None:
+        self._list_cache = None
+        self._list_cache_at = None
 
     def _snapshot_from_record(self, record: DiscoveryRecord) -> RepoSnapshot:
         repo_path = record.absolute_path

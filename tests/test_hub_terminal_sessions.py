@@ -56,6 +56,18 @@ def _create_repo(root: Path, name: str) -> Path:
     return repo_dir
 
 
+def _receive_json_text(ws, attempts: int = 5) -> dict:
+    for _ in range(attempts):
+        message = ws.receive()
+        if message.get("type") == "websocket.close":
+            raise AssertionError("WebSocket closed before JSON frame")
+        text = message.get("text")
+        if text is None:
+            continue
+        return json.loads(text)
+    raise AssertionError("No JSON text frame received")
+
+
 def test_hub_terminal_sessions_stay_isolated(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -78,8 +90,8 @@ def test_hub_terminal_sessions_stay_isolated(
         ) as ws_alpha, client.websocket_connect(
             "/repos/beta/api/terminal"
         ) as ws_beta:
-            hello_alpha = ws_alpha.receive_json()
-            hello_beta = ws_beta.receive_json()
+            hello_alpha = _receive_json_text(ws_alpha)
+            hello_beta = _receive_json_text(ws_beta)
             alpha_session = hello_alpha.get("session_id")
             beta_session = hello_beta.get("session_id")
             assert alpha_session
@@ -87,12 +99,12 @@ def test_hub_terminal_sessions_stay_isolated(
             assert alpha_session != beta_session
 
             ws_beta.send_json({"type": "ping"})
-            assert ws_beta.receive_json().get("type") == "pong"
+            assert _receive_json_text(ws_beta).get("type") == "pong"
 
             ws_alpha.close()
 
             ws_beta.send_json({"type": "ping"})
-            assert ws_beta.receive_json().get("type") == "pong"
+            assert _receive_json_text(ws_beta).get("type") == "pong"
 
         alpha_sessions = client.get("/repos/alpha/api/sessions").json()["sessions"]
         beta_sessions = client.get("/repos/beta/api/sessions").json()["sessions"]
