@@ -275,8 +275,12 @@ function buildActions(repo) {
   const actions = [];
   const missing = !repo.exists_on_disk;
   const kind = repo.kind || "base";
-  if (repo.init_error && !missing) {
-    actions.push({ key: "init", label: "Re-init", kind: "primary" });
+  if (!missing && (repo.init_error || repo.mount_error)) {
+    actions.push({
+      key: "init",
+      label: repo.initialized ? "Re-init" : "Init",
+      kind: "primary",
+    });
   } else if (!missing && !repo.initialized) {
     actions.push({ key: "init", label: "Init", kind: "primary" });
   }
@@ -290,16 +294,6 @@ function buildActions(repo) {
       kind: "ghost",
       title: "Remove worktree and delete branch",
     });
-  }
-  if (!missing && repo.initialized && repo.status !== "running") {
-    actions.push({ key: "run", label: "Run", kind: "primary" });
-    actions.push({ key: "once", label: "Once", kind: "ghost" });
-  }
-  if (repo.status === "running") {
-    actions.push({ key: "stop", label: "Stop", kind: "ghost" });
-  }
-  if (repo.lock_status === "locked_stale") {
-    actions.push({ key: "resume", label: "Resume", kind: "ghost" });
   }
   return actions;
 }
@@ -604,10 +598,6 @@ async function handleRepoAction(repoId, action) {
   buttons?.forEach((btn) => (btn.disabled = true));
   try {
     const pathMap = {
-      run: `/hub/repos/${repoId}/run`,
-      once: `/hub/repos/${repoId}/run`,
-      stop: `/hub/repos/${repoId}/stop`,
-      resume: `/hub/repos/${repoId}/resume`,
       init: `/hub/repos/${repoId}/init`,
     };
     if (action === "new_worktree") {
@@ -648,8 +638,7 @@ async function handleRepoAction(repoId, action) {
 
     const path = pathMap[action];
     if (!path) return;
-    const payload = action === "once" ? { once: true } : null;
-    await api(path, { method: "POST", body: payload });
+    await api(path, { method: "POST" });
     flash(`${action} sent to ${repoId}`);
     await refreshHub();
   } catch (err) {
