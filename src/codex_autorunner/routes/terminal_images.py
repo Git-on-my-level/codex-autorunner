@@ -45,7 +45,15 @@ def build_terminal_image_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail="missing image")
 
         content_type = (file.content_type or "").lower()
-        if not content_type.startswith("image/"):
+        content_type = content_type.split(";", 1)[0].strip()
+        filename = file.filename or ""
+        suffix = Path(filename).suffix.lower()
+        looks_like_image = False
+        if content_type.startswith("image/"):
+            looks_like_image = True
+        elif suffix in ALLOWED_EXTS:
+            looks_like_image = True
+        if not looks_like_image:
             raise HTTPException(status_code=400, detail="unsupported content type")
 
         try:
@@ -63,7 +71,7 @@ def build_terminal_image_routes() -> APIRouter:
         images_dir = repo_root / ".codex-autorunner" / "uploads" / "terminal-images"
         images_dir.mkdir(parents=True, exist_ok=True)
 
-        ext = _choose_image_extension(file.filename, content_type)
+        ext = _choose_image_extension(filename, content_type)
         token = secrets.token_hex(6)
         name = f"terminal-{int(time.time())}-{token}{ext}"
         path = images_dir / name
@@ -73,7 +81,12 @@ def build_terminal_image_routes() -> APIRouter:
             raise HTTPException(status_code=500, detail="failed to save image") from exc
 
         rel_path = path.relative_to(repo_root).as_posix()
-        return {"status": "ok", "path": rel_path, "filename": name}
+        return {
+            "status": "ok",
+            "path": rel_path,
+            "filename": name,
+            "abs_path": str(path),
+        }
 
     return router
 

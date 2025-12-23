@@ -1636,7 +1636,7 @@ export class TerminalManager {
         method: "POST",
         body: formData,
       });
-      const imagePath = response?.path;
+      const imagePath = response?.abs_path || response?.path;
       if (!imagePath) {
         throw new Error("Upload returned no path");
       }
