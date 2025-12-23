@@ -4058,6 +4058,44 @@ button.loading::after {
   .mobile-terminal-view.hidden {
     display: none;
   }
+
+  .mobile-terminal-view .ansi-bold {
+    font-weight: 600;
+  }
+
+  .mobile-terminal-view .ansi-fg-30 { color: #000000; }
+  .mobile-terminal-view .ansi-fg-31 { color: #ff5566; }
+  .mobile-terminal-view .ansi-fg-32 { color: #6cf5d8; }
+  .mobile-terminal-view .ansi-fg-33 { color: #f1fa8c; }
+  .mobile-terminal-view .ansi-fg-34 { color: #6ca8ff; }
+  .mobile-terminal-view .ansi-fg-35 { color: #bd93f9; }
+  .mobile-terminal-view .ansi-fg-36 { color: #8be9fd; }
+  .mobile-terminal-view .ansi-fg-37 { color: #e5ecff; }
+  .mobile-terminal-view .ansi-fg-90 { color: #6272a4; }
+  .mobile-terminal-view .ansi-fg-91 { color: #ff6e6e; }
+  .mobile-terminal-view .ansi-fg-92 { color: #69ff94; }
+  .mobile-terminal-view .ansi-fg-93 { color: #ffffa5; }
+  .mobile-terminal-view .ansi-fg-94 { color: #d6acff; }
+  .mobile-terminal-view .ansi-fg-95 { color: #ff92df; }
+  .mobile-terminal-view .ansi-fg-96 { color: #a4ffff; }
+  .mobile-terminal-view .ansi-fg-97 { color: #ffffff; }
+
+  .mobile-terminal-view .ansi-bg-40 { background-color: #000000; }
+  .mobile-terminal-view .ansi-bg-41 { background-color: #ff5566; }
+  .mobile-terminal-view .ansi-bg-42 { background-color: #6cf5d8; }
+  .mobile-terminal-view .ansi-bg-43 { background-color: #f1fa8c; }
+  .mobile-terminal-view .ansi-bg-44 { background-color: #6ca8ff; }
+  .mobile-terminal-view .ansi-bg-45 { background-color: #bd93f9; }
+  .mobile-terminal-view .ansi-bg-46 { background-color: #8be9fd; }
+  .mobile-terminal-view .ansi-bg-47 { background-color: #e5ecff; }
+  .mobile-terminal-view .ansi-bg-100 { background-color: #6272a4; }
+  .mobile-terminal-view .ansi-bg-101 { background-color: #ff6e6e; }
+  .mobile-terminal-view .ansi-bg-102 { background-color: #69ff94; }
+  .mobile-terminal-view .ansi-bg-103 { background-color: #ffffa5; }
+  .mobile-terminal-view .ansi-bg-104 { background-color: #d6acff; }
+  .mobile-terminal-view .ansi-bg-105 { background-color: #ff92df; }
+  .mobile-terminal-view .ansi-bg-106 { background-color: #a4ffff; }
+  .mobile-terminal-view .ansi-bg-107 { background-color: #ffffff; }
   
 }
 

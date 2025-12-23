@@ -127,6 +127,22 @@ export class TerminalManager {
     this.mobileViewRaf = null;
     this.mobileViewDirty = false;
 
+    this.transcriptLines = [];
+    this.transcriptLineCells = [];
+    this.transcriptCursor = 0;
+    this.transcriptMaxLines = 2000;
+    this.transcriptAnsiState = {
+      mode: "text",
+      oscEsc: false,
+      csiParams: "",
+      fg: null,
+      bg: null,
+      bold: false,
+      className: "",
+    };
+    this.transcriptPersistTimer = null;
+    this.transcriptDecoder = new TextDecoder();
+
     // Bind methods that are used as callbacks
     this._handleResize = this._handleResize.bind(this);
     this._handleVoiceHotkeyDown = this._handleVoiceHotkeyDown.bind(this);
@@ -167,6 +183,7 @@ export class TerminalManager {
     });
     this._updateButtons(false);
     this._setStatus("Disconnected");
+    this._restoreTranscript();
 
     window.addEventListener("resize", this._handleResize);
     if (window.visualViewport) {
@@ -385,72 +402,343 @@ export class TerminalManager {
     }
   }
 
-  _initTouchTerminalScroll(container) {
-    if (!this.isTouchDevice()) return;
-    let tracking = false;
-    let lastX = 0;
-    let lastY = 0;
-    let remainderPx = 0;
+  _resetTranscript() {
+    this.transcriptLines = [];
+    this.transcriptLineCells = [];
+    this.transcriptCursor = 0;
+    this.transcriptAnsiState = {
+      mode: "text",
+      oscEsc: false,
+      csiParams: "",
+      fg: null,
+      bg: null,
+      bold: false,
+      className: "",
+    };
+    this.transcriptDecoder = new TextDecoder();
+    this._persistTranscript(true);
+  }
 
-    const estimateCellHeight = () => {
-      const internal =
-        this.term?._core?._renderService?.dimensions?.actualCellHeight ??
-        this.term?._core?._renderService?.dimensions?.css?.cellHeight;
-      if (typeof internal === "number" && internal > 0) return internal;
-      const fontSize = Number.parseFloat(getComputedStyle(container).fontSize || "12");
-      return fontSize > 0 ? fontSize * 1.25 : 15;
+  _transcriptStorageKey() {
+    const scope = REPO_ID || BASE_PATH || "default";
+    return `codex_terminal_transcript:${scope}`;
+  }
+
+  _restoreTranscript() {
+    try {
+      const raw = sessionStorage.getItem(this._transcriptStorageKey());
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed?.lines)) {
+        this.transcriptLines = parsed.lines
+          .map((line) => this._segmentsToCells(line))
+          .filter(Boolean);
+      }
+      if (Array.isArray(parsed?.line)) {
+        this.transcriptLineCells = this._segmentsToCells(parsed.line) || [];
+      }
+      if (Number.isInteger(parsed?.cursor)) {
+        this.transcriptCursor = Math.max(0, parsed.cursor);
+      }
+    } catch (_err) {
+      // ignore restore errors
+    }
+  }
+
+  _persistTranscript(clear = false) {
+    try {
+      const key = this._transcriptStorageKey();
+      if (clear) {
+        sessionStorage.removeItem(key);
+        return;
+      }
+      sessionStorage.setItem(
+        key,
+        JSON.stringify({
+          lines: this.transcriptLines.map((line) => this._cellsToSegments(line)),
+          line: this._cellsToSegments(this.transcriptLineCells),
+          cursor: this.transcriptCursor,
+        })
+      );
+    } catch (_err) {
+      // ignore storage errors
+    }
+  }
+
+  _persistTranscriptSoon() {
+    if (this.transcriptPersistTimer) return;
+    this.transcriptPersistTimer = setTimeout(() => {
+      this.transcriptPersistTimer = null;
+      this._persistTranscript(false);
+    }, 500);
+  }
+
+  _getTranscriptLines() {
+    const lines = this.transcriptLines.slice();
+    if (this.transcriptLineCells.length) {
+      lines.push(this.transcriptLineCells);
+    }
+    return lines;
+  }
+
+  _pushTranscriptLine(lineCells) {
+    this.transcriptLines.push(lineCells.slice());
+    const overflow = this.transcriptLines.length - this.transcriptMaxLines;
+    if (overflow > 0) {
+      this.transcriptLines.splice(0, overflow);
+    }
+  }
+
+  _cellsToSegments(cells) {
+    if (!Array.isArray(cells)) return [];
+    const segments = [];
+    let current = null;
+    for (const cell of cells) {
+      if (!cell) continue;
+      const cls = cell.c || "";
+      if (!current || current.c !== cls) {
+        current = { t: cell.t || "", c: cls };
+        segments.push(current);
+      } else {
+        current.t += cell.t || "";
+      }
+    }
+    return segments;
+  }
+
+  _segmentsToCells(segments) {
+    if (typeof segments === "string") {
+      return Array.from(segments).map((ch) => ({ t: ch, c: "" }));
+    }
+    if (!Array.isArray(segments)) return null;
+    const cells = [];
+    for (const seg of segments) {
+      if (!seg || typeof seg.t !== "string") continue;
+      const cls = typeof seg.c === "string" ? seg.c : "";
+      for (const ch of seg.t) {
+        cells.push({ t: ch, c: cls });
+      }
+    }
+    return cells;
+  }
+
+  _escapeHtml(text) {
+    return String(text)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  _cellsToHtml(cells) {
+    if (!cells.length) return "";
+    const segments = this._cellsToSegments(cells);
+    let html = "";
+    for (const seg of segments) {
+      const text = this._escapeHtml(seg.t);
+      if (!seg.c) {
+        html += text;
+      } else {
+        html += `<span class="${seg.c}">${text}</span>`;
+      }
+    }
+    return html;
+  }
+
+  _ansiClassName() {
+    const state = this.transcriptAnsiState;
+    const parts = [];
+    if (state.bold) parts.push("ansi-bold");
+    if (state.fg) parts.push(`ansi-fg-${state.fg}`);
+    if (state.bg) parts.push(`ansi-bg-${state.bg}`);
+    return parts.join(" ");
+  }
+
+  _appendTranscriptChunk(data) {
+    if (!data) return;
+    const text =
+      typeof data === "string"
+        ? data
+        : this.transcriptDecoder.decode(data, { stream: true });
+    if (!text) return;
+    const state = this.transcriptAnsiState;
+    let didChange = false;
+
+    const parseParams = (raw) => {
+      if (!raw) return [];
+      return raw.split(";").map((part) => {
+        const match = part.match(/(\d+)/);
+        return match ? Number.parseInt(match[1], 10) : null;
+      });
     };
 
-    container.addEventListener(
-      "touchstart",
-      (e) => {
-        if (!this.term) return;
-        if (e.touches.length !== 1) return;
-        tracking = true;
-        lastX = e.touches[0].clientX;
-        lastY = e.touches[0].clientY;
-        remainderPx = 0;
-      },
-      { passive: true }
-    );
+    const getParam = (params, index, fallback) => {
+      const value = params[index];
+      return Number.isInteger(value) ? value : fallback;
+    };
 
-    container.addEventListener(
-      "touchmove",
-      (e) => {
-        if (!tracking || !this.term) return;
-        if (e.touches.length !== 1) return;
-        const x = e.touches[0].clientX;
-        const y = e.touches[0].clientY;
-        const dx = x - lastX;
-        const dy = y - lastY;
-        lastX = x;
-        lastY = y;
-
-        if (Math.abs(dx) > Math.abs(dy)) {
-          return;
+    const writeChar = (char) => {
+      if (this.transcriptCursor > this.transcriptLineCells.length) {
+        const padCount = this.transcriptCursor - this.transcriptLineCells.length;
+        for (let idx = 0; idx < padCount; idx++) {
+          this.transcriptLineCells.push({ t: " ", c: "" });
         }
+      }
+      const cell = { t: char, c: state.className };
+      if (this.transcriptCursor === this.transcriptLineCells.length) {
+        this.transcriptLineCells.push(cell);
+      } else {
+        this.transcriptLineCells[this.transcriptCursor] = cell;
+      }
+      this.transcriptCursor += 1;
+      didChange = true;
+    };
 
-        e.preventDefault();
-        remainderPx += dy;
-        const cellHeight = estimateCellHeight();
-        const lines = Math.trunc(remainderPx / cellHeight);
-        if (lines !== 0) {
-          remainderPx -= lines * cellHeight;
-          // Finger down should scroll up (toward earlier output).
-          this.term.scrollLines(-lines);
-          this._updateJumpBottomVisibility();
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (state.mode === "osc") {
+        if (state.oscEsc) {
+          state.oscEsc = false;
+          if (ch === "\\") {
+            state.mode = "text";
+          }
+          continue;
         }
-      },
-      { passive: false }
-    );
+        if (ch === "\x07") {
+          state.mode = "text";
+          continue;
+        }
+        if (ch === "\x1b") {
+          state.oscEsc = true;
+        }
+        continue;
+      }
 
-    container.addEventListener(
-      "touchend",
-      () => {
-        tracking = false;
-      },
-      { passive: true }
-    );
+      if (state.mode === "csi") {
+        if (ch >= "@" && ch <= "~") {
+          const params = parseParams(state.csiParams);
+          const param = getParam(params, 0, 0);
+          if (ch === "m") {
+            const codes = params.length ? params : [0];
+            for (const code of codes) {
+              if (code === 0 || code === null) {
+                state.fg = null;
+                state.bg = null;
+                state.bold = false;
+              } else if (code === 1) {
+                state.bold = true;
+              } else if (code === 22) {
+                state.bold = false;
+              } else if (code >= 30 && code <= 37) {
+                state.fg = String(code);
+              } else if (code === 39) {
+                state.fg = null;
+              } else if (code >= 40 && code <= 47) {
+                state.bg = String(code);
+              } else if (code === 49) {
+                state.bg = null;
+              } else if (code >= 90 && code <= 97) {
+                state.fg = String(code);
+              } else if (code >= 100 && code <= 107) {
+                state.bg = String(code);
+              }
+            }
+            state.className = this._ansiClassName();
+          } else if (ch === "K") {
+            if (param === 2) {
+              this.transcriptLineCells = [];
+              this.transcriptCursor = 0;
+            } else if (param === 1) {
+              for (let idx = 0; idx < this.transcriptCursor; idx++) {
+                if (this.transcriptLineCells[idx]) {
+                  this.transcriptLineCells[idx].t = " ";
+                } else {
+                  this.transcriptLineCells[idx] = { t: " ", c: "" };
+                }
+              }
+            } else {
+              this.transcriptLineCells = this.transcriptLineCells.slice(
+                0,
+                this.transcriptCursor
+              );
+            }
+            didChange = true;
+          } else if (ch === "G") {
+            this.transcriptCursor = Math.max(0, param - 1);
+          } else if (ch === "C") {
+            this.transcriptCursor = Math.max(0, this.transcriptCursor + (param || 1));
+          } else if (ch === "D") {
+            this.transcriptCursor = Math.max(0, this.transcriptCursor - (param || 1));
+          } else if (ch === "H" || ch === "f") {
+            const col = getParam(params, 1, getParam(params, 0, 1));
+            this.transcriptCursor = Math.max(0, (col || 1) - 1);
+          }
+          state.mode = "text";
+          state.csiParams = "";
+        } else {
+          state.csiParams += ch;
+        }
+        continue;
+      }
+
+      if (state.mode === "esc") {
+        if (ch === "[") {
+          state.mode = "csi";
+          state.csiParams = "";
+          continue;
+        }
+        if (ch === "]") {
+          state.mode = "osc";
+          state.oscEsc = false;
+          continue;
+        }
+        state.mode = "text";
+        continue;
+      }
+
+      if (ch === "\x1b") {
+        state.mode = "esc";
+        continue;
+      }
+      if (ch === "\x07") {
+        continue;
+      }
+      if (ch === "\r") {
+        this.transcriptCursor = 0;
+        continue;
+      }
+      if (ch === "\n") {
+        this._pushTranscriptLine(this.transcriptLineCells);
+        this.transcriptLineCells = [];
+        this.transcriptCursor = 0;
+        didChange = true;
+        continue;
+      }
+      if (ch === "\b") {
+        if (this.transcriptCursor > 0) {
+          const idx = this.transcriptCursor - 1;
+          if (this.transcriptLineCells[idx]) {
+            this.transcriptLineCells[idx].t = " ";
+          }
+          this.transcriptCursor = idx;
+          didChange = true;
+        }
+        continue;
+      }
+      if (ch >= " " || ch === "\t") {
+        if (ch === "\t") {
+          writeChar(" ");
+          writeChar(" ");
+        } else {
+          writeChar(ch);
+        }
+      }
+    }
+
+    if (didChange) {
+      this._persistTranscriptSoon();
+    }
   }
 
   _initMobileView() {
@@ -507,9 +795,12 @@ export class TerminalManager {
 
   _renderMobileView() {
     if (!this.mobileViewActive || !this.mobileViewEl || !this.term) return;
-    const buffer = this.term.buffer?.active;
-    if (!buffer) return;
-    // This view mirrors the live buffer as plain text; it is intentionally read-only
+    const lines = this._getTranscriptLines();
+    if (!lines.length) {
+      this.mobileViewEl.innerHTML = "";
+      return;
+    }
+    // This view mirrors the live output as plain text; it is intentionally read-only
     // and is hidden whenever the user wants to interact with the real TUI.
     if (!this.mobileViewEl.classList.contains("hidden")) {
       const threshold = 4;
@@ -517,18 +808,11 @@ export class TerminalManager {
         this.mobileViewEl.scrollTop + this.mobileViewEl.clientHeight >=
         this.mobileViewEl.scrollHeight - threshold;
     }
-    const rows = this.term.rows || buffer.length || 0;
-    const totalLines = Math.max(0, buffer.baseY + rows - 1);
-    const maxLines = 800;
-    const start = Math.max(0, totalLines - maxLines);
     let content = "";
-    for (let i = start; i <= totalLines; i++) {
-      const line = buffer.getLine(i);
-      if (line) {
-        content += line.translateToString(true) + "\n";
-      }
+    for (const line of lines) {
+      content += `${this._cellsToHtml(line)}\n`;
     }
-    this.mobileViewEl.textContent = content;
+    this.mobileViewEl.innerHTML = content;
     if (this.mobileViewAtBottom) {
       this.mobileViewEl.scrollTop = this.mobileViewEl.scrollHeight;
     } else if (this.mobileViewScrollTop !== null) {
@@ -571,7 +855,6 @@ export class TerminalManager {
     this.term.onScroll(() => this._updateJumpBottomVisibility());
     this.term.onRender(() => this._scheduleMobileViewRender());
     this._updateJumpBottomVisibility();
-    this._initTouchTerminalScroll(container);
 
     if (!this.inputDisposable) {
       this.inputDisposable = this.term.onData((data) => {
@@ -750,6 +1033,10 @@ export class TerminalManager {
     this.intentionalDisconnect = false;
     this.lastConnectMode = mode;
 
+    if (!isAttach) {
+      this._resetTranscript();
+    }
+
     const queryParams = new URLSearchParams();
     if (mode) queryParams.append("mode", mode);
 
@@ -891,7 +1178,10 @@ export class TerminalManager {
         return;
       }
       if (this.term) {
-        this.term.write(new Uint8Array(event.data));
+        const chunk = new Uint8Array(event.data);
+        this._appendTranscriptChunk(chunk);
+        this._scheduleMobileViewRender();
+        this.term.write(chunk);
       }
     };
 
