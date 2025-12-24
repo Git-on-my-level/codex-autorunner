@@ -23,6 +23,12 @@
   color: var(--text);
 }
 
+.mobile-terminal-view ::selection,
+.mobile-terminal-view span::selection {
+  background: rgba(190, 190, 190, 0.6);
+  color: #0a0c12;
+}
+
 /* Focus visible for keyboard nav */
 :focus-visible {
   outline: 2px solid var(--accent);

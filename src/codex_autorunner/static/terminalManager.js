@@ -854,15 +854,21 @@ export class TerminalManager {
     if (!this.isTouchDevice() || !isMobileViewport()) return;
     this._initMobileView();
     if (!this.mobileViewEl) return;
+    const wasActive = this.mobileViewActive;
     this.mobileViewActive = Boolean(active);
     if (!this.mobileViewActive) {
       this.mobileViewEl.classList.add("hidden");
       return;
     }
-    const buffer = this.term?.buffer?.active;
-    if (buffer) {
-      const atBottom = buffer.viewportY >= buffer.baseY;
-      this.mobileViewAtBottom = atBottom;
+    if (!wasActive) {
+      this.mobileViewAtBottom = true;
+      this.mobileViewScrollTop = null;
+    } else {
+      const buffer = this.term?.buffer?.active;
+      if (buffer) {
+        const atBottom = buffer.viewportY >= buffer.baseY;
+        this.mobileViewAtBottom = atBottom;
+      }
     }
     this._renderMobileView();
     this.mobileViewEl.classList.remove("hidden");
