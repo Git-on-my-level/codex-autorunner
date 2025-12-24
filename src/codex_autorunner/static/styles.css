@@ -3104,7 +3104,7 @@ button.loading::after {
   }
 
   html.mobile-compose-fixed #terminal .terminal-text-input,
-  html.mobile-compose-fixed #docs .doc-chat-compose {
+  html.mobile-compose-fixed #docs .doc-chat-panel {
     position: fixed;
     left: 4px;
     right: 4px;
