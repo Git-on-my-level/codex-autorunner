@@ -1442,9 +1442,9 @@ button.icon-btn {
   width: 70px;
 }
 
-/* Doc chat panel - compact inline design */
-.doc-chat-panel {
-  margin-top: 6px;
+/* Shared compose panel styling (terminal + doc chat) */
+.compose-panel {
+  margin-top: 4px;
   padding: 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1452,6 +1452,71 @@ button.icon-btn {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.compose-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.compose-row textarea {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 56px;
+  max-height: 160px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+  resize: vertical;
+  overflow-y: auto;
+}
+
+.compose-row textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.compose-row textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.compose-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.compose-buttons button {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  border-radius: 10px;
+}
+
+.compose-buttons .voice-button svg {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  fill: none;
+}
+
+/* Doc chat panel - compact inline design */
+.doc-chat-panel {
   flex-shrink: 0;
 }
 
@@ -1459,50 +1524,6 @@ button.icon-btn {
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.doc-chat-input-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 4px;
-}
-
-.doc-chat-input-row textarea {
-  flex: 1 1 auto;
-  min-height: 26px;
-  max-height: 80px;
-  height: 26px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  padding: 4px 8px;
-  font-family: inherit;
-  font-size: 11px;
-  line-height: 1.4;
-  resize: none;
-  overflow-y: auto;
-}
-
-.doc-chat-input-row textarea:focus {
-  border-color: var(--accent);
-  outline: none;
-}
-
-.doc-chat-input-row textarea::placeholder {
-  color: var(--muted);
-  opacity: 0.6;
-}
-
-.doc-chat-input-row button {
-  flex: 0 0 26px;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
 }
 
 .voice-button {
@@ -1523,22 +1544,6 @@ button.icon-btn {
   min-height: 16px;
   stroke: currentColor;
   flex-shrink: 0;
-}
-
-/* Doc chat: keep voice/send/cancel uniform and aligned to input */
-.doc-chat-input-row .voice-button {
-  width: 26px;
-  height: 26px;
-  min-width: 26px;
-  min-height: 26px;
-  flex-shrink: 0;
-}
-
-.doc-chat-input-row .voice-button svg {
-  width: 12px;
-  height: 12px;
-  min-width: 12px;
-  min-height: 12px;
 }
 
 .voice-button.voice-recording {
@@ -2495,17 +2500,6 @@ label {
   color: var(--accent);
 }
 
-.terminal-text-input {
-  margin-top: 4px;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 #terminal.composer-sticky .terminal-text-input {
   position: sticky;
   bottom: calc(env(safe-area-inset-bottom) + var(--vv-bottom, 0px));
@@ -2521,27 +2515,6 @@ label {
   display: none; /* Hide on mobile, show on desktop */
 }
 
-.terminal-text-input textarea {
-  width: 100%;
-  min-height: 56px;
-  max-height: 160px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  padding: 6px;
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 1.3;
-  resize: vertical;
-  overflow-y: auto;
-}
-
-.terminal-text-input textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
 .terminal-text-input-actions {
   display: flex;
   align-items: center;
@@ -2554,46 +2527,15 @@ label {
   font-size: 10px;
 }
 
-.terminal-text-input-row {
-  display: flex;
-  align-items: stretch;
-  gap: 6px;
-}
-
-.terminal-text-input-row textarea {
-  flex: 1 1 auto;
-  min-height: 56px;
-}
-
-.terminal-text-input-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 0 0 auto;
-}
-
 .terminal-text-input-buttons .voice-button,
 .terminal-text-input-buttons .terminal-text-image,
 .terminal-text-send-icon {
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
-  min-height: 34px;
   padding: 0;
-  border-radius: 10px;
 }
 
 .terminal-text-input-buttons .terminal-text-image {
   font-size: 11px;
   letter-spacing: 0.2px;
-}
-
-.terminal-text-input-buttons .voice-button svg {
-  width: 14px;
-  height: 14px;
-  min-width: 14px;
-  min-height: 14px;
-  fill: none;
 }
 
 button.terminal-text-send-icon {
@@ -3455,17 +3397,12 @@ button.loading::after {
     height: auto;
   }
 
-  .terminal-text-input {
-    padding: 6px;
-    gap: 4px;
-  }
-
   #terminal .terminal-mobile-controls,
   #terminal .terminal-text-input {
     flex: 0 0 auto;
   }
 
-  .terminal-text-input textarea {
+  .compose-row textarea {
     min-height: 52px;
     max-height: 100px;
     font-size: 16px;
@@ -3473,17 +3410,15 @@ button.loading::after {
     resize: none;
   }
 
-  .terminal-text-input-row {
+  .compose-row {
     gap: 4px;
   }
 
-  .terminal-text-input-buttons {
+  .compose-buttons {
     gap: 4px;
   }
 
-  .terminal-text-input-buttons .voice-button,
-  .terminal-text-input-buttons .terminal-text-image,
-  .terminal-text-send-icon {
+  .compose-buttons button {
     width: 30px;
     height: 30px;
     min-width: 30px;
@@ -3495,7 +3430,7 @@ button.loading::after {
     font-size: 10px;
   }
 
-  .terminal-text-input-buttons .voice-button svg {
+  .compose-buttons .voice-button svg {
     width: 12px;
     height: 12px;
     min-width: 12px;
@@ -3818,39 +3753,9 @@ button.loading::after {
     min-height: 36px;
   }
 
-  /* Chat panel - very compact on mobile */
-  .doc-chat-panel {
-    padding: 6px;
-    gap: 4px;
-    margin-top: 6px;
-    flex-shrink: 0;
-  }
-
+  /* Chat panel - mobile meta/response sizing */
   .doc-chat-compose {
     gap: 2px;
-  }
-
-  .doc-chat-input-row {
-    display: flex;
-    flex-direction: row;
-    align-items: flex-end;
-    gap: 4px;
-  }
-
-  .doc-chat-input-row textarea {
-    flex: 1 1 auto;
-    font-size: 16px;
-    min-height: 40px;
-    max-height: 60px;
-    height: 40px;
-    padding: 8px;
-  }
-
-  .doc-chat-input-row button {
-    flex: 0 0 36px;
-    width: 36px;
-    height: 36px;
-    font-size: 14px;
   }
 
   .doc-chat-meta {
@@ -4272,17 +4177,6 @@ button.loading::after {
     padding: 4px;
   }
 
-  .doc-chat-input-row textarea {
-    font-size: 16px;
-    min-height: 40px;
-    padding: 6px;
-  }
-
-  .doc-chat-input-row button {
-    width: 32px;
-    height: 32px;
-    font-size: 12px;
-  }
 
   /* Patch panel for ultra-small screens */
   .doc-patch-main {
@@ -4453,12 +4347,12 @@ button.loading::after {
     height: auto;
   }
 
-  .terminal-text-input {
+  .compose-panel {
     padding: 4px;
     gap: 3px;
   }
 
-  .terminal-text-input textarea {
+  .compose-row textarea {
     min-height: 52px;
     max-height: 70px;
     padding: 4px;
@@ -4467,17 +4361,15 @@ button.loading::after {
     resize: none;
   }
 
-  .terminal-text-input-row {
+  .compose-row {
     gap: 4px;
   }
 
-  .terminal-text-input-buttons {
+  .compose-buttons {
     gap: 4px;
   }
 
-  .terminal-text-input-buttons .voice-button,
-  .terminal-text-input-buttons .terminal-text-image,
-  .terminal-text-send-icon {
+  .compose-buttons button {
     width: 28px;
     height: 28px;
     min-width: 28px;
@@ -4489,7 +4381,7 @@ button.loading::after {
     font-size: 9px;
   }
 
-  .terminal-text-input-buttons .voice-button svg {
+  .compose-buttons .voice-button svg {
     width: 11px;
     height: 11px;
     min-width: 11px;
@@ -4584,12 +4476,6 @@ button.loading::after {
     gap: 2px;
   }
 
-  .doc-chat-input-row textarea {
-    font-size: 16px;
-    min-height: 36px;
-    max-height: 50px;
-    height: 36px;
-  }
 
   .doc-chat-response-wrapper {
     max-height: 60px;

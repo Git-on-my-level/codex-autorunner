@@ -1901,6 +1901,13 @@ export class TerminalManager {
       this._updateComposerSticky();
     });
 
+    this.textInputTextareaEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.shiftKey) {
+        e.preventDefault();
+        triggerSend();
+      }
+    });
+
     if (this.textInputImageBtn && this.textInputImageInputEl) {
       this.textInputTextareaEl.addEventListener("paste", (e) => {
         const items = e.clipboardData?.items;

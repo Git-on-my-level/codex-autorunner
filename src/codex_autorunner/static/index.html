@@ -322,18 +322,20 @@
               <button id="snapshot-copy" class="ghost sm">Copy to clipboard</button>
               <button id="snapshot-refresh" class="ghost sm">Reload</button>
             </div>
-            <div class="doc-chat-panel">
+            <div class="doc-chat-panel compose-panel">
               <div class="doc-chat-compose">
-                <div class="doc-chat-input-row">
+                <div class="doc-chat-input-row compose-row">
                   <textarea
                     id="doc-chat-input"
                     rows="1"
                     placeholder="Chat with this doc..."
                     spellcheck="false"
                   ></textarea>
-                  <button id="doc-chat-voice" class="ghost sm voice-button" title="Hold to talk"></button>
-                  <button id="doc-chat-send" class="primary sm" title="Send (Shift+Enter)">↑</button>
-                  <button id="doc-chat-cancel" class="ghost sm hidden" title="Cancel">✕</button>
+                  <div class="doc-chat-input-buttons compose-buttons">
+                    <button id="doc-chat-voice" class="ghost sm voice-button" title="Hold to talk"></button>
+                    <button id="doc-chat-send" class="primary sm" title="Send (Shift+Enter)">↑</button>
+                    <button id="doc-chat-cancel" class="ghost sm hidden" title="Cancel">✕</button>
+                  </div>
                 </div>
                 <div class="doc-chat-meta">
                   <span class="muted small" id="doc-chat-hint">Shift+Enter to send</span>
@@ -434,9 +436,9 @@
               <button class="tmb-key tmb-arrow" data-seq="&#x1b;[C">→</button>
             </div>
           </div>
-          <div id="terminal-text-input" class="terminal-text-input hidden" aria-hidden="true">
+          <div id="terminal-text-input" class="terminal-text-input compose-panel hidden" aria-hidden="true">
             <label class="terminal-text-input-title" for="terminal-textarea">Text input</label>
-            <div class="terminal-text-input-row">
+            <div class="terminal-text-input-row compose-row">
               <textarea
                 id="terminal-textarea"
                 rows="2"
@@ -445,7 +447,7 @@
                 spellcheck="false"
                 placeholder="Type or paste text/images to send to the terminal…"
               ></textarea>
-              <div class="terminal-text-input-buttons">
+              <div class="terminal-text-input-buttons compose-buttons">
                 <button
                   id="terminal-text-image"
                   class="ghost sm terminal-text-image"
