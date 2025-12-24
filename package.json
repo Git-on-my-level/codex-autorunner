@@ -1,0 +1,10 @@
+{
+  "name": "codex-autorunner-ui",
+  "private": true,
+  "scripts": {
+    "lint:js": "eslint \"src/codex_autorunner/static/**/*.js\""
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  }
+}

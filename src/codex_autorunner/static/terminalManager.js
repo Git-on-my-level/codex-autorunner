@@ -964,7 +964,7 @@ export class TerminalManager {
 
   _installWheelScroll() {
     if (this.wheelScrollInstalled || !this.term || !this.term.element) return;
-    if (this._isTouchDevice()) return;
+    if (this.isTouchDevice()) return;
 
     const wheelTarget = this.term.element;
     const wheelListener = (event) => {

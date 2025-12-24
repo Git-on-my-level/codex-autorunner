@@ -16,6 +16,16 @@ need_cmd() {
 need_cmd python
 need_cmd black
 need_cmd pytest
+need_cmd node
+
+if [ -x "./node_modules/.bin/eslint" ]; then
+  ESLINT_BIN="./node_modules/.bin/eslint"
+elif command -v eslint >/dev/null 2>&1; then
+  ESLINT_BIN="eslint"
+else
+  echo "Missing required command: eslint. Install dev deps via 'npm install'." >&2
+  exit 1
+fi
 
 paths=(src)
 if [ -d tests ]; then
@@ -24,6 +34,9 @@ fi
 
 echo "Formatting check (black)..."
 python -m black --check "${paths[@]}"
+
+echo "Linting JS (eslint)..."
+"$ESLINT_BIN" "src/codex_autorunner/static/**/*.js"
 
 echo "Running tests (pytest)..."
 python -m pytest
