@@ -77,6 +77,8 @@ export class TerminalManager {
     this.fitAddon = null;
     this.socket = null;
     this.inputDisposable = null;
+    this.wheelScrollInstalled = false;
+    this.wheelScrollRemainder = 0;
 
     // Connection state
     this.intentionalDisconnect = false;
@@ -927,6 +929,8 @@ export class TerminalManager {
       fontFamily:
         '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
       fontSize: this._getFontSize(),
+      scrollSensitivity: 1,
+      fastScrollSensitivity: 5,
       cursorBlink: true,
       rows: 24,
       cols: 100,
@@ -937,6 +941,7 @@ export class TerminalManager {
     this.term.loadAddon(this.fitAddon);
     this.term.open(container);
     this.term.write('Press "New" or "Resume" to launch Codex TUI...\r\n');
+    this._installWheelScroll();
     this.term.onScroll(() => this._updateJumpBottomVisibility());
     this.term.onRender(() => this._scheduleMobileViewRender());
     this._updateJumpBottomVisibility();
@@ -949,6 +954,62 @@ export class TerminalManager {
       });
     }
     return true;
+  }
+
+  _installWheelScroll() {
+    if (this.wheelScrollInstalled || !this.term || !this.term.element) return;
+    if (this._isTouchDevice()) return;
+
+    const wheelTarget = this.term.element;
+    const wheelListener = (event) => {
+      if (!this.term || !event) return;
+      if (event.ctrlKey) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      let deltaLines = 0;
+      if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+        deltaLines = event.deltaY;
+      } else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+        deltaLines = event.deltaY * this.term.rows;
+      } else {
+        deltaLines = event.deltaY / 40;
+      }
+
+      const options = this.term.options || {};
+      if (Number.isFinite(options.scrollSensitivity)) {
+        deltaLines *= options.scrollSensitivity;
+      }
+
+      // Respect xterm's fast-scroll modifier and sensitivity settings.
+      const modifier = options.fastScrollModifier || "alt";
+      const fastSensitivity = Number.isFinite(options.fastScrollSensitivity)
+        ? options.fastScrollSensitivity
+        : 5;
+      const modifierActive =
+        modifier !== "none" &&
+        ((modifier === "alt" && event.altKey) ||
+          (modifier === "ctrl" && event.ctrlKey) ||
+          (modifier === "shift" && event.shiftKey) ||
+          (modifier === "meta" && event.metaKey));
+      if (modifierActive) {
+        deltaLines *= fastSensitivity;
+      }
+
+      this.wheelScrollRemainder += deltaLines;
+      const wholeLines = Math.trunc(this.wheelScrollRemainder);
+      if (wholeLines !== 0) {
+        this.term.scrollLines(wholeLines);
+        this.wheelScrollRemainder -= wholeLines;
+      }
+    };
+
+    wheelTarget.addEventListener("wheel", wheelListener, {
+      passive: false,
+      capture: true,
+    });
+    this.wheelScrollInstalled = true;
   }
 
   /**
