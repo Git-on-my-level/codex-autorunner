@@ -970,6 +970,10 @@ export class TerminalManager {
     const wheelListener = (event) => {
       if (!this.term || !event) return;
       if (event.ctrlKey) return;
+      const buffer = this.term.buffer?.active;
+      if (!buffer || buffer.baseY <= 0) {
+        return;
+      }
 
       event.preventDefault();
       event.stopImmediatePropagation();
