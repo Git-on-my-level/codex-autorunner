@@ -72,6 +72,7 @@ function updateComposeFixed() {
     updateViewportInset();
     updateMobileControlsOffset();
   }
+  updateDocComposeOffset();
 }
 
 /**
@@ -101,6 +102,18 @@ function updateMobileControlsOffset() {
   );
 }
 
+function updateDocComposeOffset() {
+  const compose = document.querySelector("#docs .doc-chat-compose");
+  if (!compose || !isVisible(compose)) return;
+  const composeHeight = compose.offsetHeight || 0;
+  if (!composeHeight) return;
+  const offset = composeHeight + 8;
+  document.documentElement.style.setProperty(
+    "--doc-compose-height",
+    `${offset}px`
+  );
+}
+
 function isTerminalTextarea(el) {
   return Boolean(
     el && el instanceof HTMLElement && el.id === "terminal-textarea"
@@ -114,6 +127,7 @@ export function initMobileCompact() {
     if (!isMobileViewport()) return;
     if (!(isComposeFocused() || hasComposeDraft())) return;
     setMobileChromeHidden(true);
+    updateDocComposeOffset();
   };
 
   const show = () => {
@@ -144,6 +158,7 @@ export function initMobileCompact() {
       updateViewportInset();
       updateComposeFixed();
       setMobileChromeHidden(false);
+      updateDocComposeOffset();
 
       // Start polling for viewport changes (keyboard animation)
       if (viewportPoll) clearInterval(viewportPoll);
@@ -244,10 +259,16 @@ export function initMobileCompact() {
     updateViewportInset();
     updateComposeFixed();
     // Delay to ensure DOM has updated with new panel visibility
-    requestAnimationFrame(() => updateMobileControlsOffset());
+    requestAnimationFrame(() => {
+      updateMobileControlsOffset();
+      updateDocComposeOffset();
+    });
   });
 
   updateComposeFixed();
   // Initial measurement after layout
-  requestAnimationFrame(() => updateMobileControlsOffset());
+  requestAnimationFrame(() => {
+    updateMobileControlsOffset();
+    updateDocComposeOffset();
+  });
 }

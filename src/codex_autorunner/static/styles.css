@@ -3191,7 +3191,7 @@ button.loading::after {
   }
 
   html.mobile-compose-fixed #docs.panel.active {
-    padding-bottom: calc(100px + max(var(--mobile-bottom-nav), var(--vv-bottom, 0px)));
+    padding-bottom: calc(var(--doc-compose-height, 100px) + max(var(--mobile-bottom-nav), var(--vv-bottom, 0px)));
   }
   
   .tabs {
@@ -3327,7 +3327,7 @@ button.loading::after {
     width: 50px;
     min-height: 32px;
     padding: 4px 6px;
-    font-size: 11px;
+    font-size: var(--mobile-input-font-size);
     flex-shrink: 0;
   }
   
@@ -3726,7 +3726,7 @@ button.loading::after {
     flex: 1 1 auto;
     min-height: 0;
     height: auto;
-    font-size: 13px;
+    font-size: var(--mobile-input-font-size);
     padding: 10px;
     resize: none;
   }
@@ -3810,7 +3810,7 @@ button.loading::after {
   #doc-actions-snapshot input[type="number"] {
     width: 100%;
     min-height: 32px;
-    font-size: 12px;
+    font-size: var(--mobile-input-font-size);
   }
 
   #doc-actions-snapshot button {
@@ -4105,6 +4105,17 @@ button.loading::after {
   .mobile-terminal-view .ansi-bg-105 { background-color: #ff92df; }
   .mobile-terminal-view .ansi-bg-106 { background-color: #a4ffff; }
   .mobile-terminal-view .ansi-bg-107 { background-color: #ffffff; }
+
+  input[type="text"],
+  input[type="number"],
+  input[type="password"],
+  input[type="search"],
+  input[type="email"],
+  input[type="url"],
+  textarea,
+  select {
+    font-size: var(--mobile-input-font-size);
+  }
   
 }
 
@@ -4190,7 +4201,7 @@ button.loading::after {
   .inline-toolbar input[type="number"] {
     width: 45px;
     min-height: 28px;
-    font-size: 10px;
+    font-size: var(--mobile-input-font-size);
   }
   
   .inline-toolbar button {
