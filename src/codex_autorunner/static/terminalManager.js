@@ -971,6 +971,7 @@ export class TerminalManager {
       if (!this.term || !event) return;
       if (event.ctrlKey) return;
       const buffer = this.term.buffer?.active;
+      // Only consume wheel events when xterm has scrollback; alt screen should pass through to TUI.
       if (!buffer || buffer.baseY <= 0) {
         return;
       }
