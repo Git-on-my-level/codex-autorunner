@@ -2899,6 +2899,7 @@ button.loading::after {
   :root {
     --mobile-top-pad: max(4px, env(safe-area-inset-top));
     --mobile-bottom-nav: calc(52px + env(safe-area-inset-bottom, 0px));
+    --mobile-input-font-size: 16px;
   }
 
   html.mobile-chrome-hidden {
@@ -3461,6 +3462,8 @@ button.loading::after {
   .terminal-text-input textarea {
     min-height: 52px;
     max-height: 100px;
+    font-size: 16px;
+    line-height: 1.3;
     resize: none;
   }
 
@@ -3830,10 +3833,10 @@ button.loading::after {
 
   .doc-chat-input-row textarea {
     flex: 1 1 auto;
-    font-size: 14px;
-    min-height: 36px;
+    font-size: 16px;
+    min-height: 40px;
     max-height: 60px;
-    height: 36px;
+    height: 40px;
     padding: 8px;
   }
 
@@ -4253,8 +4256,8 @@ button.loading::after {
   }
 
   .doc-chat-input-row textarea {
-    font-size: 12px;
-    min-height: 32px;
+    font-size: 16px;
+    min-height: 40px;
     padding: 6px;
   }
 
@@ -4289,6 +4292,17 @@ button.loading::after {
     max-height: 220px;
   }
 
+  input[type="text"],
+  input[type="number"],
+  input[type="password"],
+  input[type="search"],
+  input[type="email"],
+  input[type="url"],
+  textarea,
+  select {
+    font-size: var(--mobile-input-font-size);
+  }
+
   .diff-gutter {
     flex: 0 0 24px;
     font-size: 8px;
@@ -4313,6 +4327,10 @@ button.loading::after {
 
 /* Landscape phone - side-by-side layout */
 @media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) {
+  :root {
+    --mobile-input-font-size: 16px;
+  }
+
   .app-shell {
     padding-bottom: 4px;
   }
@@ -4424,10 +4442,11 @@ button.loading::after {
   }
 
   .terminal-text-input textarea {
-    min-height: 40px;
+    min-height: 52px;
     max-height: 70px;
     padding: 4px;
-    font-size: 11px;
+    font-size: 16px;
+    line-height: 1.3;
     resize: none;
   }
 
@@ -4549,9 +4568,10 @@ button.loading::after {
   }
 
   .doc-chat-input-row textarea {
-    min-height: 28px;
+    font-size: 16px;
+    min-height: 36px;
     max-height: 50px;
-    height: 28px;
+    height: 36px;
   }
 
   .doc-chat-response-wrapper {
@@ -4614,6 +4634,17 @@ button.loading::after {
 
   .doc-patch-body {
     max-height: 140px;
+  }
+
+  input[type="text"],
+  input[type="number"],
+  input[type="password"],
+  input[type="search"],
+  input[type="email"],
+  input[type="url"],
+  textarea,
+  select {
+    font-size: var(--mobile-input-font-size);
   }
 
   .diff-gutter {
