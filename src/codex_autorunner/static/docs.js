@@ -1116,7 +1116,27 @@ export function initDocs() {
   });
   document.getElementById("ingest-spec").addEventListener("click", ingestSpec);
   document.getElementById("clear-docs").addEventListener("click", clearDocs);
-  chatUI.send.addEventListener("click", sendDocChat);
+  let suppressNextSendClick = false;
+  let lastSendTapAt = 0;
+  const triggerSend = () => {
+    const now = Date.now();
+    if (now - lastSendTapAt < 300) return;
+    lastSendTapAt = now;
+    sendDocChat();
+  };
+  chatUI.send.addEventListener("pointerup", (e) => {
+    if (e.pointerType !== "touch") return;
+    if (e.cancelable) e.preventDefault();
+    suppressNextSendClick = true;
+    triggerSend();
+  });
+  chatUI.send.addEventListener("click", () => {
+    if (suppressNextSendClick) {
+      suppressNextSendClick = false;
+      return;
+    }
+    triggerSend();
+  });
   chatUI.cancel.addEventListener("click", cancelDocChat);
   if (chatUI.patchApply)
     chatUI.patchApply.addEventListener("click", () => applyPatch(activeDoc));
