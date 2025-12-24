@@ -17,6 +17,19 @@ const TEXT_INPUT_SIZE_LIMITS = Object.freeze({
   maxBytes: 500 * 1024,
 });
 
+const TEXT_INPUT_HOOK_STORAGE_PREFIX = "codex_terminal_text_input_hook:";
+
+const CAR_CONTEXT_HOOK_ID = "car_context";
+const CAR_CONTEXT_KEYWORDS = [
+  "todo",
+  "progress",
+  "opinions",
+  "spec",
+  "summary",
+  "work docs",
+  ".codex-autorunner",
+];
+
 const LEGACY_SESSION_STORAGE_KEY = "codex_terminal_session_id";
 const SESSION_STORAGE_PREFIX = "codex_terminal_session_id:";
 const SESSION_STORAGE_TS_PREFIX = "codex_terminal_session_ts:";
@@ -105,6 +118,7 @@ export class TerminalManager {
     this.textInputPending = null;
     this.textInputSendBtnLabel = null;
     this.textInputHintBase = null;
+    this.textInputHooks = [];
 
     // Mobile controls state
     this.mobileControlsEl = null;
@@ -142,6 +156,8 @@ export class TerminalManager {
     };
     this.transcriptPersistTimer = null;
     this.transcriptDecoder = new TextDecoder();
+
+    this._registerTextInputHook(this._buildCarContextHook());
 
     // Bind methods that are used as callbacks
     this._handleResize = this._handleResize.bind(this);
@@ -244,6 +260,73 @@ export class TerminalManager {
 
   _getRepoStorageKey() {
     return REPO_ID || BASE_PATH || window.location.pathname || "default";
+  }
+
+  _getTextInputHookKey(hookId) {
+    return `${TEXT_INPUT_HOOK_STORAGE_PREFIX}${hookId}:${this._getRepoStorageKey()}`;
+  }
+
+  _hasTextInputHookFired(hookId) {
+    try {
+      return sessionStorage.getItem(this._getTextInputHookKey(hookId)) === "1";
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  _markTextInputHookFired(hookId) {
+    try {
+      sessionStorage.setItem(this._getTextInputHookKey(hookId), "1");
+    } catch (_err) {
+      // ignore
+    }
+  }
+
+  _registerTextInputHook(hook) {
+    if (!hook || typeof hook.apply !== "function") return;
+    this.textInputHooks.push(hook);
+  }
+
+  _applyTextInputHooks(text) {
+    let next = text;
+    for (const hook of this.textInputHooks) {
+      try {
+        const result = hook.apply({ text: next, manager: this });
+        if (!result) continue;
+        if (typeof result === "string") {
+          next = result;
+          continue;
+        }
+        if (result && typeof result.text === "string") {
+          next = result.text;
+        }
+        if (result && result.stop) break;
+      } catch (_err) {
+        // ignore hook failures
+      }
+    }
+    return next;
+  }
+
+  _buildCarContextHook() {
+    return {
+      id: CAR_CONTEXT_HOOK_ID,
+      apply: ({ text, manager }) => {
+        if (!text || !text.trim()) return null;
+        if (manager._hasTextInputHookFired(CAR_CONTEXT_HOOK_ID)) return null;
+
+        const lowered = text.toLowerCase();
+        const hit = CAR_CONTEXT_KEYWORDS.some((kw) => lowered.includes(kw));
+        if (!hit) return null;
+        if (lowered.includes("about_car.md")) return null;
+
+        manager._markTextInputHookFired(CAR_CONTEXT_HOOK_ID);
+        const injection =
+          "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.";
+        const separator = text.endsWith("\n") ? "\n" : "\n\n";
+        return { text: `${text}${separator}${injection}` };
+      },
+    };
   }
 
   async _loadTerminalIdleTimeout() {
@@ -1425,7 +1508,10 @@ export class TerminalManager {
     let payload = this._normalizeNewlines(text);
     if (!payload) return false;
 
-    const originalText = payload;
+    const originalText =
+      typeof options.originalText === "string"
+        ? this._normalizeNewlines(options.originalText)
+        : payload;
     if (appendNewline && !payload.endsWith("\n")) {
       payload = `${payload}\n`;
     }
@@ -1554,8 +1640,8 @@ export class TerminalManager {
 
   _sendFromTextarea() {
     const text = this.textInputTextareaEl?.value || "";
+    const normalized = this._normalizeNewlines(text);
     if (this.textInputPending) {
-      const normalized = this._normalizeNewlines(text);
       if (normalized && normalized !== this.textInputPending.originalText) {
         // New draft should be sendable even if a previous payload is pending.
         this._clearPendingTextInput();
@@ -1565,9 +1651,13 @@ export class TerminalManager {
       }
     }
     this._persistTextInputDraft();
-    const normalized = this._normalizeNewlines(text);
-    const needsEnter = Boolean(normalized && !normalized.endsWith("\n"));
-    const ok = this._sendTextWithAck(text, { appendNewline: false, sendEnter: needsEnter });
+    const payload = this._applyTextInputHooks(normalized);
+    const needsEnter = Boolean(payload && !payload.endsWith("\n"));
+    const ok = this._sendTextWithAck(payload, {
+      appendNewline: false,
+      sendEnter: needsEnter,
+      originalText: normalized,
+    });
     if (!ok) return;
     this._scrollToBottomIfNearBottom();
 
