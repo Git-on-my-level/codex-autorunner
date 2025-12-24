@@ -21,13 +21,15 @@ const TEXT_INPUT_HOOK_STORAGE_PREFIX = "codex_terminal_text_input_hook:";
 
 const CAR_CONTEXT_HOOK_ID = "car_context";
 const CAR_CONTEXT_KEYWORDS = [
+  "car",
+  "codex",
   "todo",
   "progress",
   "opinions",
   "spec",
   "summary",
+  "autorunner",
   "work docs",
-  ".codex-autorunner",
 ];
 
 const LEGACY_SESSION_STORAGE_KEY = "codex_terminal_session_id";

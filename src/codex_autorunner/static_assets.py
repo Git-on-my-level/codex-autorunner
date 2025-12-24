@@ -12,6 +12,10 @@ def asset_version(static_dir: Path) -> str:
         static_dir / "styles.css",
         static_dir / "app.js",
     ]
+    try:
+        candidates.extend(static_dir.rglob("*.js"))
+    except Exception:
+        pass
     mtimes = []
     for path in candidates:
         try:
