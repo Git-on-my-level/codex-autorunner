@@ -125,7 +125,7 @@ export function initMobileCompact() {
 
   const maybeHide = () => {
     if (!isMobileViewport()) return;
-    if (!(isComposeFocused() || hasComposeDraft())) return;
+    if (!isComposeFocused()) return;
     setMobileChromeHidden(true);
     updateDocComposeOffset();
   };
@@ -145,7 +145,20 @@ export function initMobileCompact() {
     passive: true,
     capture: true,
   });
-  document.addEventListener("touchmove", maybeHide, { passive: true });
+  document.addEventListener(
+    "touchmove",
+    (e) => {
+      const target = e.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest(COMPOSE_INPUT_SELECTOR)
+      ) {
+        return;
+      }
+      maybeHide();
+    },
+    { passive: true }
+  );
   document.addEventListener("wheel", maybeHide, { passive: true });
 
   document.addEventListener(
