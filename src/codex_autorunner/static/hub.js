@@ -28,8 +28,18 @@ const missingEl = document.getElementById("hub-count-missing");
 const hubUsageList = document.getElementById("hub-usage-list");
 const hubUsageMeta = document.getElementById("hub-usage-meta");
 const hubUsageRefresh = document.getElementById("hub-usage-refresh");
+const hubUsageChartCanvas = document.getElementById("hub-usage-chart-canvas");
+const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
+const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
+
+const hubUsageChartState = {
+  segment: "none",
+  bucket: "day",
+  windowDays: 30,
+};
+let hubUsageSeriesRetryTimer = null;
 
 function saveSessionCache(key, value) {
   try {
@@ -123,6 +133,14 @@ function formatTokensCompact(val) {
   return num.toLocaleString();
 }
 
+function formatTokensAxis(val) {
+  const num = Number(val);
+  if (Number.isNaN(num)) return "0";
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(1)}k`;
+  return Math.round(num).toString();
+}
+
 function renderHubUsage(data) {
   if (!hubUsageList) return;
   if (hubUsageMeta) {
@@ -180,12 +198,331 @@ async function loadHubUsage() {
   try {
     const data = await api("/hub/usage");
     renderHubUsage(data);
+    loadHubUsageSeries();
     saveSessionCache(HUB_USAGE_CACHE_KEY, data);
   } catch (err) {
     flash(err.message || "Failed to load usage", "error");
     renderHubUsage(null);
   } finally {
     if (hubUsageRefresh) hubUsageRefresh.disabled = false;
+  }
+}
+
+function buildHubUsageSeriesQuery() {
+  const params = new URLSearchParams();
+  const now = new Date();
+  const since = new Date(now.getTime() - hubUsageChartState.windowDays * 86400000);
+  const bucket = hubUsageChartState.windowDays >= 180 ? "week" : "day";
+  params.set("since", since.toISOString());
+  params.set("until", now.toISOString());
+  params.set("bucket", bucket);
+  params.set("segment", hubUsageChartState.segment);
+  return params.toString();
+}
+
+function renderHubUsageChart(data) {
+  if (!hubUsageChartCanvas) return;
+  const buckets = data?.buckets || [];
+  const series = data?.series || [];
+  const isLoading = data?.status === "loading";
+  if (!buckets.length || !series.length) {
+    hubUsageChartCanvas.__usageChartBound = false;
+    hubUsageChartCanvas.innerHTML = isLoading
+      ? '<div class="usage-chart-empty">Loading…</div>'
+      : '<div class="usage-chart-empty">No data</div>';
+    return;
+  }
+
+  const width = 560;
+  const height = 160;
+  const padding = 14;
+  const chartWidth = width - padding * 2;
+  const chartHeight = height - padding * 2;
+  const colors = [
+    "#6cf5d8",
+    "#6ca8ff",
+    "#f5b86c",
+    "#f56c8a",
+    "#84d1ff",
+    "#9be26f",
+    "#f2a0c5",
+    "#c18bff",
+    "#f5d36c",
+  ];
+
+  let scaleMax = 1;
+  if (hubUsageChartState.segment === "none") {
+    const values = series[0]?.values || [];
+    scaleMax = Math.max(...values, 1);
+  } else {
+    const totals = new Array(buckets.length).fill(0);
+    series.forEach((entry) => {
+      (entry.values || []).forEach((value, i) => {
+        totals[i] += value;
+      });
+    });
+    scaleMax = Math.max(...totals, 1);
+  }
+
+  const xFor = (index, count) => {
+    if (count <= 1) return padding + chartWidth / 2;
+    return padding + (index / (count - 1)) * chartWidth;
+  };
+  const yFor = (value) =>
+    padding + chartHeight - (value / scaleMax) * chartHeight;
+
+  let svg = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Hub usage trend">`;
+  svg += `
+    <defs>
+      <linearGradient id="hub-usage-line-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#6cf5d8" stop-opacity="0.35" />
+        <stop offset="100%" stop-color="#6cf5d8" stop-opacity="0" />
+      </linearGradient>
+      <filter id="hub-usage-line-glow" x="-20%" y="-20%" width="140%" height="140%">
+        <feGaussianBlur stdDeviation="2" result="blur" />
+        <feMerge>
+          <feMergeNode in="blur" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </defs>
+  `;
+
+  const gridLines = 3;
+  for (let i = 1; i <= gridLines; i += 1) {
+    const y = padding + (chartHeight / (gridLines + 1)) * i;
+    svg += `<line x1="${padding}" y1="${y}" x2="${
+      padding + chartWidth
+    }" y2="${y}" stroke="rgba(108, 245, 216, 0.12)" stroke-width="1" />`;
+  }
+
+  const maxLabel = formatTokensAxis(scaleMax);
+  const midLabel = formatTokensAxis(scaleMax / 2);
+  svg += `<text x="${padding}" y="${padding + 12}" fill="rgba(203, 213, 225, 0.7)" font-size="9">${maxLabel}</text>`;
+  svg += `<text x="${padding}" y="${
+    padding + chartHeight / 2 + 4
+  }" fill="rgba(203, 213, 225, 0.6)" font-size="9">${midLabel}</text>`;
+  svg += `<text x="${padding}" y="${
+    padding + chartHeight + 2
+  }" fill="rgba(203, 213, 225, 0.5)" font-size="9">0</text>`;
+
+  if (hubUsageChartState.segment === "none") {
+    const values = series[0]?.values || [];
+    const points = values.map((value, i) => {
+      const x = xFor(i, values.length);
+      const y = yFor(value);
+      return `${x},${y}`;
+    });
+    if (values.length) {
+      const x0 = xFor(0, values.length);
+      const y0 = yFor(values[0] || 0);
+      const linePath = `M ${points.join(" L ")}`;
+      const areaPath = `${linePath} L ${
+        padding + chartWidth
+      },${padding + chartHeight} L ${padding},${
+        padding + chartHeight
+      } Z`;
+      svg += `<path d="${areaPath}" fill="url(#hub-usage-line-fill)" />`;
+      svg += `<path d="${linePath}" fill="none" stroke="#6cf5d8" stroke-width="2" filter="url(#hub-usage-line-glow)" />`;
+      svg += `<circle cx="${x0}" cy="${y0}" r="3" fill="#6cf5d8" />`;
+    }
+  } else {
+    const count = buckets.length;
+    const accum = new Array(count).fill(0);
+    series.forEach((entry, idx) => {
+      const values = entry.values || [];
+      const top = values.map((value, i) => {
+        accum[i] += value;
+        return accum[i];
+      });
+      const bottom = top.map((value, i) => value - (values[i] || 0));
+      const pathTop = top
+        .map((value, i) => {
+          const x = xFor(i, count);
+          const y = yFor(value);
+          return `${x},${y}`;
+        })
+        .join(" ");
+      const pathBottom = bottom
+        .map((value, i) => {
+          const x = xFor(count - 1 - i, count);
+          const y = yFor(value);
+          return `${x},${y}`;
+        })
+        .join(" ");
+      const color = colors[idx % colors.length];
+      svg += `<polygon fill="${color}44" stroke="${color}" stroke-width="1" points="${pathTop} ${pathBottom}" />`;
+    });
+  }
+
+  svg += "</svg>";
+  hubUsageChartCanvas.__usageChartBound = false;
+  hubUsageChartCanvas.innerHTML = svg;
+  attachHubUsageChartInteraction(hubUsageChartCanvas, {
+    buckets,
+    series,
+    segment: hubUsageChartState.segment,
+    scaleMax,
+    width,
+    height,
+    padding,
+    chartWidth,
+    chartHeight,
+  });
+}
+
+function attachHubUsageChartInteraction(container, state) {
+  container.__usageChartState = state;
+  if (container.__usageChartBound) return;
+  container.__usageChartBound = true;
+
+  const focus = document.createElement("div");
+  focus.className = "usage-chart-focus";
+  const dot = document.createElement("div");
+  dot.className = "usage-chart-dot";
+  const tooltip = document.createElement("div");
+  tooltip.className = "usage-chart-tooltip";
+  container.appendChild(focus);
+  container.appendChild(dot);
+  container.appendChild(tooltip);
+
+  const updateTooltip = (event) => {
+    const chartState = container.__usageChartState;
+    if (!chartState) return;
+    const rect = container.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const normalizedX = (x / rect.width) * chartState.width;
+    const usableWidth = chartState.chartWidth;
+    const localX = Math.min(
+      Math.max(normalizedX - chartState.padding, 0),
+      usableWidth
+    );
+    const index = Math.round(
+      (localX / usableWidth) * (chartState.buckets.length - 1)
+    );
+    const clampedIndex = Math.max(
+      0,
+      Math.min(chartState.buckets.length - 1, index)
+    );
+    const xPos =
+      chartState.padding +
+      (clampedIndex / (chartState.buckets.length - 1 || 1)) * usableWidth;
+
+    const totals = chartState.series.reduce((sum, entry) => {
+      return sum + (entry.values?.[clampedIndex] || 0);
+    }, 0);
+    const yPos =
+      chartState.padding +
+      chartState.chartHeight -
+      (totals / chartState.scaleMax) * chartState.chartHeight;
+
+    focus.style.opacity = "1";
+    dot.style.opacity = "1";
+    focus.style.left = `${(xPos / chartState.width) * 100}%`;
+    dot.style.left = `${(xPos / chartState.width) * 100}%`;
+    dot.style.top = `${(yPos / chartState.height) * 100}%`;
+
+    const bucketLabel = chartState.buckets[clampedIndex];
+    const rows = [];
+    rows.push(
+      `<div class="usage-chart-tooltip-row"><span>Total</span><span>${formatTokensCompact(
+        totals
+      )}</span></div>`
+    );
+
+    if (chartState.segment !== "none") {
+      const ranked = chartState.series
+        .map((entry) => ({
+          key: entry.key,
+          value: entry.values?.[clampedIndex] || 0,
+        }))
+        .filter((entry) => entry.value > 0)
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 6);
+      ranked.forEach((entry) => {
+        rows.push(
+          `<div class="usage-chart-tooltip-row"><span>${entry.key}</span><span>${formatTokensCompact(
+            entry.value
+          )}</span></div>`
+        );
+      });
+    }
+
+    tooltip.innerHTML = `<div class="usage-chart-tooltip-title">${bucketLabel}</div>${rows.join(
+      ""
+    )}`;
+
+    const tooltipRect = tooltip.getBoundingClientRect();
+    let tooltipLeft = x + 12;
+    if (tooltipLeft + tooltipRect.width > rect.width) {
+      tooltipLeft = x - tooltipRect.width - 12;
+    }
+    tooltipLeft = Math.max(6, tooltipLeft);
+    let tooltipTop = (yPos / chartState.height) * rect.height - tooltipRect.height - 10;
+    if (tooltipTop < 6) {
+      tooltipTop = (yPos / chartState.height) * rect.height + 10;
+    }
+    tooltip.style.opacity = "1";
+    tooltip.style.transform = `translate(${tooltipLeft}px, ${tooltipTop}px)`;
+  };
+
+  container.addEventListener("pointermove", updateTooltip);
+  container.addEventListener("pointerleave", () => {
+    focus.style.opacity = "0";
+    dot.style.opacity = "0";
+    tooltip.style.opacity = "0";
+  });
+}
+
+async function loadHubUsageSeries() {
+  if (!hubUsageChartCanvas) return;
+  try {
+    const data = await api(`/hub/usage/series?${buildHubUsageSeriesQuery()}`);
+    hubUsageChartCanvas.classList.toggle("loading", data?.status === "loading");
+    renderHubUsageChart(data);
+    if (data?.status === "loading") {
+      scheduleHubUsageSeriesRetry();
+    } else {
+      clearHubUsageSeriesRetry();
+    }
+  } catch (_err) {
+    hubUsageChartCanvas.classList.remove("loading");
+    renderHubUsageChart(null);
+    clearHubUsageSeriesRetry();
+  }
+}
+
+function scheduleHubUsageSeriesRetry() {
+  clearHubUsageSeriesRetry();
+  hubUsageSeriesRetryTimer = setTimeout(() => {
+    loadHubUsageSeries();
+  }, 1500);
+}
+
+function clearHubUsageSeriesRetry() {
+  if (hubUsageSeriesRetryTimer) {
+    clearTimeout(hubUsageSeriesRetryTimer);
+    hubUsageSeriesRetryTimer = null;
+  }
+}
+
+function initHubUsageChartControls() {
+  if (hubUsageChartRange) {
+    hubUsageChartRange.value = String(hubUsageChartState.windowDays);
+    hubUsageChartRange.addEventListener("change", () => {
+      const value = Number(hubUsageChartRange.value);
+      hubUsageChartState.windowDays = Number.isNaN(value)
+        ? hubUsageChartState.windowDays
+        : value;
+      loadHubUsageSeries();
+    });
+  }
+  if (hubUsageChartSegment) {
+    hubUsageChartSegment.value = hubUsageChartState.segment;
+    hubUsageChartSegment.addEventListener("change", () => {
+      hubUsageChartState.segment = hubUsageChartSegment.value;
+      loadHubUsageSeries();
+    });
   }
 }
 
@@ -814,6 +1151,7 @@ function prefetchRepo(url) {
 export function initHub() {
   if (!repoListEl) return;
   attachHubHandlers();
+  initHubUsageChartControls();
   const cachedHub = loadSessionCache(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
   if (cachedHub) {
     hubData = cachedHub;
@@ -824,6 +1162,7 @@ export function initHub() {
   if (cachedUsage) {
     renderHubUsage(cachedUsage);
   }
+  loadHubUsageSeries();
   refreshHub();
   loadHubVersion();
   checkUpdateStatus();

@@ -21,6 +21,7 @@ const usageChartState = {
   bucket: "day",
   windowDays: 30,
 };
+let usageSeriesRetryTimer = null;
 
 function renderState(state) {
   if (!state) return;
@@ -91,6 +92,15 @@ function formatTokensCompact(val) {
   if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
   if (num >= 1000) return `${(num / 1000).toFixed(0)}k`;
   return num.toLocaleString();
+}
+
+function formatTokensAxis(val) {
+  if (val === null || val === undefined) return "0";
+  const num = Number(val);
+  if (Number.isNaN(num)) return "0";
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(1)}k`;
+  return Math.round(num).toString();
 }
 
 function renderUsageProgressBar(container, percent, windowMinutes) {
@@ -187,8 +197,12 @@ function renderUsageChart(data) {
   if (!container) return;
   const buckets = data?.buckets || [];
   const series = data?.series || [];
+  const isLoading = data?.status === "loading";
   if (!buckets.length || !series.length) {
-    container.innerHTML = '<div class="usage-chart-empty">No data</div>';
+    container.__usageChartBound = false;
+    container.innerHTML = isLoading
+      ? '<div class="usage-chart-empty">Loading…</div>'
+      : '<div class="usage-chart-empty">No data</div>';
     return;
   }
 
@@ -253,6 +267,16 @@ function renderUsageChart(data) {
     }" y2="${y}" stroke="rgba(108, 245, 216, 0.12)" stroke-width="1" />`;
   }
 
+  const maxLabel = formatTokensAxis(scaleMax);
+  const midLabel = formatTokensAxis(scaleMax / 2);
+  svg += `<text x="${padding}" y="${padding + 10}" fill="rgba(203, 213, 225, 0.7)" font-size="8">${maxLabel}</text>`;
+  svg += `<text x="${padding}" y="${
+    padding + chartHeight / 2 + 4
+  }" fill="rgba(203, 213, 225, 0.6)" font-size="8">${midLabel}</text>`;
+  svg += `<text x="${padding}" y="${
+    padding + chartHeight + 2
+  }" fill="rgba(203, 213, 225, 0.5)" font-size="8">0</text>`;
+
   if (usageChartState.segment === "none") {
     const values = series[0]?.values || [];
     const points = values.map((value, i) => {
@@ -303,15 +327,158 @@ function renderUsageChart(data) {
   }
 
   svg += "</svg>";
+  container.__usageChartBound = false;
   container.innerHTML = svg;
+  attachUsageChartInteraction(container, {
+    buckets,
+    series,
+    segment: usageChartState.segment,
+    scaleMax,
+    width,
+    height,
+    padding,
+    chartWidth,
+    chartHeight,
+  });
+}
+
+function setChartLoading(container, loading) {
+  if (!container) return;
+  container.classList.toggle("loading", loading);
+}
+
+function attachUsageChartInteraction(container, state) {
+  container.__usageChartState = state;
+  if (container.__usageChartBound) return;
+  container.__usageChartBound = true;
+
+  const focus = document.createElement("div");
+  focus.className = "usage-chart-focus";
+  const dot = document.createElement("div");
+  dot.className = "usage-chart-dot";
+  const tooltip = document.createElement("div");
+  tooltip.className = "usage-chart-tooltip";
+  container.appendChild(focus);
+  container.appendChild(dot);
+  container.appendChild(tooltip);
+
+  const updateTooltip = (event) => {
+    const chartState = container.__usageChartState;
+    if (!chartState) return;
+    const rect = container.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const normalizedX = (x / rect.width) * chartState.width;
+    const usableWidth = chartState.chartWidth;
+    const localX = Math.min(
+      Math.max(normalizedX - chartState.padding, 0),
+      usableWidth
+    );
+    const index = Math.round(
+      (localX / usableWidth) * (chartState.buckets.length - 1)
+    );
+    const clampedIndex = Math.max(
+      0,
+      Math.min(chartState.buckets.length - 1, index)
+    );
+    const xPos =
+      chartState.padding +
+      (clampedIndex / (chartState.buckets.length - 1 || 1)) * usableWidth;
+
+    const totals = chartState.series.reduce((sum, entry) => {
+      return sum + (entry.values?.[clampedIndex] || 0);
+    }, 0);
+    const yPos =
+      chartState.padding +
+      chartState.chartHeight -
+      (totals / chartState.scaleMax) * chartState.chartHeight;
+
+    focus.style.opacity = "1";
+    dot.style.opacity = "1";
+    focus.style.left = `${(xPos / chartState.width) * 100}%`;
+    dot.style.left = `${(xPos / chartState.width) * 100}%`;
+    dot.style.top = `${(yPos / chartState.height) * 100}%`;
+
+    const bucketLabel = chartState.buckets[clampedIndex];
+    const rows = [];
+    rows.push(
+      `<div class="usage-chart-tooltip-row"><span>Total</span><span>${formatTokensCompact(
+        totals
+      )}</span></div>`
+    );
+
+    if (chartState.segment !== "none") {
+      const ranked = chartState.series
+        .map((entry) => ({
+          key: entry.key,
+          value: entry.values?.[clampedIndex] || 0,
+        }))
+        .filter((entry) => entry.value > 0)
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 4);
+      ranked.forEach((entry) => {
+        rows.push(
+          `<div class="usage-chart-tooltip-row"><span>${entry.key}</span><span>${formatTokensCompact(
+            entry.value
+          )}</span></div>`
+        );
+      });
+    }
+
+    tooltip.innerHTML = `<div class="usage-chart-tooltip-title">${bucketLabel}</div>${rows.join(
+      ""
+    )}`;
+
+    const tooltipRect = tooltip.getBoundingClientRect();
+    let tooltipLeft = x + 10;
+    if (tooltipLeft + tooltipRect.width > rect.width) {
+      tooltipLeft = x - tooltipRect.width - 10;
+    }
+    tooltipLeft = Math.max(6, tooltipLeft);
+    let tooltipTop = yPos / chartState.height * rect.height - tooltipRect.height - 8;
+    if (tooltipTop < 6) {
+      tooltipTop = yPos / chartState.height * rect.height + 8;
+    }
+    tooltip.style.opacity = "1";
+    tooltip.style.transform = `translate(${tooltipLeft}px, ${tooltipTop}px)`;
+  };
+
+  container.addEventListener("pointermove", updateTooltip);
+  container.addEventListener("pointerleave", () => {
+    focus.style.opacity = "0";
+    dot.style.opacity = "0";
+    tooltip.style.opacity = "0";
+  });
 }
 
 async function loadUsageSeries() {
+  const container = document.getElementById("usage-chart-canvas");
   try {
     const data = await api(`/api/usage/series?${buildUsageSeriesQuery()}`);
+    setChartLoading(container, data?.status === "loading");
     renderUsageChart(data);
+    if (data?.status === "loading") {
+      scheduleUsageSeriesRetry();
+    } else {
+      clearUsageSeriesRetry();
+    }
   } catch (err) {
+    setChartLoading(container, false);
     renderUsageChart(null);
+    clearUsageSeriesRetry();
+  }
+}
+
+function scheduleUsageSeriesRetry() {
+  clearUsageSeriesRetry();
+  usageSeriesRetryTimer = setTimeout(() => {
+    loadUsageSeries();
+  }, 1500);
+}
+
+function clearUsageSeriesRetry() {
+  if (usageSeriesRetryTimer) {
+    clearTimeout(usageSeriesRetryTimer);
+    usageSeriesRetryTimer = null;
   }
 }
 

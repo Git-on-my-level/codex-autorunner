@@ -39,6 +39,7 @@ from .utils import find_repo_root
 from .usage import (
     UsageError,
     default_codex_home,
+    get_hub_usage_series_cached,
     parse_iso_datetime,
     summarize_hub_usage,
     summarize_repo_usage,
@@ -501,6 +502,42 @@ def create_hub_app(
                 for repo_id, summary in per_repo.items()
             ],
             "unmatched": unmatched.to_dict(),
+        }
+
+    @app.get("/hub/usage/series")
+    def hub_usage_series(
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        bucket: str = "day",
+        segment: str = "none",
+    ):
+        try:
+            since_dt = parse_iso_datetime(since)
+            until_dt = parse_iso_datetime(until)
+        except UsageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        manifest = load_manifest(config.manifest_path, config.root)
+        repo_map = [(repo.id, (config.root / repo.path)) for repo in manifest.repos]
+        try:
+            series, status = get_hub_usage_series_cached(
+                repo_map,
+                default_codex_home(),
+                since=since_dt,
+                until=until_dt,
+                bucket=bucket,
+                segment=segment,
+            )
+        except UsageError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {
+            "mode": "hub",
+            "hub_root": str(config.root),
+            "codex_home": str(default_codex_home()),
+            "since": since,
+            "until": until,
+            "status": status,
+            **series,
         }
 
     @app.get("/hub/repos")

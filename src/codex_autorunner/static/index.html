@@ -110,6 +110,26 @@
         <div id="hub-usage-list" class="hub-usage-grid">Loading…</div>
       </section>
 
+      <section class="hub-usage-chart">
+        <div class="hub-usage-chart-header">
+          <span class="label">Usage Trend</span>
+          <div class="usage-chart-controls">
+            <select id="hub-usage-chart-range" class="usage-chart-select" title="Range" aria-label="Range">
+              <option value="7">1w</option>
+              <option value="30" selected>1m</option>
+              <option value="90">3m</option>
+              <option value="180">6m</option>
+              <option value="365">1y</option>
+            </select>
+            <select id="hub-usage-chart-segment" class="usage-chart-select" title="Group" aria-label="Group">
+              <option value="none">Total</option>
+              <option value="repo">By repo</option>
+            </select>
+          </div>
+        </div>
+        <div id="hub-usage-chart-canvas" class="usage-chart-canvas hub-usage-chart-canvas"></div>
+      </section>
+
       <section class="hub-repo-panel">
         <div class="hub-panel-header">
           <span class="label">Repositories</span>
@@ -216,16 +236,14 @@
                 <div class="usage-chart-header">
                   <span class="usage-chart-title">Trend</span>
                   <div class="usage-chart-controls">
-                    <label class="usage-chart-label" for="usage-chart-range">Range</label>
-                    <select id="usage-chart-range" class="usage-chart-select">
+                    <select id="usage-chart-range" class="usage-chart-select" title="Range" aria-label="Range">
                       <option value="7">1w</option>
                       <option value="30" selected>1m</option>
                       <option value="90">3m</option>
                       <option value="180">6m</option>
                       <option value="365">1y</option>
                     </select>
-                    <label class="usage-chart-label" for="usage-chart-segment">Group</label>
-                    <select id="usage-chart-segment" class="usage-chart-select">
+                    <select id="usage-chart-segment" class="usage-chart-select" title="Group" aria-label="Group">
                       <option value="none">Total</option>
                       <option value="model">Model</option>
                       <option value="token_type">Token type</option>

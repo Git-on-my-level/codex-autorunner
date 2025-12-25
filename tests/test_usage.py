@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 from codex_autorunner.usage import (
+    summarize_hub_usage_series,
     summarize_hub_usage,
     summarize_repo_usage,
     summarize_repo_usage_series,
@@ -241,3 +242,82 @@ def test_usage_series_groups_by_model(tmp_path):
     values = {item["key"]: item["values"] for item in series["series"]}
     assert values["gpt-5"] == [10, 0]
     assert values["gpt-4o"] == [0, 5]
+
+
+def test_hub_usage_series_includes_unmatched(tmp_path):
+    hub_repo_one = tmp_path / "hub_repo_one"
+    hub_repo_one.mkdir()
+    codex_home = tmp_path / "codex"
+
+    _write_session(
+        codex_home,
+        hub_repo_one,
+        [
+            {
+                "timestamp": "2025-12-01T01:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 5,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 2,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 7,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 5,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 2,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 7,
+                        },
+                    },
+                },
+            }
+        ],
+        model="gpt-5",
+    )
+
+    _write_session(
+        codex_home,
+        tmp_path / "other",
+        [
+            {
+                "timestamp": "2025-12-02T01:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 2,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 1,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 3,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 2,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 1,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 3,
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    series = summarize_hub_usage_series(
+        [("repo-one", hub_repo_one)],
+        codex_home=codex_home,
+        bucket="day",
+        segment="repo",
+    )
+
+    values = {item["key"]: item["values"] for item in series["series"]}
+    assert series["buckets"] == ["2025-12-01", "2025-12-02"]
+    assert values["repo-one"] == [7, 0]
+    assert values["other"] == [0, 3]

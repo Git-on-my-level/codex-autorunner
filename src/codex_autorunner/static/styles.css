@@ -257,7 +257,7 @@ main {
 .usage-chart-controls {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -272,8 +272,8 @@ main {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 2px 4px;
-  min-width: 42px;
+  padding: 2px 6px;
+  min-width: 44px;
 }
 
 .usage-chart-canvas {
@@ -292,6 +292,78 @@ main {
   display: block;
 }
 
+.usage-chart-canvas.loading::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+.usage-chart-canvas.loading::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 12, 18, 0.25);
+  pointer-events: none;
+}
+
+.usage-chart-focus {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: rgba(108, 245, 216, 0.5);
+  pointer-events: none;
+  opacity: 0;
+}
+
+.usage-chart-dot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6cf5d8;
+  box-shadow: 0 0 6px rgba(108, 245, 216, 0.6);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  opacity: 0;
+}
+
+.usage-chart-tooltip {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 6px 8px;
+  background: rgba(9, 13, 20, 0.95);
+  border: 1px solid rgba(108, 245, 216, 0.2);
+  border-radius: var(--radius);
+  font-size: 10px;
+  color: var(--text);
+  pointer-events: none;
+  opacity: 0;
+  max-width: 180px;
+}
+
+.usage-chart-tooltip-title {
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+.usage-chart-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+}
+
 .usage-chart-empty {
   font-size: 10px;
   color: var(--muted);
@@ -299,6 +371,45 @@ main {
   align-items: center;
   justify-content: center;
   height: 100%;
+}
+
+.hub-usage-chart {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.hub-usage-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.hub-usage-chart-canvas {
+  height: 160px;
+  border-style: solid;
+}
+
+@media (max-width: 720px) {
+  .usage-chart-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .hub-usage-chart-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .usage-chart-controls {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 .usage-stat {
