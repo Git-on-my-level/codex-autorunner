@@ -233,8 +233,7 @@ function renderHubUsageChart(data) {
     return;
   }
 
-  const width = 560;
-  const height = 160;
+  const { width, height } = getChartSize(hubUsageChartCanvas, 560, 160);
   const padding = 14;
   const chartWidth = width - padding * 2;
   const chartHeight = height - padding * 2;
@@ -250,13 +249,15 @@ function renderHubUsageChart(data) {
     "#f5d36c",
   ];
 
+  const { series: displaySeries } = limitSeries(series, 6, "rest");
+
   let scaleMax = 1;
   if (hubUsageChartState.segment === "none") {
-    const values = series[0]?.values || [];
+    const values = displaySeries[0]?.values || [];
     scaleMax = Math.max(...values, 1);
   } else {
     const totals = new Array(buckets.length).fill(0);
-    series.forEach((entry) => {
+    displaySeries.forEach((entry) => {
       (entry.values || []).forEach((value, i) => {
         totals[i] += value;
       });
@@ -307,7 +308,7 @@ function renderHubUsageChart(data) {
   }" fill="rgba(203, 213, 225, 0.5)" font-size="9">0</text>`;
 
   if (hubUsageChartState.segment === "none") {
-    const values = series[0]?.values || [];
+    const values = displaySeries[0]?.values || [];
     const points = values.map((value, i) => {
       const x = xFor(i, values.length);
       const y = yFor(value);
@@ -329,7 +330,7 @@ function renderHubUsageChart(data) {
   } else {
     const count = buckets.length;
     const accum = new Array(count).fill(0);
-    series.forEach((entry, idx) => {
+    displaySeries.forEach((entry, idx) => {
       const values = entry.values || [];
       const top = values.map((value, i) => {
         accum[i] += value;
@@ -360,7 +361,7 @@ function renderHubUsageChart(data) {
   hubUsageChartCanvas.innerHTML = svg;
   attachHubUsageChartInteraction(hubUsageChartCanvas, {
     buckets,
-    series,
+    series: displaySeries,
     segment: hubUsageChartState.segment,
     scaleMax,
     width,
@@ -369,6 +370,30 @@ function renderHubUsageChart(data) {
     chartWidth,
     chartHeight,
   });
+}
+
+function getChartSize(container, fallbackWidth, fallbackHeight) {
+  const rect = container.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width || fallbackWidth));
+  const height = Math.max(1, Math.round(rect.height || fallbackHeight));
+  return { width, height };
+}
+
+function limitSeries(series, maxSeries, restKey) {
+  if (series.length <= maxSeries) return { series };
+  const sorted = [...series].sort((a, b) => (b.total || 0) - (a.total || 0));
+  const top = sorted.slice(0, maxSeries);
+  const rest = sorted.slice(maxSeries);
+  if (!rest.length) return { series: top };
+  const values = new Array((top[0]?.values || []).length).fill(0);
+  rest.forEach((entry) => {
+    (entry.values || []).forEach((value, i) => {
+      values[i] += value;
+    });
+  });
+  const total = values.reduce((sum, value) => sum + value, 0);
+  top.push({ key: restKey, repo: null, token_type: null, total, values });
+  return { series: top };
 }
 
 function attachHubUsageChartInteraction(container, state) {

@@ -206,8 +206,7 @@ function renderUsageChart(data) {
     return;
   }
 
-  const width = 320;
-  const height = 88;
+  const { width, height } = getChartSize(container, 320, 88);
   const padding = 8;
   const chartWidth = width - padding * 2;
   const chartHeight = height - padding * 2;
@@ -221,13 +220,15 @@ function renderUsageChart(data) {
     "#f2a0c5",
   ];
 
+  const { series: displaySeries } = limitSeries(series, 4, "rest");
+
   let scaleMax = 1;
   if (usageChartState.segment === "none") {
-    const values = series[0]?.values || [];
+    const values = displaySeries[0]?.values || [];
     scaleMax = Math.max(...values, 1);
   } else {
     const totals = new Array(buckets.length).fill(0);
-    series.forEach((entry) => {
+    displaySeries.forEach((entry) => {
       (entry.values || []).forEach((value, i) => {
         totals[i] += value;
       });
@@ -278,7 +279,7 @@ function renderUsageChart(data) {
   }" fill="rgba(203, 213, 225, 0.5)" font-size="8">0</text>`;
 
   if (usageChartState.segment === "none") {
-    const values = series[0]?.values || [];
+    const values = displaySeries[0]?.values || [];
     const points = values.map((value, i) => {
       const x = xFor(i, values.length);
       const y = yFor(value);
@@ -300,7 +301,7 @@ function renderUsageChart(data) {
   } else {
     const count = buckets.length;
     const accum = new Array(count).fill(0);
-    series.forEach((entry, idx) => {
+    displaySeries.forEach((entry, idx) => {
       const values = entry.values || [];
       const top = values.map((value, i) => {
         accum[i] += value;
@@ -331,7 +332,7 @@ function renderUsageChart(data) {
   container.innerHTML = svg;
   attachUsageChartInteraction(container, {
     buckets,
-    series,
+    series: displaySeries,
     segment: usageChartState.segment,
     scaleMax,
     width,
@@ -340,6 +341,30 @@ function renderUsageChart(data) {
     chartWidth,
     chartHeight,
   });
+}
+
+function getChartSize(container, fallbackWidth, fallbackHeight) {
+  const rect = container.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width || fallbackWidth));
+  const height = Math.max(1, Math.round(rect.height || fallbackHeight));
+  return { width, height };
+}
+
+function limitSeries(series, maxSeries, restKey) {
+  if (series.length <= maxSeries) return { series };
+  const sorted = [...series].sort((a, b) => (b.total || 0) - (a.total || 0));
+  const top = sorted.slice(0, maxSeries);
+  const rest = sorted.slice(maxSeries);
+  if (!rest.length) return { series: top };
+  const values = new Array((top[0]?.values || []).length).fill(0);
+  rest.forEach((entry) => {
+    (entry.values || []).forEach((value, i) => {
+      values[i] += value;
+    });
+  });
+  const total = values.reduce((sum, value) => sum + value, 0);
+  top.push({ key: restKey, model: null, token_type: null, total, values });
+  return { series: top };
 }
 
 function setChartLoading(container, loading) {
