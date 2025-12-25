@@ -269,7 +269,25 @@ export class TerminalManager {
   }
 
   _getTextInputHookKey(hookId) {
-    return `${TEXT_INPUT_HOOK_STORAGE_PREFIX}${hookId}:${this._getRepoStorageKey()}`;
+    const sessionId = this.currentSessionId || this._getSavedSessionId();
+    const scope = sessionId
+      ? `session:${sessionId}`
+      : `pending:${this._getRepoStorageKey()}`;
+    return `${TEXT_INPUT_HOOK_STORAGE_PREFIX}${hookId}:${scope}`;
+  }
+
+  _migrateTextInputHookSession(hookId, sessionId) {
+    if (!sessionId) return;
+    const pendingKey = `${TEXT_INPUT_HOOK_STORAGE_PREFIX}${hookId}:pending:${this._getRepoStorageKey()}`;
+    const sessionKey = `${TEXT_INPUT_HOOK_STORAGE_PREFIX}${hookId}:session:${sessionId}`;
+    try {
+      if (sessionStorage.getItem(pendingKey) === "1") {
+        sessionStorage.setItem(sessionKey, "1");
+        sessionStorage.removeItem(pendingKey);
+      }
+    } catch (_err) {
+      // ignore
+    }
   }
 
   _hasTextInputHookFired(hookId) {
@@ -431,6 +449,9 @@ export class TerminalManager {
 
   _setCurrentSessionId(sessionId) {
     this.currentSessionId = sessionId || null;
+    if (this.currentSessionId) {
+      this._migrateTextInputHookSession(CAR_CONTEXT_HOOK_ID, this.currentSessionId);
+    }
     this._renderStatus();
   }
 
