@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from ..codex_cli import extract_flag_value
 from ..pty_session import ActiveSession, PTYSession
 from ..state import SessionRecord, load_state, now_iso, persist_session_registry
 from ..static_assets import index_response_headers, render_index_html
@@ -43,6 +44,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         config = request.app.state.config
         state = load_state(engine.state_path)
         outstanding, done = engine.docs.todos()
+        codex_model = config.codex_model or extract_flag_value(
+            config.codex_args, "--model"
+        )
         return {
             "last_run_id": state.last_run_id,
             "status": state.status,
@@ -54,6 +58,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             "running": manager.running,
             "runner_pid": state.runner_pid,
             "terminal_idle_timeout_seconds": config.terminal_idle_timeout_seconds,
+            "codex_model": codex_model or "auto",
         }
 
     @router.get("/api/version")

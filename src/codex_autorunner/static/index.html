@@ -172,50 +172,8 @@
                 </div>
               </div>
               <div class="runner-config">
-                <div class="runner-config-row">
-                  <div class="runner-config-fields">
-                    <div class="runner-config-field">
-                      <span class="runner-config-label">Model</span>
-                      <select id="runner-model-select" aria-label="Model">
-                        <option value="">auto</option>
-                      </select>
-                      <input
-                        type="text"
-                        id="runner-model-custom"
-                        class="runner-config-custom hidden"
-                        placeholder="custom model"
-                        autocomplete="off"
-                        spellcheck="false"
-                        aria-label="Custom model"
-                      />
-                    </div>
-                    <div class="runner-config-field">
-                      <span class="runner-config-label">Reason</span>
-                      <select id="runner-reasoning-select" aria-label="Reasoning">
-                        <option value="">auto</option>
-                      </select>
-                      <input
-                        type="text"
-                        id="runner-reasoning-custom"
-                        class="runner-config-custom hidden"
-                        placeholder="custom effort"
-                        autocomplete="off"
-                        spellcheck="false"
-                        aria-label="Custom reasoning"
-                      />
-                    </div>
-                  </div>
-                  <div class="runner-config-actions">
-                    <button
-                      id="runner-options-refresh"
-                      class="ghost sm icon-btn"
-                      title="Refresh model list"
-                    >
-                      ↻
-                    </button>
-                    <button id="runner-options-save" class="primary sm">Apply</button>
-                  </div>
-                </div>
+                <span class="runner-config-label">Model</span>
+                <span id="runner-model" class="runner-config-value">auto</span>
               </div>
               <div class="actions">
                 <button id="start-run" class="primary">Start</button>

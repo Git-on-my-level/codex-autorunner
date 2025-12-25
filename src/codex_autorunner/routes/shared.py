@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from ..codex_cli import extract_flag_value
 from ..state import load_state
 
 BYPASS_FLAGS = {
@@ -69,6 +70,9 @@ async def state_stream(engine, manager, logger=None):
     last_payload = None
     last_error_log_at = 0.0
     terminal_idle_timeout_seconds = engine.config.terminal_idle_timeout_seconds
+    codex_model = engine.config.codex_model or extract_flag_value(
+        engine.config.codex_args, "--model"
+    )
     while True:
         try:
             state = await asyncio.to_thread(load_state, engine.state_path)
@@ -84,6 +88,7 @@ async def state_stream(engine, manager, logger=None):
                 "running": manager.running,
                 "runner_pid": state.runner_pid,
                 "terminal_idle_timeout_seconds": terminal_idle_timeout_seconds,
+                "codex_model": codex_model or "auto",
             }
             if payload != last_payload:
                 yield f"data: {json.dumps(payload)}\n\n"
