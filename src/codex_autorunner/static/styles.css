@@ -858,70 +858,91 @@ a.hub-pr-pill:hover {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
 }
 
 .runner-config-fields {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
 .runner-config-field {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
 .runner-config-label {
   font-size: 10px;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   white-space: nowrap;
+  text-transform: uppercase;
+  opacity: 0.75;
 }
 
 .runner-config-field input[type="text"] {
   width: 100%;
   min-width: 0;
-  padding: 4px 6px;
+  padding: 4px 8px;
   font-size: 11px;
+  background: rgba(10, 14, 22, 0.7);
+  border: 1px solid rgba(120, 130, 170, 0.35);
 }
 
 .runner-config-field select {
   width: 100%;
   min-width: 0;
-  padding: 4px 6px;
+  padding: 4px 10px;
   font-size: 11px;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid rgba(120, 130, 170, 0.35);
   border-radius: var(--radius);
   color: var(--text);
   font-family: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  appearance: none;
+  background-image:
+    linear-gradient(180deg, rgba(26, 31, 44, 0.7), rgba(11, 14, 23, 0.9)),
+    linear-gradient(45deg, transparent 50%, rgba(140, 150, 190, 0.8) 50%),
+    linear-gradient(135deg, rgba(140, 150, 190, 0.8) 50%, transparent 50%);
+  background-position:
+    0 0,
+    calc(100% - 14px) 50%,
+    calc(100% - 9px) 50%;
+  background-size:
+    100% 100%,
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 22px;
 }
 
 .runner-config-field select:focus,
 .runner-config-field input[type="text"]:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(108, 245, 216, 0.25);
 }
 
 .runner-config-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .runner-config-row button {
-  padding: 4px 8px;
+  padding: 5px 10px;
   font-size: 10px;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .runner-config-hint {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
+  opacity: 0.7;
 }
 
 /* Actions */
