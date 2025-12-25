@@ -10,23 +10,41 @@ from typing import Optional
 
 from ..state import load_state
 
+BYPASS_FLAGS = {
+    "--yolo",
+    "--dangerously-bypass-approvals-and-sandbox",
+}
+
+
+def _extract_bypass_flag(args: list[str]) -> tuple[str, list[str]]:
+    chosen = None
+    for arg in args:
+        if arg in BYPASS_FLAGS:
+            chosen = arg
+            break
+    filtered = [arg for arg in args if arg not in BYPASS_FLAGS]
+    return chosen or "--yolo", filtered
+
 
 def build_codex_terminal_cmd(engine, *, resume_mode: bool) -> list[str]:
     """
     Build the subprocess argv for launching the Codex interactive CLI inside a PTY.
     """
+    bypass_flag, terminal_args = _extract_bypass_flag(
+        list(engine.config.codex_terminal_args)
+    )
     if resume_mode:
         return [
             engine.config.codex_binary,
-            "--yolo",
+            bypass_flag,
             "resume",
-            *engine.config.codex_terminal_args,
+            *terminal_args,
         ]
 
     cmd = [
         engine.config.codex_binary,
-        "--yolo",
-        *engine.config.codex_terminal_args,
+        bypass_flag,
+        *terminal_args,
     ]
     return cmd
 
