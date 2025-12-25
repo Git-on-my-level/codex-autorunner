@@ -300,7 +300,7 @@ function renderChat(kind = activeDoc) {
   } else {
     const sendHint = isMobileViewport()
       ? "Enter to send · Shift+Enter for newline"
-      : "Shift+Enter to send · ↑ for history";
+      : "Cmd+Enter / Ctrl+Enter to send · Shift+Enter for newline";
     chatUI.hint.textContent = sendHint;
     chatUI.hint.classList.remove("loading");
   }
@@ -1208,12 +1208,12 @@ export function initDocs() {
   initDocVoice();
   reloadPatch(activeDoc, true);
 
-  // Desktop: Shift+Enter sends, Enter adds newline. Mobile: Enter sends, Shift+Enter adds newline.
+  // Desktop: Cmd+Enter or Ctrl+Enter sends, Enter adds newline. Mobile: Enter sends, Shift+Enter adds newline.
   // Up/Down arrows navigate prompt history when input is empty
   chatUI.input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.isComposing) {
       const sendOnEnter = isMobileViewport();
-      const shouldSend = sendOnEnter ? !e.shiftKey : e.shiftKey;
+      const shouldSend = sendOnEnter ? !e.shiftKey : e.metaKey || e.ctrlKey;
       if (shouldSend) {
         e.preventDefault();
         sendDocChat();

@@ -1989,7 +1989,7 @@ export class TerminalManager {
     this.textInputTextareaEl.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.isComposing) return;
       const sendOnEnter = this.isTouchDevice() && isMobileViewport();
-      const shouldSend = sendOnEnter ? !e.shiftKey : e.shiftKey;
+      const shouldSend = sendOnEnter ? !e.shiftKey : e.metaKey || e.ctrlKey;
       if (shouldSend) {
         e.preventDefault();
         triggerSend();
