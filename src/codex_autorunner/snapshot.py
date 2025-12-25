@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from .codex_cli import apply_codex_options
+from .codex_cli import apply_codex_options, supports_reasoning
 from .engine import Engine
 from .utils import atomic_write, read_json
 from .prompts import SNAPSHOT_PROMPT as _SNAPSHOT_PROMPT
@@ -472,8 +472,12 @@ def _run_codex(engine: Engine, prompt: str, *, prefer_large_model: bool) -> str:
         ).get("large")
     if model:
         args = _inject_model_arg(args, model)
+    reasoning_supported = supports_reasoning(engine.config.codex_binary)
     args = apply_codex_options(
-        args, model=None, reasoning=engine.config.codex_reasoning
+        args,
+        model=None,
+        reasoning=engine.config.codex_reasoning,
+        supports_reasoning=reasoning_supported,
     )
     cmd = [engine.config.codex_binary] + args + [prompt]
     try:

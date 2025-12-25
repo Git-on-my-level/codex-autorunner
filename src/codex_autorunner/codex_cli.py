@@ -1,3 +1,5 @@
+from functools import lru_cache
+import subprocess
 from typing import Iterable, Optional, Tuple
 
 SUBCOMMAND_HINTS = ("exec", "resume")
@@ -71,9 +73,34 @@ def apply_codex_options(
     *,
     model: Optional[str] = None,
     reasoning: Optional[str] = None,
+    supports_reasoning: Optional[bool] = None,
 ) -> list[str]:
     with_model = inject_flag(args, "--model", model)
+    if reasoning and supports_reasoning is False:
+        return with_model
     return inject_flag(with_model, "--reasoning", reasoning)
+
+
+def _read_help_text(binary: str) -> str:
+    try:
+        result = subprocess.run(
+            [binary, "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return ""
+    return "\n".join(filter(None, [result.stdout, result.stderr]))
+
+
+@lru_cache(maxsize=8)
+def supports_flag(binary: str, flag: str) -> bool:
+    return flag in _read_help_text(binary)
+
+
+def supports_reasoning(binary: str) -> bool:
+    return supports_flag(binary, "--reasoning")
 
 
 def discover_codex_models(binary: str) -> Tuple[list[str], str, Optional[str]]:

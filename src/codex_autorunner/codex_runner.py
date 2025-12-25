@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
-from .codex_cli import apply_codex_options
+from .codex_cli import apply_codex_options, supports_reasoning
 from .config import Config, ConfigError
 from .utils import resolve_executable, subprocess_env
 
@@ -27,8 +27,12 @@ def build_codex_command(
     config: Config, prompt: str, *, resolved_binary: Optional[str] = None
 ) -> list[str]:
     binary = resolved_binary or resolve_codex_binary(config)
+    reasoning_supported = supports_reasoning(binary)
     args = apply_codex_options(
-        config.codex_args, model=config.codex_model, reasoning=config.codex_reasoning
+        config.codex_args,
+        model=config.codex_model,
+        reasoning=config.codex_reasoning,
+        supports_reasoning=reasoning_supported,
     )
     return [binary] + args + [prompt]
 
