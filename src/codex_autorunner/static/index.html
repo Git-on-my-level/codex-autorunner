@@ -173,31 +173,37 @@
               </div>
               <div class="runner-config">
                 <div class="runner-config-row">
-                  <div class="runner-config-field">
-                    <span class="runner-config-label">Model</span>
-                    <input
-                      type="text"
-                      id="runner-model"
-                      list="runner-models"
-                      placeholder="auto"
-                      autocomplete="off"
-                      spellcheck="false"
-                      aria-label="Model"
-                    />
-                    <datalist id="runner-models"></datalist>
-                  </div>
-                  <div class="runner-config-field">
-                    <span class="runner-config-label">Reason</span>
-                    <input
-                      type="text"
-                      id="runner-reasoning"
-                      list="runner-reasoning-levels"
-                      placeholder="auto"
-                      autocomplete="off"
-                      spellcheck="false"
-                      aria-label="Reasoning"
-                    />
-                    <datalist id="runner-reasoning-levels"></datalist>
+                  <div class="runner-config-fields">
+                    <div class="runner-config-field">
+                      <span class="runner-config-label">Model</span>
+                      <select id="runner-model-select" aria-label="Model">
+                        <option value="">auto</option>
+                      </select>
+                      <input
+                        type="text"
+                        id="runner-model-custom"
+                        class="runner-config-custom hidden"
+                        placeholder="custom model"
+                        autocomplete="off"
+                        spellcheck="false"
+                        aria-label="Custom model"
+                      />
+                    </div>
+                    <div class="runner-config-field">
+                      <span class="runner-config-label">Reason</span>
+                      <select id="runner-reasoning-select" aria-label="Reasoning">
+                        <option value="">auto</option>
+                      </select>
+                      <input
+                        type="text"
+                        id="runner-reasoning-custom"
+                        class="runner-config-custom hidden"
+                        placeholder="custom effort"
+                        autocomplete="off"
+                        spellcheck="false"
+                        aria-label="Custom reasoning"
+                      />
+                    </div>
                   </div>
                   <div class="runner-config-actions">
                     <button
@@ -217,11 +223,11 @@
               <div class="actions">
                 <button id="start-run" class="primary">Start</button>
                 <button id="start-once">Once</button>
+                <button id="refresh-state" class="ghost icon-btn" title="Refresh state">↻</button>
                 <button id="stop-run" class="ghost">Stop</button>
                 <button id="resume-run" class="ghost">Resume</button>
                 <button id="kill-run" class="danger">Kill</button>
                 <button id="reset-runner" class="ghost" title="Reset run ID, clear logs">Reset</button>
-                <button id="refresh-state" class="ghost icon-btn" title="Refresh state">↻</button>
               </div>
               <p class="muted small" id="runner-pid">PID: –</p>
             </div>

@@ -856,9 +856,16 @@ a.hub-pr-pill:hover {
 
 .runner-config-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
+}
+
+.runner-config-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
 }
 
 .runner-config-field {
@@ -881,6 +888,24 @@ a.hub-pr-pill:hover {
   min-width: 0;
   padding: 4px 6px;
   font-size: 11px;
+}
+
+.runner-config-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: inherit;
+}
+
+.runner-config-field select:focus,
+.runner-config-field input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .runner-config-actions {
@@ -3285,7 +3310,17 @@ button.loading::after {
   }
 
   .runner-config-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .runner-config-fields {
     grid-template-columns: 1fr;
+  }
+
+  .runner-config-field {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
   }
 
   .runner-config-actions {
@@ -3294,6 +3329,15 @@ button.loading::after {
 
   .runner-config-hint {
     display: none;
+  }
+
+  .actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .actions button {
+    min-width: 0;
   }
   
   .card {

@@ -163,11 +163,13 @@ function renderUsage(data) {
 }
 
 function setRunnerOptionsLoading(loading) {
-  const modelInput = document.getElementById("runner-model");
-  const reasoningInput = document.getElementById("runner-reasoning");
+  const modelSelect = document.getElementById("runner-model-select");
+  const modelCustom = document.getElementById("runner-model-custom");
+  const reasoningSelect = document.getElementById("runner-reasoning-select");
+  const reasoningCustom = document.getElementById("runner-reasoning-custom");
   const refreshBtn = document.getElementById("runner-options-refresh");
   const saveBtn = document.getElementById("runner-options-save");
-  [modelInput, reasoningInput, refreshBtn, saveBtn].forEach((el) => {
+  [modelSelect, modelCustom, reasoningSelect, reasoningCustom, refreshBtn, saveBtn].forEach((el) => {
     if (!el) return;
     el.disabled = loading;
   });
@@ -175,33 +177,95 @@ function setRunnerOptionsLoading(loading) {
   if (saveBtn) saveBtn.classList.toggle("loading", loading);
 }
 
-function populateDatalist(listEl, options) {
-  if (!listEl) return;
-  listEl.innerHTML = "";
+function populateSelect(selectEl, options) {
+  if (!selectEl) return;
+  const current = selectEl.value;
+  const base = selectEl.querySelector('option[value=""]');
+  selectEl.innerHTML = "";
+  if (base) {
+    selectEl.appendChild(base);
+  } else {
+    const autoOpt = document.createElement("option");
+    autoOpt.value = "";
+    autoOpt.textContent = "auto";
+    selectEl.appendChild(autoOpt);
+  }
   const uniq = Array.from(new Set((options || []).filter(Boolean)));
   uniq.forEach((val) => {
     const opt = document.createElement("option");
     opt.value = val;
-    listEl.appendChild(opt);
+    opt.textContent = val;
+    selectEl.appendChild(opt);
   });
+  if (!selectEl.querySelector('option[value="__custom__"]')) {
+    const customOpt = document.createElement("option");
+    customOpt.value = "__custom__";
+    customOpt.textContent = "custom…";
+    selectEl.appendChild(customOpt);
+  }
+  if (current && selectEl.querySelector(`option[value="${CSS.escape(current)}"]`)) {
+    selectEl.value = current;
+  }
 }
 
 function renderCodexOptions(data) {
   if (!data) return;
-  const modelInput = document.getElementById("runner-model");
-  const reasoningInput = document.getElementById("runner-reasoning");
-  const modelList = document.getElementById("runner-models");
-  const reasoningList = document.getElementById("runner-reasoning-levels");
+  const modelSelect = document.getElementById("runner-model-select");
+  const modelCustom = document.getElementById("runner-model-custom");
+  const reasoningSelect = document.getElementById("runner-reasoning-select");
+  const reasoningCustom = document.getElementById("runner-reasoning-custom");
   const hintEl = document.getElementById("runner-options-hint");
 
-  populateDatalist(modelList, data.models);
-  populateDatalist(reasoningList, data.reasoning_levels);
+  populateSelect(modelSelect, data.models);
+  populateSelect(reasoningSelect, data.reasoning_levels);
 
-  if (modelInput) {
-    modelInput.value = data.current_model || "";
+  if (modelSelect) {
+    const modelValue = data.current_model || "";
+    if (modelValue && modelSelect.querySelector(`option[value="${CSS.escape(modelValue)}"]`)) {
+      modelSelect.value = modelValue;
+      if (modelCustom) {
+        modelCustom.value = "";
+        modelCustom.classList.add("hidden");
+      }
+    } else if (modelValue) {
+      modelSelect.value = "__custom__";
+      if (modelCustom) {
+        modelCustom.value = modelValue;
+        modelCustom.classList.remove("hidden");
+      }
+    } else {
+      modelSelect.value = "";
+      if (modelCustom) {
+        modelCustom.value = "";
+        modelCustom.classList.add("hidden");
+      }
+    }
   }
-  if (reasoningInput) {
-    reasoningInput.value = data.current_reasoning || "";
+
+  if (reasoningSelect) {
+    const reasoningValue = data.current_reasoning || "";
+    if (
+      reasoningValue &&
+      reasoningSelect.querySelector(`option[value="${CSS.escape(reasoningValue)}"]`)
+    ) {
+      reasoningSelect.value = reasoningValue;
+      if (reasoningCustom) {
+        reasoningCustom.value = "";
+        reasoningCustom.classList.add("hidden");
+      }
+    } else if (reasoningValue) {
+      reasoningSelect.value = "__custom__";
+      if (reasoningCustom) {
+        reasoningCustom.value = reasoningValue;
+        reasoningCustom.classList.remove("hidden");
+      }
+    } else {
+      reasoningSelect.value = "";
+      if (reasoningCustom) {
+        reasoningCustom.value = "";
+        reasoningCustom.classList.add("hidden");
+      }
+    }
   }
 
   if (hintEl) {
@@ -223,11 +287,21 @@ async function loadCodexOptions() {
 }
 
 async function saveCodexOptions() {
-  const modelInput = document.getElementById("runner-model");
-  const reasoningInput = document.getElementById("runner-reasoning");
+  const modelSelect = document.getElementById("runner-model-select");
+  const modelCustom = document.getElementById("runner-model-custom");
+  const reasoningSelect = document.getElementById("runner-reasoning-select");
+  const reasoningCustom = document.getElementById("runner-reasoning-custom");
+  const modelValue =
+    modelSelect?.value === "__custom__"
+      ? modelCustom?.value?.trim()
+      : modelSelect?.value?.trim();
+  const reasoningValue =
+    reasoningSelect?.value === "__custom__"
+      ? reasoningCustom?.value?.trim()
+      : reasoningSelect?.value?.trim();
   const payload = {
-    model: modelInput?.value?.trim() || null,
-    reasoning: reasoningInput?.value?.trim() || null,
+    model: modelValue || null,
+    reasoning: reasoningValue || null,
   };
   setRunnerOptionsLoading(true);
   try {
@@ -396,6 +470,32 @@ export function initDashboard() {
   const saveOptions = document.getElementById("runner-options-save");
   if (saveOptions) {
     saveOptions.addEventListener("click", saveCodexOptions);
+  }
+  const modelSelect = document.getElementById("runner-model-select");
+  const modelCustom = document.getElementById("runner-model-custom");
+  if (modelSelect && modelCustom) {
+    modelSelect.addEventListener("change", () => {
+      if (modelSelect.value === "__custom__") {
+        modelCustom.classList.remove("hidden");
+        modelCustom.focus();
+      } else {
+        modelCustom.classList.add("hidden");
+        modelCustom.value = "";
+      }
+    });
+  }
+  const reasoningSelect = document.getElementById("runner-reasoning-select");
+  const reasoningCustom = document.getElementById("runner-reasoning-custom");
+  if (reasoningSelect && reasoningCustom) {
+    reasoningSelect.addEventListener("change", () => {
+      if (reasoningSelect.value === "__custom__") {
+        reasoningCustom.classList.remove("hidden");
+        reasoningCustom.focus();
+      } else {
+        reasoningCustom.classList.add("hidden");
+        reasoningCustom.value = "";
+      }
+    });
   }
 
   // Try loading from cache first
