@@ -243,7 +243,7 @@ function renderUsageChart(data) {
   const yFor = (value) =>
     padding + chartHeight - (value / scaleMax) * chartHeight;
 
-  let svg = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Token usage trend">`;
+  let svg = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMin meet" role="img" aria-label="Token usage trend">`;
   svg += `
     <defs>
       <linearGradient id="usage-line-fill" x1="0" y1="0" x2="0" y2="1">
@@ -301,6 +301,7 @@ function renderUsageChart(data) {
   } else {
     const count = buckets.length;
     const accum = new Array(count).fill(0);
+    const linePaths = [];
     displaySeries.forEach((entry, idx) => {
       const values = entry.values || [];
       const top = values.map((value, i) => {
@@ -308,22 +309,26 @@ function renderUsageChart(data) {
         return accum[i];
       });
       const bottom = top.map((value, i) => value - (values[i] || 0));
-      const pathTop = top
-        .map((value, i) => {
-          const x = xFor(i, count);
-          const y = yFor(value);
-          return `${x},${y}`;
-        })
-        .join(" ");
-      const pathBottom = bottom
-        .map((value, i) => {
-          const x = xFor(count - 1 - i, count);
-          const y = yFor(value);
-          return `${x},${y}`;
-        })
-        .join(" ");
+      const topPoints = top.map((value, i) => {
+        const x = xFor(i, count);
+        const y = yFor(value);
+        return `${x},${y}`;
+      });
+      const bottomPoints = [];
+      for (let i = count - 1; i >= 0; i -= 1) {
+        const x = xFor(i, count);
+        const y = yFor(bottom[i] || 0);
+        bottomPoints.push(`${x},${y}`);
+      }
       const color = colors[idx % colors.length];
-      svg += `<polygon fill="${color}44" stroke="${color}" stroke-width="1" points="${pathTop} ${pathBottom}" />`;
+      svg += `<polygon fill="${color}33" points="${topPoints.join(
+        " "
+      )} ${bottomPoints.join(" ")}" />`;
+      linePaths.push({ path: `M ${topPoints.join(" L ")}`, color });
+    });
+    linePaths.forEach((item, idx) => {
+      const strokeWidth = idx === linePaths.length - 1 ? 2 : 1;
+      svg += `<path d="${item.path}" fill="none" stroke="${item.color}" stroke-width="${strokeWidth}" opacity="0.85" />`;
     });
   }
 
@@ -353,7 +358,7 @@ function getChartSize(container, fallbackWidth, fallbackHeight) {
 function limitSeries(series, maxSeries, restKey) {
   if (series.length <= maxSeries) return { series };
   const sorted = [...series].sort((a, b) => (b.total || 0) - (a.total || 0));
-  const top = sorted.slice(0, maxSeries);
+  const top = sorted.slice(0, maxSeries).filter((entry) => (entry.total || 0) > 0);
   const rest = sorted.slice(maxSeries);
   if (!rest.length) return { series: top };
   const values = new Array((top[0]?.values || []).length).fill(0);
@@ -363,8 +368,10 @@ function limitSeries(series, maxSeries, restKey) {
     });
   });
   const total = values.reduce((sum, value) => sum + value, 0);
-  top.push({ key: restKey, model: null, token_type: null, total, values });
-  return { series: top };
+  if (total > 0) {
+    top.push({ key: restKey, model: null, token_type: null, total, values });
+  }
+  return { series: top.length ? top : series };
 }
 
 function setChartLoading(container, loading) {
