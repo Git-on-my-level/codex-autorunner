@@ -15,6 +15,48 @@ An autorunner that uses the Codex CLI to work on large tasks via a simple loop. 
 
 CLI commands are available as `codex-autorunner` or the shorter `car`.
 
+## Install
+GitHub (pipx):
+```
+pipx install git+https://github.com/Git-on-my-level/codex-autorunner.git
+```
+
+From source (editable):
+```
+git clone https://github.com/Git-on-my-level/codex-autorunner.git
+cd codex-autorunner
+pip install -e .
+```
+
+### Opinionated setup (macOS headless hub at `~/car-workspace`)
+- One-shot setup (user scope): `scripts/install-local-mac-hub.sh`. It pipx-installs this repo, creates/initializes `~/car-workspace` as a hub, writes a launchd agent plist, and loads it. Defaults: host `0.0.0.0`, port `4173`, label `com.codex.autorunner`. Override via env (`WORKSPACE`, `HOST`, `PORT`, `LABEL`, `PLIST_PATH`, `PACKAGE_SRC`).
+- Create/update the launchd agent plist and (re)load it: `scripts/launchd-hub.sh` (or `make launchd-hub`).
+- Manual path if you prefer:
+  - `pipx install .`
+  - `car init --mode hub --path ~/car-workspace`
+  - Copy `docs/ops/launchd-hub-example.plist` to `~/Library/LaunchAgents/com.codex.autorunner.plist`, replace `/Users/you` with your home, adjust host/port if desired, then `launchctl load -w ~/Library/LaunchAgents/com.codex.autorunner.plist`.
+- The hub serves the UI/API from `http://<host>:<port>` and writes logs to `~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`. Each repo under `~/car-workspace` should be a git repo with its own `.codex-autorunner/` (run `car init` in each).
+
+#### Refresh a launchd hub to the current branch
+When you change code in this repo and want the launchd-managed hub to run it:
+1) Recommended: run the safe refresher, which installs into a new venv, flips `~/.local/pipx/venvs/codex-autorunner.current`, restarts launchd, health-checks, and auto-rolls back on failure:
+```
+make refresh-launchd
+```
+
+2) Manual path (no rollback): reinstall into the launchd venv (pipx default paths shown; adjust if your label/paths differ):
+```
+$HOME/.local/pipx/venvs/codex-autorunner/bin/python -m pip install --force-reinstall /path/to/your/codex-autorunner
+```
+3) Restart the agent so it picks up the new bits (default label is `com.codex.autorunner`; default plist `~/Library/LaunchAgents/com.codex.autorunner.plist`):
+```
+launchctl unload ~/Library/LaunchAgents/com.codex.autorunner.plist 2>/dev/null || true
+launchctl load -w ~/Library/LaunchAgents/com.codex.autorunner.plist
+launchctl kickstart -k gui/$(id -u)/com.codex.autorunner
+```
+4) Tail the hub log to confirm it booted: `tail -n 50 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`.
+5) Legacy script/Makefile target (no rollback): `make unsafe-refresh-launchd` or `scripts/refresh-local-mac-hub.sh`.
+
 ## Quick start
 1) Install (editable): `pip install -e .`
 2) Initialize (per repo): `codex-autorunner init --git-init` (or `car init --git-init` if you prefer short). This creates `.codex-autorunner/config.yml`, state/log files, and the docs under `.codex-autorunner/`.
@@ -36,34 +78,10 @@ CLI commands are available as `codex-autorunner` or the shorter `car`.
    - If you need to serve under a proxy prefix (e.g., `/car`), set `server.base_path` in `.codex-autorunner/config.yml` or pass `--base-path` to `car serve/hub serve`; all HTTP/WS endpoints will be reachable under that prefix. Proxy must forward that prefix (e.g., Caddy `handle /car/* { reverse_proxy ... }` with a 404 fallback for everything else).
    - Chat composer shortcuts: desktop uses Cmd+Enter (or Ctrl+Enter) to send and Shift+Enter for newline; mobile uses Enter to send and Shift+Enter for newline.
 
-## Local install (macOS headless hub at `~/car-workspace`)
-- One-shot setup (user scope): `scripts/install-local-mac-hub.sh`. It pipx-installs this repo, creates/initializes `~/car-workspace` as a hub, writes a launchd agent plist, and loads it. Defaults: host `0.0.0.0`, port `4173`, label `com.codex.autorunner`. Override via env (`WORKSPACE`, `HOST`, `PORT`, `LABEL`, `PLIST_PATH`, `PACKAGE_SRC`).
-- Create/update the launchd agent plist and (re)load it: `scripts/launchd-hub.sh` (or `make launchd-hub`).
-- Manual path if you prefer:
-  - `pipx install .`
-  - `car init --mode hub --path ~/car-workspace`
-  - Copy `docs/ops/launchd-hub-example.plist` to `~/Library/LaunchAgents/com.codex.autorunner.plist`, replace `/Users/you` with your home, adjust host/port if desired, then `launchctl load -w ~/Library/LaunchAgents/com.codex.autorunner.plist`.
-- The hub serves the UI/API from `http://<host>:<port>` and writes logs to `~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`. Each repo under `~/car-workspace` should be a git repo with its own `.codex-autorunner/` (run `car init` in each).
-
-## Refresh a launchd hub to the current branch
-When you change code in this repo and want the launchd-managed hub to run it:
-1) Recommended: run the safe refresher, which installs into a new venv, flips `~/.local/pipx/venvs/codex-autorunner.current`, restarts launchd, health-checks, and auto-rolls back on failure:
-```
-make refresh-launchd
-```
-
-2) Manual path (no rollback): reinstall into the launchd venv (pipx default paths shown; adjust if your label/paths differ):
-```
-$HOME/.local/pipx/venvs/codex-autorunner/bin/python -m pip install --force-reinstall /path/to/your/codex-autorunner
-```
-3) Restart the agent so it picks up the new bits (default label is `com.codex.autorunner`; default plist `~/Library/LaunchAgents/com.codex.autorunner.plist`):
-```
-launchctl unload ~/Library/LaunchAgents/com.codex.autorunner.plist 2>/dev/null || true
-launchctl load -w ~/Library/LaunchAgents/com.codex.autorunner.plist
-launchctl kickstart -k gui/$(id -u)/com.codex.autorunner
-```
-4) Tail the hub log to confirm it booted: `tail -n 50 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`.
-5) Legacy script/Makefile target (no rollback): `make unsafe-refresh-launchd` or `scripts/refresh-local-mac-hub.sh`.
+## Security and remote access
+- The UI/API are unauthenticated. Exposing them to the public web enables remote code execution on your machine (terminal + runner).
+- Keep the server bound to `127.0.0.1` and use Tailscale (or another VPN) for remote access.
+- If you must expose it, put it behind an auth-enforcing reverse proxy (basic auth/SSO) and restrict network access. Do not expose it publicly without protections.
 
 ## Git hooks
 - Install dev tools: `pip install -e .[dev]`
