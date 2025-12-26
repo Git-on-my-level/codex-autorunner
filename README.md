@@ -1,10 +1,29 @@
 # codex-autorunner
 
-An autorunner that uses the Codex CLI to work on large tasks via a simple loop. On each loop we feed the Codex instance the last one's final output along with core documents.
+An opinionated autorunner that uses the Codex CLI to work on large tasks via a simple loop. On each loop we feed the Codex instance the last one's final output along with core documents.
 1. TODO - Tracks long-horizon tasks
 2. PROGRESS - High level overview of what's been done already that may be relevant for future agents
 3. OPINIONS - Guidelines for how we should approach implementation
 4. SPEC - Source-of-truth requirements and scope for large features/projects
+
+## Sneak Peak
+Run multiple agents on many repositories, with git worktree support
+![Desktop hub](docs/screenshots/car-desktop-hub.png)
+
+See the progress of your long running tasks with a high level overview
+![Desktop repo dashboard](docs/screenshots/car-desktop-repo-dashboard.png)
+
+Dive deep into specific agent execution with a rich but readable log
+![Desktop logs](docs/screenshots/car-desktop-logs.png)
+
+All memory and opinions are markdown files! Edit them directly or chat with the document!
+![Desktop TODO](docs/screenshots/car-desktop-todo.png)
+
+Use codex CLI directly for multi-shot problem solving or `/review`
+![Desktop terminal](docs/screenshots/car-desktop-terminal.png)
+
+Mobile-first experience, code on the go with Whisper support (BYOK)
+![Mobile terminal](docs/screenshots/car-mobile-terminal.png)
 
 ## What it does
 - Initializes a repo with Codex-friendly docs and config.
