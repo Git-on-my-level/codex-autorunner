@@ -1,15 +1,8 @@
 from functools import lru_cache
 import subprocess
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional
 
 SUBCOMMAND_HINTS = ("exec", "resume")
-DEFAULT_MODELS = [
-    "gpt-5.2-codex",
-    "gpt-5.1-codex-max",
-    "gpt-5.1-codex-mini",
-    "gpt-5.2",
-]
-DEFAULT_REASONING_LEVELS = ["low", "medium", "high", "xhigh"]
 
 
 def extract_flag_value(args: Iterable[str], flag: str) -> Optional[str]:
@@ -25,23 +18,6 @@ def extract_flag_value(args: Iterable[str], flag: str) -> Optional[str]:
         if arg == flag and idx + 1 < len(args_list):
             return args_list[idx + 1]
     return None
-
-
-def strip_flag(args: Iterable[str], flag: str) -> list[str]:
-    cleaned: list[str] = []
-    skip_next = False
-    for arg in args:
-        if skip_next:
-            skip_next = False
-            continue
-        arg_str = str(arg)
-        if arg_str == flag:
-            skip_next = True
-            continue
-        if arg_str.startswith(f"{flag}="):
-            continue
-        cleaned.append(arg_str)
-    return cleaned
 
 
 def inject_flag(
@@ -101,11 +77,3 @@ def supports_flag(binary: str, flag: str) -> bool:
 
 def supports_reasoning(binary: str) -> bool:
     return supports_flag(binary, "--reasoning")
-
-
-def discover_codex_models(binary: str) -> Tuple[list[str], str, Optional[str]]:
-    return list(DEFAULT_MODELS), "static", None
-
-
-def discover_codex_reasoning(binary: str) -> Tuple[list[str], str, Optional[str]]:
-    return list(DEFAULT_REASONING_LEVELS), "static", None

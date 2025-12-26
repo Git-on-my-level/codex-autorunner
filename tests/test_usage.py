@@ -3,10 +3,11 @@ from pathlib import Path
 from typing import Optional
 
 from codex_autorunner.usage import (
-    summarize_hub_usage_series,
+    get_hub_usage_series_cached,
+    get_repo_usage_series_cached,
+    get_usage_series_cache,
     summarize_hub_usage,
     summarize_repo_usage,
-    summarize_repo_usage_series,
 )
 
 
@@ -26,6 +27,12 @@ def _write_session(
     existing = list(target.glob("*.jsonl"))
     session_path = target / f"session-{len(existing)}.jsonl"
     session_path.write_text("\n".join(json.dumps(entry) for entry in lines) + "\n")
+
+
+def _refresh_usage_cache(codex_home: Path) -> None:
+    cache = get_usage_series_cache(codex_home)
+    payload = cache._load_cache()
+    cache._update_cache(payload)
 
 
 def test_summarize_repo_usage_reads_token_deltas(tmp_path):
@@ -234,10 +241,12 @@ def test_usage_series_groups_by_model(tmp_path):
         model="gpt-4o",
     )
 
-    series = summarize_repo_usage_series(
+    _refresh_usage_cache(codex_home)
+    series, status = get_repo_usage_series_cached(
         repo_root, codex_home=codex_home, bucket="day", segment="model"
     )
 
+    assert status == "ready"
     assert series["buckets"] == ["2025-12-01", "2025-12-02"]
     values = {item["key"]: item["values"] for item in series["series"]}
     assert values["gpt-5"] == [10, 0]
@@ -310,13 +319,15 @@ def test_hub_usage_series_includes_unmatched(tmp_path):
         ],
     )
 
-    series = summarize_hub_usage_series(
+    _refresh_usage_cache(codex_home)
+    series, status = get_hub_usage_series_cached(
         [("repo-one", hub_repo_one)],
         codex_home=codex_home,
         bucket="day",
         segment="repo",
     )
 
+    assert status == "ready"
     values = {item["key"]: item["values"] for item in series["series"]}
     assert series["buckets"] == ["2025-12-01", "2025-12-02"]
     assert values["repo-one"] == [7, 0]
