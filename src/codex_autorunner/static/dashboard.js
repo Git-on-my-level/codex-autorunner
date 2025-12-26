@@ -220,21 +220,19 @@ function renderUsageChart(data) {
     "#f2a0c5",
   ];
 
-  const { series: displaySeries } = limitSeries(series, 4, "rest");
+  const { series: displaySeries } = normalizeSeries(
+    limitSeries(series, 4, "rest").series,
+    buckets.length
+  );
 
   let scaleMax = 1;
-  if (usageChartState.segment === "none") {
-    const values = displaySeries[0]?.values || [];
-    scaleMax = Math.max(...values, 1);
-  } else {
-    const totals = new Array(buckets.length).fill(0);
-    displaySeries.forEach((entry) => {
-      (entry.values || []).forEach((value, i) => {
-        totals[i] += value;
-      });
+  const totals = new Array(buckets.length).fill(0);
+  displaySeries.forEach((entry) => {
+    (entry.values || []).forEach((value, i) => {
+      totals[i] += value;
     });
-    scaleMax = Math.max(...totals, 1);
-  }
+  });
+  scaleMax = Math.max(...totals, 1);
 
   const xFor = (index, count) => {
     if (count <= 1) return padding + chartWidth / 2;
@@ -245,19 +243,7 @@ function renderUsageChart(data) {
 
   let svg = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMin meet" role="img" aria-label="Token usage trend">`;
   svg += `
-    <defs>
-      <linearGradient id="usage-line-fill" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#6cf5d8" stop-opacity="0.35" />
-        <stop offset="100%" stop-color="#6cf5d8" stop-opacity="0" />
-      </linearGradient>
-      <filter id="usage-line-glow" x="-20%" y="-20%" width="140%" height="140%">
-        <feGaussianBlur stdDeviation="2" result="blur" />
-        <feMerge>
-          <feMergeNode in="blur" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-    </defs>
+    <defs></defs>
   `;
 
   const gridLines = 3;
@@ -278,57 +264,32 @@ function renderUsageChart(data) {
     padding + chartHeight + 2
   }" fill="rgba(203, 213, 225, 0.5)" font-size="8">0</text>`;
 
+  const count = buckets.length;
+  const barWidth = count ? chartWidth / count : chartWidth;
+  const gap = Math.max(1, Math.round(barWidth * 0.2));
+  const usableWidth = Math.max(1, barWidth - gap);
   if (usageChartState.segment === "none") {
     const values = displaySeries[0]?.values || [];
-    const points = values.map((value, i) => {
-      const x = xFor(i, values.length);
-      const y = yFor(value);
-      return `${x},${y}`;
+    values.forEach((value, i) => {
+      const x = padding + i * barWidth + gap / 2;
+      const h = (value / scaleMax) * chartHeight;
+      const y = padding + chartHeight - h;
+      svg += `<rect x="${x}" y="${y}" width="${usableWidth}" height="${h}" fill="#6cf5d8" opacity="0.75" rx="2" />`;
     });
-    if (values.length) {
-      const x0 = xFor(0, values.length);
-      const y0 = yFor(values[0] || 0);
-      const linePath = `M ${points.join(" L ")}`;
-      const areaPath = `${linePath} L ${
-        padding + chartWidth
-      },${padding + chartHeight} L ${padding},${
-        padding + chartHeight
-      } Z`;
-      svg += `<path d="${areaPath}" fill="url(#usage-line-fill)" />`;
-      svg += `<path d="${linePath}" fill="none" stroke="#6cf5d8" stroke-width="2" filter="url(#usage-line-glow)" />`;
-      svg += `<circle cx="${x0}" cy="${y0}" r="2" fill="#6cf5d8" />`;
-    }
   } else {
-    const count = buckets.length;
     const accum = new Array(count).fill(0);
-    const linePaths = [];
     displaySeries.forEach((entry, idx) => {
-      const values = entry.values || [];
-      const top = values.map((value, i) => {
-        accum[i] += value;
-        return accum[i];
-      });
-      const bottom = top.map((value, i) => value - (values[i] || 0));
-      const topPoints = top.map((value, i) => {
-        const x = xFor(i, count);
-        const y = yFor(value);
-        return `${x},${y}`;
-      });
-      const bottomPoints = [];
-      for (let i = count - 1; i >= 0; i -= 1) {
-        const x = xFor(i, count);
-        const y = yFor(bottom[i] || 0);
-        bottomPoints.push(`${x},${y}`);
-      }
       const color = colors[idx % colors.length];
-      svg += `<polygon fill="${color}33" points="${topPoints.join(
-        " "
-      )} ${bottomPoints.join(" ")}" />`;
-      linePaths.push({ path: `M ${topPoints.join(" L ")}`, color });
-    });
-    linePaths.forEach((item, idx) => {
-      const strokeWidth = idx === linePaths.length - 1 ? 2 : 1;
-      svg += `<path d="${item.path}" fill="none" stroke="${item.color}" stroke-width="${strokeWidth}" opacity="0.85" />`;
+      const values = entry.values || [];
+      values.forEach((value, i) => {
+        if (!value) return;
+        const base = accum[i];
+        accum[i] += value;
+        const h = (value / scaleMax) * chartHeight;
+        const y = padding + chartHeight - (base / scaleMax) * chartHeight - h;
+        const x = padding + i * barWidth + gap / 2;
+        svg += `<rect x="${x}" y="${y}" width="${usableWidth}" height="${h}" fill="${color}" opacity="0.55" rx="2" />`;
+      });
     });
   }
 
@@ -374,6 +335,15 @@ function limitSeries(series, maxSeries, restKey) {
   return { series: top.length ? top : series };
 }
 
+function normalizeSeries(series, length) {
+  const normalized = series.map((entry) => {
+    const values = (entry.values || []).slice(0, length);
+    while (values.length < length) values.push(0);
+    return { ...entry, values, total: values.reduce((sum, v) => sum + v, 0) };
+  });
+  return { series: normalized };
+}
+
 function setChartLoading(container, loading) {
   if (!container) return;
   container.classList.toggle("loading", loading);
@@ -400,21 +370,20 @@ function attachUsageChartInteraction(container, state) {
     const rect = container.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const normalizedX = (x / rect.width) * chartState.width;
+    const count = chartState.buckets.length;
     const usableWidth = chartState.chartWidth;
     const localX = Math.min(
       Math.max(normalizedX - chartState.padding, 0),
       usableWidth
     );
-    const index = Math.round(
-      (localX / usableWidth) * (chartState.buckets.length - 1)
-    );
+    const barWidth = count ? usableWidth / count : usableWidth;
+    const index = Math.floor(localX / barWidth);
     const clampedIndex = Math.max(
       0,
       Math.min(chartState.buckets.length - 1, index)
     );
     const xPos =
-      chartState.padding +
-      (clampedIndex / (chartState.buckets.length - 1 || 1)) * usableWidth;
+      chartState.padding + clampedIndex * barWidth + barWidth / 2;
 
     const totals = chartState.series.reduce((sum, entry) => {
       return sum + (entry.values?.[clampedIndex] || 0);
