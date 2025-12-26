@@ -458,10 +458,7 @@ function attachHubUsageChartInteraction(container, state) {
       tooltipLeft = x - tooltipRect.width - 12;
     }
     tooltipLeft = Math.max(6, tooltipLeft);
-    let tooltipTop = (yPos / chartState.height) * rect.height - tooltipRect.height - 10;
-    if (tooltipTop < 6) {
-      tooltipTop = (yPos / chartState.height) * rect.height + 10;
-    }
+    const tooltipTop = 6;
     tooltip.style.opacity = "1";
     tooltip.style.transform = `translate(${tooltipLeft}px, ${tooltipTop}px)`;
   };

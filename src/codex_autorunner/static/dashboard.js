@@ -435,10 +435,7 @@ function attachUsageChartInteraction(container, state) {
       tooltipLeft = x - tooltipRect.width - 10;
     }
     tooltipLeft = Math.max(6, tooltipLeft);
-    let tooltipTop = yPos / chartState.height * rect.height - tooltipRect.height - 8;
-    if (tooltipTop < 6) {
-      tooltipTop = yPos / chartState.height * rect.height + 8;
-    }
+    const tooltipTop = 6;
     tooltip.style.opacity = "1";
     tooltip.style.transform = `translate(${tooltipLeft}px, ${tooltipTop}px)`;
   };
