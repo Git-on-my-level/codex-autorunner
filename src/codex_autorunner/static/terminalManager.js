@@ -158,8 +158,11 @@ export class TerminalManager {
       csiParams: "",
       fg: null,
       bg: null,
+      fgRgb: null,
+      bgRgb: null,
       bold: false,
       className: "",
+      style: "",
     };
     this.transcriptPersistTimer = null;
     this.transcriptDecoder = new TextDecoder();
@@ -524,8 +527,11 @@ export class TerminalManager {
       csiParams: "",
       fg: null,
       bg: null,
+      fgRgb: null,
+      bgRgb: null,
       bold: false,
       className: "",
+      style: "",
     };
     this.transcriptDecoder = new TextDecoder();
     this._persistTranscript(true);
@@ -647,8 +653,12 @@ export class TerminalManager {
     for (const cell of cells) {
       if (!cell) continue;
       const cls = cell.c || "";
-      if (!current || current.c !== cls) {
+      const style = cell.s || "";
+      if (!current || current.c !== cls || (current.s || "") !== style) {
         current = { t: cell.t || "", c: cls };
+        if (style) {
+          current.s = style;
+        }
         segments.push(current);
       } else {
         current.t += cell.t || "";
@@ -659,15 +669,16 @@ export class TerminalManager {
 
   _segmentsToCells(segments) {
     if (typeof segments === "string") {
-      return Array.from(segments).map((ch) => ({ t: ch, c: "" }));
+      return Array.from(segments).map((ch) => ({ t: ch, c: "", s: "" }));
     }
     if (!Array.isArray(segments)) return null;
     const cells = [];
     for (const seg of segments) {
       if (!seg || typeof seg.t !== "string") continue;
       const cls = typeof seg.c === "string" ? seg.c : "";
+      const style = typeof seg.s === "string" ? seg.s : "";
       for (const ch of seg.t) {
-        cells.push({ t: ch, c: cls });
+        cells.push({ t: ch, c: cls, s: style });
       }
     }
     return cells;
@@ -688,10 +699,14 @@ export class TerminalManager {
     let html = "";
     for (const seg of segments) {
       const text = this._escapeHtml(seg.t);
-      if (!seg.c) {
+      if (!seg.c && !seg.s) {
         html += text;
-      } else {
+      } else if (seg.c && seg.s) {
+        html += `<span class="${seg.c}" style="${seg.s}">${text}</span>`;
+      } else if (seg.c) {
         html += `<span class="${seg.c}">${text}</span>`;
+      } else {
+        html += `<span style="${seg.s}">${text}</span>`;
       }
     }
     return html;
@@ -731,6 +746,62 @@ export class TerminalManager {
     return parts.join(" ");
   }
 
+  _ansiStyle() {
+    const state = this.transcriptAnsiState;
+    const styles = [];
+    if (state.fgRgb) styles.push(`color: ${state.fgRgb}`);
+    if (state.bgRgb) styles.push(`background-color: ${state.bgRgb}`);
+    return styles.join("; ");
+  }
+
+  _ansi256ToRgb(value) {
+    if (!Number.isInteger(value) || value < 0 || value > 255) return null;
+    if (value >= 232) {
+      const shade = 8 + (value - 232) * 10;
+      return `rgb(${shade}, ${shade}, ${shade})`;
+    }
+    if (value < 16) return null;
+    const index = value - 16;
+    const r = Math.floor(index / 36);
+    const g = Math.floor((index % 36) / 6);
+    const b = index % 6;
+    const steps = [0, 95, 135, 175, 215, 255];
+    return `rgb(${steps[r]}, ${steps[g]}, ${steps[b]})`;
+  }
+
+  _applyAnsiPaletteColor(isForeground, value, state) {
+    if (!Number.isInteger(value)) return;
+    if (value >= 0 && value <= 7) {
+      if (isForeground) {
+        state.fg = String(30 + value);
+        state.fgRgb = null;
+      } else {
+        state.bg = String(40 + value);
+        state.bgRgb = null;
+      }
+      return;
+    }
+    if (value >= 8 && value <= 15) {
+      if (isForeground) {
+        state.fg = String(90 + (value - 8));
+        state.fgRgb = null;
+      } else {
+        state.bg = String(100 + (value - 8));
+        state.bgRgb = null;
+      }
+      return;
+    }
+    const rgb = this._ansi256ToRgb(value);
+    if (!rgb) return;
+    if (isForeground) {
+      state.fg = null;
+      state.fgRgb = rgb;
+    } else {
+      state.bg = null;
+      state.bgRgb = rgb;
+    }
+  }
+
   _appendTranscriptChunk(data) {
     if (!data) return;
     const text =
@@ -762,6 +833,9 @@ export class TerminalManager {
         }
       }
       const cell = { t: char, c: state.className };
+      if (state.style) {
+        cell.s = state.style;
+      }
       if (this.transcriptCursor === this.transcriptLineCells.length) {
         this.transcriptLineCells.push(cell);
       } else {
@@ -797,30 +871,88 @@ export class TerminalManager {
           const param = getParam(params, 0, 0);
           if (ch === "m") {
             const codes = params.length ? params : [0];
-            for (const code of codes) {
+            for (let idx = 0; idx < codes.length; idx++) {
+              const code = codes[idx];
               if (code === 0 || code === null) {
                 state.fg = null;
                 state.bg = null;
+                state.fgRgb = null;
+                state.bgRgb = null;
                 state.bold = false;
-              } else if (code === 1) {
+                continue;
+              }
+              if (code === 1) {
                 state.bold = true;
-              } else if (code === 22) {
+                continue;
+              }
+              if (code === 22) {
                 state.bold = false;
-              } else if (code >= 30 && code <= 37) {
+                continue;
+              }
+              if (code === 38 || code === 48) {
+                const isForeground = code === 38;
+                const mode = codes[idx + 1];
+                if (mode === 2) {
+                  const r = codes[idx + 2];
+                  const g = codes[idx + 3];
+                  const b = codes[idx + 4];
+                  if (
+                    Number.isInteger(r) &&
+                    Number.isInteger(g) &&
+                    Number.isInteger(b)
+                  ) {
+                    const rr = Math.max(0, Math.min(255, r));
+                    const gg = Math.max(0, Math.min(255, g));
+                    const bb = Math.max(0, Math.min(255, b));
+                    const rgb = `rgb(${rr}, ${gg}, ${bb})`;
+                    if (isForeground) {
+                      state.fg = null;
+                      state.fgRgb = rgb;
+                    } else {
+                      state.bg = null;
+                      state.bgRgb = rgb;
+                    }
+                  }
+                  idx += 4;
+                } else if (mode === 5) {
+                  const colorIndex = codes[idx + 2];
+                  this._applyAnsiPaletteColor(isForeground, colorIndex, state);
+                  idx += 2;
+                }
+                continue;
+              }
+              if (code >= 30 && code <= 37) {
                 state.fg = String(code);
-              } else if (code === 39) {
+                state.fgRgb = null;
+                continue;
+              }
+              if (code === 39) {
                 state.fg = null;
-              } else if (code >= 40 && code <= 47) {
+                state.fgRgb = null;
+                continue;
+              }
+              if (code >= 40 && code <= 47) {
                 state.bg = String(code);
-              } else if (code === 49) {
+                state.bgRgb = null;
+                continue;
+              }
+              if (code === 49) {
                 state.bg = null;
-              } else if (code >= 90 && code <= 97) {
+                state.bgRgb = null;
+                continue;
+              }
+              if (code >= 90 && code <= 97) {
                 state.fg = String(code);
-              } else if (code >= 100 && code <= 107) {
+                state.fgRgb = null;
+                continue;
+              }
+              if (code >= 100 && code <= 107) {
                 state.bg = String(code);
+                state.bgRgb = null;
               }
             }
             state.className = this._ansiClassName();
+            state.style = this._ansiStyle();
           } else if (ch === "K") {
             if (param === 2) {
               this.transcriptLineCells = [];
