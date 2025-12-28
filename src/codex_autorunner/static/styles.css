@@ -2940,7 +2940,7 @@ button.terminal-text-send-icon.disconnected {
 /* Toast */
 .toast {
   position: fixed;
-  bottom: 8px;
+  top: calc(8px + env(safe-area-inset-top, 0px));
   right: 8px;
   padding: 6px 12px;
   border-radius: var(--radius);
@@ -4295,11 +4295,11 @@ button.loading::after {
     padding: 0 3px;
   }
   
-  /* Toast above bottom nav */
+  /* Toast below top safe area */
   .toast {
     left: 8px;
     right: 8px;
-    bottom: calc(8px + var(--mobile-bottom-nav));
+    top: calc(8px + var(--mobile-top-pad));
     text-align: center;
   }
   
