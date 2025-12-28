@@ -171,6 +171,9 @@ export class TerminalManager {
     };
     this.transcriptPersistTimer = null;
     this.transcriptDecoder = new TextDecoder();
+    this.awaitingReplayEnd = false;
+    this.replayBuffer = null;
+    this.clearTranscriptOnFirstLiveData = false;
 
     this._registerTextInputHook(this._buildCarContextHook());
 
@@ -1608,6 +1611,9 @@ export class TerminalManager {
       }
     }
     this.socket = null;
+    this.awaitingReplayEnd = false;
+    this.replayBuffer = null;
+    this.clearTranscriptOnFirstLiveData = false;
   }
 
   /**
@@ -1762,6 +1768,9 @@ export class TerminalManager {
     this.intentionalDisconnect = false;
     this.lastConnectMode = mode;
 
+    this.awaitingReplayEnd = isAttach;
+    this.replayBuffer = isAttach ? [] : null;
+    this.clearTranscriptOnFirstLiveData = false;
     if (!isAttach) {
       this._resetTranscript();
     }
@@ -1852,6 +1861,33 @@ export class TerminalManager {
               this._setCurrentSessionId(payload.session_id);
             }
             this._markSessionActive();
+          } else if (payload.type === "replay_end") {
+            if (!this.awaitingReplayEnd) {
+              return;
+            }
+            const buffered = Array.isArray(this.replayBuffer) ? this.replayBuffer : [];
+            const hasReplay = buffered.length > 0;
+            this.awaitingReplayEnd = false;
+            this.replayBuffer = null;
+            if (hasReplay && this.term) {
+              this._resetTranscript();
+              try {
+                this.term.reset();
+              } catch (_err) {
+                try {
+                  this.term.clear();
+                } catch (__err) {
+                  // ignore
+                }
+              }
+              for (const chunk of buffered) {
+                this._appendTranscriptChunk(chunk);
+                this._scheduleMobileViewRender();
+                this.term.write(chunk);
+              }
+            } else {
+              this.clearTranscriptOnFirstLiveData = true;
+            }
           } else if (payload.type === "ack") {
             const ackId = payload.id;
             if (this.textInputPending && ackId === this.textInputPending.id) {
@@ -1910,6 +1946,23 @@ export class TerminalManager {
       }
       if (this.term) {
         const chunk = new Uint8Array(event.data);
+        if (this.awaitingReplayEnd) {
+          this.replayBuffer?.push(chunk);
+          return;
+        }
+        if (this.clearTranscriptOnFirstLiveData) {
+          this.clearTranscriptOnFirstLiveData = false;
+          this._resetTranscript();
+          try {
+            this.term.reset();
+          } catch (_err) {
+            try {
+              this.term.clear();
+            } catch (__err) {
+              // ignore
+            }
+          }
+        }
         this._appendTranscriptChunk(chunk);
         this._scheduleMobileViewRender();
         this.term.write(chunk);

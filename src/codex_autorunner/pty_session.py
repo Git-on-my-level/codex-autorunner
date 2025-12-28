@@ -10,6 +10,8 @@ from typing import Dict, Optional
 
 from ptyprocess import PtyProcess
 
+REPLAY_END = object()
+
 
 def default_env(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     base = os.environ.copy()
@@ -135,6 +137,7 @@ class ActiveSession:
         q = asyncio.Queue()
         for chunk in self.buffer:
             q.put_nowait(chunk)
+        q.put_nowait(REPLAY_END)
         self.subscribers.add(q)
         return q
 

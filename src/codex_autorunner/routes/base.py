@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from ..codex_cli import extract_flag_value
-from ..pty_session import ActiveSession, PTYSession
+from ..pty_session import ActiveSession, PTYSession, REPLAY_END
 from ..state import SessionRecord, load_state, now_iso, persist_session_registry
 from ..static_assets import index_response_headers, render_index_html
 from ..logging_utils import safe_log
@@ -257,6 +257,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             try:
                 while True:
                     data = await queue.get()
+                    if data is REPLAY_END:
+                        await ws.send_text(json.dumps({"type": "replay_end"}))
+                        continue
                     if data is None:
                         if active_session:
                             exit_code = active_session.pty.exit_code()
