@@ -4374,6 +4374,16 @@ button.loading::after {
   .mobile-terminal-view .ansi-fg-96 { color: #a4ffff; }
   .mobile-terminal-view .ansi-fg-97 { color: #ffffff; }
 
+  /* Match xterm's bold-bright mapping for base colors. */
+  .mobile-terminal-view .ansi-bold.ansi-fg-30 { color: #6272a4; }
+  .mobile-terminal-view .ansi-bold.ansi-fg-31 { color: #ff6e6e; }
+  .mobile-terminal-view .ansi-bold.ansi-fg-32 { color: #69ff94; }
+  .mobile-terminal-view .ansi-bold.ansi-fg-33 { color: #ffffa5; }
+  .mobile-terminal-view .ansi-bold.ansi-fg-34 { color: #d6acff; }
+  .mobile-terminal-view .ansi-bold.ansi-fg-35 { color: #ff92df; }
+  .mobile-terminal-view .ansi-bold.ansi-fg-36 { color: #a4ffff; }
+  .mobile-terminal-view .ansi-bold.ansi-fg-37 { color: #ffffff; }
+
   .mobile-terminal-view .ansi-bg-40 { background-color: #000000; }
   .mobile-terminal-view .ansi-bg-41 { background-color: #ff5566; }
   .mobile-terminal-view .ansi-bg-42 { background-color: #6cf5d8; }
