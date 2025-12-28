@@ -19,6 +19,11 @@ const TEXT_INPUT_SIZE_LIMITS = Object.freeze({
 
 const TEXT_INPUT_HOOK_STORAGE_PREFIX = "codex_terminal_text_input_hook:";
 
+const XTERM_COLOR_MODE_DEFAULT = 0;
+const XTERM_COLOR_MODE_PALETTE_16 = 0x01000000;
+const XTERM_COLOR_MODE_PALETTE_256 = 0x02000000;
+const XTERM_COLOR_MODE_RGB = 0x03000000;
+
 const CAR_CONTEXT_HOOK_ID = "car_context";
 const CAR_CONTEXT_KEYWORDS = [
   "car",
@@ -521,6 +526,9 @@ export class TerminalManager {
     this.transcriptLineCells = [];
     this.transcriptCursor = 0;
     this.transcriptHydrated = false;
+    this.altScrollbackLines = [];
+    this.altSnapshotPlain = null;
+    this.altSnapshotHtml = null;
     this.transcriptAnsiState = {
       mode: "text",
       oscEsc: false,
@@ -636,6 +644,303 @@ export class TerminalManager {
       lines.push(this.transcriptLineCells);
     }
     return lines;
+  }
+
+  _bufferLineToText(line) {
+    if (!line) return "";
+    if (typeof line.translateToString === "function") {
+      return line.translateToString(true);
+    }
+    if (typeof line.toString === "function") {
+      return line.toString();
+    }
+    return "";
+  }
+
+  _getBufferSnapshot() {
+    if (!this.term?.buffer?.active) return null;
+    const bufferNamespace = this.term.buffer;
+    const buffer = bufferNamespace.active;
+    const lineCount =
+      Number.isInteger(buffer.length) ? buffer.length : buffer.lines?.length;
+    if (!Number.isInteger(lineCount)) return null;
+    const start = Math.max(0, lineCount - this.transcriptMaxLines);
+    const lines = [];
+    for (let idx = start; idx < lineCount; idx++) {
+      let line = null;
+      if (typeof buffer.getLine === "function") {
+        line = buffer.getLine(idx);
+      } else if (typeof buffer.lines?.get === "function") {
+        line = buffer.lines.get(idx);
+      }
+      lines.push(line);
+    }
+    const cols = Number.isInteger(buffer.cols) ? buffer.cols : this.term.cols;
+    return { bufferNamespace, buffer, lines, cols };
+  }
+
+  _snapshotBufferLines(bufferSnapshot) {
+    if (!bufferSnapshot) return null;
+    const cols = bufferSnapshot.cols ?? this.term?.cols;
+    const plain = [];
+    const html = [];
+    for (const line of bufferSnapshot.lines) {
+      plain.push(this._bufferLineToText(line));
+      html.push(this._bufferLineToHtml(line, cols));
+    }
+    return { plain, html };
+  }
+
+  _findLineOverlap(prevRegion, nextRegion) {
+    const maxOverlap = Math.min(prevRegion.length, nextRegion.length);
+    for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+      let matches = true;
+      for (let idx = 0; idx < overlap; idx += 1) {
+        if (prevRegion[prevRegion.length - overlap + idx] !== nextRegion[idx]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return overlap;
+    }
+    return 0;
+  }
+
+  _trimAltScrollback() {
+    if (!Array.isArray(this.altScrollbackLines)) return;
+    const overflow = this.altScrollbackLines.length - this.transcriptMaxLines;
+    if (overflow > 0) {
+      this.altScrollbackLines.splice(0, overflow);
+    }
+  }
+
+  _updateAltScrollback(snapshotPlain, snapshotHtml) {
+    if (!Array.isArray(snapshotPlain) || !Array.isArray(snapshotHtml)) return;
+    if (!Array.isArray(this.altScrollbackLines)) {
+      this.altScrollbackLines = [];
+    }
+    if (!Array.isArray(this.altSnapshotPlain)) {
+      this.altSnapshotPlain = snapshotPlain;
+      this.altSnapshotHtml = snapshotHtml;
+      return;
+    }
+    const prevPlain = this.altSnapshotPlain;
+    const prevHtml = this.altSnapshotHtml || [];
+    const nextPlain = snapshotPlain;
+
+    const len = Math.min(prevPlain.length, nextPlain.length);
+    let prefix = 0;
+    while (prefix < len && prevPlain[prefix] === nextPlain[prefix]) {
+      prefix += 1;
+    }
+    let suffix = 0;
+    while (
+      suffix < len - prefix &&
+      prevPlain[prevPlain.length - 1 - suffix] ===
+        nextPlain[nextPlain.length - 1 - suffix]
+    ) {
+      suffix += 1;
+    }
+
+    const prevStart = prefix;
+    const prevEnd = prevPlain.length - suffix;
+    const nextStart = prefix;
+    const nextEnd = nextPlain.length - suffix;
+
+    const prevRegion = prevPlain.slice(prevStart, prevEnd);
+    const nextRegion = nextPlain.slice(nextStart, nextEnd);
+    const overlap = this._findLineOverlap(prevRegion, nextRegion);
+    if (overlap > 0) {
+      const removedCount = prevRegion.length - overlap;
+      if (removedCount > 0) {
+        const removedLines = prevHtml.slice(prevStart, prevStart + removedCount);
+        this.altScrollbackLines.push(...removedLines);
+        this._trimAltScrollback();
+      }
+    }
+
+    this.altSnapshotPlain = nextPlain;
+    this.altSnapshotHtml = snapshotHtml;
+  }
+
+  _paletteIndexToCss(index) {
+    if (!Number.isInteger(index) || index < 0) return null;
+    if (!this._xtermPalette) {
+      const theme = CONSTANTS.THEME.XTERM;
+      this._xtermPalette = [
+        theme.black,
+        theme.red,
+        theme.green,
+        theme.yellow,
+        theme.blue,
+        theme.magenta,
+        theme.cyan,
+        theme.white,
+        theme.brightBlack,
+        theme.brightRed,
+        theme.brightGreen,
+        theme.brightYellow,
+        theme.brightBlue,
+        theme.brightMagenta,
+        theme.brightCyan,
+        theme.brightWhite,
+      ];
+    }
+    if (index < this._xtermPalette.length) {
+      return this._xtermPalette[index];
+    }
+    return this._ansi256ToRgb(index);
+  }
+
+  _rgbNumberToCss(value) {
+    if (!Number.isInteger(value) || value < 0) return null;
+    const r = (value >> 16) & 0xff;
+    const g = (value >> 8) & 0xff;
+    const b = value & 0xff;
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  _resolveXtermColor(mode, value) {
+    if (!Number.isInteger(mode) || value === -1) return null;
+    if (mode === XTERM_COLOR_MODE_DEFAULT) return null;
+    if (mode === XTERM_COLOR_MODE_RGB) {
+      return this._rgbNumberToCss(value);
+    }
+    if (
+      mode === XTERM_COLOR_MODE_PALETTE_16 ||
+      mode === XTERM_COLOR_MODE_PALETTE_256
+    ) {
+      return this._paletteIndexToCss(value);
+    }
+    if (Number.isInteger(value)) {
+      return value > 255 ? this._rgbNumberToCss(value) : this._paletteIndexToCss(value);
+    }
+    return null;
+  }
+
+  _getCellStyle(cell) {
+    const bold = typeof cell.isBold === "function" ? cell.isBold() : false;
+    const inverse =
+      typeof cell.isInverse === "function" ? cell.isInverse() : false;
+    const fgMode =
+      typeof cell.getFgColorMode === "function" ? cell.getFgColorMode() : null;
+    const bgMode =
+      typeof cell.getBgColorMode === "function" ? cell.getBgColorMode() : null;
+    const fgValue =
+      typeof cell.getFgColor === "function" ? cell.getFgColor() : null;
+    const bgValue =
+      typeof cell.getBgColor === "function" ? cell.getBgColor() : null;
+    let fg = this._resolveXtermColor(fgMode, fgValue);
+    let bg = this._resolveXtermColor(bgMode, bgValue);
+    if (inverse) {
+      const theme = CONSTANTS.THEME.XTERM;
+      const defaultFg = theme.foreground;
+      const defaultBg = theme.background;
+      const resolvedFg = fg ?? defaultFg;
+      const resolvedBg = bg ?? defaultBg;
+      fg = resolvedBg;
+      bg = resolvedFg;
+    }
+    const styles = [];
+    if (fg) styles.push(`color: ${fg}`);
+    if (bg) styles.push(`background-color: ${bg}`);
+    return {
+      className: bold ? "ansi-bold" : "",
+      style: styles.join("; "),
+    };
+  }
+
+  _getCellWidth(cell) {
+    if (typeof cell.getWidth === "function") {
+      return cell.getWidth();
+    }
+    if (Number.isInteger(cell.width)) {
+      return cell.width;
+    }
+    return 1;
+  }
+
+  _getCellChars(cell, width) {
+    let chars = "";
+    if (typeof cell.getChars === "function") {
+      chars = cell.getChars();
+    }
+    if (!chars && typeof cell.getCode === "function") {
+      const code = cell.getCode();
+      if (Number.isInteger(code) && code > 0) {
+        chars = String.fromCodePoint(code);
+      }
+    }
+    if (!chars) {
+      chars = " ";
+    }
+    if (width > 1 && chars === " ") {
+      return " ".repeat(width);
+    }
+    return chars;
+  }
+
+  _bufferLineToHtml(line, cols) {
+    if (!line) return "";
+    if (typeof line.getCell !== "function") {
+      return this._escapeHtml(this._bufferLineToText(line));
+    }
+    let html = "";
+    let currentText = "";
+    let currentClass = "";
+    let currentStyle = "";
+    const flush = () => {
+      if (!currentText) return;
+      const text = this._escapeHtml(currentText);
+      if (!currentClass && !currentStyle) {
+        html += text;
+      } else if (currentClass && currentStyle) {
+        html += `<span class="${currentClass}" style="${currentStyle}">${text}</span>`;
+      } else if (currentClass) {
+        html += `<span class="${currentClass}">${text}</span>`;
+      } else {
+        html += `<span style="${currentStyle}">${text}</span>`;
+      }
+      currentText = "";
+    };
+    const lineLength = Number.isInteger(line.length) ? line.length : this.term?.cols || 0;
+    const maxCols = Number.isInteger(cols) ? cols : lineLength;
+    for (let col = 0; col < maxCols; col++) {
+      const cell = line.getCell(col);
+      if (!cell) {
+        if (currentClass || currentStyle) {
+          flush();
+          currentClass = "";
+          currentStyle = "";
+        }
+        currentText += " ";
+        continue;
+      }
+      const width = this._getCellWidth(cell);
+      if (width === 0) {
+        continue;
+      }
+      const isInvisible =
+        typeof cell.isInvisible === "function" ? cell.isInvisible() : false;
+      const { className, style } = this._getCellStyle(cell);
+      const chars = isInvisible
+        ? " ".repeat(Math.max(1, width))
+        : this._getCellChars(cell, width);
+      if (className !== currentClass || style !== currentStyle) {
+        flush();
+        currentClass = className;
+        currentStyle = style;
+      }
+      currentText += chars;
+    }
+    flush();
+    return html;
+  }
+
+  _shouldUseBufferForMobileView() {
+    const bufferNamespace = this.term?.buffer;
+    if (!bufferNamespace?.active || !bufferNamespace?.alternate) return false;
+    return bufferNamespace.active === bufferNamespace.alternate;
   }
 
   _pushTranscriptLine(lineCells) {
@@ -1118,8 +1423,25 @@ export class TerminalManager {
 
   _renderMobileView() {
     if (!this.mobileViewActive || !this.mobileViewEl || !this.term) return;
-    const lines = this._getTranscriptLines();
-    if (!lines.length) {
+    let lines = null;
+    let bufferSnapshot = null;
+    let bufferSnapshotLines = null;
+    let useBuffer = false;
+    if (this._shouldUseBufferForMobileView()) {
+      bufferSnapshot = this._getBufferSnapshot();
+      useBuffer = Array.isArray(bufferSnapshot?.lines);
+    }
+    if (!useBuffer) {
+      lines = this._getTranscriptLines();
+      this.altScrollbackLines = [];
+      this.altSnapshotPlain = null;
+      this.altSnapshotHtml = null;
+    } else {
+      lines = bufferSnapshot?.lines || [];
+      bufferSnapshotLines = this._snapshotBufferLines(bufferSnapshot);
+      this._updateAltScrollback(bufferSnapshotLines?.plain, bufferSnapshotLines?.html);
+    }
+    if (!lines?.length) {
       this.mobileViewEl.innerHTML = "";
       return;
     }
@@ -1134,11 +1456,22 @@ export class TerminalManager {
         this.mobileViewEl.scrollTop + this.mobileViewEl.clientHeight >=
         this.mobileViewEl.scrollHeight - threshold;
     }
-    let content = "";
-    for (const line of lines) {
-      content += `${this._cellsToHtml(line)}\n`;
+    if (useBuffer) {
+      let content = "";
+      for (const line of this.altScrollbackLines || []) {
+        content += `${line}\n`;
+      }
+      for (const line of bufferSnapshotLines?.html || []) {
+        content += `${line}\n`;
+      }
+      this.mobileViewEl.innerHTML = content;
+    } else {
+      let content = "";
+      for (const line of lines) {
+        content += `${this._cellsToHtml(line)}\n`;
+      }
+      this.mobileViewEl.innerHTML = content;
     }
-    this.mobileViewEl.innerHTML = content;
     if (this.mobileViewAtBottom) {
       this.mobileViewEl.scrollTop = this.mobileViewEl.scrollHeight;
     } else if (this.mobileViewScrollTop !== null) {
