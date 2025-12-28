@@ -937,7 +937,7 @@ export class TerminalManager {
     return html;
   }
 
-  _shouldUseBufferForMobileView() {
+  _isAltBufferActive() {
     const bufferNamespace = this.term?.buffer;
     if (!bufferNamespace?.active || !bufferNamespace?.alternate) return false;
     return bufferNamespace.active === bufferNamespace.alternate;
@@ -1423,27 +1423,30 @@ export class TerminalManager {
 
   _renderMobileView() {
     if (!this.mobileViewActive || !this.mobileViewEl || !this.term) return;
-    let lines = null;
-    let bufferSnapshot = null;
-    let bufferSnapshotLines = null;
-    let useBuffer = false;
-    if (this._shouldUseBufferForMobileView()) {
-      bufferSnapshot = this._getBufferSnapshot();
-      useBuffer = Array.isArray(bufferSnapshot?.lines);
-    }
-    if (!useBuffer) {
-      lines = this._getTranscriptLines();
+    const bufferSnapshot = this._getBufferSnapshot();
+    if (!Array.isArray(bufferSnapshot?.lines)) {
+      this.mobileViewEl.innerHTML = "";
       this.altScrollbackLines = [];
       this.altSnapshotPlain = null;
       this.altSnapshotHtml = null;
-    } else {
-      lines = bufferSnapshot?.lines || [];
-      bufferSnapshotLines = this._snapshotBufferLines(bufferSnapshot);
-      this._updateAltScrollback(bufferSnapshotLines?.plain, bufferSnapshotLines?.html);
+      return;
     }
-    if (!lines?.length) {
+    const useAltBuffer = this._isAltBufferActive();
+    const bufferSnapshotLines = this._snapshotBufferLines(bufferSnapshot);
+    if (!bufferSnapshotLines?.html) {
       this.mobileViewEl.innerHTML = "";
       return;
+    }
+    if (useAltBuffer) {
+      this._updateAltScrollback(
+        bufferSnapshotLines.plain,
+        bufferSnapshotLines.html
+      );
+    } else {
+      // Reset alternate buffer scrollback when we're showing the normal buffer.
+      this.altScrollbackLines = [];
+      this.altSnapshotPlain = null;
+      this.altSnapshotHtml = null;
     }
     // This view mirrors the live output as plain text; it is intentionally read-only
     // and is hidden whenever the user wants to interact with the real TUI.
@@ -1456,22 +1459,16 @@ export class TerminalManager {
         this.mobileViewEl.scrollTop + this.mobileViewEl.clientHeight >=
         this.mobileViewEl.scrollHeight - threshold;
     }
-    if (useBuffer) {
-      let content = "";
+    let content = "";
+    if (useAltBuffer) {
       for (const line of this.altScrollbackLines || []) {
         content += `${line}\n`;
       }
-      for (const line of bufferSnapshotLines?.html || []) {
-        content += `${line}\n`;
-      }
-      this.mobileViewEl.innerHTML = content;
-    } else {
-      let content = "";
-      for (const line of lines) {
-        content += `${this._cellsToHtml(line)}\n`;
-      }
-      this.mobileViewEl.innerHTML = content;
     }
+    for (const line of bufferSnapshotLines.html) {
+      content += `${line}\n`;
+    }
+    this.mobileViewEl.innerHTML = content;
     if (this.mobileViewAtBottom) {
       this.mobileViewEl.scrollTop = this.mobileViewEl.scrollHeight;
     } else if (this.mobileViewScrollTop !== null) {
