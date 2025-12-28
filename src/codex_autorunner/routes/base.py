@@ -266,6 +266,15 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                                     record.status = "closed"
                                     record.last_seen_at = now_iso()
                                     _mark_dirty()
+                            notifier = getattr(engine, "notifier", None)
+                            if notifier:
+                                asyncio.create_task(
+                                    notifier.notify_tui_session_finished_async(
+                                        session_id=session_id,
+                                        exit_code=exit_code,
+                                        repo_path=repo_path,
+                                    )
+                                )
                             await ws.send_text(
                                 json.dumps(
                                     {

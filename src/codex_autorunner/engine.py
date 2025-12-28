@@ -17,6 +17,7 @@ from .docs import DocsManager
 from .lock_utils import process_alive, read_lock_info, write_lock_info
 from .prompt import build_final_summary_prompt, build_prompt
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
+from .notifications import NotificationManager
 from .utils import (
     atomic_write,
     ensure_executable,
@@ -41,6 +42,7 @@ class Engine:
         self.config = load_config(repo_root)
         self.repo_root = self.config.root
         self.docs = DocsManager(self.config)
+        self.notifier = NotificationManager(self.config)
         self.state_path = self.repo_root / ".codex-autorunner" / "state.json"
         self.log_path = self.config.log.path
         self.lock_path = self.repo_root / ".codex-autorunner" / "lock"
@@ -155,6 +157,7 @@ class Engine:
             exit_code,
             finished=True,
         )
+        self.notifier.notify_run_finished(run_id=run_id, exit_code=exit_code)
 
         if exit_code == 0 and self.config.git_auto_commit:
             self.maybe_git_commit(run_id)

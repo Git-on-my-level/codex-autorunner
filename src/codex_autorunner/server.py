@@ -302,6 +302,7 @@ def create_app(
     app.state.logger = setup_rotating_logger(
         f"repo[{engine.repo_root}]", engine.config.server_log
     )
+    engine.notifier.set_logger(app.state.logger)
     safe_log(
         app.state.logger,
         logging.INFO,

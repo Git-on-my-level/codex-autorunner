@@ -71,6 +71,17 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "port": 4173,
         "base_path": "",
     },
+    "notifications": {
+        "enabled": "auto",
+        "events": ["run_finished", "run_error", "tui_session_finished"],
+        "discord": {
+            "webhook_url_env": "CAR_DISCORD_WEBHOOK_URL",
+        },
+        "telegram": {
+            "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
+            "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
+        },
+    },
     "terminal": {
         "idle_timeout_seconds": TWELVE_HOUR_SECONDS,
     },
@@ -176,6 +187,7 @@ class RepoConfig:
     server_host: str
     server_port: int
     server_base_path: str
+    notifications: Dict[str, Any]
     terminal_idle_timeout_seconds: Optional[int]
     log: LogConfig
     server_log: LogConfig
@@ -344,6 +356,9 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     term_args = cfg["codex"].get("terminal_args") or []
     terminal_cfg = cfg.get("terminal") if isinstance(cfg.get("terminal"), dict) else {}
     idle_timeout_seconds = terminal_cfg.get("idle_timeout_seconds")
+    notifications_cfg = (
+        cfg.get("notifications") if isinstance(cfg.get("notifications"), dict) else {}
+    )
     if idle_timeout_seconds is not None:
         idle_timeout_seconds = int(idle_timeout_seconds)
         if idle_timeout_seconds <= 0:
@@ -371,6 +386,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
+        notifications=notifications_cfg,
         terminal_idle_timeout_seconds=idle_timeout_seconds,
         log=LogConfig(
             path=root / log_cfg.get("path", DEFAULT_REPO_CONFIG["log"]["path"]),
@@ -535,6 +551,61 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.port must be an integer")
     if "base_path" in server and not isinstance(server.get("base_path", ""), str):
         raise ConfigError("server.base_path must be a string if provided")
+    notifications_cfg = cfg.get("notifications")
+    if notifications_cfg is not None:
+        if not isinstance(notifications_cfg, dict):
+            raise ConfigError("notifications section must be a mapping if provided")
+        if "enabled" in notifications_cfg:
+            enabled_val = notifications_cfg.get("enabled")
+            if not (
+                isinstance(enabled_val, bool)
+                or enabled_val is None
+                or (isinstance(enabled_val, str) and enabled_val.lower() == "auto")
+            ):
+                raise ConfigError(
+                    "notifications.enabled must be boolean, null, or 'auto'"
+                )
+        events = notifications_cfg.get("events")
+        if events is not None and not isinstance(events, list):
+            raise ConfigError("notifications.events must be a list if provided")
+        if isinstance(events, list):
+            for entry in events:
+                if not isinstance(entry, str):
+                    raise ConfigError("notifications.events must be a list of strings")
+        discord_cfg = notifications_cfg.get("discord")
+        if discord_cfg is not None and not isinstance(discord_cfg, dict):
+            raise ConfigError("notifications.discord must be a mapping if provided")
+        if isinstance(discord_cfg, dict):
+            if "enabled" in discord_cfg and not isinstance(
+                discord_cfg.get("enabled"), bool
+            ):
+                raise ConfigError("notifications.discord.enabled must be boolean")
+            if "webhook_url_env" in discord_cfg and not isinstance(
+                discord_cfg.get("webhook_url_env"), str
+            ):
+                raise ConfigError(
+                    "notifications.discord.webhook_url_env must be a string"
+                )
+        telegram_cfg = notifications_cfg.get("telegram")
+        if telegram_cfg is not None and not isinstance(telegram_cfg, dict):
+            raise ConfigError("notifications.telegram must be a mapping if provided")
+        if isinstance(telegram_cfg, dict):
+            if "enabled" in telegram_cfg and not isinstance(
+                telegram_cfg.get("enabled"), bool
+            ):
+                raise ConfigError("notifications.telegram.enabled must be boolean")
+            if "bot_token_env" in telegram_cfg and not isinstance(
+                telegram_cfg.get("bot_token_env"), str
+            ):
+                raise ConfigError(
+                    "notifications.telegram.bot_token_env must be a string"
+                )
+            if "chat_id_env" in telegram_cfg and not isinstance(
+                telegram_cfg.get("chat_id_env"), str
+            ):
+                raise ConfigError(
+                    "notifications.telegram.chat_id_env must be a string"
+                )
     terminal_cfg = cfg.get("terminal")
     if terminal_cfg is not None:
         if not isinstance(terminal_cfg, dict):
