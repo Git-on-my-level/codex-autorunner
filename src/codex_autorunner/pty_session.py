@@ -12,6 +12,21 @@ from ptyprocess import PtyProcess
 
 REPLAY_END = object()
 
+ALT_SCREEN_ENTER_SEQS = (
+    b"\x1b[?1049h",
+    b"\x1b[?47h",
+    b"\x1b[?1047h",
+)
+ALT_SCREEN_EXIT_SEQS = (
+    b"\x1b[?1049l",
+    b"\x1b[?47l",
+    b"\x1b[?1047l",
+)
+ALT_SCREEN_SEQS = tuple((seq, True) for seq in ALT_SCREEN_ENTER_SEQS) + tuple(
+    (seq, False) for seq in ALT_SCREEN_EXIT_SEQS
+)
+ALT_SCREEN_MAX_LEN = max(len(seq) for seq, _state in ALT_SCREEN_SEQS)
+
 
 def default_env(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     base = os.environ.copy()
@@ -100,6 +115,8 @@ class ActiveSession:
         self.last_input_at = now
         self._output_since_idle = False
         self._idle_notified_at: Optional[float] = None
+        self._alt_screen_active = False
+        self._alt_screen_tail = b""
         self._setup_reader()
 
     def mark_input_id_seen(self, input_id: str) -> bool:
@@ -122,6 +139,7 @@ class ActiveSession:
                 return
             data = os.read(self.pty.fd, 4096)
             if data:
+                self._update_alt_screen_state(data)
                 now = time.time()
                 self.pty.last_active = now
                 self.last_output_at = now
@@ -149,6 +167,47 @@ class ActiveSession:
         q.put_nowait(REPLAY_END)
         self.subscribers.add(q)
         return q
+
+    def refresh_alt_screen_state(self) -> None:
+        state = self._alt_screen_active
+        tail = b""
+        for chunk in self.buffer:
+            state, tail = self._scan_alt_screen_chunk(chunk, state, tail)
+        self._alt_screen_active = state
+        self._alt_screen_tail = tail
+
+    @property
+    def alt_screen_active(self) -> bool:
+        return self._alt_screen_active
+
+    def get_buffer_stats(self) -> tuple[int, int]:
+        return self._buffer_bytes, len(self.buffer)
+
+    def _scan_alt_screen_chunk(
+        self, data: bytes, state: bool, tail: bytes
+    ) -> tuple[bool, bytes]:
+        if not data:
+            return state, tail
+        haystack = tail + data
+        last_pos = -1
+        last_state: Optional[bool] = None
+        for seq, next_state in ALT_SCREEN_SEQS:
+            pos = haystack.rfind(seq)
+            if pos > last_pos:
+                last_pos = pos
+                last_state = next_state
+        if last_state is not None:
+            state = last_state
+        if ALT_SCREEN_MAX_LEN > 1:
+            tail = haystack[-(ALT_SCREEN_MAX_LEN - 1) :]
+        else:
+            tail = b""
+        return state, tail
+
+    def _update_alt_screen_state(self, data: bytes) -> None:
+        self._alt_screen_active, self._alt_screen_tail = self._scan_alt_screen_chunk(
+            data, self._alt_screen_active, self._alt_screen_tail
+        )
 
     def remove_subscriber(self, q: asyncio.Queue):
         self.subscribers.discard(q)

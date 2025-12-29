@@ -116,6 +116,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         close_session_id = ws.query_params.get("close_session_id")
         mode = (ws.query_params.get("mode") or "").strip().lower()
         attach_only = mode == "attach"
+        terminal_debug_param = (ws.query_params.get("terminal_debug") or "").strip()
+        terminal_debug = terminal_debug_param.lower() in {"1", "true", "yes", "on"}
         session_id = None
         active_session: Optional[ActiveSession] = None
         seen_update_interval = 5.0
@@ -249,9 +251,24 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     _mark_dirty()
                 _maybe_persist_sessions(force=True)
 
+        if attach_only and active_session:
+            active_session.refresh_alt_screen_state()
         await ws.send_text(json.dumps({"type": "hello", "session_id": session_id}))
-        if attach_only:
+        if attach_only and active_session and active_session.alt_screen_active:
             await ws.send_bytes(ALT_SCREEN_ENTER)
+        if terminal_debug and active_session:
+            buffer_bytes, buffer_chunks = active_session.get_buffer_stats()
+            safe_log(
+                logger,
+                logging.INFO,
+                "Terminal connect debug: mode=%s session=%s attach=%s alt_screen=%s buffer_bytes=%s buffer_chunks=%s",
+                mode,
+                session_id,
+                attach_only,
+                active_session.alt_screen_active,
+                buffer_bytes,
+                buffer_chunks,
+            )
         queue = active_session.add_subscriber()
 
         async def pty_to_ws():

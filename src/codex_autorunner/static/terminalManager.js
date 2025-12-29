@@ -78,6 +78,33 @@ const TOUCH_OVERRIDE = (() => {
   }
 })();
 
+const TERMINAL_DEBUG = (() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const truthy = new Set(["1", "true", "yes", "on"]);
+    const falsy = new Set(["0", "false", "no", "off"]);
+    const param = params.get("terminal_debug") ?? params.get("debug_terminal");
+    if (param !== null) {
+      const value = String(param).toLowerCase();
+      if (truthy.has(value)) return true;
+      if (falsy.has(value)) return false;
+    }
+    try {
+      const stored = localStorage.getItem("codex_terminal_debug");
+      if (stored !== null) {
+        const value = String(stored).toLowerCase();
+        if (truthy.has(value)) return true;
+        if (falsy.has(value)) return false;
+      }
+    } catch (_err) {
+      // ignore storage errors
+    }
+    return false;
+  } catch (_err) {
+    return false;
+  }
+})();
+
 /**
  * TerminalManager encapsulates all terminal state and logic including:
  * - xterm.js terminal instance and fit addon
@@ -106,6 +133,13 @@ export class TerminalManager {
     this.statusBase = "Disconnected";
     this.terminalIdleTimeoutSeconds = null;
     this.sessionNotFound = false;
+    this.terminalDebug = TERMINAL_DEBUG;
+    this.replayChunkCount = 0;
+    this.replayByteCount = 0;
+    this.liveChunkCount = 0;
+    this.liveByteCount = 0;
+    this.lastAltBufferActive = null;
+    this.lastAltScrollbackSize = 0;
 
     // UI element references
     this.statusEl = null;
@@ -187,6 +221,9 @@ export class TerminalManager {
     this.replayPrelude = null;
     this.pendingReplayPrelude = null;
     this.clearTranscriptOnFirstLiveData = false;
+    this._resetTerminalDebugCounters();
+    this.lastAltBufferActive = null;
+    this.lastAltScrollbackSize = 0;
     this.transcriptResetForConnect = false;
 
     this._registerTextInputHook(this._buildCarContextHook());
@@ -268,6 +305,23 @@ export class TerminalManager {
   _setStatus(message) {
     this.statusBase = message;
     this._renderStatus();
+  }
+
+  _logTerminalDebug(message, details = null) {
+    if (!this.terminalDebug) return;
+    const prefix = "[terminal-debug]";
+    if (details) {
+      console.info(prefix, message, details);
+    } else {
+      console.info(prefix, message);
+    }
+  }
+
+  _resetTerminalDebugCounters() {
+    this.replayChunkCount = 0;
+    this.replayByteCount = 0;
+    this.liveChunkCount = 0;
+    this.liveByteCount = 0;
   }
 
   _renderStatus() {
@@ -1492,6 +1546,29 @@ export class TerminalManager {
     });
   }
 
+  _recordAltBufferState() {
+    if (!this.terminalDebug || !this.term) return;
+    const active = this._isAltBufferActive();
+    const buffer = this.term.buffer?.active;
+    const baseY = buffer ? buffer.baseY : null;
+    const viewportY = buffer ? buffer.viewportY : null;
+    const size = Array.isArray(this.altScrollbackLines)
+      ? this.altScrollbackLines.length
+      : 0;
+    const changed =
+      active !== this.lastAltBufferActive ||
+      size !== this.lastAltScrollbackSize;
+    if (!changed) return;
+    this.lastAltBufferActive = active;
+    this.lastAltScrollbackSize = size;
+    this._logTerminalDebug("alt-buffer state", {
+      active,
+      scrollback: size,
+      baseY,
+      viewportY,
+    });
+  }
+
   _renderMobileView() {
     if (!this.term) return;
     const shouldRender = this.mobileViewActive && this.mobileViewEl;
@@ -1526,6 +1603,7 @@ export class TerminalManager {
       // Reset alternate buffer scrollback when we're showing the normal buffer.
       this._clearAltScrollbackState();
     }
+    this._recordAltBufferState();
     if (!shouldRender) return;
     // This view mirrors the live output as plain text; it is intentionally read-only
     // and is hidden whenever the user wants to interact with the real TUI.
@@ -1854,6 +1932,9 @@ export class TerminalManager {
     this.pendingReplayPrelude = null;
     this.clearTranscriptOnFirstLiveData = false;
     this.transcriptResetForConnect = false;
+    this._resetTerminalDebugCounters();
+    this.lastAltBufferActive = null;
+    this.lastAltScrollbackSize = 0;
     if (!isAttach && !isResume) {
       this._resetTranscript();
       this.transcriptResetForConnect = true;
@@ -1861,8 +1942,14 @@ export class TerminalManager {
 
     const queryParams = new URLSearchParams();
     if (mode) queryParams.append("mode", mode);
+    if (this.terminalDebug) queryParams.append("terminal_debug", "1");
 
     const savedSessionId = this._getSavedSessionId();
+    this._logTerminalDebug("connect", {
+      mode,
+      shouldAwaitReplay,
+      savedSessionId,
+    });
     if (isAttach) {
       if (savedSessionId) {
         this._setCurrentSessionId(savedSessionId);
@@ -1892,6 +1979,10 @@ export class TerminalManager {
       this.reconnectAttempts = 0;
       this.overlayEl?.classList.add("hidden");
       this._markSessionActive();
+      this._logTerminalDebug("socket open", {
+        mode,
+        sessionId: this.currentSessionId,
+      });
 
       // On attach/resume, clear the local terminal first.
       if ((isAttach || isResume) && this.term) {
@@ -1937,6 +2028,9 @@ export class TerminalManager {
               this._setCurrentSessionId(payload.session_id);
             }
             this._markSessionActive();
+            this._logTerminalDebug("hello", {
+              sessionId: payload.session_id || null,
+            });
           } else if (payload.type === "replay_end") {
             if (!this.awaitingReplayEnd) {
               return;
@@ -1947,6 +2041,17 @@ export class TerminalManager {
             const hasAltScreenEnter =
               hasReplay && this._replayHasAltScreenEnter(buffered);
             const shouldApplyPrelude = Boolean(prelude && !hasAltScreenEnter);
+            this._logTerminalDebug("replay_end", {
+              chunks: buffered.length,
+              bytes: this.replayByteCount,
+              prelude: Boolean(prelude),
+              hasAltScreenEnter,
+              shouldApplyPrelude,
+              clearOnLive: !this.transcriptResetForConnect,
+              altScrollback: Array.isArray(this.altScrollbackLines)
+                ? this.altScrollbackLines.length
+                : 0,
+            });
             this.awaitingReplayEnd = false;
             this.replayBuffer = null;
             this.replayPrelude = null;
@@ -2024,6 +2129,8 @@ export class TerminalManager {
       if (this.term) {
         const chunk = new Uint8Array(event.data);
         if (this.awaitingReplayEnd) {
+          this.replayChunkCount += 1;
+          this.replayByteCount += chunk.length;
           const replayEmpty =
             Array.isArray(this.replayBuffer) && this.replayBuffer.length === 0;
           if (!this.replayPrelude && replayEmpty && this._isAltScreenEnterChunk(chunk)) {
@@ -2037,11 +2144,17 @@ export class TerminalManager {
           this.clearTranscriptOnFirstLiveData = false;
           this._resetTranscript();
           this._resetTerminalDisplay();
+          const hadPrelude = Boolean(this.pendingReplayPrelude);
           if (this.pendingReplayPrelude) {
             this._applyReplayPrelude(this.pendingReplayPrelude);
             this.pendingReplayPrelude = null;
           }
+          this._logTerminalDebug("first_live_reset", {
+            pendingPrelude: hadPrelude,
+          });
         }
+        this.liveChunkCount += 1;
+        this.liveByteCount += chunk.length;
         this._appendTranscriptChunk(chunk);
         this._scheduleMobileViewRender();
         this.term.write(chunk);
