@@ -250,7 +250,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 _maybe_persist_sessions(force=True)
 
         await ws.send_text(json.dumps({"type": "hello", "session_id": session_id}))
-        await ws.send_bytes(ALT_SCREEN_ENTER)
+        if attach_only:
+            await ws.send_bytes(ALT_SCREEN_ENTER)
         queue = active_session.add_subscriber()
 
         async def pty_to_ws():
