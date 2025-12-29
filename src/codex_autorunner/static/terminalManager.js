@@ -187,6 +187,7 @@ export class TerminalManager {
     this.replayPrelude = null;
     this.pendingReplayPrelude = null;
     this.clearTranscriptOnFirstLiveData = false;
+    this.transcriptResetForConnect = false;
 
     this._registerTextInputHook(this._buildCarContextHook());
 
@@ -534,6 +535,19 @@ export class TerminalManager {
     if (atBottom) {
       this.term.scrollToBottom();
       this._updateJumpBottomVisibility();
+    }
+  }
+
+  _resetTerminalDisplay() {
+    if (!this.term) return;
+    try {
+      this.term.reset();
+    } catch (_err) {
+      try {
+        this.term.clear();
+      } catch (__err) {
+        // ignore
+      }
     }
   }
 
@@ -1662,6 +1676,7 @@ export class TerminalManager {
     this.replayPrelude = null;
     this.pendingReplayPrelude = null;
     this.clearTranscriptOnFirstLiveData = false;
+    this.transcriptResetForConnect = false;
   }
 
   /**
@@ -1800,6 +1815,7 @@ export class TerminalManager {
     const mode = (options.mode || (options.resume ? "resume" : "new")).toLowerCase();
     const isAttach = mode === "attach";
     const isResume = mode === "resume";
+    const shouldAwaitReplay = isAttach || isResume;
     const quiet = Boolean(options.quiet);
 
     this.sessionNotFound = false;
@@ -1816,13 +1832,15 @@ export class TerminalManager {
     this.intentionalDisconnect = false;
     this.lastConnectMode = mode;
 
-    this.awaitingReplayEnd = isAttach;
-    this.replayBuffer = isAttach ? [] : null;
+    this.awaitingReplayEnd = shouldAwaitReplay;
+    this.replayBuffer = shouldAwaitReplay ? [] : null;
     this.replayPrelude = null;
     this.pendingReplayPrelude = null;
     this.clearTranscriptOnFirstLiveData = false;
-    if (!isAttach) {
+    this.transcriptResetForConnect = false;
+    if (!isAttach && !isResume) {
       this._resetTranscript();
+      this.transcriptResetForConnect = true;
     }
 
     const queryParams = new URLSearchParams();
@@ -1859,17 +1877,9 @@ export class TerminalManager {
       this.overlayEl?.classList.add("hidden");
       this._markSessionActive();
 
-      // On attach, clear the local terminal first
-      if (isAttach && this.term) {
-        try {
-          this.term.reset();
-        } catch (_err) {
-          try {
-            this.term.clear();
-          } catch (__err) {
-            // ignore
-          }
-        }
+      // On attach/resume, clear the local terminal first.
+      if ((isAttach || isResume) && this.term) {
+        this._resetTerminalDisplay();
         this.transcriptHydrated = false;
         this._hydrateTerminalFromTranscript();
       }
@@ -1920,21 +1930,14 @@ export class TerminalManager {
             const hasReplay = buffered.length > 0;
             const hasAltScreenEnter =
               hasReplay && this._replayHasAltScreenEnter(buffered);
+            const shouldApplyPrelude = Boolean(prelude && !hasAltScreenEnter);
             this.awaitingReplayEnd = false;
             this.replayBuffer = null;
             this.replayPrelude = null;
             if (hasReplay && this.term) {
               this._resetTranscript();
-              try {
-                this.term.reset();
-              } catch (_err) {
-                try {
-                  this.term.clear();
-                } catch (__err) {
-                  // ignore
-                }
-              }
-              if (prelude && !hasAltScreenEnter) {
+              this._resetTerminalDisplay();
+              if (shouldApplyPrelude) {
                 this._applyReplayPrelude(prelude);
               }
               for (const chunk of buffered) {
@@ -1943,8 +1946,8 @@ export class TerminalManager {
                 this.term.write(chunk);
               }
             } else {
-              this.clearTranscriptOnFirstLiveData = true;
-              this.pendingReplayPrelude = prelude;
+              this.clearTranscriptOnFirstLiveData = !this.transcriptResetForConnect;
+              this.pendingReplayPrelude = shouldApplyPrelude ? prelude : null;
             }
           } else if (payload.type === "ack") {
             const ackId = payload.id;
@@ -2017,15 +2020,7 @@ export class TerminalManager {
         if (this.clearTranscriptOnFirstLiveData) {
           this.clearTranscriptOnFirstLiveData = false;
           this._resetTranscript();
-          try {
-            this.term.reset();
-          } catch (_err) {
-            try {
-              this.term.clear();
-            } catch (__err) {
-              // ignore
-            }
-          }
+          this._resetTerminalDisplay();
           if (this.pendingReplayPrelude) {
             this._applyReplayPrelude(this.pendingReplayPrelude);
             this.pendingReplayPrelude = null;
