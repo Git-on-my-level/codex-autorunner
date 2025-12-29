@@ -234,6 +234,22 @@ def _session_last_touch(session: ActiveSession, record) -> float:
     return max(last_seen, session.pty.last_active)
 
 
+def _parse_tui_idle_seconds(config) -> Optional[float]:
+    notifications_cfg = (
+        config.notifications if isinstance(config.notifications, dict) else {}
+    )
+    idle_seconds = notifications_cfg.get("tui_idle_seconds")
+    if idle_seconds is None:
+        return None
+    try:
+        idle_seconds = float(idle_seconds)
+    except (TypeError, ValueError):
+        return None
+    if idle_seconds <= 0:
+        return None
+    return idle_seconds
+
+
 def _prune_terminal_registry(
     state_path: Path,
     terminal_sessions: dict[str, ActiveSession],
@@ -288,6 +304,10 @@ def create_app(
     terminal_max_idle_seconds = config.terminal_idle_timeout_seconds
     if terminal_max_idle_seconds is not None and terminal_max_idle_seconds <= 0:
         terminal_max_idle_seconds = None
+    tui_idle_seconds = _parse_tui_idle_seconds(config)
+    tui_idle_check_seconds: Optional[float] = None
+    if tui_idle_seconds is not None:
+        tui_idle_check_seconds = min(10.0, max(1.0, tui_idle_seconds / 4))
     # Construct asyncio primitives without assuming a loop already exists.
     # This comes up in unit tests (sync context) and when mounting from a worker thread.
     try:
@@ -375,6 +395,42 @@ def create_app(
                     )
 
         asyncio.create_task(_cleanup_loop())
+
+        if tui_idle_seconds is None or tui_idle_check_seconds is None:
+            return
+
+        async def _tui_idle_loop():
+            while True:
+                await asyncio.sleep(tui_idle_check_seconds)
+                try:
+                    async with app.state.terminal_lock:
+                        terminal_sessions = app.state.terminal_sessions
+                        session_registry = app.state.session_registry
+                        for session_id, session in list(terminal_sessions.items()):
+                            if not session.pty.isalive():
+                                continue
+                            if not session.should_notify_idle(tui_idle_seconds):
+                                continue
+                            record = session_registry.get(session_id)
+                            repo_path = record.repo_path if record else None
+                            notifier = getattr(engine, "notifier", None)
+                            if notifier:
+                                asyncio.create_task(
+                                    notifier.notify_tui_idle_async(
+                                        session_id=session_id,
+                                        idle_seconds=tui_idle_seconds,
+                                        repo_path=repo_path,
+                                    )
+                                )
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "TUI idle notification loop failed",
+                        exc,
+                    )
+
+        asyncio.create_task(_tui_idle_loop())
 
     @app.on_event("shutdown")
     async def shutdown_terminal_sessions():

@@ -9,7 +9,7 @@ import httpx
 from .config import Config
 
 
-DEFAULT_EVENTS = {"run_finished", "run_error", "tui_session_finished"}
+DEFAULT_EVENTS = {"run_finished", "run_error", "tui_idle"}
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
 
@@ -70,6 +70,34 @@ class NotificationManager:
         )
         await self._notify_async("tui_session_finished", message)
 
+    def notify_tui_idle(
+        self,
+        *,
+        session_id: Optional[str],
+        idle_seconds: float,
+        repo_path: Optional[str] = None,
+    ) -> None:
+        message = self._format_tui_idle_message(
+            session_id=session_id,
+            idle_seconds=idle_seconds,
+            repo_path=repo_path,
+        )
+        self._notify_sync("tui_idle", message)
+
+    async def notify_tui_idle_async(
+        self,
+        *,
+        session_id: Optional[str],
+        idle_seconds: float,
+        repo_path: Optional[str] = None,
+    ) -> None:
+        message = self._format_tui_idle_message(
+            session_id=session_id,
+            idle_seconds=idle_seconds,
+            repo_path=repo_path,
+        )
+        await self._notify_async("tui_idle", message)
+
     def _normalize_events(self, raw_events) -> set[str]:
         if raw_events is None:
             return set(DEFAULT_EVENTS)
@@ -111,13 +139,19 @@ class NotificationManager:
     def _format_run_message(self, *, run_id: int, exit_code: Optional[int]) -> str:
         repo_label = self._repo_label()
         if exit_code == 0:
-            status = "finished"
+            status = "complete"
+            summary_text = "summary finalized"
         else:
             status = "failed"
+            summary_text = None
         code_text = (
             f"exit {exit_code}" if exit_code is not None else "exit unknown"
         )
-        return f"CAR run {run_id} {status} ({code_text}) in {repo_label}"
+        if summary_text:
+            details = f"{summary_text}, {code_text}"
+        else:
+            details = code_text
+        return f"CAR run {run_id} {status} ({details}) in {repo_label}"
 
     def _format_tui_message(
         self,
@@ -132,6 +166,18 @@ class NotificationManager:
             f"exit {exit_code}" if exit_code is not None else "exit unknown"
         )
         return f"CAR TUI session ended ({session_text}, {code_text}) in {repo_label}"
+
+    def _format_tui_idle_message(
+        self,
+        *,
+        session_id: Optional[str],
+        idle_seconds: float,
+        repo_path: Optional[str],
+    ) -> str:
+        repo_label = repo_path or self._repo_label()
+        session_text = f"session {session_id}" if session_id else "session"
+        idle_text = f"idle {int(idle_seconds)}s"
+        return f"CAR TUI idle ({session_text}, {idle_text}) in {repo_label}"
 
     def _repo_label(self) -> str:
         name = self.config.root.name

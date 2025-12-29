@@ -73,7 +73,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     },
     "notifications": {
         "enabled": "auto",
-        "events": ["run_finished", "run_error", "tui_session_finished"],
+        "events": ["run_finished", "run_error", "tui_idle"],
+        "tui_idle_seconds": 60,
         "discord": {
             "webhook_url_env": "CAR_DISCORD_WEBHOOK_URL",
         },
@@ -589,6 +590,16 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
             for entry in events:
                 if not isinstance(entry, str):
                     raise ConfigError("notifications.events must be a list of strings")
+        tui_idle_seconds = notifications_cfg.get("tui_idle_seconds")
+        if tui_idle_seconds is not None:
+            if not isinstance(tui_idle_seconds, (int, float)):
+                raise ConfigError(
+                    "notifications.tui_idle_seconds must be a number if provided"
+                )
+            if tui_idle_seconds < 0:
+                raise ConfigError(
+                    "notifications.tui_idle_seconds must be >= 0 if provided"
+                )
         discord_cfg = notifications_cfg.get("discord")
         if discord_cfg is not None and not isinstance(discord_cfg, dict):
             raise ConfigError("notifications.discord must be a mapping if provided")
