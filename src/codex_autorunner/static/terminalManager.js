@@ -122,6 +122,9 @@ export class TerminalManager {
     this.inputDisposable = null;
     this.wheelScrollInstalled = false;
     this.wheelScrollRemainder = 0;
+    this.touchScrollInstalled = false;
+    this.touchScrollLastY = null;
+    this.touchScrollRemainder = 0;
 
     // Connection state
     this.intentionalDisconnect = false;
@@ -1689,6 +1692,7 @@ export class TerminalManager {
     this.term.open(container);
     this.term.write('Press "New" or "Resume" to launch Codex TUI...\r\n');
     this._installWheelScroll();
+    this._installTouchScroll();
     this.term.onScroll(() => this._updateJumpBottomVisibility());
     this.term.onRender(() => this._scheduleMobileViewRender());
     this._updateJumpBottomVisibility();
@@ -1767,6 +1771,63 @@ export class TerminalManager {
       capture: true,
     });
     this.wheelScrollInstalled = true;
+  }
+
+  _installTouchScroll() {
+    if (this.touchScrollInstalled || !this.term || !this.term.element) return;
+    if (!this.isTouchDevice()) return;
+
+    const viewport = this.term.element.querySelector(".xterm-viewport");
+    if (!viewport) return;
+
+    const getLineHeight = () => {
+      const dims = this.term?._core?._renderService?.dimensions;
+      if (dims && Number.isFinite(dims.actualCellHeight) && dims.actualCellHeight > 0) {
+        return dims.actualCellHeight;
+      }
+      const fontSize =
+        typeof this.term.options?.fontSize === "number" ? this.term.options.fontSize : 14;
+      return Math.max(10, Math.round(fontSize * 1.2));
+    };
+
+    const handleTouchStart = (event) => {
+      if (!event.touches || event.touches.length !== 1) return;
+      this.touchScrollLastY = event.touches[0].clientY;
+      this.touchScrollRemainder = 0;
+    };
+
+    const handleTouchMove = (event) => {
+      if (!event.touches || event.touches.length !== 1) return;
+      if (!this.term || this.mobileViewActive) return;
+      const buffer = this.term.buffer?.active;
+      if (!buffer || buffer.baseY <= 0) return;
+      const currentY = event.touches[0].clientY;
+      if (!Number.isFinite(this.touchScrollLastY)) {
+        this.touchScrollLastY = currentY;
+        return;
+      }
+      const delta = currentY - this.touchScrollLastY;
+      this.touchScrollLastY = currentY;
+      this.touchScrollRemainder += delta;
+      const lineHeight = getLineHeight();
+      const lines = Math.trunc(this.touchScrollRemainder / lineHeight);
+      if (lines === 0) return;
+      this.touchScrollRemainder -= lines * lineHeight;
+      this.term.scrollLines(-lines);
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const handleTouchEnd = () => {
+      this.touchScrollLastY = null;
+      this.touchScrollRemainder = 0;
+    };
+
+    viewport.addEventListener("touchstart", handleTouchStart, { passive: true });
+    viewport.addEventListener("touchmove", handleTouchMove, { passive: false });
+    viewport.addEventListener("touchend", handleTouchEnd, { passive: true });
+    viewport.addEventListener("touchcancel", handleTouchEnd, { passive: true });
+    this.touchScrollInstalled = true;
   }
 
   /**

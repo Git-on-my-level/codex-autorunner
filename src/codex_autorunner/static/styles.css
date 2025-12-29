@@ -2839,6 +2839,7 @@ label {
 .terminal-container .xterm-viewport {
   overscroll-behavior-y: contain;
   touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .terminal-jump-btn {
