@@ -95,6 +95,11 @@ class ActiveSession:
         self._seen_input_ids_max = 256
         self._seen_input_ids: collections.deque[str] = collections.deque()
         self._seen_input_ids_set: set[str] = set()
+        now = time.time()
+        self.last_output_at = now
+        self.last_input_at = now
+        self._output_since_idle = False
+        self._idle_notified_at: Optional[float] = None
         self._setup_reader()
 
     def mark_input_id_seen(self, input_id: str) -> bool:
@@ -117,7 +122,11 @@ class ActiveSession:
                 return
             data = os.read(self.pty.fd, 4096)
             if data:
-                self.pty.last_active = time.time()
+                now = time.time()
+                self.pty.last_active = now
+                self.last_output_at = now
+                self._output_since_idle = True
+                self._idle_notified_at = None
                 self.buffer.append(data)
                 self._buffer_bytes += len(data)
                 while self._buffer_bytes > self._buffer_max_bytes and self.buffer:
@@ -157,6 +166,25 @@ class ActiveSession:
             except asyncio.QueueFull:
                 pass
         self.subscribers.clear()
+
+    def mark_input_activity(self) -> None:
+        now = time.time()
+        self.last_input_at = now
+        self._output_since_idle = False
+        self._idle_notified_at = None
+
+    def should_notify_idle(self, idle_seconds: float) -> bool:
+        if idle_seconds <= 0:
+            return False
+        if not self._output_since_idle:
+            return False
+        if self._idle_notified_at is not None:
+            return False
+        if time.time() - self.last_output_at < idle_seconds:
+            return False
+        self._idle_notified_at = time.time()
+        self._output_since_idle = False
+        return True
 
     async def wait_closed(self, timeout: float = 5.0):
         """Wait for the underlying PTY process to terminate."""

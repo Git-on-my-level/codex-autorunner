@@ -157,7 +157,8 @@ class Engine:
             exit_code,
             finished=True,
         )
-        self.notifier.notify_run_finished(run_id=run_id, exit_code=exit_code)
+        if exit_code != 0:
+            self.notifier.notify_run_finished(run_id=run_id, exit_code=exit_code)
 
         if exit_code == 0 and self.config.git_auto_commit:
             self.maybe_git_commit(run_id)
@@ -175,6 +176,7 @@ class Engine:
 
         if exit_code == 0:
             self._stamp_summary_finalized(run_id)
+            self.notifier.notify_run_finished(run_id=run_id, exit_code=exit_code)
             # Commit is already handled by _execute_run_step if auto-commit is enabled.
         return exit_code
 
