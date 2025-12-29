@@ -5,6 +5,8 @@ import { publish, subscribe } from "./bus.js";
 import { REPO_ID, BASE_PATH } from "./env.js";
 
 const textEncoder = new TextEncoder();
+const ALT_SCREEN_ENTER = "\x1b[?1049h";
+const ALT_SCREEN_ENTER_BYTES = textEncoder.encode(ALT_SCREEN_ENTER);
 
 const TEXT_INPUT_STORAGE_KEYS = Object.freeze({
   enabled: "codex_terminal_text_input_enabled",
@@ -173,6 +175,8 @@ export class TerminalManager {
     this.transcriptDecoder = new TextDecoder();
     this.awaitingReplayEnd = false;
     this.replayBuffer = null;
+    this.replayPrelude = null;
+    this.pendingReplayPrelude = null;
     this.clearTranscriptOnFirstLiveData = false;
 
     this._registerTextInputHook(this._buildCarContextHook());
@@ -658,6 +662,21 @@ export class TerminalManager {
       return line.toString();
     }
     return "";
+  }
+
+  _isAltScreenEnterChunk(chunk) {
+    if (!chunk || chunk.length !== ALT_SCREEN_ENTER_BYTES.length) return false;
+    for (let idx = 0; idx < ALT_SCREEN_ENTER_BYTES.length; idx++) {
+      if (chunk[idx] !== ALT_SCREEN_ENTER_BYTES[idx]) return false;
+    }
+    return true;
+  }
+
+  _applyReplayPrelude(chunk) {
+    if (!chunk || !this.term) return;
+    this._appendTranscriptChunk(chunk);
+    this._scheduleMobileViewRender();
+    this.term.write(chunk);
   }
 
   _getBufferSnapshot() {
@@ -1613,6 +1632,8 @@ export class TerminalManager {
     this.socket = null;
     this.awaitingReplayEnd = false;
     this.replayBuffer = null;
+    this.replayPrelude = null;
+    this.pendingReplayPrelude = null;
     this.clearTranscriptOnFirstLiveData = false;
   }
 
@@ -1770,6 +1791,8 @@ export class TerminalManager {
 
     this.awaitingReplayEnd = isAttach;
     this.replayBuffer = isAttach ? [] : null;
+    this.replayPrelude = null;
+    this.pendingReplayPrelude = null;
     this.clearTranscriptOnFirstLiveData = false;
     if (!isAttach) {
       this._resetTranscript();
@@ -1866,9 +1889,11 @@ export class TerminalManager {
               return;
             }
             const buffered = Array.isArray(this.replayBuffer) ? this.replayBuffer : [];
+            const prelude = this.replayPrelude;
             const hasReplay = buffered.length > 0;
             this.awaitingReplayEnd = false;
             this.replayBuffer = null;
+            this.replayPrelude = null;
             if (hasReplay && this.term) {
               this._resetTranscript();
               try {
@@ -1880,6 +1905,9 @@ export class TerminalManager {
                   // ignore
                 }
               }
+              if (prelude) {
+                this._applyReplayPrelude(prelude);
+              }
               for (const chunk of buffered) {
                 this._appendTranscriptChunk(chunk);
                 this._scheduleMobileViewRender();
@@ -1887,6 +1915,7 @@ export class TerminalManager {
               }
             } else {
               this.clearTranscriptOnFirstLiveData = true;
+              this.pendingReplayPrelude = prelude;
             }
           } else if (payload.type === "ack") {
             const ackId = payload.id;
@@ -1947,6 +1976,12 @@ export class TerminalManager {
       if (this.term) {
         const chunk = new Uint8Array(event.data);
         if (this.awaitingReplayEnd) {
+          const replayEmpty =
+            Array.isArray(this.replayBuffer) && this.replayBuffer.length === 0;
+          if (!this.replayPrelude && replayEmpty && this._isAltScreenEnterChunk(chunk)) {
+            this.replayPrelude = chunk;
+            return;
+          }
           this.replayBuffer?.push(chunk);
           return;
         }
@@ -1961,6 +1996,10 @@ export class TerminalManager {
             } catch (__err) {
               // ignore
             }
+          }
+          if (this.pendingReplayPrelude) {
+            this._applyReplayPrelude(this.pendingReplayPrelude);
+            this.pendingReplayPrelude = null;
           }
         }
         this._appendTranscriptChunk(chunk);
