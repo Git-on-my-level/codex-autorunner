@@ -556,9 +556,7 @@ export class TerminalManager {
     this.transcriptLineCells = [];
     this.transcriptCursor = 0;
     this.transcriptHydrated = false;
-    this.altScrollbackLines = [];
-    this.altSnapshotPlain = null;
-    this.altSnapshotHtml = null;
+    this._clearAltScrollbackState();
     this.transcriptAnsiState = {
       mode: "text",
       oscEsc: false,
@@ -775,6 +773,12 @@ export class TerminalManager {
     if (overflow > 0) {
       this.altScrollbackLines.splice(0, overflow);
     }
+  }
+
+  _clearAltScrollbackState() {
+    this.altScrollbackLines = [];
+    this.altSnapshotPlain = null;
+    this.altSnapshotHtml = null;
   }
 
   _updateAltScrollback(snapshotPlain, snapshotHtml) {
@@ -1473,7 +1477,6 @@ export class TerminalManager {
   }
 
   _scheduleMobileViewRender() {
-    if (!this.mobileViewActive) return;
     this.mobileViewDirty = true;
     if (this.mobileViewRaf) return;
     this.mobileViewRaf = requestAnimationFrame(() => {
@@ -1485,19 +1488,28 @@ export class TerminalManager {
   }
 
   _renderMobileView() {
-    if (!this.mobileViewActive || !this.mobileViewEl || !this.term) return;
-    const bufferSnapshot = this._getBufferSnapshot();
-    if (!Array.isArray(bufferSnapshot?.lines)) {
-      this.mobileViewEl.innerHTML = "";
-      this.altScrollbackLines = [];
-      this.altSnapshotPlain = null;
-      this.altSnapshotHtml = null;
+    if (!this.term) return;
+    const shouldRender = this.mobileViewActive && this.mobileViewEl;
+    const useAltBuffer = this._isAltBufferActive();
+    if (!shouldRender && !useAltBuffer) {
+      if (this.altSnapshotPlain || (this.altScrollbackLines || []).length) {
+        this._clearAltScrollbackState();
+      }
       return;
     }
-    const useAltBuffer = this._isAltBufferActive();
+    const bufferSnapshot = this._getBufferSnapshot();
+    if (!Array.isArray(bufferSnapshot?.lines)) {
+      if (shouldRender) {
+        this.mobileViewEl.innerHTML = "";
+      }
+      this._clearAltScrollbackState();
+      return;
+    }
     const bufferSnapshotLines = this._snapshotBufferLines(bufferSnapshot);
     if (!bufferSnapshotLines?.html) {
-      this.mobileViewEl.innerHTML = "";
+      if (shouldRender) {
+        this.mobileViewEl.innerHTML = "";
+      }
       return;
     }
     if (useAltBuffer) {
@@ -1507,10 +1519,9 @@ export class TerminalManager {
       );
     } else {
       // Reset alternate buffer scrollback when we're showing the normal buffer.
-      this.altScrollbackLines = [];
-      this.altSnapshotPlain = null;
-      this.altSnapshotHtml = null;
+      this._clearAltScrollbackState();
     }
+    if (!shouldRender) return;
     // This view mirrors the live output as plain text; it is intentionally read-only
     // and is hidden whenever the user wants to interact with the real TUI.
     if (
