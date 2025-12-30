@@ -318,7 +318,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     if msg["type"] == "websocket.disconnect":
                         break
                     if msg.get("bytes") is not None:
-                        active_session.pty.write(msg["bytes"])
+                        # Queue input so PTY writes never block the event loop.
+                        active_session.write_input(msg["bytes"])
                         active_session.mark_input_activity()
                         if session_id:
                             _touch_session(session_id)
@@ -374,7 +375,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                             )
                             continue
                         if active_session.mark_input_id_seen(input_id):
-                            active_session.pty.write(encoded)
+                            active_session.write_input(encoded)
                             active_session.mark_input_activity()
                         await ws.send_text(
                             json.dumps({"type": "ack", "id": input_id, "ok": True})

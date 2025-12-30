@@ -26,6 +26,9 @@ ALT_SCREEN_SEQS = tuple((seq, True) for seq in ALT_SCREEN_ENTER_SEQS) + tuple(
     (seq, False) for seq in ALT_SCREEN_EXIT_SEQS
 )
 ALT_SCREEN_MAX_LEN = max(len(seq) for seq, _state in ALT_SCREEN_SEQS)
+PTY_WRITE_CHUNK_BYTES = 16 * 1024
+# Cap per-flush work to keep the event loop responsive.
+PTY_WRITE_FLUSH_MAX_BYTES = 256 * 1024
 
 
 def default_env(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -42,8 +45,18 @@ class PTYSession:
         # echo=False to avoid double-printing user keystrokes
         self.proc = PtyProcess.spawn(cmd, cwd=cwd, env=default_env(env), echo=False)
         self.fd = self.proc.fd
+        self._set_nonblocking()
         self.closed = False
         self.last_active = time.time()
+
+    def _set_nonblocking(self) -> None:
+        """Ensure PTY IO doesn't block the event loop."""
+        try:
+            flags = fcntl.fcntl(self.fd, fcntl.F_GETFL)
+            if not (flags & os.O_NONBLOCK):
+                fcntl.fcntl(self.fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        except Exception:
+            pass
 
     def resize(self, cols: int, rows: int) -> None:
         if self.closed:
@@ -52,28 +65,23 @@ class PTYSession:
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, buf)
         self.last_active = time.time()
 
-    def write(self, data: bytes) -> None:
-        if self.closed:
-            return
-        view = memoryview(data)
-        offset = 0
-        total = len(view)
-        while offset < total:
-            try:
-                written = os.write(self.fd, view[offset : offset + 16384])
-            except BlockingIOError:
-                select.select([], [self.fd], [], 0.1)
-                continue
-            except InterruptedError:
-                continue
-            except OSError:
-                self.terminate()
-                return
-            if written <= 0:
-                break
-            offset += written
-        if offset:
+    def write(self, data: bytes) -> int:
+        """Best-effort non-blocking write; returns bytes written.
+
+        For user input, prefer ActiveSession.write_input so the loop never blocks.
+        """
+        if self.closed or not data:
+            return 0
+        try:
+            written = os.write(self.fd, data)
+        except (BlockingIOError, InterruptedError):
+            return 0
+        except OSError:
+            self.terminate()
+            return 0
+        if written:
             self.last_active = time.time()
+        return written
 
     def read(self, max_bytes: int = 4096) -> bytes:
         if self.closed:
@@ -83,6 +91,8 @@ class PTYSession:
             return b""
         try:
             chunk = os.read(self.fd, max_bytes)
+        except BlockingIOError:
+            return b""
         except OSError:
             self.terminate()
             return b""
@@ -123,6 +133,9 @@ class ActiveSession:
         self.subscribers: set[asyncio.Queue] = set()
         self.lock = asyncio.Lock()
         self.loop = loop
+        # Buffered input keeps the event loop from blocking on PTY writes.
+        self._pending_input = bytearray()
+        self._writer_active = False
         # Track recently-seen input IDs (from web UI) to make "send" retries idempotent.
         self._seen_input_ids_max = 256
         self._seen_input_ids: collections.deque[str] = collections.deque()
@@ -150,11 +163,72 @@ class ActiveSession:
     def _setup_reader(self):
         self.loop.add_reader(self.pty.fd, self._read_callback)
 
+    def write_input(self, data: bytes) -> None:
+        """Queue terminal input and flush without blocking the event loop."""
+        if self.pty.closed or not data:
+            return
+        self._pending_input.extend(data)
+        self._flush_pending_input()
+
+    def _enable_writer(self) -> None:
+        if self._writer_active:
+            return
+        try:
+            self.loop.add_writer(self.pty.fd, self._flush_pending_input)
+            self._writer_active = True
+        except Exception:
+            self._writer_active = False
+
+    def _disable_writer(self) -> None:
+        if not self._writer_active:
+            return
+        try:
+            self.loop.remove_writer(self.pty.fd)
+        except Exception:
+            pass
+        self._writer_active = False
+
+    def _flush_pending_input(self) -> None:
+        """Drain queued input without blocking the event loop."""
+        if self.pty.closed:
+            self._pending_input.clear()
+            self._disable_writer()
+            return
+        if not self._pending_input:
+            self._disable_writer()
+            return
+        bytes_flushed = 0
+        while self._pending_input and bytes_flushed < PTY_WRITE_FLUSH_MAX_BYTES:
+            limit = min(len(self._pending_input), PTY_WRITE_CHUNK_BYTES)
+            chunk = bytes(self._pending_input[:limit])
+            try:
+                written = os.write(self.pty.fd, chunk)
+            except BlockingIOError:
+                self._enable_writer()
+                return
+            except InterruptedError:
+                continue
+            except OSError:
+                self.close()
+                return
+            if written <= 0:
+                break
+            del self._pending_input[:written]
+            bytes_flushed += written
+            self.pty.last_active = time.time()
+        if self._pending_input:
+            self._enable_writer()
+        else:
+            self._disable_writer()
+
     def _read_callback(self):
         try:
             if self.pty.closed:
                 return
-            data = os.read(self.pty.fd, 4096)
+            try:
+                data = os.read(self.pty.fd, 4096)
+            except BlockingIOError:
+                return
             if data:
                 self._update_alt_screen_state(data)
                 now = time.time()
@@ -230,6 +304,8 @@ class ActiveSession:
         self.subscribers.discard(q)
 
     def close(self):
+        self._disable_writer()
+        self._pending_input.clear()
         if not self.pty.closed:
             try:
                 self.loop.remove_reader(self.pty.fd)
