@@ -1,6 +1,9 @@
+import logging
+from io import StringIO
 from pathlib import Path
+from uuid import uuid4
 
-from codex_autorunner.logging_utils import setup_rotating_logger
+from codex_autorunner.logging_utils import safe_log, setup_rotating_logger
 from codex_autorunner.config import LogConfig
 
 
@@ -32,3 +35,32 @@ def test_rotating_loggers_are_isolated(tmp_path: Path):
     same_logger = setup_rotating_logger("repo:a", cfg_a)
     assert same_logger is logger_a
     assert len(same_logger.handlers) == 1
+
+
+def _make_buffer_logger() -> tuple[logging.Logger, StringIO, logging.Handler]:
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger(f"test.safe_log.{uuid4()}")
+    logger.handlers.clear()
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    logger.addHandler(handler)
+    return logger, stream, handler
+
+
+def test_safe_log_formats_varargs():
+    logger, stream, handler = _make_buffer_logger()
+
+    safe_log(logger, logging.INFO, "hello %s", "world")
+    handler.flush()
+
+    assert "hello world" in stream.getvalue()
+
+
+def test_safe_log_fallback_and_exception():
+    logger, stream, handler = _make_buffer_logger()
+
+    safe_log(logger, logging.INFO, "value=%d", "oops", exc=RuntimeError("boom"))
+    handler.flush()
+
+    assert "value=%d oops: boom" in stream.getvalue()

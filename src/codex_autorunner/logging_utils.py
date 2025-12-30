@@ -55,12 +55,21 @@ def setup_rotating_logger(name: str, log_config: LogConfig) -> logging.Logger:
 
 
 def safe_log(
-    logger: logging.Logger, level: int, message: str, exc: Optional[Exception] = None
+    logger: logging.Logger,
+    level: int,
+    message: str,
+    *args,
+    exc: Optional[Exception] = None,
 ) -> None:
     try:
+        formatted = message
+        if args:
+            try:
+                formatted = message % args
+            except Exception:
+                formatted = f"{message} {' '.join(str(arg) for arg in args)}"
         if exc is not None:
-            logger.log(level, f"{message}: {exc}")
-        else:
-            logger.log(level, message)
+            formatted = f"{formatted}: {exc}"
+        logger.log(level, formatted)
     except Exception:
         pass
