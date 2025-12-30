@@ -479,6 +479,26 @@ def create_hub_app(
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
+    repo_apps: dict[str, FastAPI] = {}
+    repo_startup_complete: set[str] = set()
+    app.state.hub_started = False
+
+    async def _start_repo_app(prefix: str, sub_app: FastAPI) -> None:
+        if prefix in repo_startup_complete:
+            return
+        try:
+            await sub_app.router.startup()
+            repo_startup_complete.add(prefix)
+            safe_log(
+                app.state.logger,
+                logging.INFO,
+                f"Repo app startup complete for {prefix}",
+            )
+        except Exception as exc:
+            try:
+                app.state.logger.warning("Repo startup failed for %s: %s", prefix, exc)
+            except Exception:
+                pass
 
     def _mount_repo(prefix: str, repo_path: Path) -> bool:
         if prefix in mounted_repos:
@@ -504,7 +524,13 @@ def create_hub_app(
             return False
         app.mount(f"/repos/{prefix}", sub_app)
         mounted_repos.add(prefix)
+        repo_apps[prefix] = sub_app
         mount_errors.pop(prefix, None)
+        if app.state.hub_started:
+            try:
+                asyncio.create_task(_start_repo_app(prefix, sub_app))
+            except RuntimeError:
+                pass
         return True
 
     def _refresh_mounts(snapshots):
@@ -526,6 +552,27 @@ def create_hub_app(
 
     initial_snapshots = supervisor.scan()
     _refresh_mounts(initial_snapshots)
+
+    @app.on_event("startup")
+    async def hub_startup():
+        app.state.hub_started = True
+        for prefix, sub_app in list(repo_apps.items()):
+            await _start_repo_app(prefix, sub_app)
+
+    @app.on_event("shutdown")
+    async def hub_shutdown():
+        for prefix, sub_app in list(repo_apps.items()):
+            if prefix not in repo_startup_complete:
+                continue
+            try:
+                await sub_app.router.shutdown()
+            except Exception as exc:
+                try:
+                    app.state.logger.warning(
+                        "Repo shutdown failed for %s: %s", prefix, exc
+                    )
+                except Exception:
+                    pass
 
     @app.get("/hub/usage")
     def hub_usage(since: Optional[str] = None, until: Optional[str] = None):

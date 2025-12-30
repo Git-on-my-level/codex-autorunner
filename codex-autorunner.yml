@@ -75,6 +75,22 @@ repo:
     # Optional base path for reverse proxies ("" or "/car").
     base_path: ""
 
+  notifications:
+    # enabled: true|false|"auto" (auto enables if any target env vars are present)
+    enabled: auto
+    # List of events to notify; use ["all"] to receive every event.
+    events:
+      - run_finished
+      - run_error
+      - tui_idle
+    # Idle time (seconds) after last TUI output before notifying.
+    tui_idle_seconds: 60
+    discord:
+      webhook_url_env: CAR_DISCORD_WEBHOOK_URL
+    telegram:
+      bot_token_env: CAR_TELEGRAM_BOT_TOKEN
+      chat_id_env: CAR_TELEGRAM_CHAT_ID
+
   terminal:
     # Idle timeout for terminal sessions (seconds).
     idle_timeout_seconds: 43200

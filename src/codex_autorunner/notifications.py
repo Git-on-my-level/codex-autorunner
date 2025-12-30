@@ -10,6 +10,7 @@ from .config import Config
 
 
 DEFAULT_EVENTS = {"run_finished", "run_error", "tui_idle"}
+KNOWN_EVENTS = {"run_finished", "run_error", "tui_idle", "tui_session_finished", "all"}
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
 
@@ -19,8 +20,10 @@ class NotificationManager:
         self.logger = logger or logging.getLogger(__name__)
         raw = config.raw.get("notifications")
         self._cfg = raw if isinstance(raw, dict) else {}
+        self._warned_missing: set[str] = set()
         self._enabled_mode = self._parse_enabled(self._cfg.get("enabled"))
         self._events = self._normalize_events(self._cfg.get("events"))
+        self._warn_unknown_events(self._events)
         self._discord = (
             self._cfg.get("discord") if isinstance(self._cfg.get("discord"), dict) else {}
         )
@@ -29,7 +32,6 @@ class NotificationManager:
         )
         self._discord_enabled = self._discord.get("enabled") is not False
         self._telegram_enabled = self._telegram.get("enabled") is not False
-        self._warned_missing: set[str] = set()
 
     def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
@@ -109,6 +111,16 @@ class NotificationManager:
             if isinstance(item, str) and item.strip()
         }
         return normalized
+
+    def _warn_unknown_events(self, events: set[str]) -> None:
+        unknown = {event for event in events if event not in KNOWN_EVENTS}
+        if not unknown:
+            return
+        details = ", ".join(sorted(unknown))
+        self._warn_once(
+            "notifications.unknown_events",
+            f"Unknown notification events configured: {details}",
+        )
 
     def _should_notify(self, event: str) -> bool:
         enabled = self._is_enabled()
@@ -285,15 +297,23 @@ class NotificationManager:
         self, client: httpx.Client, targets: dict[str, dict[str, str]], message: str
     ) -> None:
         if "discord" in targets:
-            self._send_discord_sync(client, targets["discord"]["webhook_url"], message)
+            try:
+                self._send_discord_sync(
+                    client, targets["discord"]["webhook_url"], message
+                )
+            except Exception as exc:
+                self._log_delivery_failure("discord", exc)
         if "telegram" in targets:
             telegram = targets["telegram"]
-            self._send_telegram_sync(
-                client,
-                telegram["bot_token"],
-                telegram["chat_id"],
-                message,
-            )
+            try:
+                self._send_telegram_sync(
+                    client,
+                    telegram["bot_token"],
+                    telegram["chat_id"],
+                    message,
+                )
+            except Exception as exc:
+                self._log_delivery_failure("telegram", exc)
 
     async def _send_async(
         self,
@@ -302,17 +322,23 @@ class NotificationManager:
         message: str,
     ) -> None:
         if "discord" in targets:
-            await self._send_discord_async(
-                client, targets["discord"]["webhook_url"], message
-            )
+            try:
+                await self._send_discord_async(
+                    client, targets["discord"]["webhook_url"], message
+                )
+            except Exception as exc:
+                self._log_delivery_failure("discord", exc)
         if "telegram" in targets:
             telegram = targets["telegram"]
-            await self._send_telegram_async(
-                client,
-                telegram["bot_token"],
-                telegram["chat_id"],
-                message,
-            )
+            try:
+                await self._send_telegram_async(
+                    client,
+                    telegram["bot_token"],
+                    telegram["chat_id"],
+                    message,
+                )
+            except Exception as exc:
+                self._log_delivery_failure("telegram", exc)
 
     def _send_discord_sync(
         self, client: httpx.Client, webhook_url: str, message: str
@@ -347,6 +373,9 @@ class NotificationManager:
             return
         self._warned_missing.add(key)
         self._log_warning(message)
+
+    def _log_delivery_failure(self, target: str, exc: Exception) -> None:
+        self._log_warning(f"Notification delivery failed for {target}", exc)
 
     def _log_warning(self, message: str, exc: Optional[Exception] = None) -> None:
         try:
