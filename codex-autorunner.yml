@@ -91,6 +91,35 @@ repo:
       bot_token_env: CAR_TELEGRAM_BOT_TOKEN
       chat_id_env: CAR_TELEGRAM_CHAT_ID
 
+  telegram_bot:
+    # Telegram bot integration (polling).
+    enabled: false
+    mode: polling
+    bot_token_env: CAR_TELEGRAM_BOT_TOKEN
+    chat_id_env: CAR_TELEGRAM_CHAT_ID
+    allowed_chat_ids: []
+    allowed_user_ids: []
+    require_topics: true
+    defaults:
+      approval_mode: yolo
+      approval_policy: on-request
+      sandbox_policy: dangerFullAccess
+      yolo_approval_policy: never
+      yolo_sandbox_policy: dangerFullAccess
+    concurrency:
+      max_parallel_turns: 2
+      per_topic_queue: true
+    state_file: .codex-autorunner/telegram_state.json
+    app_server_command:
+      - codex
+      - app-server
+    polling:
+      timeout_seconds: 30
+      allowed_updates:
+        - message
+        - edited_message
+        - callback_query
+
   terminal:
     # Idle timeout for terminal sessions (seconds).
     idle_timeout_seconds: 43200
@@ -150,6 +179,35 @@ hub:
       path: .codex-autorunner/codex-autorunner-hub.log
       max_bytes: 10000000
       backup_count: 3
+
+  telegram_bot:
+    # Telegram bot integration (polling).
+    enabled: false
+    mode: polling
+    bot_token_env: CAR_TELEGRAM_BOT_TOKEN
+    chat_id_env: CAR_TELEGRAM_CHAT_ID
+    allowed_chat_ids: []
+    allowed_user_ids: []
+    require_topics: true
+    defaults:
+      approval_mode: yolo
+      approval_policy: on-request
+      sandbox_policy: dangerFullAccess
+      yolo_approval_policy: never
+      yolo_sandbox_policy: dangerFullAccess
+    concurrency:
+      max_parallel_turns: 2
+      per_topic_queue: true
+    state_file: .codex-autorunner/telegram_state.json
+    app_server_command:
+      - codex
+      - app-server
+    polling:
+      timeout_seconds: 30
+      allowed_updates:
+        - message
+        - edited_message
+        - callback_query
 
   server:
     host: 127.0.0.1

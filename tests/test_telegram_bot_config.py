@@ -1,0 +1,43 @@
+from pathlib import Path
+
+import pytest
+
+from codex_autorunner.telegram_bot import (
+    DEFAULT_APP_SERVER_COMMAND,
+    TelegramBotConfig,
+    TelegramBotConfigError,
+)
+
+
+def test_telegram_bot_config_env_resolution(tmp_path: Path) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "-100",
+    }
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    assert cfg.bot_token == "token"
+    assert cfg.allowed_chat_ids == {-100}
+    assert cfg.allowed_user_ids == {123}
+    assert cfg.app_server_command == list(DEFAULT_APP_SERVER_COMMAND)
+
+
+def test_telegram_bot_config_validate_requires_allowlist(tmp_path: Path) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [],
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "",
+    }
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    with pytest.raises(TelegramBotConfigError):
+        cfg.validate()

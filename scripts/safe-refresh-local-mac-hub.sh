@@ -10,6 +10,8 @@ set -euo pipefail
 #   PACKAGE_SRC            Path to this repo (default: scripts/..)
 #   LABEL                  launchd label (default: com.codex.autorunner)
 #   PLIST_PATH             launchd plist path (default: ~/Library/LaunchAgents/${LABEL}.plist)
+#   TELEGRAM_LABEL         launchd label for telegram bot (default: ${LABEL}.telegram)
+#   TELEGRAM_PLIST_PATH    telegram plist path (default: ~/Library/LaunchAgents/${TELEGRAM_LABEL}.plist)
 #   PIPX_ROOT              pipx root (default: ~/.local/pipx)
 #   PIPX_VENV              existing pipx venv path (default: ${PIPX_ROOT}/venvs/codex-autorunner)
 #   CURRENT_VENV_LINK      symlink path used by launchd (default: ${PIPX_ROOT}/venvs/codex-autorunner.current)
@@ -24,6 +26,8 @@ set -euo pipefail
 LABEL="${LABEL:-com.codex.autorunner}"
 PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/${LABEL}.plist}"
 UPDATE_STATUS_PATH="${UPDATE_STATUS_PATH:-}"
+TELEGRAM_LABEL="${TELEGRAM_LABEL:-${LABEL}.telegram}"
+TELEGRAM_PLIST_PATH="${TELEGRAM_PLIST_PATH:-$HOME/Library/LaunchAgents/${TELEGRAM_LABEL}.plist}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
@@ -174,6 +178,17 @@ _reload() {
   launchctl kickstart -k "${domain}" >/dev/null
 }
 
+_reload_telegram() {
+  if [[ ! -f "${TELEGRAM_PLIST_PATH}" ]]; then
+    return 0
+  fi
+  local telegram_domain
+  telegram_domain="gui/$(id -u)/${TELEGRAM_LABEL}"
+  launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
+  launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
+  launchctl kickstart -k "${telegram_domain}" >/dev/null
+}
+
 _plist_arg_value() {
   local key
   key="$1"
@@ -316,6 +331,7 @@ ln -sfn "${next_venv}" "${CURRENT_VENV_LINK}"
 echo "Restarting launchd service ${LABEL}..."
 _ensure_plist_uses_current_venv
 _reload
+_reload_telegram
 
 if _wait_healthy; then
   echo "Health check OK; update successful."
@@ -324,6 +340,7 @@ else
   echo "Health check failed; rolling back to ${current_target}..." >&2
   ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
   _reload || true
+  _reload_telegram || true
   if _wait_healthy; then
     echo "Rollback OK; service restored." >&2
     write_status "rollback" "Update failed; rollback succeeded."

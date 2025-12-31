@@ -268,7 +268,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     f"buffer_bytes={buffer_bytes} buffer_chunks={buffer_chunks}"
                 ),
             )
-        queue = active_session.add_subscriber()
+        include_replay_end = attach_only or mode == "resume" or bool(client_session_id)
+        queue = active_session.add_subscriber(include_replay_end=include_replay_end)
 
         async def pty_to_ws():
             try:

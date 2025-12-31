@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import subprocess
@@ -26,6 +27,7 @@ from .manifest import load_manifest
 from .server import create_app, create_hub_app
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import RepoNotFoundError, default_editor, find_repo_root
+from .logging_utils import setup_rotating_logger
 from .spec_ingest import (
     SpecIngestError,
     generate_docs_from_spec,
@@ -40,9 +42,11 @@ from .usage import (
     summarize_repo_usage,
 )
 from .snapshot import SnapshotError, generate_snapshot, load_snapshot
+from .telegram_bot import TelegramBotConfig, TelegramBotConfigError, TelegramBotService
 
 app = typer.Typer(add_completion=False)
 hub_app = typer.Typer(add_completion=False)
+telegram_app = typer.Typer(add_completion=False)
 
 
 def _require_repo_config(repo: Optional[Path]) -> Engine:
@@ -80,6 +84,7 @@ def _request_json(method: str, url: str, payload: Optional[dict] = None) -> dict
 
 
 app.add_typer(hub_app, name="hub")
+app.add_typer(telegram_app, name="telegram")
 
 
 def _has_nested_git(path: Path) -> bool:
@@ -699,6 +704,37 @@ def hub_scan(path: Optional[Path] = typer.Option(None, "--path", help="Hub root 
         typer.echo(
             f"- {snap.id}: {snap.status.value}, initialized={snap.initialized}, exists={snap.exists_on_disk}"
         )
+
+
+@telegram_app.command("start")
+def telegram_start(
+    path: Optional[Path] = typer.Option(None, "--path", help="Repo or hub root path"),
+):
+    """Start the Telegram bot (polling)."""
+    try:
+        config = load_config(path or Path.cwd())
+    except ConfigError as exc:
+        raise typer.Exit(str(exc))
+    telegram_cfg = TelegramBotConfig.from_raw(
+        config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
+        root=config.root,
+    )
+    if not telegram_cfg.enabled:
+        raise typer.Exit("telegram_bot is disabled; set telegram_bot.enabled: true")
+    try:
+        telegram_cfg.validate()
+    except TelegramBotConfigError as exc:
+        raise typer.Exit(str(exc))
+    logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
+    service = TelegramBotService(
+        telegram_cfg,
+        logger=logger,
+        hub_root=config.root if isinstance(config, HubConfig) else None,
+        manifest_path=(
+            config.manifest_path if isinstance(config, HubConfig) else None
+        ),
+    )
+    asyncio.run(service.run_polling())
 
 
 if __name__ == "__main__":

@@ -9,11 +9,15 @@ set -euo pipefail
 #   PACKAGE_SRC   Path to this repo (default: script/..)
 #   LABEL         launchd label (default: com.codex.autorunner)
 #   PLIST_PATH    launchd plist path (default: ~/Library/LaunchAgents/${LABEL}.plist)
+#   TELEGRAM_LABEL launchd label for telegram bot (default: ${LABEL}.telegram)
+#   TELEGRAM_PLIST_PATH telegram plist path (default: ~/Library/LaunchAgents/${TELEGRAM_LABEL}.plist)
 #   PIPX_VENV     pipx venv path (default: ~/.local/pipx/venvs/codex-autorunner)
 #   PIPX_PYTHON   python inside venv (default: ${PIPX_VENV}/bin/python)
 
 LABEL="${LABEL:-com.codex.autorunner}"
 PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/${LABEL}.plist}"
+TELEGRAM_LABEL="${TELEGRAM_LABEL:-${LABEL}.telegram}"
+TELEGRAM_PLIST_PATH="${TELEGRAM_PLIST_PATH:-$HOME/Library/LaunchAgents/${TELEGRAM_LABEL}.plist}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
@@ -42,5 +46,12 @@ echo "Reloading launchd service ${LABEL}..."
 launchctl unload "${PLIST_PATH}" >/dev/null 2>&1 || true
 launchctl load -w "${PLIST_PATH}"
 launchctl kickstart -k "gui/$(id -u)/${LABEL}"
+
+if [[ -f "${TELEGRAM_PLIST_PATH}" ]]; then
+  echo "Reloading launchd service ${TELEGRAM_LABEL}..."
+  launchctl unload "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
+  launchctl load -w "${TELEGRAM_PLIST_PATH}"
+  launchctl kickstart -k "gui/$(id -u)/${TELEGRAM_LABEL}"
+fi
 
 echo "Done."

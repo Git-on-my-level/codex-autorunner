@@ -1,9 +1,10 @@
+import json
 import logging
 from io import StringIO
 from pathlib import Path
 from uuid import uuid4
 
-from codex_autorunner.logging_utils import safe_log, setup_rotating_logger
+from codex_autorunner.logging_utils import log_event, safe_log, setup_rotating_logger
 from codex_autorunner.config import LogConfig
 
 
@@ -64,3 +65,26 @@ def test_safe_log_fallback_and_exception():
     handler.flush()
 
     assert "value=%d oops: boom" in stream.getvalue()
+
+
+def test_log_event_redacts_sensitive_fields() -> None:
+    logger, stream, handler = _make_buffer_logger()
+
+    log_event(
+        logger,
+        logging.INFO,
+        "test.event",
+        bot_token="secret-token",
+        nested={"api_key": "secret-key", "value": "ok"},
+        items=[{"password": "p"}],
+        text="hello",
+    )
+    handler.flush()
+    payload = json.loads(stream.getvalue())
+
+    assert payload["event"] == "test.event"
+    assert payload["bot_token"] == "<redacted>"
+    assert payload["nested"]["api_key"] == "<redacted>"
+    assert payload["nested"]["value"] == "ok"
+    assert payload["items"][0]["password"] == "<redacted>"
+    assert payload["text"] == "hello"

@@ -83,6 +83,32 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
         },
     },
+    "telegram_bot": {
+        "enabled": False,
+        "mode": "polling",
+        "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
+        "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
+        "allowed_chat_ids": [],
+        "allowed_user_ids": [],
+        "require_topics": True,
+        "defaults": {
+            "approval_mode": "yolo",
+            "approval_policy": "on-request",
+            "sandbox_policy": "dangerFullAccess",
+            "yolo_approval_policy": "never",
+            "yolo_sandbox_policy": "dangerFullAccess",
+        },
+        "concurrency": {
+            "max_parallel_turns": 2,
+            "per_topic_queue": True,
+        },
+        "state_file": ".codex-autorunner/telegram_state.json",
+        "app_server_command": ["codex", "app-server"],
+        "polling": {
+            "timeout_seconds": 30,
+            "allowed_updates": ["message", "edited_message", "callback_query"],
+        },
+    },
     "terminal": {
         "idle_timeout_seconds": TWELVE_HOUR_SECONDS,
     },
@@ -126,6 +152,32 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "mode": "hub",
     "terminal": {
         "idle_timeout_seconds": TWELVE_HOUR_SECONDS,
+    },
+    "telegram_bot": {
+        "enabled": False,
+        "mode": "polling",
+        "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
+        "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
+        "allowed_chat_ids": [],
+        "allowed_user_ids": [],
+        "require_topics": True,
+        "defaults": {
+            "approval_mode": "yolo",
+            "approval_policy": "on-request",
+            "sandbox_policy": "dangerFullAccess",
+            "yolo_approval_policy": "never",
+            "yolo_sandbox_policy": "dangerFullAccess",
+        },
+        "concurrency": {
+            "max_parallel_turns": 2,
+            "per_topic_queue": True,
+        },
+        "state_file": ".codex-autorunner/telegram_state.json",
+        "app_server_command": ["codex", "app-server"],
+        "polling": {
+            "timeout_seconds": 30,
+            "allowed_updates": ["message", "edited_message", "callback_query"],
+        },
     },
     "hub": {
         "repos_root": ".",
@@ -670,6 +722,7 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
     voice_cfg = cfg.get("voice", {})
     if voice_cfg is not None and not isinstance(voice_cfg, dict):
         raise ConfigError("voice section must be a mapping if provided")
+    _validate_telegram_bot_config(cfg)
 
 
 def _validate_hub_config(cfg: Dict[str, Any]) -> None:
@@ -722,3 +775,71 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         for key in ("max_bytes", "backup_count"):
             if key in server_log_cfg and not isinstance(server_log_cfg.get(key), int):
                 raise ConfigError(f"server_log.{key} must be an integer")
+    _validate_telegram_bot_config(cfg)
+
+
+def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
+    telegram_cfg = cfg.get("telegram_bot")
+    if telegram_cfg is None:
+        return
+    if not isinstance(telegram_cfg, dict):
+        raise ConfigError("telegram_bot section must be a mapping if provided")
+    if "enabled" in telegram_cfg and not isinstance(telegram_cfg.get("enabled"), bool):
+        raise ConfigError("telegram_bot.enabled must be boolean")
+    if "mode" in telegram_cfg and not isinstance(telegram_cfg.get("mode"), str):
+        raise ConfigError("telegram_bot.mode must be a string")
+    for key in ("bot_token_env", "chat_id_env"):
+        if key in telegram_cfg and not isinstance(telegram_cfg.get(key), str):
+            raise ConfigError(f"telegram_bot.{key} must be a string")
+    for key in ("allowed_chat_ids", "allowed_user_ids"):
+        if key in telegram_cfg and not isinstance(telegram_cfg.get(key), list):
+            raise ConfigError(f"telegram_bot.{key} must be a list")
+    if "require_topics" in telegram_cfg and not isinstance(
+        telegram_cfg.get("require_topics"), bool
+    ):
+        raise ConfigError("telegram_bot.require_topics must be boolean")
+    defaults_cfg = telegram_cfg.get("defaults")
+    if defaults_cfg is not None and not isinstance(defaults_cfg, dict):
+        raise ConfigError("telegram_bot.defaults must be a mapping if provided")
+    if isinstance(defaults_cfg, dict):
+        if "approval_mode" in defaults_cfg and not isinstance(
+            defaults_cfg.get("approval_mode"), str
+        ):
+            raise ConfigError("telegram_bot.defaults.approval_mode must be a string")
+        for key in ("approval_policy", "sandbox_policy", "yolo_approval_policy", "yolo_sandbox_policy"):
+            if key in defaults_cfg and defaults_cfg.get(key) is not None and not isinstance(
+                defaults_cfg.get(key), str
+            ):
+                raise ConfigError(f"telegram_bot.defaults.{key} must be a string or null")
+    concurrency_cfg = telegram_cfg.get("concurrency")
+    if concurrency_cfg is not None and not isinstance(concurrency_cfg, dict):
+        raise ConfigError("telegram_bot.concurrency must be a mapping if provided")
+    if isinstance(concurrency_cfg, dict):
+        if "max_parallel_turns" in concurrency_cfg and not isinstance(
+            concurrency_cfg.get("max_parallel_turns"), int
+        ):
+            raise ConfigError("telegram_bot.concurrency.max_parallel_turns must be an integer")
+        if "per_topic_queue" in concurrency_cfg and not isinstance(
+            concurrency_cfg.get("per_topic_queue"), bool
+        ):
+            raise ConfigError("telegram_bot.concurrency.per_topic_queue must be boolean")
+    if "state_file" in telegram_cfg and not isinstance(
+        telegram_cfg.get("state_file"), str
+    ):
+        raise ConfigError("telegram_bot.state_file must be a string path")
+    if "app_server_command" in telegram_cfg and not isinstance(
+        telegram_cfg.get("app_server_command"), (list, str)
+    ):
+        raise ConfigError("telegram_bot.app_server_command must be a list or string")
+    polling_cfg = telegram_cfg.get("polling")
+    if polling_cfg is not None and not isinstance(polling_cfg, dict):
+        raise ConfigError("telegram_bot.polling must be a mapping if provided")
+    if isinstance(polling_cfg, dict):
+        if "timeout_seconds" in polling_cfg and not isinstance(
+            polling_cfg.get("timeout_seconds"), int
+        ):
+            raise ConfigError("telegram_bot.polling.timeout_seconds must be an integer")
+        if "allowed_updates" in polling_cfg and not isinstance(
+            polling_cfg.get("allowed_updates"), list
+        ):
+            raise ConfigError("telegram_bot.polling.allowed_updates must be a list")

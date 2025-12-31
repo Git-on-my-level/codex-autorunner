@@ -1,13 +1,26 @@
 import collections
+import json
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional, OrderedDict
+from typing import Any, Mapping, Optional, OrderedDict
 
 from .config import LogConfig
 
 _MAX_CACHED_LOGGERS = 64
 _LOGGER_CACHE: "OrderedDict[str, logging.Logger]" = collections.OrderedDict()
+_REDACTED_VALUE = "<redacted>"
+_SENSITIVE_FIELD_PARTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "bot_token",
+    "openai_api_key",
+    "password",
+    "secret",
+    "token",
+)
+_MAX_LOG_STRING = 200
 
 
 def setup_rotating_logger(name: str, log_config: LogConfig) -> logging.Logger:
@@ -73,3 +86,63 @@ def safe_log(
         logger.log(level, formatted)
     except Exception:
         pass
+
+
+def log_event(
+    logger: logging.Logger,
+    level: int,
+    event: str,
+    *,
+    exc: Optional[Exception] = None,
+    **fields: Any,
+) -> None:
+    payload: dict[str, Any] = {"event": event}
+    if fields:
+        payload.update(_sanitize_fields(fields))
+    if exc is not None:
+        payload["error"] = _sanitize_value(str(exc))
+        payload["error_type"] = type(exc).__name__
+    try:
+        message = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+        logger.log(level, message)
+    except Exception:
+        pass
+
+
+def _sanitize_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in fields.items():
+        if _is_sensitive_key(str(key)):
+            sanitized[key] = _REDACTED_VALUE
+        else:
+            sanitized[key] = _sanitize_value(value)
+    return sanitized
+
+
+def _sanitize_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _sanitize_mapping(value)
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_value(item) for item in value]
+    if isinstance(value, str):
+        if len(value) > _MAX_LOG_STRING:
+            return value[: _MAX_LOG_STRING - 3] + "..."
+        return value
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _sanitize_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in mapping.items():
+        if _is_sensitive_key(str(key)):
+            sanitized[key] = _REDACTED_VALUE
+        else:
+            sanitized[key] = _sanitize_value(value)
+    return sanitized
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(part in lowered for part in _SENSITIVE_FIELD_PARTS)
