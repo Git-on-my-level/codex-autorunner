@@ -103,6 +103,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "per_topic_queue": True,
         },
         "state_file": ".codex-autorunner/telegram_state.json",
+        "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
         "polling": {
             "timeout_seconds": 30,
@@ -173,6 +174,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "per_topic_queue": True,
         },
         "state_file": ".codex-autorunner/telegram_state.json",
+        "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
         "polling": {
             "timeout_seconds": 30,
@@ -788,7 +790,7 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("telegram_bot.enabled must be boolean")
     if "mode" in telegram_cfg and not isinstance(telegram_cfg.get("mode"), str):
         raise ConfigError("telegram_bot.mode must be a string")
-    for key in ("bot_token_env", "chat_id_env"):
+    for key in ("bot_token_env", "chat_id_env", "app_server_command_env"):
         if key in telegram_cfg and not isinstance(telegram_cfg.get(key), str):
             raise ConfigError(f"telegram_bot.{key} must be a string")
     for key in ("allowed_chat_ids", "allowed_user_ids"):

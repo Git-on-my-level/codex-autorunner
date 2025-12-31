@@ -110,6 +110,8 @@ repo:
       max_parallel_turns: 2
       per_topic_queue: true
     state_file: .codex-autorunner/telegram_state.json
+    # Optional env var that contains the full app-server command.
+    app_server_command_env: CAR_TELEGRAM_APP_SERVER_COMMAND
     app_server_command:
       - codex
       - app-server
@@ -199,6 +201,8 @@ hub:
       max_parallel_turns: 2
       per_topic_queue: true
     state_file: .codex-autorunner/telegram_state.json
+    # Optional env var that contains the full app-server command.
+    app_server_command_env: CAR_TELEGRAM_APP_SERVER_COMMAND
     app_server_command:
       - codex
       - app-server

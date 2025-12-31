@@ -90,6 +90,7 @@ class TelegramBotConfig:
     defaults: TelegramBotDefaults
     concurrency: TelegramBotConcurrency
     state_file: Path
+    app_server_command_env: str
     app_server_command: list[str]
     poll_timeout_seconds: int
     poll_allowed_updates: list[str]
@@ -154,7 +155,16 @@ class TelegramBotConfig:
         if not state_file.is_absolute():
             state_file = (root / state_file).resolve()
 
-        app_server_command = _parse_command(cfg.get("app_server_command"))
+        app_server_command_env = str(
+            cfg.get("app_server_command_env", "CAR_TELEGRAM_APP_SERVER_COMMAND")
+        )
+        app_server_command: list[str] = []
+        if app_server_command_env:
+            env_command = env.get(app_server_command_env)
+            if env_command:
+                app_server_command = _parse_command(env_command)
+        if not app_server_command:
+            app_server_command = _parse_command(cfg.get("app_server_command"))
         if not app_server_command:
             app_server_command = list(DEFAULT_APP_SERVER_COMMAND)
 
@@ -183,6 +193,7 @@ class TelegramBotConfig:
             defaults=defaults,
             concurrency=concurrency,
             state_file=state_file,
+            app_server_command_env=app_server_command_env,
             app_server_command=app_server_command,
             poll_timeout_seconds=poll_timeout_seconds,
             poll_allowed_updates=poll_allowed_updates,
