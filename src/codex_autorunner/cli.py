@@ -43,6 +43,7 @@ from .usage import (
 )
 from .snapshot import SnapshotError, generate_snapshot, load_snapshot
 from .telegram_bot import TelegramBotConfig, TelegramBotConfigError, TelegramBotService
+from .voice import VoiceConfig
 
 app = typer.Typer(add_completion=False)
 hub_app = typer.Typer(add_completion=False)
@@ -726,6 +727,8 @@ def telegram_start(
     except TelegramBotConfigError as exc:
         raise typer.Exit(str(exc))
     logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
+    voice_raw = config.raw.get("voice") if isinstance(config.raw, dict) else None
+    voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
     service = TelegramBotService(
         telegram_cfg,
         logger=logger,
@@ -733,6 +736,7 @@ def telegram_start(
         manifest_path=(
             config.manifest_path if isinstance(config, HubConfig) else None
         ),
+        voice_config=voice_config,
     )
     asyncio.run(service.run_polling())
 

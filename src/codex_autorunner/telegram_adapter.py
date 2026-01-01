@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Sequence, Union
 
 import httpx
@@ -26,6 +26,43 @@ class TelegramAPIError(Exception):
 
 
 @dataclass(frozen=True)
+class TelegramPhotoSize:
+    file_id: str
+    file_unique_id: Optional[str]
+    width: int
+    height: int
+    file_size: Optional[int]
+
+
+@dataclass(frozen=True)
+class TelegramDocument:
+    file_id: str
+    file_unique_id: Optional[str]
+    file_name: Optional[str]
+    mime_type: Optional[str]
+    file_size: Optional[int]
+
+
+@dataclass(frozen=True)
+class TelegramAudio:
+    file_id: str
+    file_unique_id: Optional[str]
+    duration: Optional[int]
+    file_name: Optional[str]
+    mime_type: Optional[str]
+    file_size: Optional[int]
+
+
+@dataclass(frozen=True)
+class TelegramVoice:
+    file_id: str
+    file_unique_id: Optional[str]
+    duration: Optional[int]
+    mime_type: Optional[str]
+    file_size: Optional[int]
+
+
+@dataclass(frozen=True)
 class TelegramMessage:
     update_id: int
     message_id: int
@@ -35,6 +72,11 @@ class TelegramMessage:
     text: Optional[str]
     date: Optional[int]
     is_topic_message: bool
+    caption: Optional[str] = None
+    photos: tuple[TelegramPhotoSize, ...] = field(default_factory=tuple)
+    document: Optional[TelegramDocument] = None
+    audio: Optional[TelegramAudio] = None
+    voice: Optional[TelegramVoice] = None
 
 
 @dataclass(frozen=True)
@@ -164,6 +206,13 @@ def _parse_message(update_id: int, payload: Any) -> Optional[TelegramMessage]:
     text = payload.get("text")
     if text is not None and not isinstance(text, str):
         text = None
+    caption = payload.get("caption")
+    if caption is not None and not isinstance(caption, str):
+        caption = None
+    photos = _parse_photo_sizes(payload.get("photo"))
+    document = _parse_document(payload.get("document"))
+    audio = _parse_audio(payload.get("audio"))
+    voice = _parse_voice(payload.get("voice"))
     date = payload.get("date")
     if date is not None and not isinstance(date, int):
         date = None
@@ -177,6 +226,11 @@ def _parse_message(update_id: int, payload: Any) -> Optional[TelegramMessage]:
         text=text,
         date=date,
         is_topic_message=is_topic_message,
+        caption=caption,
+        photos=photos,
+        document=document,
+        audio=audio,
+        voice=voice,
     )
 
 
@@ -217,6 +271,123 @@ def _parse_callback(update_id: int, payload: Any) -> Optional[TelegramCallbackQu
         message_id=message_id,
         chat_id=chat_id,
         thread_id=thread_id,
+    )
+
+
+def _parse_photo_sizes(payload: Any) -> tuple[TelegramPhotoSize, ...]:
+    if not isinstance(payload, list):
+        return ()
+    sizes: list[TelegramPhotoSize] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        file_id = item.get("file_id")
+        if not isinstance(file_id, str) or not file_id:
+            continue
+        file_unique_id = item.get("file_unique_id")
+        if file_unique_id is not None and not isinstance(file_unique_id, str):
+            file_unique_id = None
+        width = item.get("width")
+        height = item.get("height")
+        if not isinstance(width, int) or not isinstance(height, int):
+            continue
+        file_size = item.get("file_size")
+        if file_size is not None and not isinstance(file_size, int):
+            file_size = None
+        sizes.append(
+            TelegramPhotoSize(
+                file_id=file_id,
+                file_unique_id=file_unique_id,
+                width=width,
+                height=height,
+                file_size=file_size,
+            )
+        )
+    return tuple(sizes)
+
+
+def _parse_document(payload: Any) -> Optional[TelegramDocument]:
+    if not isinstance(payload, dict):
+        return None
+    file_id = payload.get("file_id")
+    if not isinstance(file_id, str) or not file_id:
+        return None
+    file_unique_id = payload.get("file_unique_id")
+    if file_unique_id is not None and not isinstance(file_unique_id, str):
+        file_unique_id = None
+    file_name = payload.get("file_name")
+    if file_name is not None and not isinstance(file_name, str):
+        file_name = None
+    mime_type = payload.get("mime_type")
+    if mime_type is not None and not isinstance(mime_type, str):
+        mime_type = None
+    file_size = payload.get("file_size")
+    if file_size is not None and not isinstance(file_size, int):
+        file_size = None
+    return TelegramDocument(
+        file_id=file_id,
+        file_unique_id=file_unique_id,
+        file_name=file_name,
+        mime_type=mime_type,
+        file_size=file_size,
+    )
+
+
+def _parse_audio(payload: Any) -> Optional[TelegramAudio]:
+    if not isinstance(payload, dict):
+        return None
+    file_id = payload.get("file_id")
+    if not isinstance(file_id, str) or not file_id:
+        return None
+    file_unique_id = payload.get("file_unique_id")
+    if file_unique_id is not None and not isinstance(file_unique_id, str):
+        file_unique_id = None
+    duration = payload.get("duration")
+    if duration is not None and not isinstance(duration, int):
+        duration = None
+    file_name = payload.get("file_name")
+    if file_name is not None and not isinstance(file_name, str):
+        file_name = None
+    mime_type = payload.get("mime_type")
+    if mime_type is not None and not isinstance(mime_type, str):
+        mime_type = None
+    file_size = payload.get("file_size")
+    if file_size is not None and not isinstance(file_size, int):
+        file_size = None
+    return TelegramAudio(
+        file_id=file_id,
+        file_unique_id=file_unique_id,
+        duration=duration,
+        file_name=file_name,
+        mime_type=mime_type,
+        file_size=file_size,
+    )
+
+
+def _parse_voice(payload: Any) -> Optional[TelegramVoice]:
+    if not isinstance(payload, dict):
+        return None
+    file_id = payload.get("file_id")
+    if not isinstance(file_id, str) or not file_id:
+        return None
+    file_unique_id = payload.get("file_unique_id")
+    if file_unique_id is not None and not isinstance(file_unique_id, str):
+        file_unique_id = None
+    duration = payload.get("duration")
+    if duration is not None and not isinstance(duration, int):
+        duration = None
+    mime_type = payload.get("mime_type")
+    if mime_type is not None and not isinstance(mime_type, str):
+        mime_type = None
+    file_size = payload.get("file_size")
+    if file_size is not None and not isinstance(file_size, int):
+        file_size = None
+    return TelegramVoice(
+        file_id=file_id,
+        file_unique_id=file_unique_id,
+        duration=duration,
+        mime_type=mime_type,
+        file_size=file_size,
     )
 
 
@@ -462,6 +633,7 @@ class TelegramBotClient:
         client: Optional[httpx.AsyncClient] = None,
     ) -> None:
         self._base_url = f"https://api.telegram.org/bot{bot_token}"
+        self._file_base_url = f"https://api.telegram.org/file/bot{bot_token}"
         self._logger = logger or logging.getLogger(__name__)
         if client is None:
             self._client = httpx.AsyncClient(timeout=timeout_seconds)
@@ -549,6 +721,30 @@ class TelegramBotClient:
         log_event(self._logger, logging.DEBUG, "telegram.request", method="getMe")
         result = await self._request("getMe", {})
         return result if isinstance(result, dict) else {}
+
+    async def get_file(self, file_id: str) -> dict[str, Any]:
+        log_event(self._logger, logging.DEBUG, "telegram.request", method="getFile")
+        result = await self._request("getFile", {"file_id": file_id})
+        return result if isinstance(result, dict) else {}
+
+    async def download_file(self, file_path: str) -> bytes:
+        url = f"{self._file_base_url}/{file_path}"
+        log_event(
+            self._logger, logging.INFO, "telegram.file.download", file_path=file_path
+        )
+        try:
+            response = await self._client.get(url)
+            response.raise_for_status()
+            return response.content
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.file.download_failed",
+                file_path=file_path,
+                exc=exc,
+            )
+            raise TelegramAPIError("Telegram file download failed") from exc
 
     async def send_message_chunks(
         self,

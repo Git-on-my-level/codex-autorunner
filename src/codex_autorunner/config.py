@@ -102,6 +102,14 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "max_parallel_turns": 2,
             "per_topic_queue": True,
         },
+        "media": {
+            "enabled": True,
+            "images": True,
+            "voice": True,
+            "max_image_bytes": 10_000_000,
+            "max_voice_bytes": 10_000_000,
+            "image_prompt": "Describe the image.",
+        },
         "state_file": ".codex-autorunner/telegram_state.json",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
@@ -172,6 +180,14 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "concurrency": {
             "max_parallel_turns": 2,
             "per_topic_queue": True,
+        },
+        "media": {
+            "enabled": True,
+            "images": True,
+            "voice": True,
+            "max_image_bytes": 10_000_000,
+            "max_voice_bytes": 10_000_000,
+            "image_prompt": "Describe the image.",
         },
         "state_file": ".codex-autorunner/telegram_state.json",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
@@ -825,6 +841,25 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             concurrency_cfg.get("per_topic_queue"), bool
         ):
             raise ConfigError("telegram_bot.concurrency.per_topic_queue must be boolean")
+    media_cfg = telegram_cfg.get("media")
+    if media_cfg is not None and not isinstance(media_cfg, dict):
+        raise ConfigError("telegram_bot.media must be a mapping if provided")
+    if isinstance(media_cfg, dict):
+        if "enabled" in media_cfg and not isinstance(media_cfg.get("enabled"), bool):
+            raise ConfigError("telegram_bot.media.enabled must be boolean")
+        if "images" in media_cfg and not isinstance(media_cfg.get("images"), bool):
+            raise ConfigError("telegram_bot.media.images must be boolean")
+        if "voice" in media_cfg and not isinstance(media_cfg.get("voice"), bool):
+            raise ConfigError("telegram_bot.media.voice must be boolean")
+        for key in ("max_image_bytes", "max_voice_bytes"):
+            if key in media_cfg and not isinstance(media_cfg.get(key), int):
+                raise ConfigError(f"telegram_bot.media.{key} must be an integer")
+            if isinstance(media_cfg.get(key), int) and media_cfg.get(key) <= 0:
+                raise ConfigError(f"telegram_bot.media.{key} must be greater than 0")
+        if "image_prompt" in media_cfg and not isinstance(
+            media_cfg.get("image_prompt"), str
+        ):
+            raise ConfigError("telegram_bot.media.image_prompt must be a string")
     if "state_file" in telegram_cfg and not isinstance(
         telegram_cfg.get("state_file"), str
     ):

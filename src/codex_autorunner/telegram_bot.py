@@ -4,7 +4,9 @@ import asyncio
 import logging
 import os
 import re
+import secrets
 import shlex
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Iterable, Optional, Sequence
@@ -26,7 +28,9 @@ from .telegram_adapter import (
     TelegramBotClient,
     TelegramCallbackQuery,
     TelegramCommand,
+    TelegramDocument,
     TelegramMessage,
+    TelegramPhotoSize,
     TelegramUpdate,
     TelegramUpdatePoller,
     TELEGRAM_MAX_MESSAGE_LENGTH,
@@ -47,6 +51,7 @@ from .telegram_state import (
     topic_key,
 )
 from .utils import resolve_executable, subprocess_env
+from .voice import VoiceConfig, VoiceService, VoiceServiceError
 
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
@@ -64,6 +69,19 @@ RESUME_PICKER_PROMPT = (
 )
 BIND_PICKER_PROMPT = "Select a repo to bind (buttons below or reply with number/id)."
 WORKING_PLACEHOLDER = "Working..."
+DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
+DEFAULT_MEDIA_IMAGE_PROMPT = "Describe the image."
+IMAGE_CONTENT_TYPES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+}
+IMAGE_EXTS = set(IMAGE_CONTENT_TYPES.values())
 
 
 class TelegramBotConfigError(Exception):
@@ -92,6 +110,26 @@ class TelegramBotConcurrency:
 
 
 @dataclass(frozen=True)
+class TelegramBotMediaConfig:
+    enabled: bool
+    images: bool
+    voice: bool
+    max_image_bytes: int
+    max_voice_bytes: int
+    image_prompt: str
+
+
+@dataclass(frozen=True)
+class TelegramMediaCandidate:
+    kind: str
+    file_id: str
+    file_name: Optional[str]
+    mime_type: Optional[str]
+    file_size: Optional[int]
+    duration: Optional[int] = None
+
+
+@dataclass(frozen=True)
 class TelegramBotConfig:
     root: Path
     enabled: bool
@@ -104,6 +142,7 @@ class TelegramBotConfig:
     require_topics: bool
     defaults: TelegramBotDefaults
     concurrency: TelegramBotConcurrency
+    media: TelegramBotMediaConfig
     state_file: Path
     app_server_command_env: str
     app_server_command: list[str]
@@ -166,6 +205,32 @@ class TelegramBotConfig:
             per_topic_queue=per_topic_queue,
         )
 
+        media_raw = cfg.get("media") if isinstance(cfg.get("media"), dict) else {}
+        media_enabled = bool(media_raw.get("enabled", True))
+        media_images = bool(media_raw.get("images", True))
+        media_voice = bool(media_raw.get("voice", True))
+        max_image_bytes = int(
+            media_raw.get("max_image_bytes", DEFAULT_MEDIA_MAX_IMAGE_BYTES)
+        )
+        if max_image_bytes <= 0:
+            max_image_bytes = DEFAULT_MEDIA_MAX_IMAGE_BYTES
+        max_voice_bytes = int(
+            media_raw.get("max_voice_bytes", DEFAULT_MEDIA_MAX_VOICE_BYTES)
+        )
+        if max_voice_bytes <= 0:
+            max_voice_bytes = DEFAULT_MEDIA_MAX_VOICE_BYTES
+        image_prompt = str(media_raw.get("image_prompt", DEFAULT_MEDIA_IMAGE_PROMPT)).strip()
+        if not image_prompt:
+            image_prompt = DEFAULT_MEDIA_IMAGE_PROMPT
+        media = TelegramBotMediaConfig(
+            enabled=media_enabled,
+            images=media_images,
+            voice=media_voice,
+            max_image_bytes=max_image_bytes,
+            max_voice_bytes=max_voice_bytes,
+            image_prompt=image_prompt,
+        )
+
         state_file = Path(cfg.get("state_file", DEFAULT_STATE_FILE))
         if not state_file.is_absolute():
             state_file = (root / state_file).resolve()
@@ -207,6 +272,7 @@ class TelegramBotConfig:
             require_topics=require_topics,
             defaults=defaults,
             concurrency=concurrency,
+            media=media,
             state_file=state_file,
             app_server_command_env=app_server_command_env,
             app_server_command=app_server_command,
@@ -271,6 +337,8 @@ class TelegramBotService:
         logger: Optional[logging.Logger] = None,
         hub_root: Optional[Path] = None,
         manifest_path: Optional[Path] = None,
+        voice_config: Optional[VoiceConfig] = None,
+        voice_service: Optional[VoiceService] = None,
     ) -> None:
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
@@ -294,6 +362,18 @@ class TelegramBotService:
         self._poller = TelegramUpdatePoller(
             self._bot, allowed_updates=config.poll_allowed_updates
         )
+        self._voice_config = voice_config
+        self._voice_service = voice_service
+        if self._voice_service is None and voice_config is not None:
+            try:
+                self._voice_service = VoiceService(voice_config, logger=self._logger)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.voice.init_failed",
+                    exc=exc,
+                )
         self._turn_semaphore = asyncio.Semaphore(config.concurrency.max_parallel_turns)
         self._turn_contexts: dict[str, TurnContext] = {}
         self._pending_approvals: dict[str, PendingApproval] = {}
@@ -319,6 +399,9 @@ class TelegramBotService:
             allowed_chats=len(self._config.allowed_chat_ids),
             allowed_users=len(self._config.allowed_user_ids),
             require_topics=self._config.require_topics,
+            media_enabled=self._config.media.enabled,
+            media_images=self._config.media.images,
+            media_voice=self._config.media.voice,
         )
         try:
             while True:
@@ -444,20 +527,23 @@ class TelegramBotService:
     async def _handle_message(self, message: TelegramMessage) -> None:
         text = (message.text or "").strip()
         if not text:
+            text = (message.caption or "").strip()
+        has_media = self._message_has_media(message)
+        if not text and not has_media:
             return
         key = topic_key(message.chat_id, message.thread_id)
         runtime = self._router.runtime_for(key)
 
-        if self._handle_pending_resume(key, text):
+        if text and self._handle_pending_resume(key, text):
             return
-        if self._handle_pending_bind(key, text):
+        if text and self._handle_pending_bind(key, text):
             return
 
-        if is_interrupt_alias(text):
+        if text and is_interrupt_alias(text):
             await self._handle_interrupt(message, runtime)
             return
 
-        command = parse_command(text, bot_username=self._bot_username)
+        command = parse_command(text, bot_username=self._bot_username) if text else None
         if command:
             if command.name not in ("resume", "bind"):
                 self._resume_options.pop(key, None)
@@ -472,9 +558,153 @@ class TelegramBotService:
             )
             return
 
+        if has_media:
+            self._enqueue_topic_work(
+                key,
+                lambda: self._handle_media_message(message, runtime, text),
+            )
+            return
+
         self._enqueue_topic_work(
             key,
-            lambda: self._handle_normal_message(message, runtime),
+            lambda: self._handle_normal_message(message, runtime, text_override=text),
+        )
+
+    def _message_has_media(self, message: TelegramMessage) -> bool:
+        return bool(message.photos or message.document or message.voice or message.audio)
+
+    def _select_photo(self, photos: Sequence[TelegramPhotoSize]) -> Optional[TelegramPhotoSize]:
+        if not photos:
+            return None
+        return max(
+            photos,
+            key=lambda item: ((item.file_size or 0), item.width * item.height),
+        )
+
+    def _document_is_image(self, document: TelegramDocument) -> bool:
+        if document.mime_type:
+            base = document.mime_type.lower().split(";", 1)[0].strip()
+            if base.startswith("image/"):
+                return True
+        if document.file_name:
+            suffix = Path(document.file_name).suffix.lower()
+            if suffix in IMAGE_EXTS:
+                return True
+        return False
+
+    def _select_image_candidate(
+        self, message: TelegramMessage
+    ) -> Optional[TelegramMediaCandidate]:
+        photo = self._select_photo(message.photos)
+        if photo:
+            return TelegramMediaCandidate(
+                kind="photo",
+                file_id=photo.file_id,
+                file_name=None,
+                mime_type=None,
+                file_size=photo.file_size,
+            )
+        if message.document and self._document_is_image(message.document):
+            document = message.document
+            return TelegramMediaCandidate(
+                kind="document",
+                file_id=document.file_id,
+                file_name=document.file_name,
+                mime_type=document.mime_type,
+                file_size=document.file_size,
+            )
+        return None
+
+    def _select_voice_candidate(
+        self, message: TelegramMessage
+    ) -> Optional[TelegramMediaCandidate]:
+        if message.voice:
+            voice = message.voice
+            return TelegramMediaCandidate(
+                kind="voice",
+                file_id=voice.file_id,
+                file_name=None,
+                mime_type=voice.mime_type,
+                file_size=voice.file_size,
+                duration=voice.duration,
+            )
+        if message.audio:
+            audio = message.audio
+            return TelegramMediaCandidate(
+                kind="audio",
+                file_id=audio.file_id,
+                file_name=audio.file_name,
+                mime_type=audio.mime_type,
+                file_size=audio.file_size,
+                duration=audio.duration,
+            )
+        return None
+
+    async def _handle_media_message(
+        self, message: TelegramMessage, runtime: Any, caption_text: str
+    ) -> None:
+        if not self._config.media.enabled:
+            await self._send_message(
+                message.chat_id,
+                "Media handling is disabled.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        key = topic_key(message.chat_id, message.thread_id)
+        record = self._router.get_topic(key)
+        if record is None or not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        image_candidate = self._select_image_candidate(message)
+        if image_candidate:
+            if not self._config.media.images:
+                await self._send_message(
+                    message.chat_id,
+                    "Image handling is disabled.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._handle_image_message(
+                message, runtime, record, image_candidate, caption_text
+            )
+            return
+
+        voice_candidate = self._select_voice_candidate(message)
+        if voice_candidate:
+            if not self._config.media.voice:
+                await self._send_message(
+                    message.chat_id,
+                    "Voice transcription is disabled.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._handle_voice_message(
+                message, runtime, record, voice_candidate, caption_text
+            )
+            return
+
+        if caption_text:
+            await self._handle_normal_message(
+                message,
+                runtime,
+                text_override=caption_text,
+                record=record,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            "Unsupported media type.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
         )
 
     def _handle_pending_resume(self, key: str, text: str) -> bool:
@@ -609,10 +839,16 @@ class TelegramBotService:
         )
 
     async def _handle_normal_message(
-        self, message: TelegramMessage, runtime: Any
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        *,
+        text_override: Optional[str] = None,
+        input_items: Optional[list[dict[str, Any]]] = None,
+        record: Optional[Any] = None,
     ) -> None:
         key = topic_key(message.chat_id, message.thread_id)
-        record = self._router.get_topic(key)
+        record = record or self._router.get_topic(key)
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
@@ -624,6 +860,7 @@ class TelegramBotService:
         thread_id = record.active_thread_id
         turn_handle = None
         placeholder_id: Optional[int] = None
+        prompt_text = text_override if text_override is not None else (message.text or "")
         try:
             if not thread_id:
                 thread = await self._client.thread_start(record.workspace_path)
@@ -663,7 +900,8 @@ class TelegramBotService:
                 )
                 turn_handle = await self._client.turn_start(
                     thread_id,
-                    message.text or "",
+                    prompt_text,
+                    input_items=input_items,
                     approval_policy=approval_policy,
                     sandbox_policy=sandbox_policy,
                 )
@@ -727,6 +965,312 @@ class TelegramBotService:
             placeholder_id=placeholder_id,
             response=response,
         )
+
+    async def _handle_image_message(
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        record: Any,
+        candidate: TelegramMediaCandidate,
+        caption_text: str,
+    ) -> None:
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media.image.received",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            file_id=candidate.file_id,
+            file_size=candidate.file_size,
+            has_caption=bool(caption_text),
+        )
+        max_bytes = self._config.media.max_image_bytes
+        if candidate.file_size and candidate.file_size > max_bytes:
+            await self._send_message(
+                message.chat_id,
+                f"Image too large (max {max_bytes} bytes).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        try:
+            data, file_path, file_size = await self._download_telegram_file(
+                candidate.file_id
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media.image.download_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to download image.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if file_size and file_size > max_bytes:
+            await self._send_message(
+                message.chat_id,
+                f"Image too large (max {max_bytes} bytes).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if len(data) > max_bytes:
+            await self._send_message(
+                message.chat_id,
+                f"Image too large (max {max_bytes} bytes).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        try:
+            image_path = self._save_image_file(
+                record.workspace_path, data, file_path, candidate
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media.image.save_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to save image.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        prompt_text = caption_text.strip()
+        if not prompt_text:
+            prompt_text = self._config.media.image_prompt
+        input_items = [
+            {"type": "text", "text": prompt_text},
+            {"type": "localImage", "path": str(image_path)},
+        ]
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media.image.ready",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            path=str(image_path),
+            prompt_len=len(prompt_text),
+        )
+        await self._handle_normal_message(
+            message,
+            runtime,
+            text_override=prompt_text,
+            input_items=input_items,
+            record=record,
+        )
+
+    async def _handle_voice_message(
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        record: Any,
+        candidate: TelegramMediaCandidate,
+        caption_text: str,
+    ) -> None:
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media.voice.received",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            file_id=candidate.file_id,
+            file_size=candidate.file_size,
+            duration=candidate.duration,
+            has_caption=bool(caption_text),
+        )
+        if not self._voice_service or not self._voice_config or not self._voice_config.enabled:
+            await self._send_message(
+                message.chat_id,
+                "Voice transcription is disabled.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        max_bytes = self._config.media.max_voice_bytes
+        if candidate.file_size and candidate.file_size > max_bytes:
+            await self._send_message(
+                message.chat_id,
+                f"Voice note too large (max {max_bytes} bytes).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        try:
+            data, file_path, file_size = await self._download_telegram_file(
+                candidate.file_id
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media.voice.download_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to download voice note.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if file_size and file_size > max_bytes:
+            await self._send_message(
+                message.chat_id,
+                f"Voice note too large (max {max_bytes} bytes).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if len(data) > max_bytes:
+            await self._send_message(
+                message.chat_id,
+                f"Voice note too large (max {max_bytes} bytes).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        filename = candidate.file_name
+        if not filename and file_path:
+            filename = Path(file_path).name
+        try:
+            result = await asyncio.to_thread(
+                self._voice_service.transcribe,
+                data,
+                client="telegram",
+                filename=filename,
+                content_type=candidate.mime_type,
+            )
+        except VoiceServiceError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media.voice.transcribe_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+                reason=exc.reason,
+            )
+            await self._send_message(
+                message.chat_id,
+                exc.detail,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        transcript = ""
+        if isinstance(result, dict):
+            transcript = str(result.get("text") or "")
+        transcript = transcript.strip()
+        if not transcript:
+            await self._send_message(
+                message.chat_id,
+                "Voice note transcribed to empty text.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        combined = caption_text.strip()
+        if combined:
+            combined = f"{combined}\n\n{transcript}"
+        else:
+            combined = transcript
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media.voice.transcribed",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            text_len=len(transcript),
+        )
+        await self._handle_normal_message(
+            message,
+            runtime,
+            text_override=combined,
+            record=record,
+        )
+
+    async def _download_telegram_file(
+        self, file_id: str
+    ) -> tuple[bytes, Optional[str], Optional[int]]:
+        payload = await self._bot.get_file(file_id)
+        file_path = payload.get("file_path") if isinstance(payload, dict) else None
+        file_size = payload.get("file_size") if isinstance(payload, dict) else None
+        if file_size is not None and not isinstance(file_size, int):
+            file_size = None
+        if not isinstance(file_path, str) or not file_path:
+            raise RuntimeError("Telegram getFile returned no file_path")
+        data = await self._bot.download_file(file_path)
+        return data, file_path, file_size
+
+    def _image_storage_dir(self, workspace_path: str) -> Path:
+        return (
+            Path(workspace_path)
+            / ".codex-autorunner"
+            / "uploads"
+            / "telegram-images"
+        )
+
+    def _choose_image_extension(
+        self,
+        *,
+        file_path: Optional[str],
+        file_name: Optional[str],
+        mime_type: Optional[str],
+    ) -> str:
+        for candidate in (file_path, file_name):
+            if candidate:
+                suffix = Path(candidate).suffix.lower()
+                if suffix in IMAGE_EXTS:
+                    return suffix
+        if mime_type:
+            base = mime_type.lower().split(";", 1)[0].strip()
+            mapped = IMAGE_CONTENT_TYPES.get(base)
+            if mapped:
+                return mapped
+        return ".img"
+
+    def _save_image_file(
+        self,
+        workspace_path: str,
+        data: bytes,
+        file_path: Optional[str],
+        candidate: TelegramMediaCandidate,
+    ) -> Path:
+        images_dir = self._image_storage_dir(workspace_path)
+        images_dir.mkdir(parents=True, exist_ok=True)
+        ext = self._choose_image_extension(
+            file_path=file_path,
+            file_name=candidate.file_name,
+            mime_type=candidate.mime_type,
+        )
+        token = secrets.token_hex(6)
+        name = f"telegram-{int(time.time())}-{token}{ext}"
+        path = images_dir / name
+        path.write_bytes(data)
+        return path
 
     async def _handle_interrupt(self, message: TelegramMessage, runtime: Any) -> None:
         turn_id = runtime.current_turn_id

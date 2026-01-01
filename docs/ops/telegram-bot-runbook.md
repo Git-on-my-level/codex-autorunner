@@ -25,6 +25,8 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - In the target topic, send `/status` and confirm the workspace and active thread.
 - Send `/help` to confirm command handling.
 - Send a normal message and verify a single agent response.
+- Send an image with an optional caption and confirm a response (image is stored under the bound workspace).
+- Send a voice note and confirm it transcribes (requires Whisper/voice config).
 
 ## Common Commands
 
@@ -33,6 +35,13 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - `/resume`: list recent threads and resume one.
 - `/interrupt`: stop the active turn.
 - `/approvals yolo|safe`: toggle approval mode.
+
+## Media Support
+
+- Telegram media handling is controlled by `telegram_bot.media` (enabled by default).
+- Images are downloaded to `<workspace>/.codex-autorunner/uploads/telegram-images/` and sent to Codex as `localImage` inputs.
+- Voice notes are transcribed via the configured Whisper provider and sent as text inputs.
+- Ensure `voice` configuration (and API key env) is set if you want voice note transcription.
 
 ## Logs
 

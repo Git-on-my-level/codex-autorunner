@@ -206,14 +206,16 @@ class CodexAppServerClient:
         thread_id: str,
         text: str,
         *,
+        input_items: Optional[list[Dict[str, Any]]] = None,
         approval_policy: Optional[str] = None,
         sandbox_policy: Optional[str] = None,
         **kwargs: Any,
     ) -> TurnHandle:
-        params: Dict[str, Any] = {
-            "threadId": thread_id,
-            "input": [{"type": "text", "text": text}],
-        }
+        params: Dict[str, Any] = {"threadId": thread_id}
+        if input_items is None:
+            params["input"] = [{"type": "text", "text": text}]
+        else:
+            params["input"] = input_items
         if approval_policy:
             params["approvalPolicy"] = approval_policy
         if sandbox_policy:

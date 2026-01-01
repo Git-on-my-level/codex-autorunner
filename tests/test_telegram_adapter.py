@@ -148,6 +148,67 @@ def test_parse_update_callback() -> None:
     assert parsed.message is None
 
 
+def test_parse_update_photo_caption() -> None:
+    update = {
+        "update_id": 11,
+        "message": {
+            "message_id": 3,
+            "chat": {"id": 456},
+            "from": {"id": 999},
+            "photo": [
+                {
+                    "file_id": "photo-small",
+                    "file_unique_id": "unique-small",
+                    "width": 64,
+                    "height": 64,
+                    "file_size": 1200,
+                },
+                {
+                    "file_id": "photo-large",
+                    "file_unique_id": "unique-large",
+                    "width": 1024,
+                    "height": 768,
+                    "file_size": 90000,
+                },
+            ],
+            "caption": "Check this",
+            "date": 1,
+            "is_topic_message": False,
+        },
+    }
+    parsed = parse_update(update)
+    assert parsed is not None
+    assert parsed.message is not None
+    assert parsed.message.caption == "Check this"
+    assert len(parsed.message.photos) == 2
+    assert parsed.message.photos[0].file_id == "photo-small"
+
+
+def test_parse_update_voice() -> None:
+    update = {
+        "update_id": 12,
+        "message": {
+            "message_id": 4,
+            "chat": {"id": 456},
+            "from": {"id": 999},
+            "voice": {
+                "file_id": "voice-1",
+                "file_unique_id": "voice-unique",
+                "duration": 6,
+                "mime_type": "audio/ogg",
+                "file_size": 2048,
+            },
+            "date": 1,
+            "is_topic_message": False,
+        },
+    }
+    parsed = parse_update(update)
+    assert parsed is not None
+    assert parsed.message is not None
+    assert parsed.message.voice is not None
+    assert parsed.message.voice.file_id == "voice-1"
+
+
 def test_chunk_message_with_numbering() -> None:
     text = "alpha " * 200
     parts = chunk_message(text, max_len=120, with_numbering=True)
