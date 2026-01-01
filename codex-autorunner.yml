@@ -97,6 +97,8 @@ repo:
     mode: polling
     bot_token_env: CAR_TELEGRAM_BOT_TOKEN
     chat_id_env: CAR_TELEGRAM_CHAT_ID
+    # Message formatting (HTML|Markdown|MarkdownV2). Set to ""/null to disable.
+    parse_mode: HTML
     allowed_chat_ids: []
     allowed_user_ids: []
     require_topics: true
@@ -188,6 +190,8 @@ hub:
     mode: polling
     bot_token_env: CAR_TELEGRAM_BOT_TOKEN
     chat_id_env: CAR_TELEGRAM_CHAT_ID
+    # Message formatting (HTML|Markdown|MarkdownV2). Set to ""/null to disable.
+    parse_mode: HTML
     allowed_chat_ids: []
     allowed_user_ids: []
     require_topics: true

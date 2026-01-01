@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
 import re
@@ -59,6 +60,7 @@ DEFAULT_PAGE_SIZE = 10
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
+DEFAULT_PARSE_MODE = "HTML"
 DEFAULT_STATE_FILE = ".codex-autorunner/telegram_state.json"
 DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
@@ -82,6 +84,14 @@ IMAGE_CONTENT_TYPES = {
     "image/heif": ".heif",
 }
 IMAGE_EXTS = set(IMAGE_CONTENT_TYPES.values())
+PARSE_MODE_ALIASES = {
+    "html": "HTML",
+    "markdown": "Markdown",
+    "markdownv2": "MarkdownV2",
+}
+_CODE_BLOCK_RE = re.compile(r"```(?:[^\n`]*)\n(.*?)```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 
 
 class TelegramBotConfigError(Exception):
@@ -136,6 +146,7 @@ class TelegramBotConfig:
     mode: str
     bot_token_env: str
     chat_id_env: str
+    parse_mode: Optional[str]
     bot_token: Optional[str]
     allowed_chat_ids: set[int]
     allowed_user_ids: set[int]
@@ -163,6 +174,8 @@ class TelegramBotConfig:
         mode = str(cfg.get("mode", "polling"))
         bot_token_env = str(cfg.get("bot_token_env", "CAR_TELEGRAM_BOT_TOKEN"))
         chat_id_env = str(cfg.get("chat_id_env", "CAR_TELEGRAM_CHAT_ID"))
+        parse_mode_raw = cfg.get("parse_mode") if "parse_mode" in cfg else DEFAULT_PARSE_MODE
+        parse_mode = _normalize_parse_mode(parse_mode_raw)
         bot_token = env.get(bot_token_env)
 
         allowed_chat_ids = set(_parse_int_list(cfg.get("allowed_chat_ids")))
@@ -266,6 +279,7 @@ class TelegramBotConfig:
             mode=mode,
             bot_token_env=bot_token_env,
             chat_id_env=chat_id_env,
+            parse_mode=parse_mode,
             bot_token=bot_token,
             allowed_chat_ids=allowed_chat_ids,
             allowed_user_ids=allowed_user_ids,
@@ -1598,12 +1612,14 @@ class TelegramBotService:
                 request_id=request_id,
             )
             return "cancel"
+        payload_text, parse_mode = self._prepare_message(prompt)
         response = await self._bot.send_message(
             ctx.chat_id,
-            prompt,
+            payload_text,
             message_thread_id=ctx.thread_id,
             reply_to_message_id=ctx.reply_to_message_id,
             reply_markup=keyboard,
+            parse_mode=parse_mode,
         )
         message_id = response.get("message_id") if isinstance(response, dict) else None
         loop = asyncio.get_running_loop()
@@ -1666,7 +1682,7 @@ class TelegramBotService:
         await self._answer_callback(callback, f"Decision: {parsed.decision}")
         if pending.message_id is not None:
             try:
-                await self._bot.edit_message_text(
+                await self._edit_message_text(
                     pending.chat_id,
                     pending.message_id,
                     _format_approval_decision(parsed.decision),
@@ -1712,6 +1728,21 @@ class TelegramBotService:
             include_cancel=True,
         )
 
+    def _render_message(self, text: str) -> tuple[str, Optional[str]]:
+        parse_mode = self._config.parse_mode
+        if not parse_mode:
+            return text, None
+        if parse_mode == "HTML":
+            return _format_telegram_html(text), parse_mode
+        return text, parse_mode
+
+    def _prepare_message(self, text: str) -> tuple[str, Optional[str]]:
+        rendered, parse_mode = self._render_message(text)
+        # Avoid parse_mode when chunking to keep markup intact.
+        if parse_mode and len(rendered) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+            return rendered, parse_mode
+        return text, None
+
     async def _edit_message_text(
         self,
         chat_id: int,
@@ -1721,11 +1752,13 @@ class TelegramBotService:
         reply_markup: Optional[dict[str, Any]] = None,
     ) -> bool:
         try:
+            payload_text, parse_mode = self._prepare_message(text)
             await self._bot.edit_message_text(
                 chat_id,
                 message_id,
-                text,
+                payload_text,
                 reply_markup=reply_markup,
+                parse_mode=parse_mode,
             )
         except Exception:
             return False
@@ -1755,11 +1788,13 @@ class TelegramBotService:
         reply_to: Optional[int],
     ) -> Optional[int]:
         try:
+            payload_text, parse_mode = self._prepare_message(WORKING_PLACEHOLDER)
             response = await self._bot.send_message(
                 chat_id,
-                WORKING_PLACEHOLDER,
+                payload_text,
                 message_thread_id=thread_id,
                 reply_to_message_id=reply_to,
+                parse_mode=parse_mode,
             )
         except Exception as exc:
             log_event(
@@ -1910,12 +1945,14 @@ class TelegramBotService:
         reply_to: Optional[int] = None,
         reply_markup: Optional[dict[str, Any]] = None,
     ) -> None:
+        payload_text, parse_mode = self._prepare_message(text)
         await self._bot.send_message_chunks(
             chat_id,
-            text,
+            payload_text,
             message_thread_id=thread_id,
             reply_to_message_id=reply_to,
             reply_markup=reply_markup,
+            parse_mode=parse_mode,
         )
 
     async def _answer_callback(
@@ -2171,6 +2208,51 @@ def _extract_files(params: dict[str, Any]) -> list[str]:
                     if isinstance(path, str) and path:
                         files.append(path)
     return files
+
+
+def _normalize_parse_mode(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        return None
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    return PARSE_MODE_ALIASES.get(cleaned.lower(), cleaned)
+
+
+def _format_telegram_html(text: str) -> str:
+    if not text:
+        return ""
+    parts: list[str] = []
+    last = 0
+    for match in _CODE_BLOCK_RE.finditer(text):
+        parts.append(_format_telegram_inline(text[last : match.start()]))
+        code = match.group(1)
+        parts.append("<pre><code>")
+        parts.append(html.escape(code, quote=False))
+        parts.append("</code></pre>")
+        last = match.end()
+    parts.append(_format_telegram_inline(text[last:]))
+    return "".join(parts)
+
+
+def _format_telegram_inline(text: str) -> str:
+    if not text:
+        return ""
+    placeholders: list[str] = []
+
+    def _replace_code(match: re.Match[str]) -> str:
+        placeholders.append(html.escape(match.group(1), quote=False))
+        return f"\x00CODE{len(placeholders) - 1}\x00"
+
+    text = _INLINE_CODE_RE.sub(_replace_code, text)
+    escaped = html.escape(text, quote=False)
+    escaped = _BOLD_RE.sub(lambda match: f"<b>{match.group(1)}</b>", escaped)
+    for idx, code in enumerate(placeholders):
+        token = f"\x00CODE{idx}\x00"
+        escaped = escaped.replace(token, f"<code>{code}</code>")
+    return escaped
 
 
 def _split_topic_key(key: str) -> tuple[int, Optional[int]]:

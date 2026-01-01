@@ -70,6 +70,8 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
   - Confirm the `codex app-server` binary is healthy/compatible with this autorunner build.
 - Approvals not appearing:
   - Ensure `/approvals safe` is set on the topic.
+- Formatting not applied:
+  - Ensure `telegram_bot.parse_mode` is set to `HTML` (or your preferred mode) and restart the bot.
 
 ## Stop
 

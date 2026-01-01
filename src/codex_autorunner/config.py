@@ -88,6 +88,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "mode": "polling",
         "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
         "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
+        "parse_mode": "HTML",
         "allowed_chat_ids": [],
         "allowed_user_ids": [],
         "require_topics": True,
@@ -167,6 +168,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "mode": "polling",
         "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
         "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
+        "parse_mode": "HTML",
         "allowed_chat_ids": [],
         "allowed_user_ids": [],
         "require_topics": True,
@@ -806,6 +808,16 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("telegram_bot.enabled must be boolean")
     if "mode" in telegram_cfg and not isinstance(telegram_cfg.get("mode"), str):
         raise ConfigError("telegram_bot.mode must be a string")
+    if "parse_mode" in telegram_cfg:
+        parse_mode = telegram_cfg.get("parse_mode")
+        if parse_mode is not None and not isinstance(parse_mode, str):
+            raise ConfigError("telegram_bot.parse_mode must be a string or null")
+        if isinstance(parse_mode, str):
+            normalized = parse_mode.strip().lower()
+            if normalized and normalized not in ("html", "markdown", "markdownv2"):
+                raise ConfigError(
+                    "telegram_bot.parse_mode must be HTML, Markdown, MarkdownV2, or null"
+                )
     for key in ("bot_token_env", "chat_id_env", "app_server_command_env"):
         if key in telegram_cfg and not isinstance(telegram_cfg.get(key), str):
             raise ConfigError(f"telegram_bot.{key} must be a string")
