@@ -20,6 +20,8 @@ import { renderTodoPreview } from "./todoPreview.js";
 const DOC_TYPES = ["todo", "progress", "opinions", "spec", "summary"];
 const ALL_DOC_TYPES = ["todo", "progress", "opinions", "spec", "summary", "snapshot"];
 const CLEARABLE_DOCS = ["todo", "progress", "opinions"];
+const COPYABLE_DOCS = ["spec", "summary"];
+const PASTEABLE_DOCS = ["spec"];
 const CHAT_HISTORY_LIMIT = 8;
 
 const docButtons = document.querySelectorAll(".chip[data-doc]");
@@ -83,6 +85,8 @@ const docActionsUI = {
   snapshot: document.getElementById("doc-actions-snapshot"),
   ingest: document.getElementById("ingest-spec"),
   clear: document.getElementById("clear-docs"),
+  copy: document.getElementById("doc-copy"),
+  paste: document.getElementById("spec-paste"),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,6 +227,92 @@ function getDocTextarea() {
   return document.getElementById("doc-content");
 }
 
+function updateCopyButton(button, text, disabled = false) {
+  if (!button) return;
+  const hasText = Boolean((text || "").trim());
+  button.disabled = disabled || !hasText;
+}
+
+function getDocCopyText(kind = activeDoc) {
+  const textarea = getDocTextarea();
+  if (textarea && activeDoc === kind) {
+    return textarea.value || "";
+  }
+  if (kind === "snapshot") {
+    return snapshotCache.content || "";
+  }
+  return docsCache[kind] || "";
+}
+
+function updateStandardActionButtons(kind = activeDoc) {
+  if (docActionsUI.copy) {
+    const canCopy = COPYABLE_DOCS.includes(kind);
+    docActionsUI.copy.classList.toggle("hidden", !canCopy);
+    updateCopyButton(docActionsUI.copy, canCopy ? getDocCopyText(kind) : "");
+  }
+  if (docActionsUI.paste) {
+    const canPaste = PASTEABLE_DOCS.includes(kind);
+    docActionsUI.paste.classList.toggle("hidden", !canPaste);
+  }
+}
+
+async function copyDocToClipboard(kind = activeDoc) {
+  const text = getDocCopyText(kind);
+  if (!text.trim()) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      flash("Copied to clipboard");
+      return;
+    }
+  } catch {
+    // fall through
+  }
+
+  let temp = null;
+  try {
+    temp = document.createElement("textarea");
+    temp.value = text;
+    temp.setAttribute("readonly", "");
+    temp.style.position = "fixed";
+    temp.style.top = "-9999px";
+    temp.style.opacity = "0";
+    document.body.appendChild(temp);
+    temp.select();
+    const ok = document.execCommand("copy");
+    flash(ok ? "Copied to clipboard" : "Copy failed");
+  } catch {
+    flash("Copy failed");
+  } finally {
+    if (temp && temp.parentNode) {
+      temp.parentNode.removeChild(temp);
+    }
+  }
+}
+
+async function pasteSpecFromClipboard() {
+  if (!PASTEABLE_DOCS.includes(activeDoc)) return;
+  const textarea = getDocTextarea();
+  if (!textarea) return;
+  try {
+    if (!navigator.clipboard?.readText) {
+      flash("Paste not supported in this browser", "error");
+      return;
+    }
+    const text = await navigator.clipboard.readText();
+    if (!text) {
+      flash("Clipboard is empty", "error");
+      return;
+    }
+    textarea.value = text;
+    textarea.focus();
+    updateStandardActionButtons("spec");
+    flash("SPEC replaced from clipboard");
+  } catch {
+    flash("Paste failed", "error");
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chat UI Rendering
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,6 +342,9 @@ async function applyDocUpdateFromChat(kind, content) {
     document.getElementById(
       "doc-status"
     ).textContent = `Editing ${kind.toUpperCase()}`;
+  }
+  if (viewingSameDoc) {
+    updateStandardActionButtons(kind);
   }
   publish("docs:updated", { kind, content });
   if (kind === "todo") {
@@ -839,6 +932,7 @@ function setDoc(kind) {
   if (docActionsUI.clear) {
     docActionsUI.clear.classList.toggle("hidden", !CLEARABLE_DOCS.includes(kind));
   }
+  updateStandardActionButtons(kind);
   
   // Toggle chat panel visibility - hide for snapshot
   const chatPanel = document.querySelector(".doc-chat-panel");
@@ -973,9 +1067,10 @@ async function saveDoc() {
 function setSnapshotBusy(on) {
   snapshotBusy = on;
   const disabled = !!on;
-  for (const btn of [snapshotUI.generate, snapshotUI.update, snapshotUI.regenerate, snapshotUI.copy, snapshotUI.refresh]) {
+  for (const btn of [snapshotUI.generate, snapshotUI.update, snapshotUI.regenerate, snapshotUI.refresh]) {
     if (btn) btn.disabled = disabled;
   }
+  updateCopyButton(snapshotUI.copy, getDocCopyText("snapshot"), disabled);
   const statusEl = document.getElementById("doc-status");
   if (statusEl && activeDoc === "snapshot") {
     statusEl.textContent = on ? "Working…" : "Viewing SNAPSHOT";
@@ -987,7 +1082,7 @@ function renderSnapshotButtons() {
   if (snapshotUI.generate) snapshotUI.generate.classList.toggle("hidden", false);
   if (snapshotUI.update) snapshotUI.update.classList.toggle("hidden", true);
   if (snapshotUI.regenerate) snapshotUI.regenerate.classList.toggle("hidden", true);
-  if (snapshotUI.copy) snapshotUI.copy.disabled = snapshotBusy || !(snapshotCache.content || "").trim();
+  updateCopyButton(snapshotUI.copy, getDocCopyText("snapshot"), snapshotBusy);
 }
 
 async function loadSnapshot({ notify = false } = {}) {
@@ -1036,36 +1131,6 @@ async function runSnapshot() {
     flash(err?.message || "Snapshot generation failed");
   } finally {
     setSnapshotBusy(false);
-  }
-}
-
-async function copySnapshotToClipboard() {
-  const text = snapshotCache.content || "";
-  if (!text.trim()) return;
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      flash("Copied to clipboard");
-      return;
-    }
-  } catch {
-    // fall through
-  }
-  try {
-    const textarea = getDocTextarea();
-    if (textarea && activeDoc === "snapshot") {
-      textarea.focus();
-      textarea.select();
-      const ok = document.execCommand("copy");
-      flash(ok ? "Copied to clipboard" : "Copy failed");
-      try {
-        textarea.setSelectionRange(0, 0);
-      } catch {
-        // ignore
-      }
-    }
-  } catch {
-    flash("Copy failed");
   }
 }
 
@@ -1126,6 +1191,22 @@ export function initDocs() {
   });
   document.getElementById("ingest-spec").addEventListener("click", ingestSpec);
   document.getElementById("clear-docs").addEventListener("click", clearDocs);
+  if (docActionsUI.copy) {
+    docActionsUI.copy.addEventListener("click", () =>
+      copyDocToClipboard(activeDoc)
+    );
+  }
+  if (docActionsUI.paste) {
+    docActionsUI.paste.addEventListener("click", pasteSpecFromClipboard);
+  }
+  const docContent = getDocTextarea();
+  if (docContent) {
+    docContent.addEventListener("input", () => {
+      if (activeDoc !== "snapshot") {
+        updateStandardActionButtons(activeDoc);
+      }
+    });
+  }
   let suppressNextSendClick = false;
   let lastSendTapAt = 0;
   const triggerSend = () => {
@@ -1199,7 +1280,9 @@ export function initDocs() {
     snapshotUI.regenerate.addEventListener("click", () => runSnapshot());
   }
   if (snapshotUI.copy) {
-    snapshotUI.copy.addEventListener("click", copySnapshotToClipboard);
+    snapshotUI.copy.addEventListener("click", () =>
+      copyDocToClipboard("snapshot")
+    );
   }
   if (snapshotUI.refresh) {
     snapshotUI.refresh.addEventListener("click", () => loadSnapshot({ notify: true }));
