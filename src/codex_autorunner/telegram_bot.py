@@ -19,6 +19,8 @@ from .manifest import load_manifest
 from .telegram_adapter import (
     ApprovalCallback,
     BindCallback,
+    CancelCallback,
+    PageCallback,
     ResumeCallback,
     TelegramAllowlist,
     TelegramBotClient,
@@ -27,10 +29,12 @@ from .telegram_adapter import (
     TelegramMessage,
     TelegramUpdate,
     TelegramUpdatePoller,
+    TELEGRAM_MAX_MESSAGE_LENGTH,
     allowlist_allows,
     build_approval_keyboard,
     build_bind_keyboard,
     build_resume_keyboard,
+    encode_page_callback,
     is_interrupt_alias,
     parse_callback_data,
     parse_command,
@@ -46,7 +50,7 @@ from .utils import resolve_executable, subprocess_env
 
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
-DEFAULT_RESUME_LIMIT = 10
+DEFAULT_PAGE_SIZE = 10
 DEFAULT_BIND_LIMIT = 12
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
@@ -55,6 +59,11 @@ DEFAULT_STATE_FILE = ".codex-autorunner/telegram_state.json"
 DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
+RESUME_PICKER_PROMPT = (
+    "Select a thread to resume (buttons below or reply with number/id)."
+)
+BIND_PICKER_PROMPT = "Select a repo to bind (buttons below or reply with number/id)."
+WORKING_PLACEHOLDER = "Working..."
 
 
 class TelegramBotConfigError(Exception):
@@ -245,6 +254,13 @@ class TurnContext:
     chat_id: int
     thread_id: Optional[int]
     reply_to_message_id: Optional[int]
+    placeholder_message_id: Optional[int] = None
+
+
+@dataclass
+class SelectionState:
+    items: list[tuple[str, str]]
+    page: int = 0
 
 
 class TelegramBotService:
@@ -281,8 +297,8 @@ class TelegramBotService:
         self._turn_semaphore = asyncio.Semaphore(config.concurrency.max_parallel_turns)
         self._turn_contexts: dict[str, TurnContext] = {}
         self._pending_approvals: dict[str, PendingApproval] = {}
-        self._resume_options: dict[str, list[str]] = {}
-        self._bind_options: dict[str, list[str]] = {}
+        self._resume_options: dict[str, SelectionState] = {}
+        self._bind_options: dict[str, SelectionState] = {}
         self._bot_username: Optional[str] = None
 
     async def run_polling(self) -> None:
@@ -464,13 +480,16 @@ class TelegramBotService:
     def _handle_pending_resume(self, key: str, text: str) -> bool:
         if not text.isdigit():
             return False
-        options = self._resume_options.get(key)
-        if not options:
+        state = self._resume_options.get(key)
+        if not state:
+            return False
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        if not page_items:
             return False
         choice = int(text)
-        if choice <= 0 or choice > len(options):
+        if choice <= 0 or choice > len(page_items):
             return False
-        thread_id = options[choice - 1]
+        thread_id = page_items[choice - 1][0]
         self._resume_options.pop(key, None)
         self._enqueue_topic_work(
             key,
@@ -481,13 +500,16 @@ class TelegramBotService:
     def _handle_pending_bind(self, key: str, text: str) -> bool:
         if not text.isdigit():
             return False
-        options = self._bind_options.get(key)
-        if not options:
+        state = self._bind_options.get(key)
+        if not state:
+            return False
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        if not page_items:
             return False
         choice = int(text)
-        if choice <= 0 or choice > len(options):
+        if choice <= 0 or choice > len(page_items):
             return False
-        repo_id = options[choice - 1]
+        repo_id = page_items[choice - 1][0]
         self._bind_options.pop(key, None)
         self._enqueue_topic_work(
             key,
@@ -506,18 +528,24 @@ class TelegramBotService:
             await self._handle_approval_callback(callback, parsed)
         elif isinstance(parsed, ResumeCallback):
             if key:
-                options = self._resume_options.get(key)
-                if not options or parsed.thread_id not in options:
+                state = self._resume_options.get(key)
+                if not state or not _selection_contains(state.items, parsed.thread_id):
                     await self._answer_callback(callback, "Selection expired")
                     return
                 await self._resume_thread_by_id(key, parsed.thread_id, callback)
         elif isinstance(parsed, BindCallback):
             if key:
-                options = self._bind_options.get(key)
-                if not options or parsed.repo_id not in options:
+                state = self._bind_options.get(key)
+                if not state or not _selection_contains(state.items, parsed.repo_id):
                     await self._answer_callback(callback, "Selection expired")
                     return
                 await self._bind_topic_by_repo_id(key, parsed.repo_id, callback)
+        elif isinstance(parsed, CancelCallback):
+            if key:
+                await self._handle_selection_cancel(key, parsed, callback)
+        elif isinstance(parsed, PageCallback):
+            if key:
+                await self._handle_selection_page(key, parsed, callback)
 
     def _enqueue_topic_work(self, key: str, work: Any) -> None:
         runtime = self._router.runtime_for(key)
@@ -595,6 +623,7 @@ class TelegramBotService:
             return
         thread_id = record.active_thread_id
         turn_handle = None
+        placeholder_id: Optional[int] = None
         try:
             if not thread_id:
                 thread = await self._client.thread_start(record.workspace_path)
@@ -627,6 +656,11 @@ class TelegramBotService:
             )
 
             async with self._turn_semaphore:
+                placeholder_id = await self._send_placeholder(
+                    message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
                 turn_handle = await self._client.turn_start(
                     thread_id,
                     message.text or "",
@@ -634,12 +668,14 @@ class TelegramBotService:
                     sandbox_policy=sandbox_policy,
                 )
                 runtime.current_turn_id = turn_handle.turn_id
-                self._turn_contexts[turn_handle.turn_id] = TurnContext(
+                ctx = TurnContext(
                     topic_key=key,
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                     reply_to_message_id=message.message_id,
+                    placeholder_message_id=placeholder_id,
                 )
+                self._turn_contexts[turn_handle.turn_id] = ctx
                 result = await turn_handle.wait()
         except Exception as exc:
             if turn_handle is not None:
@@ -655,11 +691,12 @@ class TelegramBotService:
                 thread_id=message.thread_id,
                 exc=exc,
             )
-            await self._send_message(
-                message.chat_id,
-                "Codex turn failed; check logs for details.",
+            await self._deliver_turn_response(
+                chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
+                placeholder_id=placeholder_id,
+                response="Codex turn failed; check logs for details.",
             )
             return
         finally:
@@ -683,11 +720,12 @@ class TelegramBotService:
             status=result.status,
             agent_message_count=len(result.agent_messages),
         )
-        await self._send_message(
-            message.chat_id,
-            response,
+        await self._deliver_turn_response(
+            chat_id=message.chat_id,
             thread_id=message.thread_id,
             reply_to=message.message_id,
+            placeholder_id=placeholder_id,
+            response=response,
         )
 
     async def _handle_interrupt(self, message: TelegramMessage, runtime: Any) -> None:
@@ -732,12 +770,13 @@ class TelegramBotService:
                     reply_to=message.message_id,
                 )
                 return
-            labels = [f"{idx}) {repo_id}" for idx, repo_id in enumerate(options, 1)]
-            keyboard = build_bind_keyboard(list(zip(options, labels)))
-            self._bind_options[key] = list(options)
+            items = [(repo_id, repo_id) for repo_id in options]
+            state = SelectionState(items=items)
+            keyboard = self._build_bind_keyboard(state)
+            self._bind_options[key] = state
             await self._send_message(
                 message.chat_id,
-                "Select a repo to bind:\n" + "\n".join(labels),
+                self._selection_prompt(BIND_PICKER_PROMPT, state),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
                 reply_markup=keyboard,
@@ -755,6 +794,7 @@ class TelegramBotService:
         resolved = self._resolve_workspace(repo_id)
         if resolved is None:
             await self._answer_callback(callback, "Repo not found")
+            await self._finalize_selection(key, callback, "Repo not found.")
             return
         workspace_path, resolved_repo_id = resolved
         chat_id, thread_id = _split_topic_key(key)
@@ -765,10 +805,10 @@ class TelegramBotService:
             repo_id=resolved_repo_id,
         )
         await self._answer_callback(callback, "Bound to repo")
-        await self._send_message(
-            chat_id,
+        await self._finalize_selection(
+            key,
+            callback,
             f"Bound to {resolved_repo_id or workspace_path}.",
-            thread_id=thread_id,
         )
 
     async def _bind_topic_with_arg(
@@ -830,11 +870,12 @@ class TelegramBotService:
     async def _handle_resume(self, message: TelegramMessage, args: str) -> None:
         key = topic_key(message.chat_id, message.thread_id)
         if args.strip().isdigit():
-            options = self._resume_options.get(key)
-            if options:
+            state = self._resume_options.get(key)
+            if state:
+                page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
                 choice = int(args.strip())
-                if 0 < choice <= len(options):
-                    thread_id = options[choice - 1]
+                if 0 < choice <= len(page_items):
+                    thread_id = page_items[choice - 1][0]
                     await self._resume_thread_by_id(key, thread_id)
                     return
         if args.strip() and not args.strip().isdigit():
@@ -879,13 +920,13 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        options = filtered[:DEFAULT_RESUME_LIMIT]
-        labels = [
-            f"{idx}) {_compact_preview(entry.get('preview'))}"
-            for idx, entry in enumerate(options, 1)
-        ]
-        thread_ids = [entry.get("id") for entry in options if entry.get("id")]
-        if not thread_ids:
+        items: list[tuple[str, str]] = []
+        for entry in filtered:
+            thread_id = entry.get("id")
+            if not thread_id:
+                continue
+            items.append((thread_id, _compact_preview(entry.get("preview"))))
+        if not items:
             await self._send_message(
                 message.chat_id,
                 "No resumable threads found.",
@@ -893,11 +934,12 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        keyboard = build_resume_keyboard(list(zip(thread_ids, labels)))
-        self._resume_options[key] = list(thread_ids)
+        state = SelectionState(items=items)
+        keyboard = self._build_resume_keyboard(state)
+        self._resume_options[key] = state
         await self._send_message(
             message.chat_id,
-            "Select a thread to resume:\n" + "\n".join(labels),
+            self._selection_prompt(RESUME_PICKER_PROMPT, state),
             thread_id=message.thread_id,
             reply_to=message.message_id,
             reply_markup=keyboard,
@@ -922,21 +964,16 @@ class TelegramBotService:
                 exc=exc,
             )
             await self._answer_callback(callback, "Resume failed")
-            chat_id, thread_id_val = _split_topic_key(key)
-            await self._send_message(
-                chat_id,
+            await self._finalize_selection(
+                key,
+                callback,
                 "Failed to resume thread; check logs for details.",
-                thread_id=thread_id_val,
             )
             return
         chat_id, thread_id_val = _split_topic_key(key)
         self._router.set_active_thread(chat_id, thread_id_val, thread_id)
         await self._answer_callback(callback, "Resumed thread")
-        await self._send_message(
-            chat_id,
-            f"Resumed thread {thread_id}.",
-            thread_id=thread_id_val,
-        )
+        await self._finalize_selection(key, callback, f"Resumed thread {thread_id}.")
 
     async def _handle_status(self, message: TelegramMessage) -> None:
         record = self._router.ensure_topic(message.chat_id, message.thread_id)
@@ -1065,6 +1102,232 @@ class TelegramBotService:
                 )
             except Exception:
                 return
+
+    def _selection_prompt(self, base: str, state: SelectionState) -> str:
+        total_pages = _page_count(len(state.items), DEFAULT_PAGE_SIZE)
+        return _format_selection_prompt(base, state.page, total_pages)
+
+    def _page_button(
+        self, kind: str, state: SelectionState
+    ) -> Optional[tuple[str, str]]:
+        total_pages = _page_count(len(state.items), DEFAULT_PAGE_SIZE)
+        if total_pages <= 1:
+            return None
+        next_page = (state.page + 1) % total_pages
+        return ("More...", encode_page_callback(kind, next_page))
+
+    def _build_resume_keyboard(self, state: SelectionState) -> dict[str, Any]:
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        options = [
+            (item_id, f"{idx}) {label}")
+            for idx, (item_id, label) in enumerate(page_items, 1)
+        ]
+        return build_resume_keyboard(
+            options,
+            page_button=self._page_button("resume", state),
+            include_cancel=True,
+        )
+
+    def _build_bind_keyboard(self, state: SelectionState) -> dict[str, Any]:
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        options = [
+            (item_id, f"{idx}) {label}")
+            for idx, (item_id, label) in enumerate(page_items, 1)
+        ]
+        return build_bind_keyboard(
+            options,
+            page_button=self._page_button("bind", state),
+            include_cancel=True,
+        )
+
+    async def _edit_message_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        reply_markup: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        try:
+            await self._bot.edit_message_text(
+                chat_id,
+                message_id,
+                text,
+                reply_markup=reply_markup,
+            )
+        except Exception:
+            return False
+        return True
+
+    async def _edit_callback_message(
+        self,
+        callback: TelegramCallbackQuery,
+        text: str,
+        *,
+        reply_markup: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        if callback.chat_id is None or callback.message_id is None:
+            return False
+        return await self._edit_message_text(
+            callback.chat_id,
+            callback.message_id,
+            text,
+            reply_markup=reply_markup,
+        )
+
+    async def _send_placeholder(
+        self,
+        chat_id: int,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> Optional[int]:
+        try:
+            response = await self._bot.send_message(
+                chat_id,
+                WORKING_PLACEHOLDER,
+                message_thread_id=thread_id,
+                reply_to_message_id=reply_to,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.placeholder.failed",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                reply_to_message_id=reply_to,
+                exc=exc,
+            )
+            return None
+        message_id = response.get("message_id") if isinstance(response, dict) else None
+        return message_id if isinstance(message_id, int) else None
+
+    async def _deliver_turn_response(
+        self,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+        placeholder_id: Optional[int],
+        response: str,
+    ) -> None:
+        if placeholder_id is None:
+            await self._send_message(
+                chat_id,
+                response,
+                thread_id=thread_id,
+                reply_to=reply_to,
+            )
+            return
+        response_len = len(response.encode("utf-8"))
+        if response_len <= TELEGRAM_MAX_MESSAGE_LENGTH:
+            if await self._edit_message_text(chat_id, placeholder_id, response):
+                return
+            await self._edit_message_text(
+                chat_id,
+                placeholder_id,
+                "Response ready; see below.",
+            )
+            await self._send_message(
+                chat_id,
+                response,
+                thread_id=thread_id,
+                reply_to=placeholder_id,
+            )
+            return
+        await self._edit_message_text(
+            chat_id,
+            placeholder_id,
+            "Response too long; see below.",
+        )
+        await self._send_message(
+            chat_id,
+            response,
+            thread_id=thread_id,
+            reply_to=placeholder_id,
+        )
+
+    async def _update_selection_message(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        text: str,
+        reply_markup: dict[str, Any],
+    ) -> None:
+        if await self._edit_callback_message(
+            callback, text, reply_markup=reply_markup
+        ):
+            return
+        chat_id, thread_id = _split_topic_key(key)
+        await self._send_message(
+            chat_id,
+            text,
+            thread_id=thread_id,
+            reply_markup=reply_markup,
+        )
+
+    async def _finalize_selection(
+        self,
+        key: str,
+        callback: Optional[TelegramCallbackQuery],
+        text: str,
+    ) -> None:
+        if callback and await self._edit_callback_message(
+            callback, text, reply_markup={"inline_keyboard": []}
+        ):
+            return
+        chat_id, thread_id = _split_topic_key(key)
+        await self._send_message(chat_id, text, thread_id=thread_id)
+
+    async def _handle_selection_cancel(
+        self,
+        key: str,
+        parsed: CancelCallback,
+        callback: TelegramCallbackQuery,
+    ) -> None:
+        if parsed.kind == "resume":
+            self._resume_options.pop(key, None)
+            text = "Resume selection cancelled."
+        elif parsed.kind == "bind":
+            self._bind_options.pop(key, None)
+            text = "Bind selection cancelled."
+        else:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        await self._answer_callback(callback, "Cancelled")
+        await self._finalize_selection(key, callback, text)
+
+    async def _handle_selection_page(
+        self,
+        key: str,
+        parsed: PageCallback,
+        callback: TelegramCallbackQuery,
+    ) -> None:
+        if parsed.kind == "resume":
+            state = self._resume_options.get(key)
+            prompt_base = RESUME_PICKER_PROMPT
+            build_keyboard = self._build_resume_keyboard
+        elif parsed.kind == "bind":
+            state = self._bind_options.get(key)
+            prompt_base = BIND_PICKER_PROMPT
+            build_keyboard = self._build_bind_keyboard
+        else:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        if not state:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        total_pages = _page_count(len(state.items), DEFAULT_PAGE_SIZE)
+        if total_pages <= 1:
+            await self._answer_callback(callback, "No more pages")
+            return
+        page = parsed.page % total_pages
+        state.page = page
+        prompt = _format_selection_prompt(prompt_base, page, total_pages)
+        keyboard = build_keyboard(state)
+        await self._update_selection_message(key, callback, prompt, keyboard)
+        await self._answer_callback(callback, f"Page {page + 1}/{total_pages}")
 
     async def _send_message(
         self,
@@ -1274,7 +1537,7 @@ def _path_within(root: Path, target: Path) -> bool:
         return False
 
 
-def _compact_preview(text: Any, limit: int = 60) -> str:
+def _compact_preview(text: Any, limit: int = 40) -> str:
     preview = " ".join(str(text or "").split())
     if len(preview) > limit:
         return preview[: limit - 3] + "..."
@@ -1345,6 +1608,33 @@ def _split_topic_key(key: str) -> tuple[int, Optional[int]]:
     if thread_raw and thread_raw != "root":
         thread_id = int(thread_raw)
     return chat_id, thread_id
+
+
+def _page_count(total: int, page_size: int) -> int:
+    if total <= 0:
+        return 0
+    return (total + page_size - 1) // page_size
+
+
+def _page_slice(
+    items: Sequence[tuple[str, str]],
+    page: int,
+    page_size: int,
+) -> list[tuple[str, str]]:
+    start = page * page_size
+    end = start + page_size
+    return list(items[start:end])
+
+
+def _selection_contains(items: Sequence[tuple[str, str]], value: str) -> bool:
+    return any(item_id == value for item_id, _ in items)
+
+
+def _format_selection_prompt(base: str, page: int, total_pages: int) -> str:
+    if total_pages <= 1:
+        return base
+    trimmed = base.rstrip(".")
+    return f"{trimmed} (page {page + 1}/{total_pages})."
 
 
 def _help_text() -> str:

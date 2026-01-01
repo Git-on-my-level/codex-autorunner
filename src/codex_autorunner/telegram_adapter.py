@@ -91,6 +91,17 @@ class BindCallback:
     repo_id: str
 
 
+@dataclass(frozen=True)
+class CancelCallback:
+    kind: str
+
+
+@dataclass(frozen=True)
+class PageCallback:
+    kind: str
+    page: int
+
+
 def parse_command(
     text: Optional[str], *, bot_username: Optional[str] = None
 ) -> Optional[TelegramCommand]:
@@ -320,9 +331,23 @@ def encode_bind_callback(repo_id: str) -> str:
     return data
 
 
+def encode_cancel_callback(kind: str) -> str:
+    data = f"cancel:{kind}"
+    _validate_callback_data(data)
+    return data
+
+
+def encode_page_callback(kind: str, page: int) -> str:
+    data = f"page:{kind}:{page}"
+    _validate_callback_data(data)
+    return data
+
+
 def parse_callback_data(
     data: Optional[str],
-) -> Optional[Union[ApprovalCallback, ResumeCallback, BindCallback]]:
+) -> Optional[
+    Union[ApprovalCallback, ResumeCallback, BindCallback, CancelCallback, PageCallback]
+]:
     if not data:
         return None
     if data.startswith("appr:"):
@@ -341,6 +366,19 @@ def parse_callback_data(
         if not repo_id:
             return None
         return BindCallback(repo_id=repo_id)
+    if data.startswith("cancel:"):
+        _, _, kind = data.partition(":")
+        if not kind:
+            return None
+        return CancelCallback(kind=kind)
+    if data.startswith("page:"):
+        _, _, rest = data.partition(":")
+        kind, sep, page = rest.partition(":")
+        if not kind or not sep or not page:
+            return None
+        if not page.isdigit():
+            return None
+        return PageCallback(kind=kind, page=int(page))
     return None
 
 
@@ -361,19 +399,39 @@ def build_approval_keyboard(
     return build_inline_keyboard(rows)
 
 
-def build_resume_keyboard(options: Sequence[tuple[str, str]]) -> dict[str, Any]:
+def build_resume_keyboard(
+    options: Sequence[tuple[str, str]],
+    *,
+    page_button: Optional[tuple[str, str]] = None,
+    include_cancel: bool = False,
+) -> dict[str, Any]:
     rows = [
         [InlineButton(label, encode_resume_callback(thread_id))]
         for thread_id, label in options
     ]
+    if page_button:
+        label, callback_data = page_button
+        rows.append([InlineButton(label, callback_data)])
+    if include_cancel:
+        rows.append([InlineButton("Cancel", encode_cancel_callback("resume"))])
     return build_inline_keyboard(rows)
 
 
-def build_bind_keyboard(options: Sequence[tuple[str, str]]) -> dict[str, Any]:
+def build_bind_keyboard(
+    options: Sequence[tuple[str, str]],
+    *,
+    page_button: Optional[tuple[str, str]] = None,
+    include_cancel: bool = False,
+) -> dict[str, Any]:
     rows = [
         [InlineButton(label, encode_bind_callback(repo_id))]
         for repo_id, label in options
     ]
+    if page_button:
+        label, callback_data = page_button
+        rows.append([InlineButton(label, callback_data)])
+    if include_cancel:
+        rows.append([InlineButton("Cancel", encode_cancel_callback("bind"))])
     return build_inline_keyboard(rows)
 
 
