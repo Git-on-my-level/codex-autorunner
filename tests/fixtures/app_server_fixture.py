@@ -174,6 +174,19 @@ class FixtureServer:
                 }
             )
             return
+        if method == "fixture/echo_no_newline":
+            payload = {
+                "id": req_id,
+                "result": {
+                    "value": params.get("value"),
+                    "instance": self._instance_id,
+                },
+            }
+            data = json.dumps(payload, separators=(",", ":"))
+            with self._lock:
+                sys.stdout.write(data)
+                sys.stdout.flush()
+            sys.exit(0)
         if method == "fixture/crash":
             self.send({"id": req_id, "result": {"ok": True}})
             sys.stdout.flush()

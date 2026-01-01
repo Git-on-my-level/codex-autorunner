@@ -15,6 +15,8 @@ APPROVAL_METHODS = {
     "item/commandExecution/requestApproval",
     "item/fileChange/requestApproval",
 }
+_READ_CHUNK_SIZE = 64 * 1024
+_MAX_MESSAGE_BYTES = 50 * 1024 * 1024
 
 
 class CodexAppServerError(Exception):
@@ -332,23 +334,46 @@ class CodexAppServerClient:
     async def _read_loop(self) -> None:
         assert self._process is not None
         assert self._process.stdout is not None
+        buffer = bytearray()
         try:
             while True:
-                line = await self._process.stdout.readline()
-                if not line:
+                chunk = await self._process.stdout.read(_READ_CHUNK_SIZE)
+                if not chunk:
                     break
-                payload = line.decode("utf-8", errors="ignore").strip()
-                if not payload:
-                    continue
-                try:
-                    message = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-                await self._handle_message(message)
+                buffer.extend(chunk)
+                while True:
+                    newline_index = buffer.find(b"\n")
+                    if newline_index == -1:
+                        break
+                    line = buffer[:newline_index]
+                    del buffer[: newline_index + 1]
+                    await self._handle_payload_line(line)
+                if len(buffer) > _MAX_MESSAGE_BYTES:
+                    raise ValueError(
+                        f"App-server message exceeded {_MAX_MESSAGE_BYTES} bytes without newline"
+                    )
+            if buffer:
+                if len(buffer) > _MAX_MESSAGE_BYTES:
+                    raise ValueError(
+                        f"App-server message exceeded {_MAX_MESSAGE_BYTES} bytes without newline"
+                    )
+                await self._handle_payload_line(buffer)
         except Exception as exc:
             log_event(self._logger, logging.WARNING, "app_server.read.failed", exc=exc)
         finally:
             await self._handle_disconnect()
+
+    async def _handle_payload_line(self, line: bytes) -> None:
+        if not line:
+            return
+        payload = line.decode("utf-8", errors="ignore").strip()
+        if not payload:
+            return
+        try:
+            message = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        await self._handle_message(message)
 
     async def _drain_stderr(self) -> None:
         if not self._process or not self._process.stderr:

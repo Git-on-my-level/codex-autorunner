@@ -105,3 +105,28 @@ async def test_restart_after_crash(tmp_path: Path) -> None:
         assert result["value"] == 42
     finally:
         await client.close()
+
+
+@pytest.mark.anyio
+async def test_large_response_line(tmp_path: Path) -> None:
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        large_value = "x" * (256 * 1024)
+        result = await client.request("fixture/echo", {"value": large_value})
+        assert result["value"] == large_value
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_response_without_trailing_newline(tmp_path: Path) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        auto_restart=False,
+    )
+    try:
+        result = await client.request("fixture/echo_no_newline", {"value": "final"})
+        assert result["value"] == "final"
+    finally:
+        await client.close()
