@@ -55,6 +55,20 @@ async def test_turn_completion_and_agent_message(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_turn_start_normalizes_sandbox_policy(tmp_path: Path) -> None:
+    client = CodexAppServerClient(fixture_command("sandbox_policy_check"), cwd=tmp_path)
+    try:
+        thread = await client.thread_start(str(tmp_path))
+        handle = await client.turn_start(
+            thread["id"], "hi", sandbox_policy="dangerFullAccess"
+        )
+        result = await handle.wait()
+        assert result.status == "completed"
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("scenario", ["thread_id_key", "thread_id_snake"])
 async def test_thread_start_accepts_alt_thread_id_keys(
     tmp_path: Path, scenario: str

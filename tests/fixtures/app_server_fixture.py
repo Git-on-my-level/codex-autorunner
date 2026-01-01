@@ -119,6 +119,14 @@ class FixtureServer:
             turn_id = f"turn-{self._next_turn}"
             self._next_turn += 1
             self.send({"id": req_id, "result": {"id": turn_id}})
+            if self._scenario == "sandbox_policy_check":
+                sandbox_policy = params.get("sandboxPolicy")
+                if not (
+                    isinstance(sandbox_policy, dict)
+                    and sandbox_policy.get("type") == "danger-full-access"
+                ):
+                    self._send_error(req_id, "invalid sandboxPolicy")
+                    return
             if self._scenario == "approval":
                 approval_id = self._next_approval
                 self._next_approval += 1

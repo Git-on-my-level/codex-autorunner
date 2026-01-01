@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 from importlib import metadata as importlib_metadata
 from dataclasses import dataclass
 from pathlib import Path
@@ -206,7 +207,7 @@ class CodexAppServerClient:
         if approval_policy:
             params["approvalPolicy"] = approval_policy
         if sandbox_policy:
-            params["sandboxPolicy"] = sandbox_policy
+            params["sandboxPolicy"] = _normalize_sandbox_policy(sandbox_policy)
         params.update(kwargs)
         result = await self.request("turn/start", params)
         if not isinstance(result, dict):
@@ -751,3 +752,40 @@ def _extract_thread_id(payload: Any) -> Optional[str]:
             if isinstance(value, str):
                 return value
     return None
+
+
+_SANDBOX_POLICY_CANONICAL = {
+    "dangerfullaccess": "danger-full-access",
+    "readonly": "read-only",
+    "workspacewrite": "workspace-write",
+    "externalsandbox": "external-sandbox",
+}
+
+
+def _normalize_sandbox_policy(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        normalized = _normalize_sandbox_policy_name(raw)
+        canonical = _SANDBOX_POLICY_CANONICAL.get(
+            normalized.replace("-", ""), normalized
+        )
+        return {"type": canonical}
+    return value
+
+
+def _normalize_sandbox_policy_name(raw: str) -> str:
+    cleaned = raw.strip().replace("_", "-")
+    if not cleaned:
+        return ""
+    if cleaned.isupper():
+        return cleaned.lower()
+    normalized = re.sub(r"(?<!^)([A-Z])", r"-\1", cleaned)
+    normalized = normalized.lower()
+    normalized = re.sub(r"-+", "-", normalized)
+    return normalized

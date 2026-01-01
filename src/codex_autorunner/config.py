@@ -94,9 +94,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "defaults": {
             "approval_mode": "yolo",
             "approval_policy": "on-request",
-            "sandbox_policy": "dangerFullAccess",
+            "sandbox_policy": "danger-full-access",
             "yolo_approval_policy": "never",
-            "yolo_sandbox_policy": "dangerFullAccess",
+            "yolo_sandbox_policy": "danger-full-access",
         },
         "concurrency": {
             "max_parallel_turns": 2,
@@ -165,9 +165,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "defaults": {
             "approval_mode": "yolo",
             "approval_policy": "on-request",
-            "sandbox_policy": "dangerFullAccess",
+            "sandbox_policy": "danger-full-access",
             "yolo_approval_policy": "never",
-            "yolo_sandbox_policy": "dangerFullAccess",
+            "yolo_sandbox_policy": "danger-full-access",
         },
         "concurrency": {
             "max_parallel_turns": 2,
