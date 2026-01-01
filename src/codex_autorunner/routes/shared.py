@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..codex_cli import extract_flag_value
+from ..lock_utils import process_alive, read_lock_info
 from ..state import load_state
 
 BYPASS_FLAGS = {
@@ -50,6 +51,21 @@ def build_codex_terminal_cmd(engine, *, resume_mode: bool) -> list[str]:
     return cmd
 
 
+def resolve_runner_status(engine, state) -> tuple[str, Optional[int], bool]:
+    pid = state.runner_pid
+    alive_pid = pid if pid and process_alive(pid) else None
+    if alive_pid is None:
+        info = read_lock_info(engine.lock_path)
+        if info.pid and process_alive(info.pid):
+            alive_pid = info.pid
+    running = alive_pid is not None
+    status = state.status
+    if status == "running" and not running:
+        status = "idle"
+    runner_pid = alive_pid if running else None
+    return status, runner_pid, running
+
+
 async def log_stream(log_path: Path):
     """SSE stream generator for log file tailing."""
     if not log_path.exists():
@@ -77,16 +93,17 @@ async def state_stream(engine, manager, logger=None):
         try:
             state = await asyncio.to_thread(load_state, engine.state_path)
             outstanding, done = await asyncio.to_thread(engine.docs.todos)
+            status, runner_pid, running = resolve_runner_status(engine, state)
             payload = {
                 "last_run_id": state.last_run_id,
-                "status": state.status,
+                "status": status,
                 "last_exit_code": state.last_exit_code,
                 "last_run_started_at": state.last_run_started_at,
                 "last_run_finished_at": state.last_run_finished_at,
                 "outstanding_count": len(outstanding),
                 "done_count": len(done),
-                "running": manager.running,
-                "runner_pid": state.runner_pid,
+                "running": running,
+                "runner_pid": runner_pid,
                 "terminal_idle_timeout_seconds": terminal_idle_timeout_seconds,
                 "codex_model": codex_model or "auto",
             }

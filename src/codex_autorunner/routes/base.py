@@ -18,7 +18,12 @@ from ..pty_session import ActiveSession, PTYSession, REPLAY_END
 from ..state import SessionRecord, load_state, now_iso, persist_session_registry
 from ..static_assets import index_response_headers, render_index_html
 from ..logging_utils import safe_log
-from .shared import build_codex_terminal_cmd, log_stream, state_stream
+from .shared import (
+    build_codex_terminal_cmd,
+    log_stream,
+    resolve_runner_status,
+    state_stream,
+)
 
 ALT_SCREEN_ENTER = b"\x1b[?1049h"
 
@@ -40,23 +45,23 @@ def build_base_routes(static_dir: Path) -> APIRouter:
     @router.get("/api/state")
     def get_state(request: Request):
         engine = request.app.state.engine
-        manager = request.app.state.manager
         config = request.app.state.config
         state = load_state(engine.state_path)
         outstanding, done = engine.docs.todos()
+        status, runner_pid, running = resolve_runner_status(engine, state)
         codex_model = config.codex_model or extract_flag_value(
             config.codex_args, "--model"
         )
         return {
             "last_run_id": state.last_run_id,
-            "status": state.status,
+            "status": status,
             "last_exit_code": state.last_exit_code,
             "last_run_started_at": state.last_run_started_at,
             "last_run_finished_at": state.last_run_finished_at,
             "outstanding_count": len(outstanding),
             "done_count": len(done),
-            "running": manager.running,
-            "runner_pid": state.runner_pid,
+            "running": running,
+            "runner_pid": runner_pid,
             "terminal_idle_timeout_seconds": config.terminal_idle_timeout_seconds,
             "codex_model": codex_model or "auto",
         }

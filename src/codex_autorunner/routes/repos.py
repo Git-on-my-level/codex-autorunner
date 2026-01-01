@@ -65,7 +65,7 @@ def build_repos_routes() -> APIRouter:
                 repo_to_session=state.repo_to_session,
             )
             save_state(engine.state_path, new_state)
-        engine.release_lock()
+        clear_stale_lock(engine.lock_path)
         return {"running": manager.running}
 
     @router.post("/api/run/resume")
@@ -80,9 +80,10 @@ def build_repos_routes() -> APIRouter:
             logger.info("run/resume once=%s", once)
         except Exception:
             pass
-        clear_stale_lock(engine.lock_path)
-        manager.stop_flag.clear()
-        manager.start(once=once)
+        try:
+            manager.resume(once=once)
+        except LockError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         return {"running": manager.running, "once": once}
 
     @router.post("/api/run/reset")

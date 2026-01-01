@@ -399,6 +399,7 @@ def run(
     engine: Optional[Engine] = None
     try:
         engine = _require_repo_config(repo)
+        engine.clear_stop_request()
         engine.acquire_lock(force=force)
         engine.run_loop()
     except (ConfigError, LockError) as exc:
@@ -420,6 +421,7 @@ def once(
     engine: Optional[Engine] = None
     try:
         engine = _require_repo_config(repo)
+        engine.clear_stop_request()
         engine.acquire_lock(force=force)
         engine.run_once()
     except (ConfigError, LockError) as exc:
@@ -450,7 +452,7 @@ def kill(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")):
             repo_to_session=state.repo_to_session,
         )
         save_state(engine.state_path, new_state)
-    engine.release_lock()
+    clear_stale_lock(engine.lock_path)
     if pid:
         typer.echo(f"Sent SIGTERM to pid {pid}")
     else:
@@ -467,6 +469,7 @@ def resume(
     engine: Optional[Engine] = None
     try:
         engine = _require_repo_config(repo)
+        engine.clear_stop_request()
         clear_stale_lock(engine.lock_path)
         engine.acquire_lock(force=force)
         engine.run_loop(stop_after_runs=1 if once else None)

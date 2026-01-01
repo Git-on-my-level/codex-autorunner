@@ -14,6 +14,7 @@ from .engine import Engine, LockError, clear_stale_lock
 from .lock_utils import process_alive, read_lock_info
 from .manifest import Manifest, ManifestRepo, load_manifest, save_manifest
 from .state import RunnerState, load_state, now_iso
+from .runner_process import build_runner_cmd, spawn_detached
 from .utils import atomic_write
 
 
@@ -158,71 +159,45 @@ class RepoRunner:
     def __init__(self, repo_id: str, repo_root: Path):
         self.repo_id = repo_id
         self.engine = Engine(repo_root)
-        self._thread: Optional[threading.Thread] = None
-        self._stop_flag = threading.Event()
         self._lock = threading.Lock()
 
     @property
     def running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        return self.engine.runner_pid() is not None
 
     def start(self, once: bool = False) -> None:
         with self._lock:
-            if self.running:
-                return
             lock_status = read_lock_status(self.engine.lock_path)
-            if lock_status != LockStatus.UNLOCKED:
+            if lock_status == LockStatus.LOCKED_ALIVE:
                 raise LockError(
                     f"Repo {self.repo_id} is locked; use resume to clear stale locks"
                 )
-            self.engine.acquire_lock(force=False)
-            self._stop_flag.clear()
-            self._thread = threading.Thread(
-                target=self._run_loop,
-                kwargs={"once": once},
-                daemon=True,
-            )
-            self._thread.start()
-
-    def _run_loop(self, once: bool = False) -> None:
-        try:
-            target_runs = 1 if once else None
-            self.engine.run_loop(
-                stop_after_runs=target_runs, external_stop_flag=self._stop_flag
-            )
-        finally:
-            try:
-                self.engine.release_lock()
-            except Exception:
-                pass
+            clear_stale_lock(self.engine.lock_path)
+            self.engine.clear_stop_request()
+            action = "once" if once else "run"
+            cmd = build_runner_cmd(self.engine.repo_root, action=action)
+            spawn_detached(cmd, cwd=self.engine.repo_root)
 
     def stop(self) -> None:
         with self._lock:
-            self._stop_flag.set()
+            self.engine.request_stop()
 
     def kill(self) -> Optional[int]:
         with self._lock:
-            self._stop_flag.set()
-            if self._thread:
-                self._thread.join(timeout=1.0)
             pid = self.engine.kill_running_process()
-            self.engine.release_lock()
             return pid
 
     def resume(self, once: bool = False) -> None:
         with self._lock:
+            clear_stale_lock(self.engine.lock_path)
             lock_status = read_lock_status(self.engine.lock_path)
             if lock_status == LockStatus.LOCKED_ALIVE:
                 raise LockError(f"Repo {self.repo_id} is locked by a live process")
-            clear_stale_lock(self.engine.lock_path)
-            self.engine.acquire_lock(force=False)
-            self._stop_flag.clear()
-            self._thread = threading.Thread(
-                target=self._run_loop,
-                kwargs={"once": once},
-                daemon=True,
+            self.engine.clear_stop_request()
+            cmd = build_runner_cmd(
+                self.engine.repo_root, action="resume", once=once
             )
-            self._thread.start()
+            spawn_detached(cmd, cwd=self.engine.repo_root)
 
 
 class HubSupervisor:
@@ -596,7 +571,9 @@ class HubSupervisor:
         if not record.initialized:
             return RepoStatus.UNINITIALIZED
         if runner_state and runner_state.status == "running":
-            return RepoStatus.RUNNING
+            if lock_status == LockStatus.LOCKED_ALIVE:
+                return RepoStatus.RUNNING
+            return RepoStatus.IDLE
         if lock_status in (LockStatus.LOCKED_ALIVE, LockStatus.LOCKED_STALE):
             return RepoStatus.LOCKED
         if runner_state and runner_state.status == "error":

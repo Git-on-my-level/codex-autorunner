@@ -27,10 +27,12 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 
 from .config import ConfigError, HubConfig, _normalize_base_path, load_config
-from .engine import Engine, LockError, doctor
+from .engine import Engine, LockError, clear_stale_lock, doctor
 from .logging_utils import safe_log, setup_rotating_logger
 from .doc_chat import DocChatService
 from .hub import HubSupervisor
+from .lock_utils import process_alive, read_lock_info
+from .runner_process import build_runner_cmd, spawn_detached
 from .state import (
     load_state,
     persist_session_registry,
@@ -158,59 +160,53 @@ class BasePathRouterMiddleware:
 class RunnerManager:
     def __init__(self, engine: Engine):
         self.engine = engine
-        self.thread: Optional[threading.Thread] = None
-        self.stop_flag = threading.Event()
         self._lock = threading.Lock()
 
     @property
     def running(self) -> bool:
-        return self.thread is not None and self.thread.is_alive()
+        pid = self.engine.runner_pid()
+        return pid is not None
+
+    def _ensure_unlocked(self) -> None:
+        if not self.engine.lock_path.exists():
+            return
+        info = read_lock_info(self.engine.lock_path)
+        pid = info.pid
+        if pid and process_alive(pid):
+            raise LockError(
+                f"Another autorunner is active (pid={pid}); use --force to override"
+            )
+        self.engine.lock_path.unlink(missing_ok=True)
+
+    def _spawn_runner(self, *, action: str, once: bool = False) -> None:
+        cmd = build_runner_cmd(
+            self.engine.repo_root,
+            action=action,
+            once=once,
+        )
+        spawn_detached(cmd, cwd=self.engine.repo_root)
 
     def start(self, once: bool = False) -> None:
         with self._lock:
-            if self.running:
-                return
-            # Own the repo lock for the duration of the background runner.
-            # This matches CLI/Hub semantics and prevents concurrent runners.
-            self.engine.acquire_lock(force=False)
-            self.stop_flag.clear()
-            target_runs = 1 if once else None
-            self.thread = threading.Thread(
-                target=self._run_loop,
-                kwargs={
-                    "stop_after_runs": target_runs,
-                    "external_stop_flag": self.stop_flag,
-                },
-                daemon=True,
-            )
-            self.thread.start()
+            self._ensure_unlocked()
+            self.engine.clear_stop_request()
+            action = "once" if once else "run"
+            self._spawn_runner(action=action)
 
-    def _run_loop(
-        self,
-        stop_after_runs: Optional[int] = None,
-        external_stop_flag: Optional[threading.Event] = None,
-    ) -> None:
-        try:
-            self.engine.run_loop(
-                stop_after_runs=stop_after_runs, external_stop_flag=external_stop_flag
-            )
-        finally:
-            try:
-                self.engine.release_lock()
-            except Exception:
-                pass
+    def resume(self, once: bool = False) -> None:
+        with self._lock:
+            clear_stale_lock(self.engine.lock_path)
+            self._ensure_unlocked()
+            self.engine.clear_stop_request()
+            self._spawn_runner(action="resume", once=once)
 
     def stop(self) -> None:
         with self._lock:
-            if self.stop_flag:
-                self.stop_flag.set()
+            self.engine.request_stop()
 
     def kill(self) -> None:
         with self._lock:
-            self.stop_flag.set()
-            # Best-effort join to allow loop to exit.
-            if self.thread:
-                self.thread.join(timeout=1.0)
+            self.engine.kill_running_process()
 
 
 def _static_dir() -> Path:

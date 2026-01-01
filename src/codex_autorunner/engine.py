@@ -46,6 +46,7 @@ class Engine:
         self.state_path = self.repo_root / ".codex-autorunner" / "state.json"
         self.log_path = self.config.log.path
         self.lock_path = self.repo_root / ".codex-autorunner" / "lock"
+        self.stop_path = self.repo_root / ".codex-autorunner" / "stop"
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
         try:
             ensure_about_car_file(self.config)
@@ -75,6 +76,23 @@ class Engine:
         if self.lock_path.exists():
             self.lock_path.unlink()
 
+    def request_stop(self) -> None:
+        self.stop_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(self.stop_path, f"{now_iso()}\n")
+
+    def clear_stop_request(self) -> None:
+        self.stop_path.unlink(missing_ok=True)
+
+    def stop_requested(self) -> bool:
+        return self.stop_path.exists()
+
+    def _should_stop(
+        self, external_stop_flag: Optional[threading.Event]
+    ) -> bool:
+        if external_stop_flag and external_stop_flag.is_set():
+            return True
+        return self.stop_requested()
+
     def kill_running_process(self) -> Optional[int]:
         """Force-kill the process holding the lock, if any. Returns pid if killed."""
         if not self.lock_path.exists():
@@ -89,6 +107,16 @@ class Engine:
                 return None
         # stale lock
         self.lock_path.unlink(missing_ok=True)
+        return None
+
+    def runner_pid(self) -> Optional[int]:
+        state = load_state(self.state_path)
+        pid = state.runner_pid
+        if pid and process_alive(pid):
+            return pid
+        info = read_lock_info(self.lock_path)
+        if info.pid and process_alive(info.pid):
+            return info.pid
         return None
 
     def todos_done(self) -> bool:
@@ -371,9 +399,10 @@ class Engine:
 
         try:
             while True:
-                if external_stop_flag and external_stop_flag.is_set():
+                if self._should_stop(external_stop_flag):
+                    self.clear_stop_request()
                     self._update_state(
-                        "idle", run_id - 1, state.last_exit_code, finished=True
+                        "idle", run_id - 1, last_exit_code, finished=True
                     )
                     break
                 if self.config.runner_max_wallclock_seconds is not None:
@@ -417,7 +446,8 @@ class Engine:
                     break
 
                 run_id += 1
-                if external_stop_flag and external_stop_flag.is_set():
+                if self._should_stop(external_stop_flag):
+                    self.clear_stop_request()
                     self._update_state("idle", run_id - 1, exit_code, finished=True)
                     break
                 time.sleep(self.config.runner_sleep_seconds)
