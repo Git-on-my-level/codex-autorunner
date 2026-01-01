@@ -97,6 +97,16 @@ launchctl kickstart -k gui/$(id -u)/com.codex.autorunner
    - If you need to serve under a proxy prefix (e.g., `/car`), set `server.base_path` in `.codex-autorunner/config.yml` or pass `--base-path` to `car serve/hub serve`; all HTTP/WS endpoints will be reachable under that prefix. Proxy must forward that prefix (e.g., Caddy `handle /car/* { reverse_proxy ... }` with a 404 fallback for everything else).
    - Chat composer shortcuts: desktop uses Cmd+Enter (or Ctrl+Enter) to send and Shift+Enter for newline; mobile uses Enter to send and Shift+Enter for newline.
 
+## Telegram bot (polling)
+- The interactive Telegram bot is separate from `notifications.telegram` (which is one-way notifications).
+- Each operator should create their own Telegram bot token. Multi-user use requires explicit allowlists.
+- Quickstart:
+  1) Set env vars: `CAR_TELEGRAM_BOT_TOKEN` (and optionally `CAR_TELEGRAM_CHAT_ID`).
+  2) In config, set `telegram_bot.enabled: true` and fill `allowed_user_ids` + `allowed_chat_ids`.
+  3) Run `car telegram start --path <repo_or_hub>`.
+  4) Use `/bind` (hub mode) and `/new` or `/resume` in Telegram.
+- Details: `docs/telegram/architecture.md` and `docs/ops/telegram-bot-runbook.md`.
+
 ## Security and remote access
 - The UI/API are unauthenticated. Exposing them to the public web enables remote code execution on your machine (terminal + runner).
 - Keep the server bound to `127.0.0.1` and use Tailscale (or another VPN) for remote access.
