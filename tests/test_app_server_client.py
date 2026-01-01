@@ -55,6 +55,19 @@ async def test_turn_completion_and_agent_message(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_thread_list_includes_params(tmp_path: Path) -> None:
+    client = CodexAppServerClient(
+        fixture_command("thread_list_requires_params"), cwd=tmp_path
+    )
+    try:
+        threads = await client.thread_list()
+        assert isinstance(threads, list)
+        assert threads
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_turn_start_normalizes_sandbox_policy(tmp_path: Path) -> None:
     client = CodexAppServerClient(fixture_command("sandbox_policy_check"), cwd=tmp_path)
     try:

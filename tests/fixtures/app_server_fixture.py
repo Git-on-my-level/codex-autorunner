@@ -82,6 +82,9 @@ class FixtureServer:
             )
             return
         if method == "thread/list":
+            if self._scenario == "thread_list_requires_params" and "params" not in message:
+                self._send_error(req_id, "Invalid request: missing field `params`")
+                return
             self.send(
                 {
                     "id": req_id,
