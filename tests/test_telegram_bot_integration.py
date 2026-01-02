@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from pathlib import Path
 from typing import Optional
@@ -50,6 +51,18 @@ def build_message(
         date=0,
         is_topic_message=thread_id is not None,
     )
+
+
+def build_service_in_closed_loop(
+    tmp_path: Path, config: TelegramBotConfig
+) -> TelegramBotService:
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return TelegramBotService(config, hub_root=tmp_path)
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
 
 
 class FakeBot:
@@ -178,3 +191,16 @@ async def test_resume_requires_scoped_threads(tmp_path: Path) -> None:
     finally:
         await service._client.close()
     assert any("Use /resume --all" in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
+async def test_outbox_lock_rebinds_across_event_loops(tmp_path: Path) -> None:
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = build_service_in_closed_loop(tmp_path, config)
+    try:
+        assert await service._mark_outbox_inflight("record")
+        assert "record" in service._outbox_inflight
+        await service._clear_outbox_inflight("record")
+        assert "record" not in service._outbox_inflight
+    finally:
+        await service._client.close()

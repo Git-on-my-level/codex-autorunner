@@ -533,6 +533,8 @@ class TelegramBotService:
         self._token_usage_by_turn: "collections.OrderedDict[str, dict[str, Any]]" = (
             collections.OrderedDict()
         )
+        self._outbox_inflight: set[str] = set()
+        self._outbox_lock: Optional[asyncio.Lock] = None
         self._outbox_task: Optional[asyncio.Task[None]] = None
         self._command_specs = self._build_command_specs()
 
@@ -546,6 +548,8 @@ class TelegramBotService:
         self._turn_semaphore = asyncio.Semaphore(
             self._config.concurrency.max_parallel_turns
         )
+        self._outbox_inflight = set()
+        self._outbox_lock = asyncio.Lock()
         await self._start_app_server_with_backoff()
         await self._prime_bot_identity()
         await self._restore_pending_approvals()
@@ -688,6 +692,12 @@ class TelegramBotService:
             await self._attempt_outbox_send(record)
 
     async def _attempt_outbox_send(self, record: OutboxRecord) -> bool:
+        current = self._store.get_outbox(record.record_id)
+        if current is None:
+            return False
+        record = current
+        if not await self._mark_outbox_inflight(record.record_id):
+            return False
         try:
             await self._send_message(
                 record.chat_id,
@@ -711,6 +721,8 @@ class TelegramBotService:
                 exc=exc,
             )
             return False
+        finally:
+            await self._clear_outbox_inflight(record.record_id)
         self._store.delete_outbox(record.record_id)
         if record.placeholder_message_id is not None:
             await self._delete_message(
@@ -725,6 +737,21 @@ class TelegramBotService:
             thread_id=record.thread_id,
         )
         return True
+
+    async def _mark_outbox_inflight(self, record_id: str) -> bool:
+        if self._outbox_lock is None:
+            self._outbox_lock = asyncio.Lock()
+        async with self._outbox_lock:
+            if record_id in self._outbox_inflight:
+                return False
+            self._outbox_inflight.add(record_id)
+            return True
+
+    async def _clear_outbox_inflight(self, record_id: str) -> None:
+        if self._outbox_lock is None:
+            return
+        async with self._outbox_lock:
+            self._outbox_inflight.discard(record_id)
 
     async def _send_message_with_outbox(
         self,
@@ -1662,6 +1689,9 @@ class TelegramBotService:
         text_override: Optional[str] = None,
         input_items: Optional[list[dict[str, Any]]] = None,
         record: Optional[Any] = None,
+        send_placeholder: bool = True,
+        transcript_message_id: Optional[int] = None,
+        transcript_text: Optional[str] = None,
     ) -> None:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         record = record or self._router.get_topic(key)
@@ -1723,11 +1753,12 @@ class TelegramBotService:
             )
 
             async with self._turn_semaphore:
-                placeholder_id = await self._send_placeholder(
-                    message.chat_id,
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
+                if send_placeholder:
+                    placeholder_id = await self._send_placeholder(
+                        message.chat_id,
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
                 turn_handle = await self._client.turn_start(
                     thread_id,
                     prompt_text,
@@ -1776,6 +1807,11 @@ class TelegramBotService:
             )
             if response_sent:
                 await self._delete_message(message.chat_id, placeholder_id)
+                await self._finalize_voice_transcript(
+                    message.chat_id,
+                    transcript_message_id,
+                    transcript_text,
+                )
             return
         finally:
             if turn_handle is not None:
@@ -1846,6 +1882,11 @@ class TelegramBotService:
             self._token_usage_by_turn.pop(turn_id, None)
         if response_sent:
             await self._delete_message(message.chat_id, placeholder_id)
+            await self._finalize_voice_transcript(
+                message.chat_id,
+                transcript_message_id,
+                transcript_text,
+            )
 
     async def _handle_image_message(
         self,
@@ -2086,11 +2127,39 @@ class TelegramBotService:
             message_id=message.message_id,
             text_len=len(transcript),
         )
+        send_placeholder = True
+        transcript_message_id = None
+        transcript_message = self._format_voice_transcript_message(
+            combined,
+            WORKING_PLACEHOLDER,
+        )
+        try:
+            transcript_message_id = await self._send_voice_transcript_message(
+                message.chat_id,
+                transcript_message,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            if transcript_message_id is not None:
+                send_placeholder = False
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media.voice.transcript_message_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+                exc=exc,
+            )
         await self._handle_normal_message(
             message,
             runtime,
             text_override=combined,
             record=record,
+            send_placeholder=send_placeholder,
+            transcript_message_id=transcript_message_id,
+            transcript_text=combined,
         )
 
     async def _download_telegram_file(
@@ -3959,6 +4028,56 @@ class TelegramBotService:
             text,
             reply_markup=reply_markup,
         )
+
+    def _format_voice_transcript_message(self, text: str, agent_status: str) -> str:
+        header = "User:\n"
+        footer = f"\n\nAgent:\n{agent_status}"
+        max_len = TELEGRAM_MAX_MESSAGE_LENGTH
+        available = max_len - len(header) - len(footer)
+        if available <= 0:
+            return f"{header}{footer.lstrip()}"
+        transcript = text
+        truncation_note = "\n\n...(truncated)"
+        if len(transcript) > available:
+            remaining = available - len(truncation_note)
+            if remaining < 0:
+                remaining = 0
+            transcript = transcript[:remaining].rstrip()
+            transcript = f"{transcript}{truncation_note}"
+        return f"{header}{transcript}{footer}"
+
+    async def _send_voice_transcript_message(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> Optional[int]:
+        payload_text, parse_mode = self._prepare_message(text)
+        response = await self._bot.send_message(
+            chat_id,
+            payload_text,
+            message_thread_id=thread_id,
+            reply_to_message_id=reply_to,
+            parse_mode=parse_mode,
+        )
+        message_id = response.get("message_id") if isinstance(response, dict) else None
+        return message_id if isinstance(message_id, int) else None
+
+    async def _finalize_voice_transcript(
+        self,
+        chat_id: int,
+        message_id: Optional[int],
+        transcript_text: Optional[str],
+    ) -> None:
+        if message_id is None or transcript_text is None:
+            return
+        final_message = self._format_voice_transcript_message(
+            transcript_text,
+            "Reply below.",
+        )
+        await self._edit_message_text(chat_id, message_id, final_message)
 
     async def _send_placeholder(
         self,

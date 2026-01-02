@@ -545,6 +545,13 @@ class TelegramStateStore:
                 state.outbox.pop(record_id, None)
                 self._save_unlocked(state)
 
+    def get_outbox(self, record_id: str) -> Optional[OutboxRecord]:
+        if not isinstance(record_id, str) or not record_id:
+            return None
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            return state.outbox.get(record_id)
+
     def list_outbox(self) -> list[OutboxRecord]:
         with state_lock(self._path):
             state = self._load_unlocked()
