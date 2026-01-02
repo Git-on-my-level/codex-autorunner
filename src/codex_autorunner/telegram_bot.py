@@ -131,7 +131,8 @@ TRACE_MESSAGE_TOKENS = (
     "aborted",
     "cancelled",
 )
-WORKING_PLACEHOLDER = "Working..."
+PLACEHOLDER_TEXT = "Working..."
+STREAM_PREVIEW_PREFIX = ""
 THINKING_PREVIEW_MAX_LEN = 80
 THINKING_PREVIEW_MIN_EDIT_INTERVAL_SECONDS = 1.0
 COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
@@ -981,10 +982,10 @@ class TelegramBotService:
         transcript_text: str,
     ) -> None:
         if record.transcript_message_id is None:
-            transcript_message = self._format_voice_transcript_message(
-                transcript_text,
-                WORKING_PLACEHOLDER,
-            )
+                transcript_message = self._format_voice_transcript_message(
+                    transcript_text,
+                    PLACEHOLDER_TEXT,
+                )
             record.transcript_message_id = await self._send_voice_transcript_message(
                 record.chat_id,
                 transcript_message,
@@ -4461,10 +4462,14 @@ class TelegramBotService:
             return
         self._turn_preview_text[turn_id] = normalized
         self._turn_preview_updated_at[turn_id] = now
+        if STREAM_PREVIEW_PREFIX:
+            message_text = f"{STREAM_PREVIEW_PREFIX} {normalized}"
+        else:
+            message_text = normalized
         await self._edit_message_text(
             ctx.chat_id,
             ctx.placeholder_message_id,
-            f"{WORKING_PLACEHOLDER} {normalized}",
+            message_text,
         )
 
     def _clear_thinking_preview(self, turn_id: str) -> None:
@@ -4818,7 +4823,7 @@ class TelegramBotService:
         reply_to: Optional[int],
     ) -> Optional[int]:
         try:
-            payload_text, parse_mode = self._prepare_message(WORKING_PLACEHOLDER)
+            payload_text, parse_mode = self._prepare_message(PLACEHOLDER_TEXT)
             response = await self._bot.send_message(
                 chat_id,
                 payload_text,
