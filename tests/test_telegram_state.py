@@ -15,9 +15,18 @@ from codex_autorunner.telegram_state import (
 def test_topic_key_roundtrip() -> None:
     key = topic_key(-100, None)
     assert key == "-100:root"
-    chat_id, thread_id = parse_topic_key(key)
+    chat_id, thread_id, scope = parse_topic_key(key)
     assert chat_id == -100
     assert thread_id is None
+    assert scope is None
+
+
+def test_topic_key_scope_roundtrip() -> None:
+    key = topic_key(123, 55, scope="repo-1")
+    chat_id, thread_id, scope = parse_topic_key(key)
+    assert chat_id == 123
+    assert thread_id == 55
+    assert scope == "repo-1"
 
 
 def test_state_store_roundtrip(tmp_path: Path) -> None:

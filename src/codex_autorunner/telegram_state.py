@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+from urllib.parse import quote, unquote
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional, TypeVar
@@ -27,28 +28,52 @@ def normalize_approval_mode(mode: Optional[str], *, default: str = APPROVAL_MODE
     return default
 
 
-def topic_key(chat_id: int, thread_id: Optional[int]) -> str:
+def _encode_scope(scope: str) -> str:
+    return quote(scope, safe="")
+
+
+def _decode_scope(scope: str) -> str:
+    return unquote(scope)
+
+
+def topic_key(
+    chat_id: int, thread_id: Optional[int], *, scope: Optional[str] = None
+) -> str:
     if not isinstance(chat_id, int):
         raise TypeError("chat_id must be int")
     suffix = str(thread_id) if thread_id is not None else TOPIC_ROOT
-    return f"{chat_id}:{suffix}"
+    base_key = f"{chat_id}:{suffix}"
+    if not isinstance(scope, str):
+        return base_key
+    scope = scope.strip()
+    if not scope:
+        return base_key
+    return f"{base_key}:{_encode_scope(scope)}"
 
 
-def parse_topic_key(key: str) -> tuple[int, Optional[int]]:
-    chat_raw, sep, thread_raw = key.partition(":")
-    if not sep or not chat_raw or not thread_raw:
+def parse_topic_key(key: str) -> tuple[int, Optional[int], Optional[str]]:
+    parts = key.split(":", 2)
+    if len(parts) < 2:
+        raise ValueError("invalid topic key")
+    chat_raw, thread_raw = parts[0], parts[1]
+    scope_raw = parts[2] if len(parts) == 3 else None
+    if not chat_raw or not thread_raw:
         raise ValueError("invalid topic key")
     try:
         chat_id = int(chat_raw)
     except ValueError as exc:
         raise ValueError("invalid chat id in topic key") from exc
     if thread_raw == TOPIC_ROOT:
-        return chat_id, None
-    try:
-        thread_id = int(thread_raw)
-    except ValueError as exc:
-        raise ValueError("invalid thread id in topic key") from exc
-    return chat_id, thread_id
+        thread_id = None
+    else:
+        try:
+            thread_id = int(thread_raw)
+        except ValueError as exc:
+            raise ValueError("invalid thread id in topic key") from exc
+    scope = None
+    if isinstance(scope_raw, str) and scope_raw:
+        scope = _decode_scope(scope_raw)
+    return chat_id, thread_id, scope
 
 
 @dataclass
@@ -141,6 +166,7 @@ class TelegramTopicRecord:
 class TelegramState:
     version: int = STATE_VERSION
     topics: dict[str, TelegramTopicRecord] = dataclasses.field(default_factory=dict)
+    topic_scopes: dict[str, str] = dataclasses.field(default_factory=dict)
     pending_approvals: dict[str, "PendingApprovalRecord"] = dataclasses.field(
         default_factory=dict
     )
@@ -152,6 +178,7 @@ class TelegramState:
             "topics": {
                 key: record.to_dict() for key, record in self.topics.items()
             },
+            "topic_scopes": dict(self.topic_scopes),
             "pending_approvals": {
                 key: record.to_dict() for key, record in self.pending_approvals.items()
             },
@@ -318,6 +345,22 @@ class TelegramStateStore:
             state = self._load_unlocked()
             return state.topics.get(key)
 
+    def get_topic_scope(self, key: str) -> Optional[str]:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            return state.topic_scopes.get(key)
+
+    def set_topic_scope(self, key: str, scope: Optional[str]) -> None:
+        if not isinstance(key, str) or not key:
+            return
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            if isinstance(scope, str) and scope:
+                state.topic_scopes[key] = scope
+            else:
+                state.topic_scopes.pop(key, None)
+            self._save_unlocked(state)
+
     def bind_topic(
         self, key: str, workspace_path: str, *, repo_id: Optional[str] = None
     ) -> TelegramTopicRecord:
@@ -375,6 +418,12 @@ class TelegramStateStore:
                 topics[key] = TelegramTopicRecord.from_dict(
                     record, default_approval_mode=self._default_approval_mode
                 )
+        topic_scopes_raw = data.get("topic_scopes")
+        topic_scopes: dict[str, str] = {}
+        if isinstance(topic_scopes_raw, dict):
+            for key, value in topic_scopes_raw.items():
+                if isinstance(key, str) and isinstance(value, str):
+                    topic_scopes[key] = value
         approvals_raw = data.get("pending_approvals")
         pending_approvals: dict[str, PendingApprovalRecord] = {}
         if isinstance(approvals_raw, dict):
@@ -398,6 +447,7 @@ class TelegramStateStore:
         return TelegramState(
             version=version,
             topics=topics,
+            topic_scopes=topic_scopes,
             pending_approvals=pending_approvals,
             outbox=outbox,
         )
@@ -575,16 +625,37 @@ class TopicRouter:
             self._topics[key] = runtime
         return runtime
 
-    def topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
-        return topic_key(chat_id, thread_id)
+    def resolve_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+        base_key = topic_key(chat_id, thread_id)
+        scope = self._store.get_topic_scope(base_key)
+        if isinstance(scope, str) and scope:
+            return topic_key(chat_id, thread_id, scope=scope)
+        return base_key
+
+    def set_topic_scope(
+        self, chat_id: int, thread_id: Optional[int], scope: Optional[str]
+    ) -> None:
+        base_key = topic_key(chat_id, thread_id)
+        self._store.set_topic_scope(base_key, scope)
+
+    def topic_key(
+        self, chat_id: int, thread_id: Optional[int], *, scope: Optional[str] = None
+    ) -> str:
+        if scope is None:
+            return self.resolve_key(chat_id, thread_id)
+        return topic_key(chat_id, thread_id, scope=scope)
 
     def get_topic(self, key: str) -> Optional[TelegramTopicRecord]:
         return self._store.get_topic(key)
 
     def ensure_topic(
-        self, chat_id: int, thread_id: Optional[int]
+        self,
+        chat_id: int,
+        thread_id: Optional[int],
+        *,
+        scope: Optional[str] = None,
     ) -> TelegramTopicRecord:
-        key = self.topic_key(chat_id, thread_id)
+        key = self.topic_key(chat_id, thread_id, scope=scope)
         return self._store.ensure_topic(key)
 
     def update_topic(
@@ -592,8 +663,10 @@ class TopicRouter:
         chat_id: int,
         thread_id: Optional[int],
         apply: Callable[[TelegramTopicRecord], None],
+        *,
+        scope: Optional[str] = None,
     ) -> TelegramTopicRecord:
-        key = self.topic_key(chat_id, thread_id)
+        key = self.topic_key(chat_id, thread_id, scope=scope)
         return self._store.update_topic(key, apply)
 
     def bind_topic(
@@ -603,8 +676,9 @@ class TopicRouter:
         workspace_path: str,
         *,
         repo_id: Optional[str] = None,
+        scope: Optional[str] = None,
     ) -> TelegramTopicRecord:
-        key = self.topic_key(chat_id, thread_id)
+        key = self.topic_key(chat_id, thread_id, scope=scope)
         return self._store.bind_topic(key, workspace_path, repo_id=repo_id)
 
     def set_active_thread(
@@ -612,8 +686,10 @@ class TopicRouter:
         chat_id: int,
         thread_id: Optional[int],
         active_thread_id: Optional[str],
+        *,
+        scope: Optional[str] = None,
     ) -> TelegramTopicRecord:
-        key = self.topic_key(chat_id, thread_id)
+        key = self.topic_key(chat_id, thread_id, scope=scope)
         return self._store.set_active_thread(key, active_thread_id)
 
     def set_approval_mode(
@@ -621,6 +697,8 @@ class TopicRouter:
         chat_id: int,
         thread_id: Optional[int],
         mode: str,
+        *,
+        scope: Optional[str] = None,
     ) -> TelegramTopicRecord:
-        key = self.topic_key(chat_id, thread_id)
+        key = self.topic_key(chat_id, thread_id, scope=scope)
         return self._store.set_approval_mode(key, mode)

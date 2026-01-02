@@ -6,7 +6,6 @@ import pytest
 
 from codex_autorunner.telegram_adapter import TelegramMessage
 from codex_autorunner.telegram_bot import TelegramBotConfig, TelegramBotService
-from codex_autorunner.telegram_state import topic_key
 
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
@@ -117,7 +116,9 @@ async def test_status_creates_record(tmp_path: Path) -> None:
     text = fake_bot.messages[-1]["text"]
     assert "Workspace: unbound" in text
     assert "Topic not bound" not in text
-    record = service._router.get_topic(topic_key(message.chat_id, message.thread_id))
+    record = service._router.get_topic(
+        service._router.resolve_key(message.chat_id, message.thread_id)
+    )
     assert record is not None
 
 
@@ -133,7 +134,7 @@ async def test_normal_message_runs_turn(tmp_path: Path) -> None:
     try:
         await service._handle_bind(bind_message, str(repo))
         runtime = service._router.runtime_for(
-            topic_key(bind_message.chat_id, bind_message.thread_id)
+            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
         )
         message = build_message("hello", message_id=11)
         await service._handle_normal_message(message, runtime)
