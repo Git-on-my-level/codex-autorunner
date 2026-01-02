@@ -1279,11 +1279,12 @@ class TelegramBotService:
                 record.effort = info["effort"]
             if info.get("summary") and (overwrite_defaults or record.summary is None):
                 record.summary = info["summary"]
-            if info.get("approval_policy") and (
+            allow_thread_policies = record.approval_mode != APPROVAL_MODE_YOLO
+            if allow_thread_policies and info.get("approval_policy") and (
                 overwrite_defaults or record.approval_policy is None
             ):
                 record.approval_policy = info["approval_policy"]
-            if info.get("sandbox_policy") and (
+            if allow_thread_policies and info.get("sandbox_policy") and (
                 overwrite_defaults or record.sandbox_policy is None
             ):
                 record.sandbox_policy = info["sandbox_policy"]
