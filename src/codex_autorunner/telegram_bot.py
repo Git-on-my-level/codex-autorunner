@@ -4436,6 +4436,32 @@ def _format_context_metrics(token_usage: Optional[dict[str, Any]]) -> Optional[s
     )
 
 
+def _format_tui_token_usage(token_usage: Optional[dict[str, Any]]) -> Optional[str]:
+    if not isinstance(token_usage, dict):
+        return None
+    last = token_usage.get("last")
+    total = token_usage.get("total")
+    usage = last if isinstance(last, dict) else total if isinstance(total, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    total_tokens = usage.get("totalTokens")
+    input_tokens = usage.get("inputTokens")
+    output_tokens = usage.get("outputTokens")
+    if not isinstance(total_tokens, int):
+        return None
+    parts = [f"Token usage: total {total_tokens}"]
+    if isinstance(input_tokens, int):
+        parts.append(f"input {input_tokens}")
+    if isinstance(output_tokens, int):
+        parts.append(f"output {output_tokens}")
+    context_window = token_usage.get("modelContextWindow")
+    if isinstance(context_window, int) and context_window > 0:
+        remaining = max(context_window - total_tokens, 0)
+        percent = round(remaining / context_window * 100)
+        parts.append(f"{percent}% left")
+    return " ".join(parts)
+
+
 def _format_turn_metrics(
     token_usage: Optional[dict[str, Any]],
     elapsed_seconds: Optional[float],
@@ -4443,9 +4469,9 @@ def _format_turn_metrics(
     lines: list[str] = []
     if elapsed_seconds is not None:
         lines.append(f"Turn time: {elapsed_seconds:.1f}s")
-    context_line = _format_context_metrics(token_usage)
-    if context_line:
-        lines.append(context_line)
+    token_line = _format_tui_token_usage(token_usage)
+    if token_line:
+        lines.append(token_line)
     if not lines:
         return None
     return "\n".join(lines)
