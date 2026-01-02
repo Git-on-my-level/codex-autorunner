@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import html
 import logging
 import os
@@ -61,6 +62,7 @@ DEFAULT_THREAD_LIST_LIMIT = 10
 DEFAULT_MODEL_LIST_LIMIT = 25
 DEFAULT_MCP_LIST_LIMIT = 50
 DEFAULT_SKILLS_LIST_LIMIT = 50
+TOKEN_USAGE_CACHE_LIMIT = 256
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
@@ -464,7 +466,9 @@ class TelegramBotService:
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
         self._bot_username: Optional[str] = None
-        self._token_usage_by_thread: dict[str, dict[str, Any]] = {}
+        self._token_usage_by_thread: "collections.OrderedDict[str, dict[str, Any]]" = (
+            collections.OrderedDict()
+        )
         self._command_specs = self._build_command_specs()
 
     async def run_polling(self) -> None:
@@ -2723,6 +2727,9 @@ class TelegramBotService:
         if not isinstance(thread_id, str) or not isinstance(token_usage, dict):
             return
         self._token_usage_by_thread[thread_id] = token_usage
+        self._token_usage_by_thread.move_to_end(thread_id)
+        while len(self._token_usage_by_thread) > TOKEN_USAGE_CACHE_LIMIT:
+            self._token_usage_by_thread.popitem(last=False)
 
     async def _handle_approval_request(self, message: dict[str, Any]) -> ApprovalDecision:
         req_id = message.get("id")
