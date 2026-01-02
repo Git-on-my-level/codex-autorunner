@@ -62,6 +62,24 @@ class FixtureServer:
             params["approvalDecision"] = approval_decision
         self.send({"method": "turn/completed", "params": params})
 
+    def _send_review_completed(
+        self, turn_id: str, *, status: str = "completed"
+    ) -> None:
+        self.send(
+            {
+                "method": "item/completed",
+                "params": {
+                    "turnId": turn_id,
+                    "item": {
+                        "type": "agentMessage",
+                        "text": "fixture reply",
+                        "review": "fixture reply",
+                    },
+                },
+            }
+        )
+        self.send({"method": "turn/completed", "params": {"turnId": turn_id, "status": status}})
+
     def _handle_request(self, message: dict) -> None:
         req_id = message.get("id")
         method = message.get("method")
@@ -166,6 +184,15 @@ class FixtureServer:
                 self._pending_interrupts.add(turn_id)
                 return
             self._send_turn_completed(turn_id)
+            return
+        if method == "review/start":
+            turn_id = f"turn-{self._next_turn}"
+            self._next_turn += 1
+            self.send({"id": req_id, "result": {"id": turn_id}})
+            if self._scenario == "review_duplicate":
+                self._send_review_completed(turn_id)
+            else:
+                self._send_turn_completed(turn_id)
             return
         if method == "turn/interrupt":
             turn_id = params.get("turnId")

@@ -600,12 +600,13 @@ class CodexAppServerClient:
                 return
             state = self._ensure_turn_state(turn_id)
             item = params.get("item") if isinstance(params, dict) else None
+            text = None
             if isinstance(item, dict) and item.get("type") == "agentMessage":
                 text = item.get("text")
                 if isinstance(text, str):
                     state.agent_messages.append(text)
             review_text = _extract_review_text(item)
-            if review_text:
+            if review_text and review_text != text:
                 state.agent_messages.append(review_text)
             item_type = item.get("type") if isinstance(item, dict) else None
             log_event(

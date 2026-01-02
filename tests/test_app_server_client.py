@@ -55,6 +55,19 @@ async def test_turn_completion_and_agent_message(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_review_message_dedupes_review_text(tmp_path: Path) -> None:
+    client = CodexAppServerClient(fixture_command("review_duplicate"), cwd=tmp_path)
+    try:
+        thread = await client.thread_start(str(tmp_path))
+        handle = await client.review_start(thread["id"], target={"type": "custom"})
+        result = await handle.wait()
+        assert result.status == "completed"
+        assert result.agent_messages == ["fixture reply"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_thread_list_includes_params(tmp_path: Path) -> None:
     client = CodexAppServerClient(
         fixture_command("thread_list_requires_params"), cwd=tmp_path
