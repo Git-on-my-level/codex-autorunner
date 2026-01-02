@@ -109,7 +109,7 @@ repo:
       yolo_approval_policy: never
       yolo_sandbox_policy: dangerFullAccess
     concurrency:
-      max_parallel_turns: 2
+      max_parallel_turns: 4
       per_topic_queue: true
     state_file: .codex-autorunner/telegram_state.json
     # Optional env var that contains the full app-server command.
@@ -202,7 +202,7 @@ hub:
       yolo_approval_policy: never
       yolo_sandbox_policy: dangerFullAccess
     concurrency:
-      max_parallel_turns: 2
+      max_parallel_turns: 4
       per_topic_queue: true
     state_file: .codex-autorunner/telegram_state.json
     # Optional env var that contains the full app-server command.

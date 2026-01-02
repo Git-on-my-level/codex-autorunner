@@ -282,7 +282,7 @@ class TelegramBotConfig:
         concurrency_raw = (
             cfg.get("concurrency") if isinstance(cfg.get("concurrency"), dict) else {}
         )
-        max_parallel_turns = int(concurrency_raw.get("max_parallel_turns", 2))
+        max_parallel_turns = int(concurrency_raw.get("max_parallel_turns", 4))
         if max_parallel_turns <= 0:
             max_parallel_turns = 1
         per_topic_queue = bool(concurrency_raw.get("per_topic_queue", True))
@@ -516,6 +516,10 @@ class TelegramBotService:
                 f"Unsupported telegram_bot.mode '{self._config.mode}'"
             )
         self._config.validate()
+        # Bind the semaphore to the running loop to avoid cross-loop await failures.
+        self._turn_semaphore = asyncio.Semaphore(
+            self._config.concurrency.max_parallel_turns
+        )
         await self._start_app_server_with_backoff()
         await self._prime_bot_identity()
         log_event(

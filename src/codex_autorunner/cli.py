@@ -732,16 +732,19 @@ def telegram_start(
     logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
     voice_raw = config.raw.get("voice") if isinstance(config.raw, dict) else None
     voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
-    service = TelegramBotService(
-        telegram_cfg,
-        logger=logger,
-        hub_root=config.root if isinstance(config, HubConfig) else None,
-        manifest_path=(
-            config.manifest_path if isinstance(config, HubConfig) else None
-        ),
-        voice_config=voice_config,
-    )
-    asyncio.run(service.run_polling())
+    async def _run() -> None:
+        service = TelegramBotService(
+            telegram_cfg,
+            logger=logger,
+            hub_root=config.root if isinstance(config, HubConfig) else None,
+            manifest_path=(
+                config.manifest_path if isinstance(config, HubConfig) else None
+            ),
+            voice_config=voice_config,
+        )
+        await service.run_polling()
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":
