@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import logging
 import os
@@ -209,8 +210,13 @@ class RunnerManager:
             self.engine.kill_running_process()
 
 
-def _static_dir() -> Path:
-    return Path(resources.files("codex_autorunner")) / "static"
+def _static_dir() -> tuple[Path, Optional[ExitStack]]:
+    static_root = resources.files("codex_autorunner").joinpath("static")
+    if isinstance(static_root, Path):
+        return static_root, None
+    stack = ExitStack()
+    static_path = stack.enter_context(resources.as_file(static_root))
+    return static_path, stack
 
 
 def _parse_last_seen_at(value: Optional[str]) -> Optional[float]:
@@ -362,7 +368,8 @@ def create_app(
             terminal_max_idle_seconds,
         )
 
-    static_dir = _static_dir()
+    static_dir, static_context = _static_dir()
+    app.state.static_assets_context = static_context
     app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     # Route handlers
@@ -441,6 +448,9 @@ def create_app(
                 app.state.session_registry,
                 app.state.repo_to_session,
             )
+        static_context = getattr(app.state, "static_assets_context", None)
+        if static_context is not None:
+            static_context.close()
 
     if base_path:
         app = BasePathRouterMiddleware(app, base_path)
@@ -470,7 +480,8 @@ def create_hub_app(
         logging.INFO,
         f"Hub app ready at {config.root}",
     )
-    static_dir = _static_dir()
+    static_dir, static_context = _static_dir()
+    app.state.static_assets_context = static_context
     app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     mounted_repos: set[str] = set()
@@ -569,6 +580,9 @@ def create_hub_app(
                     )
                 except Exception:
                     pass
+        static_context = getattr(app.state, "static_assets_context", None)
+        if static_context is not None:
+            static_context.close()
 
     @app.get("/hub/usage")
     def hub_usage(since: Optional[str] = None, until: Optional[str] = None):
