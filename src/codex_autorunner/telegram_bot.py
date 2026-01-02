@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import dataclasses
 import html
 import logging
 import os
@@ -89,6 +90,7 @@ APPROVAL_PRESETS = {
 DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_IMAGE_PROMPT = "Describe the image."
+COALESCE_WINDOW_SECONDS = 2.0
 COMPACT_SUMMARY_PROMPT = (
     "Summarize the conversation so far into a concise context block I can paste into "
     "a new thread. Include goals, constraints, decisions, and current state."
@@ -406,6 +408,13 @@ class SelectionState:
     page: int = 0
 
 
+@dataclass
+class _CoalescedBuffer:
+    message: TelegramMessage
+    parts: list[str]
+    task: Optional[asyncio.Task[None]] = None
+
+
 @dataclass(frozen=True)
 class CommandSpec:
     name: str
@@ -465,6 +474,8 @@ class TelegramBotService:
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
+        self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
+        self._coalesce_locks: dict[str, asyncio.Lock] = {}
         self._bot_username: Optional[str] = None
         self._token_usage_by_thread: "collections.OrderedDict[str, dict[str, Any]]" = (
             collections.OrderedDict()
@@ -615,6 +626,26 @@ class TelegramBotService:
         )
 
     async def _handle_message(self, message: TelegramMessage) -> None:
+        raw_text = message.text or ""
+        raw_caption = message.caption or ""
+        text_candidate = raw_text if raw_text.strip() else raw_caption
+        trimmed_text = text_candidate.strip()
+        has_media = self._message_has_media(message)
+        if not trimmed_text and not has_media:
+            return
+        bypass = has_media
+        if trimmed_text:
+            if is_interrupt_alias(trimmed_text):
+                bypass = True
+            elif parse_command(trimmed_text, bot_username=self._bot_username):
+                bypass = True
+        if bypass:
+            await self._flush_coalesced_message(message)
+            await self._handle_message_inner(message)
+            return
+        await self._buffer_coalesced_message(message, text_candidate)
+
+    async def _handle_message_inner(self, message: TelegramMessage) -> None:
         text = (message.text or "").strip()
         if not text:
             text = (message.caption or "").strip()
@@ -659,6 +690,66 @@ class TelegramBotService:
             key,
             lambda: self._handle_normal_message(message, runtime, text_override=text),
         )
+
+    def _coalesce_key(self, message: TelegramMessage) -> str:
+        key = topic_key(message.chat_id, message.thread_id)
+        user_id = message.from_user_id
+        if user_id is None:
+            return f"{key}:user:unknown"
+        return f"{key}:user:{user_id}"
+
+    async def _buffer_coalesced_message(self, message: TelegramMessage, text: str) -> None:
+        key = self._coalesce_key(message)
+        lock = self._coalesce_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            buffer = self._coalesced_buffers.get(key)
+            if buffer is None:
+                buffer = _CoalescedBuffer(message=message, parts=[text])
+                self._coalesced_buffers[key] = buffer
+            else:
+                buffer.parts.append(text)
+            task = buffer.task
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
+            buffer.task = asyncio.create_task(self._coalesce_flush_after(key))
+
+    async def _coalesce_flush_after(self, key: str) -> None:
+        try:
+            await asyncio.sleep(COALESCE_WINDOW_SECONDS)
+        except asyncio.CancelledError:
+            return
+        try:
+            await self._flush_coalesced_key(key)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.coalesce.flush_failed",
+                key=key,
+                exc=exc,
+            )
+
+    async def _flush_coalesced_message(self, message: TelegramMessage) -> None:
+        await self._flush_coalesced_key(self._coalesce_key(message))
+
+    async def _flush_coalesced_key(self, key: str) -> None:
+        lock = self._coalesce_locks.get(key)
+        if lock is None:
+            return
+        buffer = None
+        async with lock:
+            buffer = self._coalesced_buffers.pop(key, None)
+            if buffer is None:
+                return
+            task = buffer.task
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
+        combined_message = self._build_coalesced_message(buffer)
+        await self._handle_message_inner(combined_message)
+
+    def _build_coalesced_message(self, buffer: _CoalescedBuffer) -> TelegramMessage:
+        combined_text = "\n".join(buffer.parts)
+        return dataclasses.replace(buffer.message, text=combined_text, caption=None)
 
     def _message_has_media(self, message: TelegramMessage) -> bool:
         return bool(message.photos or message.document or message.voice or message.audio)
