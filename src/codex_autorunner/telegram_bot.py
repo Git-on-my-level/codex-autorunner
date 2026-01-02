@@ -1681,30 +1681,36 @@ class TelegramBotService:
         if not isinstance(resumed_path, str):
             await self._send_message(
                 message.chat_id,
-                "Active thread missing workspace metadata; use /resume or /new.",
+                "Active thread missing workspace metadata; starting a new thread.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return None
+            return self._router.set_active_thread(
+                message.chat_id, message.thread_id, None
+            )
         try:
             workspace_root = Path(record.workspace_path or "").expanduser().resolve()
             resumed_root = Path(resumed_path).expanduser().resolve()
         except Exception:
             await self._send_message(
                 message.chat_id,
-                "Active thread has invalid workspace metadata; use /resume or /new.",
+                "Active thread has invalid workspace metadata; starting a new thread.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return None
+            return self._router.set_active_thread(
+                message.chat_id, message.thread_id, None
+            )
         if not _path_within(workspace_root, resumed_root):
             await self._send_message(
                 message.chat_id,
-                "Active thread belongs to a different workspace; use /resume or /new.",
+                "Active thread belongs to a different workspace; starting a new thread.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return None
+            return self._router.set_active_thread(
+                message.chat_id, message.thread_id, None
+            )
         return self._apply_thread_result(
             message.chat_id, message.thread_id, result, active_thread_id=thread_id
         )
@@ -1769,9 +1775,12 @@ class TelegramBotService:
         thread_id = record.active_thread_id
         if thread_id:
             verified = await self._verify_active_thread(message, record)
-            if not verified or not verified.active_thread_id:
+            if not verified:
                 return None
-            return verified.active_thread_id
+            record = verified
+            thread_id = record.active_thread_id
+            if thread_id:
+                return thread_id
         thread = await self._client.thread_start(record.workspace_path or "")
         thread_id = _extract_thread_id(thread)
         if not thread_id:
@@ -5150,8 +5159,6 @@ def _parse_int_list(raw: Any) -> list[int]:
 
 
 _THREAD_PATH_KEYS = (
-    "cwd",
-    "workspace",
     "workspace_path",
     "workspacePath",
     "projectRoot",
@@ -5160,6 +5167,8 @@ _THREAD_PATH_KEYS = (
     "repo_path",
     "root",
     "rootPath",
+    "workspace",
+    "cwd",
 )
 _THREAD_PATH_CONTAINERS = ("workspace", "project", "repo", "metadata", "context", "config")
 
