@@ -77,6 +77,7 @@ DEFAULT_SKILLS_LIST_LIMIT = 50
 TOKEN_USAGE_CACHE_LIMIT = 256
 TOKEN_USAGE_TURN_CACHE_LIMIT = 512
 DEFAULT_INTERRUPT_TIMEOUT_SECONDS = 30.0
+DEFAULT_INTERRUPT_REQUEST_TIMEOUT_SECONDS = 5.0
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
@@ -849,6 +850,63 @@ class TelegramBotService:
         runtime.interrupt_requested = False
         runtime.interrupt_message_id = None
         runtime.interrupt_turn_id = None
+
+    async def _dispatch_interrupt_request(
+        self,
+        *,
+        turn_id: str,
+        runtime: Any,
+        chat_id: int,
+        thread_id: Optional[int],
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                self._client.turn_interrupt(turn_id),
+                timeout=DEFAULT_INTERRUPT_REQUEST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.interrupt.request_timeout",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+            )
+            if (
+                runtime.interrupt_message_id is not None
+                and runtime.interrupt_turn_id == turn_id
+            ):
+                await self._edit_message_text(
+                    chat_id,
+                    runtime.interrupt_message_id,
+                    "Interrupt failed.",
+                )
+                runtime.interrupt_message_id = None
+                runtime.interrupt_turn_id = None
+            runtime.interrupt_requested = False
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.interrupt.failed",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                exc=exc,
+            )
+            if (
+                runtime.interrupt_message_id is not None
+                and runtime.interrupt_turn_id == turn_id
+            ):
+                await self._edit_message_text(
+                    chat_id,
+                    runtime.interrupt_message_id,
+                    "Interrupt failed.",
+                )
+                runtime.interrupt_message_id = None
+                runtime.interrupt_turn_id = None
+            runtime.interrupt_requested = False
 
     async def _dispatch_update(self, update: TelegramUpdate) -> None:
         chat_id = None
@@ -2278,7 +2336,6 @@ class TelegramBotService:
             message_id=message.message_id,
             turn_id=turn_id,
         )
-        await self._client.turn_interrupt(turn_id)
         payload_text, parse_mode = self._prepare_message("Interrupt requested.")
         response = await self._bot.send_message(
             message.chat_id,
@@ -2298,6 +2355,14 @@ class TelegramBotService:
                     message_id,
                 )
             )
+        self._spawn_task(
+            self._dispatch_interrupt_request(
+                turn_id=turn_id,
+                runtime=runtime,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+            )
+        )
 
     async def _handle_bind(self, message: TelegramMessage, args: str) -> None:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
