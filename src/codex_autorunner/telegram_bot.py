@@ -796,10 +796,14 @@ class TelegramBotService:
     def _topic_scope_id(
         self, repo_id: Optional[str], workspace_path: Optional[str]
     ) -> Optional[str]:
-        if isinstance(repo_id, str) and repo_id.strip():
-            return repo_id
-        if isinstance(workspace_path, str) and workspace_path.strip():
-            return workspace_path
+        normalized_repo = repo_id.strip() if isinstance(repo_id, str) else ""
+        normalized_path = workspace_path.strip() if isinstance(workspace_path, str) else ""
+        if normalized_repo and normalized_path:
+            return f"{normalized_repo}@{normalized_path}"
+        if normalized_repo:
+            return normalized_repo
+        if normalized_path:
+            return normalized_path
         return None
 
     async def _interrupt_timeout_check(
@@ -2347,6 +2351,10 @@ class TelegramBotService:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         argv = self._parse_command_args(args)
         trimmed = args.strip()
+        show_unscoped = False
+        if argv and argv[0].lower() in ("--all", "all", "--unscoped", "unscoped"):
+            show_unscoped = True
+            trimmed = ""
         if trimmed.isdigit():
             state = self._resume_options.get(key)
             if state:
@@ -2397,10 +2405,25 @@ class TelegramBotService:
             )
             return
         normalized = _coerce_thread_list(threads)
-        filtered = _filter_threads(
-            normalized, record.workspace_path, assume_scoped=True
+        filtered, unscoped, saw_path = _partition_threads(
+            normalized, record.workspace_path
         )
-        if not filtered:
+        candidates = filtered
+        if show_unscoped:
+            seen_ids = {entry.get("id") for entry in filtered}
+            candidates = filtered + [
+                entry for entry in unscoped if entry.get("id") not in seen_ids
+            ]
+        if not candidates:
+            if unscoped and not show_unscoped and not saw_path:
+                await self._send_message(
+                    message.chat_id,
+                    "No workspace-tagged threads available. Use /resume --all to list "
+                    "unscoped threads.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             await self._send_message(
                 message.chat_id,
                 "No previous threads found for this workspace.",
@@ -2409,7 +2432,7 @@ class TelegramBotService:
             )
             return
         items: list[tuple[str, str]] = []
-        for entry in filtered:
+        for entry in candidates:
             thread_id = entry.get("id")
             if not thread_id:
                 continue
@@ -4912,11 +4935,11 @@ def _extract_thread_path(entry: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _filter_threads(
-    threads: Any, workspace_path: str, *, assume_scoped: bool = False
-) -> list[dict[str, Any]]:
+def _partition_threads(
+    threads: Any, workspace_path: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
     if not isinstance(threads, list):
-        return []
+        return [], [], False
     workspace = Path(workspace_path).expanduser().resolve()
     filtered: list[dict[str, Any]] = []
     unscoped: list[dict[str, Any]] = []
@@ -4935,6 +4958,13 @@ def _filter_threads(
             continue
         if _path_within(workspace, candidate):
             filtered.append(entry)
+    return filtered, unscoped, saw_path
+
+
+def _filter_threads(
+    threads: Any, workspace_path: str, *, assume_scoped: bool = False
+) -> list[dict[str, Any]]:
+    filtered, unscoped, saw_path = _partition_threads(threads, workspace_path)
     if filtered or saw_path or not assume_scoped:
         return filtered
     return unscoped
