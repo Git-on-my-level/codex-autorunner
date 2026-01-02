@@ -533,6 +533,8 @@ class TelegramBotService:
         self._token_usage_by_turn: "collections.OrderedDict[str, dict[str, Any]]" = (
             collections.OrderedDict()
         )
+        self._outbox_inflight: set[str] = set()
+        self._outbox_lock: Optional[asyncio.Lock] = None
         self._outbox_task: Optional[asyncio.Task[None]] = None
         self._command_specs = self._build_command_specs()
 
@@ -546,6 +548,8 @@ class TelegramBotService:
         self._turn_semaphore = asyncio.Semaphore(
             self._config.concurrency.max_parallel_turns
         )
+        self._outbox_inflight = set()
+        self._outbox_lock = asyncio.Lock()
         await self._start_app_server_with_backoff()
         await self._prime_bot_identity()
         await self._restore_pending_approvals()
@@ -688,6 +692,12 @@ class TelegramBotService:
             await self._attempt_outbox_send(record)
 
     async def _attempt_outbox_send(self, record: OutboxRecord) -> bool:
+        current = self._store.get_outbox(record.record_id)
+        if current is None:
+            return False
+        record = current
+        if not await self._mark_outbox_inflight(record.record_id):
+            return False
         try:
             await self._send_message(
                 record.chat_id,
@@ -711,6 +721,8 @@ class TelegramBotService:
                 exc=exc,
             )
             return False
+        finally:
+            await self._clear_outbox_inflight(record.record_id)
         self._store.delete_outbox(record.record_id)
         if record.placeholder_message_id is not None:
             await self._delete_message(
@@ -725,6 +737,21 @@ class TelegramBotService:
             thread_id=record.thread_id,
         )
         return True
+
+    async def _mark_outbox_inflight(self, record_id: str) -> bool:
+        if self._outbox_lock is None:
+            self._outbox_lock = asyncio.Lock()
+        async with self._outbox_lock:
+            if record_id in self._outbox_inflight:
+                return False
+            self._outbox_inflight.add(record_id)
+            return True
+
+    async def _clear_outbox_inflight(self, record_id: str) -> None:
+        if self._outbox_lock is None:
+            return
+        async with self._outbox_lock:
+            self._outbox_inflight.discard(record_id)
 
     async def _send_message_with_outbox(
         self,
