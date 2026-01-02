@@ -24,6 +24,8 @@ from .telegram_adapter import (
     ApprovalCallback,
     BindCallback,
     CancelCallback,
+    EffortCallback,
+    ModelCallback,
     PageCallback,
     ResumeCallback,
     TelegramAllowlist,
@@ -39,6 +41,8 @@ from .telegram_adapter import (
     allowlist_allows,
     build_approval_keyboard,
     build_bind_keyboard,
+    build_effort_keyboard,
+    build_model_keyboard,
     build_resume_keyboard,
     encode_page_callback,
     is_interrupt_alias,
@@ -63,6 +67,7 @@ DEFAULT_MODEL_LIST_LIMIT = 25
 DEFAULT_MCP_LIST_LIMIT = 50
 DEFAULT_SKILLS_LIST_LIMIT = 50
 TOKEN_USAGE_CACHE_LIMIT = 256
+TOKEN_USAGE_TURN_CACHE_LIMIT = 512
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
@@ -76,10 +81,13 @@ RESUME_PICKER_PROMPT = (
     "Select a thread to resume (buttons below or reply with number/id)."
 )
 BIND_PICKER_PROMPT = "Select a repo to bind (buttons below or reply with number/id)."
+MODEL_PICKER_PROMPT = "Select a model (buttons below)."
+EFFORT_PICKER_PROMPT = "Select a reasoning effort for {model}."
 WORKING_PLACEHOLDER = "Working..."
 COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
 MAX_MENTION_BYTES = 200_000
 VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
+CONTEXT_BASELINE_TOKENS = 12000
 APPROVAL_POLICY_VALUES = {"untrusted", "on-failure", "on-request", "never"}
 APPROVAL_PRESETS = {
     "read-only": ("on-request", "readOnly"),
@@ -407,6 +415,21 @@ class SelectionState:
 
 
 @dataclass(frozen=True)
+class ModelOption:
+    model_id: str
+    label: str
+    efforts: tuple[str, ...]
+    default_effort: Optional[str] = None
+
+
+@dataclass
+class ModelPickerState:
+    items: list[tuple[str, str]]
+    options: dict[str, ModelOption]
+    page: int = 0
+
+
+@dataclass(frozen=True)
 class CommandSpec:
     name: str
     description: str
@@ -448,6 +471,8 @@ class TelegramBotService:
         self._poller = TelegramUpdatePoller(
             self._bot, allowed_updates=config.poll_allowed_updates
         )
+        self._model_options: dict[str, ModelPickerState] = {}
+        self._model_pending: dict[str, ModelOption] = {}
         self._voice_config = voice_config
         self._voice_service = voice_service
         if self._voice_service is None and voice_config is not None:
@@ -467,6 +492,9 @@ class TelegramBotService:
         self._bind_options: dict[str, SelectionState] = {}
         self._bot_username: Optional[str] = None
         self._token_usage_by_thread: "collections.OrderedDict[str, dict[str, Any]]" = (
+            collections.OrderedDict()
+        )
+        self._token_usage_by_turn: "collections.OrderedDict[str, dict[str, Any]]" = (
             collections.OrderedDict()
         )
         self._command_specs = self._build_command_specs()
@@ -635,12 +663,18 @@ class TelegramBotService:
 
         command = parse_command(text, bot_username=self._bot_username) if text else None
         if command:
-            if command.name not in ("resume", "bind"):
+            if command.name != "resume":
                 self._resume_options.pop(key, None)
+            if command.name != "bind":
                 self._bind_options.pop(key, None)
+            if command.name != "model":
+                self._model_options.pop(key, None)
+                self._model_pending.pop(key, None)
         else:
             self._resume_options.pop(key, None)
             self._bind_options.pop(key, None)
+            self._model_options.pop(key, None)
+            self._model_pending.pop(key, None)
         if command:
             self._enqueue_topic_work(
                 key,
@@ -860,12 +894,76 @@ class TelegramBotService:
                     await self._answer_callback(callback, "Selection expired")
                     return
                 await self._bind_topic_by_repo_id(key, parsed.repo_id, callback)
+        elif isinstance(parsed, ModelCallback):
+            if key:
+                await self._handle_model_callback(key, callback, parsed)
+        elif isinstance(parsed, EffortCallback):
+            if key:
+                await self._handle_effort_callback(key, callback, parsed)
         elif isinstance(parsed, CancelCallback):
             if key:
                 await self._handle_selection_cancel(key, parsed, callback)
         elif isinstance(parsed, PageCallback):
             if key:
                 await self._handle_selection_page(key, parsed, callback)
+
+    async def _handle_model_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: ModelCallback,
+    ) -> None:
+        state = self._model_options.get(key)
+        if not state:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        option = state.options.get(parsed.model_id)
+        if not option:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        self._model_options.pop(key, None)
+        self._model_pending[key] = option
+        if option.default_effort:
+            prompt = (
+                f"Select a reasoning effort for {option.model_id} "
+                f"(default {option.default_effort})."
+            )
+        else:
+            prompt = EFFORT_PICKER_PROMPT.format(model=option.model_id)
+        keyboard = self._build_effort_keyboard(option)
+        await self._update_selection_message(key, callback, prompt, keyboard)
+        await self._answer_callback(callback, "Select effort")
+
+    async def _handle_effort_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: EffortCallback,
+    ) -> None:
+        option = self._model_pending.get(key)
+        if not option:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        if parsed.effort not in option.efforts:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        self._model_pending.pop(key, None)
+        chat_id, thread_id = _split_topic_key(key)
+        self._router.update_topic(
+            chat_id,
+            thread_id,
+            lambda record: _set_model_overrides(
+                record,
+                option.model_id,
+                effort=parsed.effort,
+            ),
+        )
+        await self._answer_callback(callback, "Model set")
+        await self._finalize_selection(
+            key,
+            callback,
+            f"Model set to {option.model_id} (effort={parsed.effort}). Will apply on the next turn.",
+        )
 
     def _enqueue_topic_work(self, key: str, work: Any) -> None:
         runtime = self._router.runtime_for(key)
@@ -897,6 +995,16 @@ class TelegramBotService:
         if spec is None:
             self._resume_options.pop(key, None)
             self._bind_options.pop(key, None)
+            self._model_options.pop(key, None)
+            self._model_pending.pop(key, None)
+            if name in ("list", "ls"):
+                await self._send_message(
+                    message.chat_id,
+                    "Use /resume to list and switch threads.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             await self._send_message(
                 message.chat_id,
                 f"Unsupported command: /{name}. Send /help for options.",
@@ -928,7 +1036,7 @@ class TelegramBotService:
             ),
             "resume": CommandSpec(
                 "resume",
-                "pick a previous session",
+                "list or resume a previous session",
                 lambda message, args, _runtime: self._handle_resume(message, args),
             ),
             "review": CommandSpec(
@@ -1163,6 +1271,8 @@ class TelegramBotService:
         thread_id = record.active_thread_id
         turn_handle = None
         placeholder_id: Optional[int] = None
+        turn_started_at: Optional[float] = None
+        turn_elapsed_seconds: Optional[float] = None
         prompt_text = text_override if text_override is not None else (message.text or "")
         try:
             if not thread_id:
@@ -1221,6 +1331,7 @@ class TelegramBotService:
                     sandbox_policy=sandbox_policy,
                     **turn_kwargs,
                 )
+                turn_started_at = time.monotonic()
                 runtime.current_turn_id = turn_handle.turn_id
                 ctx = TurnContext(
                     topic_key=key,
@@ -1231,6 +1342,8 @@ class TelegramBotService:
                 )
                 self._turn_contexts[turn_handle.turn_id] = ctx
                 result = await turn_handle.wait()
+                if turn_started_at is not None:
+                    turn_elapsed_seconds = time.monotonic() - turn_started_at
         except Exception as exc:
             if turn_handle is not None:
                 self._turn_contexts.pop(turn_handle.turn_id, None)
@@ -1252,6 +1365,7 @@ class TelegramBotService:
                 placeholder_id=placeholder_id,
                 response="Codex turn failed; check logs for details.",
             )
+            await self._delete_message(message.chat_id, placeholder_id)
             return
         finally:
             if turn_handle is not None:
@@ -1281,6 +1395,24 @@ class TelegramBotService:
             placeholder_id=placeholder_id,
             response=response,
         )
+        turn_id = turn_handle.turn_id if turn_handle else None
+        token_usage = (
+            self._token_usage_by_turn.get(turn_id)
+            if turn_id
+            else None
+        )
+        if token_usage is None and thread_id:
+            token_usage = self._token_usage_by_thread.get(thread_id)
+        await self._send_turn_metrics(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            elapsed_seconds=turn_elapsed_seconds,
+            token_usage=token_usage,
+        )
+        if turn_id:
+            self._token_usage_by_turn.pop(turn_id, None)
+        await self._delete_message(message.chat_id, placeholder_id)
 
     async def _handle_image_message(
         self,
@@ -1821,6 +1953,13 @@ class TelegramBotService:
         thread_id: str,
         callback: Optional[TelegramCallbackQuery] = None,
     ) -> None:
+        preview = None
+        state = self._resume_options.get(key)
+        if state:
+            for item_id, label in state.items:
+                if item_id == thread_id:
+                    preview = label
+                    break
         self._resume_options.pop(key, None)
         try:
             result = await self._client.thread_resume(thread_id)
@@ -1849,7 +1988,10 @@ class TelegramBotService:
             overwrite_defaults=True,
         )
         await self._answer_callback(callback, "Resumed thread")
-        await self._finalize_selection(key, callback, f"Resumed thread {thread_id}.")
+        message = f"Resumed thread {thread_id}."
+        if preview and preview != "(no preview)":
+            message = f"{message}\nLast: {preview}"
+        await self._finalize_selection(key, callback, message)
 
     async def _handle_status(
         self, message: TelegramMessage, _args: str = "", runtime: Optional[Any] = None
@@ -2006,8 +2148,67 @@ class TelegramBotService:
     async def _handle_model(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
+        key = topic_key(message.chat_id, message.thread_id)
+        self._model_options.pop(key, None)
+        self._model_pending.pop(key, None)
         argv = self._parse_command_args(args)
-        if not argv or argv[0].lower() in ("list", "ls"):
+        if not argv:
+            try:
+                result = await self._client.request(
+                    "model/list",
+                    {"cursor": None, "limit": DEFAULT_MODEL_LIST_LIMIT},
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.model.list.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Failed to list models; check logs for details.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            options = _coerce_model_options(result)
+            if not options:
+                await self._send_message(
+                    message.chat_id,
+                    "No models found.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            items = [(option.model_id, option.label) for option in options]
+            state = ModelPickerState(
+                items=items,
+                options={option.model_id: option for option in options},
+            )
+            self._model_options[key] = state
+            try:
+                keyboard = self._build_model_keyboard(state)
+            except ValueError:
+                self._model_options.pop(key, None)
+                await self._send_message(
+                    message.chat_id,
+                    _format_model_list(result),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._selection_prompt(MODEL_PICKER_PROMPT, state),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                reply_markup=keyboard,
+            )
+            return
+        if argv[0].lower() in ("list", "ls"):
             try:
                 result = await self._client.request(
                     "model/list",
@@ -2154,6 +2355,8 @@ class TelegramBotService:
             review_kwargs["summary"] = record.summary
         turn_handle = None
         placeholder_id: Optional[int] = None
+        turn_started_at: Optional[float] = None
+        turn_elapsed_seconds: Optional[float] = None
         try:
             async with self._turn_semaphore:
                 placeholder_id = await self._send_placeholder(
@@ -2167,6 +2370,7 @@ class TelegramBotService:
                     delivery=delivery,
                     **review_kwargs,
                 )
+                turn_started_at = time.monotonic()
                 runtime.current_turn_id = turn_handle.turn_id
                 ctx = TurnContext(
                     topic_key=topic_key(message.chat_id, message.thread_id),
@@ -2177,6 +2381,8 @@ class TelegramBotService:
                 )
                 self._turn_contexts[turn_handle.turn_id] = ctx
                 result = await turn_handle.wait()
+                if turn_started_at is not None:
+                    turn_elapsed_seconds = time.monotonic() - turn_started_at
         except Exception as exc:
             if turn_handle is not None:
                 self._turn_contexts.pop(turn_handle.turn_id, None)
@@ -2197,6 +2403,7 @@ class TelegramBotService:
                 placeholder_id=placeholder_id,
                 response="Codex review failed; check logs for details.",
             )
+            await self._delete_message(message.chat_id, placeholder_id)
             return
         finally:
             if turn_handle is not None:
@@ -2223,6 +2430,24 @@ class TelegramBotService:
             placeholder_id=placeholder_id,
             response=response,
         )
+        turn_id = turn_handle.turn_id if turn_handle else None
+        token_usage = (
+            self._token_usage_by_turn.get(turn_id)
+            if turn_id
+            else None
+        )
+        if token_usage is None and thread_id:
+            token_usage = self._token_usage_by_thread.get(thread_id)
+        await self._send_turn_metrics(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            elapsed_seconds=turn_elapsed_seconds,
+            token_usage=token_usage,
+        )
+        if turn_id:
+            self._token_usage_by_turn.pop(turn_id, None)
+        await self._delete_message(message.chat_id, placeholder_id)
 
     async def _handle_diff(
         self, message: TelegramMessage, _args: str, _runtime: Any
@@ -2723,6 +2948,10 @@ class TelegramBotService:
             return
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
         thread_id = params.get("threadId")
+        turn_id_raw = params.get("turnId")
+        turn_id = None
+        if isinstance(turn_id_raw, (str, int)) and not isinstance(turn_id_raw, bool):
+            turn_id = str(turn_id_raw).strip()
         token_usage = params.get("tokenUsage")
         if not isinstance(thread_id, str) or not isinstance(token_usage, dict):
             return
@@ -2730,6 +2959,11 @@ class TelegramBotService:
         self._token_usage_by_thread.move_to_end(thread_id)
         while len(self._token_usage_by_thread) > TOKEN_USAGE_CACHE_LIMIT:
             self._token_usage_by_thread.popitem(last=False)
+        if turn_id:
+            self._token_usage_by_turn[turn_id] = token_usage
+            self._token_usage_by_turn.move_to_end(turn_id)
+            while len(self._token_usage_by_turn) > TOKEN_USAGE_TURN_CACHE_LIMIT:
+                self._token_usage_by_turn.popitem(last=False)
 
     async def _handle_approval_request(self, message: dict[str, Any]) -> ApprovalDecision:
         req_id = message.get("id")
@@ -2877,6 +3111,27 @@ class TelegramBotService:
             include_cancel=True,
         )
 
+    def _build_model_keyboard(self, state: ModelPickerState) -> dict[str, Any]:
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        options = [
+            (item_id, f"{idx}) {label}")
+            for idx, (item_id, label) in enumerate(page_items, 1)
+        ]
+        return build_model_keyboard(
+            options,
+            page_button=self._page_button("model", state),
+            include_cancel=True,
+        )
+
+    def _build_effort_keyboard(self, option: ModelOption) -> dict[str, Any]:
+        options = []
+        for effort in option.efforts:
+            label = effort
+            if option.default_effort and effort == option.default_effort:
+                label = f"{effort} (default)"
+            options.append((effort, label))
+        return build_effort_keyboard(options, include_cancel=True)
+
     def _render_message(self, text: str) -> tuple[str, Optional[str]]:
         parse_mode = self._config.parse_mode
         if not parse_mode:
@@ -2912,6 +3167,14 @@ class TelegramBotService:
         except Exception:
             return False
         return True
+
+    async def _delete_message(self, chat_id: int, message_id: Optional[int]) -> bool:
+        if message_id is None:
+            return False
+        try:
+            return bool(await self._bot.delete_message(chat_id, message_id))
+        except Exception:
+            return False
 
     async def _edit_callback_message(
         self,
@@ -2968,40 +3231,30 @@ class TelegramBotService:
         placeholder_id: Optional[int],
         response: str,
     ) -> None:
-        if placeholder_id is None:
-            await self._send_message(
-                chat_id,
-                response,
-                thread_id=thread_id,
-                reply_to=reply_to,
-            )
-            return
-        response_len = len(response.encode("utf-8"))
-        if response_len <= TELEGRAM_MAX_MESSAGE_LENGTH:
-            if await self._edit_message_text(chat_id, placeholder_id, response):
-                return
-            await self._edit_message_text(
-                chat_id,
-                placeholder_id,
-                "Response ready; see below.",
-            )
-            await self._send_message(
-                chat_id,
-                response,
-                thread_id=thread_id,
-                reply_to=placeholder_id,
-            )
-            return
-        await self._edit_message_text(
-            chat_id,
-            placeholder_id,
-            "Response too long; see below.",
-        )
         await self._send_message(
             chat_id,
             response,
             thread_id=thread_id,
-            reply_to=placeholder_id,
+            reply_to=reply_to,
+        )
+
+    async def _send_turn_metrics(
+        self,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+        elapsed_seconds: Optional[float],
+        token_usage: Optional[dict[str, Any]],
+    ) -> None:
+        metrics = _format_turn_metrics(token_usage, elapsed_seconds)
+        if not metrics:
+            return
+        await self._send_message(
+            chat_id,
+            metrics,
+            thread_id=thread_id,
+            reply_to=reply_to,
         )
 
     async def _update_selection_message(
@@ -3048,6 +3301,10 @@ class TelegramBotService:
         elif parsed.kind == "bind":
             self._bind_options.pop(key, None)
             text = "Bind selection cancelled."
+        elif parsed.kind == "model":
+            self._model_options.pop(key, None)
+            self._model_pending.pop(key, None)
+            text = "Model selection cancelled."
         else:
             await self._answer_callback(callback, "Selection expired")
             return
@@ -3068,6 +3325,10 @@ class TelegramBotService:
             state = self._bind_options.get(key)
             prompt_base = BIND_PICKER_PROMPT
             build_keyboard = self._build_bind_keyboard
+        elif parsed.kind == "model":
+            state = self._model_options.get(key)
+            prompt_base = MODEL_PICKER_PROMPT
+            build_keyboard = self._build_model_keyboard
         else:
             await self._answer_callback(callback, "Selection expired")
             return
@@ -3301,13 +3562,88 @@ def _format_token_usage(token_usage: Optional[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _extract_usage_value(
+    token_usage: Optional[dict[str, Any]],
+    section: str,
+    key: str,
+) -> Optional[int]:
+    if not isinstance(token_usage, dict):
+        return None
+    section_value = token_usage.get(section)
+    if not isinstance(section_value, dict):
+        return None
+    value = section_value.get(key)
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def _context_remaining_percent(total_tokens: int, context_window: int) -> Optional[int]:
+    effective_window = context_window - CONTEXT_BASELINE_TOKENS
+    if effective_window <= 0:
+        return None
+    used = max(total_tokens - CONTEXT_BASELINE_TOKENS, 0)
+    remaining = max(effective_window - used, 0)
+    percent = round(max(min(remaining / effective_window * 100, 100), 0))
+    return int(percent)
+
+
+def _format_context_metrics(token_usage: Optional[dict[str, Any]]) -> Optional[str]:
+    total_tokens = _extract_usage_value(token_usage, "total", "totalTokens")
+    last_tokens = _extract_usage_value(token_usage, "last", "totalTokens")
+    if total_tokens is None and last_tokens is None:
+        return None
+    used_tokens = total_tokens if total_tokens is not None else last_tokens
+    if used_tokens is None:
+        return None
+    context_window = token_usage.get("modelContextWindow") if isinstance(token_usage, dict) else None
+    if not isinstance(context_window, int):
+        context_window = None
+    if context_window is None:
+        return f"Context: used {used_tokens:,} tokens."
+    remaining = max(context_window - used_tokens, 0)
+    percent = _context_remaining_percent(used_tokens, context_window)
+    if percent is None:
+        return (
+            f"Context: used {used_tokens:,} tokens; remaining {remaining:,} of {context_window:,}."
+        )
+    return (
+        "Context: used "
+        f"{used_tokens:,} tokens; remaining {remaining:,} of {context_window:,} "
+        f"({percent}% remaining)."
+    )
+
+
+def _format_turn_metrics(
+    token_usage: Optional[dict[str, Any]],
+    elapsed_seconds: Optional[float],
+) -> Optional[str]:
+    lines: list[str] = []
+    if elapsed_seconds is not None:
+        lines.append(f"Turn time: {elapsed_seconds:.1f}s")
+    context_line = _format_context_metrics(token_usage)
+    if context_line:
+        lines.append(context_line)
+    if not lines:
+        return None
+    return "\n".join(lines)
+
+
 def _format_token_row(label: str, usage: dict[str, Any]) -> Optional[str]:
+    total_tokens = usage.get("totalTokens")
     input_tokens = usage.get("inputTokens")
+    cached_input_tokens = usage.get("cachedInputTokens")
     output_tokens = usage.get("outputTokens")
     reasoning_tokens = usage.get("reasoningTokens")
+    if reasoning_tokens is None:
+        reasoning_tokens = usage.get("reasoningOutputTokens")
     parts: list[str] = []
+    if isinstance(total_tokens, int):
+        parts.append(f"total={total_tokens}")
     if isinstance(input_tokens, int):
         parts.append(f"in={input_tokens}")
+    if isinstance(cached_input_tokens, int):
+        parts.append(f"cached={cached_input_tokens}")
     if isinstance(output_tokens, int):
         parts.append(f"out={output_tokens}")
     if isinstance(reasoning_tokens, int):
@@ -3317,16 +3653,62 @@ def _format_token_row(label: str, usage: dict[str, Any]) -> Optional[str]:
     return f"{label}: " + " ".join(parts)
 
 
-def _format_model_list(result: Any) -> str:
-    entries: list[dict[str, Any]] = []
+def _coerce_model_entries(result: Any) -> list[dict[str, Any]]:
     if isinstance(result, list):
-        entries = [entry for entry in result if isinstance(entry, dict)]
-    elif isinstance(result, dict):
+        return [entry for entry in result if isinstance(entry, dict)]
+    if isinstance(result, dict):
         for key in ("data", "models", "items", "results"):
             value = result.get(key)
             if isinstance(value, list):
-                entries = [entry for entry in value if isinstance(entry, dict)]
-                break
+                return [entry for entry in value if isinstance(entry, dict)]
+    return []
+
+
+def _coerce_model_options(result: Any) -> list[ModelOption]:
+    entries = _coerce_model_entries(result)
+    options: list[ModelOption] = []
+    for entry in entries:
+        model = entry.get("model") or entry.get("id")
+        if not isinstance(model, str) or not model:
+            continue
+        display_name = entry.get("displayName")
+        label = model
+        if isinstance(display_name, str) and display_name and display_name != model:
+            label = f"{model} ({display_name})"
+        default_effort = entry.get("defaultReasoningEffort")
+        if not isinstance(default_effort, str):
+            default_effort = None
+        efforts_raw = entry.get("supportedReasoningEfforts")
+        efforts: list[str] = []
+        if isinstance(efforts_raw, list):
+            for effort in efforts_raw:
+                if isinstance(effort, dict):
+                    value = effort.get("reasoningEffort")
+                    if isinstance(value, str):
+                        efforts.append(value)
+                elif isinstance(effort, str):
+                    efforts.append(effort)
+        if default_effort and default_effort not in efforts:
+            efforts.append(default_effort)
+        efforts = [effort for effort in efforts if effort]
+        if not efforts:
+            efforts = sorted(VALID_REASONING_EFFORTS)
+        efforts = list(dict.fromkeys(efforts))
+        if default_effort:
+            label = f"{label} (default {default_effort})"
+        options.append(
+            ModelOption(
+                model_id=model,
+                label=label,
+                efforts=tuple(efforts),
+                default_effort=default_effort,
+            )
+        )
+    return options
+
+
+def _format_model_list(result: Any) -> str:
+    entries = _coerce_model_entries(result)
     if not entries:
         return "No models found."
     lines = ["Available models:"]
@@ -3344,6 +3726,8 @@ def _format_model_list(result: Any) -> str:
                     value = effort.get("reasoningEffort")
                     if isinstance(value, str):
                         effort_values.append(value)
+                elif isinstance(effort, str):
+                    effort_values.append(effort)
         if effort_values:
             label = f"{label} [effort: {', '.join(effort_values)}]"
         default_effort = entry.get("defaultReasoningEffort")

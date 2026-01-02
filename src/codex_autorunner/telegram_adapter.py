@@ -134,6 +134,16 @@ class BindCallback:
 
 
 @dataclass(frozen=True)
+class ModelCallback:
+    model_id: str
+
+
+@dataclass(frozen=True)
+class EffortCallback:
+    effort: str
+
+
+@dataclass(frozen=True)
 class CancelCallback:
     kind: str
 
@@ -502,6 +512,18 @@ def encode_bind_callback(repo_id: str) -> str:
     return data
 
 
+def encode_model_callback(model_id: str) -> str:
+    data = f"model:{model_id}"
+    _validate_callback_data(data)
+    return data
+
+
+def encode_effort_callback(effort: str) -> str:
+    data = f"effort:{effort}"
+    _validate_callback_data(data)
+    return data
+
+
 def encode_cancel_callback(kind: str) -> str:
     data = f"cancel:{kind}"
     _validate_callback_data(data)
@@ -517,7 +539,15 @@ def encode_page_callback(kind: str, page: int) -> str:
 def parse_callback_data(
     data: Optional[str],
 ) -> Optional[
-    Union[ApprovalCallback, ResumeCallback, BindCallback, CancelCallback, PageCallback]
+    Union[
+        ApprovalCallback,
+        ResumeCallback,
+        BindCallback,
+        ModelCallback,
+        EffortCallback,
+        CancelCallback,
+        PageCallback,
+    ]
 ]:
     if not data:
         return None
@@ -537,6 +567,16 @@ def parse_callback_data(
         if not repo_id:
             return None
         return BindCallback(repo_id=repo_id)
+    if data.startswith("model:"):
+        _, _, model_id = data.partition(":")
+        if not model_id:
+            return None
+        return ModelCallback(model_id=model_id)
+    if data.startswith("effort:"):
+        _, _, effort = data.partition(":")
+        if not effort:
+            return None
+        return EffortCallback(effort=effort)
     if data.startswith("cancel:"):
         _, _, kind = data.partition(":")
         if not kind:
@@ -585,6 +625,38 @@ def build_resume_keyboard(
         rows.append([InlineButton(label, callback_data)])
     if include_cancel:
         rows.append([InlineButton("Cancel", encode_cancel_callback("resume"))])
+    return build_inline_keyboard(rows)
+
+
+def build_model_keyboard(
+    options: Sequence[tuple[str, str]],
+    *,
+    page_button: Optional[tuple[str, str]] = None,
+    include_cancel: bool = False,
+) -> dict[str, Any]:
+    rows = [
+        [InlineButton(label, encode_model_callback(model_id))]
+        for model_id, label in options
+    ]
+    if page_button:
+        label, callback_data = page_button
+        rows.append([InlineButton(label, callback_data)])
+    if include_cancel:
+        rows.append([InlineButton("Cancel", encode_cancel_callback("model"))])
+    return build_inline_keyboard(rows)
+
+
+def build_effort_keyboard(
+    options: Sequence[tuple[str, str]],
+    *,
+    include_cancel: bool = False,
+) -> dict[str, Any]:
+    rows = [
+        [InlineButton(label, encode_effort_callback(effort))]
+        for effort, label in options
+    ]
+    if include_cancel:
+        rows.append([InlineButton("Cancel", encode_cancel_callback("model"))])
     return build_inline_keyboard(rows)
 
 
@@ -818,6 +890,22 @@ class TelegramBotClient:
             payload["parse_mode"] = parse_mode
         result = await self._request("editMessageText", payload)
         return result if isinstance(result, dict) else {}
+
+    async def delete_message(
+        self,
+        chat_id: Union[int, str],
+        message_id: int,
+    ) -> bool:
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.delete_message",
+            chat_id=chat_id,
+            message_id=message_id,
+        )
+        payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id}
+        result = await self._request("deleteMessage", payload)
+        return bool(result) if isinstance(result, bool) else False
 
     async def answer_callback_query(
         self,
