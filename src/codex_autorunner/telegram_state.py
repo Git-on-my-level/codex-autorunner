@@ -12,7 +12,7 @@ from .state import now_iso, state_lock
 from .utils import atomic_write, read_json
 
 
-STATE_VERSION = 2
+STATE_VERSION = 3
 TOPIC_ROOT = "root"
 APPROVAL_MODE_YOLO = "yolo"
 APPROVAL_MODE_SAFE = "safe"
@@ -171,6 +171,9 @@ class TelegramState:
         default_factory=dict
     )
     outbox: dict[str, "OutboxRecord"] = dataclasses.field(default_factory=dict)
+    pending_voice: dict[str, "PendingVoiceRecord"] = dataclasses.field(
+        default_factory=dict
+    )
 
     def to_json(self) -> str:
         payload = {
@@ -184,6 +187,9 @@ class TelegramState:
             },
             "outbox": {
                 key: record.to_dict() for key, record in self.outbox.items()
+            },
+            "pending_voice": {
+                key: record.to_dict() for key, record in self.pending_voice.items()
             },
         }
         return json.dumps(payload, indent=2) + "\n"
@@ -321,6 +327,141 @@ class OutboxRecord:
         }
 
 
+@dataclass
+class PendingVoiceRecord:
+    record_id: str
+    chat_id: int
+    thread_id: Optional[int]
+    message_id: int
+    file_id: str
+    file_name: Optional[str]
+    caption: str
+    file_size: Optional[int]
+    mime_type: Optional[str]
+    duration: Optional[int]
+    workspace_path: Optional[str]
+    created_at: str
+    attempts: int = 0
+    last_error: Optional[str] = None
+    last_attempt_at: Optional[str] = None
+    next_attempt_at: Optional[str] = None
+    download_path: Optional[str] = None
+    progress_message_id: Optional[int] = None
+    transcript_message_id: Optional[int] = None
+    transcript_text: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> Optional["PendingVoiceRecord"]:
+        if not isinstance(payload, dict):
+            return None
+        record_id = payload.get("record_id")
+        chat_id = payload.get("chat_id")
+        thread_id = payload.get("thread_id")
+        message_id = payload.get("message_id")
+        file_id = payload.get("file_id")
+        file_name = payload.get("file_name")
+        caption = payload.get("caption") or ""
+        file_size = payload.get("file_size")
+        mime_type = payload.get("mime_type")
+        duration = payload.get("duration")
+        workspace_path = payload.get("workspace_path")
+        created_at = payload.get("created_at")
+        attempts = payload.get("attempts", 0)
+        last_error = payload.get("last_error")
+        last_attempt_at = payload.get("last_attempt_at")
+        next_attempt_at = payload.get("next_attempt_at")
+        download_path = payload.get("download_path")
+        progress_message_id = payload.get("progress_message_id")
+        transcript_message_id = payload.get("transcript_message_id")
+        transcript_text = payload.get("transcript_text")
+        if not isinstance(record_id, str) or not record_id:
+            return None
+        if not isinstance(chat_id, int):
+            return None
+        if thread_id is not None and not isinstance(thread_id, int):
+            thread_id = None
+        if not isinstance(message_id, int):
+            return None
+        if not isinstance(file_id, str) or not file_id:
+            return None
+        if not isinstance(file_name, str):
+            file_name = None
+        if not isinstance(caption, str):
+            caption = ""
+        if file_size is not None and not isinstance(file_size, int):
+            file_size = None
+        if not isinstance(mime_type, str):
+            mime_type = None
+        if duration is not None and not isinstance(duration, int):
+            duration = None
+        if not isinstance(workspace_path, str):
+            workspace_path = None
+        if not isinstance(created_at, str) or not created_at:
+            return None
+        if not isinstance(attempts, int) or attempts < 0:
+            attempts = 0
+        if not isinstance(last_error, str):
+            last_error = None
+        if not isinstance(last_attempt_at, str):
+            last_attempt_at = None
+        if not isinstance(next_attempt_at, str):
+            next_attempt_at = None
+        if not isinstance(download_path, str):
+            download_path = None
+        if progress_message_id is not None and not isinstance(progress_message_id, int):
+            progress_message_id = None
+        if transcript_message_id is not None and not isinstance(transcript_message_id, int):
+            transcript_message_id = None
+        if not isinstance(transcript_text, str):
+            transcript_text = None
+        return cls(
+            record_id=record_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            message_id=message_id,
+            file_id=file_id,
+            file_name=file_name,
+            caption=caption,
+            file_size=file_size,
+            mime_type=mime_type,
+            duration=duration,
+            workspace_path=workspace_path,
+            created_at=created_at,
+            attempts=attempts,
+            last_error=last_error,
+            last_attempt_at=last_attempt_at,
+            next_attempt_at=next_attempt_at,
+            download_path=download_path,
+            progress_message_id=progress_message_id,
+            transcript_message_id=transcript_message_id,
+            transcript_text=transcript_text,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "record_id": self.record_id,
+            "chat_id": self.chat_id,
+            "thread_id": self.thread_id,
+            "message_id": self.message_id,
+            "file_id": self.file_id,
+            "file_name": self.file_name,
+            "caption": self.caption,
+            "file_size": self.file_size,
+            "mime_type": self.mime_type,
+            "duration": self.duration,
+            "workspace_path": self.workspace_path,
+            "created_at": self.created_at,
+            "attempts": self.attempts,
+            "last_error": self.last_error,
+            "last_attempt_at": self.last_attempt_at,
+            "next_attempt_at": self.next_attempt_at,
+            "download_path": self.download_path,
+            "progress_message_id": self.progress_message_id,
+            "transcript_message_id": self.transcript_message_id,
+            "transcript_text": self.transcript_text,
+        }
+
+
 class TelegramStateStore:
     def __init__(
         self, path: Path, *, default_approval_mode: str = APPROVAL_MODE_YOLO
@@ -447,12 +588,23 @@ class TelegramStateStore:
                 if parsed is None:
                     continue
                 outbox[key] = parsed
+        voice_raw = data.get("pending_voice")
+        pending_voice: dict[str, PendingVoiceRecord] = {}
+        if isinstance(voice_raw, dict):
+            for key, record in voice_raw.items():
+                if not isinstance(key, str) or not isinstance(record, dict):
+                    continue
+                parsed = PendingVoiceRecord.from_dict(record)
+                if parsed is None:
+                    continue
+                pending_voice[key] = parsed
         return TelegramState(
             version=version,
             topics=topics,
             topic_scopes=topic_scopes,
             pending_approvals=pending_approvals,
             outbox=outbox,
+            pending_voice=pending_voice,
         )
 
     def _save_unlocked(self, state: TelegramState) -> None:
@@ -556,6 +708,42 @@ class TelegramStateStore:
         with state_lock(self._path):
             state = self._load_unlocked()
             records = list(state.outbox.values())
+        return sorted(records, key=lambda record: record.created_at or "")
+
+    def enqueue_pending_voice(self, record: PendingVoiceRecord) -> PendingVoiceRecord:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            state.pending_voice[record.record_id] = record
+            self._save_unlocked(state)
+            return record
+
+    def update_pending_voice(self, record: PendingVoiceRecord) -> PendingVoiceRecord:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            state.pending_voice[record.record_id] = record
+            self._save_unlocked(state)
+            return record
+
+    def delete_pending_voice(self, record_id: str) -> None:
+        if not isinstance(record_id, str) or not record_id:
+            return
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            if record_id in state.pending_voice:
+                state.pending_voice.pop(record_id, None)
+                self._save_unlocked(state)
+
+    def get_pending_voice(self, record_id: str) -> Optional[PendingVoiceRecord]:
+        if not isinstance(record_id, str) or not record_id:
+            return None
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            return state.pending_voice.get(record_id)
+
+    def list_pending_voice(self) -> list[PendingVoiceRecord]:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            records = list(state.pending_voice.values())
         return sorted(records, key=lambda record: record.created_at or "")
 
 

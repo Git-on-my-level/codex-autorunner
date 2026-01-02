@@ -6,14 +6,17 @@ import dataclasses
 import html
 import logging
 import os
+import random
 import re
 import secrets
 import shlex
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
+
+import httpx
 
 from .app_server_client import (
     ApprovalDecision,
@@ -58,6 +61,7 @@ from .state import now_iso
 from .telegram_state import (
     APPROVAL_MODE_YOLO,
     OutboxRecord,
+    PendingVoiceRecord,
     PendingApprovalRecord,
     TelegramStateStore,
     TopicRouter,
@@ -90,6 +94,12 @@ APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
 OUTBOX_RETRY_INTERVAL_SECONDS = 10.0
 OUTBOX_IMMEDIATE_RETRY_DELAYS = (0.5, 2.0, 5.0)
 OUTBOX_MAX_ATTEMPTS = 8
+VOICE_RETRY_INTERVAL_SECONDS = 5.0
+VOICE_RETRY_INITIAL_SECONDS = 2.0
+VOICE_RETRY_MAX_SECONDS = 300.0
+VOICE_RETRY_JITTER_RATIO = 0.2
+VOICE_MAX_ATTEMPTS = 20
+VOICE_RETRY_AFTER_BUFFER_SECONDS = 1.0
 DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
 RESUME_PICKER_PROMPT = (
     "Select a thread to resume (buttons below or reply with number/id)."
@@ -537,6 +547,9 @@ class TelegramBotService:
         self._outbox_inflight: set[str] = set()
         self._outbox_lock: Optional[asyncio.Lock] = None
         self._outbox_task: Optional[asyncio.Task[None]] = None
+        self._voice_inflight: set[str] = set()
+        self._voice_lock: Optional[asyncio.Lock] = None
+        self._voice_task: Optional[asyncio.Task[None]] = None
         self._command_specs = self._build_command_specs()
 
     async def run_polling(self) -> None:
@@ -551,11 +564,15 @@ class TelegramBotService:
         )
         self._outbox_inflight = set()
         self._outbox_lock = asyncio.Lock()
+        self._voice_inflight = set()
+        self._voice_lock = asyncio.Lock()
         await self._start_app_server_with_backoff()
         await self._prime_bot_identity()
         await self._restore_pending_approvals()
         await self._restore_outbox()
+        await self._restore_pending_voice()
         self._outbox_task = asyncio.create_task(self._outbox_loop())
+        self._voice_task = asyncio.create_task(self._voice_loop())
         log_event(
             self._logger,
             logging.INFO,
@@ -593,6 +610,12 @@ class TelegramBotService:
                 self._outbox_task.cancel()
                 try:
                     await self._outbox_task
+                except asyncio.CancelledError:
+                    pass
+            if self._voice_task is not None:
+                self._voice_task.cancel()
+                try:
+                    await self._voice_task
                 except asyncio.CancelledError:
                     pass
             await self._bot.close()
@@ -753,6 +776,449 @@ class TelegramBotService:
             return
         async with self._outbox_lock:
             self._outbox_inflight.discard(record_id)
+
+    async def _restore_pending_voice(self) -> None:
+        records = self._store.list_pending_voice()
+        if not records:
+            return
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.voice.restore",
+            count=len(records),
+        )
+        await self._flush_pending_voice(records)
+
+    async def _voice_loop(self) -> None:
+        while True:
+            await asyncio.sleep(VOICE_RETRY_INTERVAL_SECONDS)
+            try:
+                records = self._store.list_pending_voice()
+                if records:
+                    await self._flush_pending_voice(records)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.voice.flush_failed",
+                    exc=exc,
+                )
+
+    async def _flush_pending_voice(self, records: list[PendingVoiceRecord]) -> None:
+        for record in records:
+            if record.attempts >= VOICE_MAX_ATTEMPTS:
+                await self._give_up_voice(
+                    record,
+                    "Voice transcription failed after retries. Please resend.",
+                )
+                continue
+            await self._attempt_pending_voice(record.record_id)
+
+    async def _attempt_pending_voice(self, record_id: str) -> bool:
+        record = self._store.get_pending_voice(record_id)
+        if record is None:
+            return False
+        if not self._voice_ready_for_attempt(record):
+            return False
+        if not await self._mark_voice_inflight(record.record_id):
+            return False
+        inflight_id = record.record_id
+        try:
+            record = self._store.get_pending_voice(record.record_id)
+            if record is None:
+                return False
+            if not self._voice_ready_for_attempt(record):
+                return False
+            done = await self._process_pending_voice(record)
+        except Exception as exc:
+            retry_after = _extract_retry_after_seconds(exc)
+            await self._record_voice_failure(record, exc, retry_after=retry_after)
+            return False
+        finally:
+            await self._clear_voice_inflight(inflight_id)
+        if done:
+            self._store.delete_pending_voice(record.record_id)
+        return done
+
+    async def _process_pending_voice(self, record: PendingVoiceRecord) -> bool:
+        if not self._voice_service or not self._voice_config or not self._voice_config.enabled:
+            await self._send_message(
+                record.chat_id,
+                "Voice transcription is disabled.",
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+            self._remove_voice_file(record)
+            return True
+        max_bytes = self._config.media.max_voice_bytes
+        if record.file_size and record.file_size > max_bytes:
+            await self._send_message(
+                record.chat_id,
+                f"Voice note too large (max {max_bytes} bytes).",
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+            self._remove_voice_file(record)
+            return True
+        if record.transcript_text:
+            await self._deliver_voice_transcript(record, record.transcript_text)
+            self._remove_voice_file(record)
+            return True
+        path = self._resolve_voice_download_path(record)
+        if path is None:
+            data, file_path, file_size = await self._download_telegram_file(
+                record.file_id
+            )
+            if file_size and file_size > max_bytes:
+                await self._send_message(
+                    record.chat_id,
+                    f"Voice note too large (max {max_bytes} bytes).",
+                    thread_id=record.thread_id,
+                    reply_to=record.message_id,
+                )
+                return True
+            if len(data) > max_bytes:
+                await self._send_message(
+                    record.chat_id,
+                    f"Voice note too large (max {max_bytes} bytes).",
+                    thread_id=record.thread_id,
+                    reply_to=record.message_id,
+                )
+                return True
+            path = self._persist_voice_payload(record, data, file_path=file_path)
+            record.download_path = str(path)
+            if file_size is not None:
+                record.file_size = file_size
+            else:
+                record.file_size = len(data)
+            self._store.update_pending_voice(record)
+        data = path.read_bytes()
+        try:
+            result = await asyncio.to_thread(
+                self._voice_service.transcribe,
+                data,
+                client="telegram",
+                filename=record.file_name or path.name,
+                content_type=record.mime_type,
+            )
+        except VoiceServiceError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media.voice.transcribe_failed",
+                chat_id=record.chat_id,
+                thread_id=record.thread_id,
+                message_id=record.message_id,
+                reason=exc.reason,
+            )
+            await self._send_message(
+                record.chat_id,
+                exc.detail,
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+            self._remove_voice_file(record)
+            return True
+        transcript = ""
+        if isinstance(result, dict):
+            transcript = str(result.get("text") or "")
+        transcript = transcript.strip()
+        if not transcript:
+            await self._send_message(
+                record.chat_id,
+                "Voice note transcribed to empty text.",
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+            self._remove_voice_file(record)
+            return True
+        combined = record.caption.strip()
+        if combined:
+            combined = f"{combined}\n\n{transcript}"
+        else:
+            combined = transcript
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media.voice.transcribed",
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+            message_id=record.message_id,
+            text_len=len(transcript),
+        )
+        record.transcript_text = combined
+        self._store.update_pending_voice(record)
+        await self._deliver_voice_transcript(record, combined)
+        self._remove_voice_file(record)
+        return True
+
+    async def _deliver_voice_transcript(
+        self,
+        record: PendingVoiceRecord,
+        transcript_text: str,
+    ) -> None:
+        if record.transcript_message_id is None:
+            transcript_message = self._format_voice_transcript_message(
+                transcript_text,
+                WORKING_PLACEHOLDER,
+            )
+            record.transcript_message_id = await self._send_voice_transcript_message(
+                record.chat_id,
+                transcript_message,
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+            self._store.update_pending_voice(record)
+        if record.transcript_message_id is None:
+            raise RuntimeError("Failed to send voice transcript message")
+        await self._update_voice_progress_message(record, "Voice note transcribed.")
+        message = TelegramMessage(
+            update_id=0,
+            message_id=record.message_id,
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+            from_user_id=None,
+            text=None,
+            date=None,
+            is_topic_message=record.thread_id is not None,
+        )
+        key = self._resolve_topic_key(record.chat_id, record.thread_id)
+        runtime = self._router.runtime_for(key)
+        if self._config.concurrency.per_topic_queue:
+            await runtime.queue.enqueue(
+                lambda: self._handle_normal_message(
+                    message,
+                    runtime,
+                    text_override=transcript_text,
+                    send_placeholder=False,
+                    transcript_message_id=record.transcript_message_id,
+                    transcript_text=transcript_text,
+                )
+            )
+        else:
+            await self._handle_normal_message(
+                message,
+                runtime,
+                text_override=transcript_text,
+                send_placeholder=False,
+                transcript_message_id=record.transcript_message_id,
+                transcript_text=transcript_text,
+            )
+
+    async def _record_voice_failure(
+        self,
+        record: PendingVoiceRecord,
+        exc: Exception,
+        *,
+        retry_after: Optional[int],
+    ) -> None:
+        record.attempts += 1
+        record.last_error = str(exc)[:500]
+        record.last_attempt_at = now_iso()
+        delay = self._voice_retry_delay(record.attempts, retry_after=retry_after)
+        record.next_attempt_at = _format_future_time(delay)
+        self._store.update_pending_voice(record)
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "telegram.voice.retry",
+            record_id=record.record_id,
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+            attempts=record.attempts,
+            retry_after=retry_after,
+            next_attempt_at=record.next_attempt_at,
+            exc=exc,
+        )
+        if record.attempts == 1 and record.progress_message_id is None:
+            progress_id = await self._send_voice_progress_message(
+                record,
+                "Queued voice note, retrying download...",
+            )
+            if progress_id is not None:
+                record.progress_message_id = progress_id
+                self._store.update_pending_voice(record)
+        if record.attempts >= VOICE_MAX_ATTEMPTS:
+            await self._give_up_voice(
+                record,
+                "Voice transcription failed after retries. Please resend.",
+            )
+
+    async def _give_up_voice(self, record: PendingVoiceRecord, message: str) -> None:
+        if record.progress_message_id is not None:
+            await self._edit_message_text(
+                record.chat_id,
+                record.progress_message_id,
+                message,
+            )
+        else:
+            await self._send_message(
+                record.chat_id,
+                message,
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+        self._remove_voice_file(record)
+        self._store.delete_pending_voice(record.record_id)
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "telegram.voice.gave_up",
+            record_id=record.record_id,
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+            attempts=record.attempts,
+        )
+
+    async def _send_voice_progress_message(
+        self, record: PendingVoiceRecord, text: str
+    ) -> Optional[int]:
+        payload_text, parse_mode = self._prepare_message(text)
+        try:
+            response = await self._bot.send_message(
+                record.chat_id,
+                payload_text,
+                message_thread_id=record.thread_id,
+                reply_to_message_id=record.message_id,
+                parse_mode=parse_mode,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.voice.progress_failed",
+                record_id=record.record_id,
+                chat_id=record.chat_id,
+                thread_id=record.thread_id,
+                exc=exc,
+            )
+            return None
+        message_id = response.get("message_id") if isinstance(response, dict) else None
+        return message_id if isinstance(message_id, int) else None
+
+    async def _update_voice_progress_message(
+        self, record: PendingVoiceRecord, text: str
+    ) -> None:
+        if record.progress_message_id is None:
+            return
+        await self._edit_message_text(
+            record.chat_id,
+            record.progress_message_id,
+            text,
+        )
+
+    async def _mark_voice_inflight(self, record_id: str) -> bool:
+        if self._voice_lock is None:
+            self._voice_lock = asyncio.Lock()
+        async with self._voice_lock:
+            if record_id in self._voice_inflight:
+                return False
+            self._voice_inflight.add(record_id)
+            return True
+
+    async def _clear_voice_inflight(self, record_id: str) -> None:
+        if self._voice_lock is None:
+            return
+        async with self._voice_lock:
+            self._voice_inflight.discard(record_id)
+
+    def _voice_ready_for_attempt(self, record: PendingVoiceRecord) -> bool:
+        next_attempt = _parse_iso_timestamp(record.next_attempt_at)
+        if next_attempt is None:
+            return True
+        return datetime.now(timezone.utc) >= next_attempt
+
+    def _voice_retry_delay(
+        self, attempts: int, *, retry_after: Optional[int]
+    ) -> float:
+        if retry_after is not None and retry_after > 0:
+            return float(retry_after) + VOICE_RETRY_AFTER_BUFFER_SECONDS
+        delay = VOICE_RETRY_INITIAL_SECONDS * (2 ** max(attempts - 1, 0))
+        delay = min(delay, VOICE_RETRY_MAX_SECONDS)
+        jitter = delay * VOICE_RETRY_JITTER_RATIO
+        if jitter:
+            delay += random.uniform(0, jitter)
+        return delay
+
+    def _resolve_voice_download_path(
+        self, record: PendingVoiceRecord
+    ) -> Optional[Path]:
+        if not record.download_path:
+            return None
+        path = Path(record.download_path)
+        if path.exists():
+            return path
+        record.download_path = None
+        self._store.update_pending_voice(record)
+        return None
+
+    def _persist_voice_payload(
+        self,
+        record: PendingVoiceRecord,
+        data: bytes,
+        *,
+        file_path: Optional[str],
+    ) -> Path:
+        workspace_path = record.workspace_path or str(self._config.root)
+        storage_dir = self._voice_storage_dir(workspace_path)
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        token = secrets.token_hex(6)
+        ext = self._choose_voice_extension(
+            record.file_name,
+            record.mime_type,
+            file_path=file_path,
+        )
+        name = f"telegram-voice-{int(time.time())}-{token}{ext}"
+        path = storage_dir / name
+        path.write_bytes(data)
+        return path
+
+    def _voice_storage_dir(self, workspace_path: str) -> Path:
+        return (
+            Path(workspace_path)
+            / ".codex-autorunner"
+            / "uploads"
+            / "telegram-voice"
+        )
+
+    def _choose_voice_extension(
+        self,
+        file_name: Optional[str],
+        mime_type: Optional[str],
+        *,
+        file_path: Optional[str],
+    ) -> str:
+        for candidate in (file_name, file_path):
+            if candidate:
+                suffix = Path(candidate).suffix
+                if suffix:
+                    return suffix
+        if mime_type == "audio/ogg":
+            return ".ogg"
+        if mime_type == "audio/opus":
+            return ".opus"
+        if mime_type == "audio/mpeg":
+            return ".mp3"
+        if mime_type == "audio/wav":
+            return ".wav"
+        return ".dat"
+
+    def _remove_voice_file(self, record: PendingVoiceRecord) -> None:
+        if not record.download_path:
+            return
+        path = Path(record.download_path)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.voice.cleanup_failed",
+                record_id=record.record_id,
+                path=str(path),
+            )
 
     async def _send_message_with_outbox(
         self,
@@ -2169,131 +2635,32 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        try:
-            data, file_path, file_size = await self._download_telegram_file(
-                candidate.file_id
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.media.voice.download_failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
-                exc=exc,
-            )
-            await self._send_message(
-                message.chat_id,
-                "Failed to download voice note.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if file_size and file_size > max_bytes:
-            await self._send_message(
-                message.chat_id,
-                f"Voice note too large (max {max_bytes} bytes).",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if len(data) > max_bytes:
-            await self._send_message(
-                message.chat_id,
-                f"Voice note too large (max {max_bytes} bytes).",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        filename = candidate.file_name
-        if not filename and file_path:
-            filename = Path(file_path).name
-        try:
-            result = await asyncio.to_thread(
-                self._voice_service.transcribe,
-                data,
-                client="telegram",
-                filename=filename,
-                content_type=candidate.mime_type,
-            )
-        except VoiceServiceError as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.media.voice.transcribe_failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
-                reason=exc.reason,
-            )
-            await self._send_message(
-                message.chat_id,
-                exc.detail,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        transcript = ""
-        if isinstance(result, dict):
-            transcript = str(result.get("text") or "")
-        transcript = transcript.strip()
-        if not transcript:
-            await self._send_message(
-                message.chat_id,
-                "Voice note transcribed to empty text.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        combined = caption_text.strip()
-        if combined:
-            combined = f"{combined}\n\n{transcript}"
-        else:
-            combined = transcript
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.media.voice.transcribed",
+        pending = PendingVoiceRecord(
+            record_id=secrets.token_hex(8),
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             message_id=message.message_id,
-            text_len=len(transcript),
+            file_id=candidate.file_id,
+            file_name=candidate.file_name,
+            caption=caption_text,
+            file_size=candidate.file_size,
+            mime_type=candidate.mime_type,
+            duration=candidate.duration,
+            workspace_path=record.workspace_path,
+            created_at=now_iso(),
         )
-        send_placeholder = True
-        transcript_message_id = None
-        transcript_message = self._format_voice_transcript_message(
-            combined,
-            WORKING_PLACEHOLDER,
+        self._store.enqueue_pending_voice(pending)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media.voice.queued",
+            record_id=pending.record_id,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            file_id=candidate.file_id,
         )
-        try:
-            transcript_message_id = await self._send_voice_transcript_message(
-                message.chat_id,
-                transcript_message,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            if transcript_message_id is not None:
-                send_placeholder = False
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.media.voice.transcript_message_failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
-                exc=exc,
-            )
-        await self._handle_normal_message(
-            message,
-            runtime,
-            text_override=combined,
-            record=record,
-            send_placeholder=send_placeholder,
-            transcript_message_id=transcript_message_id,
-            transcript_text=combined,
-        )
+        self._spawn_task(self._attempt_pending_voice(pending.record_id))
 
     async def _download_telegram_file(
         self, file_id: str
@@ -4834,6 +5201,42 @@ def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _format_future_time(delay_seconds: float) -> Optional[str]:
+    if delay_seconds <= 0:
+        return None
+    dt = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _extract_retry_after_seconds(exc: Exception) -> Optional[int]:
+    current: Optional[BaseException] = exc
+    while current is not None:
+        if isinstance(current, httpx.HTTPStatusError):
+            header = current.response.headers.get("Retry-After")
+            if header and header.isdigit():
+                return int(header)
+            try:
+                payload = current.response.json()
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                parameters = payload.get("parameters")
+                if isinstance(parameters, dict):
+                    retry_after = parameters.get("retry_after")
+                    if isinstance(retry_after, int):
+                        return retry_after
+            message = str(payload.get("description")) if isinstance(payload, dict) else ""
+            match = re.search(r"retry after (\d+)", message.lower())
+            if match:
+                return int(match.group(1))
+        message = str(current)
+        match = re.search(r"retry after (\d+)", message.lower())
+        if match:
+            return int(match.group(1))
+        current = current.__cause__ or current.__context__
+    return None
 
 
 def _approval_age_seconds(created_at: Optional[str]) -> Optional[int]:
