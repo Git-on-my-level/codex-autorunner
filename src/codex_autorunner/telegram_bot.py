@@ -1399,6 +1399,7 @@ class TelegramBotService:
         message_id = None
         is_topic = None
         is_edited = None
+        key = None
         if update.message:
             chat_id = update.message.chat_id
             user_id = update.message.from_user_id
@@ -1406,11 +1407,14 @@ class TelegramBotService:
             message_id = update.message.message_id
             is_topic = update.message.is_topic_message
             is_edited = update.message.is_edited
+            key = self._resolve_topic_key(chat_id, thread_id)
         elif update.callback:
             chat_id = update.callback.chat_id
             user_id = update.callback.from_user_id
             thread_id = update.callback.thread_id
             message_id = update.callback.message_id
+            if chat_id is not None:
+                key = self._resolve_topic_key(chat_id, thread_id)
         log_event(
             self._logger,
             logging.INFO,
@@ -1425,13 +1429,42 @@ class TelegramBotService:
             has_message=bool(update.message),
             has_callback=bool(update.callback),
         )
+        if (
+            update.update_id is not None
+            and key
+            and not self._should_process_update(key, update.update_id)
+        ):
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.update.duplicate",
+                update_id=update.update_id,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                message_id=message_id,
+            )
+            return
         if not allowlist_allows(update, self._allowlist):
             self._log_denied(update)
             return
         if update.callback:
+            if key:
+                self._enqueue_topic_work(
+                    key,
+                    lambda: self._handle_callback(update.callback),
+                    force_queue=True,
+                )
+                return
             await self._handle_callback(update.callback)
             return
         if update.message:
+            if key:
+                self._enqueue_topic_work(
+                    key,
+                    lambda: self._handle_message(update.message),
+                    force_queue=True,
+                )
+                return
             await self._handle_message(update.message)
 
     def _log_denied(self, update: TelegramUpdate) -> None:
@@ -1810,6 +1843,25 @@ class TelegramBotService:
         )
         return True
 
+    def _should_process_update(self, key: str, update_id: int) -> bool:
+        if not isinstance(update_id, int):
+            return True
+        if isinstance(update_id, bool):
+            return True
+        duplicate = False
+
+        def apply(record: "TelegramTopicRecord") -> None:
+            nonlocal duplicate
+            last_id = record.last_update_id
+            if isinstance(last_id, int) and not isinstance(last_id, bool):
+                if update_id <= last_id:
+                    duplicate = True
+                    return
+            record.last_update_id = update_id
+
+        self._store.update_topic(key, apply)
+        return not duplicate
+
     async def _handle_callback(self, callback: TelegramCallbackQuery) -> None:
         parsed = parse_callback_data(callback.data)
         if parsed is None:
@@ -1933,9 +1985,11 @@ class TelegramBotService:
             selection_key=key,
         )
 
-    def _enqueue_topic_work(self, key: str, work: Any) -> None:
+    def _enqueue_topic_work(
+        self, key: str, work: Any, *, force_queue: bool = False
+    ) -> None:
         runtime = self._router.runtime_for(key)
-        if self._config.concurrency.per_topic_queue:
+        if force_queue or self._config.concurrency.per_topic_queue:
             self._spawn_task(runtime.queue.enqueue(work))
         else:
             self._spawn_task(work())

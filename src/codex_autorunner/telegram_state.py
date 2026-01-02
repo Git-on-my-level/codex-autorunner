@@ -81,6 +81,7 @@ class TelegramTopicRecord:
     repo_id: Optional[str] = None
     workspace_path: Optional[str] = None
     active_thread_id: Optional[str] = None
+    last_update_id: Optional[int] = None
     model: Optional[str] = None
     effort: Optional[str] = None
     summary: Optional[str] = None
@@ -103,6 +104,9 @@ class TelegramTopicRecord:
         active_thread_id = payload.get("active_thread_id") or payload.get("activeThreadId")
         if not isinstance(active_thread_id, str):
             active_thread_id = None
+        last_update_id = payload.get("last_update_id") or payload.get("lastUpdateId")
+        if not isinstance(last_update_id, int) or isinstance(last_update_id, bool):
+            last_update_id = None
         model = payload.get("model")
         if not isinstance(model, str):
             model = None
@@ -136,6 +140,7 @@ class TelegramTopicRecord:
             repo_id=repo_id,
             workspace_path=workspace_path,
             active_thread_id=active_thread_id,
+            last_update_id=last_update_id,
             model=model,
             effort=effort,
             summary=summary,
@@ -151,6 +156,7 @@ class TelegramTopicRecord:
             "repo_id": self.repo_id,
             "workspace_path": self.workspace_path,
             "active_thread_id": self.active_thread_id,
+            "last_update_id": self.last_update_id,
             "model": self.model,
             "effort": self.effort,
             "summary": self.summary,
