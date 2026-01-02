@@ -21,6 +21,7 @@ import httpx
 from .app_server_client import (
     ApprovalDecision,
     CodexAppServerClient,
+    CodexAppServerDisconnected,
     CodexAppServerError,
 )
 from .logging_utils import log_event
@@ -68,7 +69,7 @@ from .telegram_state import (
     normalize_approval_mode,
     topic_key,
 )
-from .utils import resolve_executable, subprocess_env
+from .utils import RepoNotFoundError, find_repo_root, resolve_executable, subprocess_env
 from .voice import VoiceConfig, VoiceService, VoiceServiceError
 
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
@@ -112,6 +113,23 @@ UPDATE_TARGET_OPTIONS = (
     ("both", "Both (web + Telegram)"),
     ("web", "Web only"),
     ("telegram", "Telegram only"),
+)
+TRACE_MESSAGE_TOKENS = (
+    "failed",
+    "error",
+    "denied",
+    "not bound",
+    "not found",
+    "invalid",
+    "unsupported",
+    "disabled",
+    "missing",
+    "mismatch",
+    "different workspace",
+    "timed out",
+    "timeout",
+    "aborted",
+    "cancelled",
 )
 WORKING_PLACEHOLDER = "Working..."
 COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
@@ -2167,7 +2185,17 @@ class TelegramBotService:
             return self._router.set_active_thread(
                 message.chat_id, message.thread_id, None
             )
-        if not _path_within(workspace_root, resumed_root):
+        if not _paths_compatible(workspace_root, resumed_root):
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.thread.workspace_mismatch",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                codex_thread_id=thread_id,
+                workspace_path=str(workspace_root),
+                resumed_path=str(resumed_root),
+            )
             await self._send_message(
                 message.chat_id,
                 "Active thread belongs to a different workspace; starting a new thread.",
@@ -2384,6 +2412,21 @@ class TelegramBotService:
                 self._turn_contexts.pop(turn_handle.turn_id, None)
             runtime.current_turn_id = None
             runtime.interrupt_requested = False
+            failure_message = "Codex turn failed; check logs for details."
+            if isinstance(exc, CodexAppServerDisconnected):
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.disconnected_during_turn",
+                    topic_key=key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    turn_id=turn_handle.turn_id if turn_handle else None,
+                )
+                failure_message = (
+                    "Codex app-server disconnected; retrying. "
+                    "Please resend your message."
+                )
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2399,7 +2442,7 @@ class TelegramBotService:
                 reply_to=message.message_id,
                 placeholder_id=placeholder_id,
                 response=_with_conversation_id(
-                    "Codex turn failed; check logs for details.",
+                    failure_message,
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                 ),
@@ -3553,6 +3596,20 @@ class TelegramBotService:
                 self._turn_contexts.pop(turn_handle.turn_id, None)
             runtime.current_turn_id = None
             runtime.interrupt_requested = False
+            failure_message = "Codex review failed; check logs for details."
+            if isinstance(exc, CodexAppServerDisconnected):
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.disconnected_during_review",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    turn_id=turn_handle.turn_id if turn_handle else None,
+                )
+                failure_message = (
+                    "Codex app-server disconnected; retrying. "
+                    "Please resend your review command."
+                )
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3567,7 +3624,7 @@ class TelegramBotService:
                 reply_to=message.message_id,
                 placeholder_id=placeholder_id,
                 response=_with_conversation_id(
-                    "Codex review failed; check logs for details.",
+                    failure_message,
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                 ),
@@ -4790,6 +4847,12 @@ class TelegramBotService:
         reply_to: Optional[int] = None,
         reply_markup: Optional[dict[str, Any]] = None,
     ) -> None:
+        if _should_trace_message(text):
+            text = _with_conversation_id(
+                text,
+                chat_id=chat_id,
+                thread_id=thread_id,
+            )
         payload_text, parse_mode = self._prepare_message(text)
         await self._bot.send_message_chunks(
             chat_id,
@@ -5681,6 +5744,34 @@ def _path_within(root: Path, target: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _repo_root(path: Path) -> Optional[Path]:
+    try:
+        return find_repo_root(path)
+    except RepoNotFoundError:
+        return None
+
+
+def _paths_compatible(workspace_root: Path, resumed_root: Path) -> bool:
+    if _path_within(workspace_root, resumed_root):
+        return True
+    if _path_within(resumed_root, workspace_root):
+        return True
+    workspace_repo = _repo_root(workspace_root)
+    resumed_repo = _repo_root(resumed_root)
+    if workspace_repo is None or resumed_repo is None:
+        return False
+    return workspace_repo == resumed_repo
+
+
+def _should_trace_message(text: str) -> bool:
+    if not text:
+        return False
+    if "(conversation " in text:
+        return False
+    lowered = text.lower()
+    return any(token in lowered for token in TRACE_MESSAGE_TOKENS)
 
 
 def _compact_preview(text: Any, limit: int = 40) -> str:
