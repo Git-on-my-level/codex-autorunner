@@ -1651,6 +1651,64 @@ class TelegramBotService:
             sandbox_policy = record.sandbox_policy
         return approval_policy, sandbox_policy
 
+    async def _verify_active_thread(
+        self, message: TelegramMessage, record: "TelegramTopicRecord"
+    ) -> Optional["TelegramTopicRecord"]:
+        thread_id = record.active_thread_id
+        if not thread_id:
+            return record
+        try:
+            result = await self._client.thread_resume(thread_id)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.thread.verify_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                codex_thread_id=thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "Failed to verify the active thread; use /resume or /new.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
+        info = _extract_thread_info(result)
+        resumed_path = info.get("workspace_path")
+        if not isinstance(resumed_path, str):
+            await self._send_message(
+                message.chat_id,
+                "Active thread missing workspace metadata; use /resume or /new.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
+        try:
+            workspace_root = Path(record.workspace_path or "").expanduser().resolve()
+            resumed_root = Path(resumed_path).expanduser().resolve()
+        except Exception:
+            await self._send_message(
+                message.chat_id,
+                "Active thread has invalid workspace metadata; use /resume or /new.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
+        if not _path_within(workspace_root, resumed_root):
+            await self._send_message(
+                message.chat_id,
+                "Active thread belongs to a different workspace; use /resume or /new.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
+        return self._apply_thread_result(
+            message.chat_id, message.thread_id, result, active_thread_id=thread_id
+        )
+
     def _apply_thread_result(
         self,
         chat_id: int,
@@ -1710,7 +1768,10 @@ class TelegramBotService:
     ) -> Optional[str]:
         thread_id = record.active_thread_id
         if thread_id:
-            return thread_id
+            verified = await self._verify_active_thread(message, record)
+            if not verified or not verified.active_thread_id:
+                return None
+            return verified.active_thread_id
         thread = await self._client.thread_start(record.workspace_path or "")
         thread_id = _extract_thread_id(thread)
         if not thread_id:
@@ -1761,6 +1822,11 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
+        if record.active_thread_id:
+            verified = await self._verify_active_thread(message, record)
+            if not verified:
+                return
+            record = verified
         thread_id = record.active_thread_id
         turn_handle = None
         placeholder_id: Optional[int] = None
@@ -2560,7 +2626,8 @@ class TelegramBotService:
                 return
             await self._send_message(
                 message.chat_id,
-                "No previous threads found for this workspace.",
+                "No previous threads found for this workspace. "
+                "If threads exist, update the app-server to include cwd metadata or use /new.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2625,6 +2692,42 @@ class TelegramBotService:
                     chat_id=chat_id,
                     thread_id=thread_id_val,
                 ),
+            )
+            return
+        record = self._router.get_topic(key)
+        info = _extract_thread_info(result)
+        resumed_path = info.get("workspace_path")
+        if record is None or not record.workspace_path:
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key, callback, "Topic not bound; use /bind before resuming."
+            )
+            return
+        if not isinstance(resumed_path, str):
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                "Thread metadata missing workspace path; resume aborted to avoid cross-worktree mixups.",
+            )
+            return
+        try:
+            workspace_root = Path(record.workspace_path).expanduser().resolve()
+            resumed_root = Path(resumed_path).expanduser().resolve()
+        except Exception:
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                "Thread workspace path is invalid; resume aborted.",
+            )
+            return
+        if not _path_within(workspace_root, resumed_root):
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                "Thread belongs to a different workspace; resume aborted.",
             )
             return
         chat_id, thread_id_val = _split_topic_key(key)
@@ -5146,12 +5249,18 @@ def _partition_threads(
 
 
 def _filter_threads(
-    threads: Any, workspace_path: str, *, assume_scoped: bool = False
+    threads: Any,
+    workspace_path: str,
+    *,
+    assume_scoped: bool = False,
+    allow_unscoped: bool = True,
 ) -> list[dict[str, Any]]:
     filtered, unscoped, saw_path = _partition_threads(threads, workspace_path)
     if filtered or saw_path or not assume_scoped:
         return filtered
-    return unscoped
+    if allow_unscoped:
+        return unscoped
+    return []
 
 
 def _path_within(root: Path, target: Path) -> bool:
