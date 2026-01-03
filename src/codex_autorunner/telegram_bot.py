@@ -104,6 +104,7 @@ VOICE_RETRY_JITTER_RATIO = 0.2
 VOICE_MAX_ATTEMPTS = 20
 VOICE_RETRY_AFTER_BUFFER_SECONDS = 1.0
 DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
+DEFAULT_UPDATE_REPO_REF = "main"
 RESUME_PICKER_PROMPT = (
     "Select a thread to resume (buttons below or reply with number/id)."
 )
@@ -513,12 +514,14 @@ class TelegramBotService:
         voice_config: Optional[VoiceConfig] = None,
         voice_service: Optional[VoiceService] = None,
         update_repo_url: Optional[str] = None,
+        update_repo_ref: Optional[str] = None,
     ) -> None:
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
         self._hub_root = hub_root
         self._manifest_path = manifest_path
         self._update_repo_url = update_repo_url
+        self._update_repo_ref = update_repo_ref
         self._allowlist = config.allowlist()
         self._store = TelegramStateStore(
             config.state_file, default_approval_mode=config.defaults.approval_mode
@@ -1017,7 +1020,7 @@ class TelegramBotService:
                     message,
                     runtime,
                     text_override=transcript_text,
-                    send_placeholder=False,
+                    send_placeholder=True,
                     transcript_message_id=record.transcript_message_id,
                     transcript_text=transcript_text,
                 )
@@ -1027,7 +1030,7 @@ class TelegramBotService:
                 message,
                 runtime,
                 text_override=transcript_text,
-                send_placeholder=False,
+                send_placeholder=True,
                 transcript_message_id=record.transcript_message_id,
                 transcript_text=transcript_text,
             )
@@ -4222,10 +4225,14 @@ class TelegramBotService:
         repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
         if not repo_url:
             repo_url = DEFAULT_UPDATE_REPO_URL
+        repo_ref = (self._update_repo_ref or DEFAULT_UPDATE_REPO_REF).strip()
+        if not repo_ref:
+            repo_ref = DEFAULT_UPDATE_REPO_REF
         update_dir = Path.home() / ".codex-autorunner" / "update_cache"
         try:
             _spawn_update_process(
                 repo_url=repo_url,
+                repo_ref=repo_ref,
                 update_dir=update_dir,
                 logger=self._logger,
                 update_target=update_target,
@@ -4236,6 +4243,7 @@ class TelegramBotService:
                 "telegram.update.started",
                 chat_id=chat_id,
                 thread_id=thread_id,
+                repo_ref=repo_ref,
                 update_target=update_target,
             )
         except Exception as exc:
@@ -4245,6 +4253,7 @@ class TelegramBotService:
                 "telegram.update.failed",
                 chat_id=chat_id,
                 thread_id=thread_id,
+                repo_ref=repo_ref,
                 update_target=update_target,
                 exc=exc,
             )
