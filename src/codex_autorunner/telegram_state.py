@@ -12,7 +12,7 @@ from .state import now_iso, state_lock
 from .utils import atomic_write, read_json
 
 
-STATE_VERSION = 3
+STATE_VERSION = 4
 TOPIC_ROOT = "root"
 APPROVAL_MODE_YOLO = "yolo"
 APPROVAL_MODE_SAFE = "safe"
@@ -180,6 +180,7 @@ class TelegramState:
     pending_voice: dict[str, "PendingVoiceRecord"] = dataclasses.field(
         default_factory=dict
     )
+    last_update_id_global: Optional[int] = None
 
     def to_json(self) -> str:
         payload = {
@@ -197,6 +198,7 @@ class TelegramState:
             "pending_voice": {
                 key: record.to_dict() for key, record in self.pending_voice.items()
             },
+            "last_update_id_global": self.last_update_id_global,
         }
         return json.dumps(payload, indent=2) + "\n"
 
@@ -579,6 +581,13 @@ class TelegramStateStore:
         version = data.get("version")
         if not isinstance(version, int):
             version = STATE_VERSION
+        last_update_id_global = data.get("last_update_id_global") or data.get(
+            "lastUpdateIdGlobal"
+        )
+        if not isinstance(last_update_id_global, int) or isinstance(
+            last_update_id_global, bool
+        ):
+            last_update_id_global = None
         topics_raw = data.get("topics")
         topics: dict[str, TelegramTopicRecord] = {}
         if isinstance(topics_raw, dict):
@@ -631,6 +640,7 @@ class TelegramStateStore:
             pending_approvals=pending_approvals,
             outbox=outbox,
             pending_voice=pending_voice,
+            last_update_id_global=last_update_id_global,
         )
 
     def _save_unlocked(self, state: TelegramState) -> None:
@@ -820,6 +830,26 @@ class TelegramStateStore:
             state = self._load_unlocked()
             records = list(state.pending_voice.values())
         return sorted(records, key=lambda record: record.created_at or "")
+
+    def get_last_update_id_global(self) -> Optional[int]:
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            return state.last_update_id_global
+
+    def update_last_update_id_global(self, update_id: int) -> Optional[int]:
+        if not isinstance(update_id, int) or isinstance(update_id, bool):
+            return None
+        with state_lock(self._path):
+            state = self._load_unlocked()
+            current = state.last_update_id_global
+            if (
+                not isinstance(current, int)
+                or isinstance(current, bool)
+                or update_id > current
+            ):
+                state.last_update_id_global = update_id
+                self._save_unlocked(state)
+            return state.last_update_id_global
 
 
 T = TypeVar("T")

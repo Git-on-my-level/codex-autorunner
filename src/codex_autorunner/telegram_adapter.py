@@ -1100,10 +1100,24 @@ class TelegramUpdatePoller:
         client: TelegramBotClient,
         *,
         allowed_updates: Optional[Sequence[str]] = None,
+        offset: Optional[int] = None,
     ) -> None:
         self._client = client
         self._offset: Optional[int] = None
         self._allowed_updates = list(allowed_updates) if allowed_updates else None
+        if isinstance(offset, int) and not isinstance(offset, bool):
+            self._offset = offset
+
+    @property
+    def offset(self) -> Optional[int]:
+        return self._offset
+
+    def set_offset(self, offset: Optional[int]) -> None:
+        if offset is None:
+            return
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            return
+        self._offset = offset
 
     async def poll(self, *, timeout: int = 30) -> list[TelegramUpdate]:
         updates = await self._client.get_updates(

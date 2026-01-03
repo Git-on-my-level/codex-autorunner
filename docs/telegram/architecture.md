@@ -19,6 +19,7 @@ Config lives under `telegram_bot` in `codex-autorunner.yml` and the generated
 - `telegram_bot.allowed_user_ids`: allowlist of Telegram user ids.
 - `telegram_bot.require_topics`: if true, only accept messages in forum topics.
 - `telegram_bot.parse_mode`: `HTML`, `Markdown`, `MarkdownV2`, or null.
+- `telegram_bot.debug.prefix_context`: when true, prefix outgoing messages with routing metadata.
 - `telegram_bot.app_server_command(_env)`: how to launch `codex app-server`.
 - `telegram_bot.media`: image/voice handling limits and prompts.
 - `telegram_bot.defaults`: approval/sandbox defaults for the app-server client.

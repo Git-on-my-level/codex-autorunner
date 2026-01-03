@@ -89,6 +89,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
         "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
         "parse_mode": "HTML",
+        "debug": {
+            "prefix_context": False,
+        },
         "allowed_chat_ids": [],
         "allowed_user_ids": [],
         "require_topics": True,
@@ -169,6 +172,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
         "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
         "parse_mode": "HTML",
+        "debug": {
+            "prefix_context": False,
+        },
         "allowed_chat_ids": [],
         "allowed_user_ids": [],
         "require_topics": True,
@@ -848,6 +854,14 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(
                     "telegram_bot.parse_mode must be HTML, Markdown, MarkdownV2, or null"
                 )
+    debug_cfg = telegram_cfg.get("debug")
+    if debug_cfg is not None and not isinstance(debug_cfg, dict):
+        raise ConfigError("telegram_bot.debug must be a mapping if provided")
+    if isinstance(debug_cfg, dict):
+        if "prefix_context" in debug_cfg and not isinstance(
+            debug_cfg.get("prefix_context"), bool
+        ):
+            raise ConfigError("telegram_bot.debug.prefix_context must be boolean")
     for key in ("bot_token_env", "chat_id_env", "app_server_command_env"):
         if key in telegram_cfg and not isinstance(telegram_cfg.get(key), str):
             raise ConfigError(f"telegram_bot.{key} must be a string")

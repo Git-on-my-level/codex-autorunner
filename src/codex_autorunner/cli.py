@@ -44,7 +44,12 @@ from .usage import (
 )
 from .snapshot import SnapshotError, generate_snapshot, load_snapshot
 from .telegram_adapter import TelegramAPIError, TelegramBotClient
-from .telegram_bot import TelegramBotConfig, TelegramBotConfigError, TelegramBotService
+from .telegram_bot import (
+    TelegramBotConfig,
+    TelegramBotConfigError,
+    TelegramBotLockError,
+    TelegramBotService,
+)
 from .voice import VoiceConfig
 
 app = typer.Typer(add_completion=False)
@@ -757,7 +762,10 @@ def telegram_start(
         )
         await service.run_polling()
 
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except TelegramBotLockError as exc:
+        raise typer.Exit(str(exc))
 
 
 @telegram_app.command("health")
