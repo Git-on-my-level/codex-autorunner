@@ -230,7 +230,7 @@ class CodexAppServerClient:
         turn_id = _extract_turn_id(result)
         if not turn_id:
             raise CodexAppServerProtocolError("turn/start response missing turn id")
-        self._ensure_turn_state(turn_id)
+        self._register_turn_state(turn_id)
         return TurnHandle(self, turn_id)
 
     async def review_start(
@@ -259,7 +259,7 @@ class CodexAppServerClient:
         turn_id = _extract_turn_id(result)
         if not turn_id:
             raise CodexAppServerProtocolError("review/start response missing turn id")
-        self._ensure_turn_state(turn_id)
+        self._register_turn_state(turn_id)
         return TurnHandle(self, turn_id)
 
     async def turn_interrupt(self, turn_id: str) -> Any:
@@ -679,6 +679,23 @@ class CodexAppServerClient:
         )
         self._turns[turn_id] = state
         return state
+
+    def _register_turn_state(self, turn_id: str) -> _TurnState:
+        state = self._turns.get(turn_id)
+        if state is None:
+            return self._ensure_turn_state(turn_id)
+        if not state.future.done():
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "app_server.turn_id.collision",
+                turn_id=turn_id,
+            )
+            raise CodexAppServerProtocolError(
+                f"turn/start returned duplicate turn id {turn_id}"
+            )
+        self._turns.pop(turn_id, None)
+        return self._ensure_turn_state(turn_id)
 
     async def _handle_disconnect(self) -> None:
         self._initialized = False
