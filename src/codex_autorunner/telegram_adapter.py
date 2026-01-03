@@ -159,6 +159,11 @@ class UpdateCallback:
 
 
 @dataclass(frozen=True)
+class UpdateConfirmCallback:
+    decision: str
+
+
+@dataclass(frozen=True)
 class CancelCallback:
     kind: str
 
@@ -588,6 +593,12 @@ def encode_update_callback(target: str) -> str:
     return data
 
 
+def encode_update_confirm_callback(decision: str) -> str:
+    data = f"update_confirm:{decision}"
+    _validate_callback_data(data)
+    return data
+
+
 def encode_cancel_callback(kind: str) -> str:
     data = f"cancel:{kind}"
     _validate_callback_data(data)
@@ -610,6 +621,7 @@ def parse_callback_data(
         ModelCallback,
         EffortCallback,
         UpdateCallback,
+        UpdateConfirmCallback,
         CancelCallback,
         PageCallback,
     ]
@@ -647,6 +659,11 @@ def parse_callback_data(
         if not target:
             return None
         return UpdateCallback(target=target)
+    if data.startswith("update_confirm:"):
+        _, _, decision = data.partition(":")
+        if not decision:
+            return None
+        return UpdateConfirmCallback(decision=decision)
     if data.startswith("cancel:"):
         _, _, kind = data.partition(":")
         if not kind:
@@ -741,6 +758,16 @@ def build_update_keyboard(
     ]
     if include_cancel:
         rows.append([InlineButton("Cancel", encode_cancel_callback("update"))])
+    return build_inline_keyboard(rows)
+
+
+def build_update_confirm_keyboard() -> dict[str, Any]:
+    rows = [
+        [
+            InlineButton("Yes, continue", encode_update_confirm_callback("yes")),
+            InlineButton("Cancel", encode_cancel_callback("update-confirm")),
+        ]
+    ]
     return build_inline_keyboard(rows)
 
 

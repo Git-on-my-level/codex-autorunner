@@ -33,6 +33,7 @@ from .telegram_adapter import (
     CancelCallback,
     EffortCallback,
     UpdateCallback,
+    UpdateConfirmCallback,
     ModelCallback,
     PageCallback,
     ResumeCallback,
@@ -51,6 +52,7 @@ from .telegram_adapter import (
     build_bind_keyboard,
     build_effort_keyboard,
     build_model_keyboard,
+    build_update_confirm_keyboard,
     build_resume_keyboard,
     build_update_keyboard,
     encode_page_callback,
@@ -559,6 +561,7 @@ class TelegramBotService:
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
         self._update_options: dict[str, SelectionState] = {}
+        self._update_confirm_options: dict[str, bool] = {}
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
         self._bot_username: Optional[str] = None
@@ -1923,6 +1926,9 @@ class TelegramBotService:
         elif isinstance(parsed, UpdateCallback):
             if key:
                 await self._handle_update_callback(key, callback, parsed)
+        elif isinstance(parsed, UpdateConfirmCallback):
+            if key:
+                await self._handle_update_confirm_callback(key, callback, parsed)
         elif isinstance(parsed, CancelCallback):
             if key:
                 await self._handle_selection_cancel(key, parsed, callback)
@@ -2013,6 +2019,23 @@ class TelegramBotService:
             callback=callback,
             selection_key=key,
         )
+
+    async def _handle_update_confirm_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: UpdateConfirmCallback,
+    ) -> None:
+        if not self._update_confirm_options.get(key):
+            await self._answer_callback(callback, "Selection expired")
+            return
+        self._update_confirm_options.pop(key, None)
+        if parsed.decision != "yes":
+            await self._answer_callback(callback, "Cancelled")
+            await self._finalize_selection(key, callback, "Update cancelled.")
+            return
+        await self._prompt_update_selection_from_callback(key, callback)
+        await self._answer_callback(callback, "Select update target")
 
     def _enqueue_topic_work(
         self, key: str, work: Any, *, force_queue: bool = False
@@ -4273,13 +4296,42 @@ class TelegramBotService:
             reply_markup=keyboard,
         )
 
+    async def _prompt_update_selection_from_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        *,
+        prompt: str = UPDATE_PICKER_PROMPT,
+    ) -> None:
+        state = SelectionState(items=list(UPDATE_TARGET_OPTIONS))
+        keyboard = self._build_update_keyboard(state)
+        self._update_options[key] = state
+        await self._update_selection_message(key, callback, prompt, keyboard)
+
+    def _has_active_turns(self) -> bool:
+        return bool(self._turn_contexts)
+
+    async def _prompt_update_confirmation(self, message: TelegramMessage) -> None:
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        self._update_confirm_options[key] = True
+        await self._send_message(
+            message.chat_id,
+            "An active Codex turn is running. Updating will restart the service. Continue?",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            reply_markup=build_update_confirm_keyboard(),
+        )
+
     async def _handle_update(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
         argv = self._parse_command_args(args)
         target_raw = argv[0] if argv else None
         if not target_raw:
-            await self._prompt_update_selection(message)
+            if self._has_active_turns():
+                await self._prompt_update_confirmation(message)
+            else:
+                await self._prompt_update_selection(message)
             return
         try:
             update_target = _normalize_update_target(target_raw)
@@ -4931,6 +4983,9 @@ class TelegramBotService:
             text = "Model selection cancelled."
         elif parsed.kind == "update":
             self._update_options.pop(key, None)
+            text = "Update cancelled."
+        elif parsed.kind == "update-confirm":
+            self._update_confirm_options.pop(key, None)
             text = "Update cancelled."
         else:
             await self._answer_callback(callback, "Selection expired")
