@@ -182,6 +182,7 @@ hub:
     auto_init_missing: true
     # Where to pull system updates from (main upstream).
     update_repo_url: https://github.com/Git-on-my-level/codex-autorunner.git
+    update_repo_ref: main
     log:
       path: .codex-autorunner/codex-autorunner-hub.log
       max_bytes: 10000000

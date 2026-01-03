@@ -208,6 +208,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "auto_init_missing": True,
         # Where to pull system updates from (defaults to main upstream)
         "update_repo_url": "https://github.com/Git-on-my-level/codex-autorunner.git",
+        "update_repo_ref": "main",
         "log": {
             "path": ".codex-autorunner/codex-autorunner-hub.log",
             "max_bytes": 10_000_000,
@@ -282,6 +283,7 @@ class HubConfig:
     discover_depth: int
     auto_init_missing: bool
     update_repo_url: str
+    update_repo_ref: str
     server_host: str
     server_port: int
     server_base_path: str
@@ -531,6 +533,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         discover_depth=int(hub_cfg["discover_depth"]),
         auto_init_missing=bool(hub_cfg["auto_init_missing"]),
         update_repo_url=str(hub_cfg.get("update_repo_url", "")),
+        update_repo_ref=str(hub_cfg.get("update_repo_ref", "main")),
         server_host=str(cfg["server"]["host"]),
         server_port=int(cfg["server"]["port"]),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
@@ -789,6 +792,10 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         hub_cfg.get("update_repo_url"), str
     ):
         raise ConfigError("hub.update_repo_url must be a string")
+    if "update_repo_ref" in hub_cfg and not isinstance(
+        hub_cfg.get("update_repo_ref"), str
+    ):
+        raise ConfigError("hub.update_repo_ref must be a string")
     log_cfg = hub_cfg.get("log")
     if not isinstance(log_cfg, dict):
         raise ConfigError("hub.log section must be a mapping")

@@ -45,6 +45,7 @@ PIPX_VENV="${PIPX_VENV:-$PIPX_ROOT/venvs/codex-autorunner}"
 PIPX_PYTHON="${PIPX_PYTHON:-$PIPX_VENV/bin/python}"
 CURRENT_VENV_LINK="${CURRENT_VENV_LINK:-$PIPX_ROOT/venvs/codex-autorunner.current}"
 PREV_VENV_LINK="${PREV_VENV_LINK:-$PIPX_ROOT/venvs/codex-autorunner.prev}"
+HELPER_PYTHON="${HELPER_PYTHON:-$PIPX_PYTHON}"
 
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
@@ -64,10 +65,10 @@ write_status() {
   local status message
   status="$1"
   message="$2"
-  if [[ -z "${UPDATE_STATUS_PATH}" ]]; then
+  if [[ -z "${UPDATE_STATUS_PATH}" || ! -x "${HELPER_PYTHON}" ]]; then
     return 0
   fi
-  "${PIPX_PYTHON}" - <<PY
+  "${HELPER_PYTHON}" - <<PY
 import json, pathlib, time
 path = pathlib.Path("${UPDATE_STATUS_PATH}")
 path.parent.mkdir(parents=True, exist_ok=True)
@@ -121,6 +122,18 @@ normalize_bool() {
   esac
 }
 
+if [[ ! -x "${HELPER_PYTHON}" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    HELPER_PYTHON="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    HELPER_PYTHON="$(command -v python)"
+  fi
+fi
+
+if [[ ! -x "${HELPER_PYTHON}" ]]; then
+  fail "Python not found (set PIPX_PYTHON or HELPER_PYTHON)."
+fi
+
 UPDATE_TARGET="$(normalize_update_target "${UPDATE_TARGET}")"
 HEALTH_CHECK_STATIC="$(normalize_bool "${HEALTH_CHECK_STATIC}")"
 HEALTH_CHECK_TELEGRAM="$(normalize_bool "${HEALTH_CHECK_TELEGRAM}")"
@@ -143,12 +156,30 @@ if [[ ! -f "${PLIST_PATH}" ]]; then
   fail "LaunchAgent plist not found at ${PLIST_PATH}. Run scripts/install-local-mac-hub.sh or scripts/launchd-hub.sh (or set PLIST_PATH)."
 fi
 
-if [[ ! -d "${PIPX_VENV}" ]]; then
-  fail "Expected pipx venv not found at ${PIPX_VENV}. Run scripts/install-local-mac-hub.sh (or set PIPX_VENV)."
-fi
+_realpath() {
+  "${HELPER_PYTHON}" - "$1" <<'PY'
+import os
+import sys
 
-if [[ ! -x "${PIPX_PYTHON}" ]]; then
-  fail "Python not found at ${PIPX_PYTHON}."
+try:
+    print(os.path.realpath(sys.argv[1]))
+except Exception:
+    pass
+PY
+}
+
+if [[ ! -d "${PIPX_VENV}" ]]; then
+  if [[ -L "${CURRENT_VENV_LINK}" ]]; then
+    current_target="$(_realpath "${CURRENT_VENV_LINK}")"
+    if [[ -n "${current_target}" && -d "${current_target}" ]]; then
+      echo "PIPX_VENV not found; using ${current_target} as current venv."
+      PIPX_VENV="${current_target}"
+    else
+      fail "Expected pipx venv not found at ${PIPX_VENV}."
+    fi
+  else
+    fail "Expected pipx venv not found at ${PIPX_VENV}."
+  fi
 fi
 
 for cmd in git launchctl curl; do
@@ -162,13 +193,16 @@ if [[ ! -L "${CURRENT_VENV_LINK}" ]]; then
   ln -sfn "${PIPX_VENV}" "${CURRENT_VENV_LINK}"
 fi
 
-current_target="$("${PIPX_PYTHON}" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${CURRENT_VENV_LINK}")"
+current_target="$(_realpath "${CURRENT_VENV_LINK}")"
+if [[ -z "${current_target}" ]]; then
+  fail "Unable to resolve current venv from ${CURRENT_VENV_LINK}."
+fi
 
 ts="$(date +%Y%m%d-%H%M%S)"
 next_venv="${PIPX_ROOT}/venvs/codex-autorunner.next-${ts}"
 
-echo "Creating staged venv at ${next_venv} (python: ${PIPX_PYTHON})..."
-"${PIPX_PYTHON}" -m venv "${next_venv}"
+echo "Creating staged venv at ${next_venv} (python: ${HELPER_PYTHON})..."
+"${HELPER_PYTHON}" -m venv "${next_venv}"
 "${next_venv}/bin/python" -m pip -q install --upgrade pip
 
 echo "Installing codex-autorunner from ${PACKAGE_SRC} into staged venv..."
@@ -199,7 +233,7 @@ _ensure_plist_uses_current_venv() {
   fi
 
   echo "Updating plist to use ${desired_bin}..."
-  "${PIPX_PYTHON}" - <<PY
+  "${HELPER_PYTHON}" - <<PY
 from __future__ import annotations
 
 from pathlib import Path
@@ -307,7 +341,7 @@ _reload_telegram() {
 _plist_arg_value() {
   local key
   key="$1"
-  "${PIPX_PYTHON}" - "$key" "${PLIST_PATH}" <<'PY'
+  "${HELPER_PYTHON}" - "$key" "${PLIST_PATH}" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -376,7 +410,7 @@ _ensure_telegram_plist_uses_current_venv() {
   fi
 
   echo "Updating telegram plist to use ${desired_bin}..."
-  "${PIPX_PYTHON}" - <<PY
+  "${HELPER_PYTHON}" - <<PY
 from __future__ import annotations
 
 import plistlib
@@ -474,7 +508,7 @@ _normalize_base_path() {
 _config_base_path() {
   local root
   root="$1"
-  "${PIPX_PYTHON}" - "$root" <<'PY'
+  "${HELPER_PYTHON}" - "$root" <<'PY'
 import sys
 from pathlib import Path
 
@@ -603,12 +637,19 @@ _wait_healthy() {
 }
 
 _telegram_check_once() {
-  local pid
-  pid="$(_telegram_service_pid)"
-  if [[ -n "${pid}" && "${pid}" != "0" ]]; then
-    return 0
+  local hub_root telegram_cmd
+  hub_root="$(_plist_arg_value path)"
+  if [[ -z "${hub_root}" ]]; then
+    return 1
   fi
-  return 1
+  telegram_cmd="${CURRENT_VENV_LINK}/bin/codex-autorunner"
+  if [[ ! -x "${telegram_cmd}" ]]; then
+    return 1
+  fi
+  "${telegram_cmd}" telegram health \
+    --path "${hub_root}" \
+    --timeout "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
+    >/dev/null 2>&1
 }
 
 _wait_telegram_healthy() {
@@ -742,14 +783,14 @@ else
   to_delete=()
 fi
 
-current_real="$("${PIPX_PYTHON}" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${CURRENT_VENV_LINK}")"
-prev_real="$("${PIPX_PYTHON}" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${PREV_VENV_LINK}" 2>/dev/null || true)"
+current_real="$(_realpath "${CURRENT_VENV_LINK}")"
+prev_real="$(_realpath "${PREV_VENV_LINK}")"
 
 printf '%s\n' "${to_delete[@]:-}" | while read -r old; do
   if [[ -z "${old}" ]]; then
     continue
   fi
-  old_real="$("${PIPX_PYTHON}" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${old}" 2>/dev/null || true)"
+  old_real="$(_realpath "${old}")"
   if [[ -n "${old_real}" && ( "${old_real}" == "${current_real}" || "${old_real}" == "${prev_real}" ) ]]; then
     continue
   fi
