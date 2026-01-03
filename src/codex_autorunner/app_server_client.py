@@ -13,6 +13,7 @@ from .logging_utils import log_event
 ApprovalDecision = Union[str, Dict[str, Any]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
 NotificationHandler = Callable[[Dict[str, Any]], Awaitable[None]]
+TurnKey = tuple[str, str]
 
 APPROVAL_METHODS = {
     "item/commandExecution/requestApproval",
@@ -64,17 +65,23 @@ class TurnResult:
 
 
 class TurnHandle:
-    def __init__(self, client: "CodexAppServerClient", turn_id: str) -> None:
+    def __init__(
+        self, client: "CodexAppServerClient", turn_id: str, thread_id: str
+    ) -> None:
         self._client = client
         self.turn_id = turn_id
+        self.thread_id = thread_id
 
     async def wait(self, *, timeout: Optional[float] = None) -> TurnResult:
-        return await self._client.wait_for_turn(self.turn_id, timeout=timeout)
+        return await self._client.wait_for_turn(
+            self.turn_id, thread_id=self.thread_id, timeout=timeout
+        )
 
 
 @dataclass
 class _TurnState:
     turn_id: str
+    thread_id: Optional[str]
     future: asyncio.Future
     agent_messages: list[str]
     raw_events: list[Dict[str, Any]]
@@ -112,7 +119,7 @@ class CodexAppServerClient:
         self._write_lock = asyncio.Lock()
         self._pending: Dict[int, asyncio.Future] = {}
         self._pending_methods: Dict[int, str] = {}
-        self._turns: Dict[str, _TurnState] = {}
+        self._turns: Dict[TurnKey, _TurnState] = {}
         self._next_id = 1
         self._initialized = False
         self._initializing = False
@@ -230,8 +237,8 @@ class CodexAppServerClient:
         turn_id = _extract_turn_id(result)
         if not turn_id:
             raise CodexAppServerProtocolError("turn/start response missing turn id")
-        self._ensure_turn_state(turn_id)
-        return TurnHandle(self, turn_id)
+        self._register_turn_state(turn_id, thread_id)
+        return TurnHandle(self, turn_id, thread_id)
 
     async def review_start(
         self,
@@ -259,28 +266,39 @@ class CodexAppServerClient:
         turn_id = _extract_turn_id(result)
         if not turn_id:
             raise CodexAppServerProtocolError("review/start response missing turn id")
-        self._ensure_turn_state(turn_id)
-        return TurnHandle(self, turn_id)
+        self._register_turn_state(turn_id, thread_id)
+        return TurnHandle(self, turn_id, thread_id)
 
     async def turn_interrupt(self, turn_id: str) -> Any:
         params = {"turnId": turn_id}
         return await self.request("turn/interrupt", params)
 
     async def wait_for_turn(
-        self, turn_id: str, *, timeout: Optional[float] = None
+        self,
+        turn_id: str,
+        *,
+        thread_id: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> TurnResult:
-        state = self._ensure_turn_state(turn_id)
+        key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+        if state is None:
+            raise CodexAppServerProtocolError(
+                f"Unknown turn id {turn_id} (thread {thread_id})"
+            )
         if state.future.done():
             result = state.future.result()
-            self._turns.pop(turn_id, None)
+            if key is not None:
+                self._turns.pop(key, None)
             return result
         timeout = timeout if timeout is not None else self._request_timeout
         if timeout is None:
             result = await state.future
-            self._turns.pop(turn_id, None)
+            if key is not None:
+                self._turns.pop(key, None)
             return result
         result = await asyncio.wait_for(state.future, timeout)
-        self._turns.pop(turn_id, None)
+        if key is not None:
+            self._turns.pop(key, None)
         return result
 
     async def _ensure_process(self) -> None:
@@ -598,15 +616,36 @@ class CodexAppServerClient:
             if not turn_id:
                 handled = True
                 return
-            state = self._ensure_turn_state(turn_id)
+            thread_id = _extract_thread_id_for_turn(params)
+            key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+            if state is None:
+                if thread_id:
+                    state = self._ensure_turn_state(turn_id, thread_id)
+                else:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "app_server.turn.unknown",
+                        method=method,
+                        turn_id=turn_id,
+                    )
+                    handled = True
+                    return
             item = params.get("item") if isinstance(params, dict) else None
+            text = None
+            def append_message(candidate: Optional[str]) -> None:
+                if not candidate:
+                    return
+                if state.agent_messages and state.agent_messages[-1] == candidate:
+                    return
+                state.agent_messages.append(candidate)
             if isinstance(item, dict) and item.get("type") == "agentMessage":
                 text = item.get("text")
                 if isinstance(text, str):
-                    state.agent_messages.append(text)
+                    append_message(text)
             review_text = _extract_review_text(item)
-            if review_text:
-                state.agent_messages.append(review_text)
+            if review_text and review_text != text:
+                append_message(review_text)
             item_type = item.get("type") if isinstance(item, dict) else None
             log_event(
                 self._logger,
@@ -622,7 +661,21 @@ class CodexAppServerClient:
             if not turn_id:
                 handled = True
                 return
-            state = self._ensure_turn_state(turn_id)
+            thread_id = _extract_thread_id_for_turn(params)
+            key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+            if state is None:
+                if thread_id:
+                    state = self._ensure_turn_state(turn_id, thread_id)
+                else:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "app_server.turn.unknown",
+                        method=method,
+                        turn_id=turn_id,
+                    )
+                    handled = True
+                    return
             state.raw_events.append(message)
             status = None
             if isinstance(params, dict):
@@ -658,19 +711,66 @@ class CodexAppServerClient:
                     exc=exc,
                 )
 
-    def _ensure_turn_state(self, turn_id: str) -> _TurnState:
-        state = self._turns.get(turn_id)
+    def _find_turn_state(
+        self, turn_id: str, *, thread_id: Optional[str]
+    ) -> tuple[Optional[TurnKey], Optional[_TurnState]]:
+        key = _turn_key(thread_id, turn_id)
+        if key is not None:
+            return key, self._turns.get(key)
+        matches = [
+            (candidate_key, state)
+            for candidate_key, state in self._turns.items()
+            if candidate_key[1] == turn_id
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.turn.ambiguous",
+                turn_id=turn_id,
+                matches=len(matches),
+            )
+        return None, None
+
+    def _ensure_turn_state(self, turn_id: str, thread_id: str) -> _TurnState:
+        key = _turn_key(thread_id, turn_id)
+        if key is None:
+            raise CodexAppServerProtocolError("turn state missing thread id")
+        state = self._turns.get(key)
         if state is not None:
             return state
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         state = _TurnState(
             turn_id=turn_id,
+            thread_id=thread_id,
             future=future,
             agent_messages=[],
             raw_events=[],
         )
-        self._turns[turn_id] = state
+        self._turns[key] = state
+        return state
+
+    def _register_turn_state(self, turn_id: str, thread_id: str) -> _TurnState:
+        key = _turn_key(thread_id, turn_id)
+        if key is None:
+            raise CodexAppServerProtocolError("turn/start missing thread id")
+        state = self._turns.get(key)
+        if state is None:
+            return self._ensure_turn_state(turn_id, thread_id)
+        if not state.future.done():
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "app_server.turn_id.collision",
+                turn_id=turn_id,
+                thread_id=thread_id,
+            )
+            raise CodexAppServerProtocolError(
+                f"turn/start returned duplicate turn id {turn_id}"
+            )
         return state
 
     async def _handle_disconnect(self) -> None:
@@ -822,6 +922,38 @@ def _extract_turn_id(payload: Any) -> Optional[str]:
     if isinstance(turn, dict):
         for key in ("id", "turnId", "turn_id"):
             value = turn.get(key)
+            if isinstance(value, str):
+                return value
+    return None
+
+
+def _turn_key(thread_id: Optional[str], turn_id: Optional[str]) -> Optional[TurnKey]:
+    if not thread_id or not turn_id:
+        return None
+    return (thread_id, turn_id)
+
+
+def _extract_thread_id_for_turn(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for candidate in (payload, payload.get("turn"), payload.get("item")):
+        thread_id = _extract_thread_id_from_container(candidate)
+        if thread_id:
+            return thread_id
+    return None
+
+
+def _extract_thread_id_from_container(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("threadId", "thread_id"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    thread = payload.get("thread")
+    if isinstance(thread, dict):
+        for key in ("id", "threadId", "thread_id"):
+            value = thread.get(key)
             if isinstance(value, str):
                 return value
     return None

@@ -64,7 +64,7 @@ from .telegram_state import (
     normalize_approval_mode,
     topic_key,
 )
-from .utils import resolve_executable, subprocess_env
+from .utils import RepoNotFoundError, find_repo_root, resolve_executable, subprocess_env
 from .voice import VoiceConfig, VoiceService, VoiceServiceError
 
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
@@ -412,10 +412,14 @@ class TelegramBotConfig:
         )
 
 
+TurnKey = tuple[str, str]
+
+
 @dataclass
 class PendingApproval:
     request_id: str
     turn_id: str
+    codex_thread_id: Optional[str]
     chat_id: int
     thread_id: Optional[int]
     message_id: Optional[int]
@@ -519,7 +523,7 @@ class TelegramBotService:
                     exc=exc,
                 )
         self._turn_semaphore = asyncio.Semaphore(config.concurrency.max_parallel_turns)
-        self._turn_contexts: dict[str, TurnContext] = {}
+        self._turn_contexts: dict[TurnKey, TurnContext] = {}
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
@@ -829,6 +833,41 @@ class TelegramBotService:
             return workspace_path
         return None
 
+    def _turn_key(
+        self, thread_id: Optional[str], turn_id: Optional[str]
+    ) -> Optional[TurnKey]:
+        if not turn_id:
+            return None
+        return (thread_id or "", turn_id)
+
+    def _resolve_turn_key(
+        self, turn_id: Optional[str], *, thread_id: Optional[str] = None
+    ) -> Optional[TurnKey]:
+        if not turn_id:
+            return None
+        if thread_id is not None:
+            return (thread_id, turn_id)
+        matches = [key for key in self._turn_contexts if key[1] == turn_id]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.turn.ambiguous",
+                turn_id=turn_id,
+                matches=len(matches),
+            )
+        return None
+
+    def _resolve_turn_context(
+        self, turn_id: Optional[str], *, thread_id: Optional[str] = None
+    ) -> Optional[TurnContext]:
+        key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if key is None:
+            return None
+        return self._turn_contexts.get(key)
+
     async def _interrupt_timeout_check(
         self, key: str, turn_id: str, message_id: int
     ) -> None:
@@ -943,10 +982,10 @@ class TelegramBotService:
             return
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         runtime = self._router.runtime_for(key)
-        turn_id = runtime.current_turn_id
-        if not turn_id:
+        turn_key = runtime.current_turn_key
+        if not turn_key:
             return
-        ctx = self._turn_contexts.get(turn_id)
+        ctx = self._turn_contexts.get(turn_key)
         if ctx is None or ctx.reply_to_message_id != message.message_id:
             return
         await self._handle_interrupt(message, runtime)
@@ -1619,30 +1658,40 @@ class TelegramBotService:
         if not isinstance(resumed_path, str):
             await self._send_message(
                 message.chat_id,
-                "Active thread missing workspace metadata; use /resume or /new.",
+                "Active thread missing workspace metadata; starting a new thread.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return None
+            return self._router.set_active_thread(
+                message.chat_id, message.thread_id, None
+            )
         try:
             workspace_root = Path(record.workspace_path or "").expanduser().resolve()
             resumed_root = Path(resumed_path).expanduser().resolve()
         except Exception:
             await self._send_message(
                 message.chat_id,
-                "Active thread has invalid workspace metadata; use /resume or /new.",
+                "Active thread has invalid workspace metadata; starting a new thread.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return None
-        if not _path_within(workspace_root, resumed_root):
-            await self._send_message(
-                message.chat_id,
-                "Active thread belongs to a different workspace; use /resume or /new.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
+            return self._router.set_active_thread(
+                message.chat_id, message.thread_id, None
             )
-            return None
+        if not _paths_compatible(workspace_root, resumed_root):
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.thread.workspace_mismatch",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                codex_thread_id=thread_id,
+                workspace_path=str(workspace_root),
+                resumed_path=str(resumed_root),
+            )
+            return self._router.set_active_thread(
+                message.chat_id, message.thread_id, None
+            )
         return self._apply_thread_result(
             message.chat_id, message.thread_id, result, active_thread_id=thread_id
         )
@@ -1707,9 +1756,12 @@ class TelegramBotService:
         thread_id = record.active_thread_id
         if thread_id:
             verified = await self._verify_active_thread(message, record)
-            if not verified or not verified.active_thread_id:
+            if not verified:
                 return None
-            return verified.active_thread_id
+            record = verified
+            thread_id = record.active_thread_id
+            if thread_id:
+                return thread_id
         thread = await self._client.thread_start(record.workspace_path or "")
         thread_id = _extract_thread_id(thread)
         if not thread_id:
@@ -1767,6 +1819,7 @@ class TelegramBotService:
             record = verified
         thread_id = record.active_thread_id
         turn_handle = None
+        turn_key: Optional[TurnKey] = None
         placeholder_id: Optional[int] = None
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
@@ -1830,7 +1883,9 @@ class TelegramBotService:
                     **turn_kwargs,
                 )
                 turn_started_at = time.monotonic()
+                turn_key = self._turn_key(thread_id, turn_handle.turn_id)
                 runtime.current_turn_id = turn_handle.turn_id
+                runtime.current_turn_key = turn_key
                 ctx = TurnContext(
                     topic_key=key,
                     chat_id=message.chat_id,
@@ -1838,14 +1893,29 @@ class TelegramBotService:
                     reply_to_message_id=message.message_id,
                     placeholder_message_id=placeholder_id,
                 )
-                self._turn_contexts[turn_handle.turn_id] = ctx
+                if turn_key is None:
+                    runtime.current_turn_id = None
+                    runtime.current_turn_key = None
+                    runtime.interrupt_requested = False
+                    await self._send_message(
+                        message.chat_id,
+                        "Turn collision detected; please retry.",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    if placeholder_id is not None:
+                        await self._delete_message(message.chat_id, placeholder_id)
+                    return
+                self._turn_contexts[turn_key] = ctx
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
         except Exception as exc:
             if turn_handle is not None:
-                self._turn_contexts.pop(turn_handle.turn_id, None)
+                if turn_key is not None:
+                    self._turn_contexts.pop(turn_key, None)
             runtime.current_turn_id = None
+            runtime.current_turn_key = None
             runtime.interrupt_requested = False
             log_event(
                 self._logger,
@@ -1877,8 +1947,10 @@ class TelegramBotService:
             return
         finally:
             if turn_handle is not None:
-                self._turn_contexts.pop(turn_handle.turn_id, None)
+                if turn_key is not None:
+                    self._turn_contexts.pop(turn_key, None)
             runtime.current_turn_id = None
+            runtime.current_turn_key = None
             runtime.interrupt_requested = False
 
         response = _compose_agent_response(result.agent_messages)
@@ -3056,6 +3128,7 @@ class TelegramBotService:
         if record.summary:
             review_kwargs["summary"] = record.summary
         turn_handle = None
+        turn_key: Optional[TurnKey] = None
         placeholder_id: Optional[int] = None
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
@@ -3073,7 +3146,9 @@ class TelegramBotService:
                     **review_kwargs,
                 )
                 turn_started_at = time.monotonic()
+                turn_key = self._turn_key(thread_id, turn_handle.turn_id)
                 runtime.current_turn_id = turn_handle.turn_id
+                runtime.current_turn_key = turn_key
                 ctx = TurnContext(
                     topic_key=self._resolve_topic_key(
                         message.chat_id, message.thread_id
@@ -3083,14 +3158,29 @@ class TelegramBotService:
                     reply_to_message_id=message.message_id,
                     placeholder_message_id=placeholder_id,
                 )
-                self._turn_contexts[turn_handle.turn_id] = ctx
+                if turn_key is None:
+                    runtime.current_turn_id = None
+                    runtime.current_turn_key = None
+                    runtime.interrupt_requested = False
+                    await self._send_message(
+                        message.chat_id,
+                        "Turn collision detected; please retry.",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    if placeholder_id is not None:
+                        await self._delete_message(message.chat_id, placeholder_id)
+                    return
+                self._turn_contexts[turn_key] = ctx
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
         except Exception as exc:
             if turn_handle is not None:
-                self._turn_contexts.pop(turn_handle.turn_id, None)
+                if turn_key is not None:
+                    self._turn_contexts.pop(turn_key, None)
             runtime.current_turn_id = None
+            runtime.current_turn_key = None
             runtime.interrupt_requested = False
             log_event(
                 self._logger,
@@ -3116,8 +3206,10 @@ class TelegramBotService:
             return
         finally:
             if turn_handle is not None:
-                self._turn_contexts.pop(turn_handle.turn_id, None)
+                if turn_key is not None:
+                    self._turn_contexts.pop(turn_key, None)
             runtime.current_turn_id = None
+            runtime.current_turn_key = None
             runtime.interrupt_requested = False
         response = _compose_agent_response(result.agent_messages)
         if result.status == "interrupted" or runtime.interrupt_requested:
@@ -3826,10 +3918,11 @@ class TelegramBotService:
     async def _handle_approval_request(self, message: dict[str, Any]) -> ApprovalDecision:
         req_id = message.get("id")
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
-        turn_id = params.get("turnId") if isinstance(params, dict) else None
+        turn_id = _coerce_id(params.get("turnId")) if isinstance(params, dict) else None
         if not req_id or not turn_id:
             return "cancel"
-        ctx = self._turn_contexts.get(str(turn_id))
+        codex_thread_id = _extract_turn_thread_id(params)
+        ctx = self._resolve_turn_context(turn_id, thread_id=codex_thread_id)
         if ctx is None:
             return "cancel"
         request_id = str(req_id)
@@ -3907,6 +4000,7 @@ class TelegramBotService:
         pending = PendingApproval(
             request_id=request_id,
             turn_id=str(turn_id),
+            codex_thread_id=codex_thread_id,
             chat_id=ctx.chat_id,
             thread_id=ctx.thread_id,
             message_id=message_id if isinstance(message_id, int) else None,
@@ -3958,7 +4052,9 @@ class TelegramBotService:
             return
         if not pending.future.done():
             pending.future.set_result(parsed.decision)
-        ctx = self._turn_contexts.get(pending.turn_id)
+        ctx = self._resolve_turn_context(
+            pending.turn_id, thread_id=pending.codex_thread_id
+        )
         if ctx:
             runtime = self._router.runtime_for(ctx.topic_key)
         else:
@@ -4594,6 +4690,35 @@ def _compute_used_percent(entry: dict[str, Any]) -> Optional[float]:
     return max(min(used, 100.0), 0.0)
 
 
+def _coerce_id(value: Any) -> Optional[str]:
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        text = str(value).strip()
+        return text or None
+    return None
+
+
+def _extract_turn_thread_id(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for candidate in (payload, payload.get("turn"), payload.get("item")):
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("threadId", "thread_id"):
+            thread_id = _coerce_id(candidate.get(key))
+            if thread_id:
+                return thread_id
+        thread = candidate.get("thread")
+        if isinstance(thread, dict):
+            thread_id = _coerce_id(
+                thread.get("id")
+                or thread.get("threadId")
+                or thread.get("thread_id")
+            )
+            if thread_id:
+                return thread_id
+    return None
+
+
 def _coerce_number(value: Any) -> Optional[float]:
     if isinstance(value, bool):
         return None
@@ -5177,6 +5302,25 @@ def _path_within(root: Path, target: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _repo_root(path: Path) -> Optional[Path]:
+    try:
+        return find_repo_root(path)
+    except RepoNotFoundError:
+        return None
+
+
+def _paths_compatible(workspace_root: Path, resumed_root: Path) -> bool:
+    if _path_within(workspace_root, resumed_root):
+        return True
+    if _path_within(resumed_root, workspace_root):
+        return True
+    workspace_repo = _repo_root(workspace_root)
+    resumed_repo = _repo_root(resumed_root)
+    if workspace_repo is None or resumed_repo is None:
+        return False
+    return workspace_repo == resumed_repo
 
 
 def _compact_preview(text: Any, limit: int = 40) -> str:

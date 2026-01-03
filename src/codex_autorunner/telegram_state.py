@@ -617,6 +617,7 @@ class TopicQueue:
 class TopicRuntime:
     queue: TopicQueue = dataclasses.field(default_factory=TopicQueue)
     current_turn_id: Optional[str] = None
+    current_turn_key: Optional[tuple[str, str]] = None
     pending_request_id: Optional[str] = None
     interrupt_requested: bool = False
     interrupt_message_id: Optional[int] = None
