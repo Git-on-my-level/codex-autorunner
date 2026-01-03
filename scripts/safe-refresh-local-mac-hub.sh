@@ -22,6 +22,7 @@ set -euo pipefail
 #   HEALTH_TIMEOUT_SECONDS seconds to wait for health (default: 30)
 #   HEALTH_INTERVAL_SECONDS poll interval (default: 0.5)
 #   HEALTH_PATH            request path (default: derived from base_path)
+#   HEALTH_STATIC_PATH     static asset path (default: derived from base_path)
 #   HEALTH_CONNECT_TIMEOUT_SECONDS connection timeout for each health request (default: 2)
 #   HEALTH_REQUEST_TIMEOUT_SECONDS total timeout for each health request (default: 5)
 #   KEEP_OLD_VENVS         how many old next-* venvs to keep (default: 3)
@@ -48,6 +49,7 @@ HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
 HEALTH_CONNECT_TIMEOUT_SECONDS="${HEALTH_CONNECT_TIMEOUT_SECONDS:-2}"
 HEALTH_REQUEST_TIMEOUT_SECONDS="${HEALTH_REQUEST_TIMEOUT_SECONDS:-5}"
 HEALTH_PATH="${HEALTH_PATH:-}"
+HEALTH_STATIC_PATH="${HEALTH_STATIC_PATH:-}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
 
 write_status() {
@@ -487,17 +489,26 @@ if [[ -z "${HEALTH_PATH}" ]]; then
   base_path="$(_detect_base_path)"
   if [[ -n "${base_path}" ]]; then
     HEALTH_PATH="${base_path}/openapi.json"
+    if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
+      HEALTH_STATIC_PATH="${base_path}/static/app.js"
+    fi
   else
     HEALTH_PATH="/openapi.json"
+    if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
+      HEALTH_STATIC_PATH="/static/app.js"
+    fi
   fi
 fi
 
 if [[ "${HEALTH_PATH:0:1}" != "/" ]]; then
   HEALTH_PATH="/${HEALTH_PATH}"
 fi
+if [[ -n "${HEALTH_STATIC_PATH}" && "${HEALTH_STATIC_PATH:0:1}" != "/" ]]; then
+  HEALTH_STATIC_PATH="/${HEALTH_STATIC_PATH}"
+fi
 
 _health_check_once() {
-  local port url
+  local port url static_url
   port="$(_plist_arg_value port)"
   if [[ -z "${port}" ]]; then
     port="4173"
@@ -507,6 +518,12 @@ _health_check_once() {
   curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
     --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
     "${url}" >/dev/null 2>&1
+  if [[ -n "${HEALTH_STATIC_PATH}" ]]; then
+    static_url="http://127.0.0.1:${port}${HEALTH_STATIC_PATH}"
+    curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
+      --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
+      "${static_url}" >/dev/null 2>&1
+  fi
 }
 
 _wait_healthy() {

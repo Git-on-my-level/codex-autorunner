@@ -13,6 +13,8 @@ def test_static_assets_served_with_base_path(tmp_path: Path) -> None:
     res = client.get("/car/static/styles.css")
     assert res.status_code == 200
     assert "body" in res.text
+    js_res = client.get("/car/static/app.js")
+    assert js_res.status_code == 200
 
 
 def test_repo_root_trailing_slash_does_not_redirect(tmp_path: Path) -> None:
