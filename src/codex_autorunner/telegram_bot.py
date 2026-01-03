@@ -1357,7 +1357,11 @@ class TelegramBotService:
             key = (thread_id, turn_id)
             if self._turn_contexts.get(key) is not None:
                 return key
-        matches = [key for key in self._turn_contexts if key[1] == turn_id]
+        matches = [
+            candidate_key
+            for candidate_key in self._turn_contexts
+            if candidate_key[1] == turn_id
+        ]
         if len(matches) == 1:
             candidate = matches[0]
             if key is not None and candidate != key:
