@@ -827,25 +827,33 @@ class TelegramBotService:
     def _topic_scope_id(
         self, repo_id: Optional[str], workspace_path: Optional[str]
     ) -> Optional[str]:
-        if isinstance(repo_id, str) and repo_id.strip():
-            return repo_id
-        if isinstance(workspace_path, str) and workspace_path.strip():
-            return workspace_path
+        normalized_repo = repo_id.strip() if isinstance(repo_id, str) else ""
+        normalized_path = workspace_path.strip() if isinstance(workspace_path, str) else ""
+        if normalized_repo and normalized_path:
+            return f"{normalized_repo}@{normalized_path}"
+        if normalized_repo:
+            return normalized_repo
+        if normalized_path:
+            return normalized_path
         return None
 
     def _turn_key(
         self, thread_id: Optional[str], turn_id: Optional[str]
     ) -> Optional[TurnKey]:
-        if not turn_id:
+        if not isinstance(thread_id, str) or not thread_id:
             return None
-        return (thread_id or "", turn_id)
+        if not isinstance(turn_id, str) or not turn_id:
+            return None
+        return (thread_id, turn_id)
 
     def _resolve_turn_key(
         self, turn_id: Optional[str], *, thread_id: Optional[str] = None
     ) -> Optional[TurnKey]:
-        if not turn_id:
+        if not isinstance(turn_id, str) or not turn_id:
             return None
         if thread_id is not None:
+            if not isinstance(thread_id, str) or not thread_id:
+                return None
             return (thread_id, turn_id)
         matches = [key for key in self._turn_contexts if key[1] == turn_id]
         if len(matches) == 1:
@@ -867,6 +875,23 @@ class TelegramBotService:
         if key is None:
             return None
         return self._turn_contexts.get(key)
+
+    def _register_turn_context(
+        self, turn_key: TurnKey, turn_id: str, ctx: TurnContext
+    ) -> bool:
+        existing = self._turn_contexts.get(turn_key)
+        if existing and existing.topic_key != ctx.topic_key:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "telegram.turn.context.collision",
+                turn_id=turn_id,
+                existing_topic=existing.topic_key,
+                new_topic=ctx.topic_key,
+            )
+            return False
+        self._turn_contexts[turn_key] = ctx
+        return True
 
     async def _interrupt_timeout_check(
         self, key: str, turn_id: str, message_id: int
@@ -1890,10 +1915,13 @@ class TelegramBotService:
                     topic_key=key,
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
+                    codex_thread_id=thread_id,
                     reply_to_message_id=message.message_id,
                     placeholder_message_id=placeholder_id,
                 )
-                if turn_key is None:
+                if turn_key is None or not self._register_turn_context(
+                    turn_key, turn_handle.turn_id, ctx
+                ):
                     runtime.current_turn_id = None
                     runtime.current_turn_key = None
                     runtime.interrupt_requested = False
@@ -1906,7 +1934,6 @@ class TelegramBotService:
                     if placeholder_id is not None:
                         await self._delete_message(message.chat_id, placeholder_id)
                     return
-                self._turn_contexts[turn_key] = ctx
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
@@ -3155,10 +3182,13 @@ class TelegramBotService:
                     ),
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
+                    codex_thread_id=thread_id,
                     reply_to_message_id=message.message_id,
                     placeholder_message_id=placeholder_id,
                 )
-                if turn_key is None:
+                if turn_key is None or not self._register_turn_context(
+                    turn_key, turn_handle.turn_id, ctx
+                ):
                     runtime.current_turn_id = None
                     runtime.current_turn_key = None
                     runtime.interrupt_requested = False
@@ -3171,7 +3201,6 @@ class TelegramBotService:
                     if placeholder_id is not None:
                         await self._delete_message(message.chat_id, placeholder_id)
                     return
-                self._turn_contexts[turn_key] = ctx
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at

@@ -716,14 +716,26 @@ class CodexAppServerClient:
     ) -> tuple[Optional[TurnKey], Optional[_TurnState]]:
         key = _turn_key(thread_id, turn_id)
         if key is not None:
-            return key, self._turns.get(key)
+            state = self._turns.get(key)
+            if state is not None:
+                return key, state
         matches = [
             (candidate_key, state)
             for candidate_key, state in self._turns.items()
             if candidate_key[1] == turn_id
         ]
         if len(matches) == 1:
-            return matches[0]
+            candidate_key, state = matches[0]
+            if key is not None and candidate_key != key:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.turn.thread_mismatch",
+                    turn_id=turn_id,
+                    requested_thread_id=thread_id,
+                    actual_thread_id=candidate_key[0],
+                )
+            return candidate_key, state
         if len(matches) > 1:
             log_event(
                 self._logger,
