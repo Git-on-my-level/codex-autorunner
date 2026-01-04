@@ -7127,14 +7127,20 @@ def _paths_compatible(workspace_root: Path, resumed_root: Path) -> bool:
     if _path_within(workspace_root, resumed_root):
         return True
     if _path_within(resumed_root, workspace_root):
-        return True
+        workspace_repo = _repo_root(workspace_root)
+        resumed_repo = _repo_root(resumed_root)
+        if workspace_repo is None or resumed_repo is None:
+            return False
+        if workspace_repo != resumed_repo:
+            return False
+        return resumed_root == workspace_repo
     workspace_repo = _repo_root(workspace_root)
     resumed_repo = _repo_root(resumed_root)
     if workspace_repo is None or resumed_repo is None:
         return False
-    if workspace_root != workspace_repo:
+    if workspace_repo != resumed_repo:
         return False
-    return workspace_repo == resumed_repo
+    return _path_within(workspace_repo, resumed_root)
 
 
 def _should_trace_message(text: str) -> bool:
