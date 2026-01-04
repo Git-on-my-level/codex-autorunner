@@ -14,7 +14,6 @@ from .engine import Engine, LockError, clear_stale_lock
 from .lock_utils import process_alive, read_lock_info
 from .manifest import Manifest, ManifestRepo, load_manifest, save_manifest
 from .state import RunnerState, load_state, now_iso
-from .runner_process import build_runner_cmd, spawn_detached
 from .utils import atomic_write
 
 
@@ -160,10 +159,29 @@ class RepoRunner:
         self.repo_id = repo_id
         self.engine = Engine(repo_root)
         self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._stop_flag = threading.Event()
 
     @property
     def running(self) -> bool:
+        if self._thread and self._thread.is_alive():
+            return True
         return self.engine.runner_pid() is not None
+
+    def _start_thread(self, *, once: bool) -> None:
+        stop_after_runs = 1 if once else None
+
+        def _run() -> None:
+            try:
+                self.engine.run_loop(
+                    stop_after_runs=stop_after_runs,
+                    external_stop_flag=self._stop_flag,
+                )
+            finally:
+                self.engine.release_lock()
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
 
     def start(self, once: bool = False) -> None:
         with self._lock:
@@ -174,16 +192,18 @@ class RepoRunner:
                 )
             clear_stale_lock(self.engine.lock_path)
             self.engine.clear_stop_request()
-            action = "once" if once else "run"
-            cmd = build_runner_cmd(self.engine.repo_root, action=action)
-            spawn_detached(cmd, cwd=self.engine.repo_root)
+            self._stop_flag.clear()
+            self.engine.acquire_lock(force=False)
+            self._start_thread(once=once)
 
     def stop(self) -> None:
         with self._lock:
+            self._stop_flag.set()
             self.engine.request_stop()
 
     def kill(self) -> Optional[int]:
         with self._lock:
+            self._stop_flag.set()
             pid = self.engine.kill_running_process()
             return pid
 
@@ -194,10 +214,9 @@ class RepoRunner:
             if lock_status == LockStatus.LOCKED_ALIVE:
                 raise LockError(f"Repo {self.repo_id} is locked by a live process")
             self.engine.clear_stop_request()
-            cmd = build_runner_cmd(
-                self.engine.repo_root, action="resume", once=once
-            )
-            spawn_detached(cmd, cwd=self.engine.repo_root)
+            self._stop_flag.clear()
+            self.engine.acquire_lock(force=False)
+            self._start_thread(once=once)
 
 
 class HubSupervisor:

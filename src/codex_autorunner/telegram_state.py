@@ -81,6 +81,7 @@ class TelegramTopicRecord:
     repo_id: Optional[str] = None
     workspace_path: Optional[str] = None
     active_thread_id: Optional[str] = None
+    thread_ids: list[str] = dataclasses.field(default_factory=list)
     model: Optional[str] = None
     effort: Optional[str] = None
     summary: Optional[str] = None
@@ -103,6 +104,14 @@ class TelegramTopicRecord:
         active_thread_id = payload.get("active_thread_id") or payload.get("activeThreadId")
         if not isinstance(active_thread_id, str):
             active_thread_id = None
+        thread_ids_raw = payload.get("thread_ids") or payload.get("threadIds")
+        thread_ids: list[str] = []
+        if isinstance(thread_ids_raw, list):
+            for item in thread_ids_raw:
+                if isinstance(item, str) and item:
+                    thread_ids.append(item)
+        if not thread_ids and isinstance(active_thread_id, str):
+            thread_ids = [active_thread_id]
         model = payload.get("model")
         if not isinstance(model, str):
             model = None
@@ -136,6 +145,7 @@ class TelegramTopicRecord:
             repo_id=repo_id,
             workspace_path=workspace_path,
             active_thread_id=active_thread_id,
+            thread_ids=thread_ids,
             model=model,
             effort=effort,
             summary=summary,
@@ -151,6 +161,7 @@ class TelegramTopicRecord:
             "repo_id": self.repo_id,
             "workspace_path": self.workspace_path,
             "active_thread_id": self.active_thread_id,
+            "thread_ids": list(self.thread_ids),
             "model": self.model,
             "effort": self.effort,
             "summary": self.summary,
@@ -373,6 +384,7 @@ class TelegramStateStore:
             if repo_id is not None:
                 record.repo_id = repo_id
             record.active_thread_id = None
+            record.thread_ids = []
             record.rollout_path = None
 
         return self._update_topic(key, apply)

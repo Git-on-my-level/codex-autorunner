@@ -120,6 +120,8 @@ class CodexAppServerClient:
         self._pending: Dict[int, asyncio.Future] = {}
         self._pending_methods: Dict[int, str] = {}
         self._turns: Dict[TurnKey, _TurnState] = {}
+        self._orphan_items: Dict[str, list[Dict[str, Any]]] = {}
+        self._orphan_turn_completed: Dict[str, Dict[str, Any]] = {}
         self._next_id = 1
         self._initialized = False
         self._initializing = False
@@ -622,39 +624,10 @@ class CodexAppServerClient:
                 if thread_id:
                     state = self._ensure_turn_state(turn_id, thread_id)
                 else:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "app_server.turn.unknown",
-                        method=method,
-                        turn_id=turn_id,
-                    )
+                    self._orphan_items.setdefault(turn_id, []).append(message)
                     handled = True
                     return
-            item = params.get("item") if isinstance(params, dict) else None
-            text = None
-            def append_message(candidate: Optional[str]) -> None:
-                if not candidate:
-                    return
-                if state.agent_messages and state.agent_messages[-1] == candidate:
-                    return
-                state.agent_messages.append(candidate)
-            if isinstance(item, dict) and item.get("type") == "agentMessage":
-                text = item.get("text")
-                if isinstance(text, str):
-                    append_message(text)
-            review_text = _extract_review_text(item)
-            if review_text and review_text != text:
-                append_message(review_text)
-            item_type = item.get("type") if isinstance(item, dict) else None
-            log_event(
-                self._logger,
-                logging.INFO,
-                "app_server.item.completed",
-                turn_id=turn_id,
-                item_type=item_type,
-            )
-            state.raw_events.append(message)
+            self._apply_item_completed(state, message, params)
             handled = True
         elif method == "turn/completed":
             turn_id = _extract_turn_id(params)
@@ -667,36 +640,10 @@ class CodexAppServerClient:
                 if thread_id:
                     state = self._ensure_turn_state(turn_id, thread_id)
                 else:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "app_server.turn.unknown",
-                        method=method,
-                        turn_id=turn_id,
-                    )
+                    self._orphan_turn_completed[turn_id] = message
                     handled = True
                     return
-            state.raw_events.append(message)
-            status = None
-            if isinstance(params, dict):
-                status = params.get("status")
-            state.status = status
-            log_event(
-                self._logger,
-                logging.INFO,
-                "app_server.turn.completed",
-                turn_id=turn_id,
-                status=status,
-            )
-            if not state.future.done():
-                state.future.set_result(
-                    TurnResult(
-                        turn_id=turn_id,
-                        status=state.status,
-                        agent_messages=list(state.agent_messages),
-                        raw_events=list(state.raw_events),
-                    )
-                )
+            self._apply_turn_completed(state, message, params)
             handled = True
         if self._notification_handler is not None:
             try:
@@ -752,6 +699,7 @@ class CodexAppServerClient:
             raise CodexAppServerProtocolError("turn state missing thread id")
         state = self._turns.get(key)
         if state is not None:
+            self._apply_orphan_turn_events(state, turn_id)
             return state
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
@@ -763,6 +711,7 @@ class CodexAppServerClient:
             raw_events=[],
         )
         self._turns[key] = state
+        self._apply_orphan_turn_events(state, turn_id)
         return state
 
     def _register_turn_state(self, turn_id: str, thread_id: str) -> _TurnState:
@@ -775,7 +724,73 @@ class CodexAppServerClient:
         if state.future.done():
             self._turns.pop(key, None)
             return self._ensure_turn_state(turn_id, thread_id)
+        self._apply_orphan_turn_events(state, turn_id)
         return state
+
+    def _apply_item_completed(
+        self, state: _TurnState, message: Dict[str, Any], params: Any
+    ) -> None:
+        item = params.get("item") if isinstance(params, dict) else None
+        text = None
+
+        def append_message(candidate: Optional[str]) -> None:
+            if not candidate:
+                return
+            if state.agent_messages and state.agent_messages[-1] == candidate:
+                return
+            state.agent_messages.append(candidate)
+
+        if isinstance(item, dict) and item.get("type") == "agentMessage":
+            text = item.get("text")
+            if isinstance(text, str):
+                append_message(text)
+        review_text = _extract_review_text(item)
+        if review_text and review_text != text:
+            append_message(review_text)
+        item_type = item.get("type") if isinstance(item, dict) else None
+        log_event(
+            self._logger,
+            logging.INFO,
+            "app_server.item.completed",
+            turn_id=state.turn_id,
+            item_type=item_type,
+        )
+        state.raw_events.append(message)
+
+    def _apply_turn_completed(
+        self, state: _TurnState, message: Dict[str, Any], params: Any
+    ) -> None:
+        state.raw_events.append(message)
+        status = None
+        if isinstance(params, dict):
+            status = params.get("status")
+        state.status = status
+        log_event(
+            self._logger,
+            logging.INFO,
+            "app_server.turn.completed",
+            turn_id=state.turn_id,
+            status=status,
+        )
+        if not state.future.done():
+            state.future.set_result(
+                TurnResult(
+                    turn_id=state.turn_id,
+                    status=state.status,
+                    agent_messages=list(state.agent_messages),
+                    raw_events=list(state.raw_events),
+                )
+            )
+
+    def _apply_orphan_turn_events(self, state: _TurnState, turn_id: str) -> None:
+        orphan_items = self._orphan_items.pop(turn_id, [])
+        for item_message in orphan_items:
+            params = item_message.get("params") or {}
+            self._apply_item_completed(state, item_message, params)
+        orphan_turn_completed = self._orphan_turn_completed.pop(turn_id, None)
+        if orphan_turn_completed:
+            params = orphan_turn_completed.get("params") or {}
+            self._apply_turn_completed(state, orphan_turn_completed, params)
 
     async def _handle_disconnect(self) -> None:
         self._initialized = False

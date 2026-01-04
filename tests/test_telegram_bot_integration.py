@@ -69,6 +69,28 @@ class FakeBot:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
 
+    async def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        message_thread_id: Optional[int] = None,
+        reply_to_message_id: Optional[int] = None,
+        parse_mode: Optional[str] = None,
+        disable_web_page_preview: bool = True,
+        reply_markup: Optional[dict[str, object]] = None,
+    ) -> dict[str, object]:
+        self.messages.append(
+            {
+                "chat_id": chat_id,
+                "thread_id": message_thread_id,
+                "text": text,
+                "reply_to": reply_to_message_id,
+                "reply_markup": reply_markup,
+            }
+        )
+        return {"message_id": len(self.messages)}
+
     async def send_message_chunks(
         self,
         chat_id: int,

@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import logging
 import os
@@ -209,8 +210,20 @@ class RunnerManager:
             self.engine.kill_running_process()
 
 
-def _static_dir() -> Path:
-    return Path(resources.files("codex_autorunner")) / "static"
+def _static_dir() -> tuple[Path, ExitStack]:
+    stack = ExitStack()
+    static_resource = resources.files("codex_autorunner") / "static"
+    try:
+        static_dir = stack.enter_context(resources.as_file(static_resource))
+    except Exception:
+        stack.close()
+        static_dir = Path(__file__).resolve().parent / "static"
+        return static_dir, ExitStack()
+    if static_dir.exists():
+        return static_dir, stack
+    stack.close()
+    fallback = Path(__file__).resolve().parent / "static"
+    return fallback, ExitStack()
 
 
 def _parse_last_seen_at(value: Optional[str]) -> Optional[float]:
@@ -362,7 +375,8 @@ def create_app(
             terminal_max_idle_seconds,
         )
 
-    static_dir = _static_dir()
+    static_dir, static_stack = _static_dir()
+    app.state.static_stack = static_stack
     app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     # Route handlers
@@ -441,6 +455,9 @@ def create_app(
                 app.state.session_registry,
                 app.state.repo_to_session,
             )
+        static_stack = getattr(app.state, "static_stack", None)
+        if static_stack is not None:
+            static_stack.close()
 
     if base_path:
         app = BasePathRouterMiddleware(app, base_path)
@@ -470,7 +487,8 @@ def create_hub_app(
         logging.INFO,
         f"Hub app ready at {config.root}",
     )
-    static_dir = _static_dir()
+    static_dir, static_stack = _static_dir()
+    app.state.static_stack = static_stack
     app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     mounted_repos: set[str] = set()
@@ -824,6 +842,12 @@ def create_hub_app(
             )
         html = render_index_html(static_dir, app.state.asset_version)
         return HTMLResponse(html, headers=index_response_headers())
+
+    @app.on_event("shutdown")
+    async def shutdown_static_stack():
+        static_stack = getattr(app.state, "static_stack", None)
+        if static_stack is not None:
+            static_stack.close()
 
     app.include_router(build_system_routes())
 

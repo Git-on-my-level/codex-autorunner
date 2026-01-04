@@ -71,6 +71,7 @@ DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
 DEFAULT_PAGE_SIZE = 10
 DEFAULT_THREAD_LIST_LIMIT = 10
+MAX_TOPIC_THREAD_HISTORY = 50
 DEFAULT_MODEL_LIST_LIMIT = 25
 DEFAULT_MCP_LIST_LIMIT = 50
 DEFAULT_SKILLS_LIST_LIMIT = 50
@@ -432,6 +433,7 @@ class TurnContext:
     topic_key: str
     chat_id: int
     thread_id: Optional[int]
+    codex_thread_id: Optional[str]
     reply_to_message_id: Optional[int]
     placeholder_message_id: Optional[int] = None
 
@@ -1754,6 +1756,11 @@ class TelegramBotService:
         def apply(record: "TelegramTopicRecord") -> None:
             if active_thread_id:
                 record.active_thread_id = active_thread_id
+                if active_thread_id in record.thread_ids:
+                    record.thread_ids.remove(active_thread_id)
+                record.thread_ids.insert(0, active_thread_id)
+                if len(record.thread_ids) > MAX_TOPIC_THREAD_HISTORY:
+                    record.thread_ids = record.thread_ids[:MAX_TOPIC_THREAD_HISTORY]
             if info.get("workspace_path"):
                 record.workspace_path = info["workspace_path"]
             if info.get("rollout_path"):
@@ -2648,17 +2655,23 @@ class TelegramBotService:
             )
             return
         normalized = _coerce_thread_list(threads)
-        filtered = _filter_threads(
-            normalized,
-            record.workspace_path,
-            assume_scoped=True,
-            allow_unscoped=False,
-        )
+        entries_by_id = {
+            entry.get("id"): entry
+            for entry in normalized
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+        }
+        if record.thread_ids:
+            filtered = [
+                entries_by_id[thread_id]
+                for thread_id in record.thread_ids
+                if thread_id in entries_by_id
+            ]
+        else:
+            filtered = list(entries_by_id.values())
         if not filtered:
             await self._send_message(
                 message.chat_id,
-                "No previous threads found for this workspace. "
-                "If threads exist, update the app-server to include cwd metadata or use /new.",
+                "No previous threads found for this topic. Use /new to start one.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
