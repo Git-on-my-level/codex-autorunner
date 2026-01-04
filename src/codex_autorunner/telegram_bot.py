@@ -88,8 +88,8 @@ DEFAULT_MODEL_LIST_LIMIT = 25
 DEFAULT_MCP_LIST_LIMIT = 50
 DEFAULT_SKILLS_LIST_LIMIT = 50
 RESUME_BUTTON_PREVIEW_LIMIT = 60
-RESUME_PREVIEW_USER_LIMIT = 120
-RESUME_PREVIEW_ASSISTANT_LIMIT = 160
+RESUME_PREVIEW_USER_LIMIT = 1000
+RESUME_PREVIEW_ASSISTANT_LIMIT = 1000
 RESUME_PREVIEW_SCAN_LINES = 200
 TOKEN_USAGE_CACHE_LIMIT = 256
 TOKEN_USAGE_TURN_CACHE_LIMIT = 512
@@ -3544,6 +3544,9 @@ class TelegramBotService:
         record = self._router.get_topic(key)
         info = _extract_thread_info(result)
         resumed_path = info.get("workspace_path")
+        result_preview = _format_thread_preview(result)
+        if result_preview != "(no preview)":
+            preview = result_preview
         if record is None or not record.workspace_path:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
@@ -6486,6 +6489,19 @@ def _format_preview(text: Any) -> str:
     return preview if preview.strip() else "(no preview)"
 
 
+def _coerce_thread_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    thread = payload.get("thread")
+    if isinstance(thread, dict):
+        merged = dict(thread)
+        for key, value in payload.items():
+            if key != "thread" and key not in merged:
+                merged[key] = value
+        return merged
+    return dict(payload)
+
+
 def _normalize_preview_text(text: str) -> str:
     return " ".join(text.split()).strip()
 
@@ -6621,7 +6637,8 @@ def _extract_rollout_preview(path: Path) -> tuple[Optional[str], Optional[str]]:
     return last_user, last_assistant
 
 
-def _format_thread_preview(entry: dict[str, Any]) -> str:
+def _format_thread_preview(entry: Any) -> str:
+    entry = _coerce_thread_payload(entry)
     user_preview_keys = (
         "last_user_message",
         "lastUserMessage",
@@ -6652,16 +6669,15 @@ def _format_thread_preview(entry: dict[str, Any]) -> str:
         preview = entry.get("preview")
         if isinstance(preview, str) and preview.strip():
             user_preview = preview.strip()
-    if not user_preview or not assistant_preview:
-        rollout_path = _extract_rollout_path(entry)
-        if rollout_path:
-            path = Path(rollout_path)
-            if path.exists():
-                rollout_user, rollout_assistant = _extract_rollout_preview(path)
-                if not user_preview and rollout_user:
-                    user_preview = rollout_user
-                if not assistant_preview and rollout_assistant:
-                    assistant_preview = rollout_assistant
+    rollout_path = _extract_rollout_path(entry)
+    if rollout_path and (not user_preview or not assistant_preview):
+        path = Path(rollout_path)
+        if path.exists():
+            rollout_user, rollout_assistant = _extract_rollout_preview(path)
+            if not user_preview and rollout_user:
+                user_preview = rollout_user
+            if not assistant_preview and rollout_assistant:
+                assistant_preview = rollout_assistant
     if user_preview:
         user_preview = _truncate_text(
             _normalize_preview_text(user_preview), RESUME_PREVIEW_USER_LIMIT
