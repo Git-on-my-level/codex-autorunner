@@ -2536,7 +2536,8 @@ class TelegramBotService:
         if not isinstance(resumed_path, str):
             await self._send_message(
                 message.chat_id,
-                "Active thread missing workspace metadata; starting a new thread.",
+                "Active thread missing workspace metadata; refusing to continue. "
+                "Fix the app-server workspace reporting and try /new.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2549,7 +2550,8 @@ class TelegramBotService:
         except Exception:
             await self._send_message(
                 message.chat_id,
-                "Active thread has invalid workspace metadata; starting a new thread.",
+                "Active thread has invalid workspace metadata; refusing to continue. "
+                "Fix the app-server workspace reporting and try /new.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2566,6 +2568,13 @@ class TelegramBotService:
                 codex_thread_id=thread_id,
                 workspace_path=str(workspace_root),
                 resumed_path=str(resumed_root),
+            )
+            await self._send_message(
+                message.chat_id,
+                "Active thread belongs to a different workspace; refusing to continue. "
+                "Fix the app-server workspace reporting and try /new.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
             )
             return self._router.set_active_thread(
                 message.chat_id, message.thread_id, None
@@ -2632,8 +2641,35 @@ class TelegramBotService:
                     workspace_path=info.get("workspace_path"),
                     rollout_path=info.get("rollout_path"),
                 )
-            if info.get("workspace_path"):
-                record.workspace_path = info["workspace_path"]
+            incoming_workspace = info.get("workspace_path")
+            if isinstance(incoming_workspace, str) and incoming_workspace:
+                if record.workspace_path:
+                    try:
+                        current_root = (
+                            Path(record.workspace_path).expanduser().resolve()
+                        )
+                        incoming_root = (
+                            Path(incoming_workspace).expanduser().resolve()
+                        )
+                    except Exception:
+                        current_root = None
+                        incoming_root = None
+                    if (
+                        current_root is None
+                        or incoming_root is None
+                        or not _paths_compatible(current_root, incoming_root)
+                    ):
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.workspace.mismatch",
+                            workspace_path=record.workspace_path,
+                            incoming_workspace_path=incoming_workspace,
+                        )
+                    else:
+                        record.workspace_path = incoming_workspace
+                else:
+                    record.workspace_path = incoming_workspace
             if info.get("rollout_path"):
                 record.rollout_path = info["rollout_path"]
             if info.get("model") and (overwrite_defaults or record.model is None):
@@ -2689,6 +2725,10 @@ class TelegramBotService:
             if thread_id:
                 return thread_id
         thread = await self._client.thread_start(record.workspace_path or "")
+        if not await self._require_thread_workspace(
+            message, record.workspace_path, thread, action="thread_start"
+        ):
+            return None
         thread_id = _extract_thread_id(thread)
         if not thread_id:
             await self._send_message(
@@ -2765,6 +2805,10 @@ class TelegramBotService:
         try:
             if not thread_id:
                 thread = await self._client.thread_start(record.workspace_path)
+                if not await self._require_thread_workspace(
+                    message, record.workspace_path, thread, action="thread_start"
+                ):
+                    return
                 thread_id = _extract_thread_id(thread)
                 if not thread_id:
                     await self._send_message(
@@ -3435,6 +3479,10 @@ class TelegramBotService:
             )
             return
         thread = await self._client.thread_start(record.workspace_path)
+        if not await self._require_thread_workspace(
+            message, record.workspace_path, thread, action="thread_start"
+        ):
+            return
         thread_id = _extract_thread_id(thread)
         if not thread_id:
             await self._send_message(
@@ -6032,6 +6080,66 @@ class TelegramBotService:
         if path.exists():
             return str(path), None
         return None
+
+    async def _require_thread_workspace(
+        self,
+        message: TelegramMessage,
+        expected_workspace: Optional[str],
+        result: Any,
+        *,
+        action: str,
+    ) -> bool:
+        if not expected_workspace:
+            return True
+        info = _extract_thread_info(result)
+        incoming = info.get("workspace_path")
+        if not isinstance(incoming, str) or not incoming:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.thread.workspace_missing",
+                action=action,
+                expected_workspace=expected_workspace,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server did not return a workspace for this thread. "
+                "Refusing to continue; fix the app-server workspace reporting and "
+                "try /new.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return False
+        try:
+            expected_root = Path(expected_workspace).expanduser().resolve()
+            incoming_root = Path(incoming).expanduser().resolve()
+        except Exception:
+            expected_root = None
+            incoming_root = None
+        if (
+            expected_root is None
+            or incoming_root is None
+            or not _paths_compatible(expected_root, incoming_root)
+        ):
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.thread.workspace_mismatch",
+                action=action,
+                expected_workspace=expected_workspace,
+                incoming_workspace=incoming,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server returned a thread for a different workspace. "
+                "Refusing to continue; fix the app-server workspace reporting and "
+                "try /new.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return False
+        return True
+
 
 
 def _extract_thread_id(payload: Any) -> Optional[str]:
