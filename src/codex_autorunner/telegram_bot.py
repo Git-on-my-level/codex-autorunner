@@ -95,6 +95,7 @@ RESUME_PREVIEW_USER_LIMIT = 1000
 RESUME_PREVIEW_ASSISTANT_LIMIT = 1000
 RESUME_PREVIEW_SCAN_LINES = 200
 RESUME_MISSING_IDS_LOG_LIMIT = 10
+RESUME_REFRESH_LIMIT = 10
 TOKEN_USAGE_CACHE_LIMIT = 256
 TOKEN_USAGE_TURN_CACHE_LIMIT = 512
 DEFAULT_INTERRUPT_TIMEOUT_SECONDS = 30.0
@@ -2385,6 +2386,12 @@ class TelegramBotService:
                 self._handle_status,
                 allow_during_turn=True,
             ),
+            "debug": CommandSpec(
+                "debug",
+                "show topic debug info",
+                self._handle_debug,
+                allow_during_turn=True,
+            ),
             "diff": CommandSpec(
                 "diff",
                 "show git diff for the bound workspace",
@@ -2615,6 +2622,8 @@ class TelegramBotService:
                     user_preview=user_preview,
                     assistant_preview=assistant_preview,
                     last_used_at=last_used_at,
+                    workspace_path=info.get("workspace_path"),
+                    rollout_path=info.get("rollout_path"),
                 )
             if info.get("workspace_path"):
                 record.workspace_path = info["workspace_path"]
@@ -2780,6 +2789,8 @@ class TelegramBotService:
                         thread_id,
                         user_preview=user_preview,
                         last_used_at=now_iso(),
+                        workspace_path=record.workspace_path,
+                        rollout_path=record.rollout_path,
                     ),
                 )
             approval_policy, sandbox_policy = self._effective_policies(record)
@@ -2921,6 +2932,8 @@ class TelegramBotService:
                         thread_id,
                         assistant_preview=assistant_preview,
                         last_used_at=now_iso(),
+                        workspace_path=record.workspace_path,
+                        rollout_path=record.rollout_path,
                     ),
                 )
         if result.status == "interrupted" or runtime.interrupt_requested:
@@ -3438,9 +3451,19 @@ class TelegramBotService:
         argv = self._parse_command_args(args)
         trimmed = args.strip()
         show_unscoped = False
-        if argv and argv[0].lower() in ("--all", "all", "--unscoped", "unscoped"):
-            show_unscoped = True
-            trimmed = ""
+        refresh = False
+        remaining: list[str] = []
+        for arg in argv:
+            lowered = arg.lower()
+            if lowered in ("--all", "all", "--unscoped", "unscoped"):
+                show_unscoped = True
+                continue
+            if lowered in ("--refresh", "refresh"):
+                refresh = True
+                continue
+            remaining.append(arg)
+        if argv:
+            trimmed = " ".join(remaining).strip()
         if trimmed.isdigit():
             state = self._resume_options.get(key)
             if state:
@@ -3451,7 +3474,7 @@ class TelegramBotService:
                     await self._resume_thread_by_id(key, thread_id)
                     return
         if trimmed and not trimmed.isdigit():
-            if argv and argv[0].lower() in ("list", "ls"):
+            if remaining and remaining[0].lower() in ("list", "ls"):
                 trimmed = ""
             else:
                 await self._resume_thread_by_id(key, trimmed)
@@ -3474,7 +3497,23 @@ class TelegramBotService:
             )
             return
         threads: list[dict[str, Any]] = []
+        entries_by_id: dict[str, dict[str, Any]] = {}
         list_failed = False
+        local_thread_ids: list[str] = []
+        local_previews: dict[str, str] = {}
+        local_thread_topics: dict[str, set[str]] = {}
+        if show_unscoped:
+            state = self._store.load()
+            local_thread_ids, local_previews, local_thread_topics = _local_workspace_threads(
+                state, record.workspace_path, current_key=key
+            )
+            for thread_id in record.thread_ids:
+                local_thread_topics.setdefault(thread_id, set()).add(key)
+                if thread_id not in local_thread_ids:
+                    local_thread_ids.append(thread_id)
+                cached_preview = _thread_summary_preview(record, thread_id)
+                if cached_preview:
+                    local_previews.setdefault(thread_id, cached_preview)
         if show_unscoped or record.thread_ids:
             limit = _resume_thread_list_limit(record.thread_ids)
             needed_ids = None if show_unscoped else set(record.thread_ids)
@@ -3494,7 +3533,7 @@ class TelegramBotService:
                     thread_id=message.thread_id,
                     exc=exc,
                 )
-                if show_unscoped and not record.thread_ids:
+                if show_unscoped and not local_thread_ids:
                     await self._send_message(
                         message.chat_id,
                         _with_conversation_id(
@@ -3506,15 +3545,28 @@ class TelegramBotService:
                         reply_to=message.message_id,
                     )
                     return
+        entries_by_id = {
+            entry.get("id"): entry
+            for entry in threads
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+        }
+        candidates: list[dict[str, Any]] = []
+        unscoped: list[dict[str, Any]] = []
+        saw_path = False
         if show_unscoped:
-            filtered, unscoped, saw_path = _partition_threads(
-                threads, record.workspace_path
-            )
-            seen_ids = {entry.get("id") for entry in filtered}
-            candidates = filtered + [
-                entry for entry in unscoped if entry.get("id") not in seen_ids
-            ]
-            if not candidates and not record.thread_ids:
+            if threads:
+                filtered, unscoped, saw_path = _partition_threads(
+                    threads, record.workspace_path
+                )
+                seen_ids = {
+                    entry.get("id")
+                    for entry in filtered
+                    if isinstance(entry.get("id"), str)
+                }
+                candidates = filtered + [
+                    entry for entry in unscoped if entry.get("id") not in seen_ids
+                ]
+            if not candidates and not local_thread_ids:
                 if unscoped and not saw_path:
                     await self._send_message(
                         message.chat_id,
@@ -3540,15 +3592,38 @@ class TelegramBotService:
                     reply_to=message.message_id,
                 )
                 return
+        missing_ids: list[str] = []
+        if show_unscoped:
+            for thread_id in local_thread_ids:
+                if thread_id not in entries_by_id:
+                    missing_ids.append(thread_id)
         else:
-            entries_by_id = {
-                entry.get("id"): entry
-                for entry in threads
-                if isinstance(entry, dict) and isinstance(entry.get("id"), str)
-            }
+            for thread_id in record.thread_ids:
+                if thread_id not in entries_by_id:
+                    missing_ids.append(thread_id)
+        if refresh and missing_ids:
+            refreshed = await self._refresh_thread_summaries(
+                missing_ids,
+                topic_keys_by_thread=local_thread_topics if show_unscoped else None,
+                default_topic_key=key,
+            )
+            if refreshed:
+                if show_unscoped:
+                    state = self._store.load()
+                    local_thread_ids, local_previews, local_thread_topics = _local_workspace_threads(
+                        state, record.workspace_path, current_key=key
+                    )
+                    for thread_id in record.thread_ids:
+                        local_thread_topics.setdefault(thread_id, set()).add(key)
+                        if thread_id not in local_thread_ids:
+                            local_thread_ids.append(thread_id)
+                        cached_preview = _thread_summary_preview(record, thread_id)
+                        if cached_preview:
+                            local_previews.setdefault(thread_id, cached_preview)
+                else:
+                    record = self._router.get_topic(key) or record
         items: list[tuple[str, str]] = []
         seen_item_ids: set[str] = set()
-        missing_ids: list[str] = []
         if show_unscoped:
             for entry in candidates:
                 thread_id = entry.get("id")
@@ -3557,28 +3632,35 @@ class TelegramBotService:
                 if thread_id in seen_item_ids:
                     continue
                 seen_item_ids.add(thread_id)
-                items.append((thread_id, _format_thread_preview(entry)))
-            for thread_id in record.thread_ids:
+                label = _format_thread_preview(entry)
+                if label == "(no preview)":
+                    cached_preview = local_previews.get(thread_id)
+                    if cached_preview:
+                        label = cached_preview
+                items.append((thread_id, label))
+            for thread_id in local_thread_ids:
                 if thread_id in seen_item_ids:
                     continue
-                missing_ids.append(thread_id)
                 seen_item_ids.add(thread_id)
-                cached_preview = _thread_summary_preview(record, thread_id)
-                items.append(
-                    (
-                        thread_id,
-                        _format_missing_thread_label(thread_id, cached_preview),
-                    )
+                cached_preview = local_previews.get(thread_id)
+                label = (
+                    cached_preview
+                    if cached_preview
+                    else _format_missing_thread_label(thread_id, None)
                 )
+                items.append((thread_id, label))
         else:
             for thread_id in record.thread_ids:
                 entry = entries_by_id.get(thread_id)
                 if entry is None:
-                    missing_ids.append(thread_id)
                     cached_preview = _thread_summary_preview(record, thread_id)
                     label = _format_missing_thread_label(thread_id, cached_preview)
                 else:
                     label = _format_thread_preview(entry)
+                    if label == "(no preview)":
+                        cached_preview = _thread_summary_preview(record, thread_id)
+                        if cached_preview:
+                            label = cached_preview
                 items.append((thread_id, label))
         if missing_ids:
             log_event(
@@ -3614,6 +3696,78 @@ class TelegramBotService:
             reply_to=message.message_id,
             reply_markup=keyboard,
         )
+
+    async def _refresh_thread_summaries(
+        self,
+        thread_ids: Sequence[str],
+        *,
+        topic_keys_by_thread: Optional[dict[str, set[str]]] = None,
+        default_topic_key: Optional[str] = None,
+    ) -> set[str]:
+        refreshed: set[str] = set()
+        if not thread_ids:
+            return refreshed
+        unique_ids: list[str] = []
+        seen: set[str] = set()
+        for thread_id in thread_ids:
+            if not isinstance(thread_id, str) or not thread_id:
+                continue
+            if thread_id in seen:
+                continue
+            seen.add(thread_id)
+            unique_ids.append(thread_id)
+            if len(unique_ids) >= RESUME_REFRESH_LIMIT:
+                break
+        for thread_id in unique_ids:
+            try:
+                result = await self._client.thread_resume(thread_id)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.resume.refresh_failed",
+                    thread_id=thread_id,
+                    exc=exc,
+                )
+                continue
+            user_preview, assistant_preview = _extract_thread_preview_parts(result)
+            info = _extract_thread_info(result)
+            workspace_path = info.get("workspace_path")
+            rollout_path = info.get("rollout_path")
+            if (
+                user_preview is None
+                and assistant_preview is None
+                and workspace_path is None
+                and rollout_path is None
+            ):
+                continue
+            last_used_at = now_iso() if user_preview or assistant_preview else None
+
+            def apply(record: "TelegramTopicRecord") -> None:
+                _set_thread_summary(
+                    record,
+                    thread_id,
+                    user_preview=user_preview,
+                    assistant_preview=assistant_preview,
+                    last_used_at=last_used_at,
+                    workspace_path=workspace_path,
+                    rollout_path=rollout_path,
+                )
+
+            keys = (
+                topic_keys_by_thread.get(thread_id)
+                if topic_keys_by_thread is not None
+                else None
+            )
+            if keys:
+                for key in keys:
+                    self._store.update_topic(key, apply)
+            elif default_topic_key:
+                self._store.update_topic(default_topic_key, apply)
+            else:
+                continue
+            refreshed.add(thread_id)
+        return refreshed
 
     async def _list_threads_paginated(
         self,
@@ -3816,6 +3970,61 @@ class TelegramBotService:
         lines.extend(_format_rate_limits(rate_limits))
         if not record.workspace_path:
             lines.append("Use /bind <repo_id> or /bind <path>.")
+        await self._send_message(
+            message.chat_id,
+            "\n".join(lines),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_debug(
+        self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
+    ) -> None:
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = self._router.get_topic(key)
+        scope = None
+        try:
+            chat_id, thread_id, scope = parse_topic_key(key)
+            base_key = topic_key(chat_id, thread_id)
+        except ValueError:
+            base_key = key
+        lines = [
+            f"Topic key: {key}",
+            f"Base key: {base_key}",
+            f"Scope: {scope or 'none'}",
+        ]
+        if record is None:
+            lines.append("Record: missing")
+            await self._send_message(
+                message.chat_id,
+                "\n".join(lines),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        workspace_path = record.workspace_path or "unbound"
+        canonical_path = "unbound"
+        if record.workspace_path:
+            try:
+                canonical_path = str(Path(record.workspace_path).expanduser().resolve())
+            except Exception:
+                canonical_path = "invalid"
+        lines.extend(
+            [
+                f"Workspace: {workspace_path}",
+                f"Workspace (canonical): {canonical_path}",
+                f"Active thread: {record.active_thread_id or 'none'}",
+                f"Thread IDs: {len(record.thread_ids)}",
+                f"Cached summaries: {len(record.thread_summaries)}",
+            ]
+        )
+        preview_ids = record.thread_ids[:3]
+        if preview_ids:
+            lines.append("Preview samples:")
+            for thread_id in preview_ids:
+                preview = _thread_summary_preview(record, thread_id)
+                label = preview or "(no cached preview)"
+                lines.append(f"{thread_id}: {_compact_preview(label, 120)}")
         await self._send_message(
             message.chat_id,
             "\n".join(lines),
@@ -4286,6 +4495,8 @@ class TelegramBotService:
                         thread_id,
                         assistant_preview=assistant_preview,
                         last_used_at=now_iso(),
+                        workspace_path=record.workspace_path,
+                        rollout_path=record.rollout_path,
                     ),
                 )
         if result.status == "interrupted" or runtime.interrupt_requested:
@@ -5932,6 +6143,8 @@ def _set_thread_summary(
     user_preview: Optional[str] = None,
     assistant_preview: Optional[str] = None,
     last_used_at: Optional[str] = None,
+    workspace_path: Optional[str] = None,
+    rollout_path: Optional[str] = None,
 ) -> None:
     if not isinstance(thread_id, str) or not thread_id:
         return
@@ -5944,6 +6157,10 @@ def _set_thread_summary(
         summary.assistant_preview = assistant_preview
     if last_used_at is not None:
         summary.last_used_at = last_used_at
+    if workspace_path is not None:
+        summary.workspace_path = workspace_path
+    if rollout_path is not None:
+        summary.rollout_path = rollout_path
     record.thread_summaries[thread_id] = summary
     if record.thread_ids:
         keep = set(record.thread_ids)
@@ -6695,6 +6912,61 @@ def _partition_threads(
         if _paths_compatible(workspace, candidate):
             filtered.append(entry)
     return filtered, unscoped, saw_path
+
+
+def _local_workspace_threads(
+    state: "TelegramState",
+    workspace_path: Optional[str],
+    *,
+    current_key: str,
+) -> tuple[list[str], dict[str, str], dict[str, set[str]]]:
+    thread_ids: list[str] = []
+    previews: dict[str, str] = {}
+    topic_keys_by_thread: dict[str, set[str]] = {}
+    if not isinstance(workspace_path, str) or not workspace_path.strip():
+        return thread_ids, previews, topic_keys_by_thread
+    workspace_key = workspace_path.strip()
+    workspace_root: Optional[Path] = None
+    try:
+        workspace_root = Path(workspace_key).expanduser().resolve()
+    except Exception:
+        workspace_root = None
+
+    def matches(candidate_path: Optional[str]) -> bool:
+        if not isinstance(candidate_path, str) or not candidate_path.strip():
+            return False
+        candidate_path = candidate_path.strip()
+        if workspace_root is not None:
+            try:
+                candidate_root = Path(candidate_path).expanduser().resolve()
+            except Exception:
+                return False
+            return _paths_compatible(workspace_root, candidate_root)
+        return candidate_path == workspace_key
+
+    def add_record(key: str, record: "TelegramTopicRecord") -> None:
+        if not matches(record.workspace_path):
+            return
+        for thread_id in record.thread_ids:
+            topic_keys_by_thread.setdefault(thread_id, set()).add(key)
+            if thread_id not in previews:
+                preview = _thread_summary_preview(record, thread_id)
+                if preview:
+                    previews[thread_id] = preview
+            if thread_id in seen:
+                continue
+            seen.add(thread_id)
+            thread_ids.append(thread_id)
+
+    seen: set[str] = set()
+    current = state.topics.get(current_key)
+    if current is not None:
+        add_record(current_key, current)
+    for key, record in state.topics.items():
+        if key == current_key:
+            continue
+        add_record(key, record)
+    return thread_ids, previews, topic_keys_by_thread
 
 
 def _filter_threads(

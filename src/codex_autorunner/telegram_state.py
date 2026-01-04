@@ -103,6 +103,8 @@ class ThreadSummary:
     user_preview: Optional[str] = None
     assistant_preview: Optional[str] = None
     last_used_at: Optional[str] = None
+    workspace_path: Optional[str] = None
+    rollout_path: Optional[str] = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> Optional["ThreadSummary"]:
@@ -113,16 +115,28 @@ class ThreadSummary:
             "assistantPreview"
         )
         last_used_at = payload.get("last_used_at") or payload.get("lastUsedAt")
+        workspace_path = payload.get("workspace_path") or payload.get("workspacePath")
+        rollout_path = (
+            payload.get("rollout_path")
+            or payload.get("rolloutPath")
+            or payload.get("path")
+        )
         if not isinstance(user_preview, str):
             user_preview = None
         if not isinstance(assistant_preview, str):
             assistant_preview = None
         if not isinstance(last_used_at, str):
             last_used_at = None
+        if not isinstance(workspace_path, str):
+            workspace_path = None
+        if not isinstance(rollout_path, str):
+            rollout_path = None
         return cls(
             user_preview=user_preview,
             assistant_preview=assistant_preview,
             last_used_at=last_used_at,
+            workspace_path=workspace_path,
+            rollout_path=rollout_path,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -130,6 +144,8 @@ class ThreadSummary:
             "user_preview": self.user_preview,
             "assistant_preview": self.assistant_preview,
             "last_used_at": self.last_used_at,
+            "workspace_path": self.workspace_path,
+            "rollout_path": self.rollout_path,
         }
 
 

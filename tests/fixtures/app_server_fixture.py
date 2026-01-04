@@ -103,7 +103,7 @@ class FixtureServer:
             if self._scenario == "thread_list_requires_params" and "params" not in message:
                 self._send_error(req_id, "Invalid request: missing field `params`")
                 return
-            if self._scenario == "thread_list_empty":
+            if self._scenario in ("thread_list_empty", "thread_list_empty_refresh"):
                 self.send(
                     {
                         "id": req_id,
@@ -176,7 +176,15 @@ class FixtureServer:
             return
         if method == "thread/resume":
             thread_id = params.get("threadId")
-            self.send({"id": req_id, "result": {"id": thread_id}})
+            if self._scenario == "thread_list_empty_refresh":
+                self.send(
+                    {
+                        "id": req_id,
+                        "result": {"id": thread_id, "preview": "refreshed preview"},
+                    }
+                )
+            else:
+                self.send({"id": req_id, "result": {"id": thread_id}})
             return
         if method == "turn/start":
             turn_id = f"turn-{self._next_turn}"
