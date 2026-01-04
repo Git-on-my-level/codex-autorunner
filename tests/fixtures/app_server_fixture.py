@@ -207,6 +207,25 @@ class FixtureServer:
                 ):
                     self._send_error(req_id, "invalid sandboxPolicy")
                     return
+            if self._scenario == "turn_error_no_agent":
+                self.send(
+                    {
+                        "method": "error",
+                        "params": {
+                            "turnId": turn_id,
+                            "threadId": params.get("threadId"),
+                            "willRetry": False,
+                            "error": {"message": "Auth required"},
+                        },
+                    }
+                )
+                self.send(
+                    {
+                        "method": "turn/completed",
+                        "params": {"turnId": turn_id, "status": "failed"},
+                    }
+                )
+                return
             if self._scenario == "approval":
                 approval_id = self._next_approval
                 self._next_approval += 1

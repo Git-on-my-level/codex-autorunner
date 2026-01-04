@@ -61,6 +61,7 @@ class TurnResult:
     turn_id: str
     status: Optional[str]
     agent_messages: list[str]
+    errors: list[str]
     raw_events: list[Dict[str, Any]]
 
 
@@ -84,6 +85,7 @@ class _TurnState:
     thread_id: Optional[str]
     future: asyncio.Future
     agent_messages: list[str]
+    errors: list[str]
     raw_events: list[Dict[str, Any]]
     status: Optional[str] = None
 
@@ -664,6 +666,20 @@ class CodexAppServerClient:
                     state = self._ensure_pending_turn_state(turn_id)
             self._apply_turn_completed(state, message, params)
             handled = True
+        elif method == "error":
+            turn_id = _extract_turn_id(params)
+            if not turn_id:
+                handled = True
+                return
+            thread_id = _extract_thread_id_for_turn(params)
+            _key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+            if state is None:
+                if thread_id:
+                    state = self._ensure_turn_state(turn_id, thread_id)
+                else:
+                    state = self._ensure_pending_turn_state(turn_id)
+            self._apply_error(state, message, params)
+            handled = True
         if self._notification_handler is not None:
             try:
                 await _maybe_await(self._notification_handler(message))
@@ -726,6 +742,7 @@ class CodexAppServerClient:
             thread_id=thread_id,
             future=future,
             agent_messages=[],
+            errors=[],
             raw_events=[],
         )
         self._turns[key] = state
@@ -742,6 +759,7 @@ class CodexAppServerClient:
             thread_id=None,
             future=future,
             agent_messages=[],
+            errors=[],
             raw_events=[],
         )
         self._pending_turns[turn_id] = state
@@ -756,6 +774,10 @@ class CodexAppServerClient:
             target.raw_events = list(source.raw_events)
         else:
             target.raw_events.extend(source.raw_events)
+        if not target.errors:
+            target.errors = list(source.errors)
+        else:
+            target.errors.extend(source.errors)
         if target.status is None and source.status is not None:
             target.status = source.status
         if source.future.done() and not target.future.done():
@@ -764,6 +786,7 @@ class CodexAppServerClient:
                     turn_id=target.turn_id,
                     status=target.status,
                     agent_messages=list(target.agent_messages),
+                    errors=list(target.errors),
                     raw_events=list(target.raw_events),
                 )
             )
@@ -815,6 +838,27 @@ class CodexAppServerClient:
         )
         state.raw_events.append(message)
 
+    def _apply_error(
+        self, state: _TurnState, message: Dict[str, Any], params: Any
+    ) -> None:
+        error_message = _extract_error_message(params)
+        if error_message:
+            state.errors.append(error_message)
+        error_payload = params.get("error") if isinstance(params, dict) else None
+        error_code = error_payload.get("code") if isinstance(error_payload, dict) else None
+        will_retry = params.get("willRetry") if isinstance(params, dict) else None
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "app_server.turn_error",
+            turn_id=state.turn_id,
+            thread_id=state.thread_id,
+            message=error_message,
+            code=error_code,
+            will_retry=will_retry,
+        )
+        state.raw_events.append(message)
+
     def _apply_turn_completed(
         self, state: _TurnState, message: Dict[str, Any], params: Any
     ) -> None:
@@ -836,6 +880,7 @@ class CodexAppServerClient:
                     turn_id=state.turn_id,
                     status=state.status,
                     agent_messages=list(state.agent_messages),
+                    errors=list(state.errors),
                     raw_events=list(state.raw_events),
                 )
             )
@@ -1048,6 +1093,32 @@ def _extract_review_text(item: Any) -> Optional[str]:
     if isinstance(review, str) and review.strip():
         return review
     return None
+
+
+def _extract_error_message(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    message: Optional[str] = None
+    details: Optional[str] = None
+    if isinstance(error, dict):
+        raw_message = error.get("message")
+        if isinstance(raw_message, str):
+            message = raw_message.strip() or None
+        raw_details = error.get("additionalDetails") or error.get("details")
+        if isinstance(raw_details, str):
+            details = raw_details.strip() or None
+    elif isinstance(error, str):
+        message = error.strip() or None
+    if message is None:
+        fallback = payload.get("message")
+        if isinstance(fallback, str):
+            message = fallback.strip() or None
+    if details and details != message:
+        if message:
+            return f"{message} ({details})"
+        return details
+    return message
 
 
 def _extract_thread_id(payload: Any) -> Optional[str]:

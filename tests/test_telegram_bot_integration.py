@@ -180,6 +180,29 @@ async def test_normal_message_runs_turn(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_error_notification_surfaces(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("turn_error_no_agent"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        runtime = service._router.runtime_for(
+            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        )
+        message = build_message("hello", message_id=11)
+        await service._handle_normal_message(message, runtime)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert any(
+        "Auth required" in msg["text"] for msg in fake_bot.messages
+    )
+
+
+@pytest.mark.anyio
 async def test_thread_start_rejects_missing_workspace(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

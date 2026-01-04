@@ -3059,8 +3059,10 @@ class TelegramBotService:
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
 
-        response = _compose_agent_response(result.agent_messages)
-        if thread_id and response and response != "(No agent response.)":
+        response = _compose_agent_response(
+            result.agent_messages, errors=result.errors, status=result.status
+        )
+        if thread_id and result.agent_messages:
             assistant_preview = _preview_from_text(
                 response, RESUME_PREVIEW_ASSISTANT_LIMIT
             )
@@ -3112,6 +3114,7 @@ class TelegramBotService:
             turn_id=turn_handle.turn_id if turn_handle else None,
             status=result.status,
             agent_message_count=len(result.agent_messages),
+            error_count=len(result.errors),
         )
         response_sent = await self._deliver_turn_response(
             chat_id=message.chat_id,
@@ -4727,8 +4730,10 @@ class TelegramBotService:
             runtime.current_turn_id = None
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
-        response = _compose_agent_response(result.agent_messages)
-        if thread_id and response and response != "(No agent response.)":
+        response = _compose_agent_response(
+            result.agent_messages, errors=result.errors, status=result.status
+        )
+        if thread_id and result.agent_messages:
             assistant_preview = _preview_from_text(
                 response, RESUME_PREVIEW_ASSISTANT_LIMIT
             )
@@ -4756,6 +4761,7 @@ class TelegramBotService:
             thread_id=message.thread_id,
             turn_id=turn_handle.turn_id if turn_handle else None,
             agent_message_count=len(result.agent_messages),
+            error_count=len(result.errors),
         )
         response_sent = await self._deliver_turn_response(
             chat_id=message.chat_id,
@@ -7446,7 +7452,7 @@ def _preview_from_text(text: Optional[str], limit: int) -> Optional[str]:
     if not isinstance(text, str):
         return None
     trimmed = text.strip()
-    if not trimmed or trimmed == "(No agent response.)":
+    if not trimmed or _is_no_agent_response(trimmed):
         return None
     return _truncate_text(_normalize_preview_text(trimmed), limit)
 
@@ -7799,18 +7805,50 @@ def _extract_first_bold_span(text: str) -> Optional[str]:
     return content or None
 
 
-def _compose_agent_response(messages: list[str]) -> str:
+def _compose_agent_response(
+    messages: list[str],
+    *,
+    errors: Optional[list[str]] = None,
+    status: Optional[str] = None,
+) -> str:
     cleaned = [msg.strip() for msg in messages if isinstance(msg, str) and msg.strip()]
     if not cleaned:
-        return "(No agent response.)"
+        cleaned_errors = [
+            err.strip()
+            for err in (errors or [])
+            if isinstance(err, str) and err.strip()
+        ]
+        if cleaned_errors:
+            if len(cleaned_errors) == 1:
+                lines = [f"Error: {cleaned_errors[0]}"]
+            else:
+                lines = ["Errors:"]
+                lines.extend(f"- {err}" for err in cleaned_errors)
+            if status and status != "completed":
+                lines.append(f"Status: {status}")
+            return "\n".join(lines)
+        if status and status != "completed":
+            return f"No agent message produced (status: {status}). Check logs."
+        return "No agent message produced. Check logs."
     return "\n\n".join(cleaned)
 
 
 def _compose_interrupt_response(agent_text: str) -> str:
     base = "Interrupted."
-    if agent_text and agent_text != "(No agent response.)":
+    if agent_text and not _is_no_agent_response(agent_text):
         return f"{base}\n\n{agent_text}"
     return base
+
+
+def _is_no_agent_response(text: str) -> bool:
+    stripped = text.strip() if isinstance(text, str) else ""
+    if not stripped:
+        return True
+    if stripped == "(No agent response.)":
+        return True
+    if stripped.startswith("No agent message produced"):
+        return True
+    return False
 
 
 def _format_approval_prompt(message: dict[str, Any]) -> str:

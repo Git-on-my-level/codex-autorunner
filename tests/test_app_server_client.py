@@ -55,6 +55,22 @@ async def test_turn_completion_and_agent_message(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_turn_error_notification(tmp_path: Path) -> None:
+    client = CodexAppServerClient(
+        fixture_command("turn_error_no_agent"), cwd=tmp_path
+    )
+    try:
+        thread = await client.thread_start(str(tmp_path))
+        handle = await client.turn_start(thread["id"], "hi")
+        result = await handle.wait()
+        assert result.status == "failed"
+        assert result.agent_messages == []
+        assert result.errors == ["Auth required"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_review_message_dedupes_review_text(tmp_path: Path) -> None:
     client = CodexAppServerClient(fixture_command("review_duplicate"), cwd=tmp_path)
     try:
