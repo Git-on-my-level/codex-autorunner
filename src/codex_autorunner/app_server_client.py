@@ -617,19 +617,20 @@ class CodexAppServerClient:
                 handled = True
                 return
             thread_id = _extract_thread_id_for_turn(params)
-            if not thread_id:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "app_server.turn.missing_thread_id",
-                    method=method,
-                    turn_id=turn_id,
-                )
-                handled = True
-                return
             _key, state = self._find_turn_state(turn_id, thread_id=thread_id)
             if state is None:
-                state = self._ensure_turn_state(turn_id, thread_id)
+                if thread_id:
+                    state = self._ensure_turn_state(turn_id, thread_id)
+                else:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "app_server.turn.missing_thread_id",
+                        method=method,
+                        turn_id=turn_id,
+                    )
+                    handled = True
+                    return
             item = params.get("item") if isinstance(params, dict) else None
             text = None
             def append_message(candidate: Optional[str]) -> None:
@@ -661,19 +662,20 @@ class CodexAppServerClient:
                 handled = True
                 return
             thread_id = _extract_thread_id_for_turn(params)
-            if not thread_id:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "app_server.turn.missing_thread_id",
-                    method=method,
-                    turn_id=turn_id,
-                )
-                handled = True
-                return
             _key, state = self._find_turn_state(turn_id, thread_id=thread_id)
             if state is None:
-                state = self._ensure_turn_state(turn_id, thread_id)
+                if thread_id:
+                    state = self._ensure_turn_state(turn_id, thread_id)
+                else:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "app_server.turn.missing_thread_id",
+                        method=method,
+                        turn_id=turn_id,
+                    )
+                    handled = True
+                    return
             state.raw_events.append(message)
             status = None
             if isinstance(params, dict):

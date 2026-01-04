@@ -87,6 +87,7 @@ DEFAULT_THREAD_LIST_LIMIT = 10
 DEFAULT_MODEL_LIST_LIMIT = 25
 DEFAULT_MCP_LIST_LIMIT = 50
 DEFAULT_SKILLS_LIST_LIMIT = 50
+MAX_TOPIC_THREAD_HISTORY = 50
 RESUME_BUTTON_PREVIEW_LIMIT = 60
 RESUME_PREVIEW_USER_LIMIT = 1000
 RESUME_PREVIEW_ASSISTANT_LIMIT = 1000
@@ -2593,6 +2594,11 @@ class TelegramBotService:
         def apply(record: "TelegramTopicRecord") -> None:
             if active_thread_id:
                 record.active_thread_id = active_thread_id
+                if active_thread_id in record.thread_ids:
+                    record.thread_ids.remove(active_thread_id)
+                record.thread_ids.insert(0, active_thread_id)
+                if len(record.thread_ids) > MAX_TOPIC_THREAD_HISTORY:
+                    record.thread_ids = record.thread_ids[:MAX_TOPIC_THREAD_HISTORY]
             if info.get("workspace_path"):
                 record.workspace_path = info["workspace_path"]
             if info.get("rollout_path"):
@@ -3413,6 +3419,14 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
+        if not show_unscoped and not record.thread_ids:
+            await self._send_message(
+                message.chat_id,
+                "No previous threads found for this topic. Use /new to start one.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         try:
             threads = await self._client.thread_list(
                 cursor=None,
@@ -3439,22 +3453,33 @@ class TelegramBotService:
             )
             return
         normalized = _coerce_thread_list(threads)
-        filtered, unscoped, saw_path = _partition_threads(
-            normalized, record.workspace_path
-        )
-        candidates = filtered
         if show_unscoped:
+            filtered, unscoped, saw_path = _partition_threads(
+                normalized, record.workspace_path
+            )
             seen_ids = {entry.get("id") for entry in filtered}
             candidates = filtered + [
                 entry for entry in unscoped if entry.get("id") not in seen_ids
             ]
-        if not candidates:
-            if unscoped and not show_unscoped and not saw_path:
+            if not candidates:
+                if unscoped and not saw_path:
+                    await self._send_message(
+                        message.chat_id,
+                        _with_conversation_id(
+                            "No workspace-tagged threads available. Use /resume --all to list "
+                            "unscoped threads.",
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                        ),
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
                 await self._send_message(
                     message.chat_id,
                     _with_conversation_id(
-                        "No workspace-tagged threads available. Use /resume --all to list "
-                        "unscoped threads.",
+                        "No previous threads found for this workspace. "
+                        "If threads exist, update the app-server to include cwd metadata or use /new.",
                         chat_id=message.chat_id,
                         thread_id=message.thread_id,
                     ),
@@ -3462,18 +3487,25 @@ class TelegramBotService:
                     reply_to=message.message_id,
                 )
                 return
-            await self._send_message(
-                message.chat_id,
-                _with_conversation_id(
-                    "No previous threads found for this workspace. "
-                    "If threads exist, update the app-server to include cwd metadata or use /new.",
-                    chat_id=message.chat_id,
+        else:
+            entries_by_id = {
+                entry.get("id"): entry
+                for entry in normalized
+                if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+            }
+            candidates = [
+                entries_by_id[thread_id]
+                for thread_id in record.thread_ids
+                if thread_id in entries_by_id
+            ]
+            if not candidates:
+                await self._send_message(
+                    message.chat_id,
+                    "No previous threads found for this topic. Use /new to start one.",
                     thread_id=message.thread_id,
-                ),
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
+                    reply_to=message.message_id,
+                )
+                return
         items: list[tuple[str, str]] = []
         for entry in candidates:
             thread_id = entry.get("id")
@@ -3586,7 +3618,7 @@ class TelegramBotService:
                 ),
             )
             return
-        if not _path_within(workspace_root, resumed_root):
+        if not _paths_compatible(workspace_root, resumed_root):
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
                 key,
@@ -5833,6 +5865,35 @@ def _compute_used_percent(entry: dict[str, Any]) -> Optional[float]:
     return max(min(used, 100.0), 0.0)
 
 
+def _coerce_id(value: Any) -> Optional[str]:
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        text = str(value).strip()
+        return text or None
+    return None
+
+
+def _extract_turn_thread_id(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for candidate in (payload, payload.get("turn"), payload.get("item")):
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("threadId", "thread_id"):
+            thread_id = _coerce_id(candidate.get(key))
+            if thread_id:
+                return thread_id
+        thread = candidate.get("thread")
+        if isinstance(thread, dict):
+            thread_id = _coerce_id(
+                thread.get("id")
+                or thread.get("threadId")
+                or thread.get("thread_id")
+            )
+            if thread_id:
+                return thread_id
+    return None
+
+
 def _coerce_number(value: Any) -> Optional[float]:
     if isinstance(value, bool):
         return None
@@ -6430,7 +6491,7 @@ def _partition_threads(
             candidate = Path(cwd).expanduser().resolve()
         except Exception:
             continue
-        if _path_within(workspace, candidate):
+        if _paths_compatible(workspace, candidate):
             filtered.append(entry)
     return filtered, unscoped, saw_path
 
@@ -6467,6 +6528,8 @@ def _repo_root(path: Path) -> Optional[Path]:
 
 def _paths_compatible(workspace_root: Path, resumed_root: Path) -> bool:
     if _path_within(workspace_root, resumed_root):
+        return True
+    if _path_within(resumed_root, workspace_root):
         return True
     workspace_repo = _repo_root(workspace_root)
     resumed_repo = _repo_root(resumed_root)
@@ -6562,7 +6625,7 @@ def _extract_text_payload(payload: Any) -> Optional[str]:
             return " ".join(parts)
         return None
     if isinstance(payload, dict):
-        for key in ("text", "input_text", "output_text", "message", "value"):
+        for key in ("text", "input_text", "output_text", "message", "value", "delta"):
             value = payload.get(key)
             if isinstance(value, str):
                 text = value.strip()
@@ -6595,7 +6658,7 @@ def _iter_role_texts(
     role_hint = role or default_role
     if not role_hint and type_value:
         lowered = type_value.lower()
-        if lowered in ("user", "user_message", "input", "input_text", "prompt"):
+        if lowered in ("user", "user_message", "input", "input_text", "prompt", "request"):
             role_hint = "user"
         elif lowered in (
             "assistant",
@@ -6605,6 +6668,17 @@ def _iter_role_texts(
             "response",
         ):
             role_hint = "assistant"
+        else:
+            tokens = [token for token in re.split(r"[._]+", lowered) if token]
+            if any(
+                token in ("user", "input", "prompt", "request") for token in tokens
+            ):
+                role_hint = "user"
+            elif any(
+                token in ("assistant", "output", "response", "completion")
+                for token in tokens
+            ):
+                role_hint = "assistant"
     text = _extract_text_payload(payload)
     if role_hint in ("user", "assistant") and text:
         yield role_hint, text
@@ -6622,8 +6696,14 @@ def _iter_role_texts(
             )
     for key in ("request", "response", "message", "item", "turn", "event", "data"):
         if key in payload:
+            next_role = role_hint
+            if next_role is None:
+                if key == "request":
+                    next_role = "user"
+                elif key == "response":
+                    next_role = "assistant"
             yield from _iter_role_texts(
-                payload[key], default_role=role_hint, depth=depth + 1
+                payload[key], default_role=next_role, depth=depth + 1
             )
 
 
@@ -6648,6 +6728,37 @@ def _extract_rollout_preview(path: Path) -> tuple[Optional[str], Optional[str]]:
                 last_user = text
             if last_user and last_assistant:
                 return last_user, last_assistant
+    return last_user, last_assistant
+
+
+def _extract_turns_preview(turns: Any) -> tuple[Optional[str], Optional[str]]:
+    if not isinstance(turns, list):
+        return None, None
+    last_user = None
+    last_assistant = None
+    for turn in reversed(turns):
+        if not isinstance(turn, dict):
+            continue
+        candidates: list[Any] = []
+        for key in ("items", "messages", "input", "output"):
+            value = turn.get(key)
+            if value is not None:
+                candidates.append(value)
+        if not candidates:
+            candidates.append(turn)
+        for candidate in candidates:
+            if isinstance(candidate, list):
+                iterable = reversed(candidate)
+            else:
+                iterable = (candidate,)
+            for item in iterable:
+                for role, text in _iter_role_texts(item):
+                    if role == "assistant" and last_assistant is None:
+                        last_assistant = text
+                    elif role == "user" and last_user is None:
+                        last_user = text
+                    if last_user and last_assistant:
+                        return last_user, last_assistant
     return last_user, last_assistant
 
 
@@ -6683,6 +6794,13 @@ def _format_thread_preview(entry: Any) -> str:
         preview = entry.get("preview")
         if isinstance(preview, str) and preview.strip():
             user_preview = preview.strip()
+    turns = entry.get("turns")
+    if turns and (not user_preview or not assistant_preview):
+        turn_user, turn_assistant = _extract_turns_preview(turns)
+        if not user_preview and turn_user:
+            user_preview = turn_user
+        if not assistant_preview and turn_assistant:
+            assistant_preview = turn_assistant
     rollout_path = _extract_rollout_path(entry)
     if rollout_path and (not user_preview or not assistant_preview):
         path = Path(rollout_path)
