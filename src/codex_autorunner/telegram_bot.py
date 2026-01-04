@@ -5469,6 +5469,15 @@ class TelegramBotService:
         callback: Optional[TelegramCallbackQuery],
         text: str,
     ) -> None:
+        if len(text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            if callback and await self._edit_callback_message(
+                callback,
+                "Selection complete.",
+                reply_markup={"inline_keyboard": []},
+            ):
+                chat_id, thread_id = _split_topic_key(key)
+                await self._send_message(chat_id, text, thread_id=thread_id)
+                return
         if callback and await self._edit_callback_message(
             callback, text, reply_markup={"inline_keyboard": []}
         ):
