@@ -121,6 +121,15 @@ class FixtureServer:
                 result = {"threadId": thread_id, "cwd": params.get("cwd")}
             elif self._scenario == "thread_id_snake":
                 result = {"thread_id": thread_id, "cwd": params.get("cwd")}
+            elif self._scenario == "thread_start_missing_cwd":
+                result = {"id": thread_id}
+            elif self._scenario == "thread_start_mismatch":
+                raw_cwd = params.get("cwd")
+                if isinstance(raw_cwd, str):
+                    mismatched = f"{raw_cwd.rstrip('/')}-other"
+                else:
+                    mismatched = "/mismatch"
+                result = {"id": thread_id, "cwd": mismatched}
             else:
                 result = {"id": thread_id, "cwd": params.get("cwd")}
             self.send(
