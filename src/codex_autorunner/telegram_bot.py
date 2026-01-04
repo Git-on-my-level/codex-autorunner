@@ -6608,6 +6608,11 @@ def _iter_role_texts(
     text = _extract_text_payload(payload)
     if role_hint in ("user", "assistant") and text:
         yield role_hint, text
+    nested_payload = payload.get("payload")
+    if nested_payload is not None:
+        yield from _iter_role_texts(
+            nested_payload, default_role=role_hint, depth=depth + 1
+        )
     for key in ("input", "output", "messages", "items", "events"):
         if key in payload:
             yield from _iter_role_texts(
