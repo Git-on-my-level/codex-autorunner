@@ -571,6 +571,11 @@
             <input type="text" id="create-repo-path" placeholder="relative/path/to/repo" autocomplete="off" spellcheck="false" />
             <span class="form-hint">Leave empty to use repo ID as path</span>
           </div>
+          <div class="form-group">
+            <label for="create-repo-url">Git URL <span class="optional">(optional)</span></label>
+            <input type="text" id="create-repo-url" placeholder="https://github.com/org/repo.git" autocomplete="off" spellcheck="false" />
+            <span class="form-hint">If provided, the repo will be cloned automatically</span>
+          </div>
           <div class="form-group form-checkbox">
             <label>
               <input type="checkbox" id="create-repo-git" checked />

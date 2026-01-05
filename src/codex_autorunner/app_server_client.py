@@ -61,6 +61,7 @@ class TurnResult:
     turn_id: str
     status: Optional[str]
     agent_messages: list[str]
+    errors: list[str]
     raw_events: list[Dict[str, Any]]
 
 
@@ -84,6 +85,7 @@ class _TurnState:
     thread_id: Optional[str]
     future: asyncio.Future
     agent_messages: list[str]
+    errors: list[str]
     raw_events: list[Dict[str, Any]]
     status: Optional[str] = None
 
@@ -115,19 +117,18 @@ class CodexAppServerClient:
         self._process: Optional[asyncio.subprocess.Process] = None
         self._reader_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
-        self._start_lock = asyncio.Lock()
-        self._write_lock = asyncio.Lock()
+        self._start_lock: Optional[asyncio.Lock] = None
+        self._write_lock: Optional[asyncio.Lock] = None
         self._pending: Dict[int, asyncio.Future] = {}
         self._pending_methods: Dict[int, str] = {}
         self._turns: Dict[TurnKey, _TurnState] = {}
-        self._orphan_items: Dict[str, list[Dict[str, Any]]] = {}
-        self._orphan_turn_completed: Dict[str, Dict[str, Any]] = {}
+        self._pending_turns: Dict[str, _TurnState] = {}
         self._next_id = 1
         self._initialized = False
         self._initializing = False
         self._closed = False
-        self._disconnected = asyncio.Event()
-        self._disconnected.set()
+        self._disconnected: Optional[asyncio.Event] = None
+        self._disconnected_set = True
         self._client_version = _client_version()
         self._include_client_version = True
         self._restart_task: Optional[asyncio.Task] = None
@@ -149,10 +150,11 @@ class CodexAppServerClient:
         self._fail_pending(CodexAppServerDisconnected("Client closed"))
 
     async def wait_for_disconnect(self, *, timeout: Optional[float] = None) -> None:
+        disconnected = self._ensure_disconnect_event()
         if timeout is None:
-            await self._disconnected.wait()
+            await disconnected.wait()
             return
-        await asyncio.wait_for(self._disconnected.wait(), timeout)
+        await asyncio.wait_for(disconnected.wait(), timeout)
 
     async def request(
         self,
@@ -304,7 +306,11 @@ class CodexAppServerClient:
         return result
 
     async def _ensure_process(self) -> None:
-        async with self._start_lock:
+        self._ensure_locks()
+        start_lock = self._start_lock
+        if start_lock is None:
+            raise CodexAppServerProtocolError("start lock unavailable")
+        async with start_lock:
             if self._closed:
                 raise CodexAppServerDisconnected("Client closed")
             if (
@@ -333,7 +339,9 @@ class CodexAppServerClient:
             command=list(self._command),
             cwd=self._cwd,
         )
-        self._disconnected.clear()
+        disconnected = self._ensure_disconnect_event()
+        disconnected.clear()
+        self._disconnected_set = False
         self._reader_task = asyncio.create_task(self._read_loop())
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         self._initialized = False
@@ -411,8 +419,12 @@ class CodexAppServerClient:
     async def _send_message(self, message: Dict[str, Any]) -> None:
         if not self._process or not self._process.stdin:
             raise CodexAppServerDisconnected("App-server process is not running")
+        self._ensure_locks()
+        write_lock = self._write_lock
+        if write_lock is None:
+            raise CodexAppServerProtocolError("write lock unavailable")
         payload = json.dumps(message, separators=(",", ":"))
-        async with self._write_lock:
+        async with write_lock:
             self._process.stdin.write((payload + "\n").encode("utf-8"))
             await self._process.stdin.drain()
 
@@ -442,6 +454,19 @@ class CodexAppServerClient:
         request_id = self._next_id
         self._next_id += 1
         return request_id
+
+    def _ensure_locks(self) -> None:
+        if self._start_lock is None:
+            self._start_lock = asyncio.Lock()
+        if self._write_lock is None:
+            self._write_lock = asyncio.Lock()
+
+    def _ensure_disconnect_event(self) -> asyncio.Event:
+        if self._disconnected is None:
+            self._disconnected = asyncio.Event()
+            if self._disconnected_set:
+                self._disconnected.set()
+        return self._disconnected
 
     async def _read_loop(self) -> None:
         assert self._process is not None
@@ -619,14 +644,12 @@ class CodexAppServerClient:
                 handled = True
                 return
             thread_id = _extract_thread_id_for_turn(params)
-            key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+            _key, state = self._find_turn_state(turn_id, thread_id=thread_id)
             if state is None:
                 if thread_id:
                     state = self._ensure_turn_state(turn_id, thread_id)
                 else:
-                    self._orphan_items.setdefault(turn_id, []).append(message)
-                    handled = True
-                    return
+                    state = self._ensure_pending_turn_state(turn_id)
             self._apply_item_completed(state, message, params)
             handled = True
         elif method == "turn/completed":
@@ -635,15 +658,27 @@ class CodexAppServerClient:
                 handled = True
                 return
             thread_id = _extract_thread_id_for_turn(params)
-            key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+            _key, state = self._find_turn_state(turn_id, thread_id=thread_id)
             if state is None:
                 if thread_id:
                     state = self._ensure_turn_state(turn_id, thread_id)
                 else:
-                    self._orphan_turn_completed[turn_id] = message
-                    handled = True
-                    return
+                    state = self._ensure_pending_turn_state(turn_id)
             self._apply_turn_completed(state, message, params)
+            handled = True
+        elif method == "error":
+            turn_id = _extract_turn_id(params)
+            if not turn_id:
+                handled = True
+                return
+            thread_id = _extract_thread_id_for_turn(params)
+            _key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+            if state is None:
+                if thread_id:
+                    state = self._ensure_turn_state(turn_id, thread_id)
+                else:
+                    state = self._ensure_pending_turn_state(turn_id)
+            self._apply_error(state, message, params)
             handled = True
         if self._notification_handler is not None:
             try:
@@ -699,7 +734,6 @@ class CodexAppServerClient:
             raise CodexAppServerProtocolError("turn state missing thread id")
         state = self._turns.get(key)
         if state is not None:
-            self._apply_orphan_turn_events(state, turn_id)
             return state
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
@@ -708,23 +742,70 @@ class CodexAppServerClient:
             thread_id=thread_id,
             future=future,
             agent_messages=[],
+            errors=[],
             raw_events=[],
         )
         self._turns[key] = state
-        self._apply_orphan_turn_events(state, turn_id)
         return state
+
+    def _ensure_pending_turn_state(self, turn_id: str) -> _TurnState:
+        state = self._pending_turns.get(turn_id)
+        if state is not None:
+            return state
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        state = _TurnState(
+            turn_id=turn_id,
+            thread_id=None,
+            future=future,
+            agent_messages=[],
+            errors=[],
+            raw_events=[],
+        )
+        self._pending_turns[turn_id] = state
+        return state
+
+    def _merge_turn_state(self, target: _TurnState, source: _TurnState) -> None:
+        if not target.agent_messages:
+            target.agent_messages = list(source.agent_messages)
+        else:
+            target.agent_messages.extend(source.agent_messages)
+        if not target.raw_events:
+            target.raw_events = list(source.raw_events)
+        else:
+            target.raw_events.extend(source.raw_events)
+        if not target.errors:
+            target.errors = list(source.errors)
+        else:
+            target.errors.extend(source.errors)
+        if target.status is None and source.status is not None:
+            target.status = source.status
+        if source.future.done() and not target.future.done():
+            target.future.set_result(
+                TurnResult(
+                    turn_id=target.turn_id,
+                    status=target.status,
+                    agent_messages=list(target.agent_messages),
+                    errors=list(target.errors),
+                    raw_events=list(target.raw_events),
+                )
+            )
 
     def _register_turn_state(self, turn_id: str, thread_id: str) -> _TurnState:
         key = _turn_key(thread_id, turn_id)
         if key is None:
             raise CodexAppServerProtocolError("turn/start missing thread id")
+        pending = self._pending_turns.pop(turn_id, None)
         state = self._turns.get(key)
+        if pending is not None:
+            if state is None:
+                pending.thread_id = thread_id
+                self._turns[key] = pending
+                return pending
+            self._merge_turn_state(state, pending)
+            return state
         if state is None:
             return self._ensure_turn_state(turn_id, thread_id)
-        if state.future.done():
-            self._turns.pop(key, None)
-            return self._ensure_turn_state(turn_id, thread_id)
-        self._apply_orphan_turn_events(state, turn_id)
         return state
 
     def _apply_item_completed(
@@ -757,6 +838,27 @@ class CodexAppServerClient:
         )
         state.raw_events.append(message)
 
+    def _apply_error(
+        self, state: _TurnState, message: Dict[str, Any], params: Any
+    ) -> None:
+        error_message = _extract_error_message(params)
+        if error_message:
+            state.errors.append(error_message)
+        error_payload = params.get("error") if isinstance(params, dict) else None
+        error_code = error_payload.get("code") if isinstance(error_payload, dict) else None
+        will_retry = params.get("willRetry") if isinstance(params, dict) else None
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "app_server.turn_error",
+            turn_id=state.turn_id,
+            thread_id=state.thread_id,
+            message=error_message,
+            code=error_code,
+            will_retry=will_retry,
+        )
+        state.raw_events.append(message)
+
     def _apply_turn_completed(
         self, state: _TurnState, message: Dict[str, Any], params: Any
     ) -> None:
@@ -778,24 +880,17 @@ class CodexAppServerClient:
                     turn_id=state.turn_id,
                     status=state.status,
                     agent_messages=list(state.agent_messages),
+                    errors=list(state.errors),
                     raw_events=list(state.raw_events),
                 )
             )
 
-    def _apply_orphan_turn_events(self, state: _TurnState, turn_id: str) -> None:
-        orphan_items = self._orphan_items.pop(turn_id, [])
-        for item_message in orphan_items:
-            params = item_message.get("params") or {}
-            self._apply_item_completed(state, item_message, params)
-        orphan_turn_completed = self._orphan_turn_completed.pop(turn_id, None)
-        if orphan_turn_completed:
-            params = orphan_turn_completed.get("params") or {}
-            self._apply_turn_completed(state, orphan_turn_completed, params)
-
     async def _handle_disconnect(self) -> None:
         self._initialized = False
         self._initializing = False
-        self._disconnected.set()
+        disconnected = self._ensure_disconnect_event()
+        disconnected.set()
+        self._disconnected_set = True
         log_event(
             self._logger,
             logging.WARNING,
@@ -818,6 +913,10 @@ class CodexAppServerClient:
             if not state.future.done():
                 state.future.set_exception(error)
         self._turns.clear()
+        for state in list(self._pending_turns.values()):
+            if not state.future.done():
+                state.future.set_exception(error)
+        self._pending_turns.clear()
 
     def _schedule_restart(self) -> None:
         if self._restart_task is not None and not self._restart_task.done():
@@ -994,6 +1093,32 @@ def _extract_review_text(item: Any) -> Optional[str]:
     if isinstance(review, str) and review.strip():
         return review
     return None
+
+
+def _extract_error_message(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    message: Optional[str] = None
+    details: Optional[str] = None
+    if isinstance(error, dict):
+        raw_message = error.get("message")
+        if isinstance(raw_message, str):
+            message = raw_message.strip() or None
+        raw_details = error.get("additionalDetails") or error.get("details")
+        if isinstance(raw_details, str):
+            details = raw_details.strip() or None
+    elif isinstance(error, str):
+        message = error.strip() or None
+    if message is None:
+        fallback = payload.get("message")
+        if isinstance(fallback, str):
+            message = fallback.strip() or None
+    if details and details != message:
+        if message:
+            return f"{message} ({details})"
+        return details
+    return message
 
 
 def _extract_thread_id(payload: Any) -> Optional[str]:

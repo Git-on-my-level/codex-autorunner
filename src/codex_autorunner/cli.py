@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -27,7 +28,7 @@ from .manifest import load_manifest
 from .server import create_app, create_hub_app
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import RepoNotFoundError, default_editor, find_repo_root
-from .logging_utils import setup_rotating_logger
+from .logging_utils import log_event, setup_rotating_logger
 from .spec_ingest import (
     SpecIngestError,
     generate_docs_from_spec,
@@ -42,7 +43,13 @@ from .usage import (
     summarize_repo_usage,
 )
 from .snapshot import SnapshotError, generate_snapshot, load_snapshot
-from .telegram_bot import TelegramBotConfig, TelegramBotConfigError, TelegramBotService
+from .telegram_adapter import TelegramAPIError, TelegramBotClient
+from .telegram_bot import (
+    TelegramBotConfig,
+    TelegramBotConfigError,
+    TelegramBotLockError,
+    TelegramBotService,
+)
 from .voice import VoiceConfig
 
 app = typer.Typer(add_completion=False)
@@ -730,9 +737,17 @@ def telegram_start(
     except TelegramBotConfigError as exc:
         raise typer.Exit(str(exc))
     logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
+    log_event(
+        logger,
+        logging.INFO,
+        "telegram.bot.starting",
+        root=str(config.root),
+        mode=("hub" if isinstance(config, HubConfig) else "repo"),
+    )
     voice_raw = config.raw.get("voice") if isinstance(config.raw, dict) else None
     voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
     update_repo_url = config.update_repo_url if isinstance(config, HubConfig) else None
+    update_repo_ref = config.update_repo_ref if isinstance(config, HubConfig) else None
     async def _run() -> None:
         service = TelegramBotService(
             telegram_cfg,
@@ -743,10 +758,46 @@ def telegram_start(
             ),
             voice_config=voice_config,
             update_repo_url=update_repo_url,
+            update_repo_ref=update_repo_ref,
         )
         await service.run_polling()
 
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except TelegramBotLockError as exc:
+        raise typer.Exit(str(exc))
+
+
+@telegram_app.command("health")
+def telegram_health(
+    path: Optional[Path] = typer.Option(None, "--path", help="Repo or hub root path"),
+    timeout: float = typer.Option(5.0, "--timeout", help="Timeout (seconds)"),
+):
+    """Check Telegram API connectivity for the configured bot."""
+    try:
+        config = load_config(path or Path.cwd())
+    except ConfigError as exc:
+        raise typer.Exit(str(exc))
+    telegram_cfg = TelegramBotConfig.from_raw(
+        config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
+        root=config.root,
+    )
+    if not telegram_cfg.enabled:
+        raise typer.Exit("telegram_bot is disabled; set telegram_bot.enabled: true")
+    if not telegram_cfg.bot_token:
+        raise typer.Exit(f"missing bot token env '{telegram_cfg.bot_token_env}'")
+    timeout_seconds = max(float(timeout), 0.1)
+
+    async def _run() -> None:
+        async with TelegramBotClient(telegram_cfg.bot_token) as client:
+            await asyncio.wait_for(client.get_me(), timeout=timeout_seconds)
+
+    try:
+        asyncio.run(_run())
+    except TelegramAPIError as exc:
+        raise typer.Exit(f"Telegram health check failed: {exc}")
+    except Exception as exc:
+        raise typer.Exit(f"Telegram health check failed: {exc}")
 
 
 if __name__ == "__main__":

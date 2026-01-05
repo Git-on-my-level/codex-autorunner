@@ -89,6 +89,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
         "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
         "parse_mode": "HTML",
+        "debug": {
+            "prefix_context": False,
+        },
         "allowed_chat_ids": [],
         "allowed_user_ids": [],
         "require_topics": True,
@@ -174,6 +177,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
         "chat_id_env": "CAR_TELEGRAM_CHAT_ID",
         "parse_mode": "HTML",
+        "debug": {
+            "prefix_context": False,
+        },
         "allowed_chat_ids": [],
         "allowed_user_ids": [],
         "require_topics": True,
@@ -218,6 +224,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "auto_init_missing": True,
         # Where to pull system updates from (defaults to main upstream)
         "update_repo_url": "https://github.com/Git-on-my-level/codex-autorunner.git",
+        "update_repo_ref": "main",
         "log": {
             "path": ".codex-autorunner/codex-autorunner-hub.log",
             "max_bytes": 10_000_000,
@@ -292,6 +299,7 @@ class HubConfig:
     discover_depth: int
     auto_init_missing: bool
     update_repo_url: str
+    update_repo_ref: str
     server_host: str
     server_port: int
     server_base_path: str
@@ -541,6 +549,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         discover_depth=int(hub_cfg["discover_depth"]),
         auto_init_missing=bool(hub_cfg["auto_init_missing"]),
         update_repo_url=str(hub_cfg.get("update_repo_url", "")),
+        update_repo_ref=str(hub_cfg.get("update_repo_ref", "main")),
         server_host=str(cfg["server"]["host"]),
         server_port=int(cfg["server"]["port"]),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
@@ -716,6 +725,29 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(
                     "notifications.telegram.chat_id_env must be a string"
                 )
+            if "thread_id_env" in telegram_cfg and not isinstance(
+                telegram_cfg.get("thread_id_env"), str
+            ):
+                raise ConfigError(
+                    "notifications.telegram.thread_id_env must be a string"
+                )
+            if "thread_id" in telegram_cfg:
+                thread_id = telegram_cfg.get("thread_id")
+                if thread_id is not None and not isinstance(thread_id, int):
+                    raise ConfigError(
+                        "notifications.telegram.thread_id must be an integer or null"
+                    )
+            if "thread_id_map" in telegram_cfg:
+                thread_id_map = telegram_cfg.get("thread_id_map")
+                if not isinstance(thread_id_map, dict):
+                    raise ConfigError(
+                        "notifications.telegram.thread_id_map must be a mapping"
+                    )
+                for key, value in thread_id_map.items():
+                    if not isinstance(key, str) or not isinstance(value, int):
+                        raise ConfigError(
+                            "notifications.telegram.thread_id_map must map strings to integers"
+                        )
     terminal_cfg = cfg.get("terminal")
     if terminal_cfg is not None:
         if not isinstance(terminal_cfg, dict):
@@ -776,6 +808,10 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         hub_cfg.get("update_repo_url"), str
     ):
         raise ConfigError("hub.update_repo_url must be a string")
+    if "update_repo_ref" in hub_cfg and not isinstance(
+        hub_cfg.get("update_repo_ref"), str
+    ):
+        raise ConfigError("hub.update_repo_ref must be a string")
     log_cfg = hub_cfg.get("log")
     if not isinstance(log_cfg, dict):
         raise ConfigError("hub.log section must be a mapping")
@@ -828,6 +864,14 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(
                     "telegram_bot.parse_mode must be HTML, Markdown, MarkdownV2, or null"
                 )
+    debug_cfg = telegram_cfg.get("debug")
+    if debug_cfg is not None and not isinstance(debug_cfg, dict):
+        raise ConfigError("telegram_bot.debug must be a mapping if provided")
+    if isinstance(debug_cfg, dict):
+        if "prefix_context" in debug_cfg and not isinstance(
+            debug_cfg.get("prefix_context"), bool
+        ):
+            raise ConfigError("telegram_bot.debug.prefix_context must be boolean")
     for key in ("bot_token_env", "chat_id_env", "app_server_command_env"):
         if key in telegram_cfg and not isinstance(telegram_cfg.get(key), str):
             raise ConfigError(f"telegram_bot.{key} must be a string")

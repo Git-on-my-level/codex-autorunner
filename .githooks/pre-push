@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Git pre-push hook to catch syntax errors before pushing.
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$REPO_ROOT"
+
+python - <<'PY'
+import subprocess
+import py_compile
+
+files = subprocess.check_output(
+    ["git", "ls-files", "src/**/*.py"],
+    text=True,
+).splitlines()
+
+for path in files:
+    py_compile.compile(path, doraise=True)
+
+print("Python syntax check passed.")
+PY

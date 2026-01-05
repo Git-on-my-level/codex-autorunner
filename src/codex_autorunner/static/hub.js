@@ -665,6 +665,9 @@ function buildActions(repo) {
       title: "Remove worktree and delete branch",
     });
   }
+  if (kind === "base") {
+    actions.push({ key: "remove_repo", label: "Remove", kind: "danger" });
+  }
   return actions;
 }
 
@@ -905,13 +908,16 @@ async function refreshHub({ scan = false } = {}) {
   }
 }
 
-async function createRepo(repoId, repoPath, gitInit) {
+async function createRepo(repoId, repoPath, gitInit, gitUrl) {
   try {
-    const payload = { id: repoId };
+    const payload = {};
+    if (repoId) payload.id = repoId;
     if (repoPath) payload.path = repoPath;
     payload.git_init = gitInit;
+    if (gitUrl) payload.git_url = gitUrl;
     await api("/hub/repos", { method: "POST", body: payload });
-    flash(`Created repo: ${repoId}`);
+    const label = repoId || repoPath || "repo";
+    flash(`Created repo: ${label}`);
     await refreshHub();
     return true;
   } catch (err) {
@@ -931,6 +937,8 @@ function showCreateRepoModal() {
     }
     const pathInput = document.getElementById("create-repo-path");
     if (pathInput) pathInput.value = "";
+    const urlInput = document.getElementById("create-repo-url");
+    if (urlInput) urlInput.value = "";
     const gitCheck = document.getElementById("create-repo-git");
     if (gitCheck) gitCheck.checked = true;
   }
@@ -944,18 +952,20 @@ function hideCreateRepoModal() {
 async function handleCreateRepoSubmit() {
   const idInput = document.getElementById("create-repo-id");
   const pathInput = document.getElementById("create-repo-path");
+  const urlInput = document.getElementById("create-repo-url");
   const gitCheck = document.getElementById("create-repo-git");
 
   const repoId = idInput?.value?.trim();
   const repoPath = pathInput?.value?.trim() || null;
+  const gitUrl = urlInput?.value?.trim() || null;
   const gitInit = gitCheck?.checked ?? true;
 
-  if (!repoId) {
-    flash("Repo ID is required", "error");
+  if (!repoId && !gitUrl) {
+    flash("Repo ID or Git URL is required", "error");
     return;
   }
 
-  const ok = await createRepo(repoId, repoPath, gitInit);
+  const ok = await createRepo(repoId, repoPath, gitInit, gitUrl);
   if (ok) {
     hideCreateRepoModal();
   }
@@ -1002,6 +1012,75 @@ async function handleRepoAction(repoId, action) {
         body: { worktree_repo_id: repoId },
       });
       flash(`Removed worktree: ${repoId}`);
+      await refreshHub();
+      return;
+    }
+    if (action === "remove_repo") {
+      const check = await api(`/hub/repos/${repoId}/remove-check`, {
+        method: "GET",
+      });
+      const warnings = [];
+      const dirty = check?.is_clean === false;
+      if (dirty) {
+        warnings.push("Working tree has uncommitted changes.");
+      }
+      const hasUpstream = check?.upstream?.has_upstream;
+      if (hasUpstream === false) {
+        warnings.push("No upstream tracking branch is configured.");
+      }
+      const ahead = Number(check?.upstream?.ahead || 0);
+      if (ahead > 0) {
+        warnings.push(
+          `Local branch is ahead of upstream by ${ahead} commit(s).`
+        );
+      }
+      const behind = Number(check?.upstream?.behind || 0);
+      if (behind > 0) {
+        warnings.push(
+          `Local branch is behind upstream by ${behind} commit(s).`
+        );
+      }
+      const worktrees = Array.isArray(check?.worktrees) ? check.worktrees : [];
+      if (worktrees.length) {
+        warnings.push(`This repo has ${worktrees.length} worktree(s).`);
+      }
+
+      const messageParts = [
+        `Remove repo "${repoId}" and delete its local directory?`,
+      ];
+      if (warnings.length) {
+        messageParts.push("", "Warnings:", ...warnings.map((w) => `- ${w}`));
+      }
+      if (worktrees.length) {
+        messageParts.push(
+          "",
+          "Worktrees to delete:",
+          ...worktrees.map((w) => `- ${w}`)
+        );
+      }
+
+      const ok = await confirmModal(messageParts.join("\n"), {
+        confirmText: "Remove",
+        danger: true,
+      });
+      if (!ok) return;
+      const needsForce = dirty || ahead > 0;
+      if (needsForce) {
+        const forceOk = await confirmModal(
+          "This repo has uncommitted or unpushed changes. Remove anyway?",
+          { confirmText: "Remove anyway", danger: true }
+        );
+        if (!forceOk) return;
+      }
+      await api(`/hub/repos/${repoId}/remove`, {
+        method: "POST",
+        body: {
+          force: needsForce,
+          delete_dir: true,
+          delete_worktrees: worktrees.length > 0,
+        },
+      });
+      flash(`Removed repo: ${repoId}`);
       await refreshHub();
       return;
     }

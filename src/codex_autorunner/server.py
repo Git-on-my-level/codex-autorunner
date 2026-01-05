@@ -216,20 +216,25 @@ class RunnerManager:
             self.engine.kill_running_process()
 
 
-def _static_dir() -> tuple[Path, ExitStack]:
+def _static_dir() -> tuple[Path, Optional[ExitStack]]:
+    static_root = resources.files("codex_autorunner").joinpath("static")
+    if isinstance(static_root, Path):
+        if static_root.exists():
+            return static_root, None
+        fallback = Path(__file__).resolve().parent / "static"
+        return fallback, None
     stack = ExitStack()
-    static_resource = resources.files("codex_autorunner") / "static"
     try:
-        static_dir = stack.enter_context(resources.as_file(static_resource))
+        static_path = stack.enter_context(resources.as_file(static_root))
     except Exception:
         stack.close()
-        static_dir = Path(__file__).resolve().parent / "static"
-        return static_dir, ExitStack()
-    if static_dir.exists():
-        return static_dir, stack
+        fallback = Path(__file__).resolve().parent / "static"
+        return fallback, None
+    if static_path.exists():
+        return static_path, stack
     stack.close()
     fallback = Path(__file__).resolve().parent / "static"
-    return fallback, ExitStack()
+    return fallback, None
 
 
 def _require_static_assets(static_dir: Path, logger: logging.Logger) -> None:
@@ -395,14 +400,15 @@ def create_app(
             terminal_max_idle_seconds,
         )
 
-    static_dir, static_stack = _static_dir()
+    static_dir, static_context = _static_dir()
     try:
         _require_static_assets(static_dir, app.state.logger)
     except Exception:
-        static_stack.close()
+        if static_context is not None:
+            static_context.close()
         raise
     app.state.static_dir = static_dir
-    app.state.static_stack = static_stack
+    app.state.static_assets_context = static_context
     app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     # Route handlers
@@ -481,9 +487,9 @@ def create_app(
                 app.state.session_registry,
                 app.state.repo_to_session,
             )
-        static_stack = getattr(app.state, "static_stack", None)
-        if static_stack is not None:
-            static_stack.close()
+        static_context = getattr(app.state, "static_assets_context", None)
+        if static_context is not None:
+            static_context.close()
 
     if base_path:
         app = BasePathRouterMiddleware(app, base_path)
@@ -513,14 +519,15 @@ def create_hub_app(
         logging.INFO,
         f"Hub app ready at {config.root}",
     )
-    static_dir, static_stack = _static_dir()
+    static_dir, static_context = _static_dir()
     try:
         _require_static_assets(static_dir, app.state.logger)
     except Exception:
-        static_stack.close()
+        if static_context is not None:
+            static_context.close()
         raise
     app.state.static_dir = static_dir
-    app.state.static_stack = static_stack
+    app.state.static_assets_context = static_context
     app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     mounted_repos: set[str] = set()
@@ -619,6 +626,9 @@ def create_hub_app(
                     )
                 except Exception:
                     pass
+        static_context = getattr(app.state, "static_assets_context", None)
+        if static_context is not None:
+            static_context.close()
 
     @app.get("/hub/usage")
     def hub_usage(since: Optional[str] = None, until: Optional[str] = None):
@@ -720,8 +730,9 @@ def create_hub_app(
             raise HTTPException(
                 status_code=400, detail="Request body must be a JSON object"
             )
+        git_url = payload.get("git_url") or payload.get("gitUrl")
         repo_id = payload.get("id") or payload.get("repo_id")
-        if not repo_id:
+        if not repo_id and not git_url:
             raise HTTPException(status_code=400, detail="Missing repo id")
         repo_path_val = payload.get("path")
         repo_path = Path(repo_path_val) if repo_path_val else None
@@ -730,17 +741,59 @@ def create_hub_app(
         safe_log(
             app.state.logger,
             logging.INFO,
-            "Hub create repo id=%s path=%s git_init=%s force=%s"
-            % (repo_id, repo_path_val, git_init, force),
+            "Hub create repo id=%s path=%s git_init=%s force=%s git_url=%s"
+            % (repo_id, repo_path_val, git_init, force, bool(git_url)),
         )
         try:
-            snapshot = supervisor.create_repo(
-                str(repo_id), repo_path=repo_path, git_init=git_init, force=force
-            )
+            if git_url:
+                snapshot = supervisor.clone_repo(
+                    git_url=str(git_url),
+                    repo_id=str(repo_id) if repo_id else None,
+                    repo_path=repo_path,
+                    force=force,
+                )
+            else:
+                snapshot = supervisor.create_repo(
+                    str(repo_id), repo_path=repo_path, git_init=git_init, force=force
+                )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(config.root))
+
+    @app.get("/hub/repos/{repo_id}/remove-check")
+    async def remove_repo_check(repo_id: str):
+        safe_log(app.state.logger, logging.INFO, f"Hub remove-check {repo_id}")
+        try:
+            return supervisor.check_repo_removal(repo_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/hub/repos/{repo_id}/remove")
+    async def remove_repo(repo_id: str, payload: Optional[dict] = None):
+        force = False
+        delete_dir = True
+        delete_worktrees = False
+        if payload and isinstance(payload, dict):
+            force = bool(payload.get("force", False))
+            delete_dir = bool(payload.get("delete_dir", True))
+            delete_worktrees = bool(payload.get("delete_worktrees", False))
+        safe_log(
+            app.state.logger,
+            logging.INFO,
+            "Hub remove repo id=%s force=%s delete_dir=%s delete_worktrees=%s"
+            % (repo_id, force, delete_dir, delete_worktrees),
+        )
+        try:
+            supervisor.remove_repo(
+                repo_id,
+                force=force,
+                delete_dir=delete_dir,
+                delete_worktrees=delete_worktrees,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"status": "ok"}
 
     @app.post("/hub/worktrees/create")
     async def create_worktree(payload: Optional[dict] = None):
@@ -877,9 +930,9 @@ def create_hub_app(
 
     @app.on_event("shutdown")
     async def shutdown_static_stack():
-        static_stack = getattr(app.state, "static_stack", None)
-        if static_stack is not None:
-            static_stack.close()
+        static_context = getattr(app.state, "static_assets_context", None)
+        if static_context is not None:
+            static_context.close()
 
     app.include_router(build_system_routes())
 

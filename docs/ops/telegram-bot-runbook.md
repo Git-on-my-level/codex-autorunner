@@ -58,6 +58,12 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 
 ## Troubleshooting
 
+- Resume preview missing assistant message:
+  - The app-server thread metadata only includes a single `preview` field (often the first user message).
+  - The Telegram bot augments resume previews by reading the rollout JSONL path when available.
+  - Rollout JSONL lines wrap content under a top-level `payload` key; ensure preview extraction descends into `payload`.
+  - If the rollout path is unavailable (remote app-server), consider adding assistant preview fields to the app-server `Thread` schema.
+
 - No response in Telegram:
   - Confirm `CAR_TELEGRAM_BOT_TOKEN` and `CAR_TELEGRAM_CHAT_ID` are set.
   - Confirm `telegram_bot.allowed_user_ids` contains your user id.

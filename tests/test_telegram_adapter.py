@@ -1,3 +1,7 @@
+import types
+
+import pytest
+
 from codex_autorunner.telegram_adapter import (
     ApprovalCallback,
     BindCallback,
@@ -27,6 +31,8 @@ from codex_autorunner.telegram_adapter import (
     parse_callback_data,
     parse_command,
     parse_update,
+    TelegramBotClient,
+    TELEGRAM_MAX_MESSAGE_LENGTH,
 )
 
 
@@ -278,6 +284,35 @@ def test_chunk_message_no_numbering() -> None:
 def test_chunk_message_empty() -> None:
     assert chunk_message("") == []
     assert chunk_message(None) == []
+
+
+@pytest.mark.anyio
+async def test_send_message_chunks_long_text() -> None:
+    client = TelegramBotClient("test-token")
+    calls: list[dict[str, object]] = []
+
+    async def fake_request(self, method: str, payload: dict[str, object]) -> object:
+        calls.append({"method": method, "payload": payload})
+        return {"message_id": len(calls)}
+
+    client._request = types.MethodType(fake_request, client)
+    try:
+        text = "x" * (TELEGRAM_MAX_MESSAGE_LENGTH + 5)
+        response = await client.send_message(
+            123,
+            text,
+            reply_markup={"inline_keyboard": [[{"text": "OK", "callback_data": "ok"}]]},
+            parse_mode="Markdown",
+        )
+    finally:
+        await client.close()
+
+    assert response.get("message_id") == 1
+    assert len(calls) == 2
+    first_payload = calls[0]["payload"]
+    second_payload = calls[1]["payload"]
+    assert "reply_markup" in first_payload
+    assert "reply_markup" not in second_payload
 
 
 def test_callback_encoding_and_parsing() -> None:

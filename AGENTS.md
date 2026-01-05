@@ -28,6 +28,11 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 - serve (API/UI)
 - hub: `car hub serve|scan|create` (worktrees via UI/API)
 
+## Safe updates (launchd mac hub)
+- Preferred path: `scripts/safe-refresh-local-mac-hub.sh` (staged venv swap, launchd reload, `/health` + static/telegram checks, rollback on failure).
+- `/system/update` and Telegram `/update` use the safe refresh script when available.
+- Common overrides: `UPDATE_TARGET=web|telegram|both`, `HEALTH_CHECK_STATIC=auto|true|false`, `HEALTH_CHECK_TELEGRAM=auto|true|false`, `HEALTH_PATH`, `HEALTH_STATIC_PATH`.
+
 ## Debugging
 - Telegram troubleshooting guide: `docs/ops/telegram-debugging.md`
 

@@ -21,6 +21,7 @@ def _build_logger(log_path: Path) -> logging.Logger:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run codex-autorunner update worker.")
     parser.add_argument("--repo-url", required=True)
+    parser.add_argument("--repo-ref", default="main")
     parser.add_argument("--update-dir", required=True)
     parser.add_argument("--log-path", required=True)
     parser.add_argument("--target", default="both")
@@ -33,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _system_update_worker(
         repo_url=args.repo_url,
+        repo_ref=args.repo_ref,
         update_dir=update_dir,
         logger=logger,
         update_target=args.target,

@@ -62,6 +62,24 @@ class FixtureServer:
             params["approvalDecision"] = approval_decision
         self.send({"method": "turn/completed", "params": params})
 
+    def _send_review_completed(
+        self, turn_id: str, *, status: str = "completed"
+    ) -> None:
+        self.send(
+            {
+                "method": "item/completed",
+                "params": {
+                    "turnId": turn_id,
+                    "item": {
+                        "type": "agentMessage",
+                        "text": "fixture reply",
+                        "review": "fixture reply",
+                    },
+                },
+            }
+        )
+        self.send({"method": "turn/completed", "params": {"turnId": turn_id, "status": status}})
+
     def _handle_request(self, message: dict) -> None:
         req_id = message.get("id")
         method = message.get("method")
@@ -84,6 +102,32 @@ class FixtureServer:
         if method == "thread/list":
             if self._scenario == "thread_list_requires_params" and "params" not in message:
                 self._send_error(req_id, "Invalid request: missing field `params`")
+                return
+            if self._scenario in ("thread_list_empty", "thread_list_empty_refresh"):
+                self.send(
+                    {
+                        "id": req_id,
+                        "result": {"threads": [], "nextCursor": None},
+                    }
+                )
+                return
+            if self._scenario == "thread_list_paged":
+                cursor = params.get("cursor")
+                if cursor:
+                    entries = [
+                        {"id": "thread-2", "preview": "fixture preview 2"},
+                        {"id": "thread-3", "preview": "fixture preview 3"},
+                    ]
+                    next_cursor = None
+                else:
+                    entries = [{"id": "thread-1", "preview": "fixture preview 1"}]
+                    next_cursor = "cursor-2"
+                self.send(
+                    {
+                        "id": req_id,
+                        "result": {"threads": entries, "nextCursor": next_cursor},
+                    }
+                )
                 return
             cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else None
             entry = {
@@ -141,7 +185,15 @@ class FixtureServer:
             return
         if method == "thread/resume":
             thread_id = params.get("threadId")
-            self.send({"id": req_id, "result": {"id": thread_id}})
+            if self._scenario == "thread_list_empty_refresh":
+                self.send(
+                    {
+                        "id": req_id,
+                        "result": {"id": thread_id, "preview": "refreshed preview"},
+                    }
+                )
+            else:
+                self.send({"id": req_id, "result": {"id": thread_id}})
             return
         if method == "turn/start":
             turn_id = f"turn-{self._next_turn}"
@@ -155,6 +207,25 @@ class FixtureServer:
                 ):
                     self._send_error(req_id, "invalid sandboxPolicy")
                     return
+            if self._scenario == "turn_error_no_agent":
+                self.send(
+                    {
+                        "method": "error",
+                        "params": {
+                            "turnId": turn_id,
+                            "threadId": params.get("threadId"),
+                            "willRetry": False,
+                            "error": {"message": "Auth required"},
+                        },
+                    }
+                )
+                self.send(
+                    {
+                        "method": "turn/completed",
+                        "params": {"turnId": turn_id, "status": "failed"},
+                    }
+                )
+                return
             if self._scenario == "approval":
                 approval_id = self._next_approval
                 self._next_approval += 1
@@ -175,6 +246,15 @@ class FixtureServer:
                 self._pending_interrupts.add(turn_id)
                 return
             self._send_turn_completed(turn_id)
+            return
+        if method == "review/start":
+            turn_id = f"turn-{self._next_turn}"
+            self._next_turn += 1
+            self.send({"id": req_id, "result": {"id": turn_id}})
+            if self._scenario == "review_duplicate":
+                self._send_review_completed(turn_id)
+            else:
+                self._send_turn_completed(turn_id)
             return
         if method == "turn/interrupt":
             turn_id = params.get("turnId")

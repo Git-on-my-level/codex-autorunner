@@ -17,6 +17,18 @@ def find_repo_root(start: Path) -> Path:
     raise RepoNotFoundError("Could not find .git directory in current or parent paths")
 
 
+def canonicalize_path(path: Path) -> Path:
+    return path.expanduser().resolve()
+
+
+def is_within(root: Path, target: Path) -> bool:
+    try:
+        target.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")

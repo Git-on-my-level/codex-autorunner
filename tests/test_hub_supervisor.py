@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG, load_config
 from codex_autorunner.engine import Engine
+from codex_autorunner.git_utils import run_git
 from codex_autorunner.hub import HubSupervisor, RepoStatus
 from codex_autorunner.server import create_hub_app
 
@@ -16,6 +17,26 @@ from codex_autorunner.server import create_hub_app
 def _write_config(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def _init_git_repo(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    run_git(["init"], path, check=True)
+    (path / "README.md").write_text("hello\n", encoding="utf-8")
+    run_git(["add", "README.md"], path, check=True)
+    run_git(
+        [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "init",
+        ],
+        path,
+        check=True,
+    )
 
 
 def test_scan_writes_hub_state(tmp_path: Path):
@@ -158,3 +179,57 @@ def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     for snap in snapshots:
         lock_path = snap.path / ".codex-autorunner" / "lock"
         assert not lock_path.exists()
+
+
+def test_hub_clone_repo_endpoint(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+
+    source_repo = tmp_path / "source"
+    _init_git_repo(source_repo)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/repos",
+        json={"git_url": str(source_repo), "id": "cloned"},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["id"] == "cloned"
+    repo_dir = hub_root / "cloned"
+    assert (repo_dir / ".git").exists()
+    assert (repo_dir / ".codex-autorunner" / "config.yml").exists()
+
+
+def test_hub_remove_repo_with_worktrees(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(load_config(hub_root))  # type: ignore[arg-type]
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(base_repo_id="base", branch="feature/test")
+
+    dirty_file = base.path / "DIRTY.txt"
+    dirty_file.write_text("dirty\n", encoding="utf-8")
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    check_resp = client.get("/hub/repos/base/remove-check")
+    assert check_resp.status_code == 200
+    check_payload = check_resp.json()
+    assert check_payload["is_clean"] is False
+    assert worktree.id in check_payload["worktrees"]
+
+    remove_resp = client.post(
+        "/hub/repos/base/remove",
+        json={"force": True, "delete_dir": True, "delete_worktrees": True},
+    )
+    assert remove_resp.status_code == 200
+    assert not base.path.exists()
+    assert not worktree.path.exists()

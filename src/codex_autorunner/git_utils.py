@@ -165,3 +165,43 @@ def git_status_porcelain(repo_root: Path) -> Optional[str]:
         return None
     return (proc.stdout or "").strip()
 
+
+def git_upstream_status(repo_root: Path) -> Optional[dict]:
+    """
+    Get upstream tracking status for the current branch.
+
+    Returns:
+        Dict with has_upstream, ahead, behind, or None if git is unavailable.
+    """
+    if not git_available(repo_root):
+        return None
+    try:
+        proc = run_git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            repo_root,
+            check=False,
+        )
+    except GitError:
+        return None
+    if proc.returncode != 0:
+        return {"has_upstream": False, "ahead": 0, "behind": 0}
+    proc = run_git(
+        ["rev-list", "--left-right", "--count", "HEAD...@{u}"],
+        repo_root,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return {"has_upstream": True, "ahead": 0, "behind": 0}
+    raw = (proc.stdout or "").strip()
+    ahead = 0
+    behind = 0
+    if raw:
+        parts = raw.split()
+        if len(parts) >= 2:
+            try:
+                ahead = int(parts[0])
+                behind = int(parts[1])
+            except ValueError:
+                ahead = 0
+                behind = 0
+    return {"has_upstream": True, "ahead": ahead, "behind": behind}

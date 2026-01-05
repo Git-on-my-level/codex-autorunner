@@ -28,6 +28,7 @@ def test_update_check_uses_update_cache_when_no_local_git(tmp_path: Path) -> Non
 
     result = _system_update_check(
         repo_url=str(remote),
+        repo_ref="main",
         module_dir=module_dir,
         update_cache_dir=local_cache,
     )
@@ -35,4 +36,3 @@ def test_update_check_uses_update_cache_when_no_local_git(tmp_path: Path) -> Non
     assert result["status"] == "ok"
     assert result["update_available"] is False
     assert result["message"].startswith("No update available")
-

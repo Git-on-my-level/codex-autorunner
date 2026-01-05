@@ -22,6 +22,9 @@ set -euo pipefail
 #   HEALTH_TIMEOUT_SECONDS seconds to wait for health (default: 30)
 #   HEALTH_INTERVAL_SECONDS poll interval (default: 0.5)
 #   HEALTH_PATH            request path (default: derived from base_path)
+#   HEALTH_STATIC_PATH     static asset path (default: derived from base_path)
+#   HEALTH_CHECK_STATIC    static asset check (auto|true|false; default: auto)
+#   HEALTH_CHECK_TELEGRAM  telegram launchd check (auto|true|false; default: auto)
 #   HEALTH_CONNECT_TIMEOUT_SECONDS connection timeout for each health request (default: 2)
 #   HEALTH_REQUEST_TIMEOUT_SECONDS total timeout for each health request (default: 5)
 #   KEEP_OLD_VENVS         how many old next-* venvs to keep (default: 3)
@@ -42,22 +45,30 @@ PIPX_VENV="${PIPX_VENV:-$PIPX_ROOT/venvs/codex-autorunner}"
 PIPX_PYTHON="${PIPX_PYTHON:-$PIPX_VENV/bin/python}"
 CURRENT_VENV_LINK="${CURRENT_VENV_LINK:-$PIPX_ROOT/venvs/codex-autorunner.current}"
 PREV_VENV_LINK="${PREV_VENV_LINK:-$PIPX_ROOT/venvs/codex-autorunner.prev}"
+HELPER_PYTHON="${HELPER_PYTHON:-$PIPX_PYTHON}"
 
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
 HEALTH_CONNECT_TIMEOUT_SECONDS="${HEALTH_CONNECT_TIMEOUT_SECONDS:-2}"
 HEALTH_REQUEST_TIMEOUT_SECONDS="${HEALTH_REQUEST_TIMEOUT_SECONDS:-5}"
 HEALTH_PATH="${HEALTH_PATH:-}"
+HEALTH_STATIC_PATH="${HEALTH_STATIC_PATH:-}"
+HEALTH_CHECK_STATIC="${HEALTH_CHECK_STATIC:-auto}"
+HEALTH_CHECK_TELEGRAM="${HEALTH_CHECK_TELEGRAM:-auto}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
+
+current_target=""
+swap_completed=false
+rollback_completed=false
 
 write_status() {
   local status message
   status="$1"
   message="$2"
-  if [[ -z "${UPDATE_STATUS_PATH}" ]]; then
+  if [[ -z "${UPDATE_STATUS_PATH}" || ! -x "${HELPER_PYTHON}" ]]; then
     return 0
   fi
-  "${PIPX_PYTHON}" - <<PY
+  "${HELPER_PYTHON}" - <<PY
 import json, pathlib, time
 path = pathlib.Path("${UPDATE_STATUS_PATH}")
 path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +103,40 @@ normalize_update_target() {
   esac
 }
 
+normalize_bool() {
+  local raw
+  raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    1|true|yes|y|on)
+      echo "true"
+      ;;
+    0|false|no|n|off)
+      echo "false"
+      ;;
+    ""|auto)
+      echo "auto"
+      ;;
+    *)
+      echo "auto"
+      ;;
+  esac
+}
+
+if [[ ! -x "${HELPER_PYTHON}" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    HELPER_PYTHON="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    HELPER_PYTHON="$(command -v python)"
+  fi
+fi
+
+if [[ ! -x "${HELPER_PYTHON}" ]]; then
+  fail "Python not found (set PIPX_PYTHON or HELPER_PYTHON)."
+fi
+
 UPDATE_TARGET="$(normalize_update_target "${UPDATE_TARGET}")"
+HEALTH_CHECK_STATIC="$(normalize_bool "${HEALTH_CHECK_STATIC}")"
+HEALTH_CHECK_TELEGRAM="$(normalize_bool "${HEALTH_CHECK_TELEGRAM}")"
 should_reload_hub=false
 should_reload_telegram=false
 case "${UPDATE_TARGET}" in
@@ -112,12 +156,30 @@ if [[ ! -f "${PLIST_PATH}" ]]; then
   fail "LaunchAgent plist not found at ${PLIST_PATH}. Run scripts/install-local-mac-hub.sh or scripts/launchd-hub.sh (or set PLIST_PATH)."
 fi
 
-if [[ ! -d "${PIPX_VENV}" ]]; then
-  fail "Expected pipx venv not found at ${PIPX_VENV}. Run scripts/install-local-mac-hub.sh (or set PIPX_VENV)."
-fi
+_realpath() {
+  "${HELPER_PYTHON}" - "$1" <<'PY'
+import os
+import sys
 
-if [[ ! -x "${PIPX_PYTHON}" ]]; then
-  fail "Python not found at ${PIPX_PYTHON}."
+try:
+    print(os.path.realpath(sys.argv[1]))
+except Exception:
+    pass
+PY
+}
+
+if [[ ! -d "${PIPX_VENV}" ]]; then
+  if [[ -L "${CURRENT_VENV_LINK}" ]]; then
+    current_target="$(_realpath "${CURRENT_VENV_LINK}")"
+    if [[ -n "${current_target}" && -d "${current_target}" ]]; then
+      echo "PIPX_VENV not found; using ${current_target} as current venv."
+      PIPX_VENV="${current_target}"
+    else
+      fail "Expected pipx venv not found at ${PIPX_VENV}."
+    fi
+  else
+    fail "Expected pipx venv not found at ${PIPX_VENV}."
+  fi
 fi
 
 for cmd in git launchctl curl; do
@@ -131,13 +193,16 @@ if [[ ! -L "${CURRENT_VENV_LINK}" ]]; then
   ln -sfn "${PIPX_VENV}" "${CURRENT_VENV_LINK}"
 fi
 
-current_target="$("${PIPX_PYTHON}" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${CURRENT_VENV_LINK}")"
+current_target="$(_realpath "${CURRENT_VENV_LINK}")"
+if [[ -z "${current_target}" ]]; then
+  fail "Unable to resolve current venv from ${CURRENT_VENV_LINK}."
+fi
 
 ts="$(date +%Y%m%d-%H%M%S)"
 next_venv="${PIPX_ROOT}/venvs/codex-autorunner.next-${ts}"
 
-echo "Creating staged venv at ${next_venv} (python: ${PIPX_PYTHON})..."
-"${PIPX_PYTHON}" -m venv "${next_venv}"
+echo "Creating staged venv at ${next_venv} (python: ${HELPER_PYTHON})..."
+"${HELPER_PYTHON}" -m venv "${next_venv}"
 "${next_venv}/bin/python" -m pip -q install --upgrade pip
 
 echo "Installing codex-autorunner from ${PACKAGE_SRC} into staged venv..."
@@ -145,6 +210,17 @@ echo "Installing codex-autorunner from ${PACKAGE_SRC} into staged venv..."
 
 echo "Smoke-checking staged venv imports..."
 "${next_venv}/bin/python" -c "import codex_autorunner; from codex_autorunner.server import create_hub_app; print('ok')"
+echo "Smoke-checking telegram module..."
+"${next_venv}/bin/python" - <<'PY'
+import importlib.util
+import py_compile
+
+spec = importlib.util.find_spec("codex_autorunner.telegram_bot")
+if spec is None or spec.origin is None:
+    raise SystemExit("telegram_bot module not found in staged venv")
+py_compile.compile(spec.origin, doraise=True)
+print("telegram_bot ok")
+PY
 
 domain="gui/$(id -u)/${LABEL}"
 
@@ -157,7 +233,7 @@ _ensure_plist_uses_current_venv() {
   fi
 
   echo "Updating plist to use ${desired_bin}..."
-  "${PIPX_PYTHON}" - <<PY
+  "${HELPER_PYTHON}" - <<PY
 from __future__ import annotations
 
 from pathlib import Path
@@ -190,6 +266,12 @@ PY
 
 _service_pid() {
   launchctl print "${domain}" 2>/dev/null | awk '/pid =/ {print $3; exit}'
+}
+
+_telegram_service_pid() {
+  local telegram_domain
+  telegram_domain="gui/$(id -u)/${TELEGRAM_LABEL}"
+  launchctl print "${telegram_domain}" 2>/dev/null | awk '/pid =/ {print $3; exit}'
 }
 
 _wait_pid_exit() {
@@ -259,7 +341,7 @@ _reload_telegram() {
 _plist_arg_value() {
   local key
   key="$1"
-  "${PIPX_PYTHON}" - "$key" "${PLIST_PATH}" <<'PY'
+  "${HELPER_PYTHON}" - "$key" "${PLIST_PATH}" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -328,7 +410,7 @@ _ensure_telegram_plist_uses_current_venv() {
   fi
 
   echo "Updating telegram plist to use ${desired_bin}..."
-  "${PIPX_PYTHON}" - <<PY
+  "${HELPER_PYTHON}" - <<PY
 from __future__ import annotations
 
 import plistlib
@@ -426,7 +508,7 @@ _normalize_base_path() {
 _config_base_path() {
   local root
   root="$1"
-  "${PIPX_PYTHON}" - "$root" <<'PY'
+  "${HELPER_PYTHON}" - "$root" <<'PY'
 import sys
 from pathlib import Path
 
@@ -476,17 +558,52 @@ if [[ -z "${HEALTH_PATH}" ]]; then
   base_path="$(_detect_base_path)"
   if [[ -n "${base_path}" ]]; then
     HEALTH_PATH="${base_path}/health"
+    if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
+      HEALTH_STATIC_PATH="${base_path}/static/app.js"
+    fi
   else
     HEALTH_PATH="/health"
+    if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
+      HEALTH_STATIC_PATH="/static/app.js"
+    fi
   fi
 fi
 
 if [[ "${HEALTH_PATH:0:1}" != "/" ]]; then
   HEALTH_PATH="/${HEALTH_PATH}"
 fi
+if [[ -n "${HEALTH_STATIC_PATH}" && "${HEALTH_STATIC_PATH:0:1}" != "/" ]]; then
+  HEALTH_STATIC_PATH="/${HEALTH_STATIC_PATH}"
+fi
+
+_should_check_static() {
+  if [[ "${HEALTH_CHECK_STATIC}" == "false" ]]; then
+    return 1
+  fi
+  if [[ "${HEALTH_CHECK_STATIC}" == "true" ]]; then
+    return 0
+  fi
+  [[ -n "${HEALTH_STATIC_PATH}" ]]
+}
+
+_should_check_telegram() {
+  local hub_root telegram_state
+  if [[ "${HEALTH_CHECK_TELEGRAM}" == "false" ]]; then
+    return 1
+  fi
+  if [[ "${HEALTH_CHECK_TELEGRAM}" == "true" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${TELEGRAM_PLIST_PATH}" ]]; then
+    return 1
+  fi
+  hub_root="$(_plist_arg_value path)"
+  telegram_state="$(_telegram_state "${hub_root}")"
+  [[ "${telegram_state}" != "disabled" ]]
+}
 
 _health_check_once() {
-  local port url
+  local port url static_url
   port="$(_plist_arg_value port)"
   if [[ -z "${port}" ]]; then
     port="4173"
@@ -496,6 +613,12 @@ _health_check_once() {
   curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
     --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
     "${url}" >/dev/null 2>&1
+  if _should_check_static; then
+    static_url="http://127.0.0.1:${port}${HEALTH_STATIC_PATH}"
+    curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
+      --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
+      "${static_url}" >/dev/null 2>&1
+  fi
 }
 
 _wait_healthy() {
@@ -513,11 +636,104 @@ _wait_healthy() {
   done
 }
 
+_telegram_check_once() {
+  local hub_root telegram_cmd
+  hub_root="$(_plist_arg_value path)"
+  if [[ -z "${hub_root}" ]]; then
+    return 1
+  fi
+  telegram_cmd="${CURRENT_VENV_LINK}/bin/codex-autorunner"
+  if [[ ! -x "${telegram_cmd}" ]]; then
+    return 1
+  fi
+  "${telegram_cmd}" telegram health \
+    --path "${hub_root}" \
+    --timeout "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
+    >/dev/null 2>&1
+}
+
+_wait_telegram_healthy() {
+  local start now
+  start="$(date +%s)"
+  while true; do
+    if _telegram_check_once; then
+      return 0
+    fi
+    now="$(date +%s)"
+    if (( now - start >= HEALTH_TIMEOUT_SECONDS )); then
+      return 1
+    fi
+    sleep "${HEALTH_INTERVAL_SECONDS}"
+  done
+}
+
+_check_hub_health() {
+  if [[ "${should_reload_hub}" != "true" ]]; then
+    echo "Skipping hub health check (update target: ${UPDATE_TARGET})."
+    return 0
+  fi
+  if _wait_healthy; then
+    echo "Hub health check OK."
+    return 0
+  fi
+  echo "Hub health check failed." >&2
+  return 1
+}
+
+_check_telegram_health() {
+  if [[ "${should_reload_telegram}" != "true" ]]; then
+    return 0
+  fi
+  if ! _should_check_telegram; then
+    echo "Skipping telegram health check."
+    return 0
+  fi
+  if _wait_telegram_healthy; then
+    echo "Telegram health check OK."
+    return 0
+  fi
+  echo "Telegram health check failed." >&2
+  return 1
+}
+
+_rollback() {
+  local message
+  message="$1"
+  if [[ "${rollback_completed}" == "true" ]]; then
+    return 0
+  fi
+  rollback_completed=true
+  echo "${message}" >&2
+  ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
+  if [[ "${should_reload_hub}" == "true" ]]; then
+    _reload || true
+  fi
+  if [[ "${should_reload_telegram}" == "true" ]]; then
+    _reload_telegram || true
+  fi
+}
+
+_on_exit() {
+  local status
+  status="$1"
+  if [[ "${status}" -eq 0 ]]; then
+    return 0
+  fi
+  if [[ "${swap_completed}" != "true" || "${rollback_completed}" == "true" ]]; then
+    return 0
+  fi
+  _rollback "Update failed; rolling back to ${current_target}..."
+  write_status "rollback" "Update failed; rollback attempted."
+}
+
+trap '_on_exit $?' EXIT
+
 echo "Switching ${PREV_VENV_LINK} -> ${current_target}"
 ln -sfn "${current_target}" "${PREV_VENV_LINK}"
 
 echo "Switching ${CURRENT_VENV_LINK} -> ${next_venv}"
 ln -sfn "${next_venv}" "${CURRENT_VENV_LINK}"
+swap_completed=true
 
 if [[ "${should_reload_hub}" == "true" ]]; then
   echo "Restarting launchd service ${LABEL}..."
@@ -528,34 +744,30 @@ if [[ "${should_reload_telegram}" == "true" ]]; then
   _reload_telegram
 fi
 
-if [[ "${should_reload_hub}" != "true" ]]; then
-  echo "Skipping hub health check (update target: ${UPDATE_TARGET})."
+health_ok=true
+if ! _check_hub_health; then
+  health_ok=false
+fi
+if ! _check_telegram_health; then
+  health_ok=false
+fi
+
+if [[ "${health_ok}" == "true" ]]; then
+  echo "Health check OK; update successful."
   write_status "ok" "Update completed successfully."
 else
-  if _wait_healthy; then
-    echo "Health check OK; update successful."
-    write_status "ok" "Update completed successfully."
+  _rollback "Health check failed; rolling back to ${current_target}..."
+  if _check_hub_health && _check_telegram_health; then
+    echo "Rollback OK; service restored." >&2
+    write_status "rollback" "Update failed; rollback succeeded."
   else
-    echo "Health check failed; rolling back to ${current_target}..." >&2
-    ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
-    if [[ "${should_reload_hub}" == "true" ]]; then
-      _reload || true
-    fi
-    if [[ "${should_reload_telegram}" == "true" ]]; then
-      _reload_telegram || true
-    fi
-    if _wait_healthy; then
-      echo "Rollback OK; service restored." >&2
-      write_status "rollback" "Update failed; rollback succeeded."
-    else
-      echo "Rollback failed; service still unhealthy. Check logs and launchctl state:" >&2
-      echo "  tail -n 200 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log" >&2
-      echo "  launchctl print ${domain}" >&2
-      write_status "error" "Update failed and rollback did not recover the service."
-      exit 2
-    fi
-    exit 1
+    echo "Rollback failed; service still unhealthy. Check logs and launchctl state:" >&2
+    echo "  tail -n 200 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log" >&2
+    echo "  launchctl print ${domain}" >&2
+    write_status "error" "Update failed and rollback did not recover the service."
+    exit 2
   fi
+  exit 1
 fi
 
 echo "Pruning old staged venvs (keeping ${KEEP_OLD_VENVS})..."
@@ -571,14 +783,14 @@ else
   to_delete=()
 fi
 
-current_real="$("${PIPX_PYTHON}" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${CURRENT_VENV_LINK}")"
-prev_real="$("${PIPX_PYTHON}" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${PREV_VENV_LINK}" 2>/dev/null || true)"
+current_real="$(_realpath "${CURRENT_VENV_LINK}")"
+prev_real="$(_realpath "${PREV_VENV_LINK}")"
 
 printf '%s\n' "${to_delete[@]:-}" | while read -r old; do
   if [[ -z "${old}" ]]; then
     continue
   fi
-  old_real="$("${PIPX_PYTHON}" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${old}" 2>/dev/null || true)"
+  old_real="$(_realpath "${old}")"
   if [[ -n "${old_real}" && ( "${old_real}" == "${current_real}" || "${old_real}" == "${prev_real}" ) ]]; then
     continue
   fi

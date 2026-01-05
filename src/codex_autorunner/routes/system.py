@@ -18,6 +18,10 @@ from ..git_utils import GitError, run_git
 from ..static_assets import missing_static_assets
 
 
+class UpdateInProgressError(RuntimeError):
+    """Raised when an update is already running."""
+
+
 def _run_cmd(cmd: list[str], cwd: Path) -> None:
     """Run a subprocess command, raising on failure."""
     try:
@@ -48,6 +52,11 @@ def _normalize_update_target(raw: Optional[str]) -> str:
     raise ValueError("Unsupported update target (use both, web, or telegram).")
 
 
+def _normalize_update_ref(raw: Optional[str]) -> str:
+    value = str(raw or "").strip()
+    return value or "main"
+
+
 def _update_status_path() -> Path:
     return Path.home() / ".codex-autorunner" / "update_status.json"
 
@@ -67,6 +76,89 @@ def _read_update_status() -> Optional[dict]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _update_lock_path() -> Path:
+    return Path.home() / ".codex-autorunner" / "update.lock"
+
+
+def _read_update_lock() -> Optional[dict]:
+    path = _update_lock_path()
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _update_lock_active() -> Optional[dict]:
+    lock = _read_update_lock()
+    if not lock:
+        try:
+            _update_lock_path().unlink()
+        except OSError:
+            pass
+        return None
+    pid = lock.get("pid")
+    if isinstance(pid, int) and _pid_is_running(pid):
+        return lock
+    try:
+        _update_lock_path().unlink()
+    except OSError:
+        pass
+    return None
+
+
+def _acquire_update_lock(
+    *, repo_url: str, repo_ref: str, update_target: str, logger: logging.Logger
+) -> bool:
+    lock_path = _update_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pid": os.getpid(),
+        "started_at": time.time(),
+        "repo_url": repo_url,
+        "repo_ref": repo_ref,
+        "update_target": update_target,
+    }
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        existing = _update_lock_active()
+        if existing:
+            msg = f"Update already running (pid {existing.get('pid')})."
+            logger.info(msg)
+            raise UpdateInProgressError(msg)
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            msg = "Update already running."
+            logger.info(msg)
+            raise UpdateInProgressError(msg)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(json.dumps(payload))
+    return True
+
+
+def _release_update_lock() -> None:
+    lock = _read_update_lock()
+    if not lock or lock.get("pid") != os.getpid():
+        return
+    try:
+        _update_lock_path().unlink()
+    except OSError:
+        pass
 
 
 def _find_git_root(start: Path) -> Optional[Path]:
@@ -126,11 +218,13 @@ def _resolve_local_repo_root(*, module_dir: Path, update_cache_dir: Path) -> Opt
 def _system_update_check(
     *,
     repo_url: str,
+    repo_ref: str,
     module_dir: Optional[Path] = None,
     update_cache_dir: Optional[Path] = None,
 ) -> dict:
     module_dir = module_dir or Path(__file__).resolve().parent
     update_cache_dir = update_cache_dir or (Path.home() / ".codex-autorunner" / "update_cache")
+    repo_ref = _normalize_update_ref(repo_ref)
 
     repo_root = _resolve_local_repo_root(module_dir=module_dir, update_cache_dir=update_cache_dir)
     if repo_root is None:
@@ -151,7 +245,7 @@ def _system_update_check(
 
     try:
         run_git(
-            ["fetch", "--quiet", repo_url, "main"],
+            ["fetch", "--quiet", repo_url, repo_ref],
             repo_root,
             timeout_seconds=60,
             check=True,
@@ -210,9 +304,15 @@ def _system_update_check(
 
 
 def _system_update_worker(
-    *, repo_url: str, update_dir: Path, logger: logging.Logger, update_target: str = "both"
+    *,
+    repo_url: str,
+    repo_ref: str,
+    update_dir: Path,
+    logger: logging.Logger,
+    update_target: str = "both",
 ) -> None:
     status_path = _update_status_path()
+    lock_acquired = False
     try:
         try:
             update_target = _normalize_update_target(update_target)
@@ -221,12 +321,23 @@ def _system_update_worker(
             logger.error(msg)
             _write_update_status("error", msg)
             return
+        repo_ref = _normalize_update_ref(repo_ref)
+        try:
+            lock_acquired = _acquire_update_lock(
+                repo_url=repo_url,
+                repo_ref=repo_ref,
+                update_target=update_target,
+                logger=logger,
+            )
+        except UpdateInProgressError:
+            return
 
         _write_update_status(
             "running",
             "Update started.",
             repo_url=repo_url,
             update_dir=str(update_dir),
+            repo_ref=repo_ref,
             update_target=update_target,
         )
 
@@ -243,14 +354,22 @@ def _system_update_worker(
         update_dir.parent.mkdir(parents=True, exist_ok=True)
 
         if update_dir.exists() and (update_dir / ".git").exists():
-            logger.info("Updating source in %s from %s", update_dir, repo_url)
-            _run_cmd(["git", "fetch", "origin"], cwd=update_dir)
-            _run_cmd(["git", "reset", "--hard", "origin/main"], cwd=update_dir)
+            logger.info(
+                "Updating source in %s from %s (%s)", update_dir, repo_url, repo_ref
+            )
+            try:
+                _run_cmd(["git", "remote", "set-url", "origin", repo_url], cwd=update_dir)
+            except Exception:
+                _run_cmd(["git", "remote", "add", "origin", repo_url], cwd=update_dir)
+            _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
+            _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
         else:
             if update_dir.exists():
                 shutil.rmtree(update_dir)
             logger.info("Cloning %s into %s", repo_url, update_dir)
             _run_cmd(["git", "clone", repo_url, str(update_dir)], cwd=update_dir.parent)
+            _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
+            _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
 
         if os.environ.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1":
             logger.info("Skipping update checks (CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1).")
@@ -304,11 +423,24 @@ def _system_update_worker(
             "error",
             "Update crashed; see hub logs for details.",
         )
+    finally:
+        if lock_acquired:
+            _release_update_lock()
 
 
 def _spawn_update_process(
-    *, repo_url: str, update_dir: Path, logger: logging.Logger, update_target: str = "both"
+    *,
+    repo_url: str,
+    repo_ref: str,
+    update_dir: Path,
+    logger: logging.Logger,
+    update_target: str = "both",
 ) -> None:
+    active = _update_lock_active()
+    if active:
+        raise UpdateInProgressError(
+            f"Update already running (pid {active.get('pid')})."
+        )
     status_path = _update_status_path()
     log_path = status_path.parent / "update-standalone.log"
     _write_update_status(
@@ -316,6 +448,7 @@ def _spawn_update_process(
         "Update spawned.",
         repo_url=repo_url,
         update_dir=str(update_dir),
+        repo_ref=repo_ref,
         update_target=update_target,
         log_path=str(log_path),
     )
@@ -325,6 +458,8 @@ def _spawn_update_process(
         "codex_autorunner.update_runner",
         "--repo-url",
         repo_url,
+        "--repo-ref",
+        repo_ref,
         "--update-dir",
         str(update_dir),
         "--target",
@@ -351,14 +486,23 @@ def _spawn_update_process(
 def build_system_routes() -> APIRouter:
     router = APIRouter()
 
-    @router.get("/health", include_in_schema=False)
-    async def health(request: Request):
+    @router.get("/health")
+    async def system_health(request: Request):
+        try:
+            config = request.app.state.config
+        except AttributeError:
+            config = None
+        mode = "hub" if isinstance(config, HubConfig) else "repo"
+        base_path = getattr(request.app.state, "base_path", "")
+        asset_version = getattr(request.app.state, "asset_version", None)
         static_dir = getattr(getattr(request.app, "state", None), "static_dir", None)
         if not isinstance(static_dir, Path):
             return JSONResponse(
                 {
                     "status": "error",
                     "detail": "Static UI assets missing; reinstall package",
+                    "mode": mode,
+                    "base_path": base_path,
                 },
                 status_code=500,
             )
@@ -369,10 +513,17 @@ def build_system_routes() -> APIRouter:
                     "status": "error",
                     "detail": "Static UI assets missing; reinstall package",
                     "missing": missing,
+                    "mode": mode,
+                    "base_path": base_path,
                 },
                 status_code=500,
             )
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "mode": mode,
+            "base_path": base_path,
+            "asset_version": asset_version,
+        }
 
     @router.get("/system/update/check")
     async def system_update_check(request: Request):
@@ -386,13 +537,17 @@ def build_system_routes() -> APIRouter:
             config = None
 
         repo_url = "https://github.com/Git-on-my-level/codex-autorunner.git"
+        repo_ref = "main"
         if config and isinstance(config, HubConfig):
             configured_url = getattr(config, "update_repo_url", None)
             if configured_url:
                 repo_url = configured_url
+            configured_ref = getattr(config, "update_repo_ref", None)
+            if configured_ref:
+                repo_ref = configured_ref
 
         try:
-            return _system_update_check(repo_url=repo_url)
+            return _system_update_check(repo_url=repo_url, repo_ref=repo_ref)
         except Exception as e:
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:
@@ -412,10 +567,14 @@ def build_system_routes() -> APIRouter:
 
         # Determine URL
         repo_url = "https://github.com/Git-on-my-level/codex-autorunner.git"
+        repo_ref = "main"
         if config and isinstance(config, HubConfig):
             configured_url = getattr(config, "update_repo_url", None)
             if configured_url:
                 repo_url = configured_url
+            configured_ref = getattr(config, "update_repo_ref", None)
+            if configured_ref:
+                repo_ref = configured_ref
 
         home_dot_car = Path.home() / ".codex-autorunner"
         update_dir = home_dot_car / "update_cache"
@@ -436,6 +595,7 @@ def build_system_routes() -> APIRouter:
                 logger = logging.getLogger("codex_autorunner.system_update")
             _spawn_update_process(
                 repo_url=repo_url,
+                repo_ref=_normalize_update_ref(repo_ref),
                 update_dir=update_dir,
                 logger=logger,
                 update_target=update_target,
@@ -445,6 +605,8 @@ def build_system_routes() -> APIRouter:
                 "message": f"Update started ({update_target}). Service will restart shortly.",
                 "target": update_target,
             }
+        except UpdateInProgressError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except Exception as e:

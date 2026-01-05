@@ -90,6 +90,9 @@ repo:
     telegram:
       bot_token_env: CAR_TELEGRAM_BOT_TOKEN
       chat_id_env: CAR_TELEGRAM_CHAT_ID
+      thread_id_env: CAR_TELEGRAM_THREAD_ID
+      thread_id: null
+      thread_id_map: {}
 
   telegram_bot:
     # Telegram bot integration (polling).
@@ -186,6 +189,7 @@ hub:
     auto_init_missing: true
     # Where to pull system updates from (main upstream).
     update_repo_url: https://github.com/Git-on-my-level/codex-autorunner.git
+    update_repo_ref: main
     log:
       path: .codex-autorunner/codex-autorunner-hub.log
       max_bytes: 10000000

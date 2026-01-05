@@ -44,7 +44,7 @@ def build_message(
     user_id: int = 456,
     message_id: int = 1,
     update_id: int = 1,
-    ) -> TelegramMessage:
+) -> TelegramMessage:
     return TelegramMessage(
         update_id=update_id,
         message_id=message_id,
@@ -174,7 +174,7 @@ async def test_status_creates_record(tmp_path: Path) -> None:
     try:
         await service._handle_status(message)
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert fake_bot.messages
     text = fake_bot.messages[-1]["text"]
     assert "Workspace: unbound" in text
@@ -202,9 +202,32 @@ async def test_normal_message_runs_turn(tmp_path: Path) -> None:
         message = build_message("hello", message_id=11)
         await service._handle_normal_message(message, runtime)
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert any("Bound to" in msg["text"] for msg in fake_bot.messages)
     assert any("fixture reply" in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
+async def test_error_notification_surfaces(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("turn_error_no_agent"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        runtime = service._router.runtime_for(
+            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        )
+        message = build_message("hello", message_id=11)
+        await service._handle_normal_message(message, runtime)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert any(
+        "Auth required" in msg["text"] for msg in fake_bot.messages
+    )
 
 
 @pytest.mark.anyio
@@ -228,10 +251,31 @@ async def test_bang_shell_attaches_output(tmp_path: Path) -> None:
         message = build_message("!echo hi", message_id=11)
         await service._handle_bang_shell(message, "!echo hi", runtime)
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert any("Output too long" in msg["text"] for msg in fake_bot.messages)
     assert any("echo" in msg["text"] for msg in fake_bot.messages)
     assert fake_bot.documents
+
+
+@pytest.mark.anyio
+async def test_diff_command_uses_app_server(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        runtime = service._router.runtime_for(
+            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        )
+        message = build_message("/diff", message_id=11)
+        await service._handle_diff(message, "", runtime)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert any("fixture output" in msg["text"] for msg in fake_bot.messages)
 
 
 @pytest.mark.anyio
@@ -248,7 +292,7 @@ async def test_thread_start_rejects_missing_workspace(tmp_path: Path) -> None:
         await service._handle_bind(bind_message, str(repo))
         await service._handle_new(new_message)
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert any("did not return a workspace" in msg["text"] for msg in fake_bot.messages)
 
 
@@ -269,7 +313,7 @@ async def test_thread_start_rejects_mismatched_workspace(tmp_path: Path) -> None
         message = build_message("hello", message_id=11)
         await service._handle_normal_message(message, runtime)
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()
     assert any(
         "returned a thread for a different workspace" in msg["text"]
         for msg in fake_bot.messages
@@ -288,10 +332,161 @@ async def test_resume_lists_threads_from_data_shape(tmp_path: Path) -> None:
     resume_message = build_message("/resume", message_id=11)
     try:
         await service._handle_bind(bind_message, str(repo))
+        await service._handle_resume(resume_message, "--all")
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert any("Select a thread to resume" in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
+async def test_resume_all_uses_local_workspace_index(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("thread_list_empty"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    bind_message_other = build_message("/bind", thread_id=99, message_id=11)
+    new_message = build_message("/new", message_id=12)
+    new_message_other = build_message("/new", thread_id=99, message_id=13)
+    resume_message = build_message("/resume", message_id=14)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_bind(bind_message_other, str(repo))
+        await service._handle_new(new_message)
+        await service._handle_new(new_message_other)
+        await service._handle_resume(resume_message, "--all")
+    finally:
+        await service._app_server_supervisor.close_all()
+    resume_msg = next(
+        msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
+    )
+    keyboard = resume_msg["reply_markup"]["inline_keyboard"]
+    callback_data = [
+        button["callback_data"]
+        for row in keyboard
+        for button in row
+        if "callback_data" in button
+    ]
+    assert any("thread-1" in token for token in callback_data)
+    assert any("thread-2" in token for token in callback_data)
+
+
+@pytest.mark.anyio
+async def test_resume_requires_scoped_threads(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    resume_message = build_message("/resume", message_id=11)
+    try:
+        await service._handle_bind(bind_message, str(repo))
         await service._handle_resume(resume_message, "")
     finally:
-        await service._client.close()
-    assert any("Select a thread to resume" in msg["text"] for msg in fake_bot.messages)
+        await service._app_server_supervisor.close_all()
+    assert any("No previous threads found for this topic" in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
+async def test_resume_shows_local_threads_when_thread_list_empty(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("thread_list_empty"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    new_message = build_message("/new", message_id=11)
+    resume_message = build_message("/resume", message_id=12)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_new(new_message)
+        await service._handle_resume(resume_message, "")
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert not any("No previous threads found" in msg["text"] for msg in fake_bot.messages)
+    resume_msg = next(
+        msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
+    )
+    keyboard = resume_msg["reply_markup"]["inline_keyboard"]
+    assert any(
+        "thread-1" in button["callback_data"]
+        for row in keyboard
+        for button in row
+        if "callback_data" in button
+    )
+
+
+@pytest.mark.anyio
+async def test_resume_refresh_updates_cached_preview(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("thread_list_empty_refresh"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    new_message = build_message("/new", message_id=11)
+    resume_message = build_message("/resume", message_id=12)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_new(new_message)
+        await service._handle_resume(resume_message, "--refresh")
+    finally:
+        await service._app_server_supervisor.close_all()
+    resume_msg = next(
+        msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
+    )
+    keyboard = resume_msg["reply_markup"]["inline_keyboard"]
+    labels = [
+        button["text"]
+        for row in keyboard
+        for button in row
+        if "text" in button
+    ]
+    assert any("refreshed preview" in label for label in labels)
+
+
+@pytest.mark.anyio
+async def test_resume_paginates_thread_list(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(tmp_path, fixture_command("thread_list_paged"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    new_message_1 = build_message("/new", message_id=11)
+    new_message_2 = build_message("/new", message_id=12)
+    new_message_3 = build_message("/new", message_id=13)
+    resume_message = build_message("/resume", message_id=14)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_new(new_message_1)
+        await service._handle_new(new_message_2)
+        await service._handle_new(new_message_3)
+        await service._handle_resume(resume_message, "")
+    finally:
+        await service._app_server_supervisor.close_all()
+    resume_msg = next(
+        msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
+    )
+    keyboard = resume_msg["reply_markup"]["inline_keyboard"]
+    callback_data = [
+        button["callback_data"]
+        for row in keyboard
+        for button in row
+        if "callback_data" in button
+    ]
+    assert any("thread-1" in token for token in callback_data)
+    assert any("thread-2" in token for token in callback_data)
+    assert any("thread-3" in token for token in callback_data)
 
 
 @pytest.mark.anyio
@@ -304,4 +499,4 @@ async def test_outbox_lock_rebinds_across_event_loops(tmp_path: Path) -> None:
         await service._clear_outbox_inflight("record")
         assert "record" not in service._outbox_inflight
     finally:
-        await service._client.close()
+        await service._app_server_supervisor.close_all()

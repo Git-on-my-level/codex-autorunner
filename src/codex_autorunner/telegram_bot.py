@@ -3,25 +3,34 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
+import hashlib
 import html
+import json
 import logging
 import os
+import random
 import re
 import secrets
 import shlex
+import socket
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
 
+import httpx
+
 from .app_server_client import (
     ApprovalDecision,
     CodexAppServerClient,
+    CodexAppServerDisconnected,
     CodexAppServerError,
     _normalize_sandbox_policy,
 )
+from .app_server_supervisor import WorkspaceAppServerSupervisor
 from .logging_utils import log_event
+from .lock_utils import process_alive
 from .manifest import load_manifest
 from .routes.system import _normalize_update_target, _spawn_update_process
 from .telegram_adapter import (
@@ -30,6 +39,7 @@ from .telegram_adapter import (
     CancelCallback,
     EffortCallback,
     UpdateCallback,
+    UpdateConfirmCallback,
     ModelCallback,
     PageCallback,
     ResumeCallback,
@@ -48,6 +58,7 @@ from .telegram_adapter import (
     build_bind_keyboard,
     build_effort_keyboard,
     build_model_keyboard,
+    build_update_confirm_keyboard,
     build_resume_keyboard,
     build_update_keyboard,
     encode_page_callback,
@@ -59,26 +70,46 @@ from .state import now_iso
 from .telegram_state import (
     APPROVAL_MODE_YOLO,
     OutboxRecord,
+    PendingVoiceRecord,
     PendingApprovalRecord,
+    ThreadSummary,
     TelegramStateStore,
     TopicRouter,
     normalize_approval_mode,
+    parse_topic_key,
+    TOPIC_ROOT,
     topic_key,
 )
-from .utils import RepoNotFoundError, find_repo_root, resolve_executable, subprocess_env
+from .utils import (
+    RepoNotFoundError,
+    canonicalize_path,
+    find_repo_root,
+    is_within,
+    resolve_executable,
+    subprocess_env,
+)
+from .workspace import canonical_workspace_root, workspace_id_for_path
 from .voice import VoiceConfig, VoiceService, VoiceServiceError
 
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
 DEFAULT_PAGE_SIZE = 10
-DEFAULT_THREAD_LIST_LIMIT = 10
-MAX_TOPIC_THREAD_HISTORY = 50
+THREAD_LIST_PAGE_LIMIT = 100
+THREAD_LIST_MAX_PAGES = 5
 DEFAULT_MODEL_LIST_LIMIT = 25
 DEFAULT_MCP_LIST_LIMIT = 50
 DEFAULT_SKILLS_LIST_LIMIT = 50
+MAX_TOPIC_THREAD_HISTORY = 50
+RESUME_BUTTON_PREVIEW_LIMIT = 60
+RESUME_PREVIEW_USER_LIMIT = 1000
+RESUME_PREVIEW_ASSISTANT_LIMIT = 1000
+RESUME_PREVIEW_SCAN_LINES = 200
+RESUME_MISSING_IDS_LOG_LIMIT = 10
+RESUME_REFRESH_LIMIT = 10
 TOKEN_USAGE_CACHE_LIMIT = 256
 TOKEN_USAGE_TURN_CACHE_LIMIT = 512
 DEFAULT_INTERRUPT_TIMEOUT_SECONDS = 30.0
+DEFAULT_INTERRUPT_REQUEST_TIMEOUT_SECONDS = 5.0
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
@@ -86,12 +117,24 @@ DEFAULT_PARSE_MODE = "HTML"
 DEFAULT_STATE_FILE = ".codex-autorunner/telegram_state.json"
 DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
+DEFAULT_WORKSPACE_STATE_ROOT = "~/.codex-autorunner/workspaces"
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
 OUTBOX_RETRY_INTERVAL_SECONDS = 10.0
 OUTBOX_IMMEDIATE_RETRY_DELAYS = (0.5, 2.0, 5.0)
 OUTBOX_MAX_ATTEMPTS = 8
+VOICE_RETRY_INTERVAL_SECONDS = 5.0
+VOICE_RETRY_INITIAL_SECONDS = 2.0
+VOICE_RETRY_MAX_SECONDS = 300.0
+VOICE_RETRY_JITTER_RATIO = 0.2
+VOICE_MAX_ATTEMPTS = 20
+VOICE_RETRY_AFTER_BUFFER_SECONDS = 1.0
+WHISPER_TRANSCRIPT_DISCLAIMER = (
+    "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
+    "cannot infer the intention please clarify before proceeding."
+)
 DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
+DEFAULT_UPDATE_REPO_REF = "main"
 RESUME_PICKER_PROMPT = (
     "Select a thread to resume (buttons below or reply with number/id)."
 )
@@ -104,7 +147,33 @@ UPDATE_TARGET_OPTIONS = (
     ("web", "Web only"),
     ("telegram", "Telegram only"),
 )
-WORKING_PLACEHOLDER = "Working..."
+TRACE_MESSAGE_TOKENS = (
+    "failed",
+    "error",
+    "denied",
+    "unknown",
+    "not bound",
+    "not found",
+    "invalid",
+    "unsupported",
+    "disabled",
+    "missing",
+    "mismatch",
+    "different workspace",
+    "no previous",
+    "no resumable",
+    "no workspace-tagged",
+    "not applicable",
+    "selection expired",
+    "timed out",
+    "timeout",
+    "aborted",
+    "cancelled",
+)
+PLACEHOLDER_TEXT = "Working..."
+STREAM_PREVIEW_PREFIX = ""
+THINKING_PREVIEW_MAX_LEN = 80
+THINKING_PREVIEW_MIN_EDIT_INTERVAL_SECONDS = 1.0
 COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
 MAX_MENTION_BYTES = 200_000
 VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
@@ -197,6 +266,10 @@ class TelegramBotConfigError(Exception):
     """Raised when telegram bot config is invalid."""
 
 
+class TelegramBotLockError(Exception):
+    """Raised when another telegram bot instance already holds the lock."""
+
+
 @dataclass(frozen=True)
 class TelegramBotDefaults:
     approval_mode: str
@@ -253,6 +326,7 @@ class TelegramBotConfig:
     bot_token_env: str
     chat_id_env: str
     parse_mode: Optional[str]
+    debug_prefix_context: bool
     bot_token: Optional[str]
     allowed_chat_ids: set[int]
     allowed_user_ids: set[int]
@@ -283,6 +357,8 @@ class TelegramBotConfig:
         chat_id_env = str(cfg.get("chat_id_env", "CAR_TELEGRAM_CHAT_ID"))
         parse_mode_raw = cfg.get("parse_mode") if "parse_mode" in cfg else DEFAULT_PARSE_MODE
         parse_mode = _normalize_parse_mode(parse_mode_raw)
+        debug_raw = cfg.get("debug") if isinstance(cfg.get("debug"), dict) else {}
+        debug_prefix_context = bool(debug_raw.get("prefix_context", False))
         bot_token = env.get(bot_token_env)
 
         allowed_chat_ids = set(_parse_int_list(cfg.get("allowed_chat_ids")))
@@ -403,6 +479,7 @@ class TelegramBotConfig:
             bot_token_env=bot_token_env,
             chat_id_env=chat_id_env,
             parse_mode=parse_mode,
+            debug_prefix_context=debug_prefix_context,
             bot_token=bot_token,
             allowed_chat_ids=allowed_chat_ids,
             allowed_user_ids=allowed_user_ids,
@@ -453,6 +530,7 @@ class PendingApproval:
     codex_thread_id: Optional[str]
     chat_id: int
     thread_id: Optional[int]
+    topic_key: Optional[str]
     message_id: Optional[int]
     created_at: str
     future: asyncio.Future[ApprovalDecision]
@@ -478,6 +556,7 @@ class SelectionState:
 class _CoalescedBuffer:
     message: TelegramMessage
     parts: list[str]
+    topic_key: str
     task: Optional[asyncio.Task[None]] = None
 
 
@@ -515,23 +594,24 @@ class TelegramBotService:
         voice_config: Optional[VoiceConfig] = None,
         voice_service: Optional[VoiceService] = None,
         update_repo_url: Optional[str] = None,
+        update_repo_ref: Optional[str] = None,
     ) -> None:
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
         self._hub_root = hub_root
         self._manifest_path = manifest_path
         self._update_repo_url = update_repo_url
+        self._update_repo_ref = update_repo_ref
         self._allowlist = config.allowlist()
         self._store = TelegramStateStore(
             config.state_file, default_approval_mode=config.defaults.approval_mode
         )
         self._router = TopicRouter(self._store)
-        app_server_cwd = hub_root or config.root
-        app_server_env = _app_server_env(config.app_server_command, app_server_cwd)
-        self._client = CodexAppServerClient(
+        self._app_server_state_root = Path(DEFAULT_WORKSPACE_STATE_ROOT).expanduser()
+        self._app_server_supervisor = WorkspaceAppServerSupervisor(
             config.app_server_command,
-            cwd=app_server_cwd,
-            env=app_server_env,
+            state_root=self._app_server_state_root,
+            env_builder=self._build_workspace_env,
             approval_handler=self._handle_approval_request,
             notification_handler=self._handle_app_server_notification,
             logger=self._logger,
@@ -554,12 +634,16 @@ class TelegramBotService:
                     "telegram.voice.init_failed",
                     exc=exc,
                 )
-        self._turn_semaphore = asyncio.Semaphore(config.concurrency.max_parallel_turns)
+        self._turn_semaphore: Optional[asyncio.Semaphore] = None
         self._turn_contexts: dict[TurnKey, TurnContext] = {}
+        self._reasoning_buffers: dict[str, str] = {}
+        self._turn_preview_text: dict[TurnKey, str] = {}
+        self._turn_preview_updated_at: dict[TurnKey, float] = {}
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
         self._update_options: dict[str, SelectionState] = {}
+        self._update_confirm_options: dict[str, bool] = {}
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
         self._bot_username: Optional[str] = None
@@ -572,7 +656,91 @@ class TelegramBotService:
         self._outbox_inflight: set[str] = set()
         self._outbox_lock: Optional[asyncio.Lock] = None
         self._outbox_task: Optional[asyncio.Task[None]] = None
+        self._voice_inflight: set[str] = set()
+        self._voice_lock: Optional[asyncio.Lock] = None
+        self._voice_task: Optional[asyncio.Task[None]] = None
         self._command_specs = self._build_command_specs()
+        self._instance_lock_path: Optional[Path] = None
+
+    def _acquire_instance_lock(self) -> None:
+        token = self._config.bot_token
+        if not token:
+            raise TelegramBotLockError("missing telegram bot token")
+        lock_path = _telegram_lock_path(token)
+        payload = {
+            "pid": os.getpid(),
+            "started_at": now_iso(),
+            "host": socket.gethostname(),
+            "cwd": os.getcwd(),
+            "config_root": str(self._config.root),
+        }
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            existing = _read_lock_payload(lock_path)
+            pid = existing.get("pid") if isinstance(existing, dict) else None
+            if isinstance(pid, int) and process_alive(pid):
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "telegram.lock.contended",
+                    lock_path=str(lock_path),
+                    **_lock_payload_summary(existing),
+                )
+                raise TelegramBotLockError(
+                    "Telegram bot already running for this token."
+                )
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+            try:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                existing = _read_lock_payload(lock_path)
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "telegram.lock.contended",
+                    lock_path=str(lock_path),
+                    **_lock_payload_summary(existing),
+                )
+                raise TelegramBotLockError(
+                    "Telegram bot already running for this token."
+                )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload) + "\n")
+        self._instance_lock_path = lock_path
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.lock.acquired",
+            lock_path=str(lock_path),
+            **_lock_payload_summary(payload),
+        )
+
+    def _release_instance_lock(self) -> None:
+        lock_path = self._instance_lock_path
+        if lock_path is None:
+            return
+        existing = _read_lock_payload(lock_path)
+        if isinstance(existing, dict):
+            pid = existing.get("pid")
+            if isinstance(pid, int) and pid != os.getpid():
+                return
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        self._instance_lock_path = None
+
+    def _ensure_turn_semaphore(self) -> asyncio.Semaphore:
+        if self._turn_semaphore is None:
+            self._turn_semaphore = asyncio.Semaphore(
+                self._config.concurrency.max_parallel_turns
+            )
+        return self._turn_semaphore
 
     async def run_polling(self) -> None:
         if self._config.mode != "polling":
@@ -580,38 +748,46 @@ class TelegramBotService:
                 f"Unsupported telegram_bot.mode '{self._config.mode}'"
             )
         self._config.validate()
+        self._acquire_instance_lock()
         # Bind the semaphore to the running loop to avoid cross-loop await failures.
         self._turn_semaphore = asyncio.Semaphore(
             self._config.concurrency.max_parallel_turns
         )
         self._outbox_inflight = set()
         self._outbox_lock = asyncio.Lock()
-        await self._start_app_server_with_backoff()
-        await self._prime_bot_identity()
-        await self._restore_pending_approvals()
-        await self._restore_outbox()
-        self._outbox_task = asyncio.create_task(self._outbox_loop())
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.bot.started",
-            mode=self._config.mode,
-            poll_timeout=self._config.poll_timeout_seconds,
-            allowed_updates=list(self._config.poll_allowed_updates),
-            allowed_chats=len(self._config.allowed_chat_ids),
-            allowed_users=len(self._config.allowed_user_ids),
-            require_topics=self._config.require_topics,
-            media_enabled=self._config.media.enabled,
-            media_images=self._config.media.images,
-            media_voice=self._config.media.voice,
-        )
+        self._voice_inflight = set()
+        self._voice_lock = asyncio.Lock()
         try:
+            await self._prime_bot_identity()
+            await self._restore_pending_approvals()
+            await self._restore_outbox()
+            await self._restore_pending_voice()
+            self._prime_poller_offset()
+            self._outbox_task = asyncio.create_task(self._outbox_loop())
+            self._voice_task = asyncio.create_task(self._voice_loop())
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.bot.started",
+                mode=self._config.mode,
+                poll_timeout=self._config.poll_timeout_seconds,
+                allowed_updates=list(self._config.poll_allowed_updates),
+                allowed_chats=len(self._config.allowed_chat_ids),
+                allowed_users=len(self._config.allowed_user_ids),
+                require_topics=self._config.require_topics,
+                media_enabled=self._config.media.enabled,
+                media_images=self._config.media.images,
+                media_voice=self._config.media.voice,
+                poller_offset=self._poller.offset,
+            )
             while True:
                 updates = []
                 try:
                     updates = await self._poller.poll(
                         timeout=self._config.poll_timeout_seconds
                     )
+                    if self._poller.offset is not None:
+                        self._record_poll_offset(updates)
                 except Exception as exc:
                     log_event(
                         self._logger,
@@ -624,14 +800,39 @@ class TelegramBotService:
                 for update in updates:
                     self._spawn_task(self._dispatch_update(update))
         finally:
-            if self._outbox_task is not None:
-                self._outbox_task.cancel()
+            try:
+                if self._outbox_task is not None:
+                    self._outbox_task.cancel()
+                    try:
+                        await self._outbox_task
+                    except asyncio.CancelledError:
+                        pass
+                if self._voice_task is not None:
+                    self._voice_task.cancel()
+                    try:
+                        await self._voice_task
+                    except asyncio.CancelledError:
+                        pass
+            finally:
                 try:
-                    await self._outbox_task
-                except asyncio.CancelledError:
-                    pass
-            await self._bot.close()
-            await self._client.close()
+                    await self._bot.close()
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.bot.close_failed",
+                        exc=exc,
+                    )
+                try:
+                    await self._app_server_supervisor.close_all()
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.app_server.close_failed",
+                        exc=exc,
+                    )
+                self._release_instance_lock()
 
     async def _prime_bot_identity(self) -> None:
         try:
@@ -642,6 +843,39 @@ class TelegramBotService:
             username = payload.get("username")
             if isinstance(username, str) and username:
                 self._bot_username = username
+
+    def _prime_poller_offset(self) -> None:
+        last_update_id = self._store.get_last_update_id_global()
+        if not isinstance(last_update_id, int) or isinstance(last_update_id, bool):
+            return
+        offset = last_update_id + 1
+        self._poller.set_offset(offset)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.poll.offset.init",
+            stored_global_update_id=last_update_id,
+            poller_offset=offset,
+        )
+
+    def _record_poll_offset(self, updates: Sequence[TelegramUpdate]) -> None:
+        offset = self._poller.offset
+        if offset is None:
+            return
+        last_update_id = offset - 1
+        if last_update_id < 0:
+            return
+        stored = self._store.update_last_update_id_global(last_update_id)
+        if updates:
+            max_update_id = max(update.update_id for update in updates)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.poll.offset.updated",
+                incoming_update_id=max_update_id,
+                stored_global_update_id=stored,
+                poller_offset=offset,
+            )
 
     async def _restore_pending_approvals(self) -> None:
         state = self._store.load()
@@ -789,6 +1023,455 @@ class TelegramBotService:
         async with self._outbox_lock:
             self._outbox_inflight.discard(record_id)
 
+    async def _restore_pending_voice(self) -> None:
+        records = self._store.list_pending_voice()
+        if not records:
+            return
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.voice.restore",
+            count=len(records),
+        )
+        await self._flush_pending_voice(records)
+
+    async def _voice_loop(self) -> None:
+        while True:
+            await asyncio.sleep(VOICE_RETRY_INTERVAL_SECONDS)
+            try:
+                records = self._store.list_pending_voice()
+                if records:
+                    await self._flush_pending_voice(records)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.voice.flush_failed",
+                    exc=exc,
+                )
+
+    async def _flush_pending_voice(self, records: list[PendingVoiceRecord]) -> None:
+        for record in records:
+            if record.attempts >= VOICE_MAX_ATTEMPTS:
+                await self._give_up_voice(
+                    record,
+                    "Voice transcription failed after retries. Please resend.",
+                )
+                continue
+            await self._attempt_pending_voice(record.record_id)
+
+    async def _attempt_pending_voice(self, record_id: str) -> bool:
+        record = self._store.get_pending_voice(record_id)
+        if record is None:
+            return False
+        if not self._voice_ready_for_attempt(record):
+            return False
+        if not await self._mark_voice_inflight(record.record_id):
+            return False
+        inflight_id = record.record_id
+        try:
+            record = self._store.get_pending_voice(record.record_id)
+            if record is None:
+                return False
+            if not self._voice_ready_for_attempt(record):
+                return False
+            done = await self._process_pending_voice(record)
+        except Exception as exc:
+            retry_after = _extract_retry_after_seconds(exc)
+            await self._record_voice_failure(record, exc, retry_after=retry_after)
+            return False
+        finally:
+            await self._clear_voice_inflight(inflight_id)
+        if done:
+            self._store.delete_pending_voice(record.record_id)
+        return done
+
+    async def _process_pending_voice(self, record: PendingVoiceRecord) -> bool:
+        if not self._voice_service or not self._voice_config or not self._voice_config.enabled:
+            await self._send_message(
+                record.chat_id,
+                "Voice transcription is disabled.",
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+            self._remove_voice_file(record)
+            return True
+        max_bytes = self._config.media.max_voice_bytes
+        if record.file_size and record.file_size > max_bytes:
+            await self._send_message(
+                record.chat_id,
+                f"Voice note too large (max {max_bytes} bytes).",
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+            self._remove_voice_file(record)
+            return True
+        if record.transcript_text:
+            await self._deliver_voice_transcript(record, record.transcript_text)
+            self._remove_voice_file(record)
+            return True
+        path = self._resolve_voice_download_path(record)
+        if path is None:
+            data, file_path, file_size = await self._download_telegram_file(
+                record.file_id
+            )
+            if file_size and file_size > max_bytes:
+                await self._send_message(
+                    record.chat_id,
+                    f"Voice note too large (max {max_bytes} bytes).",
+                    thread_id=record.thread_id,
+                    reply_to=record.message_id,
+                )
+                return True
+            if len(data) > max_bytes:
+                await self._send_message(
+                    record.chat_id,
+                    f"Voice note too large (max {max_bytes} bytes).",
+                    thread_id=record.thread_id,
+                    reply_to=record.message_id,
+                )
+                return True
+            path = self._persist_voice_payload(record, data, file_path=file_path)
+            record.download_path = str(path)
+            if file_size is not None:
+                record.file_size = file_size
+            else:
+                record.file_size = len(data)
+            self._store.update_pending_voice(record)
+        data = path.read_bytes()
+        try:
+            result = await asyncio.to_thread(
+                self._voice_service.transcribe,
+                data,
+                client="telegram",
+                filename=record.file_name or path.name,
+                content_type=record.mime_type,
+            )
+        except VoiceServiceError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media.voice.transcribe_failed",
+                chat_id=record.chat_id,
+                thread_id=record.thread_id,
+                message_id=record.message_id,
+                reason=exc.reason,
+            )
+            await self._send_message(
+                record.chat_id,
+                exc.detail,
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+            self._remove_voice_file(record)
+            return True
+        transcript = ""
+        if isinstance(result, dict):
+            transcript = str(result.get("text") or "")
+        transcript = transcript.strip()
+        if not transcript:
+            await self._send_message(
+                record.chat_id,
+                "Voice note transcribed to empty text.",
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+            self._remove_voice_file(record)
+            return True
+        combined = record.caption.strip()
+        if combined:
+            combined = f"{combined}\n\n{transcript}"
+        else:
+            combined = transcript
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media.voice.transcribed",
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+            message_id=record.message_id,
+            text_len=len(transcript),
+        )
+        record.transcript_text = combined
+        self._store.update_pending_voice(record)
+        await self._deliver_voice_transcript(record, combined)
+        self._remove_voice_file(record)
+        return True
+
+    async def _deliver_voice_transcript(
+        self,
+        record: PendingVoiceRecord,
+        transcript_text: str,
+    ) -> None:
+        if record.transcript_message_id is None:
+            transcript_message = self._format_voice_transcript_message(
+                transcript_text,
+                PLACEHOLDER_TEXT,
+            )
+            record.transcript_message_id = await self._send_voice_transcript_message(
+                record.chat_id,
+                transcript_message,
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+            self._store.update_pending_voice(record)
+        if record.transcript_message_id is None:
+            raise RuntimeError("Failed to send voice transcript message")
+        await self._update_voice_progress_message(record, "Voice note transcribed.")
+        message = TelegramMessage(
+            update_id=0,
+            message_id=record.message_id,
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+            from_user_id=None,
+            text=None,
+            date=None,
+            is_topic_message=record.thread_id is not None,
+        )
+        key = self._resolve_topic_key(record.chat_id, record.thread_id)
+        runtime = self._router.runtime_for(key)
+        if self._config.concurrency.per_topic_queue:
+            await runtime.queue.enqueue(
+                lambda: self._handle_normal_message(
+                    message,
+                    runtime,
+                    text_override=transcript_text,
+                    send_placeholder=True,
+                    transcript_message_id=record.transcript_message_id,
+                    transcript_text=transcript_text,
+                )
+            )
+        else:
+            await self._handle_normal_message(
+                message,
+                runtime,
+                text_override=transcript_text,
+                send_placeholder=True,
+                transcript_message_id=record.transcript_message_id,
+                transcript_text=transcript_text,
+            )
+
+    async def _record_voice_failure(
+        self,
+        record: PendingVoiceRecord,
+        exc: Exception,
+        *,
+        retry_after: Optional[int],
+    ) -> None:
+        record.attempts += 1
+        record.last_error = str(exc)[:500]
+        record.last_attempt_at = now_iso()
+        delay = self._voice_retry_delay(record.attempts, retry_after=retry_after)
+        record.next_attempt_at = _format_future_time(delay)
+        self._store.update_pending_voice(record)
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "telegram.voice.retry",
+            record_id=record.record_id,
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+            attempts=record.attempts,
+            retry_after=retry_after,
+            next_attempt_at=record.next_attempt_at,
+            exc=exc,
+        )
+        if record.attempts == 1 and record.progress_message_id is None:
+            progress_id = await self._send_voice_progress_message(
+                record,
+                "Queued voice note, retrying download...",
+            )
+            if progress_id is not None:
+                record.progress_message_id = progress_id
+                self._store.update_pending_voice(record)
+        if record.attempts >= VOICE_MAX_ATTEMPTS:
+            await self._give_up_voice(
+                record,
+                "Voice transcription failed after retries. Please resend.",
+            )
+
+    async def _give_up_voice(self, record: PendingVoiceRecord, message: str) -> None:
+        if record.progress_message_id is not None:
+            await self._edit_message_text(
+                record.chat_id,
+                record.progress_message_id,
+                message,
+            )
+        else:
+            await self._send_message(
+                record.chat_id,
+                message,
+                thread_id=record.thread_id,
+                reply_to=record.message_id,
+            )
+        self._remove_voice_file(record)
+        self._store.delete_pending_voice(record.record_id)
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "telegram.voice.gave_up",
+            record_id=record.record_id,
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+            attempts=record.attempts,
+        )
+
+    async def _send_voice_progress_message(
+        self, record: PendingVoiceRecord, text: str
+    ) -> Optional[int]:
+        payload_text, parse_mode = self._prepare_outgoing_text(
+            text,
+            chat_id=record.chat_id,
+            thread_id=record.thread_id,
+            reply_to=record.message_id,
+            workspace_path=record.workspace_path,
+        )
+        try:
+            response = await self._bot.send_message(
+                record.chat_id,
+                payload_text,
+                message_thread_id=record.thread_id,
+                reply_to_message_id=record.message_id,
+                parse_mode=parse_mode,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.voice.progress_failed",
+                record_id=record.record_id,
+                chat_id=record.chat_id,
+                thread_id=record.thread_id,
+                exc=exc,
+            )
+            return None
+        message_id = response.get("message_id") if isinstance(response, dict) else None
+        return message_id if isinstance(message_id, int) else None
+
+    async def _update_voice_progress_message(
+        self, record: PendingVoiceRecord, text: str
+    ) -> None:
+        if record.progress_message_id is None:
+            return
+        await self._edit_message_text(
+            record.chat_id,
+            record.progress_message_id,
+            text,
+        )
+
+    async def _mark_voice_inflight(self, record_id: str) -> bool:
+        if self._voice_lock is None:
+            self._voice_lock = asyncio.Lock()
+        async with self._voice_lock:
+            if record_id in self._voice_inflight:
+                return False
+            self._voice_inflight.add(record_id)
+            return True
+
+    async def _clear_voice_inflight(self, record_id: str) -> None:
+        if self._voice_lock is None:
+            return
+        async with self._voice_lock:
+            self._voice_inflight.discard(record_id)
+
+    def _voice_ready_for_attempt(self, record: PendingVoiceRecord) -> bool:
+        next_attempt = _parse_iso_timestamp(record.next_attempt_at)
+        if next_attempt is None:
+            return True
+        return datetime.now(timezone.utc) >= next_attempt
+
+    def _voice_retry_delay(
+        self, attempts: int, *, retry_after: Optional[int]
+    ) -> float:
+        if retry_after is not None and retry_after > 0:
+            return float(retry_after) + VOICE_RETRY_AFTER_BUFFER_SECONDS
+        delay = VOICE_RETRY_INITIAL_SECONDS * (2 ** max(attempts - 1, 0))
+        delay = min(delay, VOICE_RETRY_MAX_SECONDS)
+        jitter = delay * VOICE_RETRY_JITTER_RATIO
+        if jitter:
+            delay += random.uniform(0, jitter)
+        return delay
+
+    def _resolve_voice_download_path(
+        self, record: PendingVoiceRecord
+    ) -> Optional[Path]:
+        if not record.download_path:
+            return None
+        path = Path(record.download_path)
+        if path.exists():
+            return path
+        record.download_path = None
+        self._store.update_pending_voice(record)
+        return None
+
+    def _persist_voice_payload(
+        self,
+        record: PendingVoiceRecord,
+        data: bytes,
+        *,
+        file_path: Optional[str],
+    ) -> Path:
+        workspace_path = record.workspace_path or str(self._config.root)
+        storage_dir = self._voice_storage_dir(workspace_path)
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        token = secrets.token_hex(6)
+        ext = self._choose_voice_extension(
+            record.file_name,
+            record.mime_type,
+            file_path=file_path,
+        )
+        name = f"telegram-voice-{int(time.time())}-{token}{ext}"
+        path = storage_dir / name
+        path.write_bytes(data)
+        return path
+
+    def _voice_storage_dir(self, workspace_path: str) -> Path:
+        return (
+            Path(workspace_path)
+            / ".codex-autorunner"
+            / "uploads"
+            / "telegram-voice"
+        )
+
+    def _choose_voice_extension(
+        self,
+        file_name: Optional[str],
+        mime_type: Optional[str],
+        *,
+        file_path: Optional[str],
+    ) -> str:
+        for candidate in (file_name, file_path):
+            if candidate:
+                suffix = Path(candidate).suffix
+                if suffix:
+                    return suffix
+        if mime_type == "audio/ogg":
+            return ".ogg"
+        if mime_type == "audio/opus":
+            return ".opus"
+        if mime_type == "audio/mpeg":
+            return ".mp3"
+        if mime_type == "audio/wav":
+            return ".wav"
+        return ".dat"
+
+    def _remove_voice_file(self, record: PendingVoiceRecord) -> None:
+        if not record.download_path:
+            return
+        path = Path(record.download_path)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.voice.cleanup_failed",
+                record_id=record.record_id,
+                path=str(path),
+            )
+
     async def _send_message_with_outbox(
         self,
         chat_id: int,
@@ -824,23 +1507,6 @@ class TelegramBotService:
             await asyncio.sleep(delay)
         return False
 
-    async def _start_app_server_with_backoff(self) -> None:
-        delay = APP_SERVER_START_BACKOFF_INITIAL_SECONDS
-        while True:
-            try:
-                await self._client.start()
-                return
-            except CodexAppServerError as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.app_server.start_failed",
-                    delay_seconds=round(delay, 2),
-                    exc=exc,
-                )
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, APP_SERVER_START_BACKOFF_MAX_SECONDS)
-
     def _spawn_task(self, coro: Awaitable[Any]) -> None:
         task = asyncio.create_task(coro)
         task.add_done_callback(self._log_task_result)
@@ -856,11 +1522,74 @@ class TelegramBotService:
     def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return self._router.resolve_key(chat_id, thread_id)
 
+    def _canonical_workspace_root(self, workspace_path: Optional[str]) -> Optional[Path]:
+        if not isinstance(workspace_path, str) or not workspace_path.strip():
+            return None
+        try:
+            return canonical_workspace_root(Path(workspace_path))
+        except Exception:
+            return None
+
+    def _workspace_id_for_path(self, workspace_path: Optional[str]) -> Optional[str]:
+        root = self._canonical_workspace_root(workspace_path)
+        if root is None:
+            return None
+        return workspace_id_for_path(root)
+
+    def _refresh_workspace_id(
+        self, key: str, record: "TelegramTopicRecord"
+    ) -> Optional[str]:
+        if record.workspace_id or not record.workspace_path:
+            return record.workspace_id
+        workspace_id = self._workspace_id_for_path(record.workspace_path)
+        if workspace_id:
+            self._store.update_topic(
+                key, lambda stored: setattr(stored, "workspace_id", workspace_id)
+            )
+            record.workspace_id = workspace_id
+        return record.workspace_id
+
+    def _build_workspace_env(
+        self, workspace_root: Path, workspace_id: str, state_dir: Path
+    ) -> dict[str, str]:
+        env = _app_server_env(self._config.app_server_command, workspace_root)
+        codex_home = state_dir / "codex_home"
+        codex_home.mkdir(parents=True, exist_ok=True)
+        _seed_codex_home(codex_home, logger=self._logger)
+        env["CODEX_HOME"] = str(codex_home)
+        return env
+
+    async def _client_for_workspace(
+        self, workspace_path: Optional[str]
+    ) -> Optional[CodexAppServerClient]:
+        workspace_root = self._canonical_workspace_root(workspace_path)
+        if workspace_root is None:
+            return None
+        delay = APP_SERVER_START_BACKOFF_INITIAL_SECONDS
+        while True:
+            try:
+                return await self._app_server_supervisor.get_client(workspace_root)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.start_failed",
+                    workspace_path=str(workspace_root),
+                    exc=exc,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, APP_SERVER_START_BACKOFF_MAX_SECONDS)
+
     def _topic_scope_id(
         self, repo_id: Optional[str], workspace_path: Optional[str]
     ) -> Optional[str]:
         normalized_repo = repo_id.strip() if isinstance(repo_id, str) else ""
         normalized_path = workspace_path.strip() if isinstance(workspace_path, str) else ""
+        if normalized_path:
+            try:
+                normalized_path = str(canonicalize_path(Path(normalized_path)))
+            except Exception:
+                pass
         if normalized_repo and normalized_path:
             return f"{normalized_repo}@{normalized_path}"
         if normalized_repo:
@@ -925,23 +1654,6 @@ class TelegramBotService:
             return None
         return self._turn_contexts.get(key)
 
-    def _register_turn_context(
-        self, turn_key: TurnKey, turn_id: str, ctx: TurnContext
-    ) -> bool:
-        existing = self._turn_contexts.get(turn_key)
-        if existing and existing.topic_key != ctx.topic_key:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "telegram.turn.context.collision",
-                turn_id=turn_id,
-                existing_topic=existing.topic_key,
-                new_topic=ctx.topic_key,
-            )
-            return False
-        self._turn_contexts[turn_key] = ctx
-        return True
-
     async def _interrupt_timeout_check(
         self, key: str, turn_id: str, message_id: int
     ) -> None:
@@ -959,6 +1671,79 @@ class TelegramBotService:
         runtime.interrupt_message_id = None
         runtime.interrupt_turn_id = None
 
+    async def _dispatch_interrupt_request(
+        self,
+        *,
+        turn_id: str,
+        runtime: Any,
+        chat_id: int,
+        thread_id: Optional[int],
+    ) -> None:
+        key = self._resolve_topic_key(chat_id, thread_id)
+        record = self._router.get_topic(key)
+        client = await self._client_for_workspace(
+            record.workspace_path if record else None
+        )
+        if client is None:
+            runtime.interrupt_requested = False
+            if runtime.interrupt_message_id is not None:
+                await self._edit_message_text(
+                    chat_id,
+                    runtime.interrupt_message_id,
+                    "Interrupt failed.",
+                )
+                runtime.interrupt_message_id = None
+                runtime.interrupt_turn_id = None
+            return
+        try:
+            await asyncio.wait_for(
+                client.turn_interrupt(turn_id),
+                timeout=DEFAULT_INTERRUPT_REQUEST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.interrupt.request_timeout",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+            )
+            if (
+                runtime.interrupt_message_id is not None
+                and runtime.interrupt_turn_id == turn_id
+            ):
+                await self._edit_message_text(
+                    chat_id,
+                    runtime.interrupt_message_id,
+                    "Interrupt failed.",
+                )
+                runtime.interrupt_message_id = None
+                runtime.interrupt_turn_id = None
+            runtime.interrupt_requested = False
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.interrupt.failed",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                exc=exc,
+            )
+            if (
+                runtime.interrupt_message_id is not None
+                and runtime.interrupt_turn_id == turn_id
+            ):
+                await self._edit_message_text(
+                    chat_id,
+                    runtime.interrupt_message_id,
+                    "Interrupt failed.",
+                )
+                runtime.interrupt_message_id = None
+                runtime.interrupt_turn_id = None
+            runtime.interrupt_requested = False
+
     async def _dispatch_update(self, update: TelegramUpdate) -> None:
         chat_id = None
         user_id = None
@@ -966,6 +1751,7 @@ class TelegramBotService:
         message_id = None
         is_topic = None
         is_edited = None
+        key = None
         if update.message:
             chat_id = update.message.chat_id
             user_id = update.message.from_user_id
@@ -973,11 +1759,14 @@ class TelegramBotService:
             message_id = update.message.message_id
             is_topic = update.message.is_topic_message
             is_edited = update.message.is_edited
+            key = self._resolve_topic_key(chat_id, thread_id)
         elif update.callback:
             chat_id = update.callback.chat_id
             user_id = update.callback.from_user_id
             thread_id = update.callback.thread_id
             message_id = update.callback.message_id
+            if chat_id is not None:
+                key = self._resolve_topic_key(chat_id, thread_id)
         log_event(
             self._logger,
             logging.INFO,
@@ -992,13 +1781,45 @@ class TelegramBotService:
             has_message=bool(update.message),
             has_callback=bool(update.callback),
         )
+        if (
+            update.update_id is not None
+            and key
+            and not self._should_process_update(key, update.update_id)
+        ):
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.update.duplicate",
+                update_id=update.update_id,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                message_id=message_id,
+            )
+            return
         if not allowlist_allows(update, self._allowlist):
             self._log_denied(update)
             return
         if update.callback:
+            if key:
+                self._enqueue_topic_work(
+                    key,
+                    lambda: self._handle_callback(update.callback),
+                    force_queue=True,
+                )
+                return
             await self._handle_callback(update.callback)
             return
         if update.message:
+            if key:
+                if self._should_bypass_topic_queue(update.message):
+                    await self._handle_message(update.message)
+                    return
+                self._enqueue_topic_work(
+                    key,
+                    lambda: self._handle_message(update.message),
+                    force_queue=True,
+                )
+                return
             await self._handle_message(update.message)
 
     def _log_denied(self, update: TelegramUpdate) -> None:
@@ -1050,6 +1871,26 @@ class TelegramBotService:
             return
         await self._buffer_coalesced_message(message, text_candidate)
 
+    def _should_bypass_topic_queue(self, message: TelegramMessage) -> bool:
+        raw_text = message.text or ""
+        raw_caption = message.caption or ""
+        text_candidate = raw_text if raw_text.strip() else raw_caption
+        if not text_candidate:
+            return False
+        trimmed_text = text_candidate.strip()
+        if not trimmed_text:
+            return False
+        if is_interrupt_alias(trimmed_text):
+            return True
+        entities = message.entities if raw_text.strip() else message.caption_entities
+        command = parse_command(
+            text_candidate, entities=entities, bot_username=self._bot_username
+        )
+        if not command:
+            return False
+        spec = self._command_specs.get(command.name)
+        return bool(spec and spec.allow_during_turn)
+
     async def _handle_edited_message(self, message: TelegramMessage) -> None:
         text = (message.text or "").strip()
         if not text:
@@ -1075,7 +1916,9 @@ class TelegramBotService:
             ),
         )
 
-    async def _handle_message_inner(self, message: TelegramMessage) -> None:
+    async def _handle_message_inner(
+        self, message: TelegramMessage, *, topic_key: Optional[str] = None
+    ) -> None:
         raw_text = message.text or ""
         raw_caption = message.caption or ""
         text = raw_text.strip()
@@ -1086,7 +1929,11 @@ class TelegramBotService:
         has_media = self._message_has_media(message)
         if not text and not has_media:
             return
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = (
+            topic_key
+            if isinstance(topic_key, str) and topic_key
+            else self._resolve_topic_key(message.chat_id, message.thread_id)
+        )
         runtime = self._router.runtime_for(key)
 
         if text and self._handle_pending_resume(key, text):
@@ -1153,20 +2000,25 @@ class TelegramBotService:
             lambda: self._handle_normal_message(message, runtime, text_override=text),
         )
 
-    def _coalesce_key(self, message: TelegramMessage) -> str:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        user_id = message.from_user_id
+    def _coalesce_key_for_topic(self, key: str, user_id: Optional[int]) -> str:
         if user_id is None:
             return f"{key}:user:unknown"
         return f"{key}:user:{user_id}"
 
+    def _coalesce_key(self, message: TelegramMessage) -> str:
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        return self._coalesce_key_for_topic(key, message.from_user_id)
+
     async def _buffer_coalesced_message(self, message: TelegramMessage, text: str) -> None:
-        key = self._coalesce_key(message)
+        topic_key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = self._coalesce_key_for_topic(topic_key, message.from_user_id)
         lock = self._coalesce_locks.setdefault(key, asyncio.Lock())
         async with lock:
             buffer = self._coalesced_buffers.get(key)
             if buffer is None:
-                buffer = _CoalescedBuffer(message=message, parts=[text])
+                buffer = _CoalescedBuffer(
+                    message=message, parts=[text], topic_key=topic_key
+                )
                 self._coalesced_buffers[key] = buffer
             else:
                 buffer.parts.append(text)
@@ -1207,7 +2059,7 @@ class TelegramBotService:
             if task is not None and task is not asyncio.current_task():
                 task.cancel()
         combined_message = self._build_coalesced_message(buffer)
-        await self._handle_message_inner(combined_message)
+        await self._handle_message_inner(combined_message, topic_key=buffer.topic_key)
 
     def _build_coalesced_message(self, buffer: _CoalescedBuffer) -> TelegramMessage:
         combined_text = "\n".join(buffer.parts)
@@ -1299,7 +2151,11 @@ class TelegramBotService:
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                _with_conversation_id(
+                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1390,6 +2246,25 @@ class TelegramBotService:
         )
         return True
 
+    def _should_process_update(self, key: str, update_id: int) -> bool:
+        if not isinstance(update_id, int):
+            return True
+        if isinstance(update_id, bool):
+            return True
+        duplicate = False
+
+        def apply(record: "TelegramTopicRecord") -> None:
+            nonlocal duplicate
+            last_id = record.last_update_id
+            if isinstance(last_id, int) and not isinstance(last_id, bool):
+                if update_id <= last_id:
+                    duplicate = True
+                    return
+            record.last_update_id = update_id
+
+        self._store.update_topic(key, apply)
+        return not duplicate
+
     async def _handle_callback(self, callback: TelegramCallbackQuery) -> None:
         parsed = parse_callback_data(callback.data)
         if parsed is None:
@@ -1422,6 +2297,9 @@ class TelegramBotService:
         elif isinstance(parsed, UpdateCallback):
             if key:
                 await self._handle_update_callback(key, callback, parsed)
+        elif isinstance(parsed, UpdateConfirmCallback):
+            if key:
+                await self._handle_update_confirm_callback(key, callback, parsed)
         elif isinstance(parsed, CancelCallback):
             if key:
                 await self._handle_selection_cancel(key, parsed, callback)
@@ -1513,9 +2391,28 @@ class TelegramBotService:
             selection_key=key,
         )
 
-    def _enqueue_topic_work(self, key: str, work: Any) -> None:
+    async def _handle_update_confirm_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: UpdateConfirmCallback,
+    ) -> None:
+        if not self._update_confirm_options.get(key):
+            await self._answer_callback(callback, "Selection expired")
+            return
+        self._update_confirm_options.pop(key, None)
+        if parsed.decision != "yes":
+            await self._answer_callback(callback, "Cancelled")
+            await self._finalize_selection(key, callback, "Update cancelled.")
+            return
+        await self._prompt_update_selection_from_callback(key, callback)
+        await self._answer_callback(callback, "Select update target")
+
+    def _enqueue_topic_work(
+        self, key: str, work: Any, *, force_queue: bool = False
+    ) -> None:
         runtime = self._router.runtime_for(key)
-        if self._config.concurrency.per_topic_queue:
+        if force_queue or self._config.concurrency.per_topic_queue:
             self._spawn_task(runtime.queue.enqueue(work))
         else:
             self._spawn_task(work())
@@ -1606,6 +2503,12 @@ class TelegramBotService:
                 "status",
                 "show current binding and thread status",
                 self._handle_status,
+                allow_during_turn=True,
+            ),
+            "debug": CommandSpec(
+                "debug",
+                "show topic debug info",
+                self._handle_debug,
                 allow_during_turn=True,
             ),
             "diff": CommandSpec(
@@ -1721,8 +2624,17 @@ class TelegramBotService:
         thread_id = record.active_thread_id
         if not thread_id:
             return record
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
         try:
-            result = await self._client.thread_resume(thread_id)
+            result = await client.thread_resume(thread_id)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -1792,6 +2704,32 @@ class TelegramBotService:
             message.chat_id, message.thread_id, result, active_thread_id=thread_id
         )
 
+    def _find_thread_conflict(self, thread_id: str, *, key: str) -> Optional[str]:
+        return self._store.find_active_thread(thread_id, exclude_key=key)
+
+    async def _handle_thread_conflict(
+        self,
+        message: TelegramMessage,
+        thread_id: str,
+        conflict_key: str,
+    ) -> None:
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "telegram.thread.conflict",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            codex_thread_id=thread_id,
+            conflict_topic=conflict_key,
+        )
+        await self._send_message(
+            message.chat_id,
+            "That Codex thread is already active in another topic. "
+            "Use /new here or continue in the other topic.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
     def _apply_thread_result(
         self,
         chat_id: int,
@@ -1804,6 +2742,8 @@ class TelegramBotService:
         info = _extract_thread_info(result)
         if active_thread_id is None:
             active_thread_id = info.get("thread_id")
+        user_preview, assistant_preview = _extract_thread_preview_parts(result)
+        last_used_at = now_iso()
 
         def apply(record: "TelegramTopicRecord") -> None:
             if active_thread_id:
@@ -1813,16 +2753,21 @@ class TelegramBotService:
                 record.thread_ids.insert(0, active_thread_id)
                 if len(record.thread_ids) > MAX_TOPIC_THREAD_HISTORY:
                     record.thread_ids = record.thread_ids[:MAX_TOPIC_THREAD_HISTORY]
+                _set_thread_summary(
+                    record,
+                    active_thread_id,
+                    user_preview=user_preview,
+                    assistant_preview=assistant_preview,
+                    last_used_at=last_used_at,
+                    workspace_path=info.get("workspace_path"),
+                    rollout_path=info.get("rollout_path"),
+                )
             incoming_workspace = info.get("workspace_path")
             if isinstance(incoming_workspace, str) and incoming_workspace:
                 if record.workspace_path:
                     try:
-                        current_root = (
-                            Path(record.workspace_path).expanduser().resolve()
-                        )
-                        incoming_root = (
-                            Path(incoming_workspace).expanduser().resolve()
-                        )
+                        current_root = canonicalize_path(Path(record.workspace_path))
+                        incoming_root = canonicalize_path(Path(incoming_workspace))
                     except Exception:
                         current_root = None
                         incoming_root = None
@@ -1842,6 +2787,7 @@ class TelegramBotService:
                         record.workspace_path = incoming_workspace
                 else:
                     record.workspace_path = incoming_workspace
+                record.workspace_id = self._workspace_id_for_path(record.workspace_path)
             if info.get("rollout_path"):
                 record.rollout_path = info["rollout_path"]
             if info.get("model") and (overwrite_defaults or record.model is None):
@@ -1876,6 +2822,7 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return None
+        self._refresh_workspace_id(key, record)
         return record
 
     async def _ensure_thread_id(
@@ -1883,6 +2830,12 @@ class TelegramBotService:
     ) -> Optional[str]:
         thread_id = record.active_thread_id
         if thread_id:
+            key = self._resolve_topic_key(message.chat_id, message.thread_id)
+            conflict_key = self._find_thread_conflict(thread_id, key=key)
+            if conflict_key:
+                self._router.set_active_thread(message.chat_id, message.thread_id, None)
+                await self._handle_thread_conflict(message, thread_id, conflict_key)
+                return None
             verified = await self._verify_active_thread(message, record)
             if not verified:
                 return None
@@ -1890,7 +2843,16 @@ class TelegramBotService:
             thread_id = record.active_thread_id
             if thread_id:
                 return thread_id
-        thread = await self._client.thread_start(record.workspace_path or "")
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
+        thread = await client.thread_start(record.workspace_path or "")
         if not await self._require_thread_workspace(
             message, record.workspace_path, thread, action="thread_start"
         ):
@@ -1944,7 +2906,28 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if record.active_thread_id:
+            conflict_key = self._find_thread_conflict(
+                record.active_thread_id,
+                key=key,
+            )
+            if conflict_key:
+                self._router.set_active_thread(message.chat_id, message.thread_id, None)
+                await self._handle_thread_conflict(
+                    message,
+                    record.active_thread_id,
+                    conflict_key,
+                )
+                return
             verified = await self._verify_active_thread(message, record)
             if not verified:
                 return
@@ -1956,9 +2939,12 @@ class TelegramBotService:
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
         prompt_text = text_override if text_override is not None else (message.text or "")
+        prompt_text = self._maybe_append_whisper_disclaimer(
+            prompt_text, transcript_text=transcript_text
+        )
         try:
             if not thread_id:
-                thread = await self._client.thread_start(record.workspace_path)
+                thread = await client.thread_start(record.workspace_path)
                 if not await self._require_thread_workspace(
                     message, record.workspace_path, thread, action="thread_start"
                 ):
@@ -1982,6 +2968,22 @@ class TelegramBotService:
                 record = self._router.set_active_thread(
                     message.chat_id, message.thread_id, thread_id
                 )
+            if thread_id:
+                user_preview = _preview_from_text(
+                    prompt_text, RESUME_PREVIEW_USER_LIMIT
+                )
+                self._router.update_topic(
+                    message.chat_id,
+                    message.thread_id,
+                    lambda record: _set_thread_summary(
+                        record,
+                        thread_id,
+                        user_preview=user_preview,
+                        last_used_at=now_iso(),
+                        workspace_path=record.workspace_path,
+                        rollout_path=record.rollout_path,
+                    ),
+                )
             approval_policy, sandbox_policy = self._effective_policies(record)
             turn_kwargs: dict[str, Any] = {}
             if record.model:
@@ -2003,14 +3005,15 @@ class TelegramBotService:
                 sandbox_policy=sandbox_policy,
             )
 
-            async with self._turn_semaphore:
+            turn_semaphore = self._ensure_turn_semaphore()
+            async with turn_semaphore:
                 if send_placeholder:
                     placeholder_id = await self._send_placeholder(
                         message.chat_id,
                         thread_id=message.thread_id,
                         reply_to=message.message_id,
                     )
-                turn_handle = await self._client.turn_start(
+                turn_handle = await client.turn_start(
                     thread_id,
                     prompt_text,
                     input_items=input_items,
@@ -2055,6 +3058,21 @@ class TelegramBotService:
             runtime.current_turn_id = None
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
+            failure_message = "Codex turn failed; check logs for details."
+            if isinstance(exc, CodexAppServerDisconnected):
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.disconnected_during_turn",
+                    topic_key=key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    turn_id=turn_handle.turn_id if turn_handle else None,
+                )
+                failure_message = (
+                    "Codex app-server disconnected; retrying. "
+                    "Please resend your message."
+                )
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2070,7 +3088,7 @@ class TelegramBotService:
                 reply_to=message.message_id,
                 placeholder_id=placeholder_id,
                 response=_with_conversation_id(
-                    "Codex turn failed; check logs for details.",
+                    failure_message,
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                 ),
@@ -2087,11 +3105,31 @@ class TelegramBotService:
             if turn_handle is not None:
                 if turn_key is not None:
                     self._turn_contexts.pop(turn_key, None)
+                    self._clear_thinking_preview(turn_key)
             runtime.current_turn_id = None
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
 
-        response = _compose_agent_response(result.agent_messages)
+        response = _compose_agent_response(
+            result.agent_messages, errors=result.errors, status=result.status
+        )
+        if thread_id and result.agent_messages:
+            assistant_preview = _preview_from_text(
+                response, RESUME_PREVIEW_ASSISTANT_LIMIT
+            )
+            if assistant_preview:
+                self._router.update_topic(
+                    message.chat_id,
+                    message.thread_id,
+                    lambda record: _set_thread_summary(
+                        record,
+                        thread_id,
+                        assistant_preview=assistant_preview,
+                        last_used_at=now_iso(),
+                        workspace_path=record.workspace_path,
+                        rollout_path=record.rollout_path,
+                    ),
+                )
         if result.status == "interrupted" or runtime.interrupt_requested:
             response = _compose_interrupt_response(response)
             runtime.interrupt_requested = False
@@ -2127,6 +3165,7 @@ class TelegramBotService:
             turn_id=turn_handle.turn_id if turn_handle else None,
             status=result.status,
             agent_message_count=len(result.agent_messages),
+            error_count=len(result.errors),
         )
         response_sent = await self._deliver_turn_response(
             chat_id=message.chat_id,
@@ -2159,6 +3198,26 @@ class TelegramBotService:
                 transcript_message_id,
                 transcript_text,
             )
+
+    def _maybe_append_whisper_disclaimer(
+        self,
+        prompt_text: str,
+        *,
+        transcript_text: Optional[str],
+    ) -> str:
+        if not transcript_text:
+            return prompt_text
+        if WHISPER_TRANSCRIPT_DISCLAIMER in prompt_text:
+            return prompt_text
+        provider = None
+        if self._voice_config is not None:
+            provider = self._voice_config.provider
+        provider = provider or "openai_whisper"
+        if provider != "openai_whisper":
+            return prompt_text
+        if prompt_text.strip():
+            return f"{prompt_text}\n\n{WHISPER_TRANSCRIPT_DISCLAIMER}"
+        return WHISPER_TRANSCRIPT_DISCLAIMER
 
     async def _handle_image_message(
         self,
@@ -2308,131 +3367,32 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        try:
-            data, file_path, file_size = await self._download_telegram_file(
-                candidate.file_id
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.media.voice.download_failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
-                exc=exc,
-            )
-            await self._send_message(
-                message.chat_id,
-                "Failed to download voice note.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if file_size and file_size > max_bytes:
-            await self._send_message(
-                message.chat_id,
-                f"Voice note too large (max {max_bytes} bytes).",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if len(data) > max_bytes:
-            await self._send_message(
-                message.chat_id,
-                f"Voice note too large (max {max_bytes} bytes).",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        filename = candidate.file_name
-        if not filename and file_path:
-            filename = Path(file_path).name
-        try:
-            result = await asyncio.to_thread(
-                self._voice_service.transcribe,
-                data,
-                client="telegram",
-                filename=filename,
-                content_type=candidate.mime_type,
-            )
-        except VoiceServiceError as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.media.voice.transcribe_failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
-                reason=exc.reason,
-            )
-            await self._send_message(
-                message.chat_id,
-                exc.detail,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        transcript = ""
-        if isinstance(result, dict):
-            transcript = str(result.get("text") or "")
-        transcript = transcript.strip()
-        if not transcript:
-            await self._send_message(
-                message.chat_id,
-                "Voice note transcribed to empty text.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        combined = caption_text.strip()
-        if combined:
-            combined = f"{combined}\n\n{transcript}"
-        else:
-            combined = transcript
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.media.voice.transcribed",
+        pending = PendingVoiceRecord(
+            record_id=secrets.token_hex(8),
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             message_id=message.message_id,
-            text_len=len(transcript),
+            file_id=candidate.file_id,
+            file_name=candidate.file_name,
+            caption=caption_text,
+            file_size=candidate.file_size,
+            mime_type=candidate.mime_type,
+            duration=candidate.duration,
+            workspace_path=record.workspace_path,
+            created_at=now_iso(),
         )
-        send_placeholder = True
-        transcript_message_id = None
-        transcript_message = self._format_voice_transcript_message(
-            combined,
-            WORKING_PLACEHOLDER,
+        self._store.enqueue_pending_voice(pending)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media.voice.queued",
+            record_id=pending.record_id,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            file_id=candidate.file_id,
         )
-        try:
-            transcript_message_id = await self._send_voice_transcript_message(
-                message.chat_id,
-                transcript_message,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            if transcript_message_id is not None:
-                send_placeholder = False
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.media.voice.transcript_message_failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
-                exc=exc,
-            )
-        await self._handle_normal_message(
-            message,
-            runtime,
-            text_override=combined,
-            record=record,
-            send_placeholder=send_placeholder,
-            transcript_message_id=transcript_message_id,
-            transcript_text=combined,
-        )
+        self._spawn_task(self._attempt_pending_voice(pending.record_id))
 
     async def _download_telegram_file(
         self, file_id: str
@@ -2496,11 +3456,16 @@ class TelegramBotService:
 
     async def _handle_interrupt(self, message: TelegramMessage, runtime: Any) -> None:
         turn_id = runtime.current_turn_id
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
         pending_request_ids = [
             request_id
             for request_id, pending in self._pending_approvals.items()
-            if pending.chat_id == message.chat_id
-            and pending.thread_id == message.thread_id
+            if (pending.topic_key == key)
+            or (
+                pending.topic_key is None
+                and pending.chat_id == message.chat_id
+                and pending.thread_id == message.thread_id
+            )
         ]
         for request_id in pending_request_ids:
             pending = self._pending_approvals.pop(request_id, None)
@@ -2510,13 +3475,9 @@ class TelegramBotService:
         if pending_request_ids:
             runtime.pending_request_id = None
         if not turn_id:
-            pending = self._store.pending_approvals_for_topic(
-                message.chat_id, message.thread_id
-            )
+            pending = self._store.pending_approvals_for_key(key)
             if pending:
-                self._store.clear_pending_approvals_for_topic(
-                    message.chat_id, message.thread_id
-                )
+                self._store.clear_pending_approvals_for_key(key)
                 runtime.pending_request_id = None
                 await self._send_message(
                     message.chat_id,
@@ -2550,8 +3511,12 @@ class TelegramBotService:
             message_id=message.message_id,
             turn_id=turn_id,
         )
-        await self._client.turn_interrupt(turn_id)
-        payload_text, parse_mode = self._prepare_message("Interrupt requested.")
+        payload_text, parse_mode = self._prepare_outgoing_text(
+            "Interrupt requested.",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
         response = await self._bot.send_message(
             message.chat_id,
             payload_text,
@@ -2570,6 +3535,14 @@ class TelegramBotService:
                     message_id,
                 )
             )
+        self._spawn_task(
+            self._dispatch_interrupt_request(
+                turn_id=turn_id,
+                runtime=runtime,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+            )
+        )
 
     async def _handle_bind(self, message: TelegramMessage, args: str) -> None:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
@@ -2620,6 +3593,14 @@ class TelegramBotService:
             repo_id=resolved_repo_id,
             scope=scope,
         )
+        workspace_id = self._workspace_id_for_path(workspace_path)
+        if workspace_id:
+            self._router.update_topic(
+                chat_id,
+                thread_id,
+                lambda record: setattr(record, "workspace_id", workspace_id),
+                scope=scope,
+            )
         await self._answer_callback(callback, "Bound to repo")
         await self._finalize_selection(
             key,
@@ -2650,6 +3631,14 @@ class TelegramBotService:
             repo_id=repo_id,
             scope=scope,
         )
+        workspace_id = self._workspace_id_for_path(workspace_path)
+        if workspace_id:
+            self._router.update_topic(
+                message.chat_id,
+                message.thread_id,
+                lambda record: setattr(record, "workspace_id", workspace_id),
+                scope=scope,
+            )
         await self._send_message(
             message.chat_id,
             f"Bound to {repo_id or workspace_path}.",
@@ -2668,7 +3657,16 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        thread = await self._client.thread_start(record.workspace_path)
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        thread = await client.thread_start(record.workspace_path)
         if not await self._require_thread_workspace(
             message, record.workspace_path, thread, action="thread_start"
         ):
@@ -2696,6 +3694,20 @@ class TelegramBotService:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         argv = self._parse_command_args(args)
         trimmed = args.strip()
+        show_unscoped = False
+        refresh = False
+        remaining: list[str] = []
+        for arg in argv:
+            lowered = arg.lower()
+            if lowered in ("--all", "all", "--unscoped", "unscoped"):
+                show_unscoped = True
+                continue
+            if lowered in ("--refresh", "refresh"):
+                refresh = True
+                continue
+            remaining.append(arg)
+        if argv:
+            trimmed = " ".join(remaining).strip()
         if trimmed.isdigit():
             state = self._resume_options.get(key)
             if state:
@@ -2706,7 +3718,7 @@ class TelegramBotService:
                     await self._resume_thread_by_id(key, thread_id)
                     return
         if trimmed and not trimmed.isdigit():
-            if argv and argv[0].lower() in ("list", "ls"):
+            if remaining and remaining[0].lower() in ("list", "ls"):
                 trimmed = ""
             else:
                 await self._resume_thread_by_id(key, trimmed)
@@ -2720,12 +3732,52 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if not show_unscoped and not record.thread_ids:
+            await self._send_message(
+                message.chat_id,
+                "No previous threads found for this topic. Use /new to start one.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        threads: list[dict[str, Any]] = []
+        entries_by_id: dict[str, dict[str, Any]] = {}
+        list_failed = False
+        local_thread_ids: list[str] = []
+        local_previews: dict[str, str] = {}
+        local_thread_topics: dict[str, set[str]] = {}
+        if show_unscoped:
+            state = self._store.load()
+            local_thread_ids, local_previews, local_thread_topics = _local_workspace_threads(
+                state, record.workspace_path, current_key=key
+            )
+            for thread_id in record.thread_ids:
+                local_thread_topics.setdefault(thread_id, set()).add(key)
+                if thread_id not in local_thread_ids:
+                    local_thread_ids.append(thread_id)
+                cached_preview = _thread_summary_preview(record, thread_id)
+                if cached_preview:
+                    local_previews.setdefault(thread_id, cached_preview)
+        limit = _resume_thread_list_limit(record.thread_ids)
+        needed_ids = None if show_unscoped or not record.thread_ids else set(record.thread_ids)
         try:
-            threads = await self._client.thread_list(
-                cursor=None,
-                limit=DEFAULT_THREAD_LIST_LIMIT,
+            threads, _ = await self._list_threads_paginated(
+                client,
+                limit=limit,
+                max_pages=THREAD_LIST_MAX_PAGES,
+                needed_ids=needed_ids,
             )
         except Exception as exc:
+            list_failed = True
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2734,49 +3786,164 @@ class TelegramBotService:
                 thread_id=message.thread_id,
                 exc=exc,
             )
-            await self._send_message(
-                message.chat_id,
-                _with_conversation_id(
-                    "Failed to list threads; check logs for details.",
-                    chat_id=message.chat_id,
+            if show_unscoped and not local_thread_ids:
+                await self._send_message(
+                    message.chat_id,
+                    _with_conversation_id(
+                        "Failed to list threads; check logs for details.",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    ),
                     thread_id=message.thread_id,
-                ),
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        normalized = _coerce_thread_list(threads)
+                    reply_to=message.message_id,
+                )
+                return
         entries_by_id = {
             entry.get("id"): entry
-            for entry in normalized
+            for entry in threads
             if isinstance(entry, dict) and isinstance(entry.get("id"), str)
         }
-        if record.thread_ids:
-            filtered = [
-                entries_by_id[thread_id]
-                for thread_id in record.thread_ids
-                if thread_id in entries_by_id
-            ]
+        candidates: list[dict[str, Any]] = []
+        unscoped: list[dict[str, Any]] = []
+        saw_path = False
+        if show_unscoped:
+            if threads:
+                filtered, unscoped, saw_path = _partition_threads(
+                    threads, record.workspace_path
+                )
+                seen_ids = {
+                    entry.get("id")
+                    for entry in filtered
+                    if isinstance(entry.get("id"), str)
+                }
+                candidates = filtered + [
+                    entry for entry in unscoped if entry.get("id") not in seen_ids
+                ]
+            if not candidates and not local_thread_ids:
+                if unscoped and not saw_path:
+                    await self._send_message(
+                        message.chat_id,
+                        _with_conversation_id(
+                            "No workspace-tagged threads available. Use /resume --all to list "
+                            "unscoped threads.",
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                        ),
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                await self._send_message(
+                    message.chat_id,
+                    _with_conversation_id(
+                        "No previous threads found for this workspace. "
+                        "If threads exist, update the app-server to include cwd metadata or use /new.",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    ),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+        missing_ids: list[str] = []
+        if show_unscoped:
+            for thread_id in local_thread_ids:
+                if thread_id not in entries_by_id:
+                    missing_ids.append(thread_id)
         else:
-            filtered = list(entries_by_id.values())
-        if not filtered:
-            await self._send_message(
-                message.chat_id,
-                "No previous threads found for this topic. Use /new to start one.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
+            for thread_id in record.thread_ids:
+                if thread_id not in entries_by_id:
+                    missing_ids.append(thread_id)
+        if refresh and missing_ids:
+            refreshed = await self._refresh_thread_summaries(
+                client,
+                missing_ids,
+                topic_keys_by_thread=local_thread_topics if show_unscoped else None,
+                default_topic_key=key,
             )
-            return
+            if refreshed:
+                if show_unscoped:
+                    state = self._store.load()
+                    local_thread_ids, local_previews, local_thread_topics = _local_workspace_threads(
+                        state, record.workspace_path, current_key=key
+                    )
+                    for thread_id in record.thread_ids:
+                        local_thread_topics.setdefault(thread_id, set()).add(key)
+                        if thread_id not in local_thread_ids:
+                            local_thread_ids.append(thread_id)
+                        cached_preview = _thread_summary_preview(record, thread_id)
+                        if cached_preview:
+                            local_previews.setdefault(thread_id, cached_preview)
+                else:
+                    record = self._router.get_topic(key) or record
         items: list[tuple[str, str]] = []
-        for entry in filtered:
-            thread_id = entry.get("id")
-            if not thread_id:
-                continue
-            items.append((thread_id, _compact_preview(entry.get("preview"))))
+        seen_item_ids: set[str] = set()
+        if show_unscoped:
+            for entry in candidates:
+                thread_id = entry.get("id")
+                if not isinstance(thread_id, str) or not thread_id:
+                    continue
+                if thread_id in seen_item_ids:
+                    continue
+                seen_item_ids.add(thread_id)
+                label = _format_thread_preview(entry)
+                if label == "(no preview)":
+                    cached_preview = local_previews.get(thread_id)
+                    if cached_preview:
+                        label = cached_preview
+                items.append((thread_id, label))
+            for thread_id in local_thread_ids:
+                if thread_id in seen_item_ids:
+                    continue
+                seen_item_ids.add(thread_id)
+                cached_preview = local_previews.get(thread_id)
+                label = (
+                    cached_preview
+                    if cached_preview
+                    else _format_missing_thread_label(thread_id, None)
+                )
+                items.append((thread_id, label))
+        else:
+            if record.thread_ids:
+                for thread_id in record.thread_ids:
+                    entry = entries_by_id.get(thread_id)
+                    if entry is None:
+                        cached_preview = _thread_summary_preview(record, thread_id)
+                        label = _format_missing_thread_label(thread_id, cached_preview)
+                    else:
+                        label = _format_thread_preview(entry)
+                        if label == "(no preview)":
+                            cached_preview = _thread_summary_preview(record, thread_id)
+                            if cached_preview:
+                                label = cached_preview
+                    items.append((thread_id, label))
+            else:
+                for entry in entries_by_id.values():
+                    thread_id = entry.get("id")
+                    if not isinstance(thread_id, str) or not thread_id:
+                        continue
+                    label = _format_thread_preview(entry)
+                    items.append((thread_id, label))
+        if missing_ids:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.resume.missing_thread_metadata",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                stored_count=len(record.thread_ids),
+                listed_count=len(entries_by_id) if not show_unscoped else len(threads),
+                missing_ids=missing_ids[:RESUME_MISSING_IDS_LOG_LIMIT],
+                list_failed=list_failed,
+            )
         if not items:
             await self._send_message(
                 message.chat_id,
-                "No resumable threads found.",
+                _with_conversation_id(
+                    "No resumable threads found.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2792,12 +3959,119 @@ class TelegramBotService:
             reply_markup=keyboard,
         )
 
+    async def _refresh_thread_summaries(
+        self,
+        client: CodexAppServerClient,
+        thread_ids: Sequence[str],
+        *,
+        topic_keys_by_thread: Optional[dict[str, set[str]]] = None,
+        default_topic_key: Optional[str] = None,
+    ) -> set[str]:
+        refreshed: set[str] = set()
+        if not thread_ids:
+            return refreshed
+        unique_ids: list[str] = []
+        seen: set[str] = set()
+        for thread_id in thread_ids:
+            if not isinstance(thread_id, str) or not thread_id:
+                continue
+            if thread_id in seen:
+                continue
+            seen.add(thread_id)
+            unique_ids.append(thread_id)
+            if len(unique_ids) >= RESUME_REFRESH_LIMIT:
+                break
+        for thread_id in unique_ids:
+            try:
+                result = await client.thread_resume(thread_id)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.resume.refresh_failed",
+                    thread_id=thread_id,
+                    exc=exc,
+                )
+                continue
+            user_preview, assistant_preview = _extract_thread_preview_parts(result)
+            info = _extract_thread_info(result)
+            workspace_path = info.get("workspace_path")
+            rollout_path = info.get("rollout_path")
+            if (
+                user_preview is None
+                and assistant_preview is None
+                and workspace_path is None
+                and rollout_path is None
+            ):
+                continue
+            last_used_at = now_iso() if user_preview or assistant_preview else None
+
+            def apply(record: "TelegramTopicRecord") -> None:
+                _set_thread_summary(
+                    record,
+                    thread_id,
+                    user_preview=user_preview,
+                    assistant_preview=assistant_preview,
+                    last_used_at=last_used_at,
+                    workspace_path=workspace_path,
+                    rollout_path=rollout_path,
+                )
+
+            keys = (
+                topic_keys_by_thread.get(thread_id)
+                if topic_keys_by_thread is not None
+                else None
+            )
+            if keys:
+                for key in keys:
+                    self._store.update_topic(key, apply)
+            elif default_topic_key:
+                self._store.update_topic(default_topic_key, apply)
+            else:
+                continue
+            refreshed.add(thread_id)
+        return refreshed
+
+    async def _list_threads_paginated(
+        self,
+        client: CodexAppServerClient,
+        *,
+        limit: int,
+        max_pages: int,
+        needed_ids: Optional[set[str]] = None,
+    ) -> tuple[list[dict[str, Any]], set[str]]:
+        entries: list[dict[str, Any]] = []
+        found_ids: set[str] = set()
+        seen_ids: set[str] = set()
+        cursor: Optional[str] = None
+        page_count = max(1, max_pages)
+        for _ in range(page_count):
+            payload = await client.thread_list(cursor=cursor, limit=limit)
+            page_entries = _coerce_thread_list(payload)
+            for entry in page_entries:
+                if not isinstance(entry, dict):
+                    continue
+                thread_id = entry.get("id")
+                if isinstance(thread_id, str):
+                    if thread_id in seen_ids:
+                        continue
+                    seen_ids.add(thread_id)
+                    found_ids.add(thread_id)
+                entries.append(entry)
+            if needed_ids is not None and needed_ids.issubset(found_ids):
+                break
+            cursor = _extract_thread_list_cursor(payload)
+            if not cursor:
+                break
+        return entries, found_ids
+
     async def _resume_thread_by_id(
         self,
         key: str,
         thread_id: str,
         callback: Optional[TelegramCallbackQuery] = None,
     ) -> None:
+        chat_id, thread_id_val = _split_topic_key(key)
         preview = None
         state = self._resume_options.get(key)
         if state:
@@ -2806,8 +4080,34 @@ class TelegramBotService:
                     preview = label
                     break
         self._resume_options.pop(key, None)
+        record = self._router.get_topic(key)
+        if record is None or not record.workspace_path:
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "Topic not bound; use /bind before resuming.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "Topic not bound; use /bind before resuming.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            return
         try:
-            result = await self._client.thread_resume(thread_id)
+            result = await client.thread_resume(thread_id)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -2829,13 +4129,21 @@ class TelegramBotService:
                 ),
             )
             return
-        record = self._router.get_topic(key)
         info = _extract_thread_info(result)
         resumed_path = info.get("workspace_path")
+        result_preview = _format_thread_preview(result)
+        if result_preview != "(no preview)":
+            preview = result_preview
         if record is None or not record.workspace_path:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
-                key, callback, "Topic not bound; use /bind before resuming."
+                key,
+                callback,
+                _with_conversation_id(
+                    "Topic not bound; use /bind before resuming.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
             )
             return
         if not isinstance(resumed_path, str):
@@ -2843,7 +4151,11 @@ class TelegramBotService:
             await self._finalize_selection(
                 key,
                 callback,
-                "Thread metadata missing workspace path; resume aborted to avoid cross-worktree mixups.",
+                _with_conversation_id(
+                    "Thread metadata missing workspace path; resume aborted to avoid cross-worktree mixups.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
             )
             return
         try:
@@ -2854,7 +4166,11 @@ class TelegramBotService:
             await self._finalize_selection(
                 key,
                 callback,
-                "Thread workspace path is invalid; resume aborted.",
+                _with_conversation_id(
+                    "Thread workspace path is invalid; resume aborted.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
             )
             return
         if not _paths_compatible(workspace_root, resumed_root):
@@ -2862,10 +4178,34 @@ class TelegramBotService:
             await self._finalize_selection(
                 key,
                 callback,
-                "Thread belongs to a different workspace; resume aborted.",
+                _with_conversation_id(
+                    "Thread belongs to a different workspace; resume aborted.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
             )
             return
-        chat_id, thread_id_val = _split_topic_key(key)
+        conflict_key = self._find_thread_conflict(thread_id, key=key)
+        if conflict_key:
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "Thread is already active in another topic; resume aborted.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.resume.conflict",
+                topic_key=key,
+                thread_id=thread_id,
+                conflict_topic=conflict_key,
+            )
+            return
         self._apply_thread_result(
             chat_id,
             thread_id_val,
@@ -2876,20 +4216,21 @@ class TelegramBotService:
         await self._answer_callback(callback, "Resumed thread")
         message = f"Resumed thread {thread_id}."
         if preview and preview != "(no preview)":
-            message = f"{message}\nLast: {preview}"
+            message = f"{message}\nLast:\n{preview}"
         await self._finalize_selection(key, callback, message)
 
     async def _handle_status(
         self, message: TelegramMessage, _args: str = "", runtime: Optional[Any] = None
     ) -> None:
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
         record = self._router.ensure_topic(message.chat_id, message.thread_id)
+        self._refresh_workspace_id(key, record)
         if runtime is None:
-            runtime = self._router.runtime_for(
-                self._resolve_topic_key(message.chat_id, message.thread_id)
-            )
+            runtime = self._router.runtime_for(key)
         approval_policy, sandbox_policy = self._effective_policies(record)
         lines = [
             f"Workspace: {record.workspace_path or 'unbound'}",
+            f"Workspace ID: {record.workspace_id or 'unknown'}",
             f"Active thread: {record.active_thread_id or 'none'}",
             f"Active turn: {runtime.current_turn_id or 'none'}",
             f"Model: {record.model or 'default'}",
@@ -2898,9 +4239,7 @@ class TelegramBotService:
             f"Approval policy: {approval_policy or 'default'}",
             f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
         ]
-        pending = self._store.pending_approvals_for_topic(
-            message.chat_id, message.thread_id
-        )
+        pending = self._store.pending_approvals_for_key(key)
         if pending:
             lines.append(f"Pending approvals: {len(pending)}")
             if len(pending) == 1:
@@ -2918,7 +4257,7 @@ class TelegramBotService:
         if record.active_thread_id:
             token_usage = self._token_usage_by_thread.get(record.active_thread_id)
             lines.extend(_format_token_usage(token_usage))
-        rate_limits = await self._read_rate_limits()
+        rate_limits = await self._read_rate_limits(record.workspace_path)
         lines.extend(_format_rate_limits(rate_limits))
         if not record.workspace_path:
             lines.append("Use /bind <repo_id> or /bind <path>.")
@@ -2929,10 +4268,72 @@ class TelegramBotService:
             reply_to=message.message_id,
         )
 
-    async def _read_rate_limits(self) -> Optional[dict[str, Any]]:
+    async def _handle_debug(
+        self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
+    ) -> None:
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = self._router.get_topic(key)
+        scope = None
+        try:
+            chat_id, thread_id, scope = parse_topic_key(key)
+            base_key = topic_key(chat_id, thread_id)
+        except ValueError:
+            base_key = key
+        lines = [
+            f"Topic key: {key}",
+            f"Base key: {base_key}",
+            f"Scope: {scope or 'none'}",
+        ]
+        if record is None:
+            lines.append("Record: missing")
+            await self._send_message(
+                message.chat_id,
+                "\n".join(lines),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        self._refresh_workspace_id(key, record)
+        workspace_path = record.workspace_path or "unbound"
+        canonical_path = "unbound"
+        if record.workspace_path:
+            try:
+                canonical_path = str(Path(record.workspace_path).expanduser().resolve())
+            except Exception:
+                canonical_path = "invalid"
+        lines.extend(
+            [
+                f"Workspace: {workspace_path}",
+                f"Workspace ID: {record.workspace_id or 'unknown'}",
+                f"Workspace (canonical): {canonical_path}",
+                f"Active thread: {record.active_thread_id or 'none'}",
+                f"Thread IDs: {len(record.thread_ids)}",
+                f"Cached summaries: {len(record.thread_summaries)}",
+            ]
+        )
+        preview_ids = record.thread_ids[:3]
+        if preview_ids:
+            lines.append("Preview samples:")
+            for thread_id in preview_ids:
+                preview = _thread_summary_preview(record, thread_id)
+                label = preview or "(no cached preview)"
+                lines.append(f"{thread_id}: {_compact_preview(label, 120)}")
+        await self._send_message(
+            message.chat_id,
+            "\n".join(lines),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _read_rate_limits(
+        self, workspace_path: Optional[str]
+    ) -> Optional[dict[str, Any]]:
+        client = await self._client_for_workspace(workspace_path)
+        if client is None:
+            return None
         for method in ("account/rateLimits/read", "account/read"):
             try:
-                result = await self._client.request(method, params=None, timeout=5.0)
+                result = await client.request(method, params=None, timeout=5.0)
             except (CodexAppServerError, asyncio.TimeoutError):
                 continue
             rate_limits = _extract_rate_limits(result)
@@ -3065,10 +4466,22 @@ class TelegramBotService:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         self._model_options.pop(key, None)
         self._model_pending.pop(key, None)
+        record = self._router.get_topic(key)
+        client = await self._client_for_workspace(
+            record.workspace_path if record else None
+        )
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         argv = self._parse_command_args(args)
         if not argv:
             try:
-                result = await self._client.request(
+                result = await client.request(
                     "model/list",
                     {"cursor": None, "limit": DEFAULT_MODEL_LIST_LIMIT},
                 )
@@ -3128,7 +4541,7 @@ class TelegramBotService:
             return
         if argv[0].lower() in ("list", "ls"):
             try:
-                result = await self._client.request(
+                result = await client.request(
                     "model/list",
                     {"cursor": None, "limit": DEFAULT_MODEL_LIST_LIMIT},
                 )
@@ -3212,6 +4625,15 @@ class TelegramBotService:
         thread_id = await self._ensure_thread_id(message, record)
         if not thread_id:
             return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         argv = self._parse_command_args(args)
         delivery = "inline"
         if argv and argv[0].lower() == "detached":
@@ -3275,19 +4697,22 @@ class TelegramBotService:
             review_kwargs["effort"] = record.effort
         if record.summary:
             review_kwargs["summary"] = record.summary
+        if record.workspace_path:
+            review_kwargs["cwd"] = record.workspace_path
         turn_handle = None
         turn_key: Optional[TurnKey] = None
         placeholder_id: Optional[int] = None
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
         try:
-            async with self._turn_semaphore:
+            turn_semaphore = self._ensure_turn_semaphore()
+            async with turn_semaphore:
                 placeholder_id = await self._send_placeholder(
                     message.chat_id,
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
-                turn_handle = await self._client.review_start(
+                turn_handle = await client.review_start(
                     thread_id,
                     target=target,
                     delivery=delivery,
@@ -3332,6 +4757,20 @@ class TelegramBotService:
             runtime.current_turn_id = None
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
+            failure_message = "Codex review failed; check logs for details."
+            if isinstance(exc, CodexAppServerDisconnected):
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.disconnected_during_review",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    turn_id=turn_handle.turn_id if turn_handle else None,
+                )
+                failure_message = (
+                    "Codex app-server disconnected; retrying. "
+                    "Please resend your review command."
+                )
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3346,7 +4785,7 @@ class TelegramBotService:
                 reply_to=message.message_id,
                 placeholder_id=placeholder_id,
                 response=_with_conversation_id(
-                    "Codex review failed; check logs for details.",
+                    failure_message,
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                 ),
@@ -3358,10 +4797,30 @@ class TelegramBotService:
             if turn_handle is not None:
                 if turn_key is not None:
                     self._turn_contexts.pop(turn_key, None)
+                    self._clear_thinking_preview(turn_key)
             runtime.current_turn_id = None
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
-        response = _compose_agent_response(result.agent_messages)
+        response = _compose_agent_response(
+            result.agent_messages, errors=result.errors, status=result.status
+        )
+        if thread_id and result.agent_messages:
+            assistant_preview = _preview_from_text(
+                response, RESUME_PREVIEW_ASSISTANT_LIMIT
+            )
+            if assistant_preview:
+                self._router.update_topic(
+                    message.chat_id,
+                    message.thread_id,
+                    lambda record: _set_thread_summary(
+                        record,
+                        thread_id,
+                        assistant_preview=assistant_preview,
+                        last_used_at=now_iso(),
+                        workspace_path=record.workspace_path,
+                        rollout_path=record.rollout_path,
+                    ),
+                )
         if result.status == "interrupted" or runtime.interrupt_requested:
             response = _compose_interrupt_response(response)
             runtime.interrupt_requested = False
@@ -3373,6 +4832,7 @@ class TelegramBotService:
             thread_id=message.thread_id,
             turn_id=turn_handle.turn_id if turn_handle else None,
             agent_message_count=len(result.agent_messages),
+            error_count=len(result.errors),
         )
         response_sent = await self._deliver_turn_response(
             chat_id=message.chat_id,
@@ -3424,6 +4884,15 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         placeholder_id = await self._send_placeholder(
             message.chat_id,
             thread_id=message.thread_id,
@@ -3438,7 +4907,7 @@ class TelegramBotService:
         if sandbox_policy:
             params["sandboxPolicy"] = _normalize_sandbox_policy(sandbox_policy)
         try:
-            result = await self._client.request("command/exec", params)
+            result = await client.request("command/exec", params)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -3494,6 +4963,15 @@ class TelegramBotService:
         record = await self._require_bound_record(message)
         if not record:
             return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         command = (
             "git rev-parse --is-inside-work-tree >/dev/null 2>&1 || "
             "{ echo 'Not a git repo'; exit 0; }\n"
@@ -3502,7 +4980,7 @@ class TelegramBotService:
             "while read -r f; do git diff --color --no-index -- /dev/null \"$f\"; done"
         )
         try:
-            result = await self._client.request(
+            result = await client.request(
                 "command/exec",
                 {
                     "cwd": record.workspace_path,
@@ -3555,12 +5033,12 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        workspace = Path(record.workspace_path or "").expanduser().resolve()
+        workspace = canonicalize_path(Path(record.workspace_path or ""))
         path = Path(argv[0]).expanduser()
         if not path.is_absolute():
             path = workspace / path
         try:
-            path = path.resolve()
+            path = canonicalize_path(path)
         except Exception:
             await self._send_message(
                 message.chat_id,
@@ -3643,8 +5121,17 @@ class TelegramBotService:
         record = await self._require_bound_record(message)
         if not record:
             return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         try:
-            result = await self._client.request(
+            result = await client.request(
                 "skills/list",
                 {"cwds": [record.workspace_path], "forceReload": False},
             )
@@ -3678,8 +5165,20 @@ class TelegramBotService:
     async def _handle_mcp(
         self, message: TelegramMessage, _args: str, _runtime: Any
     ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         try:
-            result = await self._client.request(
+            result = await client.request(
                 "mcpServerStatus/list",
                 {"cursor": None, "limit": DEFAULT_MCP_LIST_LIMIT},
             )
@@ -3713,10 +5212,22 @@ class TelegramBotService:
     async def _handle_experimental(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         argv = self._parse_command_args(args)
         if not argv:
             try:
-                result = await self._client.request(
+                result = await client.request(
                     "config/read",
                     {"includeLayers": False},
                 )
@@ -3779,7 +5290,7 @@ class TelegramBotService:
             return
         key_path = feature if feature.startswith("features.") else f"features.{feature}"
         try:
-            await self._client.request(
+            await client.request(
                 "config/value/write",
                 {
                     "keyPath": key_path,
@@ -3855,10 +5366,19 @@ class TelegramBotService:
         record = self._router.get_topic(
             self._resolve_topic_key(message.chat_id, message.thread_id)
         )
-        if record is None or not record.active_thread_id:
+        if record is None or not record.active_thread_id or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
                 "No active thread to inspect.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3871,11 +5391,9 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
+        rollout_path = None
         try:
-            threads = await self._client.thread_list(
-                cursor=None,
-                limit=DEFAULT_THREAD_LIST_LIMIT,
-            )
+            result = await client.thread_resume(record.active_thread_id)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -3896,8 +5414,37 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        entry = _find_thread_entry(threads, record.active_thread_id)
-        rollout_path = _extract_rollout_path(entry) if entry else None
+        rollout_path = _extract_thread_info(result).get("rollout_path")
+        if not rollout_path:
+            try:
+                threads, _ = await self._list_threads_paginated(
+                    client,
+                    limit=THREAD_LIST_PAGE_LIMIT,
+                    max_pages=THREAD_LIST_MAX_PAGES,
+                    needed_ids={record.active_thread_id},
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.rollout.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    _with_conversation_id(
+                        "Failed to look up rollout path; check logs for details.",
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    ),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            entry = _find_thread_entry(threads, record.active_thread_id)
+            rollout_path = _extract_rollout_path(entry) if entry else None
         if rollout_path:
             self._router.update_topic(
                 message.chat_id,
@@ -3911,6 +5458,12 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
+        await self._send_message(
+            message.chat_id,
+            "Rollout path not available.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
         await self._send_message(
             message.chat_id,
             "Rollout path not found for this thread.",
@@ -3931,10 +5484,14 @@ class TelegramBotService:
         repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
         if not repo_url:
             repo_url = DEFAULT_UPDATE_REPO_URL
+        repo_ref = (self._update_repo_ref or DEFAULT_UPDATE_REPO_REF).strip()
+        if not repo_ref:
+            repo_ref = DEFAULT_UPDATE_REPO_REF
         update_dir = Path.home() / ".codex-autorunner" / "update_cache"
         try:
             _spawn_update_process(
                 repo_url=repo_url,
+                repo_ref=repo_ref,
                 update_dir=update_dir,
                 logger=self._logger,
                 update_target=update_target,
@@ -3945,6 +5502,7 @@ class TelegramBotService:
                 "telegram.update.started",
                 chat_id=chat_id,
                 thread_id=thread_id,
+                repo_ref=repo_ref,
                 update_target=update_target,
             )
         except Exception as exc:
@@ -3954,6 +5512,7 @@ class TelegramBotService:
                 "telegram.update.failed",
                 chat_id=chat_id,
                 thread_id=thread_id,
+                repo_ref=repo_ref,
                 update_target=update_target,
                 exc=exc,
             )
@@ -4005,13 +5564,42 @@ class TelegramBotService:
             reply_markup=keyboard,
         )
 
+    async def _prompt_update_selection_from_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        *,
+        prompt: str = UPDATE_PICKER_PROMPT,
+    ) -> None:
+        state = SelectionState(items=list(UPDATE_TARGET_OPTIONS))
+        keyboard = self._build_update_keyboard(state)
+        self._update_options[key] = state
+        await self._update_selection_message(key, callback, prompt, keyboard)
+
+    def _has_active_turns(self) -> bool:
+        return bool(self._turn_contexts)
+
+    async def _prompt_update_confirmation(self, message: TelegramMessage) -> None:
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        self._update_confirm_options[key] = True
+        await self._send_message(
+            message.chat_id,
+            "An active Codex turn is running. Updating will restart the service. Continue?",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            reply_markup=build_update_confirm_keyboard(),
+        )
+
     async def _handle_update(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
         argv = self._parse_command_args(args)
         target_raw = argv[0] if argv else None
         if not target_raw:
-            await self._prompt_update_selection(message)
+            if self._has_active_turns():
+                await self._prompt_update_confirmation(message)
+            else:
+                await self._prompt_update_selection(message)
             return
         try:
             update_target = _normalize_update_target(target_raw)
@@ -4033,8 +5621,20 @@ class TelegramBotService:
     async def _handle_logout(
         self, message: TelegramMessage, _args: str, _runtime: Any
     ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         try:
-            await self._client.request("account/logout", params=None)
+            await client.request("account/logout", params=None)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -4074,9 +5674,18 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        record = self._router.get_topic(
-            self._resolve_topic_key(message.chat_id, message.thread_id)
-        )
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         params: dict[str, Any] = {
             "classification": "bug",
             "reason": reason,
@@ -4085,7 +5694,7 @@ class TelegramBotService:
         if record and record.active_thread_id:
             params["threadId"] = record.active_thread_id
         try:
-            result = await self._client.request("feedback/upload", params)
+            result = await client.request("feedback/upload", params)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -4131,26 +5740,107 @@ class TelegramBotService:
 
     async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
         method = message.get("method")
-        if method != "thread/tokenUsage/updated":
-            return
         params = message.get("params") if isinstance(message.get("params"), dict) else {}
-        thread_id = params.get("threadId")
-        turn_id_raw = params.get("turnId")
-        turn_id = None
-        if isinstance(turn_id_raw, (str, int)) and not isinstance(turn_id_raw, bool):
-            turn_id = str(turn_id_raw).strip()
-        token_usage = params.get("tokenUsage")
-        if not isinstance(thread_id, str) or not isinstance(token_usage, dict):
+        if method == "thread/tokenUsage/updated":
+            thread_id = params.get("threadId")
+            turn_id = _coerce_id(params.get("turnId"))
+            token_usage = params.get("tokenUsage")
+            if not isinstance(thread_id, str) or not isinstance(token_usage, dict):
+                return
+            self._token_usage_by_thread[thread_id] = token_usage
+            self._token_usage_by_thread.move_to_end(thread_id)
+            while len(self._token_usage_by_thread) > TOKEN_USAGE_CACHE_LIMIT:
+                self._token_usage_by_thread.popitem(last=False)
+            if turn_id:
+                self._token_usage_by_turn[turn_id] = token_usage
+                self._token_usage_by_turn.move_to_end(turn_id)
+                while len(self._token_usage_by_turn) > TOKEN_USAGE_TURN_CACHE_LIMIT:
+                    self._token_usage_by_turn.popitem(last=False)
             return
-        self._token_usage_by_thread[thread_id] = token_usage
-        self._token_usage_by_thread.move_to_end(thread_id)
-        while len(self._token_usage_by_thread) > TOKEN_USAGE_CACHE_LIMIT:
-            self._token_usage_by_thread.popitem(last=False)
-        if turn_id:
-            self._token_usage_by_turn[turn_id] = token_usage
-            self._token_usage_by_turn.move_to_end(turn_id)
-            while len(self._token_usage_by_turn) > TOKEN_USAGE_TURN_CACHE_LIMIT:
-                self._token_usage_by_turn.popitem(last=False)
+        if method == "item/reasoning/summaryTextDelta":
+            item_id = _coerce_id(params.get("itemId"))
+            turn_id = _coerce_id(params.get("turnId"))
+            thread_id = _extract_turn_thread_id(params)
+            delta = params.get("delta")
+            if not item_id or not turn_id or not isinstance(delta, str):
+                return
+            buffer = self._reasoning_buffers.get(item_id, "")
+            buffer = f"{buffer}{delta}"
+            self._reasoning_buffers[item_id] = buffer
+            preview = _extract_first_bold_span(buffer)
+            if preview:
+                await self._update_placeholder_preview(
+                    turn_id, preview, thread_id=thread_id
+                )
+            return
+        if method == "item/reasoning/summaryPartAdded":
+            item_id = _coerce_id(params.get("itemId"))
+            if not item_id:
+                return
+            buffer = self._reasoning_buffers.get(item_id, "")
+            buffer = f"{buffer}\n\n"
+            self._reasoning_buffers[item_id] = buffer
+            return
+        if method == "item/completed":
+            item = params.get("item") if isinstance(params, dict) else None
+            if not isinstance(item, dict) or item.get("type") != "reasoning":
+                return
+            item_id = _coerce_id(item.get("id") or params.get("itemId"))
+            if item_id:
+                self._reasoning_buffers.pop(item_id, None)
+            return
+
+    async def _update_placeholder_preview(
+        self, turn_id: str, preview: str, *, thread_id: Optional[str] = None
+    ) -> None:
+        turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if turn_key is None:
+            return
+        ctx = self._turn_contexts.get(turn_key)
+        if ctx is None or ctx.placeholder_message_id is None:
+            return
+        normalized = " ".join(preview.split()).strip()
+        if not normalized:
+            return
+        normalized = _truncate_text(normalized, THINKING_PREVIEW_MAX_LEN)
+        if normalized == self._turn_preview_text.get(turn_key):
+            return
+        now = time.monotonic()
+        last_updated = self._turn_preview_updated_at.get(turn_key, 0.0)
+        if (now - last_updated) < THINKING_PREVIEW_MIN_EDIT_INTERVAL_SECONDS:
+            return
+        self._turn_preview_text[turn_key] = normalized
+        self._turn_preview_updated_at[turn_key] = now
+        if STREAM_PREVIEW_PREFIX:
+            message_text = f"{STREAM_PREVIEW_PREFIX} {normalized}"
+        else:
+            message_text = normalized
+        await self._edit_message_text(
+            ctx.chat_id,
+            ctx.placeholder_message_id,
+            message_text,
+        )
+
+    def _register_turn_context(
+        self, turn_key: TurnKey, turn_id: str, ctx: TurnContext
+    ) -> bool:
+        existing = self._turn_contexts.get(turn_key)
+        if existing and existing.topic_key != ctx.topic_key:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "telegram.turn.context.collision",
+                turn_id=turn_id,
+                existing_topic=existing.topic_key,
+                new_topic=ctx.topic_key,
+            )
+            return False
+        self._turn_contexts[turn_key] = ctx
+        return True
+
+    def _clear_thinking_preview(self, turn_key: TurnKey) -> None:
+        self._turn_preview_text.pop(turn_key, None)
+        self._turn_preview_updated_at.pop(turn_key, None)
 
     async def _handle_approval_request(self, message: dict[str, Any]) -> ApprovalDecision:
         req_id = message.get("id")
@@ -4173,6 +5863,7 @@ class TelegramBotService:
             message_id=None,
             prompt=prompt,
             created_at=created_at,
+            topic_key=ctx.topic_key,
         )
         self._store.upsert_pending_approval(approval_record)
         log_event(
@@ -4195,7 +5886,14 @@ class TelegramBotService:
             )
             self._store.clear_pending_approval(request_id)
             return "cancel"
-        payload_text, parse_mode = self._prepare_message(prompt)
+        payload_text, parse_mode = self._prepare_outgoing_text(
+            prompt,
+            chat_id=ctx.chat_id,
+            thread_id=ctx.thread_id,
+            reply_to=ctx.reply_to_message_id,
+            topic_key=ctx.topic_key,
+            codex_thread_id=codex_thread_id,
+        )
         try:
             response = await self._bot.send_message(
                 ctx.chat_id,
@@ -4240,6 +5938,7 @@ class TelegramBotService:
             codex_thread_id=codex_thread_id,
             chat_id=ctx.chat_id,
             thread_id=ctx.thread_id,
+            topic_key=ctx.topic_key,
             message_id=message_id if isinstance(message_id, int) else None,
             created_at=created_at,
             future=future,
@@ -4293,11 +5992,12 @@ class TelegramBotService:
             pending.turn_id, thread_id=pending.codex_thread_id
         )
         if ctx:
-            runtime = self._router.runtime_for(ctx.topic_key)
+            runtime_key = ctx.topic_key
+        elif pending.topic_key:
+            runtime_key = pending.topic_key
         else:
-            runtime = self._router.runtime_for(
-                self._resolve_topic_key(pending.chat_id, pending.thread_id)
-            )
+            runtime_key = self._resolve_topic_key(pending.chat_id, pending.thread_id)
+        runtime = self._router.runtime_for(runtime_key)
         runtime.pending_request_id = None
         log_event(
             self._logger,
@@ -4337,7 +6037,7 @@ class TelegramBotService:
     def _build_resume_keyboard(self, state: SelectionState) -> dict[str, Any]:
         page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
         options = [
-            (item_id, f"{idx}) {label}")
+            (item_id, f"{idx}) {_compact_preview(label, RESUME_BUTTON_PREVIEW_LIMIT)}")
             for idx, (item_id, label) in enumerate(page_items, 1)
         ]
         return build_resume_keyboard(
@@ -4382,6 +6082,73 @@ class TelegramBotService:
                 label = f"{effort} (default)"
             options.append((effort, label))
         return build_effort_keyboard(options, include_cancel=True)
+
+    def _build_debug_prefix(
+        self,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int] = None,
+        topic_key: Optional[str] = None,
+        workspace_path: Optional[str] = None,
+        codex_thread_id: Optional[str] = None,
+    ) -> str:
+        if not self._config.debug_prefix_context:
+            return ""
+        resolved_key = topic_key
+        if not resolved_key:
+            try:
+                resolved_key = self._resolve_topic_key(chat_id, thread_id)
+            except Exception:
+                resolved_key = None
+        scope = None
+        if resolved_key:
+            try:
+                _, _, scope = parse_topic_key(resolved_key)
+            except Exception:
+                scope = None
+        record = None
+        if workspace_path is None or codex_thread_id is None:
+            record = self._router.get_topic(resolved_key) if resolved_key else None
+        if workspace_path is None and record is not None:
+            workspace_path = record.workspace_path
+        if codex_thread_id is None and record is not None:
+            codex_thread_id = record.active_thread_id
+        parts = [f"chat={chat_id}"]
+        thread_label = str(thread_id) if thread_id is not None else TOPIC_ROOT
+        parts.append(f"thread={thread_label}")
+        if scope:
+            parts.append(f"scope={scope}")
+        if workspace_path:
+            parts.append(f"cwd={workspace_path}")
+        if codex_thread_id:
+            parts.append(f"codex={codex_thread_id}")
+        if reply_to is not None:
+            parts.append(f"reply_to={reply_to}")
+        return f"[{' '.join(parts)}] "
+
+    def _prepare_outgoing_text(
+        self,
+        text: str,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int] = None,
+        topic_key: Optional[str] = None,
+        workspace_path: Optional[str] = None,
+        codex_thread_id: Optional[str] = None,
+    ) -> tuple[str, Optional[str]]:
+        prefix = self._build_debug_prefix(
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to,
+            topic_key=topic_key,
+            workspace_path=workspace_path,
+            codex_thread_id=codex_thread_id,
+        )
+        if prefix:
+            text = f"{prefix}{text}"
+        return self._prepare_message(text)
 
     def _render_message(self, text: str) -> tuple[str, Optional[str]]:
         parse_mode = self._config.parse_mode
@@ -4470,7 +6237,12 @@ class TelegramBotService:
         thread_id: Optional[int],
         reply_to: Optional[int],
     ) -> Optional[int]:
-        payload_text, parse_mode = self._prepare_message(text)
+        payload_text, parse_mode = self._prepare_outgoing_text(
+            text,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to,
+        )
         response = await self._bot.send_message(
             chat_id,
             payload_text,
@@ -4503,7 +6275,12 @@ class TelegramBotService:
         reply_to: Optional[int],
     ) -> Optional[int]:
         try:
-            payload_text, parse_mode = self._prepare_message(WORKING_PLACEHOLDER)
+            payload_text, parse_mode = self._prepare_outgoing_text(
+                PLACEHOLDER_TEXT,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                reply_to=reply_to,
+            )
             response = await self._bot.send_message(
                 chat_id,
                 payload_text,
@@ -4586,6 +6363,15 @@ class TelegramBotService:
         callback: Optional[TelegramCallbackQuery],
         text: str,
     ) -> None:
+        if len(text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            if callback and await self._edit_callback_message(
+                callback,
+                "Selection complete.",
+                reply_markup={"inline_keyboard": []},
+            ):
+                chat_id, thread_id = _split_topic_key(key)
+                await self._send_message(chat_id, text, thread_id=thread_id)
+                return
         if callback and await self._edit_callback_message(
             callback, text, reply_markup={"inline_keyboard": []}
         ):
@@ -4611,6 +6397,9 @@ class TelegramBotService:
             text = "Model selection cancelled."
         elif parsed.kind == "update":
             self._update_options.pop(key, None)
+            text = "Update cancelled."
+        elif parsed.kind == "update-confirm":
+            self._update_confirm_options.pop(key, None)
             text = "Update cancelled."
         else:
             await self._answer_callback(callback, "Selection expired")
@@ -4662,7 +6451,18 @@ class TelegramBotService:
         reply_to: Optional[int] = None,
         reply_markup: Optional[dict[str, Any]] = None,
     ) -> None:
-        payload_text, parse_mode = self._prepare_message(text)
+        if _should_trace_message(text):
+            text = _with_conversation_id(
+                text,
+                chat_id=chat_id,
+                thread_id=thread_id,
+            )
+        payload_text, parse_mode = self._prepare_outgoing_text(
+            text,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to,
+        )
         await self._bot.send_message_chunks(
             chat_id,
             payload_text,
@@ -4728,13 +6528,18 @@ class TelegramBotService:
                 manifest = load_manifest(self._manifest_path, self._hub_root)
                 repo = manifest.get(arg)
                 if repo:
-                    workspace = (self._hub_root / repo.path).resolve()
+                    workspace = canonicalize_path(self._hub_root / repo.path)
                     return str(workspace), repo.id
             except Exception:
                 pass
         path = Path(arg)
         if not path.is_absolute():
-            path = (self._config.root / path).resolve()
+            path = canonicalize_path(self._config.root / path)
+        else:
+            try:
+                path = canonicalize_path(path)
+            except Exception:
+                return None
         if path.exists():
             return str(path), None
         return None
@@ -4916,6 +6721,39 @@ def _set_model_overrides(
 
 def _set_rollout_path(record: "TelegramTopicRecord", rollout_path: str) -> None:
     record.rollout_path = rollout_path
+
+
+def _set_thread_summary(
+    record: "TelegramTopicRecord",
+    thread_id: str,
+    *,
+    user_preview: Optional[str] = None,
+    assistant_preview: Optional[str] = None,
+    last_used_at: Optional[str] = None,
+    workspace_path: Optional[str] = None,
+    rollout_path: Optional[str] = None,
+) -> None:
+    if not isinstance(thread_id, str) or not thread_id:
+        return
+    summary = record.thread_summaries.get(thread_id)
+    if summary is None:
+        summary = ThreadSummary()
+    if user_preview is not None:
+        summary.user_preview = user_preview
+    if assistant_preview is not None:
+        summary.assistant_preview = assistant_preview
+    if last_used_at is not None:
+        summary.last_used_at = last_used_at
+    if workspace_path is not None:
+        summary.workspace_path = workspace_path
+    if rollout_path is not None:
+        summary.rollout_path = rollout_path
+    record.thread_summaries[thread_id] = summary
+    if record.thread_ids:
+        keep = set(record.thread_ids)
+        for key in list(record.thread_summaries.keys()):
+            if key not in keep:
+                record.thread_summaries.pop(key, None)
 
 
 def _format_conversation_id(chat_id: int, thread_id: Optional[int]) -> str:
@@ -5192,6 +7030,42 @@ def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _format_future_time(delay_seconds: float) -> Optional[str]:
+    if delay_seconds <= 0:
+        return None
+    dt = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _extract_retry_after_seconds(exc: Exception) -> Optional[int]:
+    current: Optional[BaseException] = exc
+    while current is not None:
+        if isinstance(current, httpx.HTTPStatusError):
+            header = current.response.headers.get("Retry-After")
+            if header and header.isdigit():
+                return int(header)
+            try:
+                payload = current.response.json()
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                parameters = payload.get("parameters")
+                if isinstance(parameters, dict):
+                    retry_after = parameters.get("retry_after")
+                    if isinstance(retry_after, int):
+                        return retry_after
+            message = str(payload.get("description")) if isinstance(payload, dict) else ""
+            match = re.search(r"retry after (\d+)", message.lower())
+            if match:
+                return int(match.group(1))
+        message = str(current)
+        match = re.search(r"retry after (\d+)", message.lower())
+        if match:
+            return int(match.group(1))
+        current = current.__cause__ or current.__context__
+    return None
 
 
 def _approval_age_seconds(created_at: Optional[str]) -> Optional[int]:
@@ -5569,6 +7443,64 @@ def _app_server_env(command: Sequence[str], cwd: Path) -> dict[str, str]:
     return subprocess_env(extra_paths=extra_paths)
 
 
+def _seed_codex_home(codex_home: Path, *, logger: logging.Logger) -> None:
+    auth_path = codex_home / "auth.json"
+    source_root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
+    if source_root.resolve() == codex_home.resolve():
+        return
+    source_auth = source_root / "auth.json"
+    if auth_path.exists():
+        if auth_path.is_symlink() and auth_path.resolve() == source_auth.resolve():
+            return
+        log_event(
+            logger,
+            logging.INFO,
+            "telegram.codex_home.seed.skipped",
+            reason="auth_exists",
+            source=str(source_root),
+            target=str(codex_home),
+        )
+        return
+    if not source_root.exists():
+        log_event(
+            logger,
+            logging.WARNING,
+            "telegram.codex_home.seed.skipped",
+            reason="source_missing",
+            source=str(source_root),
+            target=str(codex_home),
+        )
+        return
+    if not source_auth.exists():
+        log_event(
+            logger,
+            logging.WARNING,
+            "telegram.codex_home.seed.skipped",
+            reason="auth_missing",
+            source=str(source_root),
+            target=str(codex_home),
+        )
+        return
+    try:
+        auth_path.symlink_to(source_auth)
+        log_event(
+            logger,
+            logging.INFO,
+            "telegram.codex_home.seeded",
+            source=str(source_root),
+            target=str(codex_home),
+        )
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "telegram.codex_home.seed.failed",
+            source=str(source_root),
+            target=str(codex_home),
+            exc=exc,
+        )
+
+
 def _parse_int_list(raw: Any) -> list[int]:
     values: list[int] = []
     if raw is None:
@@ -5589,19 +7521,31 @@ def _parse_int_list(raw: Any) -> list[int]:
     return values
 
 
-_THREAD_PATH_KEYS = (
+_THREAD_PATH_KEYS_PRIMARY = (
     "cwd",
-    "workspace",
     "workspace_path",
     "workspacePath",
-    "projectRoot",
-    "project_root",
     "repoPath",
     "repo_path",
-    "root",
-    "rootPath",
+    "projectRoot",
+    "project_root",
 )
 _THREAD_PATH_CONTAINERS = ("workspace", "project", "repo", "metadata", "context", "config")
+_THREAD_LIST_CURSOR_KEYS = ("nextCursor", "next_cursor", "next")
+
+
+def _extract_thread_list_cursor(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in _THREAD_LIST_CURSOR_KEYS:
+        value = payload.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (str, int)):
+            text = str(value).strip()
+            if text:
+                return text
+    return None
 
 
 def _coerce_thread_list(payload: Any) -> list[dict[str, Any]]:
@@ -5648,29 +7592,25 @@ def _normalize_thread_mapping(mapping: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _extract_thread_path(entry: dict[str, Any]) -> Optional[str]:
-    for key in _THREAD_PATH_KEYS:
+    for key in _THREAD_PATH_KEYS_PRIMARY:
         value = entry.get(key)
         if isinstance(value, str):
             return value
     for container_key in _THREAD_PATH_CONTAINERS:
         nested = entry.get(container_key)
         if isinstance(nested, dict):
-            for key in _THREAD_PATH_KEYS:
+            for key in _THREAD_PATH_KEYS_PRIMARY:
                 value = nested.get(key)
                 if isinstance(value, str):
                     return value
     return None
 
 
-def _filter_threads(
-    threads: Any,
-    workspace_path: str,
-    *,
-    assume_scoped: bool = False,
-    allow_unscoped: bool = True,
-) -> list[dict[str, Any]]:
+def _partition_threads(
+    threads: Any, workspace_path: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
     if not isinstance(threads, list):
-        return []
+        return [], [], False
     workspace = Path(workspace_path).expanduser().resolve()
     filtered: list[dict[str, Any]] = []
     unscoped: list[dict[str, Any]] = []
@@ -5689,6 +7629,72 @@ def _filter_threads(
             continue
         if _paths_compatible(workspace, candidate):
             filtered.append(entry)
+    return filtered, unscoped, saw_path
+
+
+def _local_workspace_threads(
+    state: "TelegramState",
+    workspace_path: Optional[str],
+    *,
+    current_key: str,
+) -> tuple[list[str], dict[str, str], dict[str, set[str]]]:
+    thread_ids: list[str] = []
+    previews: dict[str, str] = {}
+    topic_keys_by_thread: dict[str, set[str]] = {}
+    if not isinstance(workspace_path, str) or not workspace_path.strip():
+        return thread_ids, previews, topic_keys_by_thread
+    workspace_key = workspace_path.strip()
+    workspace_root: Optional[Path] = None
+    try:
+        workspace_root = Path(workspace_key).expanduser().resolve()
+    except Exception:
+        workspace_root = None
+
+    def matches(candidate_path: Optional[str]) -> bool:
+        if not isinstance(candidate_path, str) or not candidate_path.strip():
+            return False
+        candidate_path = candidate_path.strip()
+        if workspace_root is not None:
+            try:
+                candidate_root = Path(candidate_path).expanduser().resolve()
+            except Exception:
+                return False
+            return _paths_compatible(workspace_root, candidate_root)
+        return candidate_path == workspace_key
+
+    def add_record(key: str, record: "TelegramTopicRecord") -> None:
+        if not matches(record.workspace_path):
+            return
+        for thread_id in record.thread_ids:
+            topic_keys_by_thread.setdefault(thread_id, set()).add(key)
+            if thread_id not in previews:
+                preview = _thread_summary_preview(record, thread_id)
+                if preview:
+                    previews[thread_id] = preview
+            if thread_id in seen:
+                continue
+            seen.add(thread_id)
+            thread_ids.append(thread_id)
+
+    seen: set[str] = set()
+    current = state.topics.get(current_key)
+    if current is not None:
+        add_record(current_key, current)
+    for key, record in state.topics.items():
+        if key == current_key:
+            continue
+        add_record(key, record)
+    return thread_ids, previews, topic_keys_by_thread
+
+
+def _filter_threads(
+    threads: Any,
+    workspace_path: str,
+    *,
+    assume_scoped: bool = False,
+    allow_unscoped: bool = True,
+) -> list[dict[str, Any]]:
+    filtered, unscoped, saw_path = _partition_threads(threads, workspace_path)
     if filtered or saw_path or not assume_scoped:
         return filtered
     if allow_unscoped:
@@ -5698,10 +7704,11 @@ def _filter_threads(
 
 def _path_within(root: Path, target: Path) -> bool:
     try:
-        target.relative_to(root)
-        return True
-    except ValueError:
+        root = canonicalize_path(root)
+        target = canonicalize_path(target)
+    except Exception:
         return False
+    return is_within(root, target)
 
 
 def _repo_root(path: Path) -> Optional[Path]:
@@ -5715,12 +7722,29 @@ def _paths_compatible(workspace_root: Path, resumed_root: Path) -> bool:
     if _path_within(workspace_root, resumed_root):
         return True
     if _path_within(resumed_root, workspace_root):
-        return True
+        workspace_repo = _repo_root(workspace_root)
+        resumed_repo = _repo_root(resumed_root)
+        if workspace_repo is None or resumed_repo is None:
+            return False
+        if workspace_repo != resumed_repo:
+            return False
+        return resumed_root == workspace_repo
     workspace_repo = _repo_root(workspace_root)
     resumed_repo = _repo_root(resumed_root)
     if workspace_repo is None or resumed_repo is None:
         return False
-    return workspace_repo == resumed_repo
+    if workspace_repo != resumed_repo:
+        return False
+    return _path_within(workspace_repo, resumed_root)
+
+
+def _should_trace_message(text: str) -> bool:
+    if not text:
+        return False
+    if "(conversation " in text:
+        return False
+    lowered = text.lower()
+    return any(token in lowered for token in TRACE_MESSAGE_TOKENS)
 
 
 def _compact_preview(text: Any, limit: int = 40) -> str:
@@ -5730,18 +7754,429 @@ def _compact_preview(text: Any, limit: int = 40) -> str:
     return preview or "(no preview)"
 
 
-def _compose_agent_response(messages: list[str]) -> str:
+def _format_preview(text: Any) -> str:
+    preview = "" if text is None else str(text)
+    return preview if preview.strip() else "(no preview)"
+
+
+def _coerce_thread_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    thread = payload.get("thread")
+    if isinstance(thread, dict):
+        merged = dict(thread)
+        for key, value in payload.items():
+            if key != "thread" and key not in merged:
+                merged[key] = value
+        return merged
+    return dict(payload)
+
+
+def _normalize_preview_text(text: str) -> str:
+    return " ".join(text.split()).strip()
+
+
+def _preview_from_text(text: Optional[str], limit: int) -> Optional[str]:
+    if not isinstance(text, str):
+        return None
+    trimmed = text.strip()
+    if not trimmed or _is_no_agent_response(trimmed):
+        return None
+    return _truncate_text(_normalize_preview_text(trimmed), limit)
+
+
+def _coerce_preview_field(entry: dict[str, Any], keys: Sequence[str]) -> Optional[str]:
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+    return None
+
+
+def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
+    if max_lines <= 0:
+        return []
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            position = handle.tell()
+            buffer = b""
+            lines: list[bytes] = []
+            while position > 0 and len(lines) <= max_lines:
+                read_size = min(4096, position)
+                position -= read_size
+                handle.seek(position)
+                buffer = handle.read(read_size) + buffer
+                lines = buffer.splitlines()
+            return [
+                line.decode("utf-8", errors="replace")
+                for line in lines[-max_lines:]
+            ]
+    except OSError:
+        return []
+
+
+def _extract_text_payload(payload: Any) -> Optional[str]:
+    if isinstance(payload, str):
+        text = payload.strip()
+        return text if text else None
+    if isinstance(payload, list):
+        parts = []
+        for item in payload:
+            text = _extract_text_payload(item)
+            if text:
+                parts.append(text)
+        if parts:
+            return " ".join(parts)
+        return None
+    if isinstance(payload, dict):
+        for key in ("text", "input_text", "output_text", "message", "value", "delta"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                text = value.strip()
+                if text:
+                    return text
+        content = payload.get("content")
+        if content is not None:
+            return _extract_text_payload(content)
+    return None
+
+
+def _iter_role_texts(
+    payload: Any,
+    *,
+    default_role: Optional[str] = None,
+    depth: int = 0,
+) -> Iterable[tuple[str, str]]:
+    if depth > 5:
+        return
+    if isinstance(payload, list):
+        for item in payload:
+            yield from _iter_role_texts(
+                item, default_role=default_role, depth=depth + 1
+            )
+        return
+    if not isinstance(payload, dict):
+        return
+    role = payload.get("role") if isinstance(payload.get("role"), str) else None
+    type_value = payload.get("type") if isinstance(payload.get("type"), str) else None
+    role_hint = role or default_role
+    if not role_hint and type_value:
+        lowered = type_value.lower()
+        if lowered in ("user", "user_message", "input", "input_text", "prompt", "request"):
+            role_hint = "user"
+        elif lowered in (
+            "assistant",
+            "assistant_message",
+            "output",
+            "output_text",
+            "response",
+        ):
+            role_hint = "assistant"
+        else:
+            tokens = [token for token in re.split(r"[._]+", lowered) if token]
+            if any(
+                token in ("user", "input", "prompt", "request") for token in tokens
+            ):
+                role_hint = "user"
+            elif any(
+                token in ("assistant", "output", "response", "completion")
+                for token in tokens
+            ):
+                role_hint = "assistant"
+    text = _extract_text_payload(payload)
+    if role_hint in ("user", "assistant") and text:
+        yield role_hint, text
+    nested_payload = payload.get("payload")
+    if nested_payload is not None:
+        yield from _iter_role_texts(
+            nested_payload, default_role=role_hint, depth=depth + 1
+        )
+    for key in ("input", "output", "messages", "items", "events"):
+        if key in payload:
+            yield from _iter_role_texts(
+                payload[key],
+                default_role="user" if key == "input" else "assistant",
+                depth=depth + 1,
+            )
+    for key in ("request", "response", "message", "item", "turn", "event", "data"):
+        if key in payload:
+            next_role = role_hint
+            if next_role is None:
+                if key == "request":
+                    next_role = "user"
+                elif key == "response":
+                    next_role = "assistant"
+            yield from _iter_role_texts(
+                payload[key], default_role=next_role, depth=depth + 1
+            )
+
+
+def _extract_rollout_preview(path: Path) -> tuple[Optional[str], Optional[str]]:
+    lines = _tail_text_lines(path, RESUME_PREVIEW_SCAN_LINES)
+    if not lines:
+        return None, None
+    last_user = None
+    last_assistant = None
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for role, text in _iter_role_texts(payload):
+            if role == "assistant" and last_assistant is None:
+                last_assistant = text
+            elif role == "user" and last_user is None:
+                last_user = text
+            if last_user and last_assistant:
+                return last_user, last_assistant
+    return last_user, last_assistant
+
+
+def _extract_turns_preview(turns: Any) -> tuple[Optional[str], Optional[str]]:
+    if not isinstance(turns, list):
+        return None, None
+    last_user = None
+    last_assistant = None
+    for turn in reversed(turns):
+        if not isinstance(turn, dict):
+            continue
+        candidates: list[Any] = []
+        for key in ("items", "messages", "input", "output"):
+            value = turn.get(key)
+            if value is not None:
+                candidates.append(value)
+        if not candidates:
+            candidates.append(turn)
+        for candidate in candidates:
+            if isinstance(candidate, list):
+                iterable = reversed(candidate)
+            else:
+                iterable = (candidate,)
+            for item in iterable:
+                for role, text in _iter_role_texts(item):
+                    if role == "assistant" and last_assistant is None:
+                        last_assistant = text
+                    elif role == "user" and last_user is None:
+                        last_user = text
+                    if last_user and last_assistant:
+                        return last_user, last_assistant
+    return last_user, last_assistant
+
+
+def _extract_thread_preview_parts(entry: Any) -> tuple[Optional[str], Optional[str]]:
+    entry = _coerce_thread_payload(entry)
+    user_preview_keys = (
+        "last_user_message",
+        "lastUserMessage",
+        "last_user",
+        "lastUser",
+        "last_user_text",
+        "lastUserText",
+        "user_preview",
+        "userPreview",
+    )
+    assistant_preview_keys = (
+        "last_assistant_message",
+        "lastAssistantMessage",
+        "last_assistant",
+        "lastAssistant",
+        "last_assistant_text",
+        "lastAssistantText",
+        "assistant_preview",
+        "assistantPreview",
+        "last_response",
+        "lastResponse",
+        "response_preview",
+        "responsePreview",
+    )
+    user_preview = _coerce_preview_field(entry, user_preview_keys)
+    assistant_preview = _coerce_preview_field(entry, assistant_preview_keys)
+    if user_preview is None:
+        preview = entry.get("preview")
+        if isinstance(preview, str) and preview.strip():
+            user_preview = preview.strip()
+    turns = entry.get("turns")
+    if turns and (not user_preview or not assistant_preview):
+        turn_user, turn_assistant = _extract_turns_preview(turns)
+        if not user_preview and turn_user:
+            user_preview = turn_user
+        if not assistant_preview and turn_assistant:
+            assistant_preview = turn_assistant
+    rollout_path = _extract_rollout_path(entry)
+    if rollout_path and (not user_preview or not assistant_preview):
+        path = Path(rollout_path)
+        if path.exists():
+            rollout_user, rollout_assistant = _extract_rollout_preview(path)
+            if not user_preview and rollout_user:
+                user_preview = rollout_user
+            if not assistant_preview and rollout_assistant:
+                assistant_preview = rollout_assistant
+    if user_preview:
+        user_preview = _truncate_text(
+            _normalize_preview_text(user_preview), RESUME_PREVIEW_USER_LIMIT
+        )
+    if assistant_preview:
+        assistant_preview = _truncate_text(
+            _normalize_preview_text(assistant_preview),
+            RESUME_PREVIEW_ASSISTANT_LIMIT,
+        )
+    return user_preview, assistant_preview
+
+
+def _format_preview_parts(
+    user_preview: Optional[str], assistant_preview: Optional[str]
+) -> str:
+    if user_preview and assistant_preview:
+        return f"User: {user_preview}\nAssistant: {assistant_preview}"
+    if user_preview:
+        return f"User: {user_preview}"
+    if assistant_preview:
+        return f"Assistant: {assistant_preview}"
+    return "(no preview)"
+
+
+def _format_thread_preview(entry: Any) -> str:
+    user_preview, assistant_preview = _extract_thread_preview_parts(entry)
+    return _format_preview_parts(user_preview, assistant_preview)
+
+
+def _format_summary_preview(summary: ThreadSummary) -> str:
+    user_preview = _preview_from_text(
+        summary.user_preview, RESUME_PREVIEW_USER_LIMIT
+    )
+    assistant_preview = _preview_from_text(
+        summary.assistant_preview, RESUME_PREVIEW_ASSISTANT_LIMIT
+    )
+    return _format_preview_parts(user_preview, assistant_preview)
+
+
+def _thread_summary_preview(
+    record: "TelegramTopicRecord", thread_id: str
+) -> Optional[str]:
+    summary = record.thread_summaries.get(thread_id)
+    if summary is None:
+        return None
+    preview = _format_summary_preview(summary)
+    if preview == "(no preview)":
+        return None
+    return preview
+
+
+def _format_missing_thread_label(thread_id: str, preview: Optional[str]) -> str:
+    if preview:
+        return preview
+    prefix = thread_id[:8]
+    suffix = "..." if len(thread_id) > 8 else ""
+    return f"Thread {prefix}{suffix} (not indexed yet)"
+
+
+def _resume_thread_list_limit(thread_ids: Sequence[str]) -> int:
+    desired = max(DEFAULT_PAGE_SIZE, len(thread_ids) or DEFAULT_PAGE_SIZE)
+    return min(THREAD_LIST_PAGE_LIMIT, desired)
+
+
+def _coerce_id(value: Any) -> Optional[str]:
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        text = str(value).strip()
+        return text or None
+    return None
+
+
+def _extract_turn_thread_id(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for candidate in (payload, payload.get("turn"), payload.get("item")):
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("threadId", "thread_id"):
+            thread_id = _coerce_id(candidate.get(key))
+            if thread_id:
+                return thread_id
+        thread = candidate.get("thread")
+        if isinstance(thread, dict):
+            thread_id = _coerce_id(
+                thread.get("id")
+                or thread.get("threadId")
+                or thread.get("thread_id")
+            )
+            if thread_id:
+                return thread_id
+    return None
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return f"{text[: limit - 3]}..."
+
+
+def _extract_first_bold_span(text: str) -> Optional[str]:
+    if not text:
+        return None
+    start = text.find("**")
+    if start < 0:
+        return None
+    end = text.find("**", start + 2)
+    if end < 0:
+        return None
+    content = text[start + 2 : end].strip()
+    return content or None
+
+
+def _compose_agent_response(
+    messages: list[str],
+    *,
+    errors: Optional[list[str]] = None,
+    status: Optional[str] = None,
+) -> str:
     cleaned = [msg.strip() for msg in messages if isinstance(msg, str) and msg.strip()]
     if not cleaned:
-        return "(No agent response.)"
+        cleaned_errors = [
+            err.strip()
+            for err in (errors or [])
+            if isinstance(err, str) and err.strip()
+        ]
+        if cleaned_errors:
+            if len(cleaned_errors) == 1:
+                lines = [f"Error: {cleaned_errors[0]}"]
+            else:
+                lines = ["Errors:"]
+                lines.extend(f"- {err}" for err in cleaned_errors)
+            if status and status != "completed":
+                lines.append(f"Status: {status}")
+            return "\n".join(lines)
+        if status and status != "completed":
+            return f"No agent message produced (status: {status}). Check logs."
+        return "No agent message produced. Check logs."
     return "\n\n".join(cleaned)
 
 
 def _compose_interrupt_response(agent_text: str) -> str:
     base = "Interrupted."
-    if agent_text and agent_text != "(No agent response.)":
+    if agent_text and not _is_no_agent_response(agent_text):
         return f"{base}\n\n{agent_text}"
     return base
+
+
+def _is_no_agent_response(text: str) -> bool:
+    stripped = text.strip() if isinstance(text, str) else ""
+    if not stripped:
+        return True
+    if stripped == "(No agent response.)":
+        return True
+    if stripped.startswith("No agent message produced"):
+        return True
+    return False
 
 
 def _format_approval_prompt(message: dict[str, Any]) -> str:
@@ -5785,6 +8220,33 @@ def _extract_files(params: dict[str, Any]) -> list[str]:
                     if isinstance(path, str) and path:
                         files.append(path)
     return files
+
+
+def _telegram_lock_path(token: str) -> Path:
+    if not isinstance(token, str) or not token:
+        raise ValueError("token is required")
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+    return Path.home() / ".codex-autorunner" / "locks" / f"telegram_bot_{digest}.lock"
+
+
+def _read_lock_payload(path: Path) -> Optional[dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _lock_payload_summary(payload: Optional[dict[str, Any]]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    summary: dict[str, Any] = {}
+    for key in ("pid", "started_at", "host", "cwd", "config_root"):
+        if key in payload:
+            summary[key] = payload.get(key)
+    return summary
 
 
 def _normalize_parse_mode(raw: Any) -> Optional[str]:

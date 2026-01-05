@@ -11,7 +11,8 @@ def test_static_dir_has_index():
         assert static_dir.is_dir()
         assert (static_dir / "index.html").exists()
     finally:
-        stack.close()
+        if stack is not None:
+            stack.close()
 
 
 def test_static_mobile_terminal_compose_view_assets():
@@ -24,7 +25,8 @@ def test_static_mobile_terminal_compose_view_assets():
         assert "mobile-terminal-view" in styles
         assert "_setMobileViewActive" in terminal_manager
     finally:
-        stack.close()
+        if stack is not None:
+            stack.close()
 
 
 def test_static_dir_fallback_when_as_file_fails(monkeypatch):
@@ -38,7 +40,8 @@ def test_static_dir_fallback_when_as_file_fails(monkeypatch):
         assert static_dir == expected
         assert static_dir.is_dir()
     finally:
-        stack.close()
+        if stack is not None:
+            stack.close()
 
 
 def test_static_dir_fallback_when_as_file_missing(monkeypatch, tmp_path: Path):
@@ -55,4 +58,5 @@ def test_static_dir_fallback_when_as_file_missing(monkeypatch, tmp_path: Path):
         assert static_dir == expected
         assert static_dir.is_dir()
     finally:
-        stack.close()
+        if stack is not None:
+            stack.close()
