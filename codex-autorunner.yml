@@ -115,8 +115,8 @@ repo:
       max_parallel_turns: 4
       per_topic_queue: true
     shell:
-      # Allow !<cmd> execution (disabled by default).
-      enabled: false
+      # Allow !<cmd> execution (enabled by default).
+      enabled: true
       # Timeout for shell commands (ms).
       timeout_ms: 120000
       # Max output characters to show inline before attaching full output.
@@ -216,8 +216,8 @@ hub:
       max_parallel_turns: 4
       per_topic_queue: true
     shell:
-      # Allow !<cmd> execution (disabled by default).
-      enabled: false
+      # Allow !<cmd> execution (enabled by default).
+      enabled: true
       # Timeout for shell commands (ms).
       timeout_ms: 120000
       # Max output characters to show inline before attaching full output.

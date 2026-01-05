@@ -115,7 +115,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "image_prompt": "Describe the image.",
         },
         "shell": {
-            "enabled": False,
+            "enabled": True,
             "timeout_ms": 120000,
             "max_output_chars": 3800,
         },
