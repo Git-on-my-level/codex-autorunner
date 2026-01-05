@@ -76,7 +76,6 @@ launchctl load -w ~/Library/LaunchAgents/com.codex.autorunner.plist
 launchctl kickstart -k gui/$(id -u)/com.codex.autorunner
 ```
 4) Tail the hub log to confirm it booted: `tail -n 50 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`.
-5) Legacy script/Makefile target (no rollback): `make unsafe-refresh-launchd` or `scripts/refresh-local-mac-hub.sh` (use only when the service is stopped).
 
 #### Health checks (recommended)
 - `GET /health` returns 200 (verifies static assets are present).
