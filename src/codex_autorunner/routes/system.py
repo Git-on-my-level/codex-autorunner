@@ -11,9 +11,11 @@ from typing import Optional
 from urllib.parse import unquote, urlparse
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from ..config import HubConfig
 from ..git_utils import GitError, run_git
+from ..static_assets import missing_static_assets
 
 
 def _run_cmd(cmd: list[str], cwd: Path) -> None:
@@ -348,6 +350,29 @@ def _spawn_update_process(
 
 def build_system_routes() -> APIRouter:
     router = APIRouter()
+
+    @router.get("/health", include_in_schema=False)
+    async def health(request: Request):
+        static_dir = getattr(getattr(request.app, "state", None), "static_dir", None)
+        if not isinstance(static_dir, Path):
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "detail": "Static UI assets missing; reinstall package",
+                },
+                status_code=500,
+            )
+        missing = missing_static_assets(static_dir)
+        if missing:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "detail": "Static UI assets missing; reinstall package",
+                    "missing": missing,
+                },
+                status_code=500,
+            )
+        return {"status": "ok"}
 
     @router.get("/system/update/check")
     async def system_update_check(request: Request):

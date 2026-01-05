@@ -63,7 +63,9 @@ When you change code in this repo and want the launchd-managed hub to run it:
 make refresh-launchd
 ```
 
-2) Manual path (no rollback): reinstall into the launchd venv (pipx default paths shown; adjust if your label/paths differ):
+Important: avoid in-place pip/pipx installs against the live venv. During uninstall/reinstall, packaged static assets disappear and the UI can break while the server keeps running. Use the safe refresher or stop the service before manual installs.
+
+2) Manual path (offline only; no rollback): stop launchd first, then reinstall into the launchd venv (pipx default paths shown; adjust if your label/paths differ):
 ```
 $HOME/.local/pipx/venvs/codex-autorunner/bin/python -m pip install --force-reinstall /path/to/your/codex-autorunner
 ```
@@ -74,7 +76,13 @@ launchctl load -w ~/Library/LaunchAgents/com.codex.autorunner.plist
 launchctl kickstart -k gui/$(id -u)/com.codex.autorunner
 ```
 4) Tail the hub log to confirm it booted: `tail -n 50 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log`.
-5) Legacy script/Makefile target (no rollback): `make unsafe-refresh-launchd` or `scripts/refresh-local-mac-hub.sh`.
+5) Legacy script/Makefile target (no rollback): `make unsafe-refresh-launchd` or `scripts/refresh-local-mac-hub.sh` (use only when the service is stopped).
+
+#### Health checks (recommended)
+- `GET /health` returns 200 (verifies static assets are present).
+- `GET /static/app.js` returns 200.
+- Optional: `GET /` returns HTML (not a JSON error).
+If you set a base path, prefix all checks with it.
 
 ## Quick start
 1) Install (editable): `pip install -e .`

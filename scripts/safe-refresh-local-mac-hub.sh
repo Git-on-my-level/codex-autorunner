@@ -475,9 +475,9 @@ _detect_base_path() {
 if [[ -z "${HEALTH_PATH}" ]]; then
   base_path="$(_detect_base_path)"
   if [[ -n "${base_path}" ]]; then
-    HEALTH_PATH="${base_path}/openapi.json"
+    HEALTH_PATH="${base_path}/health"
   else
-    HEALTH_PATH="/openapi.json"
+    HEALTH_PATH="/health"
   fi
 fi
 

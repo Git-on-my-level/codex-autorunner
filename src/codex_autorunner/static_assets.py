@@ -4,6 +4,25 @@ from pathlib import Path
 from typing import Optional
 
 _ASSET_VERSION_TOKEN = "__CAR_ASSET_VERSION__"
+_REQUIRED_STATIC_ASSETS = (
+    "index.html",
+    "styles.css",
+    "app.js",
+    "vendor/xterm.js",
+    "vendor/xterm-addon-fit.js",
+    "vendor/xterm.css",
+)
+
+
+def missing_static_assets(static_dir: Path) -> list[str]:
+    missing: list[str] = []
+    for rel_path in _REQUIRED_STATIC_ASSETS:
+        try:
+            if not (static_dir / rel_path).exists():
+                missing.append(rel_path)
+        except OSError:
+            missing.append(rel_path)
+    return missing
 
 
 def asset_version(static_dir: Path) -> str:

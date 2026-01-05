@@ -48,7 +48,12 @@ from .usage import (
     summarize_repo_usage,
 )
 from .manifest import load_manifest
-from .static_assets import asset_version, index_response_headers, render_index_html
+from .static_assets import (
+    asset_version,
+    index_response_headers,
+    missing_static_assets,
+    render_index_html,
+)
 from .voice import VoiceConfig, VoiceService, VoiceServiceError
 from .api_routes import build_repo_router, ActiveSession
 from .routes.system import build_system_routes
@@ -74,6 +79,7 @@ class BasePathRouterMiddleware:
                 "/hub",
                 "/repos",
                 "/static",
+                "/health",
                 "/cat",
             )
         )
@@ -226,6 +232,20 @@ def _static_dir() -> tuple[Path, ExitStack]:
     return fallback, ExitStack()
 
 
+def _require_static_assets(static_dir: Path, logger: logging.Logger) -> None:
+    missing = missing_static_assets(static_dir)
+    if not missing:
+        return
+    safe_log(
+        logger,
+        logging.ERROR,
+        "Static UI assets missing in %s: %s",
+        static_dir,
+        ", ".join(missing),
+    )
+    raise RuntimeError("Static UI assets missing; reinstall package")
+
+
 def _parse_last_seen_at(value: Optional[str]) -> Optional[float]:
     if not value:
         return None
@@ -376,6 +396,12 @@ def create_app(
         )
 
     static_dir, static_stack = _static_dir()
+    try:
+        _require_static_assets(static_dir, app.state.logger)
+    except Exception:
+        static_stack.close()
+        raise
+    app.state.static_dir = static_dir
     app.state.static_stack = static_stack
     app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -488,6 +514,12 @@ def create_hub_app(
         f"Hub app ready at {config.root}",
     )
     static_dir, static_stack = _static_dir()
+    try:
+        _require_static_assets(static_dir, app.state.logger)
+    except Exception:
+        static_stack.close()
+        raise
+    app.state.static_dir = static_dir
     app.state.static_stack = static_stack
     app.state.asset_version = asset_version(static_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
