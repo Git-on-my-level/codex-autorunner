@@ -6846,7 +6846,7 @@ def _format_rate_limits(rate_limits: Optional[dict[str, Any]]) -> list[str]:
     refresh_label = _format_rate_limit_refresh(rate_limits)
     if refresh_label:
         parts.append(f"[refresh: {refresh_label}]")
-    return [" ".join(parts)]
+    return [f"Limits: {' '.join(parts)}"]
 
 
 def _compute_used_percent(entry: dict[str, Any]) -> Optional[float]:
@@ -6950,6 +6950,27 @@ def _extract_rate_limit_timestamp(rate_limits: dict[str, Any]) -> Optional[datet
     ):
         if key in rate_limits:
             return _coerce_datetime(rate_limits.get(key))
+    candidates: list[datetime] = []
+    for section in ("primary", "secondary"):
+        entry = rate_limits.get(section)
+        if not isinstance(entry, dict):
+            continue
+        for key in (
+            "resets_at",
+            "resetsAt",
+            "reset_at",
+            "resetAt",
+            "refresh_at",
+            "refreshAt",
+            "updated_at",
+            "updatedAt",
+        ):
+            if key in entry:
+                dt = _coerce_datetime(entry.get(key))
+                if dt is not None:
+                    candidates.append(dt)
+    if candidates:
+        return min(candidates)
     return None
 
 
