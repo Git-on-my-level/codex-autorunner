@@ -383,7 +383,10 @@ def _system_update_worker(
         logger.info("Refreshing launchd service...")
         refresh_script = update_dir / "scripts" / "safe-refresh-local-mac-hub.sh"
         if not refresh_script.exists():
-            refresh_script = update_dir / "scripts" / "refresh-local-mac-hub.sh"
+            msg = f"Missing safe refresh script at {refresh_script}."
+            logger.error(msg)
+            _write_update_status("error", msg)
+            return
 
         env = os.environ.copy()
         env["PACKAGE_SRC"] = str(update_dir)
