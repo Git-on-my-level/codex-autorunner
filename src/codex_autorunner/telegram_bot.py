@@ -129,6 +129,10 @@ VOICE_RETRY_MAX_SECONDS = 300.0
 VOICE_RETRY_JITTER_RATIO = 0.2
 VOICE_MAX_ATTEMPTS = 20
 VOICE_RETRY_AFTER_BUFFER_SECONDS = 1.0
+WHISPER_TRANSCRIPT_DISCLAIMER = (
+    "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
+    "cannot infer the intention please clarify before proceeding."
+)
 DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
 DEFAULT_UPDATE_REPO_REF = "main"
 RESUME_PICKER_PROMPT = (
@@ -2935,6 +2939,9 @@ class TelegramBotService:
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
         prompt_text = text_override if text_override is not None else (message.text or "")
+        prompt_text = self._maybe_append_whisper_disclaimer(
+            prompt_text, transcript_text=transcript_text
+        )
         try:
             if not thread_id:
                 thread = await client.thread_start(record.workspace_path)
@@ -3191,6 +3198,26 @@ class TelegramBotService:
                 transcript_message_id,
                 transcript_text,
             )
+
+    def _maybe_append_whisper_disclaimer(
+        self,
+        prompt_text: str,
+        *,
+        transcript_text: Optional[str],
+    ) -> str:
+        if not transcript_text:
+            return prompt_text
+        if WHISPER_TRANSCRIPT_DISCLAIMER in prompt_text:
+            return prompt_text
+        provider = None
+        if self._voice_config is not None:
+            provider = self._voice_config.provider
+        provider = provider or "openai_whisper"
+        if provider != "openai_whisper":
+            return prompt_text
+        if prompt_text.strip():
+            return f"{prompt_text}\n\n{WHISPER_TRANSCRIPT_DISCLAIMER}"
+        return WHISPER_TRANSCRIPT_DISCLAIMER
 
     async def _handle_image_message(
         self,

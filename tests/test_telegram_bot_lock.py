@@ -28,13 +28,25 @@ def _make_config(root: Path) -> TelegramBotConfig:
     return TelegramBotConfig.from_raw(raw, root=root, env=env)
 
 
+def _build_service_in_closed_loop(
+    tmp_path: Path, config: TelegramBotConfig
+) -> TelegramBotService:
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return TelegramBotService(config, hub_root=tmp_path)
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+
 def test_telegram_bot_lock_acquire_and_release(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     config = _make_config(tmp_path)
-    service = TelegramBotService(config, hub_root=tmp_path)
+    service = _build_service_in_closed_loop(tmp_path, config)
     assert config.bot_token
     lock_path = _telegram_lock_path(config.bot_token)
     try:
@@ -70,7 +82,7 @@ def test_telegram_bot_lock_contended(
         ),
         encoding="utf-8",
     )
-    service = TelegramBotService(config, hub_root=tmp_path)
+    service = _build_service_in_closed_loop(tmp_path, config)
     try:
         with pytest.raises(TelegramBotLockError):
             service._acquire_instance_lock()
