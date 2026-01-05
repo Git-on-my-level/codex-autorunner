@@ -4857,6 +4857,15 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         placeholder_id = await self._send_placeholder(
             message.chat_id,
             thread_id=message.thread_id,
@@ -4871,7 +4880,7 @@ class TelegramBotService:
         if sandbox_policy:
             params["sandboxPolicy"] = _normalize_sandbox_policy(sandbox_policy)
         try:
-            result = await self._client.request("command/exec", params)
+            result = await client.request("command/exec", params)
         except Exception as exc:
             log_event(
                 self._logger,
