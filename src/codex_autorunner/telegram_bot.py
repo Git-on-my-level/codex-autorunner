@@ -6833,11 +6833,30 @@ def _format_rate_limits(rate_limits: Optional[dict[str, Any]]) -> list[str]:
         if used is None:
             used = _compute_used_percent(entry)
         used_text = _format_percent(used)
-        window_minutes = _coerce_int(entry.get("window_minutes", entry.get("windowMinutes")))
+        window_minutes = _coerce_int(
+            entry.get("window_minutes", entry.get("windowMinutes"))
+        )
         if window_minutes is None:
-            window_seconds = _coerce_int(entry.get("window_seconds", entry.get("windowSeconds")))
+            for candidate in (
+                "window",
+                "window_mins",
+                "windowMins",
+                "period_minutes",
+                "periodMinutes",
+                "duration_minutes",
+                "durationMinutes",
+            ):
+                window_minutes = _coerce_int(entry.get(candidate))
+                if window_minutes is not None:
+                    break
+        if window_minutes is None:
+            window_seconds = _coerce_int(
+                entry.get("window_seconds", entry.get("windowSeconds"))
+            )
             if window_seconds is not None:
                 window_minutes = max(int(round(window_seconds / 60)), 1)
+        if window_minutes is None and key in ("primary", "secondary"):
+            window_minutes = 300 if key == "primary" else 10080
         label = _format_rate_limit_window(window_minutes) or key
         if used_text:
             parts.append(f"[{label}: {used_text}]")
