@@ -12,7 +12,6 @@ import random
 import re
 import secrets
 import shlex
-import shutil
 import socket
 import time
 from datetime import datetime, timedelta, timezone
@@ -7177,10 +7176,21 @@ def _app_server_env(command: Sequence[str], cwd: Path) -> dict[str, str]:
 
 def _seed_codex_home(codex_home: Path, *, logger: logging.Logger) -> None:
     auth_path = codex_home / "auth.json"
-    if auth_path.exists():
-        return
     source_root = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
     if source_root.resolve() == codex_home.resolve():
+        return
+    source_auth = source_root / "auth.json"
+    if auth_path.exists():
+        if auth_path.is_symlink() and auth_path.resolve() == source_auth.resolve():
+            return
+        log_event(
+            logger,
+            logging.INFO,
+            "telegram.codex_home.seed.skipped",
+            reason="auth_exists",
+            source=str(source_root),
+            target=str(codex_home),
+        )
         return
     if not source_root.exists():
         log_event(
@@ -7192,7 +7202,6 @@ def _seed_codex_home(codex_home: Path, *, logger: logging.Logger) -> None:
             target=str(codex_home),
         )
         return
-    source_auth = source_root / "auth.json"
     if not source_auth.exists():
         log_event(
             logger,
@@ -7204,7 +7213,7 @@ def _seed_codex_home(codex_home: Path, *, logger: logging.Logger) -> None:
         )
         return
     try:
-        shutil.copy2(source_auth, auth_path)
+        auth_path.symlink_to(source_auth)
         log_event(
             logger,
             logging.INFO,
