@@ -6840,10 +6840,13 @@ def _format_rate_limits(rate_limits: Optional[dict[str, Any]]) -> list[str]:
                 window_minutes = max(int(round(window_seconds / 60)), 1)
         label = _format_rate_limit_window(window_minutes) or key
         if used_text:
-            parts.append(f"{label} used {used_text}")
+            parts.append(f"[{label}: {used_text}]")
     if not parts:
         return []
-    return [f"Rate limits: {', '.join(parts)}"]
+    refresh_label = _format_rate_limit_refresh(rate_limits)
+    if refresh_label:
+        parts.append(f"[refresh: {refresh_label}]")
+    return [" ".join(parts)]
 
 
 def _compute_used_percent(entry: dict[str, Any]) -> Optional[float]:
@@ -6918,13 +6921,67 @@ def _format_rate_limit_window(window_minutes: Optional[int]) -> Optional[str]:
         return None
     if window_minutes == 300:
         return "5h"
-    if window_minutes == 10080:
-        return "weekly"
     if window_minutes % 1440 == 0:
         return f"{window_minutes // 1440}d"
     if window_minutes % 60 == 0:
         return f"{window_minutes // 60}h"
     return f"{window_minutes}m"
+
+
+def _format_rate_limit_refresh(rate_limits: dict[str, Any]) -> Optional[str]:
+    refresh_dt = _extract_rate_limit_timestamp(rate_limits)
+    if refresh_dt is None:
+        return None
+    return _format_friendly_time(refresh_dt.astimezone())
+
+
+def _extract_rate_limit_timestamp(rate_limits: dict[str, Any]) -> Optional[datetime]:
+    for key in (
+        "refreshed_at",
+        "refreshedAt",
+        "refresh_at",
+        "refreshAt",
+        "updated_at",
+        "updatedAt",
+        "timestamp",
+        "time",
+        "as_of",
+        "asOf",
+    ):
+        if key in rate_limits:
+            return _coerce_datetime(rate_limits.get(key))
+    return None
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+        if seconds > 1e12:
+            seconds /= 1000.0
+        try:
+            return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        dt = _parse_iso_timestamp(value)
+        if dt is not None:
+            return dt
+        try:
+            return _coerce_datetime(float(value))
+        except Exception:
+            return None
+    return None
+
+
+def _format_friendly_time(value: datetime) -> str:
+    month = value.strftime("%b")
+    day = value.day
+    hour = value.strftime("%I").lstrip("0") or "12"
+    minute = value.strftime("%M")
+    ampm = value.strftime("%p").lower()
+    return f"{month} {day}, {hour}:{minute}{ampm}"
 
 
 def _extract_usage_value(
