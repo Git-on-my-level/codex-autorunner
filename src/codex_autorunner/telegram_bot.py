@@ -30,7 +30,7 @@ from .app_server_client import (
 )
 from .app_server_supervisor import WorkspaceAppServerSupervisor
 from .config import load_config
-from .github import GitHubService, find_github_links
+from .github import GitHubService, find_github_links, parse_github_url
 from .logging_utils import log_event
 from .lock_utils import process_alive
 from .manifest import load_manifest
@@ -560,6 +560,7 @@ class TurnContext:
 class SelectionState:
     items: list[tuple[str, str]]
     page: int = 0
+    button_labels: Optional[dict[str, str]] = None
 
 
 @dataclass
@@ -4125,6 +4126,7 @@ class TelegramBotService:
                 else:
                     record = self._router.get_topic(key) or record
         items: list[tuple[str, str]] = []
+        button_labels: dict[str, str] = {}
         seen_item_ids: set[str] = set()
         if show_unscoped:
             for entry in candidates:
@@ -4135,6 +4137,9 @@ class TelegramBotService:
                     continue
                 seen_item_ids.add(thread_id)
                 label = _format_thread_preview(entry)
+                button_label = _extract_first_user_preview(entry)
+                if button_label:
+                    button_labels[thread_id] = button_label
                 if label == "(no preview)":
                     cached_preview = local_previews.get(thread_id)
                     if cached_preview:
@@ -4160,6 +4165,9 @@ class TelegramBotService:
                         label = _format_missing_thread_label(thread_id, cached_preview)
                     else:
                         label = _format_thread_preview(entry)
+                        button_label = _extract_first_user_preview(entry)
+                        if button_label:
+                            button_labels[thread_id] = button_label
                         if label == "(no preview)":
                             cached_preview = _thread_summary_preview(record, thread_id)
                             if cached_preview:
@@ -4171,6 +4179,9 @@ class TelegramBotService:
                     if not isinstance(thread_id, str) or not thread_id:
                         continue
                     label = _format_thread_preview(entry)
+                    button_label = _extract_first_user_preview(entry)
+                    if button_label:
+                        button_labels[thread_id] = button_label
                     items.append((thread_id, label))
         if missing_ids:
             log_event(
@@ -4196,7 +4207,7 @@ class TelegramBotService:
                 reply_to=message.message_id,
             )
             return
-        state = SelectionState(items=items)
+        state = SelectionState(items=items, button_labels=button_labels)
         keyboard = self._build_resume_keyboard(state)
         self._resume_options[key] = state
         await self._send_message(
@@ -6408,15 +6419,27 @@ class TelegramBotService:
 
     def _build_resume_keyboard(self, state: SelectionState) -> dict[str, Any]:
         page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
-        options = [
-            (item_id, f"{idx}) {_compact_preview(label, RESUME_BUTTON_PREVIEW_LIMIT)}")
-            for idx, (item_id, label) in enumerate(page_items, 1)
-        ]
+        options = []
+        for idx, (item_id, label) in enumerate(page_items, 1):
+            button_label = self._resume_button_label(state, item_id, label)
+            options.append(
+                (
+                    item_id,
+                    f"{idx}) {_compact_preview(button_label, RESUME_BUTTON_PREVIEW_LIMIT)}",
+                )
+            )
         return build_resume_keyboard(
             options,
             page_button=self._page_button("resume", state),
             include_cancel=True,
         )
+
+    def _resume_button_label(self, state: SelectionState, item_id: str, label: str) -> str:
+        if state.button_labels:
+            button_label = state.button_labels.get(item_id)
+            if isinstance(button_label, str) and button_label.strip():
+                return button_label
+        return label
 
     def _build_bind_keyboard(self, state: SelectionState) -> dict[str, Any]:
         page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
@@ -8286,6 +8309,42 @@ def _normalize_preview_text(text: str) -> str:
     return " ".join(text.split()).strip()
 
 
+GITHUB_URL_TRAILING_PUNCTUATION = ".,)]}>\"'"
+
+
+def _strip_url_trailing_punctuation(url: str) -> str:
+    return url.rstrip(GITHUB_URL_TRAILING_PUNCTUATION)
+
+
+def _github_preview_matcher(text: Optional[str]) -> Optional[str]:
+    if not isinstance(text, str) or not text.strip():
+        return None
+    for link in find_github_links(text):
+        cleaned = _strip_url_trailing_punctuation(link)
+        parsed = parse_github_url(cleaned)
+        if not parsed:
+            continue
+        slug, kind, number = parsed
+        label = f"{slug}#{number}"
+        if kind == "pr":
+            return f"{label} (PR)"
+        return f"{label} (Issue)"
+    return None
+
+
+SPECIAL_PREVIEW_MATCHERS: tuple[Callable[[Optional[str]], Optional[str]], ...] = (
+    _github_preview_matcher,
+)
+
+
+def _special_preview_from_text(text: Optional[str]) -> Optional[str]:
+    for matcher in SPECIAL_PREVIEW_MATCHERS:
+        preview = matcher(text)
+        if preview:
+            return preview
+    return None
+
+
 def _preview_from_text(text: Optional[str], limit: int) -> Optional[str]:
     if not isinstance(text, str):
         return None
@@ -8324,6 +8383,22 @@ def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
                 line.decode("utf-8", errors="replace")
                 for line in lines[-max_lines:]
             ]
+    except OSError:
+        return []
+
+
+def _head_text_lines(path: Path, max_lines: int) -> list[str]:
+    if max_lines <= 0:
+        return []
+    try:
+        lines: list[str] = []
+        with path.open("rb") as handle:
+            for _ in range(max_lines):
+                line = handle.readline()
+                if not line:
+                    break
+                lines.append(line.decode("utf-8", errors="replace"))
+        return lines
     except OSError:
         return []
 
@@ -8448,6 +8523,24 @@ def _extract_rollout_preview(path: Path) -> tuple[Optional[str], Optional[str]]:
     return last_user, last_assistant
 
 
+def _extract_rollout_first_user_preview(path: Path) -> Optional[str]:
+    lines = _head_text_lines(path, RESUME_PREVIEW_SCAN_LINES)
+    if not lines:
+        return None
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for role, text in _iter_role_texts(payload):
+            if role == "user" and text:
+                return text
+    return None
+
+
 def _extract_turns_preview(turns: Any) -> tuple[Optional[str], Optional[str]]:
     if not isinstance(turns, list):
         return None, None
@@ -8477,6 +8570,31 @@ def _extract_turns_preview(turns: Any) -> tuple[Optional[str], Optional[str]]:
                     if last_user and last_assistant:
                         return last_user, last_assistant
     return last_user, last_assistant
+
+
+def _extract_turns_first_user_preview(turns: Any) -> Optional[str]:
+    if not isinstance(turns, list):
+        return None
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        candidates: list[Any] = []
+        for key in ("items", "messages", "input", "output"):
+            value = turn.get(key)
+            if value is not None:
+                candidates.append(value)
+        if not candidates:
+            candidates.append(turn)
+        for candidate in candidates:
+            if isinstance(candidate, list):
+                iterable = candidate
+            else:
+                iterable = (candidate,)
+            for item in iterable:
+                for role, text in _iter_role_texts(item):
+                    if role == "user" and text:
+                        return text
+    return None
 
 
 def _extract_thread_preview_parts(entry: Any) -> tuple[Optional[str], Optional[str]]:
@@ -8537,6 +8655,37 @@ def _extract_thread_preview_parts(entry: Any) -> tuple[Optional[str], Optional[s
             RESUME_PREVIEW_ASSISTANT_LIMIT,
         )
     return user_preview, assistant_preview
+
+
+def _extract_first_user_preview(entry: Any) -> Optional[str]:
+    entry = _coerce_thread_payload(entry)
+    user_preview_keys = (
+        "first_user_message",
+        "firstUserMessage",
+        "first_user",
+        "firstUser",
+        "initial_user_message",
+        "initialUserMessage",
+        "initial_user",
+        "initialUser",
+        "first_message",
+        "firstMessage",
+        "initial_message",
+        "initialMessage",
+    )
+    user_preview = _coerce_preview_field(entry, user_preview_keys)
+    turns = entry.get("turns")
+    if not user_preview and turns:
+        user_preview = _extract_turns_first_user_preview(turns)
+    rollout_path = _extract_rollout_path(entry)
+    if not user_preview and rollout_path:
+        path = Path(rollout_path)
+        if path.exists():
+            user_preview = _extract_rollout_first_user_preview(path)
+    special_preview = _special_preview_from_text(user_preview)
+    if special_preview:
+        return _preview_from_text(special_preview, RESUME_PREVIEW_USER_LIMIT)
+    return _preview_from_text(user_preview, RESUME_PREVIEW_USER_LIMIT)
 
 
 def _format_preview_parts(
