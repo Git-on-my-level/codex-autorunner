@@ -3382,10 +3382,23 @@ class TelegramBotService:
             return prompt_text, False
         links = find_github_links(prompt_text)
         if not links:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "telegram.github_context.skip",
+                reason="no_links",
+            )
             return prompt_text, False
         workspace_root = Path(record.workspace_path)
         repo_root = _repo_root(workspace_root)
         if repo_root is None:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.github_context.skip",
+                reason="repo_not_found",
+                workspace_path=str(workspace_root),
+            )
             return prompt_text, False
         try:
             repo_config = load_config(repo_root)
@@ -3393,6 +3406,24 @@ class TelegramBotService:
         except Exception:
             raw_config = None
         svc = GitHubService(repo_root, raw_config=raw_config)
+        if not svc.gh_available():
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.github_context.skip",
+                reason="gh_unavailable",
+                repo_root=str(repo_root),
+            )
+            return prompt_text, False
+        if not svc.gh_authenticated():
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.github_context.skip",
+                reason="gh_unauthenticated",
+                repo_root=str(repo_root),
+            )
+            return prompt_text, False
         for link in links:
             try:
                 result = await asyncio.to_thread(
@@ -3403,7 +3434,21 @@ class TelegramBotService:
             if result and result.get("hint"):
                 separator = "\n" if prompt_text.endswith("\n") else "\n\n"
                 hint = str(result["hint"])
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.github_context.injected",
+                    repo_root=str(repo_root),
+                    path=result.get("path"),
+                )
                 return f"{prompt_text}{separator}{hint}", True
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.github_context.skip",
+            reason="no_context",
+            repo_root=str(repo_root),
+        )
         return prompt_text, False
 
     async def _handle_image_message(
