@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Optional
 
 from ..codex_cli import extract_flag_value
-from ..lock_utils import process_alive, read_lock_info
-from ..state import load_state
+from ..core.locks import process_alive, read_lock_info
+from ..core.state import load_state
 
 BYPASS_FLAGS = {
     "--yolo",

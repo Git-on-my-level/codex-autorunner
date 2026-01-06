@@ -3,10 +3,10 @@ from typing import Optional
 
 import yaml
 
-from .about_car import ensure_about_car_file_for_repo
-from .config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG, resolve_config_data
+from .core.about_car import ensure_about_car_file_for_repo
+from .core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG, resolve_config_data
 from .manifest import load_manifest
-from .utils import atomic_write
+from .core.utils import atomic_write
 
 GITIGNORE_CONTENT = "*"
 

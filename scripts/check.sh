@@ -15,6 +15,8 @@ need_cmd() {
 
 need_cmd python
 need_cmd black
+need_cmd ruff
+need_cmd mypy
 need_cmd pytest
 need_cmd node
 
@@ -34,6 +36,12 @@ fi
 
 echo "Formatting check (black)..."
 python -m black --check "${paths[@]}"
+
+echo "Linting Python (ruff)..."
+ruff check "${paths[@]}"
+
+echo "Type check (mypy)..."
+mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server
 
 echo "Linting JS (eslint)..."
 "$ESLINT_BIN" "src/codex_autorunner/static/**/*.js"

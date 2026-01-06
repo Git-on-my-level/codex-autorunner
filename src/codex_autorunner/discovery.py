@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .bootstrap import seed_repo_files
-from .config import HubConfig
+from .core.config import HubConfig
 from .manifest import Manifest, ManifestRepo, load_manifest, save_manifest
 
 

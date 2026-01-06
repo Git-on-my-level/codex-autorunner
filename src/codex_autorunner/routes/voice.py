@@ -18,6 +18,29 @@ def build_voice_routes() -> APIRouter:
     def get_voice_config(request: Request):
         voice_service: Optional[VoiceService] = request.app.state.voice_service
         voice_config = request.app.state.voice_config
+        missing_reason = getattr(request.app.state, "voice_missing_reason", None)
+        if missing_reason:
+            return {
+                "enabled": False,
+                "provider": voice_config.provider,
+                "latency_mode": voice_config.latency_mode,
+                "chunk_ms": voice_config.chunk_ms,
+                "sample_rate": voice_config.sample_rate,
+                "warn_on_remote_api": voice_config.warn_on_remote_api,
+                "has_api_key": False,
+                "api_key_env": (
+                    voice_config.providers.get(
+                        voice_config.provider or "openai_whisper", {}
+                    )
+                    or {}
+                ).get("api_key_env", "OPENAI_API_KEY"),
+                "push_to_talk": {
+                    "max_ms": voice_config.push_to_talk.max_ms,
+                    "silence_auto_stop_ms": voice_config.push_to_talk.silence_auto_stop_ms,
+                    "min_hold_ms": voice_config.push_to_talk.min_hold_ms,
+                },
+                "missing_extra": missing_reason,
+            }
         if voice_service is None:
             # Degrade gracefully: still return config to the UI even if service init failed.
             try:
@@ -55,6 +78,9 @@ def build_voice_routes() -> APIRouter:
     ):
         voice_service: Optional[VoiceService] = request.app.state.voice_service
         voice_config = request.app.state.voice_config
+        missing_reason = getattr(request.app.state, "voice_missing_reason", None)
+        if missing_reason:
+            raise HTTPException(status_code=503, detail=missing_reason)
         if not voice_service or not voice_config.enabled:
             raise HTTPException(status_code=400, detail="Voice is disabled")
 
@@ -100,4 +126,3 @@ def build_voice_routes() -> APIRouter:
         return {"status": "ok", **result}
 
     return router
-

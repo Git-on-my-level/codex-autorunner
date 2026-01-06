@@ -3,11 +3,15 @@ Terminal session registry routes.
 """
 
 import time
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..state import persist_session_registry
+from ..core.state import persist_session_registry
+from ..web.schemas import (
+    SessionStopRequest,
+    SessionStopResponse,
+    SessionsResponse,
+)
 
 
 def _session_payload(session_id: str, record, terminal_sessions: dict) -> dict:
@@ -26,7 +30,7 @@ def _session_payload(session_id: str, record, terminal_sessions: dict) -> dict:
 def build_sessions_routes() -> APIRouter:
     router = APIRouter()
 
-    @router.get("/api/sessions")
+    @router.get("/api/sessions", response_model=SessionsResponse)
     def list_sessions(request: Request):
         terminal_sessions = request.app.state.terminal_sessions
         session_registry = request.app.state.session_registry
@@ -40,13 +44,10 @@ def build_sessions_routes() -> APIRouter:
             "repo_to_session": dict(repo_to_session),
         }
 
-    @router.post("/api/sessions/stop")
-    async def stop_session(request: Request, payload: Optional[dict] = None):
-        if not payload or not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Missing session payload")
-
-        session_id = payload.get("session_id")
-        repo_path = payload.get("repo_path")
+    @router.post("/api/sessions/stop", response_model=SessionStopResponse)
+    async def stop_session(request: Request, payload: SessionStopRequest):
+        session_id = payload.session_id
+        repo_path = payload.repo_path
         if not session_id and not repo_path:
             raise HTTPException(
                 status_code=400, detail="Provide session_id or repo_path"

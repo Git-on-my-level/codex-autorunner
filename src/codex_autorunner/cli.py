@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -6,45 +7,36 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:  # pragma: no cover
-
-    def load_dotenv(*_args, **_kwargs):  # type: ignore[no-redef]
-        return False
-
-
 import typer
-
-load_dotenv()
 import uvicorn
 import httpx
 
 from .bootstrap import seed_hub_files, seed_repo_files
-from .config import ConfigError, HubConfig, _normalize_base_path, load_config
-from .engine import Engine, LockError, clear_stale_lock, doctor
-from .hub import HubSupervisor
+from .core.config import ConfigError, HubConfig, _normalize_base_path, load_config
+from .core.engine import Engine, LockError, clear_stale_lock, doctor
+from .core.hub import HubSupervisor
 from .manifest import load_manifest
 from .server import create_app, create_hub_app
-from .state import RunnerState, load_state, now_iso, save_state, state_lock
-from .utils import RepoNotFoundError, default_editor, find_repo_root
-from .logging_utils import log_event, setup_rotating_logger
+from .core.state import RunnerState, load_state, now_iso, save_state, state_lock
+from .core.utils import RepoNotFoundError, default_editor, find_repo_root
+from .core.logging_utils import log_event, setup_rotating_logger
+from .core.optional_dependencies import require_optional_dependencies
 from .spec_ingest import (
     SpecIngestError,
     generate_docs_from_spec,
     write_ingested_docs,
     clear_work_docs,
 )
-from .usage import (
+from .core.usage import (
     UsageError,
     default_codex_home,
     parse_iso_datetime,
     summarize_hub_usage,
     summarize_repo_usage,
 )
-from .snapshot import SnapshotError, generate_snapshot, load_snapshot
-from .telegram_adapter import TelegramAPIError, TelegramBotClient
-from .telegram_bot import (
+from .core.snapshot import SnapshotError, generate_snapshot, load_snapshot
+from .integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
+from .integrations.telegram.service import (
     TelegramBotConfig,
     TelegramBotConfigError,
     TelegramBotLockError,
@@ -84,11 +76,49 @@ def _build_server_url(config, path: str) -> str:
     return f"http://{config.server_host}:{config.server_port}{base_path}{path}"
 
 
+def _resolve_auth_token(env_name: str) -> Optional[str]:
+    if not env_name:
+        return None
+    value = os.environ.get(env_name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _enforce_bind_auth(host: str, token_env: str) -> None:
+    if _is_loopback_host(host):
+        return
+    if _resolve_auth_token(token_env):
+        return
+    raise typer.Exit(
+        "Refusing to bind to a non-loopback host without server.auth_token_env set."
+    )
+
+
 def _request_json(method: str, url: str, payload: Optional[dict] = None) -> dict:
     response = httpx.request(method, url, json=payload, timeout=2.0)
     response.raise_for_status()
     data = response.json()
     return data if isinstance(data, dict) else {}
+
+
+def _require_optional_feature(
+    *, feature: str, deps: list[tuple[str, str]], extra: Optional[str] = None
+) -> None:
+    try:
+        require_optional_dependencies(feature=feature, deps=deps, extra=extra)
+    except ConfigError as exc:
+        raise typer.Exit(str(exc))
 
 
 app.add_typer(hub_app, name="hub")
@@ -628,6 +658,7 @@ def serve(
             if base_path is not None
             else config.server_base_path
         )
+        _enforce_bind_auth(bind_host, config.server_auth_token_env)
         typer.echo(
             f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}"
         )
@@ -647,6 +678,7 @@ def serve(
     app_instance = create_app(engine.repo_root, base_path=normalized_base)
     bind_host = host or engine.config.server_host
     bind_port = port or engine.config.server_port
+    _enforce_bind_auth(bind_host, engine.config.server_auth_token_env)
     typer.echo(f"Serving repo on http://{bind_host}:{bind_port}{normalized_base or ''}")
     uvicorn.run(app_instance, host=bind_host, port=bind_port, root_path="")
 
@@ -695,6 +727,7 @@ def hub_serve(
     )
     bind_host = host or config.server_host
     bind_port = port or config.server_port
+    _enforce_bind_auth(bind_host, config.server_auth_token_env)
     typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}")
     uvicorn.run(
         create_hub_app(config.root, base_path=normalized_base),
@@ -722,6 +755,11 @@ def telegram_start(
     path: Optional[Path] = typer.Option(None, "--path", help="Repo or hub root path"),
 ):
     """Start the Telegram bot (polling)."""
+    _require_optional_feature(
+        feature="telegram",
+        deps=[("httpx", "httpx")],
+        extra="telegram",
+    )
     try:
         config = load_config(path or Path.cwd())
     except ConfigError as exc:
@@ -774,6 +812,11 @@ def telegram_health(
     timeout: float = typer.Option(5.0, "--timeout", help="Timeout (seconds)"),
 ):
     """Check Telegram API connectivity for the configured bot."""
+    _require_optional_feature(
+        feature="telegram",
+        deps=[("httpx", "httpx")],
+        extra="telegram",
+    )
     try:
         config = load_config(path or Path.cwd())
     except ConfigError as exc:

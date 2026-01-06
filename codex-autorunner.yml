@@ -74,6 +74,8 @@ repo:
     port: 4173
     # Optional base path for reverse proxies ("" or "/car").
     base_path: ""
+    # Optional env var containing the bearer token required for /api and websocket access.
+    auth_token_env: ""
 
   notifications:
     # enabled: true|false|"auto" (auto enables if any target env vars are present)
@@ -239,6 +241,8 @@ hub:
     host: 127.0.0.1
     port: 4173
     base_path: ""
+    # Optional env var containing the bearer token required for /api and websocket access.
+    auth_token_env: ""
 
   # Optional explicit server log for the hub (null uses hub.log only).
   server_log: null

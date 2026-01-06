@@ -13,9 +13,16 @@ from urllib.parse import unquote, urlparse
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from ..config import HubConfig
-from ..git_utils import GitError, run_git
-from ..static_assets import missing_static_assets
+from ..core.config import HubConfig
+from ..core.git_utils import GitError, run_git
+from ..web.schemas import (
+    SystemHealthResponse,
+    SystemUpdateCheckResponse,
+    SystemUpdateRequest,
+    SystemUpdateResponse,
+    SystemUpdateStatusResponse,
+)
+from ..web.static_assets import missing_static_assets
 
 
 class UpdateInProgressError(RuntimeError):
@@ -458,7 +465,7 @@ def _spawn_update_process(
     cmd = [
         sys.executable,
         "-m",
-        "codex_autorunner.update_runner",
+        "codex_autorunner.core.update_runner",
         "--repo-url",
         repo_url,
         "--repo-ref",
@@ -489,7 +496,7 @@ def _spawn_update_process(
 def build_system_routes() -> APIRouter:
     router = APIRouter()
 
-    @router.get("/health")
+    @router.get("/health", response_model=SystemHealthResponse)
     async def system_health(request: Request):
         try:
             config = request.app.state.config
@@ -528,7 +535,7 @@ def build_system_routes() -> APIRouter:
             "asset_version": asset_version,
         }
 
-    @router.get("/system/update/check")
+    @router.get("/system/update/check", response_model=SystemUpdateCheckResponse)
     async def system_update_check(request: Request):
         """
         Check if an update is available by comparing local git state vs remote.
@@ -557,8 +564,10 @@ def build_system_routes() -> APIRouter:
                 logger.error("Update check error: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
 
-    @router.post("/system/update")
-    async def system_update(request: Request):
+    @router.post("/system/update", response_model=SystemUpdateResponse)
+    async def system_update(
+        request: Request, payload: Optional[SystemUpdateRequest] = None
+    ):
         """
         Pull latest code and refresh the running service.
         This will restart the server if successful.
@@ -583,13 +592,7 @@ def build_system_routes() -> APIRouter:
         update_dir = home_dot_car / "update_cache"
 
         try:
-            try:
-                payload = await request.json()
-            except Exception:
-                payload = None
-            target_raw = None
-            if isinstance(payload, dict):
-                target_raw = payload.get("target")
+            target_raw = payload.target if payload else None
             if target_raw is None:
                 target_raw = request.query_params.get("target")
             update_target = _normalize_update_target(target_raw)
@@ -618,7 +621,7 @@ def build_system_routes() -> APIRouter:
                 logger.error("Update error: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
 
-    @router.get("/system/update/status")
+    @router.get("/system/update/status", response_model=SystemUpdateStatusResponse)
     async def system_update_status():
         status = _read_update_status()
         if status is None:

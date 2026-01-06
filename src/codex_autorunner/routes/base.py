@@ -14,10 +14,11 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from ..codex_cli import extract_flag_value
-from ..pty_session import ActiveSession, PTYSession, REPLAY_END
-from ..state import SessionRecord, load_state, now_iso, persist_session_registry
-from ..static_assets import index_response_headers, render_index_html
-from ..logging_utils import safe_log
+from ..web.pty_session import ActiveSession, PTYSession, REPLAY_END
+from ..core.state import SessionRecord, load_state, now_iso, persist_session_registry
+from ..web.static_assets import index_response_headers, render_index_html
+from ..web.schemas import StateResponse, VersionResponse
+from ..core.logging_utils import safe_log
 from .shared import (
     build_codex_terminal_cmd,
     log_stream,
@@ -42,7 +43,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         html = render_index_html(static_dir, request.app.state.asset_version)
         return HTMLResponse(html, headers=index_response_headers())
 
-    @router.get("/api/state")
+    @router.get("/api/state", response_model=StateResponse)
     def get_state(request: Request):
         engine = request.app.state.engine
         config = request.app.state.config
@@ -66,7 +67,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             "codex_model": codex_model or "auto",
         }
 
-    @router.get("/api/version")
+    @router.get("/api/version", response_model=VersionResponse)
     def get_version(request: Request):
         return {"asset_version": request.app.state.asset_version}
 

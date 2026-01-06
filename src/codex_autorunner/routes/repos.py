@@ -6,21 +6,25 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..engine import LockError, clear_stale_lock
-from ..state import RunnerState, load_state, now_iso, save_state, state_lock
+from ..core.engine import LockError, clear_stale_lock
+from ..core.state import RunnerState, load_state, now_iso, save_state, state_lock
+from ..web.schemas import (
+    RunControlRequest,
+    RunControlResponse,
+    RunResetResponse,
+    RunStatusResponse,
+)
 
 
 def build_repos_routes() -> APIRouter:
     """Build routes for run control."""
     router = APIRouter()
 
-    @router.post("/api/run/start")
-    def start_run(request: Request, payload: Optional[dict] = None):
+    @router.post("/api/run/start", response_model=RunControlResponse)
+    def start_run(request: Request, payload: Optional[RunControlRequest] = None):
         manager = request.app.state.manager
         logger = request.app.state.logger
-        once = False
-        if payload and isinstance(payload, dict):
-            once = bool(payload.get("once", False))
+        once = payload.once if payload else False
         try:
             logger.info("run/start once=%s", once)
         except Exception:
@@ -31,7 +35,7 @@ def build_repos_routes() -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc))
         return {"running": manager.running, "once": once}
 
-    @router.post("/api/run/stop")
+    @router.post("/api/run/stop", response_model=RunStatusResponse)
     def stop_run(request: Request):
         manager = request.app.state.manager
         logger = request.app.state.logger
@@ -42,7 +46,7 @@ def build_repos_routes() -> APIRouter:
         manager.stop()
         return {"running": manager.running}
 
-    @router.post("/api/run/kill")
+    @router.post("/api/run/kill", response_model=RunStatusResponse)
     def kill_run(request: Request):
         engine = request.app.state.engine
         manager = request.app.state.manager
@@ -68,14 +72,12 @@ def build_repos_routes() -> APIRouter:
         clear_stale_lock(engine.lock_path)
         return {"running": manager.running}
 
-    @router.post("/api/run/resume")
-    def resume_run(request: Request, payload: Optional[dict] = None):
+    @router.post("/api/run/resume", response_model=RunControlResponse)
+    def resume_run(request: Request, payload: Optional[RunControlRequest] = None):
         engine = request.app.state.engine
         manager = request.app.state.manager
         logger = request.app.state.logger
-        once = False
-        if payload and isinstance(payload, dict):
-            once = bool(payload.get("once", False))
+        once = payload.once if payload else False
         try:
             logger.info("run/resume once=%s", once)
         except Exception:
@@ -86,7 +88,7 @@ def build_repos_routes() -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc))
         return {"running": manager.running, "once": once}
 
-    @router.post("/api/run/reset")
+    @router.post("/api/run/reset", response_model=RunResetResponse)
     def reset_runner(request: Request):
         engine = request.app.state.engine
         manager = request.app.state.manager
