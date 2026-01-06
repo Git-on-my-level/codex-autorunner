@@ -4473,10 +4473,32 @@ class TelegramBotService:
             overwrite_defaults=True,
         )
         await self._answer_callback(callback, "Resumed thread")
-        message = f"Resumed thread {thread_id}."
-        if preview and preview != "(no preview)":
-            message = f"{message}\nLast:\n{preview}"
-        await self._finalize_selection(key, callback, message)
+        user_preview, assistant_preview = _extract_thread_resume_parts(result)
+        message = _format_resume_summary(
+            thread_id,
+            user_preview,
+            assistant_preview,
+            fallback_preview=preview,
+        )
+        if len(message) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+            await self._finalize_selection(key, callback, message)
+            return
+        header = f"Resumed thread `{thread_id}`"
+        await self._finalize_selection(key, callback, header)
+        extra_parts: list[str] = []
+        if user_preview:
+            extra_parts.append(f"User:\n{user_preview}")
+        if assistant_preview:
+            extra_parts.append(f"Assistant:\n{assistant_preview}")
+        if (
+            not extra_parts
+            and preview
+            and preview != "(no preview)"
+        ):
+            extra_parts.append(f"Last:\n{preview}")
+        for part in extra_parts:
+            await self._send_message(chat_id, part, thread_id=thread_id_val)
+        return
 
     async def _handle_status(
         self, message: TelegramMessage, _args: str = "", runtime: Optional[Any] = None
@@ -8405,6 +8427,16 @@ def _coerce_preview_field(entry: dict[str, Any], keys: Sequence[str]) -> Optiona
     return None
 
 
+def _coerce_preview_field_raw(
+    entry: dict[str, Any], keys: Sequence[str]
+) -> Optional[str]:
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
 def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
     if max_lines <= 0:
         return []
@@ -8702,6 +8734,57 @@ def _extract_thread_preview_parts(entry: Any) -> tuple[Optional[str], Optional[s
     return user_preview, assistant_preview
 
 
+def _extract_thread_resume_parts(entry: Any) -> tuple[Optional[str], Optional[str]]:
+    entry = _coerce_thread_payload(entry)
+    user_preview_keys = (
+        "last_user_message",
+        "lastUserMessage",
+        "last_user",
+        "lastUser",
+        "last_user_text",
+        "lastUserText",
+        "user_preview",
+        "userPreview",
+    )
+    assistant_preview_keys = (
+        "last_assistant_message",
+        "lastAssistantMessage",
+        "last_assistant",
+        "lastAssistant",
+        "last_assistant_text",
+        "lastAssistantText",
+        "assistant_preview",
+        "assistantPreview",
+        "last_response",
+        "lastResponse",
+        "response_preview",
+        "responsePreview",
+    )
+    user_preview = _coerce_preview_field_raw(entry, user_preview_keys)
+    assistant_preview = _coerce_preview_field_raw(entry, assistant_preview_keys)
+    turns = entry.get("turns")
+    if turns and (not user_preview or not assistant_preview):
+        turn_user, turn_assistant = _extract_turns_preview(turns)
+        if not user_preview and turn_user:
+            user_preview = turn_user
+        if not assistant_preview and turn_assistant:
+            assistant_preview = turn_assistant
+    rollout_path = _extract_rollout_path(entry)
+    if rollout_path and (not user_preview or not assistant_preview):
+        path = Path(rollout_path)
+        if path.exists():
+            rollout_user, rollout_assistant = _extract_rollout_preview(path)
+            if not user_preview and rollout_user:
+                user_preview = rollout_user
+            if not assistant_preview and rollout_assistant:
+                assistant_preview = rollout_assistant
+    if user_preview is None:
+        preview = entry.get("preview")
+        if isinstance(preview, str) and preview.strip():
+            user_preview = preview
+    return user_preview, assistant_preview
+
+
 def _extract_first_user_preview(entry: Any) -> Optional[str]:
     entry = _coerce_thread_payload(entry)
     user_preview_keys = (
@@ -8746,6 +8829,28 @@ def _format_preview_parts(
     if assistant_preview:
         return f"Assistant: {assistant_preview}"
     return "(no preview)"
+
+
+def _format_resume_summary(
+    thread_id: str,
+    user_preview: Optional[str],
+    assistant_preview: Optional[str],
+    *,
+    fallback_preview: Optional[str] = None,
+) -> str:
+    parts = [f"Resumed thread `{thread_id}`"]
+    if user_preview:
+        parts.extend(("", "User:", user_preview))
+    if assistant_preview:
+        parts.extend(("", "Assistant:", assistant_preview))
+    if (
+        not user_preview
+        and not assistant_preview
+        and fallback_preview
+        and fallback_preview != "(no preview)"
+    ):
+        parts.extend(("", "Last:", fallback_preview))
+    return "\n".join(parts)
 
 
 def _format_thread_preview(entry: Any) -> str:
