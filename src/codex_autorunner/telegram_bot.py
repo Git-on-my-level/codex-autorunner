@@ -6849,30 +6849,7 @@ def _format_rate_limits(rate_limits: Optional[dict[str, Any]]) -> list[str]:
         if used is None:
             used = _compute_used_percent(entry)
         used_text = _format_percent(used)
-        window_minutes = _coerce_int(
-            entry.get("window_minutes", entry.get("windowMinutes"))
-        )
-        if window_minutes is None:
-            for candidate in (
-                "window",
-                "window_mins",
-                "windowMins",
-                "period_minutes",
-                "periodMinutes",
-                "duration_minutes",
-                "durationMinutes",
-            ):
-                window_minutes = _coerce_int(entry.get(candidate))
-                if window_minutes is not None:
-                    break
-        if window_minutes is None:
-            window_seconds = _coerce_int(
-                entry.get("window_seconds", entry.get("windowSeconds"))
-            )
-            if window_seconds is not None:
-                window_minutes = max(int(round(window_seconds / 60)), 1)
-        if window_minutes is None and key in ("primary", "secondary"):
-            window_minutes = 300 if key == "primary" else 10080
+        window_minutes = _rate_limit_window_minutes(entry, key)
         label = _format_rate_limit_window(window_minutes) or key
         if used_text:
             parts.append(f"[{label}: {used_text}]")
@@ -6882,6 +6859,37 @@ def _format_rate_limits(rate_limits: Optional[dict[str, Any]]) -> list[str]:
     if refresh_label:
         parts.append(f"[refresh: {refresh_label}]")
     return [f"Limits: {' '.join(parts)}"]
+
+
+def _rate_limit_window_minutes(
+    entry: dict[str, Any],
+    section: Optional[str] = None,
+) -> Optional[int]:
+    window_minutes = _coerce_int(
+        entry.get("window_minutes", entry.get("windowMinutes"))
+    )
+    if window_minutes is None:
+        for candidate in (
+            "window",
+            "window_mins",
+            "windowMins",
+            "period_minutes",
+            "periodMinutes",
+            "duration_minutes",
+            "durationMinutes",
+        ):
+            window_minutes = _coerce_int(entry.get(candidate))
+            if window_minutes is not None:
+                break
+    if window_minutes is None:
+        window_seconds = _coerce_int(
+            entry.get("window_seconds", entry.get("windowSeconds"))
+        )
+        if window_seconds is not None:
+            window_minutes = max(int(round(window_seconds / 60)), 1)
+    if window_minutes is None and section in ("primary", "secondary"):
+        window_minutes = 300 if section == "primary" else 10080
+    return window_minutes
 
 
 def _compute_used_percent(entry: dict[str, Any]) -> Optional[float]:
@@ -6971,6 +6979,28 @@ def _format_rate_limit_refresh(rate_limits: dict[str, Any]) -> Optional[str]:
 
 
 def _extract_rate_limit_timestamp(rate_limits: dict[str, Any]) -> Optional[datetime]:
+    candidates: list[tuple[int, datetime]] = []
+    for section in ("primary", "secondary"):
+        entry = rate_limits.get(section)
+        if not isinstance(entry, dict):
+            continue
+        window_minutes = _rate_limit_window_minutes(entry, section) or 0
+        for key in (
+            "resets_at",
+            "resetsAt",
+            "reset_at",
+            "resetAt",
+            "refresh_at",
+            "refreshAt",
+            "updated_at",
+            "updatedAt",
+        ):
+            if key in entry:
+                dt = _coerce_datetime(entry.get(key))
+                if dt is not None:
+                    candidates.append((window_minutes, dt))
+    if candidates:
+        return max(candidates, key=lambda item: (item[0], item[1]))[1]
     for key in (
         "refreshed_at",
         "refreshedAt",
@@ -6985,27 +7015,6 @@ def _extract_rate_limit_timestamp(rate_limits: dict[str, Any]) -> Optional[datet
     ):
         if key in rate_limits:
             return _coerce_datetime(rate_limits.get(key))
-    candidates: list[datetime] = []
-    for section in ("primary", "secondary"):
-        entry = rate_limits.get(section)
-        if not isinstance(entry, dict):
-            continue
-        for key in (
-            "resets_at",
-            "resetsAt",
-            "reset_at",
-            "resetAt",
-            "refresh_at",
-            "refreshAt",
-            "updated_at",
-            "updatedAt",
-        ):
-            if key in entry:
-                dt = _coerce_datetime(entry.get(key))
-                if dt is not None:
-                    candidates.append(dt)
-    if candidates:
-        return min(candidates)
     return None
 
 
