@@ -8316,6 +8316,47 @@ def _strip_url_trailing_punctuation(url: str) -> str:
     return url.rstrip(GITHUB_URL_TRAILING_PUNCTUATION)
 
 
+FIRST_USER_PREVIEW_IGNORE_PATTERNS = (
+    # New-format user instructions injection (AGENTS.md), preferred format.
+    re.compile(
+        r"(?s)^\s*#\s*AGENTS\.md instructions for .+?\n\n<INSTRUCTIONS>\n.*?\n</INSTRUCTIONS>\s*$",
+        re.IGNORECASE,
+    ),
+    # Legacy user instructions injection.
+    re.compile(r"(?s)^\s*<user_instructions>\s*.*?\s*</user_instructions>\s*$", re.IGNORECASE),
+    # Environment context injection (cwd, approval policy, sandbox policy, etc.).
+    re.compile(
+        r"(?s)^\s*<environment_context>\s*.*?\s*</environment_context>\s*$",
+        re.IGNORECASE,
+    ),
+    # Skill instructions injection (includes name/path and skill contents).
+    re.compile(r"(?s)^\s*<skill>\s*.*?\s*</skill>\s*$", re.IGNORECASE),
+    # User shell command records (transcript of !/shell).
+    re.compile(r"(?s)^\s*<user_shell_command>\s*.*?\s*</user_shell_command>\s*$", re.IGNORECASE),
+)
+
+USER_MESSAGE_BEGIN_STRIP_RE = re.compile(
+    r"(?s)^\s*(?:<prior context>\s*)?##\s*My request for Codex:\s*",
+    re.IGNORECASE,
+)
+
+
+def _is_ignored_first_user_preview(text: Optional[str]) -> bool:
+    if not isinstance(text, str):
+        return False
+    trimmed = text.strip()
+    if not trimmed:
+        return True
+    return any(pattern.search(trimmed) for pattern in FIRST_USER_PREVIEW_IGNORE_PATTERNS)
+
+
+def _strip_user_message_begin(text: Optional[str]) -> Optional[str]:
+    if not isinstance(text, str):
+        return text
+    stripped = USER_MESSAGE_BEGIN_STRIP_RE.sub("", text)
+    return stripped if stripped != text else text
+
+
 def _github_preview_matcher(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str) or not text.strip():
         return None
@@ -8537,7 +8578,9 @@ def _extract_rollout_first_user_preview(path: Path) -> Optional[str]:
             continue
         for role, text in _iter_role_texts(payload):
             if role == "user" and text:
-                return text
+                text = _strip_user_message_begin(text)
+                if not _is_ignored_first_user_preview(text):
+                    return text
     return None
 
 
@@ -8593,7 +8636,9 @@ def _extract_turns_first_user_preview(turns: Any) -> Optional[str]:
             for item in iterable:
                 for role, text in _iter_role_texts(item):
                     if role == "user" and text:
-                        return text
+                        text = _strip_user_message_begin(text)
+                        if not _is_ignored_first_user_preview(text):
+                            return text
     return None
 
 
@@ -8674,6 +8719,9 @@ def _extract_first_user_preview(entry: Any) -> Optional[str]:
         "initialMessage",
     )
     user_preview = _coerce_preview_field(entry, user_preview_keys)
+    user_preview = _strip_user_message_begin(user_preview)
+    if _is_ignored_first_user_preview(user_preview):
+        user_preview = None
     turns = entry.get("turns")
     if not user_preview and turns:
         user_preview = _extract_turns_first_user_preview(turns)
