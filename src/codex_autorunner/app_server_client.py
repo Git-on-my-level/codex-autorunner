@@ -891,11 +891,16 @@ class CodexAppServerClient:
         disconnected = self._ensure_disconnect_event()
         disconnected.set()
         self._disconnected_set = True
+        process = self._process
+        returncode = process.returncode if process is not None else None
+        pid = process.pid if process is not None else None
         log_event(
             self._logger,
             logging.WARNING,
             "app_server.disconnected",
             auto_restart=self._auto_restart,
+            returncode=returncode,
+            pid=pid,
         )
         if not self._closed:
             self._fail_pending(

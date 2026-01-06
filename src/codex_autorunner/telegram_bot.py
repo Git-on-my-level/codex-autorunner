@@ -3070,8 +3070,8 @@ class TelegramBotService:
                     turn_id=turn_handle.turn_id if turn_handle else None,
                 )
                 failure_message = (
-                    "Codex app-server disconnected; retrying. "
-                    "Please resend your message."
+                    "Codex app-server disconnected; recovering now. "
+                    "Your request did not complete. Please resend your message in a moment."
                 )
             log_event(
                 self._logger,
@@ -4768,8 +4768,8 @@ class TelegramBotService:
                     turn_id=turn_handle.turn_id if turn_handle else None,
                 )
                 failure_message = (
-                    "Codex app-server disconnected; retrying. "
-                    "Please resend your review command."
+                    "Codex app-server disconnected; recovering now. "
+                    "Your review did not complete. Please resend the review command in a moment."
                 )
             log_event(
                 self._logger,
