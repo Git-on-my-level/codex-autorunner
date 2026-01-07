@@ -94,9 +94,3 @@ module = [
   "codex_autorunner.integrations.app_server.*",
 ]
 ignore_errors = false
-
-[[tool.mypy.overrides]]
-module = [
-  "codex_autorunner.manifest",
-]
-ignore_errors = true

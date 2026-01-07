@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -267,18 +268,9 @@ def _apply_hub_context(app: FastAPI, context: HubAppContext) -> None:
     app.state.asset_version = context.asset_version
 
 
-def create_app(
-    repo_root: Optional[Path] = None, base_path: Optional[str] = None
-) -> ASGIApp:
-    context = _build_app_context(repo_root, base_path)
-    app = FastAPI(redirect_slashes=False)
-    _apply_app_context(app, context)
-    app.mount("/static", StaticFiles(directory=context.static_dir), name="static")
-    # Route handlers
-    app.include_router(build_repo_router(context.static_dir))
-
-    @app.on_event("startup")
-    async def start_cleanup_task():
+def _app_lifespan(context: AppContext):
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         async def _cleanup_loop():
             while True:
                 await asyncio.sleep(600)  # Check every 10 mins
@@ -301,58 +293,76 @@ def create_app(
 
         asyncio.create_task(_cleanup_loop())
 
-        if context.tui_idle_seconds is None or context.tui_idle_check_seconds is None:
-            return
+        if (
+            context.tui_idle_seconds is not None
+            and context.tui_idle_check_seconds is not None
+        ):
 
-        async def _tui_idle_loop():
-            while True:
-                await asyncio.sleep(context.tui_idle_check_seconds)
-                try:
-                    async with app.state.terminal_lock:
-                        terminal_sessions = app.state.terminal_sessions
-                        session_registry = app.state.session_registry
-                        for session_id, session in list(terminal_sessions.items()):
-                            if not session.pty.isalive():
-                                continue
-                            if not session.should_notify_idle(context.tui_idle_seconds):
-                                continue
-                            record = session_registry.get(session_id)
-                            repo_path = record.repo_path if record else None
-                            notifier = getattr(app.state.engine, "notifier", None)
-                            if notifier:
-                                asyncio.create_task(
-                                    notifier.notify_tui_idle_async(
-                                        session_id=session_id,
-                                        idle_seconds=context.tui_idle_seconds,
-                                        repo_path=repo_path,
+            async def _tui_idle_loop():
+                while True:
+                    await asyncio.sleep(context.tui_idle_check_seconds)
+                    try:
+                        async with app.state.terminal_lock:
+                            terminal_sessions = app.state.terminal_sessions
+                            session_registry = app.state.session_registry
+                            for session_id, session in list(terminal_sessions.items()):
+                                if not session.pty.isalive():
+                                    continue
+                                if not session.should_notify_idle(
+                                    context.tui_idle_seconds
+                                ):
+                                    continue
+                                record = session_registry.get(session_id)
+                                repo_path = record.repo_path if record else None
+                                notifier = getattr(app.state.engine, "notifier", None)
+                                if notifier:
+                                    asyncio.create_task(
+                                        notifier.notify_tui_idle_async(
+                                            session_id=session_id,
+                                            idle_seconds=context.tui_idle_seconds,
+                                            repo_path=repo_path,
+                                        )
                                     )
-                                )
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.WARNING,
-                        "TUI idle notification loop failed",
-                        exc,
-                    )
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "TUI idle notification loop failed",
+                            exc,
+                        )
 
-        asyncio.create_task(_tui_idle_loop())
+            asyncio.create_task(_tui_idle_loop())
 
-    @app.on_event("shutdown")
-    async def shutdown_terminal_sessions():
-        async with app.state.terminal_lock:
-            for session in app.state.terminal_sessions.values():
-                session.close()
-            app.state.terminal_sessions.clear()
-            app.state.session_registry.clear()
-            app.state.repo_to_session.clear()
-            persist_session_registry(
-                app.state.engine.state_path,
-                app.state.session_registry,
-                app.state.repo_to_session,
-            )
-        static_context = getattr(app.state, "static_assets_context", None)
-        if static_context is not None:
-            static_context.close()
+        try:
+            yield
+        finally:
+            async with app.state.terminal_lock:
+                for session in app.state.terminal_sessions.values():
+                    session.close()
+                app.state.terminal_sessions.clear()
+                app.state.session_registry.clear()
+                app.state.repo_to_session.clear()
+                persist_session_registry(
+                    app.state.engine.state_path,
+                    app.state.session_registry,
+                    app.state.repo_to_session,
+                )
+            static_context = getattr(app.state, "static_assets_context", None)
+            if static_context is not None:
+                static_context.close()
+
+    return lifespan
+
+
+def create_app(
+    repo_root: Optional[Path] = None, base_path: Optional[str] = None
+) -> ASGIApp:
+    context = _build_app_context(repo_root, base_path)
+    app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
+    _apply_app_context(app, context)
+    app.mount("/static", StaticFiles(directory=context.static_dir), name="static")
+    # Route handlers
+    app.include_router(build_repo_router(context.static_dir))
 
     auth_token = _resolve_auth_token(context.engine.config.server_auth_token_env)
     asgi_app: ASGIApp = app
@@ -459,29 +469,31 @@ def create_hub_app(
     initial_snapshots = context.supervisor.scan()
     _refresh_mounts(initial_snapshots)
 
-    @app.on_event("startup")
-    async def hub_startup():
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         app.state.hub_started = True
         for prefix, sub_app in list(repo_apps.items()):
             await _start_repo_app(prefix, sub_app)
-
-    @app.on_event("shutdown")
-    async def hub_shutdown():
-        for prefix, sub_app in list(repo_apps.items()):
-            if prefix not in repo_startup_complete:
-                continue
-            try:
-                await sub_app.router.shutdown()
-            except Exception as exc:
+        try:
+            yield
+        finally:
+            for prefix, sub_app in list(repo_apps.items()):
+                if prefix not in repo_startup_complete:
+                    continue
                 try:
-                    app.state.logger.warning(
-                        "Repo shutdown failed for %s: %s", prefix, exc
-                    )
-                except Exception:
-                    pass
-        static_context = getattr(app.state, "static_assets_context", None)
-        if static_context is not None:
-            static_context.close()
+                    await sub_app.router.shutdown()
+                except Exception as exc:
+                    try:
+                        app.state.logger.warning(
+                            "Repo shutdown failed for %s: %s", prefix, exc
+                        )
+                    except Exception:
+                        pass
+            static_context = getattr(app.state, "static_assets_context", None)
+            if static_context is not None:
+                static_context.close()
+
+    app.router.lifespan_context = lifespan
 
     @app.get("/hub/usage")
     def hub_usage(since: Optional[str] = None, until: Optional[str] = None):
@@ -761,12 +773,6 @@ def create_hub_app(
             )
         html = render_index_html(context.static_dir, app.state.asset_version)
         return HTMLResponse(html, headers=index_response_headers())
-
-    @app.on_event("shutdown")
-    async def shutdown_static_stack():
-        static_context = getattr(app.state, "static_assets_context", None)
-        if static_context is not None:
-            static_context.close()
 
     app.include_router(build_system_routes())
 

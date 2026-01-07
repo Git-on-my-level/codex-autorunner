@@ -70,9 +70,7 @@ class VoiceConfig:
             )
             pt_overrides_raw = raw.get("push_to_talk")
             pt_overrides: dict[str, Any] = (
-                dict(pt_overrides_raw)
-                if isinstance(pt_overrides_raw, Mapping)
-                else {}
+                dict(pt_overrides_raw) if isinstance(pt_overrides_raw, Mapping) else {}
             )
             merged["push_to_talk"] = {**pt_defaults, **pt_overrides}
 

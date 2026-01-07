@@ -187,9 +187,7 @@ class OpenAIWhisperProvider(SpeechProvider):
             data["language"] = payload["language"]
 
         filename = payload.get("filename", "audio.webm")
-        content_type = _pick_upload_content_type(
-            filename, payload.get("content_type")
-        )
+        content_type = _pick_upload_content_type(filename, payload.get("content_type"))
         files = {
             "file": (
                 filename,

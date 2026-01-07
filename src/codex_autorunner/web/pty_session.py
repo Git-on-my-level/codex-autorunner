@@ -258,7 +258,9 @@ class ActiveSession:
         except OSError:
             self.close()
 
-    def add_subscriber(self, *, include_replay_end: bool = True) -> asyncio.Queue[object]:
+    def add_subscriber(
+        self, *, include_replay_end: bool = True
+    ) -> asyncio.Queue[object]:
         q: asyncio.Queue[object] = asyncio.Queue()
         for chunk in self.buffer:
             q.put_nowait(chunk)
