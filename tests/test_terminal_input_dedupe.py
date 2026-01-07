@@ -118,6 +118,7 @@ def test_active_session_caps_pending_input(monkeypatch):
 
     try:
         session = ActiveSession("s", DummyPTY(), DummyLoop())  # type: ignore[arg-type]
+
         def always_block(_fd, _data):
             raise BlockingIOError
 

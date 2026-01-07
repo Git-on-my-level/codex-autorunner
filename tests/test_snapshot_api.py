@@ -2,11 +2,10 @@ from pathlib import Path
 
 import pytest
 
-
-fastapi = pytest.importorskip("fastapi")
-TestClient = pytest.importorskip("fastapi.testclient").TestClient
-
 from codex_autorunner.server import create_app
+
+pytest.importorskip("fastapi")
+TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 
 def _client(repo_root: Path) -> TestClient:

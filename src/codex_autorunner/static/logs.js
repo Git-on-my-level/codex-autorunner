@@ -33,7 +33,7 @@ const LINE_PATTERNS = {
   execCommand: /^\/bin\/(zsh|bash|sh)\s+-[a-z]+\s+['"]?.+in\s+\//i,
   applyPatch: /^apply_patch\(/i,
   fileUpdate: /^file update:?$/i,
-  fileModified: /^M\s+[\w.\/]/,
+  fileModified: /^M\s+[\w./]/,
 
   // Diff patterns - need context tracking to avoid false positives
   // These patterns identify the START of a diff block
@@ -433,7 +433,7 @@ function renderLogs() {
     let promptBlockType = null;
     let promptLineCount = 0;
 
-    lines.forEach((lineData, idx) => {
+    lines.forEach((lineData) => {
       // Handle collapsible prompt context blocks
       if (lineData.type === "prompt-marker") {
         // Start a new collapsible block

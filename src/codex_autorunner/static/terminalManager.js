@@ -1192,7 +1192,7 @@ export class TerminalManager {
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
-      .replace(/\"/g, "&quot;")
+      .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
   }
 
@@ -2867,7 +2867,7 @@ export class TerminalManager {
     }
   }
 
-  _updateTextInputConnected(connected) {
+  _updateTextInputConnected() {
     if (this.textInputTextareaEl) this.textInputTextareaEl.disabled = false;
     this._updateTextInputSendUi();
   }

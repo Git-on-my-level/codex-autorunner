@@ -22,7 +22,9 @@ ALLOWED_CONTENT_TYPES = {
 ALLOWED_EXTS = set(ALLOWED_CONTENT_TYPES.values())
 
 
-def _choose_image_extension(filename: Optional[str], content_type: Optional[str]) -> str:
+def _choose_image_extension(
+    filename: Optional[str], content_type: Optional[str]
+) -> str:
     if filename:
         suffix = Path(filename).suffix.lower()
         if suffix in ALLOWED_EXTS:
@@ -38,9 +40,7 @@ def build_terminal_image_routes() -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/terminal/image")
-    async def upload_terminal_image(
-        request: Request, file: UploadFile = File(...)
-    ):
+    async def upload_terminal_image(request: Request, file: UploadFile = File(...)):
         if not file:
             raise HTTPException(status_code=400, detail="missing image")
 
@@ -59,7 +59,9 @@ def build_terminal_image_routes() -> APIRouter:
         try:
             data = await file.read()
         except Exception as exc:
-            raise HTTPException(status_code=400, detail="unable to read upload") from exc
+            raise HTTPException(
+                status_code=400, detail="unable to read upload"
+            ) from exc
 
         if not data:
             raise HTTPException(status_code=400, detail="empty upload")

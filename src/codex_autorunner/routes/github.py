@@ -3,11 +3,11 @@ GitHub integration routes.
 """
 
 import asyncio
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..github import GitHubError, GitHubService
+from ..integrations.github.service import GitHubError, GitHubService
+from ..web.schemas import GithubContextRequest, GithubIssueRequest, GithubPrSyncRequest
 
 
 def _github(request) -> GitHubService:
@@ -25,9 +25,9 @@ def build_github_routes() -> APIRouter:
         try:
             return await asyncio.to_thread(_github(request).status_payload)
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.get("/api/github/pr")
     async def github_pr(request: Request):
@@ -42,36 +42,24 @@ def build_github_routes() -> APIRouter:
                 "link": status.get("link") or {},
             }
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/github/link-issue")
-    async def github_link_issue(request: Request, payload: Optional[dict] = None):
-        if not payload or not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=400, detail="Request body must be a JSON object"
-            )
-        issue = payload.get("issue")
-        if not issue:
-            raise HTTPException(status_code=400, detail="Missing issue")
+    async def github_link_issue(request: Request, payload: GithubIssueRequest):
+        issue = payload.issue
         try:
             state = await asyncio.to_thread(_github(request).link_issue, str(issue))
             return {"status": "ok", "link": state}
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/github/spec/from-issue")
-    async def github_spec_from_issue(request: Request, payload: Optional[dict] = None):
-        if not payload or not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=400, detail="Request body must be a JSON object"
-            )
-        issue = payload.get("issue")
-        if not issue:
-            raise HTTPException(status_code=400, detail="Missing issue")
+    async def github_spec_from_issue(request: Request, payload: GithubIssueRequest):
+        issue = payload.issue
 
         doc_chat = request.app.state.doc_chat
         repo_blocked = doc_chat.repo_blocked_reason()
@@ -98,27 +86,22 @@ def build_github_routes() -> APIRouter:
             result["github"] = {"issue": link_state.get("issue")}
             return result
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except HTTPException:
             raise
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/github/pr/sync")
-    async def github_pr_sync(request: Request, payload: Optional[dict] = None):
-        payload = payload or {}
-        if not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=400, detail="Request body must be a JSON object"
-            )
-        if payload.get("mode") is not None:
+    async def github_pr_sync(request: Request, payload: GithubPrSyncRequest):
+        if payload.mode is not None:
             raise HTTPException(
                 status_code=400,
                 detail="Repo mode does not support worktrees; create a hub worktree repo instead.",
             )
-        draft = bool(payload.get("draft", True))
-        title = payload.get("title")
-        body = payload.get("body")
+        draft = payload.draft
+        title = payload.title
+        body = payload.body
         try:
             return await asyncio.to_thread(
                 _github(request).sync_pr,
@@ -127,19 +110,13 @@ def build_github_routes() -> APIRouter:
                 body=str(body) if body else None,
             )
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/github/context")
-    async def github_context(request: Request, payload: Optional[dict] = None):
-        if not payload or not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=400, detail="Request body must be a JSON object"
-            )
-        url = payload.get("url")
-        if not url:
-            raise HTTPException(status_code=400, detail="Missing url")
+    async def github_context(request: Request, payload: GithubContextRequest):
+        url = payload.url
         try:
             result = await asyncio.to_thread(
                 _github(request).build_context_file_from_url, str(url)
@@ -148,8 +125,8 @@ def build_github_routes() -> APIRouter:
                 return {"status": "ok", "injected": False}
             return {"status": "ok", "injected": True, **result}
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return router

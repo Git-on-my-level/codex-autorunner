@@ -72,7 +72,6 @@ function formatErrorMessage(err, fallback) {
 
 export async function initVoiceInput({
   button,
-  input,
   statusEl,
   onTranscript,
   onError,
@@ -168,7 +167,7 @@ export async function initVoiceInput({
     await triggerStart({ forceRetry: Boolean(event.shiftKey) });
   };
 
-  const endHandler = (event) => {
+  const endHandler = () => {
     const holdDuration = Date.now() - state.pointerDownTime;
     state.pointerIsDown = false;
 
@@ -187,13 +186,13 @@ export async function initVoiceInput({
 
   button.addEventListener("pointerdown", startHandler);
   button.addEventListener("pointerup", endHandler);
-  button.addEventListener("pointerleave", (e) => {
+  button.addEventListener("pointerleave", () => {
     // Only stop on leave if in hold mode (not click-toggle)
     if (state.recording && !state.isClickToggleMode) {
       stopRecording();
     }
   });
-  button.addEventListener("pointercancel", (e) => {
+  button.addEventListener("pointercancel", () => {
     if (state.recording && !state.isClickToggleMode) {
       stopRecording();
     }

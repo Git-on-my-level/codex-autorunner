@@ -1,3 +1,12 @@
 {
-  "findings": []
+  "findings": [
+    "python:function:src/codex_autorunner/integrations/github/service.py:85:_sanitize_cmd",
+    "python:function:src/codex_autorunner/integrations/telegram/service.py:6939:_format_sandbox_policy",
+    "python:function:src/codex_autorunner/integrations/telegram/service.py:7225:_format_context_metrics",
+    "python:function:src/codex_autorunner/integrations/telegram/service.py:7957:_filter_threads",
+    "python:function:src/codex_autorunner/integrations/telegram/service.py:8017:_compact_preview",
+    "python:function:src/codex_autorunner/integrations/telegram/service.py:8024:_format_preview",
+    "python:function:src/codex_autorunner/integrations/telegram/state.py:36:_encode_scope",
+    "python:function:src/codex_autorunner/server.py:9:_static_dir"
+  ]
 }

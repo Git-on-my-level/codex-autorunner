@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
 import time
-import json
 from io import BytesIO
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, cast
 
 import httpx
 
@@ -17,7 +17,6 @@ from ..provider import (
     TranscriptionEvent,
     TranscriptionStream,
 )
-
 
 RequestFn = Callable[[bytes, Mapping[str, Any]], Dict[str, Any]]
 
@@ -188,9 +187,7 @@ class OpenAIWhisperProvider(SpeechProvider):
             data["language"] = payload["language"]
 
         filename = payload.get("filename", "audio.webm")
-        content_type = _pick_upload_content_type(
-            filename, payload.get("content_type")  # type: ignore[arg-type]
-        )
+        content_type = _pick_upload_content_type(filename, payload.get("content_type"))
         files = {
             "file": (
                 filename,
@@ -204,7 +201,7 @@ class OpenAIWhisperProvider(SpeechProvider):
             url, headers=headers, data=data, files=files, timeout=timeout_s
         )
         response.raise_for_status()
-        return response.json()
+        return cast(Dict[str, Any], response.json())
 
 
 class _OpenAIWhisperStream(TranscriptionStream):

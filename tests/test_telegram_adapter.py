@@ -3,22 +3,25 @@ import types
 import pytest
 
 from codex_autorunner.telegram_adapter import (
+    TELEGRAM_MAX_MESSAGE_LENGTH,
     ApprovalCallback,
     BindCallback,
     CancelCallback,
-    UpdateCallback,
     PageCallback,
     ResumeCallback,
     ReviewCommitCallback,
     TelegramAllowlist,
-    TelegramUpdate,
-    TelegramMessage,
+    TelegramBotClient,
     TelegramCommand,
+    TelegramMessage,
     TelegramMessageEntity,
+    TelegramUpdate,
+    UpdateCallback,
     allowlist_allows,
     build_approval_keyboard,
     build_bind_keyboard,
     build_resume_keyboard,
+    build_review_commit_keyboard,
     build_update_keyboard,
     chunk_message,
     encode_approval_callback,
@@ -33,9 +36,6 @@ from codex_autorunner.telegram_adapter import (
     parse_callback_data,
     parse_command,
     parse_update,
-    TelegramBotClient,
-    TELEGRAM_MAX_MESSAGE_LENGTH,
-    build_review_commit_keyboard,
 )
 
 
@@ -87,7 +87,16 @@ def test_parse_command_requires_offset_zero() -> None:
 
 
 def test_is_interrupt_aliases() -> None:
-    for text in ("^C", "^c", "ctrl-c", "CTRL+C", "esc", "Escape", "/interrupt", "/stop"):
+    for text in (
+        "^C",
+        "^c",
+        "ctrl-c",
+        "CTRL+C",
+        "esc",
+        "Escape",
+        "/interrupt",
+        "/stop",
+    ):
         assert is_interrupt_alias(text)
 
 

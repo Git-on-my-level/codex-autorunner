@@ -1,8 +1,7 @@
 import hashlib
 from pathlib import Path
 
-from .utils import canonicalize_path
-
+from .core.utils import canonicalize_path
 
 WORKSPACE_ID_HEX_LEN = 12
 

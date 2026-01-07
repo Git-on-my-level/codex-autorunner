@@ -27,9 +27,19 @@ classifiers = [
 [project.optional-dependencies]
 dev = [
   "black>=23.0",
+  "mypy>=1.10",
   "pytest>=7.0",
+  "ruff>=0.5.0",
+  "types-PyYAML",
+]
+telegram = [
   "httpx>=0.27",
 ]
+voice = [
+  "httpx>=0.27",
+  "python-multipart>=0.0.9",
+]
+github = []
 
 [project.scripts]
 codex-autorunner = "codex_autorunner.cli:app"
@@ -47,3 +57,40 @@ codex_autorunner = ["static/*", "static/**/*"]
 
 [tool.typer]
 completions = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/codex_autorunner/logging_utils.py" = ["F403"]
+"src/codex_autorunner/pty_session.py" = ["F403"]
+"src/codex_autorunner/static_assets.py" = ["F403"]
+"src/codex_autorunner/cli.py" = ["B008"]
+"src/codex_autorunner/routes/terminal_images.py" = ["B008"]
+"src/codex_autorunner/routes/voice.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+no_implicit_optional = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+files = [
+  "src/codex_autorunner",
+]
+
+[[tool.mypy.overrides]]
+module = ["codex_autorunner.core", "codex_autorunner.core.*"]
+ignore_errors = false
+
+[[tool.mypy.overrides]]
+module = [
+  "codex_autorunner.integrations.app_server",
+  "codex_autorunner.integrations.app_server.*",
+]
+ignore_errors = false

@@ -4,8 +4,8 @@ from io import StringIO
 from pathlib import Path
 from uuid import uuid4
 
-from codex_autorunner.logging_utils import log_event, safe_log, setup_rotating_logger
 from codex_autorunner.config import LogConfig
+from codex_autorunner.logging_utils import log_event, safe_log, setup_rotating_logger
 
 
 def test_rotating_loggers_are_isolated(tmp_path: Path):

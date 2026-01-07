@@ -67,7 +67,6 @@ function formatRunSummary(repo) {
   if (!repo.initialized) return "Not initialized";
   if (!repo.exists_on_disk) return "Missing on disk";
   if (!repo.last_run_id) return "No runs yet";
-  const time = repo.last_run_finished_at || repo.last_run_started_at;
   const exit =
     repo.last_exit_code === null || repo.last_exit_code === undefined
       ? ""
@@ -261,13 +260,6 @@ function renderHubUsageChart(data) {
     });
   });
   let scaleMax = Math.max(...totals, 1);
-
-  const xFor = (index, count) => {
-    if (count <= 1) return padding + chartWidth / 2;
-    return padding + (index / (count - 1)) * chartWidth;
-  };
-  const yFor = (value) =>
-    padding + chartHeight - (value / scaleMax) * chartHeight;
 
   let svg = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMin meet" role="img" aria-label="Hub usage trend">`;
   svg += `

@@ -1,7 +1,7 @@
 import dataclasses
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import yaml
 
@@ -96,7 +96,10 @@ def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
         return manifest
 
     with manifest_path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+        raw_data = yaml.safe_load(f) or {}
+    if not isinstance(raw_data, dict):
+        raw_data = {}
+    data = cast(Dict[str, Any], raw_data)
 
     version = data.get("version")
     if version != MANIFEST_VERSION:
@@ -104,13 +107,17 @@ def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
             f"Unsupported manifest version {version}; expected {MANIFEST_VERSION}"
         )
     repos_data = data.get("repos", []) or []
+    if not isinstance(repos_data, list):
+        repos_data = []
     repos: List[ManifestRepo] = []
     for entry in repos_data:
         if not isinstance(entry, dict):
             continue
-        repo_id = str(entry.get("id"))
+        repo_id = entry.get("id")
         path_val = entry.get("path")
-        if not repo_id or not path_val:
+        if not isinstance(repo_id, str) or not repo_id:
+            continue
+        if not isinstance(path_val, str) or not path_val:
             continue
         kind = entry.get("kind")
         if kind not in ("base", "worktree"):

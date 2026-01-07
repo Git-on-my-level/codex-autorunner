@@ -12,7 +12,9 @@ def _fixture(path: str) -> dict:
 
 
 def _stub_repo_info(slug: str):
-    return type("Repo", (), {"name_with_owner": slug, "url": f"https://github.com/{slug}"})()
+    return type(
+        "Repo", (), {"name_with_owner": slug, "url": f"https://github.com/{slug}"}
+    )()
 
 
 def test_github_context_issue_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -40,7 +42,9 @@ def test_github_context_issue_fixture(tmp_path: Path, monkeypatch: pytest.Monkey
     assert f"Comments: {comment_count}" in text
 
 
-def test_github_context_issue_comments_dict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_github_context_issue_comments_dict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     issue = _fixture("tests/fixtures/github_issue.json")
     url = issue.get("url")
     assert url
@@ -87,7 +91,9 @@ def test_github_context_pr_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "Files:" in text
 
 
-def test_github_context_rejects_other_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_github_context_rejects_other_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     pr = _fixture("tests/fixtures/github_pr.json")
     url = pr.get("url")
     assert url

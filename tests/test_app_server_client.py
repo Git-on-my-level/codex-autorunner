@@ -6,7 +6,6 @@ import pytest
 
 from codex_autorunner.app_server_client import CodexAppServerClient
 
-
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
 
 
@@ -56,9 +55,7 @@ async def test_turn_completion_and_agent_message(tmp_path: Path) -> None:
 
 @pytest.mark.anyio
 async def test_turn_error_notification(tmp_path: Path) -> None:
-    client = CodexAppServerClient(
-        fixture_command("turn_error_no_agent"), cwd=tmp_path
-    )
+    client = CodexAppServerClient(fixture_command("turn_error_no_agent"), cwd=tmp_path)
     try:
         thread = await client.thread_start(str(tmp_path))
         handle = await client.turn_start(thread["id"], "hi")

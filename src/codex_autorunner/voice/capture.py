@@ -13,6 +13,7 @@ from .provider import (
     SpeechProvider,
     SpeechSessionMetadata,
     TranscriptionEvent,
+    TranscriptionStream,
 )
 
 
@@ -94,7 +95,7 @@ class PushToTalkCapture(VoiceCaptureSession):
 
         self._state: CaptureState = CaptureState.IDLE
         self._permission_granted = False
-        self._stream = None
+        self._stream: Optional[TranscriptionStream] = None
         self._retry_attempts = 0
         self._chunks: list[AudioChunk] = []
         self._sequence = 0
@@ -140,7 +141,8 @@ class PushToTalkCapture(VoiceCaptureSession):
             return
 
         try:
-            self._stream = self._provider.start_stream(self._build_session_metadata())
+            stream = self._provider.start_stream(self._build_session_metadata())
+            self._stream = stream
         except Exception as exc:
             self.fail("provider_error")
             self._logger.error(
@@ -328,12 +330,13 @@ class PushToTalkCapture(VoiceCaptureSession):
             return False
 
     def _restart_stream(self) -> None:
-        self._stream = self._provider.start_stream(self._build_session_metadata())
+        stream = self._provider.start_stream(self._build_session_metadata())
+        self._stream = stream
         replayed_state = (
             CaptureState.RECORDING if not self._chunks else CaptureState.STREAMING
         )
         for chunk in self._chunks:
-            events = self._stream.send_chunk(chunk)
+            events = stream.send_chunk(chunk)
             self._handle_events(events)
         self._emit_state(replayed_state)
         self._last_chunk_at = self._now()

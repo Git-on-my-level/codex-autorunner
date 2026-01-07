@@ -1,7 +1,6 @@
 import { publish } from "./bus.js";
 
 const tabs = [];
-let activeTabId = null;
 
 export function registerTab(id, label) {
   tabs.push({ id, label });
@@ -16,7 +15,6 @@ export function initTabs(defaultTab = "dashboard") {
   const panels = document.querySelectorAll(".panel");
 
   const setActivePanel = (id) => {
-    activeTabId = id;
     panels.forEach((p) => p.classList.toggle("active", p.id === id));
     
     // Update buttons

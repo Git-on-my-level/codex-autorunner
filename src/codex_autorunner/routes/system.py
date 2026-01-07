@@ -13,9 +13,16 @@ from urllib.parse import unquote, urlparse
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from ..config import HubConfig
-from ..git_utils import GitError, run_git
-from ..static_assets import missing_static_assets
+from ..core.config import HubConfig
+from ..core.git_utils import GitError, run_git
+from ..web.schemas import (
+    SystemHealthResponse,
+    SystemUpdateCheckResponse,
+    SystemUpdateRequest,
+    SystemUpdateResponse,
+    SystemUpdateStatusResponse,
+)
+from ..web.static_assets import missing_static_assets
 
 
 class UpdateInProgressError(RuntimeError):
@@ -35,7 +42,9 @@ def _run_cmd(cmd: list[str], cwd: Path) -> None:
         )
     except subprocess.CalledProcessError as e:
         # Include stdout/stderr in the error message for debugging
-        detail = f"Command failed: {' '.join(cmd)}\nStdout: {e.stdout}\nStderr: {e.stderr}"
+        detail = (
+            f"Command failed: {' '.join(cmd)}\nStdout: {e.stdout}\nStderr: {e.stderr}"
+        )
         raise RuntimeError(detail) from e
 
 
@@ -68,28 +77,34 @@ def _write_update_status(status: str, message: str, **extra) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _read_update_status() -> Optional[dict]:
+def _read_update_status() -> Optional[dict[str, object]]:
     path = _update_status_path()
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+    if isinstance(payload, dict):
+        return payload
+    return None
 
 
 def _update_lock_path() -> Path:
     return Path.home() / ".codex-autorunner" / "update.lock"
 
 
-def _read_update_lock() -> Optional[dict]:
+def _read_update_lock() -> Optional[dict[str, object]]:
     path = _update_lock_path()
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+    if isinstance(payload, dict):
+        return payload
+    return None
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -134,18 +149,18 @@ def _acquire_update_lock(
     }
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
+    except FileExistsError as exc:
         existing = _update_lock_active()
         if existing:
             msg = f"Update already running (pid {existing.get('pid')})."
             logger.info(msg)
-            raise UpdateInProgressError(msg)
+            raise UpdateInProgressError(msg) from exc
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        except FileExistsError as exc:
             msg = "Update already running."
             logger.info(msg)
-            raise UpdateInProgressError(msg)
+            raise UpdateInProgressError(msg) from exc
     with os.fdopen(fd, "w") as handle:
         handle.write(json.dumps(payload))
     return True
@@ -204,7 +219,9 @@ def _find_git_root_from_install_metadata() -> Optional[Path]:
     return _find_git_root(candidate)
 
 
-def _resolve_local_repo_root(*, module_dir: Path, update_cache_dir: Path) -> Optional[Path]:
+def _resolve_local_repo_root(
+    *, module_dir: Path, update_cache_dir: Path
+) -> Optional[Path]:
     repo_root = _find_git_root(module_dir)
     if repo_root is not None:
         return repo_root
@@ -223,10 +240,14 @@ def _system_update_check(
     update_cache_dir: Optional[Path] = None,
 ) -> dict:
     module_dir = module_dir or Path(__file__).resolve().parent
-    update_cache_dir = update_cache_dir or (Path.home() / ".codex-autorunner" / "update_cache")
+    update_cache_dir = update_cache_dir or (
+        Path.home() / ".codex-autorunner" / "update_cache"
+    )
     repo_ref = _normalize_update_ref(repo_ref)
 
-    repo_root = _resolve_local_repo_root(module_dir=module_dir, update_cache_dir=update_cache_dir)
+    repo_root = _resolve_local_repo_root(
+        module_dir=module_dir, update_cache_dir=update_cache_dir
+    )
     if repo_root is None:
         return {
             "status": "ok",
@@ -250,7 +271,9 @@ def _system_update_check(
             timeout_seconds=60,
             check=True,
         )
-        remote_sha = run_git(["rev-parse", "FETCH_HEAD"], repo_root, check=True).stdout.strip()
+        remote_sha = run_git(
+            ["rev-parse", "FETCH_HEAD"], repo_root, check=True
+        ).stdout.strip()
     except GitError as exc:
         return {
             "status": "ok",
@@ -276,11 +299,15 @@ def _system_update_check(
         }
 
     local_is_ancestor = (
-        run_git(["merge-base", "--is-ancestor", local_sha, remote_sha], repo_root).returncode
+        run_git(
+            ["merge-base", "--is-ancestor", local_sha, remote_sha], repo_root
+        ).returncode
         == 0
     )
     remote_is_ancestor = (
-        run_git(["merge-base", "--is-ancestor", remote_sha, local_sha], repo_root).returncode
+        run_git(
+            ["merge-base", "--is-ancestor", remote_sha, local_sha], repo_root
+        ).returncode
         == 0
     )
 
@@ -358,7 +385,9 @@ def _system_update_worker(
                 "Updating source in %s from %s (%s)", update_dir, repo_url, repo_ref
             )
             try:
-                _run_cmd(["git", "remote", "set-url", "origin", repo_url], cwd=update_dir)
+                _run_cmd(
+                    ["git", "remote", "set-url", "origin", repo_url], cwd=update_dir
+                )
             except Exception:
                 _run_cmd(["git", "remote", "add", "origin", repo_url], cwd=update_dir)
             _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
@@ -372,7 +401,9 @@ def _system_update_worker(
             _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
 
         if os.environ.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1":
-            logger.info("Skipping update checks (CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1).")
+            logger.info(
+                "Skipping update checks (CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1)."
+            )
         else:
             logger.info("Running checks...")
             try:
@@ -458,7 +489,7 @@ def _spawn_update_process(
     cmd = [
         sys.executable,
         "-m",
-        "codex_autorunner.update_runner",
+        "codex_autorunner.core.update_runner",
         "--repo-url",
         repo_url,
         "--repo-ref",
@@ -489,7 +520,7 @@ def _spawn_update_process(
 def build_system_routes() -> APIRouter:
     router = APIRouter()
 
-    @router.get("/health")
+    @router.get("/health", response_model=SystemHealthResponse)
     async def system_health(request: Request):
         try:
             config = request.app.state.config
@@ -528,7 +559,7 @@ def build_system_routes() -> APIRouter:
             "asset_version": asset_version,
         }
 
-    @router.get("/system/update/check")
+    @router.get("/system/update/check", response_model=SystemUpdateCheckResponse)
     async def system_update_check(request: Request):
         """
         Check if an update is available by comparing local git state vs remote.
@@ -555,10 +586,12 @@ def build_system_routes() -> APIRouter:
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:
                 logger.error("Update check error: %s", e, exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
-    @router.post("/system/update")
-    async def system_update(request: Request):
+    @router.post("/system/update", response_model=SystemUpdateResponse)
+    async def system_update(
+        request: Request, payload: Optional[SystemUpdateRequest] = None
+    ):
         """
         Pull latest code and refresh the running service.
         This will restart the server if successful.
@@ -583,13 +616,7 @@ def build_system_routes() -> APIRouter:
         update_dir = home_dot_car / "update_cache"
 
         try:
-            try:
-                payload = await request.json()
-            except Exception:
-                payload = None
-            target_raw = None
-            if isinstance(payload, dict):
-                target_raw = payload.get("target")
+            target_raw = payload.target if payload else None
             if target_raw is None:
                 target_raw = request.query_params.get("target")
             update_target = _normalize_update_target(target_raw)
@@ -609,16 +636,16 @@ def build_system_routes() -> APIRouter:
                 "target": update_target,
             }
         except UpdateInProgressError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as e:
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:
                 logger.error("Update error: %s", e, exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
-    @router.get("/system/update/status")
+    @router.get("/system/update/status", response_model=SystemUpdateStatusResponse)
     async def system_update_status():
         status = _read_update_status()
         if status is None:

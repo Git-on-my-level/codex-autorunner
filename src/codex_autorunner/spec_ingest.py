@@ -3,10 +3,10 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Optional
 
-from .codex_runner import build_codex_command
-from .utils import atomic_write
-from .engine import Engine
-from .prompts import SPEC_INGEST_PROMPT
+from .core.codex_runner import build_codex_command
+from .core.engine import Engine
+from .core.prompts import SPEC_INGEST_PROMPT
+from .core.utils import atomic_write
 
 
 class SpecIngestError(Exception):
@@ -65,8 +65,10 @@ def generate_docs_from_spec(
             text=True,
             cwd=str(engine.repo_root),
         )
-    except FileNotFoundError:
-        raise SpecIngestError(f"Codex binary not found: {engine.config.codex_binary}")
+    except FileNotFoundError as exc:
+        raise SpecIngestError(
+            f"Codex binary not found: {engine.config.codex_binary}"
+        ) from exc
 
     if result.returncode != 0:
         stderr = result.stderr.strip() if result.stderr else ""

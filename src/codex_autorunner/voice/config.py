@@ -65,11 +65,12 @@ class VoiceConfig:
         if isinstance(raw, Mapping):
             merged.update(raw)
             base_pt = merged.get("push_to_talk")
-            pt_defaults = base_pt if isinstance(base_pt, Mapping) else {}
-            pt_overrides = (
-                raw.get("push_to_talk")
-                if isinstance(raw.get("push_to_talk"), Mapping)
-                else {}
+            pt_defaults: dict[str, Any] = (
+                dict(base_pt) if isinstance(base_pt, Mapping) else {}
+            )
+            pt_overrides_raw = raw.get("push_to_talk")
+            pt_overrides: dict[str, Any] = (
+                dict(pt_overrides_raw) if isinstance(pt_overrides_raw, Mapping) else {}
             )
             merged["push_to_talk"] = {**pt_defaults, **pt_overrides}
 
