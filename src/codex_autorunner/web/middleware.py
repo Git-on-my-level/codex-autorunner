@@ -143,7 +143,10 @@ class AuthTokenMiddleware:
         if scope_type not in ("http", "websocket"):
             return False
         full_path = self._strip_base_path(self._full_path(scope))
-        return full_path == "/api" or full_path.startswith("/api/") or full_path == "/ws" or full_path.startswith("/ws/")
+        for prefix in ("/api", "/ws", "/hub"):
+            if full_path == prefix or full_path.startswith(f"{prefix}/"):
+                return True
+        return False
 
     def _extract_header_token(self, scope) -> str | None:
         headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
