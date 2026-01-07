@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Union
 
-from ..core.logging_utils import log_event
+from ...core.logging_utils import log_event
 
 ApprovalDecision = Union[str, Dict[str, Any]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
@@ -196,7 +196,9 @@ class CodexAppServerClient:
         params.update(kwargs)
         result = await self.request("thread/resume", params)
         if not isinstance(result, dict):
-            raise CodexAppServerProtocolError("thread/resume returned non-object result")
+            raise CodexAppServerProtocolError(
+                "thread/resume returned non-object result"
+            )
         resumed_id = _extract_thread_id(result)
         if resumed_id and "id" not in result:
             result = dict(result)
@@ -411,7 +413,9 @@ class CodexAppServerClient:
             method=method,
             **_summarize_params(method, params),
         )
-        await self._send_message(self._build_message(method, params=params, req_id=request_id))
+        await self._send_message(
+            self._build_message(method, params=params, req_id=request_id)
+        )
         timeout = timeout if timeout is not None else self._request_timeout
         try:
             if timeout is None:
@@ -591,7 +595,9 @@ class CodexAppServerClient:
         method = message.get("method")
         req_id = message.get("id")
         if method in APPROVAL_METHODS:
-            params = message.get("params") if isinstance(message.get("params"), dict) else {}
+            params = (
+                message.get("params") if isinstance(message.get("params"), dict) else {}
+            )
             log_event(
                 self._logger,
                 logging.INFO,
@@ -854,7 +860,9 @@ class CodexAppServerClient:
         if error_message:
             state.errors.append(error_message)
         error_payload = params.get("error") if isinstance(params, dict) else None
-        error_code = error_payload.get("code") if isinstance(error_payload, dict) else None
+        error_code = (
+            error_payload.get("code") if isinstance(error_payload, dict) else None
+        )
         will_retry = params.get("willRetry") if isinstance(params, dict) else None
         log_event(
             self._logger,
@@ -912,9 +920,7 @@ class CodexAppServerClient:
             pid=pid,
         )
         if not self._closed:
-            self._fail_pending(
-                CodexAppServerDisconnected("App-server disconnected")
-            )
+            self._fail_pending(CodexAppServerDisconnected("App-server disconnected"))
         if self._auto_restart and not self._closed:
             self._schedule_restart()
 
@@ -956,7 +962,9 @@ class CodexAppServerClient:
             )
         except Exception as exc:
             next_delay = min(
-                max(self._restart_backoff_seconds * 2, _RESTART_BACKOFF_INITIAL_SECONDS),
+                max(
+                    self._restart_backoff_seconds * 2, _RESTART_BACKOFF_INITIAL_SECONDS
+                ),
                 _RESTART_BACKOFF_MAX_SECONDS,
             )
             log_event(

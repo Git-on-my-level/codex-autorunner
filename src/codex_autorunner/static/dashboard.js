@@ -234,13 +234,6 @@ function renderUsageChart(data) {
   });
   scaleMax = Math.max(...totals, 1);
 
-  const xFor = (index, count) => {
-    if (count <= 1) return padding + chartWidth / 2;
-    return padding + (index / (count - 1)) * chartWidth;
-  };
-  const yFor = (value) =>
-    padding + chartHeight - (value / scaleMax) * chartHeight;
-
   let svg = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMin meet" role="img" aria-label="Token usage trend">`;
   svg += `
     <defs></defs>

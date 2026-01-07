@@ -78,7 +78,12 @@ class FixtureServer:
                 },
             }
         )
-        self.send({"method": "turn/completed", "params": {"turnId": turn_id, "status": status}})
+        self.send(
+            {
+                "method": "turn/completed",
+                "params": {"turnId": turn_id, "status": status},
+            }
+        )
 
     def _handle_request(self, message: dict) -> None:
         req_id = message.get("id")
@@ -93,14 +98,20 @@ class FixtureServer:
                 {
                     "id": req_id,
                     "result": {
-                        "serverInfo": {"name": "fixture", "instance": self._instance_id},
+                        "serverInfo": {
+                            "name": "fixture",
+                            "instance": self._instance_id,
+                        },
                         "capabilities": {},
                     },
                 }
             )
             return
         if method == "thread/list":
-            if self._scenario == "thread_list_requires_params" and "params" not in message:
+            if (
+                self._scenario == "thread_list_requires_params"
+                and "params" not in message
+            ):
                 self._send_error(req_id, "Invalid request: missing field `params`")
                 return
             if self._scenario in ("thread_list_empty", "thread_list_empty_refresh"):
@@ -141,9 +152,7 @@ class FixtureServer:
                     {
                         "id": req_id,
                         "result": {
-                            "data": [
-                                entry
-                            ],
+                            "data": [entry],
                             "nextCursor": None,
                         },
                     }
@@ -152,9 +161,7 @@ class FixtureServer:
                 self.send(
                     {
                         "id": req_id,
-                        "result": [
-                            entry
-                        ],
+                        "result": [entry],
                     }
                 )
             return
@@ -300,6 +307,7 @@ class FixtureServer:
             )
             return
         if method == "fixture/slow":
+
             def _send_late() -> None:
                 time.sleep(0.05)
                 self.send({"id": req_id, "result": {"value": params.get("value")}})

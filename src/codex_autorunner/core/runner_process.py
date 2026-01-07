@@ -5,9 +5,7 @@ import sys
 from pathlib import Path
 
 
-def build_runner_cmd(
-    repo_root: Path, *, action: str, once: bool = False
-) -> list[str]:
+def build_runner_cmd(repo_root: Path, *, action: str, once: bool = False) -> list[str]:
     cmd = [
         sys.executable,
         "-m",

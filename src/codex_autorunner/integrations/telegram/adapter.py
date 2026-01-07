@@ -470,6 +470,7 @@ def _parse_entities(payload: Any) -> tuple[TelegramMessageEntity, ...]:
         entities.append(TelegramMessageEntity(type=kind, offset=offset, length=length))
     return tuple(entities)
 
+
 def allowlist_allows(update: TelegramUpdate, allowlist: TelegramAllowlist) -> bool:
     if not allowlist.allowed_chat_ids or not allowlist.allowed_user_ids:
         return False
@@ -558,7 +559,10 @@ def build_inline_keyboard(
     keyboard: list[list[dict[str, str]]] = []
     for row in rows:
         keyboard.append(
-            [{"text": button.text, "callback_data": button.callback_data} for button in row]
+            [
+                {"text": button.text, "callback_data": button.callback_data}
+                for button in row
+            ]
         )
     return {"inline_keyboard": keyboard}
 
@@ -710,7 +714,10 @@ def build_approval_keyboard(
     ]
     if include_session:
         rows[0].insert(
-            1, InlineButton("Accept session", encode_approval_callback("accept_session", request_id))
+            1,
+            InlineButton(
+                "Accept session", encode_approval_callback("accept_session", request_id)
+            ),
         )
     return build_inline_keyboard(rows)
 
@@ -830,7 +837,9 @@ def _validate_callback_data(data: str) -> None:
         raise ValueError("callback_data exceeds Telegram limit")
 
 
-def next_update_offset(updates: Iterable[dict[str, Any]], current: Optional[int]) -> Optional[int]:
+def next_update_offset(
+    updates: Iterable[dict[str, Any]], current: Optional[int]
+) -> Optional[int]:
     max_update_id = None
     for update in updates:
         update_id = update.get("update_id")
@@ -1182,7 +1191,9 @@ class TelegramBotClient:
             )
             raise TelegramAPIError("Telegram request failed") from exc
         if not isinstance(payload, dict) or not payload.get("ok"):
-            description = payload.get("description") if isinstance(payload, dict) else None
+            description = (
+                payload.get("description") if isinstance(payload, dict) else None
+            )
             raise TelegramAPIError(description or "Telegram API returned error")
         return payload.get("result")
 

@@ -33,9 +33,7 @@ def _build_service_in_closed_loop(
     loop = asyncio.new_event_loop()
     try:
         asyncio.set_event_loop(loop)
-        return TelegramBotService(
-            config, hub_root=tmp_path, voice_config=voice_config
-        )
+        return TelegramBotService(config, hub_root=tmp_path, voice_config=voice_config)
     finally:
         asyncio.set_event_loop(None)
         loop.close()

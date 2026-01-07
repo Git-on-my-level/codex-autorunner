@@ -18,7 +18,6 @@ import { renderTodoPreview } from "./todoPreview.js";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DOC_TYPES = ["todo", "progress", "opinions", "spec", "summary"];
-const ALL_DOC_TYPES = ["todo", "progress", "opinions", "spec", "summary", "snapshot"];
 const CLEARABLE_DOCS = ["todo", "progress", "opinions"];
 const COPYABLE_DOCS = ["spec", "summary"];
 const PASTEABLE_DOCS = ["spec"];
@@ -156,7 +155,7 @@ function renderDiffHtml(diffText) {
   let oldLineNum = 0;
   let newLineNum = 0;
 
-  const htmlLines = lines.map((line, idx) => {
+  const htmlLines = lines.map((line) => {
     // Escape HTML entities
     const escaped = line
       .replace(/&/g, "&amp;")
@@ -206,7 +205,7 @@ function renderDiffHtml(diffText) {
       (line.length > 0 && !line.startsWith("\\") && oldLineNum > 0)
     ) {
       const oLine = oldLineNum++;
-      const nLine = newLineNum++;
+      newLineNum += 1;
       const content = escaped.startsWith(" ") ? escaped.substring(1) : escaped;
       return `<div class="diff-line diff-ctx"><span class="diff-gutter diff-gutter-ctx">${oLine}</span><span class="diff-sign"> </span><span class="diff-content">${content}</span></div>`;
     }
@@ -662,7 +661,7 @@ async function performDocChatRequest(kind, entry, state) {
     const payload = contentType.includes("application/json")
       ? await res.json()
       : await res.text();
-    applyChatResult(payload, state, entry, kind);
+    applyChatResult(payload, state, entry);
   }
 }
 
@@ -748,7 +747,7 @@ async function readChatStream(res, state, entry, kind) {
   if (!res.body) throw new Error("Streaming not supported in this browser");
   const reader = res.body.getReader();
   let buffer = "";
-  while (true) {
+  for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
     buffer += chatDecoder.decode(value, { stream: true });
@@ -820,7 +819,7 @@ async function handleStreamEvent(event, rawData, state, entry, kind) {
   }
 }
 
-function applyChatResult(payload, state, entry, kind = activeDoc) {
+function applyChatResult(payload, state, entry) {
   const parsed = parseChatPayload(payload);
   if (parsed.error) {
     markChatError(state, entry, parsed.error);
@@ -993,7 +992,7 @@ async function importIssueToSpec() {
       method: "POST",
       body: { issue },
     });
-    applyChatResult(res, state, entry, "spec");
+    applyChatResult(res, state, entry);
     if (res?.content) {
       await applyDocUpdateFromChat("spec", res.content);
     }

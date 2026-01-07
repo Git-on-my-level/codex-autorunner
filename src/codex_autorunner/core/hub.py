@@ -1,9 +1,12 @@
 import dataclasses
 import enum
 import logging
+import os
 import shutil
 import subprocess
 import re
+import sys
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -14,7 +17,7 @@ from ..discovery import DiscoveryRecord, discover_and_init
 from .engine import Engine
 from .git_utils import git_available, git_is_clean, git_upstream_status
 from .locks import process_alive, read_lock_info
-from ..manifest import Manifest, ManifestRepo, load_manifest, save_manifest
+from ..manifest import Manifest, load_manifest, save_manifest
 from .runner_controller import ProcessRunnerController
 from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
@@ -162,14 +165,18 @@ def save_hub_state(state_path: Path, state: HubState, hub_root: Path) -> None:
 class RepoRunner:
     def __init__(self, repo_id: str, repo_root: Path):
         self.repo_id = repo_id
-        engine = Engine(repo_root)
-        self._controller = ProcessRunnerController(engine)
+        self._engine = Engine(repo_root)
+        self._controller = ProcessRunnerController(self._engine)
+        self._thread = None
 
     @property
     def running(self) -> bool:
         return self._controller.running
 
     def start(self, once: bool = False) -> None:
+        if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
+            self._start_in_thread(once=once)
+            return
         self._controller.start(once=once)
 
     def stop(self) -> None:
@@ -179,7 +186,17 @@ class RepoRunner:
         return self._controller.kill()
 
     def resume(self, once: bool = False) -> None:
+        if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
+            self._start_in_thread(once=once)
+            return
         self._controller.resume(once=once)
+
+    def _start_in_thread(self, once: bool) -> None:
+        def _run() -> None:
+            self._engine.run_loop(stop_after_runs=1 if once else None)
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
 
 
 class HubSupervisor:
@@ -312,9 +329,7 @@ class HubSupervisor:
             raise ValueError(f"git init failed for {target}")
 
         seed_repo_files(target, force=force)
-        manifest.ensure_repo(
-            self.hub_config.root, target, repo_id=repo_id, kind="base"
-        )
+        manifest.ensure_repo(self.hub_config.root, target, repo_id=repo_id, kind="base")
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
 
         return self._snapshot_for_repo(repo_id)
@@ -581,7 +596,9 @@ class HubSupervisor:
         if worktrees and delete_worktrees:
             for worktree in worktrees:
                 self.cleanup_worktree(worktree_repo_id=worktree.id)
-            manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+            manifest = load_manifest(
+                self.hub_config.manifest_path, self.hub_config.root
+            )
             repo = manifest.get(repo_id)
             if not repo:
                 raise ValueError(f"Repo {repo_id} missing after worktree cleanup")

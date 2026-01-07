@@ -1,6 +1,5 @@
 import dataclasses
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -616,12 +615,16 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         codex.get("terminal_args", []), list
     ):
         raise ConfigError("codex.terminal_args must be a list if provided")
-    if "model" in codex and codex.get("model") is not None and not isinstance(
-        codex.get("model"), str
+    if (
+        "model" in codex
+        and codex.get("model") is not None
+        and not isinstance(codex.get("model"), str)
     ):
         raise ConfigError("codex.model must be a string or null if provided")
-    if "reasoning" in codex and codex.get("reasoning") is not None and not isinstance(
-        codex.get("reasoning"), str
+    if (
+        "reasoning" in codex
+        and codex.get("reasoning") is not None
+        and not isinstance(codex.get("reasoning"), str)
     ):
         raise ConfigError("codex.reasoning must be a string or null if provided")
     if "models" in codex:
@@ -748,9 +751,7 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
             if "chat_id_env" in telegram_cfg and not isinstance(
                 telegram_cfg.get("chat_id_env"), str
             ):
-                raise ConfigError(
-                    "notifications.telegram.chat_id_env must be a string"
-                )
+                raise ConfigError("notifications.telegram.chat_id_env must be a string")
             if "thread_id_env" in telegram_cfg and not isinstance(
                 telegram_cfg.get("thread_id_env"), str
             ):
@@ -920,11 +921,20 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             defaults_cfg.get("approval_mode"), str
         ):
             raise ConfigError("telegram_bot.defaults.approval_mode must be a string")
-        for key in ("approval_policy", "sandbox_policy", "yolo_approval_policy", "yolo_sandbox_policy"):
-            if key in defaults_cfg and defaults_cfg.get(key) is not None and not isinstance(
-                defaults_cfg.get(key), str
+        for key in (
+            "approval_policy",
+            "sandbox_policy",
+            "yolo_approval_policy",
+            "yolo_sandbox_policy",
+        ):
+            if (
+                key in defaults_cfg
+                and defaults_cfg.get(key) is not None
+                and not isinstance(defaults_cfg.get(key), str)
             ):
-                raise ConfigError(f"telegram_bot.defaults.{key} must be a string or null")
+                raise ConfigError(
+                    f"telegram_bot.defaults.{key} must be a string or null"
+                )
     concurrency_cfg = telegram_cfg.get("concurrency")
     if concurrency_cfg is not None and not isinstance(concurrency_cfg, dict):
         raise ConfigError("telegram_bot.concurrency must be a mapping if provided")
@@ -932,11 +942,15 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
         if "max_parallel_turns" in concurrency_cfg and not isinstance(
             concurrency_cfg.get("max_parallel_turns"), int
         ):
-            raise ConfigError("telegram_bot.concurrency.max_parallel_turns must be an integer")
+            raise ConfigError(
+                "telegram_bot.concurrency.max_parallel_turns must be an integer"
+            )
         if "per_topic_queue" in concurrency_cfg and not isinstance(
             concurrency_cfg.get("per_topic_queue"), bool
         ):
-            raise ConfigError("telegram_bot.concurrency.per_topic_queue must be boolean")
+            raise ConfigError(
+                "telegram_bot.concurrency.per_topic_queue must be boolean"
+            )
     media_cfg = telegram_cfg.get("media")
     if media_cfg is not None and not isinstance(media_cfg, dict):
         raise ConfigError("telegram_bot.media must be a mapping if provided")

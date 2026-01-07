@@ -36,7 +36,9 @@ class HubRemoveRepoRequest(Payload):
 
 
 class HubCreateWorktreeRequest(Payload):
-    base_repo_id: str = Field(validation_alias=AliasChoices("base_repo_id", "baseRepoId"))
+    base_repo_id: str = Field(
+        validation_alias=AliasChoices("base_repo_id", "baseRepoId")
+    )
     branch: str
     force: bool = False
 

@@ -284,7 +284,7 @@ def create_app(
                 try:
                     async with app.state.terminal_lock:
                         prune_terminal_registry(
-                            engine.state_path,
+                            app.state.engine.state_path,
                             app.state.terminal_sessions,
                             app.state.session_registry,
                             app.state.repo_to_session,
@@ -300,10 +300,7 @@ def create_app(
 
         asyncio.create_task(_cleanup_loop())
 
-        if (
-            context.tui_idle_seconds is None
-            or context.tui_idle_check_seconds is None
-        ):
+        if context.tui_idle_seconds is None or context.tui_idle_check_seconds is None:
             return
 
         async def _tui_idle_loop():
@@ -316,9 +313,7 @@ def create_app(
                         for session_id, session in list(terminal_sessions.items()):
                             if not session.pty.isalive():
                                 continue
-                            if not session.should_notify_idle(
-                                context.tui_idle_seconds
-                            ):
+                            if not session.should_notify_idle(context.tui_idle_seconds):
                                 continue
                             record = session_registry.get(session_id)
                             repo_path = record.repo_path if record else None
@@ -484,8 +479,7 @@ def create_hub_app(
 
         manifest = load_manifest(context.config.manifest_path, context.config.root)
         repo_map = [
-            (repo.id, (context.config.root / repo.path))
-            for repo in manifest.repos
+            (repo.id, (context.config.root / repo.path)) for repo in manifest.repos
         ]
         per_repo, unmatched = summarize_hub_usage(
             repo_map,
@@ -526,8 +520,7 @@ def create_hub_app(
 
         manifest = load_manifest(context.config.manifest_path, context.config.root)
         repo_map = [
-            (repo.id, (context.config.root / repo.path))
-            for repo in manifest.repos
+            (repo.id, (context.config.root / repo.path)) for repo in manifest.repos
         ]
         try:
             series, status = get_hub_usage_series_cached(
@@ -558,8 +551,7 @@ def create_hub_app(
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
             "repos": [
-                _add_mount_info(repo.to_dict(context.config.root))
-                for repo in snapshots
+                _add_mount_info(repo.to_dict(context.config.root)) for repo in snapshots
             ],
         }
 
@@ -575,8 +567,7 @@ def create_hub_app(
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
             "repos": [
-                _add_mount_info(repo.to_dict(context.config.root))
-                for repo in snapshots
+                _add_mount_info(repo.to_dict(context.config.root)) for repo in snapshots
             ],
         }
 

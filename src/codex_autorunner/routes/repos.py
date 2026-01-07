@@ -74,7 +74,6 @@ def build_repos_routes() -> APIRouter:
 
     @router.post("/api/run/resume", response_model=RunControlResponse)
     def resume_run(request: Request, payload: Optional[RunControlRequest] = None):
-        engine = request.app.state.engine
         manager = request.app.state.manager
         logger = request.app.state.logger
         once = payload.once if payload else False

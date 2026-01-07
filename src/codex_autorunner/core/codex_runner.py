@@ -88,9 +88,7 @@ async def run_codex_capture_async(
         raise ConfigError(f"Codex binary not found: {config.codex_binary}")
 
     try:
-        stdout, _ = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout_seconds
-        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
     except asyncio.TimeoutError as exc:
         proc.kill()
         await proc.wait()

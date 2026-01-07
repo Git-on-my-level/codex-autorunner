@@ -31,7 +31,11 @@ def load_prompt_template(config: Config) -> str:
 
 
 def build_prompt_text(
-    *, template: str, docs: Mapping[str, str], doc_paths: Mapping[str, str], prev_run_output: Optional[str]
+    *,
+    template: str,
+    docs: Mapping[str, str],
+    doc_paths: Mapping[str, str],
+    prev_run_output: Optional[str],
 ) -> str:
     prev_section = ""
     if prev_run_output:

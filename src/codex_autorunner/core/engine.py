@@ -14,7 +14,7 @@ import traceback
 
 from .about_car import ensure_about_car_file
 from .codex_runner import run_codex_streaming
-from .config import Config, ConfigError, load_config
+from .config import ConfigError, load_config
 from .docs import DocsManager
 from .locks import process_alive, read_lock_info, write_lock_info
 from .notifications import NotificationManager
@@ -47,9 +47,7 @@ class Engine:
         self.notifier = NotificationManager(self.config)
         self.state_path = self.repo_root / ".codex-autorunner" / "state.json"
         self.log_path = self.config.log.path
-        self.run_index_path = (
-            self.repo_root / ".codex-autorunner" / "run_index.json"
-        )
+        self.run_index_path = self.repo_root / ".codex-autorunner" / "run_index.json"
         self.lock_path = self.repo_root / ".codex-autorunner" / "lock"
         self.stop_path = self.repo_root / ".codex-autorunner" / "stop"
         self._active_global_handler: Optional[RotatingFileHandler] = None
@@ -93,9 +91,7 @@ class Engine:
     def stop_requested(self) -> bool:
         return self.stop_path.exists()
 
-    def _should_stop(
-        self, external_stop_flag: Optional[threading.Event]
-    ) -> bool:
+    def _should_stop(self, external_stop_flag: Optional[threading.Event]) -> bool:
         if external_stop_flag and external_stop_flag.is_set():
             return True
         return self.stop_requested()

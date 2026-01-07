@@ -6,7 +6,6 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import AsyncIterator, Dict, List, Optional, Tuple
 
 from .codex_runner import (

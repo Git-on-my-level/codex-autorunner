@@ -87,7 +87,16 @@ def test_parse_command_requires_offset_zero() -> None:
 
 
 def test_is_interrupt_aliases() -> None:
-    for text in ("^C", "^c", "ctrl-c", "CTRL+C", "esc", "Escape", "/interrupt", "/stop"):
+    for text in (
+        "^C",
+        "^c",
+        "ctrl-c",
+        "CTRL+C",
+        "esc",
+        "Escape",
+        "/interrupt",
+        "/stop",
+    ):
         assert is_interrupt_alias(text)
 
 

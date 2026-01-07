@@ -15,7 +15,7 @@ from ..core.doc_chat import (
     DocChatValidationError,
     _normalize_kind,
 )
-from ..core.snapshot import (
+from ..snapshot import (
     SnapshotError,
     generate_snapshot,
     load_snapshot,

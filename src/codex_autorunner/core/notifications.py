@@ -26,10 +26,14 @@ class NotificationManager:
         self._events = self._normalize_events(self._cfg.get("events"))
         self._warn_unknown_events(self._events)
         self._discord = (
-            self._cfg.get("discord") if isinstance(self._cfg.get("discord"), dict) else {}
+            self._cfg.get("discord")
+            if isinstance(self._cfg.get("discord"), dict)
+            else {}
         )
         self._telegram = (
-            self._cfg.get("telegram") if isinstance(self._cfg.get("telegram"), dict) else {}
+            self._cfg.get("telegram")
+            if isinstance(self._cfg.get("telegram"), dict)
+            else {}
         )
         self._discord_enabled = self._discord.get("enabled") is not False
         self._telegram_enabled = self._telegram.get("enabled") is not False
@@ -157,9 +161,7 @@ class NotificationManager:
         else:
             status = "failed"
             summary_text = None
-        code_text = (
-            f"exit {exit_code}" if exit_code is not None else "exit unknown"
-        )
+        code_text = f"exit {exit_code}" if exit_code is not None else "exit unknown"
         if summary_text:
             details = f"{summary_text}, {code_text}"
         else:
@@ -175,9 +177,7 @@ class NotificationManager:
     ) -> str:
         repo_label = repo_path or self._repo_label()
         session_text = f"session {session_id}" if session_id else "session"
-        code_text = (
-            f"exit {exit_code}" if exit_code is not None else "exit unknown"
-        )
+        code_text = f"exit {exit_code}" if exit_code is not None else "exit unknown"
         return f"CAR TUI session ended ({session_text}, {code_text}) in {repo_label}"
 
     def _format_tui_idle_message(
@@ -278,7 +278,9 @@ class NotificationManager:
                 )
         return None
 
-    def _resolve_telegram(self, *, repo_path: Optional[str] = None) -> Optional[dict[str, object]]:
+    def _resolve_telegram(
+        self, *, repo_path: Optional[str] = None
+    ) -> Optional[dict[str, object]]:
         if not self._telegram_enabled:
             return None
         token_key = self._telegram.get("bot_token_env")
@@ -293,7 +295,9 @@ class NotificationManager:
                 thread_id = None
         if thread_id is None:
             thread_id_raw = (
-                os.environ.get(thread_id_key) if isinstance(thread_id_key, str) else None
+                os.environ.get(thread_id_key)
+                if isinstance(thread_id_key, str)
+                else None
             )
             if isinstance(thread_id_raw, str) and thread_id_raw.strip():
                 try:

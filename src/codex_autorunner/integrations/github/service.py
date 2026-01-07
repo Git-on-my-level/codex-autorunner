@@ -13,11 +13,8 @@ from ...core.utils import (
     subprocess_env,
 )
 from ...core.git_utils import (
-    run_git,
-    git_available,
     git_branch,
     git_is_clean,
-    GitError,
 )
 from ...core.prompts import build_github_issue_to_spec_prompt
 from ...core.prompts import build_sync_agent_prompt
@@ -449,121 +446,7 @@ class GitHubService:
         )
         return {"path": rel_path.as_posix(), "hint": hint, "kind": kind}
 
-
-def _safe_text(value: Any, *, max_chars: int = 8000) -> str:
-    text = str(value or "").strip()
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 3] + "..."
-
-
-def _format_labels(labels: Any) -> str:
-    if not isinstance(labels, list):
-        return "none"
-    names = []
-    for label in labels:
-        if isinstance(label, dict):
-            name = label.get("name")
-        else:
-            name = label
-        if name:
-            names.append(str(name))
-    return ", ".join(names) if names else "none"
-
-
-def _format_author(author: Any) -> str:
-    if isinstance(author, dict):
-        return str(author.get("login") or author.get("name") or "unknown")
-    return str(author or "unknown")
-
-
-def _format_issue_context(issue: dict, *, repo: str) -> list[str]:
-    number = issue.get("number") or ""
-    title = issue.get("title") or ""
-    url = issue.get("url") or ""
-    state = issue.get("state") or ""
-    body = _safe_text(issue.get("body") or "")
-    labels = _format_labels(issue.get("labels"))
-    author = _format_author(issue.get("author"))
-    comments = issue.get("comments")
-    comment_count = 0
-    if isinstance(comments, dict):
-        total = comments.get("totalCount")
-        if isinstance(total, int):
-            comment_count = total
-        else:
-            nodes = comments.get("nodes")
-            edges = comments.get("edges")
-            if isinstance(nodes, list):
-                comment_count = len(nodes)
-            elif isinstance(edges, list):
-                comment_count = len(edges)
-    elif isinstance(comments, list):
-        comment_count = len(comments)
-
-    lines = [
-        "# GitHub Issue Context",
-        f"Repo: {repo}",
-        f"Issue: #{number} {title}".strip(),
-        f"URL: {url}",
-        f"State: {state}",
-        f"Author: {author}",
-        f"Labels: {labels}",
-        f"Comments: {comment_count}",
-        "",
-        "Body:",
-        body or "(no body)",
-    ]
-    return lines
-
-
-def _format_pr_context(pr: dict, *, repo: str) -> list[str]:
-    number = pr.get("number") or ""
-    title = pr.get("title") or ""
-    url = pr.get("url") or ""
-    state = pr.get("state") or ""
-    body = _safe_text(pr.get("body") or "")
-    labels = _format_labels(pr.get("labels"))
-    author = _format_author(pr.get("author"))
-    additions = pr.get("additions") or 0
-    deletions = pr.get("deletions") or 0
-    changed_files = pr.get("changedFiles") or 0
-    files = pr.get("files") if isinstance(pr.get("files"), list) else []
-    file_lines = []
-    for entry in files[:200]:
-        if not isinstance(entry, dict):
-            continue
-        path = entry.get("path") or entry.get("name") or ""
-        if not path:
-            continue
-        add = entry.get("additions")
-        dele = entry.get("deletions")
-        if isinstance(add, int) and isinstance(dele, int):
-            file_lines.append(f"- {path} (+{add}/-{dele})")
-        else:
-            file_lines.append(f"- {path}")
-    if len(files) > 200:
-        file_lines.append(f"... ({len(files) - 200} more)")
-
-    lines = [
-        "# GitHub PR Context",
-        f"Repo: {repo}",
-        f"PR: #{number} {title}".strip(),
-        f"URL: {url}",
-        f"State: {state}",
-        f"Author: {author}",
-        f"Labels: {labels}",
-        f"Stats: +{additions} -{deletions}; changed files: {changed_files}",
-        "",
-        "Body:",
-        body or "(no body)",
-        "",
-        "Files:",
-    ]
-    lines.extend(file_lines or ["(no files)"])
-    return lines
-
-    # ── high-level operations ──────────────────────────────────────────────────
+    # ── high-level operations ──────────────────────────────────────────────
     def status_payload(self) -> dict:
         link = self.read_link_state()
         gh_ok = self.gh_available()
@@ -752,3 +635,117 @@ def _format_pr_context(pr: dict, *, repo: str) -> list[str]:
                 "checks": f"{pr_url}/checks",
             }
         return out
+
+
+def _safe_text(value: Any, *, max_chars: int = 8000) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3] + "..."
+
+
+def _format_labels(labels: Any) -> str:
+    if not isinstance(labels, list):
+        return "none"
+    names = []
+    for label in labels:
+        if isinstance(label, dict):
+            name = label.get("name")
+        else:
+            name = label
+        if name:
+            names.append(str(name))
+    return ", ".join(names) if names else "none"
+
+
+def _format_author(author: Any) -> str:
+    if isinstance(author, dict):
+        return str(author.get("login") or author.get("name") or "unknown")
+    return str(author or "unknown")
+
+
+def _format_issue_context(issue: dict, *, repo: str) -> list[str]:
+    number = issue.get("number") or ""
+    title = issue.get("title") or ""
+    url = issue.get("url") or ""
+    state = issue.get("state") or ""
+    body = _safe_text(issue.get("body") or "")
+    labels = _format_labels(issue.get("labels"))
+    author = _format_author(issue.get("author"))
+    comments = issue.get("comments")
+    comment_count = 0
+    if isinstance(comments, dict):
+        total = comments.get("totalCount")
+        if isinstance(total, int):
+            comment_count = total
+        else:
+            nodes = comments.get("nodes")
+            edges = comments.get("edges")
+            if isinstance(nodes, list):
+                comment_count = len(nodes)
+            elif isinstance(edges, list):
+                comment_count = len(edges)
+    elif isinstance(comments, list):
+        comment_count = len(comments)
+
+    lines = [
+        "# GitHub Issue Context",
+        f"Repo: {repo}",
+        f"Issue: #{number} {title}".strip(),
+        f"URL: {url}",
+        f"State: {state}",
+        f"Author: {author}",
+        f"Labels: {labels}",
+        f"Comments: {comment_count}",
+        "",
+        "Body:",
+        body or "(no body)",
+    ]
+    return lines
+
+
+def _format_pr_context(pr: dict, *, repo: str) -> list[str]:
+    number = pr.get("number") or ""
+    title = pr.get("title") or ""
+    url = pr.get("url") or ""
+    state = pr.get("state") or ""
+    body = _safe_text(pr.get("body") or "")
+    labels = _format_labels(pr.get("labels"))
+    author = _format_author(pr.get("author"))
+    additions = pr.get("additions") or 0
+    deletions = pr.get("deletions") or 0
+    changed_files = pr.get("changedFiles") or 0
+    files = pr.get("files") if isinstance(pr.get("files"), list) else []
+    file_lines = []
+    for entry in files[:200]:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path") or entry.get("name") or ""
+        if not path:
+            continue
+        add = entry.get("additions")
+        dele = entry.get("deletions")
+        if isinstance(add, int) and isinstance(dele, int):
+            file_lines.append(f"- {path} (+{add}/-{dele})")
+        else:
+            file_lines.append(f"- {path}")
+    if len(files) > 200:
+        file_lines.append(f"... ({len(files) - 200} more)")
+
+    lines = [
+        "# GitHub PR Context",
+        f"Repo: {repo}",
+        f"PR: #{number} {title}".strip(),
+        f"URL: {url}",
+        f"State: {state}",
+        f"Author: {author}",
+        f"Labels: {labels}",
+        f"Stats: +{additions} -{deletions}; changed files: {changed_files}",
+        "",
+        "Body:",
+        body or "(no body)",
+        "",
+        "Files:",
+    ]
+    lines.extend(file_lines or ["(no files)"])
+    return lines

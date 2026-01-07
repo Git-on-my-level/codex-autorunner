@@ -225,9 +225,7 @@ async def test_error_notification_surfaces(tmp_path: Path) -> None:
         await service._handle_normal_message(message, runtime)
     finally:
         await service._app_server_supervisor.close_all()
-    assert any(
-        "Auth required" in msg["text"] for msg in fake_bot.messages
-    )
+    assert any("Auth required" in msg["text"] for msg in fake_bot.messages)
 
 
 @pytest.mark.anyio
@@ -388,7 +386,10 @@ async def test_resume_requires_scoped_threads(tmp_path: Path) -> None:
         await service._handle_resume(resume_message, "")
     finally:
         await service._app_server_supervisor.close_all()
-    assert any("No previous threads found for this topic" in msg["text"] for msg in fake_bot.messages)
+    assert any(
+        "No previous threads found for this topic" in msg["text"]
+        for msg in fake_bot.messages
+    )
 
 
 @pytest.mark.anyio
@@ -410,7 +411,9 @@ async def test_resume_shows_local_threads_when_thread_list_empty(
         await service._handle_resume(resume_message, "")
     finally:
         await service._app_server_supervisor.close_all()
-    assert not any("No previous threads found" in msg["text"] for msg in fake_bot.messages)
+    assert not any(
+        "No previous threads found" in msg["text"] for msg in fake_bot.messages
+    )
     resume_msg = next(
         msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
     )
@@ -444,12 +447,7 @@ async def test_resume_refresh_updates_cached_preview(tmp_path: Path) -> None:
         msg for msg in fake_bot.messages if "Select a thread to resume" in msg["text"]
     )
     keyboard = resume_msg["reply_markup"]["inline_keyboard"]
-    labels = [
-        button["text"]
-        for row in keyboard
-        for button in row
-        if "text" in button
-    ]
+    labels = [button["text"] for row in keyboard for button in row if "text" in button]
     assert any("refreshed preview" in label for label in labels)
 
 

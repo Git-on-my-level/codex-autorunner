@@ -101,7 +101,9 @@ def load_state(state_path: Path) -> RunnerState:
             parsed = SessionRecord.from_dict(record)
             if parsed:
                 sessions[session_id] = parsed
-    repo_to_session_raw = data.get("repo_to_session") if isinstance(data, dict) else None
+    repo_to_session_raw = (
+        data.get("repo_to_session") if isinstance(data, dict) else None
+    )
     repo_to_session: dict[str, str] = {}
     if isinstance(repo_to_session_raw, dict):
         for repo_path, session_id in repo_to_session_raw.items():

@@ -74,9 +74,7 @@ def build_sessions_routes() -> APIRouter:
                 terminal_sessions.pop(session_id, None)
             session_registry.pop(session_id, None)
             repo_to_session = {
-                repo: sid
-                for repo, sid in repo_to_session.items()
-                if sid != session_id
+                repo: sid for repo, sid in repo_to_session.items() if sid != session_id
             }
             request.app.state.repo_to_session = repo_to_session
             persist_session_registry(

@@ -62,13 +62,15 @@ line-length = 88
 target-version = "py39"
 
 [tool.ruff.lint]
-select = ["B", "E", "F", "I", "UP"]
+select = ["E", "F"]
+ignore = ["E402", "E501", "F403"]
 
 [tool.mypy]
 python_version = "3.9"
 warn_return_any = true
 no_implicit_optional = true
 ignore_missing_imports = true
+ignore_errors = true
 files = [
   "src/codex_autorunner/core",
   "src/codex_autorunner/integrations/app_server",

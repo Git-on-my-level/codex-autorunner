@@ -428,7 +428,12 @@ class UsageSeriesCache:
         with self._lock:
             payload = self._load_cache()
             series = self._build_repo_series(
-                payload, repo_root, since=since, until=until, bucket=bucket, segment=segment
+                payload,
+                repo_root,
+                since=since,
+                until=until,
+                bucket=bucket,
+                segment=segment,
             )
         return series, status
 
@@ -445,7 +450,12 @@ class UsageSeriesCache:
         with self._lock:
             payload = self._load_cache()
             series = self._build_hub_series(
-                payload, repo_map, since=since, until=until, bucket=bucket, segment=segment
+                payload,
+                repo_map,
+                since=since,
+                until=until,
+                bucket=bucket,
+                segment=segment,
             )
         return series, status
 
@@ -455,7 +465,9 @@ class UsageSeriesCache:
             file_rollups = payload.setdefault("file_rollups", {})
             rollups = payload.setdefault("rollups", {}).setdefault("by_cwd", {})
             rebuild_rollups = False
-            existing_paths = {str(path) for path in _iter_session_files(self.codex_home)}
+            existing_paths = {
+                str(path) for path in _iter_session_files(self.codex_home)
+            }
             for path_key in list(files.keys()):
                 if path_key not in existing_paths:
                     files.pop(path_key, None)
@@ -654,15 +666,19 @@ class UsageSeriesCache:
                             models[model_key] = int(models.get(model_key, 0)) + int(
                                 total
                             )
-                        for token_key, total in (entry.get("token_types") or {}).items():
+                        for token_key, total in (
+                            entry.get("token_types") or {}
+                        ).items():
                             token_types = merged_entry.setdefault("token_types", {})
                             token_types[token_key] = int(
                                 token_types.get(token_key, 0)
                             ) + int(total)
-                        for model_key, token_map in (entry.get("model_token") or {}).items():
-                            model_token = merged_entry.setdefault("model_token", {}).setdefault(
-                                model_key, {}
-                            )
+                        for model_key, token_map in (
+                            entry.get("model_token") or {}
+                        ).items():
+                            model_token = merged_entry.setdefault(
+                                "model_token", {}
+                            ).setdefault(model_key, {})
                             for token_key, total in (token_map or {}).items():
                                 model_token[token_key] = int(
                                     model_token.get(token_key, 0)
@@ -680,7 +696,9 @@ class UsageSeriesCache:
         if since and until:
             start = _bucket_start(since, bucket)
             end = _bucket_start(until, bucket)
-            return [_bucket_label(dt, bucket) for dt in _iter_buckets(start, end, bucket)]
+            return [
+                _bucket_label(dt, bucket) for dt in _iter_buckets(start, end, bucket)
+            ]
 
         times: List[datetime] = []
         for label in bucket_rollups.keys():
@@ -694,7 +712,9 @@ class UsageSeriesCache:
         return [_bucket_label(dt, bucket) for dt in _iter_buckets(start, end, bucket)]
 
     def _build_series_from_map(
-        self, buckets: List[str], series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]]
+        self,
+        buckets: List[str],
+        series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]],
     ) -> List[Dict[str, object]]:
         series = []
         for (key, model, token_type), values in series_map.items():

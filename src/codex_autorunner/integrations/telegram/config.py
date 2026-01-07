@@ -125,7 +125,9 @@ class TelegramBotConfig:
         mode = str(cfg.get("mode", "polling"))
         bot_token_env = str(cfg.get("bot_token_env", "CAR_TELEGRAM_BOT_TOKEN"))
         chat_id_env = str(cfg.get("chat_id_env", "CAR_TELEGRAM_CHAT_ID"))
-        parse_mode_raw = cfg.get("parse_mode") if "parse_mode" in cfg else DEFAULT_PARSE_MODE
+        parse_mode_raw = (
+            cfg.get("parse_mode") if "parse_mode" in cfg else DEFAULT_PARSE_MODE
+        )
         parse_mode = _normalize_parse_mode(parse_mode_raw)
         debug_raw = cfg.get("debug") if isinstance(cfg.get("debug"), dict) else {}
         debug_prefix_context = bool(debug_raw.get("prefix_context", False))
@@ -137,11 +139,15 @@ class TelegramBotConfig:
 
         require_topics = bool(cfg.get("require_topics", True))
 
-        defaults_raw = cfg.get("defaults") if isinstance(cfg.get("defaults"), dict) else {}
+        defaults_raw = (
+            cfg.get("defaults") if isinstance(cfg.get("defaults"), dict) else {}
+        )
         approval_mode = normalize_approval_mode(
             defaults_raw.get("approval_mode"), default=APPROVAL_MODE_YOLO
         )
-        approval_policy = defaults_raw.get("approval_policy", DEFAULT_SAFE_APPROVAL_POLICY)
+        approval_policy = defaults_raw.get(
+            "approval_policy", DEFAULT_SAFE_APPROVAL_POLICY
+        )
         sandbox_policy = defaults_raw.get("sandbox_policy")
         if sandbox_policy is not None:
             sandbox_policy = str(sandbox_policy)
@@ -153,7 +159,9 @@ class TelegramBotConfig:
         )
         defaults = TelegramBotDefaults(
             approval_mode=approval_mode,
-            approval_policy=str(approval_policy) if approval_policy is not None else None,
+            approval_policy=(
+                str(approval_policy) if approval_policy is not None else None
+            ),
             sandbox_policy=sandbox_policy,
             yolo_approval_policy=yolo_approval_policy,
             yolo_sandbox_policy=yolo_sandbox_policy,
@@ -185,7 +193,9 @@ class TelegramBotConfig:
         )
         if max_voice_bytes <= 0:
             max_voice_bytes = DEFAULT_MEDIA_MAX_VOICE_BYTES
-        image_prompt = str(media_raw.get("image_prompt", DEFAULT_MEDIA_IMAGE_PROMPT)).strip()
+        image_prompt = str(
+            media_raw.get("image_prompt", DEFAULT_MEDIA_IMAGE_PROMPT)
+        ).strip()
         if not image_prompt:
             image_prompt = DEFAULT_MEDIA_IMAGE_PROMPT
         media = TelegramBotMediaConfig(

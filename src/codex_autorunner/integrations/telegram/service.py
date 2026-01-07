@@ -17,9 +17,12 @@ import time
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
+from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence, TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from .state import TelegramState, TelegramTopicRecord
 
 from ..app_server.client import (
     ApprovalDecision,
@@ -77,27 +80,10 @@ from .adapter import (
     parse_command,
 )
 from .config import (
-    DEFAULT_ALLOWED_UPDATES,
-    DEFAULT_APP_SERVER_COMMAND,
     DEFAULT_APPROVAL_TIMEOUT_SECONDS,
-    DEFAULT_MEDIA_IMAGE_PROMPT,
-    DEFAULT_MEDIA_MAX_IMAGE_BYTES,
-    DEFAULT_MEDIA_MAX_VOICE_BYTES,
-    DEFAULT_PARSE_MODE,
-    DEFAULT_POLL_TIMEOUT_SECONDS,
-    DEFAULT_SAFE_APPROVAL_POLICY,
-    DEFAULT_SHELL_MAX_OUTPUT_CHARS,
-    DEFAULT_SHELL_TIMEOUT_MS,
-    DEFAULT_STATE_FILE,
-    DEFAULT_YOLO_APPROVAL_POLICY,
-    DEFAULT_YOLO_SANDBOX_POLICY,
-    TelegramBotConcurrency,
     TelegramBotConfig,
     TelegramBotConfigError,
-    TelegramBotDefaults,
     TelegramBotLockError,
-    TelegramBotMediaConfig,
-    TelegramBotShellConfig,
     TelegramMediaCandidate,
 )
 from ...core.state import now_iso
@@ -226,7 +212,7 @@ INIT_PROMPT = "\n".join(
         "",
         "Document Requirements",
         "",
-        "- Title the document \"Repository Guidelines\".",
+        '- Title the document "Repository Guidelines".',
         "- Use Markdown headings (#, ##, etc.) for structure.",
         "- Keep the document concise. 200-400 words is optimal.",
         "- Keep explanations short, direct, and specific to this repository.",
@@ -765,9 +751,7 @@ class TelegramBotService:
             await self._clear_outbox_inflight(record.record_id)
         self._store.delete_outbox(record.record_id)
         if record.placeholder_message_id is not None:
-            await self._delete_message(
-                record.chat_id, record.placeholder_message_id
-            )
+            await self._delete_message(record.chat_id, record.placeholder_message_id)
         log_event(
             self._logger,
             logging.INFO,
@@ -857,7 +841,11 @@ class TelegramBotService:
         return done
 
     async def _process_pending_voice(self, record: PendingVoiceRecord) -> bool:
-        if not self._voice_service or not self._voice_config or not self._voice_config.enabled:
+        if (
+            not self._voice_service
+            or not self._voice_config
+            or not self._voice_config.enabled
+        ):
             await self._send_message(
                 record.chat_id,
                 "Voice transcription is disabled.",
@@ -1150,9 +1138,7 @@ class TelegramBotService:
             return True
         return datetime.now(timezone.utc) >= next_attempt
 
-    def _voice_retry_delay(
-        self, attempts: int, *, retry_after: Optional[int]
-    ) -> float:
+    def _voice_retry_delay(self, attempts: int, *, retry_after: Optional[int]) -> float:
         if retry_after is not None and retry_after > 0:
             return float(retry_after) + VOICE_RETRY_AFTER_BUFFER_SECONDS
         delay = VOICE_RETRY_INITIAL_SECONDS * (2 ** max(attempts - 1, 0))
@@ -1196,12 +1182,7 @@ class TelegramBotService:
         return path
 
     def _voice_storage_dir(self, workspace_path: str) -> Path:
-        return (
-            Path(workspace_path)
-            / ".codex-autorunner"
-            / "uploads"
-            / "telegram-voice"
-        )
+        return Path(workspace_path) / ".codex-autorunner" / "uploads" / "telegram-voice"
 
     def _choose_voice_extension(
         self,
@@ -1292,7 +1273,9 @@ class TelegramBotService:
     def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return self._router.resolve_key(chat_id, thread_id)
 
-    def _canonical_workspace_root(self, workspace_path: Optional[str]) -> Optional[Path]:
+    def _canonical_workspace_root(
+        self, workspace_path: Optional[str]
+    ) -> Optional[Path]:
         if not isinstance(workspace_path, str) or not workspace_path.strip():
             return None
         try:
@@ -1354,7 +1337,9 @@ class TelegramBotService:
         self, repo_id: Optional[str], workspace_path: Optional[str]
     ) -> Optional[str]:
         normalized_repo = repo_id.strip() if isinstance(repo_id, str) else ""
-        normalized_path = workspace_path.strip() if isinstance(workspace_path, str) else ""
+        normalized_path = (
+            workspace_path.strip() if isinstance(workspace_path, str) else ""
+        )
         if normalized_path:
             try:
                 normalized_path = str(canonicalize_path(Path(normalized_path)))
@@ -1774,7 +1759,9 @@ class TelegramBotService:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         return self._coalesce_key_for_topic(key, message.from_user_id)
 
-    async def _buffer_coalesced_message(self, message: TelegramMessage, text: str) -> None:
+    async def _buffer_coalesced_message(
+        self, message: TelegramMessage, text: str
+    ) -> None:
         topic_key = self._resolve_topic_key(message.chat_id, message.thread_id)
         key = self._coalesce_key_for_topic(topic_key, message.from_user_id)
         lock = self._coalesce_locks.setdefault(key, asyncio.Lock())
@@ -1831,9 +1818,13 @@ class TelegramBotService:
         return dataclasses.replace(buffer.message, text=combined_text, caption=None)
 
     def _message_has_media(self, message: TelegramMessage) -> bool:
-        return bool(message.photos or message.document or message.voice or message.audio)
+        return bool(
+            message.photos or message.document or message.voice or message.audio
+        )
 
-    def _select_photo(self, photos: Sequence[TelegramPhotoSize]) -> Optional[TelegramPhotoSize]:
+    def _select_photo(
+        self, photos: Sequence[TelegramPhotoSize]
+    ) -> Optional[TelegramPhotoSize]:
         if not photos:
             return None
         return max(
@@ -2471,7 +2462,9 @@ class TelegramBotService:
             "interrupt": CommandSpec(
                 "interrupt",
                 "stop the active turn",
-                lambda message, _args, runtime: self._handle_interrupt(message, runtime),
+                lambda message, _args, runtime: self._handle_interrupt(
+                    message, runtime
+                ),
                 allow_during_turn=True,
             ),
             "quit": CommandSpec(
@@ -2693,12 +2686,16 @@ class TelegramBotService:
             if info.get("summary") and (overwrite_defaults or record.summary is None):
                 record.summary = info["summary"]
             allow_thread_policies = record.approval_mode != APPROVAL_MODE_YOLO
-            if allow_thread_policies and info.get("approval_policy") and (
-                overwrite_defaults or record.approval_policy is None
+            if (
+                allow_thread_policies
+                and info.get("approval_policy")
+                and (overwrite_defaults or record.approval_policy is None)
             ):
                 record.approval_policy = info["approval_policy"]
-            if allow_thread_policies and info.get("sandbox_policy") and (
-                overwrite_defaults or record.sandbox_policy is None
+            if (
+                allow_thread_policies
+                and info.get("sandbox_policy")
+                and (overwrite_defaults or record.sandbox_policy is None)
             ):
                 record.sandbox_policy = info["sandbox_policy"]
 
@@ -2712,8 +2709,7 @@ class TelegramBotService:
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
-                prompt
-                or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                prompt or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2834,7 +2830,9 @@ class TelegramBotService:
         placeholder_id: Optional[int] = None
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
-        prompt_text = text_override if text_override is not None else (message.text or "")
+        prompt_text = (
+            text_override if text_override is not None else (message.text or "")
+        )
         prompt_text = self._maybe_append_whisper_disclaimer(
             prompt_text, transcript_text=transcript_text
         )
@@ -3081,11 +3079,7 @@ class TelegramBotService:
             response=response,
         )
         turn_id = turn_handle.turn_id if turn_handle else None
-        token_usage = (
-            self._token_usage_by_turn.get(turn_id)
-            if turn_id
-            else None
-        )
+        token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
         if token_usage is None and thread_id:
             token_usage = self._token_usage_by_thread.get(thread_id)
         await self._send_turn_metrics(
@@ -3176,9 +3170,7 @@ class TelegramBotService:
             return prompt_text, False
         for link in links:
             try:
-                result = await asyncio.to_thread(
-                    svc.build_context_file_from_url, link
-                )
+                result = await asyncio.to_thread(svc.build_context_file_from_url, link)
             except Exception:
                 result = None
             if result and result.get("hint"):
@@ -3332,7 +3324,11 @@ class TelegramBotService:
             duration=candidate.duration,
             has_caption=bool(caption_text),
         )
-        if not self._voice_service or not self._voice_config or not self._voice_config.enabled:
+        if (
+            not self._voice_service
+            or not self._voice_config
+            or not self._voice_config.enabled
+        ):
             await self._send_message(
                 message.chat_id,
                 "Voice transcription is disabled.",
@@ -3391,10 +3387,7 @@ class TelegramBotService:
 
     def _image_storage_dir(self, workspace_path: str) -> Path:
         return (
-            Path(workspace_path)
-            / ".codex-autorunner"
-            / "uploads"
-            / "telegram-images"
+            Path(workspace_path) / ".codex-autorunner" / "uploads" / "telegram-images"
         )
 
     def _choose_image_extension(
@@ -3755,8 +3748,8 @@ class TelegramBotService:
         local_thread_topics: dict[str, set[str]] = {}
         if show_unscoped:
             state = self._store.load()
-            local_thread_ids, local_previews, local_thread_topics = _local_workspace_threads(
-                state, record.workspace_path, current_key=key
+            local_thread_ids, local_previews, local_thread_topics = (
+                _local_workspace_threads(state, record.workspace_path, current_key=key)
             )
             for thread_id in record.thread_ids:
                 local_thread_topics.setdefault(thread_id, set()).add(key)
@@ -3766,7 +3759,9 @@ class TelegramBotService:
                 if cached_preview:
                     local_previews.setdefault(thread_id, cached_preview)
         limit = _resume_thread_list_limit(record.thread_ids)
-        needed_ids = None if show_unscoped or not record.thread_ids else set(record.thread_ids)
+        needed_ids = (
+            None if show_unscoped or not record.thread_ids else set(record.thread_ids)
+        )
         try:
             threads, _ = await self._list_threads_paginated(
                 client,
@@ -3862,8 +3857,10 @@ class TelegramBotService:
             if refreshed:
                 if show_unscoped:
                     state = self._store.load()
-                    local_thread_ids, local_previews, local_thread_topics = _local_workspace_threads(
-                        state, record.workspace_path, current_key=key
+                    local_thread_ids, local_previews, local_thread_topics = (
+                        _local_workspace_threads(
+                            state, record.workspace_path, current_key=key
+                        )
                     )
                     for thread_id in record.thread_ids:
                         local_thread_topics.setdefault(thread_id, set()).add(key)
@@ -4253,9 +4250,7 @@ class TelegramBotService:
             if len(pending) == 1:
                 age = _approval_age_seconds(pending[0].created_at)
                 age_label = f"{age}s" if isinstance(age, int) else "unknown age"
-                lines.append(
-                    f"Pending request: {pending[0].request_id} ({age_label})"
-                )
+                lines.append(f"Pending request: {pending[0].request_id} ({age_label})")
             else:
                 preview = ", ".join(item.request_id for item in pending[:3])
                 suffix = "" if len(pending) <= 3 else "..."
@@ -4392,9 +4387,7 @@ class TelegramBotService:
             )
             await self._send_message(
                 message.chat_id,
-                _format_persist_note(
-                    "Approval mode set to yolo.", persist=persist
-                ),
+                _format_persist_note("Approval mode set to yolo.", persist=persist),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -4408,9 +4401,7 @@ class TelegramBotService:
             )
             await self._send_message(
                 message.chat_id,
-                _format_persist_note(
-                    "Approval mode set to safe.", persist=persist
-                ),
+                _format_persist_note("Approval mode set to safe.", persist=persist),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -4832,11 +4823,7 @@ class TelegramBotService:
             response=response,
         )
         turn_id = turn_handle.turn_id if turn_handle else None
-        token_usage = (
-            self._token_usage_by_turn.get(turn_id)
-            if turn_id
-            else None
-        )
+        token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
         if token_usage is None and thread_id:
             token_usage = self._token_usage_by_thread.get(thread_id)
         await self._send_turn_metrics(
@@ -5109,7 +5096,7 @@ class TelegramBotService:
             "{ echo 'Not a git repo'; exit 0; }\n"
             "git diff --color;\n"
             "git ls-files --others --exclude-standard | "
-            "while read -r f; do git diff --color --no-index -- /dev/null \"$f\"; done"
+            'while read -r f; do git diff --color --no-index -- /dev/null "$f"; done'
         )
         try:
             result = await client.request(
@@ -5872,7 +5859,9 @@ class TelegramBotService:
 
     async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
         method = message.get("method")
-        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        params = (
+            message.get("params") if isinstance(message.get("params"), dict) else {}
+        )
         if method == "thread/tokenUsage/updated":
             thread_id = params.get("threadId")
             turn_id = _coerce_id(params.get("turnId"))
@@ -5974,9 +5963,13 @@ class TelegramBotService:
         self._turn_preview_text.pop(turn_key, None)
         self._turn_preview_updated_at.pop(turn_key, None)
 
-    async def _handle_approval_request(self, message: dict[str, Any]) -> ApprovalDecision:
+    async def _handle_approval_request(
+        self, message: dict[str, Any]
+    ) -> ApprovalDecision:
         req_id = message.get("id")
-        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        params = (
+            message.get("params") if isinstance(message.get("params"), dict) else {}
+        )
         turn_id = _coerce_id(params.get("turnId")) if isinstance(params, dict) else None
         if not req_id or not turn_id:
             return "cancel"
@@ -6183,7 +6176,9 @@ class TelegramBotService:
             include_cancel=True,
         )
 
-    def _resume_button_label(self, state: SelectionState, item_id: str, label: str) -> str:
+    def _resume_button_label(
+        self, state: SelectionState, item_id: str, label: str
+    ) -> str:
         if state.button_labels:
             button_label = state.button_labels.get(item_id)
             if isinstance(button_label, str) and button_label.strip():
@@ -6503,9 +6498,7 @@ class TelegramBotService:
         text: str,
         reply_markup: dict[str, Any],
     ) -> None:
-        if await self._edit_callback_message(
-            callback, text, reply_markup=reply_markup
-        ):
+        if await self._edit_callback_message(callback, text, reply_markup=reply_markup):
             return
         chat_id, thread_id = _split_topic_key(key)
         await self._send_message(
@@ -6773,7 +6766,6 @@ class TelegramBotService:
         return True
 
 
-
 def _extract_thread_id(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -6799,7 +6791,9 @@ def _extract_thread_info(payload: Any) -> dict[str, Any]:
         workspace_path = _extract_thread_path(thread)
     rollout_path = None
     if isinstance(thread, dict):
-        rollout_path = thread.get("path") if isinstance(thread.get("path"), str) else None
+        rollout_path = (
+            thread.get("path") if isinstance(thread.get("path"), str) else None
+        )
     if rollout_path is None and isinstance(payload.get("path"), str):
         rollout_path = payload.get("path")
     model = None
@@ -6971,7 +6965,9 @@ def _format_token_usage(token_usage: Optional[dict[str, Any]]) -> list[str]:
         last_line = _format_token_row("Token usage (last)", last)
         if last_line:
             lines.append(last_line)
-    context = token_usage.get("modelContextWindow") if isinstance(token_usage, dict) else None
+    context = (
+        token_usage.get("modelContextWindow") if isinstance(token_usage, dict) else None
+    )
     if isinstance(context, int):
         lines.append(f"Context window: {context}")
     return lines
@@ -7074,9 +7070,7 @@ def _extract_turn_thread_id(payload: Any) -> Optional[str]:
         thread = candidate.get("thread")
         if isinstance(thread, dict):
             thread_id = _coerce_id(
-                thread.get("id")
-                or thread.get("threadId")
-                or thread.get("thread_id")
+                thread.get("id") or thread.get("threadId") or thread.get("thread_id")
             )
             if thread_id:
                 return thread_id
@@ -7236,7 +7230,9 @@ def _format_context_metrics(token_usage: Optional[dict[str, Any]]) -> Optional[s
     used_tokens = total_tokens if total_tokens is not None else last_tokens
     if used_tokens is None:
         return None
-    context_window = token_usage.get("modelContextWindow") if isinstance(token_usage, dict) else None
+    context_window = (
+        token_usage.get("modelContextWindow") if isinstance(token_usage, dict) else None
+    )
     if not isinstance(context_window, int):
         context_window = None
     if context_window is None:
@@ -7244,9 +7240,7 @@ def _format_context_metrics(token_usage: Optional[dict[str, Any]]) -> Optional[s
     remaining = max(context_window - used_tokens, 0)
     percent = _context_remaining_percent(used_tokens, context_window)
     if percent is None:
-        return (
-            f"Context: used {used_tokens:,} tokens; remaining {remaining:,} of {context_window:,}."
-        )
+        return f"Context: used {used_tokens:,} tokens; remaining {remaining:,} of {context_window:,}."
     return (
         "Context: used "
         f"{used_tokens:,} tokens; remaining {remaining:,} of {context_window:,} "
@@ -7259,7 +7253,9 @@ def _format_tui_token_usage(token_usage: Optional[dict[str, Any]]) -> Optional[s
         return None
     last = token_usage.get("last")
     total = token_usage.get("total")
-    usage = last if isinstance(last, dict) else total if isinstance(total, dict) else None
+    usage = (
+        last if isinstance(last, dict) else total if isinstance(total, dict) else None
+    )
     if not isinstance(usage, dict):
         return None
     total_tokens = usage.get("totalTokens")
@@ -7331,7 +7327,9 @@ def _extract_retry_after_seconds(exc: Exception) -> Optional[int]:
                     retry_after = parameters.get("retry_after")
                     if isinstance(retry_after, int):
                         return retry_after
-            message = str(payload.get("description")) if isinstance(payload, dict) else ""
+            message = (
+                str(payload.get("description")) if isinstance(payload, dict) else ""
+            )
             match = re.search(r"retry after (\d+)", message.lower())
             if match:
                 return int(match.group(1))
@@ -7489,7 +7487,10 @@ def _format_skills_list(result: Any, workspace_path: Optional[str]) -> str:
     for entry in entries:
         cwd = entry.get("cwd")
         if isinstance(workspace_path, str) and isinstance(cwd, str):
-            if Path(cwd).expanduser().resolve() != Path(workspace_path).expanduser().resolve():
+            if (
+                Path(cwd).expanduser().resolve()
+                != Path(workspace_path).expanduser().resolve()
+            ):
                 continue
         items = entry.get("skills")
         if isinstance(items, list):
@@ -7501,7 +7502,9 @@ def _format_skills_list(result: Any, workspace_path: Optional[str]) -> str:
                     continue
                 description = skill.get("shortDescription") or skill.get("description")
                 desc_text = (
-                    description.strip() if isinstance(description, str) and description else ""
+                    description.strip()
+                    if isinstance(description, str) and description
+                    else ""
                 )
                 skills.append((name, desc_text))
     if not skills:
@@ -7614,7 +7617,9 @@ def _extract_command_result(result: Any) -> tuple[str, str, Optional[int]]:
         stdout = result
         return stdout, stderr, exit_code
     if isinstance(result, dict):
-        stdout_value = result.get("stdout") or result.get("stdOut") or result.get("output")
+        stdout_value = (
+            result.get("stdout") or result.get("stdOut") or result.get("output")
+        )
         stderr_value = result.get("stderr") or result.get("stdErr")
         exit_value = result.get("exitCode") or result.get("exit_code")
         if isinstance(stdout_value, str):
@@ -7657,11 +7662,12 @@ def _prepare_shell_response(
     filename: str,
 ) -> tuple[str, Optional[bytes]]:
     message = _format_shell_message(full_body, note=None)
-    if len(full_body) <= max_output_chars and len(message) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+    if (
+        len(full_body) <= max_output_chars
+        and len(message) <= TELEGRAM_MAX_MESSAGE_LENGTH
+    ):
         return message, None
-    note = (
-        f"Output too long; attached full output as {filename}. Showing head."
-    )
+    note = f"Output too long; attached full output as {filename}. Showing head."
     limit = max_output_chars
     head = full_body[:limit].rstrip()
     head = f"{head}{SHELL_OUTPUT_TRUNCATION_SUFFIX}"
@@ -7784,7 +7790,14 @@ _THREAD_PATH_KEYS_PRIMARY = (
     "projectRoot",
     "project_root",
 )
-_THREAD_PATH_CONTAINERS = ("workspace", "project", "repo", "metadata", "context", "config")
+_THREAD_PATH_CONTAINERS = (
+    "workspace",
+    "project",
+    "repo",
+    "metadata",
+    "context",
+    "config",
+)
 _THREAD_LIST_CURSOR_KEYS = ("nextCursor", "next_cursor", "next")
 
 
@@ -8044,7 +8057,9 @@ FIRST_USER_PREVIEW_IGNORE_PATTERNS = (
         re.IGNORECASE,
     ),
     # Legacy user instructions injection.
-    re.compile(r"(?s)^\s*<user_instructions>\s*.*?\s*</user_instructions>\s*$", re.IGNORECASE),
+    re.compile(
+        r"(?s)^\s*<user_instructions>\s*.*?\s*</user_instructions>\s*$", re.IGNORECASE
+    ),
     # Environment context injection (cwd, approval policy, sandbox policy, etc.).
     re.compile(
         r"(?s)^\s*<environment_context>\s*.*?\s*</environment_context>\s*$",
@@ -8053,7 +8068,9 @@ FIRST_USER_PREVIEW_IGNORE_PATTERNS = (
     # Skill instructions injection (includes name/path and skill contents).
     re.compile(r"(?s)^\s*<skill>\s*.*?\s*</skill>\s*$", re.IGNORECASE),
     # User shell command records (transcript of !/shell).
-    re.compile(r"(?s)^\s*<user_shell_command>\s*.*?\s*</user_shell_command>\s*$", re.IGNORECASE),
+    re.compile(
+        r"(?s)^\s*<user_shell_command>\s*.*?\s*</user_shell_command>\s*$", re.IGNORECASE
+    ),
 )
 
 USER_MESSAGE_BEGIN_STRIP_RE = re.compile(
@@ -8068,7 +8085,9 @@ def _is_ignored_first_user_preview(text: Optional[str]) -> bool:
     trimmed = text.strip()
     if not trimmed:
         return True
-    return any(pattern.search(trimmed) for pattern in FIRST_USER_PREVIEW_IGNORE_PATTERNS)
+    return any(
+        pattern.search(trimmed) for pattern in FIRST_USER_PREVIEW_IGNORE_PATTERNS
+    )
 
 
 def _strip_user_message_begin(text: Optional[str]) -> Optional[str]:
@@ -8142,8 +8161,7 @@ def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
                 buffer = handle.read(read_size) + buffer
                 lines = buffer.splitlines()
             return [
-                line.decode("utf-8", errors="replace")
-                for line in lines[-max_lines:]
+                line.decode("utf-8", errors="replace") for line in lines[-max_lines:]
             ]
     except OSError:
         return []
@@ -8212,7 +8230,14 @@ def _iter_role_texts(
     role_hint = role or default_role
     if not role_hint and type_value:
         lowered = type_value.lower()
-        if lowered in ("user", "user_message", "input", "input_text", "prompt", "request"):
+        if lowered in (
+            "user",
+            "user_message",
+            "input",
+            "input_text",
+            "prompt",
+            "request",
+        ):
             role_hint = "user"
         elif lowered in (
             "assistant",
@@ -8224,9 +8249,7 @@ def _iter_role_texts(
             role_hint = "assistant"
         else:
             tokens = [token for token in re.split(r"[._]+", lowered) if token]
-            if any(
-                token in ("user", "input", "prompt", "request") for token in tokens
-            ):
+            if any(token in ("user", "input", "prompt", "request") for token in tokens):
                 role_hint = "user"
             elif any(
                 token in ("assistant", "output", "response", "completion")
@@ -8475,9 +8498,7 @@ def _format_thread_preview(entry: Any) -> str:
 
 
 def _format_summary_preview(summary: ThreadSummary) -> str:
-    user_preview = _preview_from_text(
-        summary.user_preview, RESUME_PREVIEW_USER_LIMIT
-    )
+    user_preview = _preview_from_text(summary.user_preview, RESUME_PREVIEW_USER_LIMIT)
     assistant_preview = _preview_from_text(
         summary.assistant_preview, RESUME_PREVIEW_ASSISTANT_LIMIT
     )
@@ -8529,9 +8550,7 @@ def _extract_turn_thread_id(payload: Any) -> Optional[str]:
         thread = candidate.get("thread")
         if isinstance(thread, dict):
             thread_id = _coerce_id(
-                thread.get("id")
-                or thread.get("threadId")
-                or thread.get("thread_id")
+                thread.get("id") or thread.get("threadId") or thread.get("thread_id")
             )
             if thread_id:
                 return thread_id
@@ -8765,7 +8784,9 @@ def _format_telegram_markdown(text: str, version: str) -> str:
     parts: list[str] = []
     last = 0
     for match in _CODE_BLOCK_RE.finditer(text):
-        parts.append(_format_telegram_markdown_inline(text[last : match.start()], version))
+        parts.append(
+            _format_telegram_markdown_inline(text[last : match.start()], version)
+        )
         code = _escape_markdown_code(match.group(1), version=version)
         parts.append(f"```\n{code}\n```")
         last = match.end()
@@ -8784,9 +8805,7 @@ def _format_telegram_markdown_inline(text: str, version: str) -> str:
         return f"\x00CODE{len(code_placeholders) - 1}\x00"
 
     def _replace_bold(match: re.Match[str]) -> str:
-        bold_placeholders.append(
-            _escape_markdown_text(match.group(1), version=version)
-        )
+        bold_placeholders.append(_escape_markdown_text(match.group(1), version=version))
         return f"\x00BOLD{len(bold_placeholders) - 1}\x00"
 
     text = _INLINE_CODE_RE.sub(_replace_code, text)

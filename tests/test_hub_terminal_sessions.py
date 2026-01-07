@@ -85,11 +85,10 @@ def test_hub_terminal_sessions_stay_isolated(
     monkeypatch.setattr("codex_autorunner.routes.base.PTYSession", FakePTYSession)
 
     with TestClient(app) as client:
-        with client.websocket_connect(
-            "/repos/alpha/api/terminal"
-        ) as ws_alpha, client.websocket_connect(
-            "/repos/beta/api/terminal"
-        ) as ws_beta:
+        with (
+            client.websocket_connect("/repos/alpha/api/terminal") as ws_alpha,
+            client.websocket_connect("/repos/beta/api/terminal") as ws_beta,
+        ):
             hello_alpha = _receive_json_text(ws_alpha)
             hello_beta = _receive_json_text(ws_beta)
             alpha_session = hello_alpha.get("session_id")

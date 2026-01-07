@@ -22,7 +22,9 @@ STALE_SCOPED_TOPIC_DAYS = 30
 MAX_SCOPED_TOPICS_PER_BASE = 5
 
 
-def normalize_approval_mode(mode: Optional[str], *, default: str = APPROVAL_MODE_YOLO) -> str:
+def normalize_approval_mode(
+    mode: Optional[str], *, default: str = APPROVAL_MODE_YOLO
+) -> str:
     if not isinstance(mode, str):
         return default
     key = mode.strip().lower()
@@ -83,9 +85,7 @@ def _parse_iso_timestamp(raw: Optional[str]) -> Optional[datetime]:
     if not isinstance(raw, str) or not raw:
         return None
     try:
-        return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc
-        )
+        return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 
@@ -180,7 +180,9 @@ class TelegramTopicRecord:
         workspace_id = payload.get("workspace_id") or payload.get("workspaceId")
         if not isinstance(workspace_id, str):
             workspace_id = None
-        active_thread_id = payload.get("active_thread_id") or payload.get("activeThreadId")
+        active_thread_id = payload.get("active_thread_id") or payload.get(
+            "activeThreadId"
+        )
         if not isinstance(active_thread_id, str):
             active_thread_id = None
         thread_ids_raw = payload.get("thread_ids") or payload.get("threadIds")
@@ -217,7 +219,9 @@ class TelegramTopicRecord:
         summary = payload.get("summary") or payload.get("summaryMode")
         if not isinstance(summary, str):
             summary = None
-        approval_policy = payload.get("approval_policy") or payload.get("approvalPolicy")
+        approval_policy = payload.get("approval_policy") or payload.get(
+            "approvalPolicy"
+        )
         if not isinstance(approval_policy, str):
             approval_policy = None
         sandbox_policy = payload.get("sandbox_policy") or payload.get("sandboxPolicy")
@@ -295,16 +299,12 @@ class TelegramState:
     def to_json(self) -> str:
         payload = {
             "version": self.version,
-            "topics": {
-                key: record.to_dict() for key, record in self.topics.items()
-            },
+            "topics": {key: record.to_dict() for key, record in self.topics.items()},
             "topic_scopes": dict(self.topic_scopes),
             "pending_approvals": {
                 key: record.to_dict() for key, record in self.pending_approvals.items()
             },
-            "outbox": {
-                key: record.to_dict() for key, record in self.outbox.items()
-            },
+            "outbox": {key: record.to_dict() for key, record in self.outbox.items()},
             "pending_voice": {
                 key: record.to_dict() for key, record in self.pending_voice.items()
             },
@@ -411,7 +411,9 @@ class OutboxRecord:
             thread_id = None
         if reply_to_message_id is not None and not isinstance(reply_to_message_id, int):
             reply_to_message_id = None
-        if placeholder_message_id is not None and not isinstance(placeholder_message_id, int):
+        if placeholder_message_id is not None and not isinstance(
+            placeholder_message_id, int
+        ):
             placeholder_message_id = None
         if not isinstance(text, str):
             text = ""
@@ -534,7 +536,9 @@ class PendingVoiceRecord:
             download_path = None
         if progress_message_id is not None and not isinstance(progress_message_id, int):
             progress_message_id = None
-        if transcript_message_id is not None and not isinstance(transcript_message_id, int):
+        if transcript_message_id is not None and not isinstance(
+            transcript_message_id, int
+        ):
             transcript_message_id = None
         if not isinstance(transcript_text, str):
             transcript_text = None
@@ -646,7 +650,9 @@ class TelegramStateStore:
 
         return self._update_topic(key, apply)
 
-    def set_active_thread(self, key: str, thread_id: Optional[str]) -> TelegramTopicRecord:
+    def set_active_thread(
+        self, key: str, thread_id: Optional[str]
+    ) -> TelegramTopicRecord:
         def apply(record: TelegramTopicRecord) -> None:
             record.active_thread_id = thread_id
 
@@ -780,9 +786,7 @@ class TelegramStateStore:
             state = self._load_unlocked()
             record = state.topics.get(key)
             if record is None:
-                record = TelegramTopicRecord(
-                    approval_mode=self._default_approval_mode
-                )
+                record = TelegramTopicRecord(approval_mode=self._default_approval_mode)
             apply(record)
             record.approval_mode = normalize_approval_mode(
                 record.approval_mode, default=self._default_approval_mode

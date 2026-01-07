@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
-from typing import Iterable, Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 from .config import ConfigError
 

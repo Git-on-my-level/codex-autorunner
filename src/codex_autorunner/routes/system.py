@@ -42,7 +42,9 @@ def _run_cmd(cmd: list[str], cwd: Path) -> None:
         )
     except subprocess.CalledProcessError as e:
         # Include stdout/stderr in the error message for debugging
-        detail = f"Command failed: {' '.join(cmd)}\nStdout: {e.stdout}\nStderr: {e.stderr}"
+        detail = (
+            f"Command failed: {' '.join(cmd)}\nStdout: {e.stdout}\nStderr: {e.stderr}"
+        )
         raise RuntimeError(detail) from e
 
 
@@ -211,7 +213,9 @@ def _find_git_root_from_install_metadata() -> Optional[Path]:
     return _find_git_root(candidate)
 
 
-def _resolve_local_repo_root(*, module_dir: Path, update_cache_dir: Path) -> Optional[Path]:
+def _resolve_local_repo_root(
+    *, module_dir: Path, update_cache_dir: Path
+) -> Optional[Path]:
     repo_root = _find_git_root(module_dir)
     if repo_root is not None:
         return repo_root
@@ -230,10 +234,14 @@ def _system_update_check(
     update_cache_dir: Optional[Path] = None,
 ) -> dict:
     module_dir = module_dir or Path(__file__).resolve().parent
-    update_cache_dir = update_cache_dir or (Path.home() / ".codex-autorunner" / "update_cache")
+    update_cache_dir = update_cache_dir or (
+        Path.home() / ".codex-autorunner" / "update_cache"
+    )
     repo_ref = _normalize_update_ref(repo_ref)
 
-    repo_root = _resolve_local_repo_root(module_dir=module_dir, update_cache_dir=update_cache_dir)
+    repo_root = _resolve_local_repo_root(
+        module_dir=module_dir, update_cache_dir=update_cache_dir
+    )
     if repo_root is None:
         return {
             "status": "ok",
@@ -257,7 +265,9 @@ def _system_update_check(
             timeout_seconds=60,
             check=True,
         )
-        remote_sha = run_git(["rev-parse", "FETCH_HEAD"], repo_root, check=True).stdout.strip()
+        remote_sha = run_git(
+            ["rev-parse", "FETCH_HEAD"], repo_root, check=True
+        ).stdout.strip()
     except GitError as exc:
         return {
             "status": "ok",
@@ -283,11 +293,15 @@ def _system_update_check(
         }
 
     local_is_ancestor = (
-        run_git(["merge-base", "--is-ancestor", local_sha, remote_sha], repo_root).returncode
+        run_git(
+            ["merge-base", "--is-ancestor", local_sha, remote_sha], repo_root
+        ).returncode
         == 0
     )
     remote_is_ancestor = (
-        run_git(["merge-base", "--is-ancestor", remote_sha, local_sha], repo_root).returncode
+        run_git(
+            ["merge-base", "--is-ancestor", remote_sha, local_sha], repo_root
+        ).returncode
         == 0
     )
 
@@ -365,7 +379,9 @@ def _system_update_worker(
                 "Updating source in %s from %s (%s)", update_dir, repo_url, repo_ref
             )
             try:
-                _run_cmd(["git", "remote", "set-url", "origin", repo_url], cwd=update_dir)
+                _run_cmd(
+                    ["git", "remote", "set-url", "origin", repo_url], cwd=update_dir
+                )
             except Exception:
                 _run_cmd(["git", "remote", "add", "origin", repo_url], cwd=update_dir)
             _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
@@ -379,7 +395,9 @@ def _system_update_worker(
             _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
 
         if os.environ.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1":
-            logger.info("Skipping update checks (CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1).")
+            logger.info(
+                "Skipping update checks (CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1)."
+            )
         else:
             logger.info("Running checks...")
             try:

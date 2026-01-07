@@ -34,7 +34,7 @@ from .core.usage import (
     summarize_hub_usage,
     summarize_repo_usage,
 )
-from .core.snapshot import SnapshotError, generate_snapshot, load_snapshot
+from .core.snapshot import SnapshotError, generate_snapshot
 from .integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
 from .integrations.telegram.service import (
     TelegramBotConfig,
@@ -212,9 +212,7 @@ def status(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")
     if session_id:
         detail = ""
         if session_record:
-            detail = (
-                f" (status={session_record.status}, last_seen={session_record.last_seen_at})"
-            )
+            detail = f" (status={session_record.status}, last_seen={session_record.last_seen_at})"
         typer.echo(f"Terminal session: {session_id}{detail}")
     else:
         typer.echo("Terminal session: none")
@@ -630,7 +628,7 @@ def snapshot(
     """Generate or update `.codex-autorunner/SNAPSHOT.md`."""
     engine = _require_repo_config(repo)
     try:
-        result = generate_snapshot(engine)
+        generate_snapshot(engine)
     except SnapshotError as exc:
         raise typer.Exit(str(exc))
     typer.echo("Snapshot written to .codex-autorunner/SNAPSHOT.md")
@@ -786,6 +784,7 @@ def telegram_start(
     voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
     update_repo_url = config.update_repo_url if isinstance(config, HubConfig) else None
     update_repo_ref = config.update_repo_ref if isinstance(config, HubConfig) else None
+
     async def _run() -> None:
         service = TelegramBotService(
             telegram_cfg,

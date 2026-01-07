@@ -281,7 +281,7 @@ export function initMobileCompact() {
     show();
   });
 
-  subscribe("terminal:compose", (data) => {
+  subscribe("terminal:compose", () => {
     updateViewportInset();
     updateComposeFixed();
     // Delay to ensure DOM has updated with new panel visibility

@@ -2,7 +2,6 @@
 Centralized Git utilities for consistent git operations across the codebase.
 """
 
-import os
 import subprocess
 from pathlib import Path
 from typing import List, Optional

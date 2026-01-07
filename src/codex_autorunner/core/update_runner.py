@@ -11,9 +11,7 @@ def _build_logger(log_path: Path) -> logging.Logger:
     logger = logging.getLogger("codex_autorunner.system_update")
     logger.setLevel(logging.INFO)
     handler = logging.FileHandler(log_path, encoding="utf-8")
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    )
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     logger.addHandler(handler)
     return logger
 

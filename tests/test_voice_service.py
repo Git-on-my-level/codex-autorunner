@@ -2,7 +2,6 @@ from codex_autorunner.voice import (
     TranscriptionEvent,
     VoiceConfig,
     VoiceService,
-    VoiceServiceError,
 )
 
 
