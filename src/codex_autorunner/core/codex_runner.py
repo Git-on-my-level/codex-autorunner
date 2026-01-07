@@ -56,16 +56,15 @@ def run_codex_streaming(
             text=True,
             bufsize=1,
         )
-    except FileNotFoundError:
-        raise ConfigError(f"Codex binary not found: {config.codex_binary}")
+    except FileNotFoundError as exc:
+        raise ConfigError(f"Codex binary not found: {config.codex_binary}") from exc
 
     if proc.stdout:
         for line in proc.stdout:
             if on_stdout_line:
                 on_stdout_line(line.rstrip("\n"))
 
-    proc.wait()
-    return proc.returncode
+    return proc.wait()
 
 
 async def run_codex_capture_async(
@@ -84,8 +83,8 @@ async def run_codex_capture_async(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-    except FileNotFoundError:
-        raise ConfigError(f"Codex binary not found: {config.codex_binary}")
+    except FileNotFoundError as exc:
+        raise ConfigError(f"Codex binary not found: {config.codex_binary}") from exc
 
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
@@ -95,4 +94,7 @@ async def run_codex_capture_async(
         raise CodexTimeoutError("Codex process timed out") from exc
 
     output = stdout.decode("utf-8", errors="ignore") if stdout else ""
-    return proc.returncode, output
+    returncode = proc.returncode
+    if returncode is None:
+        returncode = await proc.wait()
+    return returncode, output

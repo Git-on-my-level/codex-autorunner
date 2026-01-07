@@ -120,7 +120,7 @@ class TelegramBotConfig:
         env: Optional[dict[str, str]] = None,
     ) -> "TelegramBotConfig":
         env = env or dict(os.environ)
-        cfg = raw if isinstance(raw, dict) else {}
+        cfg: dict[str, Any] = raw if isinstance(raw, dict) else {}
         enabled = bool(cfg.get("enabled", False))
         mode = str(cfg.get("mode", "polling"))
         bot_token_env = str(cfg.get("bot_token_env", "CAR_TELEGRAM_BOT_TOKEN"))
@@ -129,7 +129,10 @@ class TelegramBotConfig:
             cfg.get("parse_mode") if "parse_mode" in cfg else DEFAULT_PARSE_MODE
         )
         parse_mode = _normalize_parse_mode(parse_mode_raw)
-        debug_raw = cfg.get("debug") if isinstance(cfg.get("debug"), dict) else {}
+        debug_raw_value = cfg.get("debug")
+        debug_raw: dict[str, Any] = (
+            debug_raw_value if isinstance(debug_raw_value, dict) else {}
+        )
         debug_prefix_context = bool(debug_raw.get("prefix_context", False))
         bot_token = env.get(bot_token_env)
 
@@ -139,8 +142,9 @@ class TelegramBotConfig:
 
         require_topics = bool(cfg.get("require_topics", True))
 
-        defaults_raw = (
-            cfg.get("defaults") if isinstance(cfg.get("defaults"), dict) else {}
+        defaults_raw_value = cfg.get("defaults")
+        defaults_raw: dict[str, Any] = (
+            defaults_raw_value if isinstance(defaults_raw_value, dict) else {}
         )
         approval_mode = normalize_approval_mode(
             defaults_raw.get("approval_mode"), default=APPROVAL_MODE_YOLO
@@ -167,8 +171,9 @@ class TelegramBotConfig:
             yolo_sandbox_policy=yolo_sandbox_policy,
         )
 
-        concurrency_raw = (
-            cfg.get("concurrency") if isinstance(cfg.get("concurrency"), dict) else {}
+        concurrency_raw_value = cfg.get("concurrency")
+        concurrency_raw: dict[str, Any] = (
+            concurrency_raw_value if isinstance(concurrency_raw_value, dict) else {}
         )
         max_parallel_turns = int(concurrency_raw.get("max_parallel_turns", 4))
         if max_parallel_turns <= 0:
@@ -179,7 +184,10 @@ class TelegramBotConfig:
             per_topic_queue=per_topic_queue,
         )
 
-        media_raw = cfg.get("media") if isinstance(cfg.get("media"), dict) else {}
+        media_raw_value = cfg.get("media")
+        media_raw: dict[str, Any] = (
+            media_raw_value if isinstance(media_raw_value, dict) else {}
+        )
         media_enabled = bool(media_raw.get("enabled", True))
         media_images = bool(media_raw.get("images", True))
         media_voice = bool(media_raw.get("voice", True))
@@ -207,7 +215,10 @@ class TelegramBotConfig:
             image_prompt=image_prompt,
         )
 
-        shell_raw = cfg.get("shell") if isinstance(cfg.get("shell"), dict) else {}
+        shell_raw_value = cfg.get("shell")
+        shell_raw: dict[str, Any] = (
+            shell_raw_value if isinstance(shell_raw_value, dict) else {}
+        )
         shell_enabled = bool(shell_raw.get("enabled", False))
         shell_timeout_ms = int(shell_raw.get("timeout_ms", DEFAULT_SHELL_TIMEOUT_MS))
         if shell_timeout_ms <= 0:
@@ -240,7 +251,10 @@ class TelegramBotConfig:
         if not app_server_command:
             app_server_command = list(DEFAULT_APP_SERVER_COMMAND)
 
-        polling_raw = cfg.get("polling") if isinstance(cfg.get("polling"), dict) else {}
+        polling_raw_value = cfg.get("polling")
+        polling_raw: dict[str, Any] = (
+            polling_raw_value if isinstance(polling_raw_value, dict) else {}
+        )
         poll_timeout_seconds = int(
             polling_raw.get("timeout_seconds", DEFAULT_POLL_TIMEOUT_SECONDS)
         )

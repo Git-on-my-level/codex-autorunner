@@ -1,10 +1,9 @@
 import dataclasses
 import json
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
-
-from contextlib import contextmanager
 
 from .utils import atomic_write, read_json
 

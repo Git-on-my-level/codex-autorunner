@@ -5,7 +5,7 @@ import os
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 
 
 class UsageError(Exception):
@@ -68,14 +68,14 @@ class TokenEvent:
     model: Optional[str]
     totals: TokenTotals
     delta: TokenTotals
-    rate_limits: Optional[dict]
+    rate_limits: Optional[Dict[str, Any]]
 
 
 @dataclasses.dataclass
 class UsageSummary:
     totals: TokenTotals
     events: int
-    latest_rate_limits: Optional[dict]
+    latest_rate_limits: Optional[Dict[str, Any]]
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -85,7 +85,7 @@ class UsageSummary:
         }
 
 
-def _coerce_totals(payload: Optional[dict]) -> TokenTotals:
+def _coerce_totals(payload: Optional[Dict[str, Any]]) -> TokenTotals:
     payload = payload or {}
     return TokenTotals(
         input_tokens=int(payload.get("input_tokens", 0) or 0),
@@ -324,7 +324,7 @@ def _parse_bucket_label(value: str, bucket: str) -> Optional[datetime]:
         return None
 
 
-def _empty_rollup_bucket() -> Dict[str, object]:
+def _empty_rollup_bucket() -> Dict[str, Any]:
     return {
         "total": 0,
         "models": {},
@@ -339,9 +339,9 @@ class UsageSeriesCache:
         self.cache_path = cache_path
         self._lock = threading.Lock()
         self._updating = False
-        self._cache: Optional[Dict[str, object]] = None
+        self._cache: Optional[Dict[str, Any]] = None
 
-    def _load_cache(self) -> Dict[str, object]:
+    def _load_cache(self) -> Dict[str, Any]:
         if self._cache is not None:
             return self._cache
         if not self.cache_path.exists():
@@ -353,7 +353,9 @@ class UsageSeriesCache:
             }
             return self._cache
         try:
-            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            payload = cast(
+                Dict[str, Any], json.loads(self.cache_path.read_text(encoding="utf-8"))
+            )
             if payload.get("version") != 2:
                 raise ValueError("Unsupported cache version")
             payload.setdefault("files", {})
@@ -370,14 +372,14 @@ class UsageSeriesCache:
             }
             return self._cache
 
-    def _save_cache(self, payload: Dict[str, object]) -> None:
+    def _save_cache(self, payload: Dict[str, Any]) -> None:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self.cache_path.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(payload), encoding="utf-8")
         tmp_path.replace(self.cache_path)
 
-    def _needs_update(self, payload: Dict[str, object]) -> bool:
-        files = payload.get("files", {})
+    def _needs_update(self, payload: Dict[str, Any]) -> bool:
+        files = cast(Dict[str, Any], payload.get("files", {}))
         existing_paths = {str(path) for path in _iter_session_files(self.codex_home)}
         for path_key in list(files.keys()):
             if path_key not in existing_paths:
@@ -396,7 +398,7 @@ class UsageSeriesCache:
                 return True
         return False
 
-    def _start_update(self, payload: Dict[str, object]) -> None:
+    def _start_update(self, payload: Dict[str, Any]) -> None:
         if self._updating:
             return
         cache_snapshot = copy.deepcopy(payload)
@@ -459,11 +461,14 @@ class UsageSeriesCache:
             )
         return series, status
 
-    def _update_cache(self, payload: Dict[str, object]) -> None:
+    def _update_cache(self, payload: Dict[str, Any]) -> None:
         try:
-            files = payload.setdefault("files", {})
-            file_rollups = payload.setdefault("file_rollups", {})
-            rollups = payload.setdefault("rollups", {}).setdefault("by_cwd", {})
+            files = cast(Dict[str, Any], payload.setdefault("files", {}))
+            file_rollups = cast(Dict[str, Any], payload.setdefault("file_rollups", {}))
+            rollups = cast(
+                Dict[str, Any],
+                payload.setdefault("rollups", {}).setdefault("by_cwd", {}),
+            )
             rebuild_rollups = False
             existing_paths = {
                 str(path) for path in _iter_session_files(self.codex_home)
@@ -507,10 +512,10 @@ class UsageSeriesCache:
         self,
         session_path: Path,
         offset: int,
-        state: Dict[str, object],
-        rollups: Dict[str, object],
-        file_rollups: Dict[str, object],
-    ) -> Dict[str, object]:
+        state: Dict[str, Any],
+        rollups: Dict[str, Any],
+        file_rollups: Dict[str, Any],
+    ) -> Dict[str, Any]:
         cwd = state.get("cwd")
         model = state.get("model")
         last_totals_raw = state.get("last_totals")
@@ -616,7 +621,7 @@ class UsageSeriesCache:
 
     def _apply_rollup_delta(
         self,
-        rollups: Dict[str, object],
+        rollups: Dict[str, Any],
         cwd_key: str,
         bucket_name: str,
         bucket_label: str,
@@ -645,8 +650,8 @@ class UsageSeriesCache:
             token_types[label] = int(token_types.get(label, 0)) + value
             model_token[label] = int(model_token.get(label, 0)) + value
 
-    def _rebuild_rollups(self, file_rollups: Dict[str, object]) -> Dict[str, object]:
-        merged: Dict[str, object] = {}
+    def _rebuild_rollups(self, file_rollups: Dict[str, Any]) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
         for file_entry in file_rollups.values():
             cwd_rollups = file_entry.get("by_cwd", {})
             for cwd_key, buckets in cwd_rollups.items():
@@ -687,7 +692,7 @@ class UsageSeriesCache:
 
     def _buckets_for_range(
         self,
-        bucket_rollups: Dict[str, object],
+        bucket_rollups: Dict[str, Any],
         *,
         since: Optional[datetime],
         until: Optional[datetime],
@@ -715,8 +720,8 @@ class UsageSeriesCache:
         self,
         buckets: List[str],
         series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]],
-    ) -> List[Dict[str, object]]:
-        series = []
+    ) -> List[Dict[str, Any]]:
+        series: List[Dict[str, Any]] = []
         for (key, model, token_type), values in series_map.items():
             series_values = [int(values.get(bucket, 0)) for bucket in buckets]
             series.append(
@@ -728,12 +733,12 @@ class UsageSeriesCache:
                     "values": series_values,
                 }
             )
-        series.sort(key=lambda item: item["total"], reverse=True)
+        series.sort(key=lambda item: int(item["total"]), reverse=True)
         return series
 
     def _build_repo_series(
         self,
-        payload: Dict[str, object],
+        payload: Dict[str, Any],
         repo_root: Path,
         *,
         since: Optional[datetime],
@@ -748,10 +753,10 @@ class UsageSeriesCache:
         if segment not in allowed_segments:
             raise UsageError(f"Unsupported segment: {segment}")
         repo_root = repo_root.resolve()
-        rollups = payload.get("rollups", {}).get("by_cwd", {})
+        rollups = cast(Dict[str, Any], payload.get("rollups", {}).get("by_cwd", {}))
 
         series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]] = {}
-        bucket_union: Dict[str, object] = {}
+        bucket_union: Dict[str, Any] = {}
 
         for cwd, cwd_data in rollups.items():
             try:
@@ -816,7 +821,7 @@ class UsageSeriesCache:
 
     def _build_hub_series(
         self,
-        payload: Dict[str, object],
+        payload: Dict[str, Any],
         repo_map: List[Tuple[str, Path]],
         *,
         since: Optional[datetime],
@@ -838,9 +843,9 @@ class UsageSeriesCache:
                     return repo_id
             return None
 
-        rollups = payload.get("rollups", {}).get("by_cwd", {})
+        rollups = cast(Dict[str, Any], payload.get("rollups", {}).get("by_cwd", {}))
         series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]] = {}
-        bucket_union: Dict[str, object] = {}
+        bucket_union: Dict[str, Any] = {}
 
         for cwd, cwd_data in rollups.items():
             bucket_rollups = cwd_data.get(bucket, {})
@@ -864,9 +869,13 @@ class UsageSeriesCache:
             repo_id = _match_repo(cwd_path) if cwd_path else None
             label = repo_id or "other"
             for bucket_label, entry in bucket_rollups.items():
-                key = (label, repo_id, None)
-                series_map.setdefault(key, {})
-                series_map[key][bucket_label] = series_map[key].get(
+                repo_key: Tuple[str, Optional[str], Optional[str]] = (
+                    label,
+                    repo_id,
+                    None,
+                )
+                series_map.setdefault(repo_key, {})
+                series_map[repo_key][bucket_label] = series_map[repo_key].get(
                     bucket_label, 0
                 ) + int(entry.get("total", 0))
 

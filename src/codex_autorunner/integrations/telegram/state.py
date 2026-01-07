@@ -6,12 +6,11 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional, TypeVar
+from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
 from urllib.parse import quote, unquote
 
 from ...core.state import now_iso, state_lock
 from ...core.utils import atomic_write, read_json
-
 
 STATE_VERSION = 5
 TOPIC_ROOT = "root"
@@ -742,30 +741,30 @@ class TelegramStateStore:
             for key, record in approvals_raw.items():
                 if not isinstance(key, str) or not isinstance(record, dict):
                     continue
-                parsed = PendingApprovalRecord.from_dict(record)
-                if parsed is None:
+                approval_record = PendingApprovalRecord.from_dict(record)
+                if approval_record is None:
                     continue
-                pending_approvals[key] = parsed
+                pending_approvals[key] = approval_record
         outbox_raw = data.get("outbox")
         outbox: dict[str, OutboxRecord] = {}
         if isinstance(outbox_raw, dict):
             for key, record in outbox_raw.items():
                 if not isinstance(key, str) or not isinstance(record, dict):
                     continue
-                parsed = OutboxRecord.from_dict(record)
-                if parsed is None:
+                outbox_record = OutboxRecord.from_dict(record)
+                if outbox_record is None:
                     continue
-                outbox[key] = parsed
+                outbox[key] = outbox_record
         voice_raw = data.get("pending_voice")
         pending_voice: dict[str, PendingVoiceRecord] = {}
         if isinstance(voice_raw, dict):
             for key, record in voice_raw.items():
                 if not isinstance(key, str) or not isinstance(record, dict):
                     continue
-                parsed = PendingVoiceRecord.from_dict(record)
-                if parsed is None:
+                voice_record = PendingVoiceRecord.from_dict(record)
+                if voice_record is None:
                     continue
-                pending_voice[key] = parsed
+                pending_voice[key] = voice_record
         return TelegramState(
             version=version,
             topics=topics,
@@ -797,23 +796,23 @@ class TelegramStateStore:
             return record
 
     def _compact_scoped_topics(self, state: TelegramState, base_key: str) -> None:
-        base_key = _base_topic_key(base_key)
-        if not base_key:
+        base_key_normalized = _base_topic_key(base_key)
+        if not base_key_normalized:
             return
         try:
-            chat_id, thread_id, _scope = parse_topic_key(base_key)
+            chat_id, thread_id, _scope = parse_topic_key(base_key_normalized)
         except ValueError:
             return
-        scope = state.topic_scopes.get(base_key)
+        scope = state.topic_scopes.get(base_key_normalized)
         current_key = (
             topic_key(chat_id, thread_id, scope=scope)
             if isinstance(scope, str) and scope
-            else base_key
+            else base_key_normalized
         )
         cutoff = datetime.now(timezone.utc) - timedelta(days=STALE_SCOPED_TOPIC_DAYS)
         candidates: list[tuple[str, TelegramTopicRecord, Optional[datetime]]] = []
         for key, record in state.topics.items():
-            if _base_topic_key(key) != base_key:
+            if _base_topic_key(key) != base_key_normalized:
                 continue
             last_active = _parse_iso_timestamp(record.last_active_at)
             candidates.append((key, record, last_active))
@@ -1087,11 +1086,13 @@ class TopicQueue:
             try:
                 if item is _QUEUE_STOP:
                     return
-                work, future = item
+                work, future = cast(
+                    tuple[Callable[[], Awaitable[Any]], asyncio.Future[Any]], item
+                )
                 if future.cancelled():
                     continue
                 try:
-                    result = await work()
+                    result: Any = await work()
                 except Exception as exc:
                     if not future.cancelled():
                         future.set_exception(exc)

@@ -11,11 +11,16 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.types import ASGIApp
 
 from ..api_routes import build_repo_router
-from ..core.config import ConfigError, HubConfig, load_config, _normalize_base_path
+from ..core.config import ConfigError, HubConfig, _normalize_base_path, load_config
+from ..core.doc_chat import DocChatService
+from ..core.engine import Engine, LockError
+from ..core.hub import HubSupervisor
 from ..core.logging_utils import safe_log, setup_rotating_logger
 from ..core.optional_dependencies import require_optional_dependencies
+from ..core.state import load_state, persist_session_registry
 from ..core.usage import (
     UsageError,
     default_codex_home,
@@ -23,12 +28,8 @@ from ..core.usage import (
     parse_iso_datetime,
     summarize_hub_usage,
 )
-from ..core.doc_chat import DocChatService
-from ..core.engine import Engine, LockError
-from ..core.hub import HubSupervisor
 from ..manifest import load_manifest
 from ..routes.system import build_system_routes
-from ..core.state import load_state, persist_session_registry
 from ..voice import VoiceConfig, VoiceService
 from .middleware import AuthTokenMiddleware, BasePathRouterMiddleware
 from .runner_manager import RunnerManager
@@ -268,7 +269,7 @@ def _apply_hub_context(app: FastAPI, context: HubAppContext) -> None:
 
 def create_app(
     repo_root: Optional[Path] = None, base_path: Optional[str] = None
-) -> FastAPI:
+) -> ASGIApp:
     context = _build_app_context(repo_root, base_path)
     app = FastAPI(redirect_slashes=False)
     _apply_app_context(app, context)
@@ -354,32 +355,45 @@ def create_app(
             static_context.close()
 
     auth_token = _resolve_auth_token(context.engine.config.server_auth_token_env)
+    asgi_app: ASGIApp = app
     if auth_token:
-        app = AuthTokenMiddleware(app, auth_token, context.base_path)
+        asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
     if context.base_path:
-        app = BasePathRouterMiddleware(app, context.base_path)
+        asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
 
-    return app
+    return asgi_app
 
 
 def create_hub_app(
     hub_root: Optional[Path] = None, base_path: Optional[str] = None
-) -> FastAPI:
+) -> ASGIApp:
     context = _build_hub_context(hub_root, base_path)
     app = FastAPI(redirect_slashes=False)
     _apply_hub_context(app, context)
     app.mount("/static", StaticFiles(directory=context.static_dir), name="static")
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
-    repo_apps: dict[str, FastAPI] = {}
+    repo_apps: dict[str, ASGIApp] = {}
     repo_startup_complete: set[str] = set()
     app.state.hub_started = False
 
-    async def _start_repo_app(prefix: str, sub_app: FastAPI) -> None:
+    def _unwrap_fastapi(sub_app: ASGIApp) -> Optional[FastAPI]:
+        current: ASGIApp = sub_app
+        while not isinstance(current, FastAPI):
+            nested = getattr(current, "app", None)
+            if nested is None:
+                return None
+            current = nested
+        return current
+
+    async def _start_repo_app(prefix: str, sub_app: ASGIApp) -> None:
         if prefix in repo_startup_complete:
             return
+        fastapi_app = _unwrap_fastapi(sub_app)
+        if fastapi_app is None:
+            return
         try:
-            await sub_app.router.startup()
+            await fastapi_app.router.startup()
             repo_startup_complete.add(prefix)
             safe_log(
                 app.state.logger,
@@ -475,7 +489,7 @@ def create_hub_app(
             since_dt = parse_iso_datetime(since)
             until_dt = parse_iso_datetime(until)
         except UsageError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         manifest = load_manifest(context.config.manifest_path, context.config.root)
         repo_map = [
@@ -516,7 +530,7 @@ def create_hub_app(
             since_dt = parse_iso_datetime(since)
             until_dt = parse_iso_datetime(until)
         except UsageError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         manifest = load_manifest(context.config.manifest_path, context.config.root)
         repo_map = [
@@ -532,7 +546,7 @@ def create_hub_app(
                 segment=segment,
             )
         except UsageError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "mode": "hub",
             "hub_root": str(context.config.root),
@@ -600,7 +614,7 @@ def create_hub_app(
                     str(repo_id), repo_path=repo_path, git_init=git_init, force=force
                 )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
@@ -610,7 +624,7 @@ def create_hub_app(
         try:
             return context.supervisor.check_repo_removal(repo_id)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/hub/repos/{repo_id}/remove")
     async def remove_repo(repo_id: str, payload: Optional[HubRemoveRepoRequest] = None):
@@ -632,7 +646,7 @@ def create_hub_app(
                 delete_worktrees=delete_worktrees,
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"status": "ok"}
 
     @app.post("/hub/worktrees/create")
@@ -651,7 +665,7 @@ def create_hub_app(
                 base_repo_id=str(base_repo_id), branch=str(branch), force=force
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
@@ -673,7 +687,7 @@ def create_hub_app(
                 delete_remote=delete_remote,
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"status": "ok"}
 
     @app.post("/hub/repos/{repo_id}/run")
@@ -687,9 +701,9 @@ def create_hub_app(
         try:
             snapshot = context.supervisor.run_repo(repo_id, once=once)
         except LockError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
@@ -699,7 +713,7 @@ def create_hub_app(
         try:
             snapshot = context.supervisor.stop_repo(repo_id)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/resume")
@@ -713,9 +727,9 @@ def create_hub_app(
         try:
             snapshot = context.supervisor.resume_repo(repo_id, once=once)
         except LockError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
@@ -725,7 +739,7 @@ def create_hub_app(
         try:
             snapshot = context.supervisor.kill_repo(repo_id)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/init")
@@ -734,7 +748,7 @@ def create_hub_app(
         try:
             snapshot = context.supervisor.init_repo(repo_id)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
@@ -757,12 +771,13 @@ def create_hub_app(
     app.include_router(build_system_routes())
 
     auth_token = _resolve_auth_token(context.config.server_auth_token_env)
+    asgi_app: ASGIApp = app
     if auth_token:
-        app = AuthTokenMiddleware(app, auth_token, context.base_path)
+        asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
     if context.base_path:
-        app = BasePathRouterMiddleware(app, context.base_path)
+        asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
 
-    return app
+    return asgi_app
 
 
 def _resolve_auth_token(env_name: str) -> Optional[str]:

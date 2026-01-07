@@ -9,21 +9,28 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..codex_cli import apply_codex_options, supports_reasoning
+from .config import RepoConfig
 from .engine import Engine
-from .utils import atomic_write, read_json
-from .prompts import SNAPSHOT_PROMPT as _SNAPSHOT_PROMPT
 from .git_utils import (
     git_available,
-    git_head_sha,
     git_branch,
-    git_ls_files,
     git_diff_name_status,
+    git_head_sha,
+    git_ls_files,
     git_status_porcelain,
 )
+from .prompts import SNAPSHOT_PROMPT as _SNAPSHOT_PROMPT
+from .utils import atomic_write, read_json
 
 
 class SnapshotError(Exception):
     """Raised when snapshot generation fails."""
+
+
+def _repo_config(engine: Engine) -> RepoConfig:
+    if not isinstance(engine.config, RepoConfig):
+        raise SnapshotError("Snapshot generation requires repo mode config")
+    return engine.config
 
 
 def _now_iso() -> str:
@@ -267,6 +274,7 @@ def collect_seed_context(
     per_doc_max_chars: int = 2000,
 ) -> SeedContext:
     repo_root = engine.repo_root
+    config = _repo_config(engine)
     git_ok = git_available(repo_root)
     head_sha = git_head_sha(repo_root) if git_ok else None
     branch = git_branch(repo_root) if git_ok else None
@@ -303,10 +311,10 @@ def collect_seed_context(
 
     # Work docs are always included, but bounded and redacted.
     docs = {
-        "TODO": engine.config.doc_path("todo"),
-        "PROGRESS": engine.config.doc_path("progress"),
-        "OPINIONS": engine.config.doc_path("opinions"),
-        "SPEC": engine.config.doc_path("spec"),
+        "TODO": config.doc_path("todo"),
+        "PROGRESS": config.doc_path("progress"),
+        "OPINIONS": config.doc_path("opinions"),
+        "SPEC": config.doc_path("spec"),
     }
 
     parts: List[str] = []
@@ -464,22 +472,23 @@ def _inject_model_arg(args: List[str], model: str) -> List[str]:
 
 
 def _run_codex(engine: Engine, prompt: str, *, prefer_large_model: bool) -> str:
-    args = list(engine.config.codex_args)
-    model = engine.config.codex_model
+    config = _repo_config(engine)
+    args = list(config.codex_args)
+    model = config.codex_model
     if prefer_large_model:
-        model = (
-            ((engine.config.raw or {}).get("codex") or {}).get("models") or {}
-        ).get("large")
+        model = (((config.raw or {}).get("codex") or {}).get("models") or {}).get(
+            "large"
+        )
     if model:
         args = _inject_model_arg(args, model)
-    reasoning_supported = supports_reasoning(engine.config.codex_binary)
+    reasoning_supported = supports_reasoning(config.codex_binary)
     args = apply_codex_options(
         args,
         model=None,
-        reasoning=engine.config.codex_reasoning,
+        reasoning=config.codex_reasoning,
         supports_reasoning=reasoning_supported,
     )
-    cmd = [engine.config.codex_binary] + args + [prompt]
+    cmd = [config.codex_binary] + args + [prompt]
     try:
         result = subprocess.run(
             cmd,
@@ -487,8 +496,8 @@ def _run_codex(engine: Engine, prompt: str, *, prefer_large_model: bool) -> str:
             text=True,
             cwd=str(engine.repo_root),
         )
-    except FileNotFoundError:
-        raise SnapshotError(f"Codex binary not found: {engine.config.codex_binary}")
+    except FileNotFoundError as exc:
+        raise SnapshotError(f"Codex binary not found: {config.codex_binary}") from exc
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
         stdout_tail = (result.stdout or "").strip()[-400:]
@@ -499,14 +508,16 @@ def _run_codex(engine: Engine, prompt: str, *, prefer_large_model: bool) -> str:
 
 
 def load_snapshot(engine: Engine) -> Optional[str]:
-    path = engine.config.doc_path("snapshot")
+    config = _repo_config(engine)
+    path = config.doc_path("snapshot")
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8")
 
 
 def load_snapshot_state(engine: Engine) -> Optional[dict]:
-    return read_json(engine.config.doc_path("snapshot_state"))
+    config = _repo_config(engine)
+    return read_json(config.doc_path("snapshot_state"))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -521,6 +532,7 @@ def generate_snapshot(
     *,
     prefer_large_model: bool = True,
 ) -> SnapshotResult:
+    config = _repo_config(engine)
     previous_snapshot = load_snapshot(engine)
     previous_state = load_snapshot_state(engine)
 
@@ -555,11 +567,10 @@ def generate_snapshot(
     }
 
     atomic_write(
-        engine.config.doc_path("snapshot"),
-        final if final.endswith("\n") else final + "\n",
+        config.doc_path("snapshot"), final if final.endswith("\n") else final + "\n"
     )
     atomic_write(
-        engine.config.doc_path("snapshot_state"),
+        config.doc_path("snapshot_state"),
         json.dumps(state, indent=2, sort_keys=True) + "\n",
     )
     return SnapshotResult(content=final, truncated=truncated, state=state)

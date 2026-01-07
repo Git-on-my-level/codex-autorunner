@@ -14,16 +14,47 @@ import secrets
 import shlex
 import socket
 import time
-from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence, TYPE_CHECKING
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Optional,
+    Sequence,
+    cast,
+)
 
 import httpx
 
 if TYPE_CHECKING:
     from .state import TelegramState, TelegramTopicRecord
 
+from ...core.config import load_config
+from ...core.locks import process_alive
+from ...core.logging_utils import log_event
+from ...core.state import now_iso
+from ...core.utils import (
+    RepoNotFoundError,
+    canonicalize_path,
+    find_repo_root,
+    is_within,
+    resolve_executable,
+    subprocess_env,
+)
+from ...integrations.github.service import (
+    GitHubService,
+    find_github_links,
+    parse_github_url,
+)
+from ...manifest import load_manifest
+from ...routes.system import _normalize_update_target, _spawn_update_process
+from ...voice import VoiceConfig, VoiceService, VoiceServiceError
+from ...workspace import canonical_workspace_root, workspace_id_for_path
 from ..app_server.client import (
     ApprovalDecision,
     CodexAppServerClient,
@@ -32,27 +63,17 @@ from ..app_server.client import (
     _normalize_sandbox_policy,
 )
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
-from ...core.config import load_config
-from ...integrations.github.service import (
-    GitHubService,
-    find_github_links,
-    parse_github_url,
-)
-from ...core.logging_utils import log_event
-from ...core.locks import process_alive
-from ...manifest import load_manifest
-from ...routes.system import _normalize_update_target, _spawn_update_process
 from .adapter import (
+    TELEGRAM_MAX_MESSAGE_LENGTH,
     ApprovalCallback,
     BindCallback,
     CancelCallback,
     EffortCallback,
-    UpdateCallback,
-    UpdateConfirmCallback,
+    InlineButton,
     ModelCallback,
     PageCallback,
-    ReviewCommitCallback,
     ResumeCallback,
+    ReviewCommitCallback,
     TelegramBotClient,
     TelegramCallbackQuery,
     TelegramCommand,
@@ -61,20 +82,20 @@ from .adapter import (
     TelegramPhotoSize,
     TelegramUpdate,
     TelegramUpdatePoller,
-    TELEGRAM_MAX_MESSAGE_LENGTH,
+    UpdateCallback,
+    UpdateConfirmCallback,
     allowlist_allows,
     build_approval_keyboard,
     build_bind_keyboard,
     build_effort_keyboard,
     build_inline_keyboard,
     build_model_keyboard,
+    build_resume_keyboard,
     build_review_commit_keyboard,
     build_update_confirm_keyboard,
-    build_resume_keyboard,
     build_update_keyboard,
     encode_cancel_callback,
     encode_page_callback,
-    InlineButton,
     is_interrupt_alias,
     parse_callback_data,
     parse_command,
@@ -86,29 +107,18 @@ from .config import (
     TelegramBotLockError,
     TelegramMediaCandidate,
 )
-from ...core.state import now_iso
 from .state import (
     APPROVAL_MODE_YOLO,
+    TOPIC_ROOT,
     OutboxRecord,
-    PendingVoiceRecord,
     PendingApprovalRecord,
-    ThreadSummary,
+    PendingVoiceRecord,
     TelegramStateStore,
+    ThreadSummary,
     TopicRouter,
     parse_topic_key,
-    TOPIC_ROOT,
     topic_key,
 )
-from ...core.utils import (
-    RepoNotFoundError,
-    canonicalize_path,
-    find_repo_root,
-    is_within,
-    resolve_executable,
-    subprocess_env,
-)
-from ...workspace import canonical_workspace_root, workspace_id_for_path
-from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 
 DEFAULT_PAGE_SIZE = 10
 THREAD_LIST_PAGE_LIMIT = 100
@@ -299,10 +309,8 @@ class SelectionState:
 
 
 @dataclass
-class ReviewCommitSelectionState:
-    items: list[tuple[str, str]]
-    delivery: str
-    page: int = 0
+class ReviewCommitSelectionState(SelectionState):
+    delivery: str = "inline"
 
 
 @dataclass
@@ -322,10 +330,8 @@ class ModelOption:
 
 
 @dataclass
-class ModelPickerState:
-    items: list[tuple[str, str]]
-    options: dict[str, ModelOption]
-    page: int = 0
+class ModelPickerState(SelectionState):
+    options: dict[str, ModelOption] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -433,7 +439,7 @@ class TelegramBotService:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        except FileExistsError as exc:
             existing = _read_lock_payload(lock_path)
             pid = existing.get("pid") if isinstance(existing, dict) else None
             if isinstance(pid, int) and process_alive(pid):
@@ -446,14 +452,14 @@ class TelegramBotService:
                 )
                 raise TelegramBotLockError(
                     "Telegram bot already running for this token."
-                )
+                ) from exc
             try:
                 lock_path.unlink()
             except OSError:
                 pass
             try:
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
+            except FileExistsError as exc:
                 existing = _read_lock_payload(lock_path)
                 log_event(
                     self._logger,
@@ -464,7 +470,7 @@ class TelegramBotService:
                 )
                 raise TelegramBotLockError(
                     "Telegram bot already running for this token."
-                )
+                ) from exc
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(payload) + "\n")
         self._instance_lock_path = lock_path
@@ -824,12 +830,12 @@ class TelegramBotService:
             return False
         inflight_id = record.record_id
         try:
-            record = self._store.get_pending_voice(record.record_id)
-            if record is None:
+            current_record = self._store.get_pending_voice(record.record_id)
+            if current_record is None:
                 return False
-            if not self._voice_ready_for_attempt(record):
+            if not self._voice_ready_for_attempt(current_record):
                 return False
-            done = await self._process_pending_voice(record)
+            done = await self._process_pending_voice(current_record)
         except Exception as exc:
             retry_after = _extract_retry_after_seconds(exc)
             await self._record_voice_failure(record, exc, retry_after=retry_after)
@@ -1141,8 +1147,8 @@ class TelegramBotService:
     def _voice_retry_delay(self, attempts: int, *, retry_after: Optional[int]) -> float:
         if retry_after is not None and retry_after > 0:
             return float(retry_after) + VOICE_RETRY_AFTER_BUFFER_SECONDS
-        delay = VOICE_RETRY_INITIAL_SECONDS * (2 ** max(attempts - 1, 0))
-        delay = min(delay, VOICE_RETRY_MAX_SECONDS)
+        delay: float = VOICE_RETRY_INITIAL_SECONDS * (2 ** max(attempts - 1, 0))
+        delay = float(min(delay, VOICE_RETRY_MAX_SECONDS))
         jitter = delay * VOICE_RETRY_JITTER_RATIO
         if jitter:
             delay += random.uniform(0, jitter)
@@ -1258,8 +1264,8 @@ class TelegramBotService:
             await asyncio.sleep(delay)
         return False
 
-    def _spawn_task(self, coro: Awaitable[Any]) -> None:
-        task = asyncio.create_task(coro)
+    def _spawn_task(self, coro: Coroutine[Any, Any, Any]) -> None:
+        task: asyncio.Task[Any] = asyncio.create_task(coro)
         task.add_done_callback(self._log_task_result)
 
     def _log_task_result(self, task: asyncio.Future) -> None:
@@ -2783,7 +2789,7 @@ class TelegramBotService:
         *,
         text_override: Optional[str] = None,
         input_items: Optional[list[dict[str, Any]]] = None,
-        record: Optional[Any] = None,
+        record: Optional["TelegramTopicRecord"] = None,
         send_placeholder: bool = True,
         transcript_message_id: Optional[int] = None,
         transcript_text: Optional[str] = None,
@@ -2848,9 +2854,12 @@ class TelegramBotService:
             )
         try:
             if not thread_id:
-                thread = await client.thread_start(record.workspace_path)
+                workspace_path = record.workspace_path
+                if not workspace_path:
+                    return
+                thread = await client.thread_start(workspace_path)
                 if not await self._require_thread_workspace(
-                    message, record.workspace_path, thread, action="thread_start"
+                    message, workspace_path, thread, action="thread_start"
                 ):
                     return
                 thread_id = _extract_thread_id(thread)
@@ -3462,13 +3471,13 @@ class TelegramBotService:
         if pending_request_ids:
             runtime.pending_request_id = None
         if not turn_id:
-            pending = self._store.pending_approvals_for_key(key)
-            if pending:
+            pending_records = self._store.pending_approvals_for_key(key)
+            if pending_records:
                 self._store.clear_pending_approvals_for_key(key)
                 runtime.pending_request_id = None
                 await self._send_message(
                     message.chat_id,
-                    f"Cleared {len(pending)} pending approval(s).",
+                    f"Cleared {len(pending_records)} pending approval(s).",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -3741,15 +3750,16 @@ class TelegramBotService:
             )
             return
         threads: list[dict[str, Any]] = []
-        entries_by_id: dict[str, dict[str, Any]] = {}
         list_failed = False
         local_thread_ids: list[str] = []
         local_previews: dict[str, str] = {}
         local_thread_topics: dict[str, set[str]] = {}
         if show_unscoped:
-            state = self._store.load()
+            store_state = self._store.load()
             local_thread_ids, local_previews, local_thread_topics = (
-                _local_workspace_threads(state, record.workspace_path, current_key=key)
+                _local_workspace_threads(
+                    store_state, record.workspace_path, current_key=key
+                )
             )
             for thread_id in record.thread_ids:
                 local_thread_topics.setdefault(thread_id, set()).add(key)
@@ -3791,11 +3801,13 @@ class TelegramBotService:
                     reply_to=message.message_id,
                 )
                 return
-        entries_by_id = {
-            entry.get("id"): entry
-            for entry in threads
-            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
-        }
+        entries_by_id: dict[str, dict[str, Any]] = {}
+        for entry in threads:
+            if not isinstance(entry, dict):
+                continue
+            entry_id = entry.get("id")
+            if isinstance(entry_id, str):
+                entries_by_id[entry_id] = entry
         candidates: list[dict[str, Any]] = []
         unscoped: list[dict[str, Any]] = []
         saw_path = False
@@ -3856,10 +3868,10 @@ class TelegramBotService:
             )
             if refreshed:
                 if show_unscoped:
-                    state = self._store.load()
+                    store_state = self._store.load()
                     local_thread_ids, local_previews, local_thread_topics = (
                         _local_workspace_threads(
-                            state, record.workspace_path, current_key=key
+                            store_state, record.workspace_path, current_key=key
                         )
                     )
                     for thread_id in record.thread_ids:
@@ -3876,21 +3888,21 @@ class TelegramBotService:
         seen_item_ids: set[str] = set()
         if show_unscoped:
             for entry in candidates:
-                thread_id = entry.get("id")
-                if not isinstance(thread_id, str) or not thread_id:
+                candidate_id = entry.get("id")
+                if not isinstance(candidate_id, str) or not candidate_id:
                     continue
-                if thread_id in seen_item_ids:
+                if candidate_id in seen_item_ids:
                     continue
-                seen_item_ids.add(thread_id)
+                seen_item_ids.add(candidate_id)
                 label = _format_thread_preview(entry)
                 button_label = _extract_first_user_preview(entry)
                 if button_label:
-                    button_labels[thread_id] = button_label
+                    button_labels[candidate_id] = button_label
                 if label == "(no preview)":
-                    cached_preview = local_previews.get(thread_id)
+                    cached_preview = local_previews.get(candidate_id)
                     if cached_preview:
                         label = cached_preview
-                items.append((thread_id, label))
+                items.append((candidate_id, label))
             for thread_id in local_thread_ids:
                 if thread_id in seen_item_ids:
                     continue
@@ -3905,13 +3917,13 @@ class TelegramBotService:
         else:
             if record.thread_ids:
                 for thread_id in record.thread_ids:
-                    entry = entries_by_id.get(thread_id)
-                    if entry is None:
+                    entry_data = entries_by_id.get(thread_id)
+                    if entry_data is None:
                         cached_preview = _thread_summary_preview(record, thread_id)
                         label = _format_missing_thread_label(thread_id, cached_preview)
                     else:
-                        label = _format_thread_preview(entry)
-                        button_label = _extract_first_user_preview(entry)
+                        label = _format_thread_preview(entry_data)
+                        button_label = _extract_first_user_preview(entry_data)
                         if button_label:
                             button_labels[thread_id] = button_label
                         if label == "(no preview)":
@@ -3921,14 +3933,14 @@ class TelegramBotService:
                     items.append((thread_id, label))
             else:
                 for entry in entries_by_id.values():
-                    thread_id = entry.get("id")
-                    if not isinstance(thread_id, str) or not thread_id:
+                    entry_id = entry.get("id")
+                    if not isinstance(entry_id, str) or not entry_id:
                         continue
                     label = _format_thread_preview(entry)
                     button_label = _extract_first_user_preview(entry)
                     if button_label:
-                        button_labels[thread_id] = button_label
-                    items.append((thread_id, label))
+                        button_labels[entry_id] = button_label
+                    items.append((entry_id, label))
         if missing_ids:
             log_event(
                 self._logger,
@@ -4011,7 +4023,16 @@ class TelegramBotService:
                 continue
             last_used_at = now_iso() if user_preview or assistant_preview else None
 
-            def apply(record: "TelegramTopicRecord") -> None:
+            def apply(
+                record: "TelegramTopicRecord",
+                *,
+                thread_id: str = thread_id,
+                user_preview: Optional[str] = user_preview,
+                assistant_preview: Optional[str] = assistant_preview,
+                last_used_at: Optional[str] = last_used_at,
+                workspace_path: Optional[str] = workspace_path,
+                rollout_path: Optional[str] = rollout_path,
+            ) -> None:
                 _set_thread_summary(
                     record,
                     thread_id,
@@ -4317,10 +4338,10 @@ class TelegramBotService:
         preview_ids = record.thread_ids[:3]
         if preview_ids:
             lines.append("Preview samples:")
-            for thread_id in preview_ids:
-                preview = _thread_summary_preview(record, thread_id)
+            for preview_thread_id in preview_ids:
+                preview = _thread_summary_preview(record, preview_thread_id)
                 label = preview or "(no cached preview)"
-                lines.append(f"{thread_id}: {_compact_preview(label, 120)}")
+                lines.append(f"{preview_thread_id}: {_compact_preview(label, 120)}")
         await self._send_message(
             message.chat_id,
             "\n".join(lines),
@@ -5859,9 +5880,8 @@ class TelegramBotService:
 
     async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
         method = message.get("method")
-        params = (
-            message.get("params") if isinstance(message.get("params"), dict) else {}
-        )
+        params_raw = message.get("params")
+        params: dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
         if method == "thread/tokenUsage/updated":
             thread_id = params.get("threadId")
             turn_id = _coerce_id(params.get("turnId"))
@@ -6571,6 +6591,7 @@ class TelegramBotService:
         parsed: PageCallback,
         callback: TelegramCallbackQuery,
     ) -> None:
+        build_keyboard: Callable[[SelectionState], dict[str, Any]]
         if parsed.kind == "resume":
             state = self._resume_options.get(key)
             prompt_base = RESUME_PICKER_PROMPT
@@ -6582,11 +6603,17 @@ class TelegramBotService:
         elif parsed.kind == "model":
             state = self._model_options.get(key)
             prompt_base = MODEL_PICKER_PROMPT
-            build_keyboard = self._build_model_keyboard
+            build_keyboard = cast(
+                Callable[[SelectionState], dict[str, Any]],
+                self._build_model_keyboard,
+            )
         elif parsed.kind == "review-commit":
             state = self._review_commit_options.get(key)
             prompt_base = REVIEW_COMMIT_PICKER_PROMPT
-            build_keyboard = self._build_review_commit_keyboard
+            build_keyboard = cast(
+                Callable[[SelectionState], dict[str, Any]],
+                self._build_review_commit_keyboard,
+            )
         else:
             await self._answer_callback(callback, "Selection expired")
             return
@@ -7194,58 +7221,6 @@ def _format_friendly_time(value: datetime) -> str:
     minute = value.strftime("%M")
     ampm = value.strftime("%p").lower()
     return f"{month} {day}, {hour}:{minute}{ampm}"
-
-
-def _extract_usage_value(
-    token_usage: Optional[dict[str, Any]],
-    section: str,
-    key: str,
-) -> Optional[int]:
-    if not isinstance(token_usage, dict):
-        return None
-    section_value = token_usage.get(section)
-    if not isinstance(section_value, dict):
-        return None
-    value = section_value.get(key)
-    if isinstance(value, int):
-        return value
-    return None
-
-
-def _context_remaining_percent(total_tokens: int, context_window: int) -> Optional[int]:
-    effective_window = context_window - CONTEXT_BASELINE_TOKENS
-    if effective_window <= 0:
-        return None
-    used = max(total_tokens - CONTEXT_BASELINE_TOKENS, 0)
-    remaining = max(effective_window - used, 0)
-    percent = round(max(min(remaining / effective_window * 100, 100), 0))
-    return int(percent)
-
-
-def _format_context_metrics(token_usage: Optional[dict[str, Any]]) -> Optional[str]:
-    total_tokens = _extract_usage_value(token_usage, "total", "totalTokens")
-    last_tokens = _extract_usage_value(token_usage, "last", "totalTokens")
-    if total_tokens is None and last_tokens is None:
-        return None
-    used_tokens = total_tokens if total_tokens is not None else last_tokens
-    if used_tokens is None:
-        return None
-    context_window = (
-        token_usage.get("modelContextWindow") if isinstance(token_usage, dict) else None
-    )
-    if not isinstance(context_window, int):
-        context_window = None
-    if context_window is None:
-        return f"Context: used {used_tokens:,} tokens."
-    remaining = max(context_window - used_tokens, 0)
-    percent = _context_remaining_percent(used_tokens, context_window)
-    if percent is None:
-        return f"Context: used {used_tokens:,} tokens; remaining {remaining:,} of {context_window:,}."
-    return (
-        "Context: used "
-        f"{used_tokens:,} tokens; remaining {remaining:,} of {context_window:,} "
-        f"({percent}% remaining)."
-    )
 
 
 def _format_tui_token_usage(token_usage: Optional[dict[str, Any]]) -> Optional[str]:
@@ -7954,21 +7929,6 @@ def _local_workspace_threads(
     return thread_ids, previews, topic_keys_by_thread
 
 
-def _filter_threads(
-    threads: Any,
-    workspace_path: str,
-    *,
-    assume_scoped: bool = False,
-    allow_unscoped: bool = True,
-) -> list[dict[str, Any]]:
-    filtered, unscoped, saw_path = _partition_threads(threads, workspace_path)
-    if filtered or saw_path or not assume_scoped:
-        return filtered
-    if allow_unscoped:
-        return unscoped
-    return []
-
-
 def _path_within(root: Path, target: Path) -> bool:
     try:
         root = canonicalize_path(root)
@@ -8019,11 +7979,6 @@ def _compact_preview(text: Any, limit: int = 40) -> str:
     if len(preview) > limit:
         return preview[: limit - 3] + "..."
     return preview or "(no preview)"
-
-
-def _format_preview(text: Any) -> str:
-    preview = "" if text is None else str(text)
-    return preview if preview.strip() else "(no preview)"
 
 
 def _coerce_thread_payload(payload: Any) -> dict[str, Any]:
@@ -8190,9 +8145,9 @@ def _extract_text_payload(payload: Any) -> Optional[str]:
     if isinstance(payload, list):
         parts = []
         for item in payload:
-            text = _extract_text_payload(item)
-            if text:
-                parts.append(text)
+            part_text = _extract_text_payload(item)
+            if part_text:
+                parts.append(part_text)
         if parts:
             return " ".join(parts)
         return None
@@ -8322,9 +8277,9 @@ def _extract_rollout_first_user_preview(path: Path) -> Optional[str]:
             continue
         for role, text in _iter_role_texts(payload):
             if role == "user" and text:
-                text = _strip_user_message_begin(text)
-                if not _is_ignored_first_user_preview(text):
-                    return text
+                stripped = _strip_user_message_begin(text)
+                if stripped and not _is_ignored_first_user_preview(stripped):
+                    return stripped
     return None
 
 
@@ -8345,7 +8300,7 @@ def _extract_turns_preview(turns: Any) -> tuple[Optional[str], Optional[str]]:
             candidates.append(turn)
         for candidate in candidates:
             if isinstance(candidate, list):
-                iterable = reversed(candidate)
+                iterable: Iterable[Any] = reversed(candidate)
             else:
                 iterable = (candidate,)
             for item in iterable:
@@ -8374,15 +8329,15 @@ def _extract_turns_first_user_preview(turns: Any) -> Optional[str]:
             candidates.append(turn)
         for candidate in candidates:
             if isinstance(candidate, list):
-                iterable = candidate
+                iterable: Iterable[Any] = candidate
             else:
                 iterable = (candidate,)
             for item in iterable:
                 for role, text in _iter_role_texts(item):
                     if role == "user" and text:
-                        text = _strip_user_message_begin(text)
-                        if not _is_ignored_first_user_preview(text):
-                            return text
+                        stripped = _strip_user_message_begin(text)
+                        if stripped and not _is_ignored_first_user_preview(stripped):
+                            return stripped
     return None
 
 
@@ -8530,33 +8485,6 @@ def _resume_thread_list_limit(thread_ids: Sequence[str]) -> int:
     return min(THREAD_LIST_PAGE_LIMIT, desired)
 
 
-def _coerce_id(value: Any) -> Optional[str]:
-    if isinstance(value, (str, int)) and not isinstance(value, bool):
-        text = str(value).strip()
-        return text or None
-    return None
-
-
-def _extract_turn_thread_id(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for candidate in (payload, payload.get("turn"), payload.get("item")):
-        if not isinstance(candidate, dict):
-            continue
-        for key in ("threadId", "thread_id"):
-            thread_id = _coerce_id(candidate.get(key))
-            if thread_id:
-                return thread_id
-        thread = candidate.get("thread")
-        if isinstance(thread, dict):
-            thread_id = _coerce_id(
-                thread.get("id") or thread.get("threadId") or thread.get("thread_id")
-            )
-            if thread_id:
-                return thread_id
-    return None
-
-
 def _truncate_text(text: str, limit: int) -> str:
     if limit <= 0:
         return ""
@@ -8660,7 +8588,8 @@ def _is_no_agent_response(text: str) -> bool:
 
 def _format_approval_prompt(message: dict[str, Any]) -> str:
     method = message.get("method")
-    params = message.get("params") if isinstance(message.get("params"), dict) else {}
+    params_raw = message.get("params")
+    params: dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
     lines = ["Approval required"]
     reason = params.get("reason")
     if isinstance(reason, str) and reason:

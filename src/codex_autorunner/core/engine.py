@@ -4,17 +4,17 @@ import logging
 import os
 import signal
 import subprocess
+import threading
 import time
+import traceback
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional
-import threading
-import traceback
+from typing import IO, Iterator, Optional
 
 from .about_car import ensure_about_car_file
 from .codex_runner import run_codex_streaming
-from .config import ConfigError, load_config
+from .config import ConfigError, RepoConfig, load_config
 from .docs import DocsManager
 from .locks import process_alive, read_lock_info, write_lock_info
 from .notifications import NotificationManager
@@ -41,7 +41,10 @@ SUMMARY_FINALIZED_MARKER_PREFIX = f"<!-- {SUMMARY_FINALIZED_MARKER}"
 
 class Engine:
     def __init__(self, repo_root: Path):
-        self.config = load_config(repo_root)
+        config = load_config(repo_root)
+        if not isinstance(config, RepoConfig):
+            raise ConfigError("Engine requires repo mode configuration")
+        self.config: RepoConfig = config
         self.repo_root = self.config.root
         self.docs = DocsManager(self.config)
         self.notifier = NotificationManager(self.config)
@@ -51,7 +54,7 @@ class Engine:
         self.lock_path = self.repo_root / ".codex-autorunner" / "lock"
         self.stop_path = self.repo_root / ".codex-autorunner" / "stop"
         self._active_global_handler: Optional[RotatingFileHandler] = None
-        self._active_run_log = None
+        self._active_run_log: Optional[IO[str]] = None
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
         try:
             ensure_about_car_file(self.config)
@@ -395,7 +398,7 @@ class Engine:
             handler.release()
 
     @contextlib.contextmanager
-    def _run_log_context(self, run_id: int) -> None:
+    def _run_log_context(self, run_id: int) -> Iterator[None]:
         self._ensure_log_path()
         self._ensure_run_log_dir()
         max_bytes = getattr(self.config.log, "max_bytes", None) or 0
@@ -695,6 +698,8 @@ def _read_tail_text(path: Path, *, max_bytes: int) -> str:
 def doctor(repo_root: Path) -> None:
     root = find_repo_root(repo_root)
     config = load_config(root)
+    if not isinstance(config, RepoConfig):
+        raise ConfigError("Doctor requires repo mode configuration")
     missing = []
     for key in ("todo", "progress", "opinions"):
         path = config.doc_path(key)

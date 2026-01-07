@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, Optional
 
-from .config import Config, ROOT_CONFIG_FILENAME, ROOT_OVERRIDE_FILENAME
-
+from .config import ROOT_CONFIG_FILENAME, ROOT_OVERRIDE_FILENAME, Config
 
 ABOUT_CAR_BASENAME = "ABOUT_CAR.md"
 ABOUT_CAR_REL_PATH = Path(".codex-autorunner") / ABOUT_CAR_BASENAME

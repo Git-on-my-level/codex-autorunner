@@ -5,14 +5,12 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, Optional, Sequence
+from typing import Callable, Dict, Optional, Sequence
 
-from .client import CodexAppServerClient
 from ...workspace import canonical_workspace_root, workspace_id_for_path
+from .client import ApprovalHandler, CodexAppServerClient, NotificationHandler
 
 EnvBuilder = Callable[[Path, str, Path], Dict[str, str]]
-ApprovalHandler = Callable[[Dict[str, object]], Awaitable[object]]
-NotificationHandler = Callable[[Dict[str, object]], Awaitable[None]]
 
 
 @dataclass

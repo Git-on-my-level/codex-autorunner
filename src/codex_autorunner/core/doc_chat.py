@@ -14,12 +14,12 @@ from .codex_runner import (
     resolve_codex_binary,
     run_codex_capture_async,
 )
-from .config import ConfigError
+from .config import ConfigError, RepoConfig
 from .engine import Engine, timestamp
-from .state import load_state
-from .utils import atomic_write
 from .locks import process_alive, read_lock_info
 from .prompts import DOC_CHAT_PROMPT_TEMPLATE
+from .state import load_state
+from .utils import atomic_write
 
 ALLOWED_DOC_KINDS = ("todo", "progress", "opinions", "spec", "summary")
 DOC_CHAT_TIMEOUT_SECONDS = 180
@@ -82,6 +82,11 @@ class DocChatService:
         )
         self.last_agent_message: Optional[str] = None
 
+    def _repo_config(self) -> RepoConfig:
+        if not isinstance(self.engine.config, RepoConfig):
+            raise DocChatError("Doc chat requires repo mode config")
+        return self.engine.config
+
     def parse_request(self, kind: str, payload: Optional[dict]) -> DocChatRequest:
         if payload is None or not isinstance(payload, dict):
             raise DocChatValidationError("invalid payload")
@@ -137,7 +142,8 @@ class DocChatService:
             f.write(line)
 
     def _doc_pointer(self, kind: str) -> str:
-        path = self.engine.config.doc_path(kind)
+        config = self._repo_config()
+        path = config.doc_path(kind)
         try:
             return str(path.relative_to(self.engine.repo_root))
         except ValueError:
@@ -161,6 +167,7 @@ class DocChatService:
         return summary
 
     def _build_prompt(self, request: DocChatRequest) -> str:
+        config = self._repo_config()
         docs = {key: self.engine.docs.read_doc(key) for key in ALLOWED_DOC_KINDS}
         target_doc = docs.get(request.kind, "")
         recent_block = self._recent_run_summary()
@@ -178,34 +185,33 @@ class DocChatService:
             spec=docs.get("spec", ""),
             recent_run_block=recent_section,
             target_doc=target_doc,
-            target_path=str(self.engine.config.doc_path(request.kind)),
+            target_path=str(config.doc_path(request.kind)),
             patch_path=str(self.patch_path),
         )
 
     async def _run_codex_cli(self, prompt: str, chat_id: str) -> str:
         try:
-            resolved = resolve_codex_binary(self.engine.config)
-            cmd = build_codex_command(
-                self.engine.config, prompt, resolved_binary=resolved
-            )
+            config = self._repo_config()
+            resolved = resolve_codex_binary(config)
+            cmd = build_codex_command(config, prompt, resolved_binary=resolved)
         except ConfigError as exc:
-            raise DocChatError(str(exc))
+            raise DocChatError(str(exc)) from exc
 
         self._log(chat_id, f"cmd={' '.join(cmd[:-1])} prompt_chars={len(prompt)}")
 
         try:
             exit_code, output = await run_codex_capture_async(
-                self.engine.config,
+                config,
                 self.engine.repo_root,
                 prompt,
                 timeout_seconds=DOC_CHAT_TIMEOUT_SECONDS,
                 cmd=cmd,
             )
-        except CodexTimeoutError:
+        except CodexTimeoutError as exc:
             self._log(chat_id, "timed out waiting for codex process")
-            raise DocChatError("Doc chat agent timed out")
+            raise DocChatError("Doc chat agent timed out") from exc
         except ConfigError as exc:
-            raise DocChatError(str(exc))
+            raise DocChatError(str(exc)) from exc
 
         output = (output or "").strip()
         for line in output.splitlines():
@@ -305,9 +311,8 @@ class DocChatService:
         )
         if has_headers:
             return patch_text
-        target_path = str(
-            self.engine.config.doc_path(kind).relative_to(self.engine.repo_root)
-        )
+        config = self._repo_config()
+        target_path = str(config.doc_path(kind).relative_to(self.engine.repo_root))
         header = f"--- a/{target_path}\n+++ b/{target_path}\n"
         return (
             header
@@ -330,7 +335,8 @@ class DocChatService:
         targets = self._patch_targets(patch_text)
         if not targets:
             raise DocChatError("Patch file missing file headers")
-        target_path = self.engine.config.doc_path(kind)
+        config = self._repo_config()
+        target_path = config.doc_path(kind)
         normalized_target = str(target_path.relative_to(self.engine.repo_root))
         normalized = []
         for path in targets:
@@ -370,7 +376,8 @@ class DocChatService:
         patch_text_raw = self._read_patch()
         patch_text, _ = self._normalize_patch(patch_text_raw, kind)
         targets = self._patch_targets(patch_text)
-        target_path = self.engine.config.doc_path(kind)
+        config = self._repo_config()
+        target_path = config.doc_path(kind)
         normalized_target = str(target_path.relative_to(self.engine.repo_root))
         normalized = []
         for path in targets:
@@ -392,7 +399,8 @@ class DocChatService:
         return content
 
     def discard_patch(self, kind: str) -> str:
-        target_path = self.engine.config.doc_path(kind)
+        config = self._repo_config()
+        target_path = config.doc_path(kind)
         if self.backup_path.exists():
             atomic_write(target_path, self.backup_path.read_text(encoding="utf-8"))
         self._cleanup_patch()
@@ -413,9 +421,8 @@ class DocChatService:
         normalized_target = target_path
         if normalized_target.startswith(("a/", "b/")):
             normalized_target = normalized_target[2:]
-        expected = str(
-            self.engine.config.doc_path(kind).relative_to(self.engine.repo_root)
-        )
+        config = self._repo_config()
+        expected = str(config.doc_path(kind).relative_to(self.engine.repo_root))
         if normalized_target != expected:
             return None
         return {
@@ -424,7 +431,7 @@ class DocChatService:
             "patch": patch_text,
             "agent_message": self.last_agent_message
             or f"Pending patch for {kind.upper()}",
-            "content": self.engine.config.doc_path(kind).read_text(encoding="utf-8"),
+            "content": config.doc_path(kind).read_text(encoding="utf-8"),
         }
 
     async def execute(self, request: DocChatRequest) -> dict:
@@ -439,7 +446,8 @@ class DocChatService:
         try:
             self._cleanup_patch()
             # Backup current doc before the agent edits it.
-            target_doc_path = self.engine.config.doc_path(request.kind)
+            config = self._repo_config()
+            target_doc_path = config.doc_path(request.kind)
             if target_doc_path.exists():
                 self.backup_path.write_text(
                     target_doc_path.read_text(encoding="utf-8"), encoding="utf-8"
@@ -495,7 +503,8 @@ class DocChatService:
             )
             # Restore backup on error
             if self.backup_path.exists():
-                target_doc_path = self.engine.config.doc_path(request.kind)
+                config = self._repo_config()
+                target_doc_path = config.doc_path(request.kind)
                 atomic_write(
                     target_doc_path, self.backup_path.read_text(encoding="utf-8")
                 )

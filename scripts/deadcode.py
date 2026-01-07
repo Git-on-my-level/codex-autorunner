@@ -19,12 +19,10 @@ import argparse
 import ast
 import json
 import re
-import sys
 import tokenize
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
-
+from typing import Dict, Iterable, List, Optional, Sequence, Set
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = REPO_ROOT / ".deadcode-baseline.json"
@@ -68,6 +66,20 @@ def _python_name_token_counts(py_files: Sequence[Path]) -> Dict[str, int]:
         except tokenize.TokenError:
             # malformed file; ignore
             continue
+        try:
+            tree = ast.parse(src, filename=str(p))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.JoinedStr):
+                continue
+            for part in node.values:
+                if isinstance(part, ast.FormattedValue):
+                    for sub in ast.walk(part.value):
+                        if isinstance(sub, ast.Name):
+                            counts[sub.id] = counts.get(sub.id, 0) + 1
+                        elif isinstance(sub, ast.Attribute):
+                            counts[sub.attr] = counts.get(sub.attr, 0) + 1
     return counts
 
 
@@ -292,6 +304,3 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-

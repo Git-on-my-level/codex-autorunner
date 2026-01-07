@@ -1,11 +1,10 @@
-from .config import DEFAULT_PROVIDER_CONFIG, LatencyMode, PushToTalkConfig, VoiceConfig
 from .capture import (
     CaptureCallbacks,
     CaptureState,
     PushToTalkCapture,
     VoiceCaptureSession,
 )
-from .resolver import resolve_speech_provider
+from .config import DEFAULT_PROVIDER_CONFIG, LatencyMode, PushToTalkConfig, VoiceConfig
 from .provider import (
     AudioChunk,
     SpeechProvider,
@@ -13,8 +12,9 @@ from .provider import (
     TranscriptionEvent,
     TranscriptionStream,
 )
-from .service import VoiceService, VoiceServiceError
 from .providers import OpenAIWhisperProvider, OpenAIWhisperSettings
+from .resolver import resolve_speech_provider
+from .service import VoiceService, VoiceServiceError
 
 __all__ = [
     "AudioChunk",

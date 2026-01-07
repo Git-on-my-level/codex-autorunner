@@ -25,9 +25,9 @@ def build_github_routes() -> APIRouter:
         try:
             return await asyncio.to_thread(_github(request).status_payload)
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.get("/api/github/pr")
     async def github_pr(request: Request):
@@ -42,9 +42,9 @@ def build_github_routes() -> APIRouter:
                 "link": status.get("link") or {},
             }
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/github/link-issue")
     async def github_link_issue(request: Request, payload: GithubIssueRequest):
@@ -53,9 +53,9 @@ def build_github_routes() -> APIRouter:
             state = await asyncio.to_thread(_github(request).link_issue, str(issue))
             return {"status": "ok", "link": state}
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/github/spec/from-issue")
     async def github_spec_from_issue(request: Request, payload: GithubIssueRequest):
@@ -86,11 +86,11 @@ def build_github_routes() -> APIRouter:
             result["github"] = {"issue": link_state.get("issue")}
             return result
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except HTTPException:
             raise
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/github/pr/sync")
     async def github_pr_sync(request: Request, payload: GithubPrSyncRequest):
@@ -110,9 +110,9 @@ def build_github_routes() -> APIRouter:
                 body=str(body) if body else None,
             )
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/github/context")
     async def github_context(request: Request, payload: GithubContextRequest):
@@ -125,8 +125,8 @@ def build_github_routes() -> APIRouter:
                 return {"status": "ok", "injected": False}
             return {"status": "ok", "injected": True, **result}
         except GitHubError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc))
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return router

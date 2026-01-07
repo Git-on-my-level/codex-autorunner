@@ -2,7 +2,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Dict, Optional, Sequence, cast
 
 
 class RepoNotFoundError(Exception):
@@ -41,7 +41,7 @@ def read_json(path: Path) -> Optional[dict]:
     if not path.exists():
         return None
     with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        return cast(Optional[dict], json.load(f))
 
 
 def _default_path_prefixes() -> list[str]:

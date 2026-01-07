@@ -2,9 +2,9 @@ import asyncio
 from pathlib import Path
 
 from codex_autorunner.telegram_bot import (
+    WHISPER_TRANSCRIPT_DISCLAIMER,
     TelegramBotConfig,
     TelegramBotService,
-    WHISPER_TRANSCRIPT_DISCLAIMER,
 )
 from codex_autorunner.voice import VoiceConfig
 

@@ -3,12 +3,11 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
 from .config import Config
-
 
 DEFAULT_EVENTS = {"run_finished", "run_error", "tui_idle"}
 KNOWN_EVENTS = {"run_finished", "run_error", "tui_idle", "tui_session_finished", "all"}
@@ -20,20 +19,18 @@ class NotificationManager:
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
         raw = config.raw.get("notifications")
-        self._cfg = raw if isinstance(raw, dict) else {}
+        self._cfg: Dict[str, Any] = raw if isinstance(raw, dict) else {}
         self._warned_missing: set[str] = set()
         self._enabled_mode = self._parse_enabled(self._cfg.get("enabled"))
         self._events = self._normalize_events(self._cfg.get("events"))
         self._warn_unknown_events(self._events)
-        self._discord = (
-            self._cfg.get("discord")
-            if isinstance(self._cfg.get("discord"), dict)
-            else {}
+        discord_cfg = self._cfg.get("discord")
+        self._discord: Dict[str, Any] = (
+            discord_cfg if isinstance(discord_cfg, dict) else {}
         )
-        self._telegram = (
-            self._cfg.get("telegram")
-            if isinstance(self._cfg.get("telegram"), dict)
-            else {}
+        telegram_cfg = self._cfg.get("telegram")
+        self._telegram: Dict[str, Any] = (
+            telegram_cfg if isinstance(telegram_cfg, dict) else {}
         )
         self._discord_enabled = self._discord.get("enabled") is not False
         self._telegram_enabled = self._telegram.get("enabled") is not False
@@ -355,21 +352,25 @@ class NotificationManager:
     ) -> None:
         if "discord" in targets:
             try:
-                self._send_discord_sync(
-                    client, targets["discord"]["webhook_url"], message
-                )
+                webhook_url = targets["discord"].get("webhook_url")
+                if isinstance(webhook_url, str):
+                    self._send_discord_sync(client, webhook_url, message)
             except Exception as exc:
                 self._log_delivery_failure("discord", exc)
         if "telegram" in targets:
             telegram = targets["telegram"]
             try:
-                self._send_telegram_sync(
-                    client,
-                    telegram["bot_token"],
-                    telegram["chat_id"],
-                    telegram.get("thread_id"),
-                    message,
-                )
+                bot_token = telegram.get("bot_token")
+                chat_id = telegram.get("chat_id")
+                thread_id = telegram.get("thread_id")
+                if isinstance(bot_token, str) and isinstance(chat_id, str):
+                    self._send_telegram_sync(
+                        client,
+                        bot_token,
+                        chat_id,
+                        thread_id if isinstance(thread_id, int) else None,
+                        message,
+                    )
             except Exception as exc:
                 self._log_delivery_failure("telegram", exc)
 
@@ -381,21 +382,25 @@ class NotificationManager:
     ) -> None:
         if "discord" in targets:
             try:
-                await self._send_discord_async(
-                    client, targets["discord"]["webhook_url"], message
-                )
+                webhook_url = targets["discord"].get("webhook_url")
+                if isinstance(webhook_url, str):
+                    await self._send_discord_async(client, webhook_url, message)
             except Exception as exc:
                 self._log_delivery_failure("discord", exc)
         if "telegram" in targets:
             telegram = targets["telegram"]
             try:
-                await self._send_telegram_async(
-                    client,
-                    telegram["bot_token"],
-                    telegram["chat_id"],
-                    telegram.get("thread_id"),
-                    message,
-                )
+                bot_token = telegram.get("bot_token")
+                chat_id = telegram.get("chat_id")
+                thread_id = telegram.get("thread_id")
+                if isinstance(bot_token, str) and isinstance(chat_id, str):
+                    await self._send_telegram_async(
+                        client,
+                        bot_token,
+                        chat_id,
+                        thread_id if isinstance(thread_id, int) else None,
+                        message,
+                    )
             except Exception as exc:
                 self._log_delivery_failure("telegram", exc)
 

@@ -1,7 +1,7 @@
 import asyncio
 import collections
-import os
 import fcntl
+import os
 import select
 import struct
 import termios
@@ -132,7 +132,7 @@ class ActiveSession:
         self._buffer_max_bytes = 512 * 1024  # 512KB
         self._buffer_bytes = 0
         self.buffer: collections.deque[bytes] = collections.deque()
-        self.subscribers: set[asyncio.Queue] = set()
+        self.subscribers: set[asyncio.Queue[object]] = set()
         self.lock = asyncio.Lock()
         self.loop = loop
         # Buffered input keeps the event loop from blocking on PTY writes.
@@ -258,8 +258,8 @@ class ActiveSession:
         except OSError:
             self.close()
 
-    def add_subscriber(self, *, include_replay_end: bool = True) -> asyncio.Queue:
-        q = asyncio.Queue()
+    def add_subscriber(self, *, include_replay_end: bool = True) -> asyncio.Queue[object]:
+        q: asyncio.Queue[object] = asyncio.Queue()
         for chunk in self.buffer:
             q.put_nowait(chunk)
         if include_replay_end:
@@ -308,7 +308,7 @@ class ActiveSession:
             data, self._alt_screen_active, self._alt_screen_tail
         )
 
-    def remove_subscriber(self, q: asyncio.Queue):
+    def remove_subscriber(self, q: asyncio.Queue[object]):
         self.subscribers.discard(q)
 
     def close(self):

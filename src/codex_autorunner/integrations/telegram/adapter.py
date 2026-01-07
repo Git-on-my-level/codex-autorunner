@@ -8,7 +8,6 @@ import httpx
 
 from ...core.logging_utils import log_event
 
-
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 TELEGRAM_CALLBACK_DATA_LIMIT = 64
 

@@ -5,28 +5,20 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
+import httpx
 import typer
 import uvicorn
-import httpx
 
 from .bootstrap import seed_hub_files, seed_repo_files
 from .core.config import ConfigError, HubConfig, _normalize_base_path, load_config
 from .core.engine import Engine, LockError, clear_stale_lock, doctor
 from .core.hub import HubSupervisor
-from .manifest import load_manifest
-from .server import create_app, create_hub_app
-from .core.state import RunnerState, load_state, now_iso, save_state, state_lock
-from .core.utils import RepoNotFoundError, default_editor, find_repo_root
 from .core.logging_utils import log_event, setup_rotating_logger
 from .core.optional_dependencies import require_optional_dependencies
-from .spec_ingest import (
-    SpecIngestError,
-    generate_docs_from_spec,
-    write_ingested_docs,
-    clear_work_docs,
-)
+from .core.snapshot import SnapshotError, generate_snapshot
+from .core.state import RunnerState, load_state, now_iso, save_state, state_lock
 from .core.usage import (
     UsageError,
     default_codex_home,
@@ -34,13 +26,21 @@ from .core.usage import (
     summarize_hub_usage,
     summarize_repo_usage,
 )
-from .core.snapshot import SnapshotError, generate_snapshot
+from .core.utils import RepoNotFoundError, default_editor, find_repo_root
 from .integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
 from .integrations.telegram.service import (
     TelegramBotConfig,
     TelegramBotConfigError,
     TelegramBotLockError,
     TelegramBotService,
+)
+from .manifest import load_manifest
+from .server import create_app, create_hub_app
+from .spec_ingest import (
+    SpecIngestError,
+    clear_work_docs,
+    generate_docs_from_spec,
+    write_ingested_docs,
 )
 from .voice import VoiceConfig
 
@@ -49,13 +49,20 @@ hub_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
 
 
+def _raise_exit(message: str, *, cause: Optional[BaseException] = None) -> NoReturn:
+    typer.echo(message, err=True)
+    if cause is not None:
+        raise typer.Exit(code=1) from cause
+    raise typer.Exit(code=1)
+
+
 def _require_repo_config(repo: Optional[Path]) -> Engine:
     try:
         config = load_config(repo or Path.cwd())
     except ConfigError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     if config.mode != "repo":
-        raise typer.Exit("This command must be run in repo mode (config.mode=repo).")
+        _raise_exit("This command must be run in repo mode (config.mode=repo).")
     return Engine(config.root)
 
 
@@ -63,9 +70,9 @@ def _require_hub_config(path: Optional[Path]) -> HubConfig:
     try:
         config = load_config(path or Path.cwd())
     except ConfigError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     if not isinstance(config, HubConfig):
-        raise typer.Exit("This command requires hub mode (config.mode=hub).")
+        _raise_exit("This command requires hub mode (config.mode=hub).")
     return config
 
 
@@ -100,7 +107,7 @@ def _enforce_bind_auth(host: str, token_env: str) -> None:
         return
     if _resolve_auth_token(token_env):
         return
-    raise typer.Exit(
+    _raise_exit(
         "Refusing to bind to a non-loopback host without server.auth_token_env set."
     )
 
@@ -118,7 +125,7 @@ def _require_optional_feature(
     try:
         require_optional_dependencies(feature=feature, deps=deps, extra=extra)
     except ConfigError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
 
 
 app.add_typer(hub_app, name="hub")
@@ -154,7 +161,7 @@ def init(
     start_path = (path or Path.cwd()).resolve()
     mode = (mode or "auto").lower()
     if mode not in ("auto", "repo", "hub"):
-        raise typer.Exit("Invalid mode; expected repo, hub, or auto")
+        _raise_exit("Invalid mode; expected repo, hub, or auto")
 
     git_required = True
     target_root: Optional[Path] = None
@@ -178,9 +185,7 @@ def init(
             selected_mode = "repo"
             subprocess.run(["git", "init"], cwd=target_root, check=False)
         else:
-            raise typer.Exit(
-                "No .git directory found; rerun with --git-init to create one"
-            )
+            _raise_exit("No .git directory found; rerun with --git-init to create one")
 
     ca_dir = target_root / ".codex-autorunner"
     ca_dir.mkdir(parents=True, exist_ok=True)
@@ -305,7 +310,7 @@ def stop_session(
             if repo_lookup:
                 target_id = state.repo_to_session.get(repo_lookup)
         if not target_id:
-            raise typer.Exit("Session not found (server unavailable)")
+            _raise_exit("Session not found (server unavailable)")
         state.sessions.pop(target_id, None)
         state.repo_to_session = {
             repo_key: sid
@@ -338,13 +343,13 @@ def usage(
     try:
         config = load_config(repo or Path.cwd())
     except ConfigError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
 
     try:
         since_dt = parse_iso_datetime(since)
         until_dt = parse_iso_datetime(until)
     except UsageError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
 
     codex_root = (codex_home or default_codex_home()).expanduser()
 
@@ -438,7 +443,7 @@ def run(
         engine.acquire_lock(force=force)
         engine.run_loop()
     except (ConfigError, LockError) as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     finally:
         if engine:
             try:
@@ -460,7 +465,7 @@ def once(
         engine.acquire_lock(force=force)
         engine.run_once()
     except (ConfigError, LockError) as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     finally:
         if engine:
             try:
@@ -509,7 +514,7 @@ def resume(
         engine.acquire_lock(force=force)
         engine.run_loop(stop_after_runs=1 if once else None)
     except (ConfigError, LockError) as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     finally:
         if engine:
             try:
@@ -527,12 +532,12 @@ def log(
     """Show autorunner log output."""
     engine = _require_repo_config(repo)
     if not engine.log_path.exists():
-        raise typer.Exit("Log file not found; run init")
+        _raise_exit("Log file not found; run init")
 
     if run_id is not None:
         block = engine.read_run_block(run_id)
         if not block:
-            raise typer.Exit("run not found")
+            _raise_exit("run not found")
         typer.echo(block)
         return
 
@@ -561,7 +566,7 @@ def edit(
     config = engine.config
     key = target.lower()
     if key not in ("todo", "progress", "opinions", "spec"):
-        raise typer.Exit("Invalid target; choose todo, progress, opinions, or spec")
+        _raise_exit("Invalid target; choose todo, progress, opinions, or spec")
     path = config.doc_path(key)
     editor = default_editor()
     typer.echo(f"Opening {path} with {editor}")
@@ -584,7 +589,7 @@ def ingest_spec_cmd(
         docs = generate_docs_from_spec(engine, spec_path=spec)
         write_ingested_docs(engine, docs, force=force)
     except (ConfigError, SpecIngestError) as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
 
     typer.echo("Ingested SPEC into TODO/PROGRESS/OPINIONS.")
     for key, content in docs.items():
@@ -601,12 +606,12 @@ def clear_docs_cmd(
     if not yes:
         confirm = input("Clear TODO/PROGRESS/OPINIONS? Type CLEAR to confirm: ").strip()
         if confirm.upper() != "CLEAR":
-            raise typer.Exit("Aborted.")
+            _raise_exit("Aborted.")
     engine = _require_repo_config(repo)
     try:
         clear_work_docs(engine)
     except ConfigError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     typer.echo("Cleared TODO/PROGRESS/OPINIONS.")
 
 
@@ -617,7 +622,7 @@ def doctor_cmd(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo pa
     try:
         doctor(engine.repo_root)
     except ConfigError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     typer.echo("Doctor check passed")
 
 
@@ -630,7 +635,7 @@ def snapshot(
     try:
         generate_snapshot(engine)
     except SnapshotError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     typer.echo("Snapshot written to .codex-autorunner/SNAPSHOT.md")
 
 
@@ -647,7 +652,7 @@ def serve(
     try:
         config = load_config(repo or Path.cwd())
     except ConfigError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     if isinstance(config, HubConfig):
         bind_host = host or config.server_host
         bind_port = port or config.server_port
@@ -703,7 +708,7 @@ def hub_create(
             repo_id, repo_path, git_init=git_init, force=force
         )
     except Exception as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     typer.echo(f"Created repo {snapshot.id} at {snapshot.path}")
 
 
@@ -761,17 +766,17 @@ def telegram_start(
     try:
         config = load_config(path or Path.cwd())
     except ConfigError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     telegram_cfg = TelegramBotConfig.from_raw(
         config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
         root=config.root,
     )
     if not telegram_cfg.enabled:
-        raise typer.Exit("telegram_bot is disabled; set telegram_bot.enabled: true")
+        _raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
     try:
         telegram_cfg.validate()
     except TelegramBotConfigError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
     log_event(
         logger,
@@ -802,7 +807,7 @@ def telegram_start(
     try:
         asyncio.run(_run())
     except TelegramBotLockError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
 
 
 @telegram_app.command("health")
@@ -819,27 +824,28 @@ def telegram_health(
     try:
         config = load_config(path or Path.cwd())
     except ConfigError as exc:
-        raise typer.Exit(str(exc))
+        _raise_exit(str(exc), cause=exc)
     telegram_cfg = TelegramBotConfig.from_raw(
         config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
         root=config.root,
     )
     if not telegram_cfg.enabled:
-        raise typer.Exit("telegram_bot is disabled; set telegram_bot.enabled: true")
-    if not telegram_cfg.bot_token:
-        raise typer.Exit(f"missing bot token env '{telegram_cfg.bot_token_env}'")
+        _raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
+    bot_token = telegram_cfg.bot_token
+    if not bot_token:
+        _raise_exit(f"missing bot token env '{telegram_cfg.bot_token_env}'")
     timeout_seconds = max(float(timeout), 0.1)
 
     async def _run() -> None:
-        async with TelegramBotClient(telegram_cfg.bot_token) as client:
+        async with TelegramBotClient(bot_token) as client:
             await asyncio.wait_for(client.get_me(), timeout=timeout_seconds)
 
     try:
         asyncio.run(_run())
     except TelegramAPIError as exc:
-        raise typer.Exit(f"Telegram health check failed: {exc}")
+        _raise_exit(f"Telegram health check failed: {exc}", cause=exc)
     except Exception as exc:
-        raise typer.Exit(f"Telegram health check failed: {exc}")
+        _raise_exit(f"Telegram health check failed: {exc}", cause=exc)
 
 
 if __name__ == "__main__":

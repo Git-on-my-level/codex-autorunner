@@ -65,8 +65,10 @@ def generate_docs_from_spec(
             text=True,
             cwd=str(engine.repo_root),
         )
-    except FileNotFoundError:
-        raise SpecIngestError(f"Codex binary not found: {engine.config.codex_binary}")
+    except FileNotFoundError as exc:
+        raise SpecIngestError(
+            f"Codex binary not found: {engine.config.codex_binary}"
+        ) from exc
 
     if result.returncode != 0:
         stderr = result.stderr.strip() if result.stderr else ""

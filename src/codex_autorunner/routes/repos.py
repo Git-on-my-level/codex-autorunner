@@ -32,7 +32,7 @@ def build_repos_routes() -> APIRouter:
         try:
             manager.start(once=once)
         except LockError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"running": manager.running, "once": once}
 
     @router.post("/api/run/stop", response_model=RunStatusResponse)
@@ -84,7 +84,7 @@ def build_repos_routes() -> APIRouter:
         try:
             manager.resume(once=once)
         except LockError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"running": manager.running, "once": once}
 
     @router.post("/api/run/reset", response_model=RunResetResponse)

@@ -8,7 +8,6 @@ import pytest
 from codex_autorunner.telegram_adapter import TelegramMessage
 from codex_autorunner.telegram_bot import TelegramBotConfig, TelegramBotService
 
-
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
 
 

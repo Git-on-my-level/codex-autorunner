@@ -8,18 +8,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
+from ...core.git_utils import (
+    git_branch,
+    git_is_clean,
+)
+from ...core.prompts import build_github_issue_to_spec_prompt, build_sync_agent_prompt
 from ...core.utils import (
     atomic_write,
     read_json,
     resolve_executable,
     subprocess_env,
 )
-from ...core.git_utils import (
-    git_branch,
-    git_is_clean,
-)
-from ...core.prompts import build_github_issue_to_spec_prompt
-from ...core.prompts import build_sync_agent_prompt
 
 
 class GitHubError(Exception):
@@ -113,7 +112,8 @@ def _run_codex_sync_agent(
     codex_cfg = raw_config.get("codex") if isinstance(raw_config, dict) else None
     codex_cfg = codex_cfg if isinstance(codex_cfg, dict) else {}
     binary = str(codex_cfg.get("binary") or "codex")
-    base_args = codex_cfg.get("args") if isinstance(codex_cfg.get("args"), list) else []
+    base_args_raw = codex_cfg.get("args")
+    base_args = base_args_raw if isinstance(base_args_raw, list) else []
 
     # Strip any existing --model flags from base args to avoid ambiguity; this flow
     # deliberately uses the configured "small" model (or no model when unset).
@@ -259,10 +259,12 @@ class GitHubService:
 
     def _resolve_gh_bin(self) -> Optional[str]:
         cfg = self.raw_config if isinstance(self.raw_config, dict) else {}
-        github_cfg = cfg.get("github") if isinstance(cfg.get("github"), dict) else {}
-        override = (
-            str(github_cfg.get("gh_path")).strip() if github_cfg.get("gh_path") else ""
+        github_cfg_raw = cfg.get("github")
+        github_cfg: dict[str, Any] = (
+            github_cfg_raw if isinstance(github_cfg_raw, dict) else {}
         )
+        gh_path = github_cfg.get("gh_path")
+        override = str(gh_path).strip() if isinstance(gh_path, str) and gh_path else ""
         return resolve_executable(override or "gh")
 
     def _gh(
@@ -380,11 +382,12 @@ class GitHubService:
             timeout_seconds=20,
         )
         try:
-            return json.loads(proc.stdout or "{}")
+            payload = json.loads(proc.stdout or "{}")
         except json.JSONDecodeError as exc:
             raise GitHubError(
                 "Unable to parse gh issue view output", status_code=500
             ) from exc
+        return payload if isinstance(payload, dict) else {}
 
     def validate_issue_same_repo(self, issue_ref: str) -> int:
         repo = self.repo_info()
@@ -410,11 +413,12 @@ class GitHubService:
             timeout_seconds=30,
         )
         try:
-            return json.loads(proc.stdout or "{}")
+            payload = json.loads(proc.stdout or "{}")
         except json.JSONDecodeError as exc:
             raise GitHubError(
                 "Unable to parse gh pr view output", status_code=500
             ) from exc
+        return payload if isinstance(payload, dict) else {}
 
     def build_context_file_from_url(self, url: str) -> Optional[dict]:
         parsed = parse_github_url(url)
@@ -720,7 +724,12 @@ def _format_pr_context(pr: dict, *, repo: str) -> list[str]:
     additions = pr.get("additions") or 0
     deletions = pr.get("deletions") or 0
     changed_files = pr.get("changedFiles") or 0
-    files = pr.get("files") if isinstance(pr.get("files"), list) else []
+    files_raw = pr.get("files")
+    files = (
+        [entry for entry in files_raw if isinstance(entry, dict)]
+        if isinstance(files_raw, list)
+        else []
+    )
     file_lines = []
     for entry in files[:200]:
         if not isinstance(entry, dict):

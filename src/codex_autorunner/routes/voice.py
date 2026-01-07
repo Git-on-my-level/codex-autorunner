@@ -122,7 +122,7 @@ def build_voice_routes() -> APIRouter:
                     if exc.reason in ("disabled", "empty_audio", "invalid_audio")
                     else 502
                 )
-            raise HTTPException(status_code=status, detail=exc.detail)
+            raise HTTPException(status_code=status, detail=exc.detail) from exc
         return {"status": "ok", **result}
 
     return router

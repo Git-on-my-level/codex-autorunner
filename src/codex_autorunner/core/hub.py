@@ -2,9 +2,9 @@ import dataclasses
 import enum
 import logging
 import os
+import re
 import shutil
 import subprocess
-import re
 import sys
 import threading
 import time
@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..bootstrap import seed_repo_files
-from .config import HubConfig, load_config
 from ..discovery import DiscoveryRecord, discover_and_init
+from ..manifest import Manifest, load_manifest, save_manifest
+from .config import HubConfig, load_config
 from .engine import Engine
 from .git_utils import git_available, git_is_clean, git_upstream_status
 from .locks import process_alive, read_lock_info
-from ..manifest import Manifest, load_manifest, save_manifest
 from .runner_controller import ProcessRunnerController
 from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
@@ -167,7 +167,7 @@ class RepoRunner:
         self.repo_id = repo_id
         self._engine = Engine(repo_root)
         self._controller = ProcessRunnerController(self._engine)
-        self._thread = None
+        self._thread: Optional[threading.Thread] = None
 
     @property
     def running(self) -> bool:
@@ -257,6 +257,7 @@ class HubSupervisor:
 
     def run_repo(self, repo_id: str, once: bool = False) -> RepoSnapshot:
         runner = self._ensure_runner(repo_id)
+        assert runner is not None
         runner.start(once=once)
         return self._snapshot_for_repo(repo_id)
 
@@ -268,6 +269,7 @@ class HubSupervisor:
 
     def resume_repo(self, repo_id: str, once: bool = False) -> RepoSnapshot:
         runner = self._ensure_runner(repo_id)
+        assert runner is not None
         runner.resume(once=once)
         return self._snapshot_for_repo(repo_id)
 
@@ -306,8 +308,10 @@ class HubSupervisor:
 
         try:
             target.relative_to(base_dir)
-        except ValueError:
-            raise ValueError(f"Repo path must live under repos_root ({base_dir})")
+        except ValueError as exc:
+            raise ValueError(
+                f"Repo path must live under repos_root ({base_dir})"
+            ) from exc
 
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         existing = manifest.get(repo_id)
@@ -358,8 +362,10 @@ class HubSupervisor:
 
         try:
             target.relative_to(base_dir)
-        except ValueError:
-            raise ValueError(f"Repo path must live under repos_root ({base_dir})")
+        except ValueError as exc:
+            raise ValueError(
+                f"Repo path must live under repos_root ({base_dir})"
+            ) from exc
 
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         existing = manifest.get(inferred_id)

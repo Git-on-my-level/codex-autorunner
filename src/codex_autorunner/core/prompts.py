@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-
 DEFAULT_PROMPT_TEMPLATE = """You are Codex, an autonomous coding assistant operating on a git repository.
 
 You are given five documents:
@@ -26,7 +25,7 @@ Work docs live under the hidden .codex-autorunner directory. Edit these files di
 - SUMMARY: {{SUMMARY_PATH}}
 
 You must:
-- Work through TODO items from top to bottom. 
+- Work through TODO items from top to bottom.
 - Be proactive and in-context learning efficient. When you are done with one task, think about if what you learned will help you on the next task. If so, work on the next TODO item as well. Only stop if the next TODO item is very large or completely unrelated to your current context.
 - Prefer fixing issues over just documenting them.
 - Keep TODO, PROGRESS, OPINIONS, SPEC, and SUMMARY in sync.

@@ -1,7 +1,8 @@
 import dataclasses
 import json
+from os import PathLike
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import IO, Any, Dict, List, Optional, Union, cast
 
 import yaml
 
@@ -9,7 +10,14 @@ try:
     from dotenv import load_dotenv
 except ModuleNotFoundError:  # pragma: no cover
 
-    def load_dotenv(*_args, **_kwargs):  # type: ignore[no-redef]
+    def load_dotenv(
+        dotenv_path: Optional[Union[str, PathLike[str]]] = None,
+        stream: Optional[IO[str]] = None,
+        verbose: bool = False,
+        override: bool = False,
+        interpolate: bool = True,
+        encoding: Optional[str] = None,
+    ) -> bool:
         return False
 
 
@@ -315,7 +323,7 @@ Config = RepoConfig
 
 
 def _merge_defaults(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
-    merged = json.loads(json.dumps(base))
+    merged = cast(Dict[str, Any], json.loads(json.dumps(base)))
     for key, value in overrides.items():
         if isinstance(value, dict) and key in merged and isinstance(merged[key], dict):
             merged[key] = _merge_defaults(merged[key], value)
@@ -478,20 +486,30 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         ),
     }
     voice_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
+    voice_cfg = cast(Dict[str, Any], voice_cfg)
     template_val = cfg["prompt"].get("template")
     template = root / template_val if template_val else None
     term_args = cfg["codex"].get("terminal_args") or []
     terminal_cfg = cfg.get("terminal") if isinstance(cfg.get("terminal"), dict) else {}
-    idle_timeout_seconds = terminal_cfg.get("idle_timeout_seconds")
+    terminal_cfg = cast(Dict[str, Any], terminal_cfg)
+    idle_timeout_value = terminal_cfg.get("idle_timeout_seconds")
+    idle_timeout_seconds: Optional[int]
+    if idle_timeout_value is None:
+        idle_timeout_seconds = None
+    else:
+        idle_timeout_seconds = int(idle_timeout_value)
+        if idle_timeout_seconds <= 0:
+            idle_timeout_seconds = None
     notifications_cfg = (
         cfg.get("notifications") if isinstance(cfg.get("notifications"), dict) else {}
     )
-    if idle_timeout_seconds is not None:
-        idle_timeout_seconds = int(idle_timeout_seconds)
-        if idle_timeout_seconds <= 0:
-            idle_timeout_seconds = None
+    notifications_cfg = cast(Dict[str, Any], notifications_cfg)
     log_cfg = cfg.get("log", {})
+    log_cfg = cast(Dict[str, Any], log_cfg if isinstance(log_cfg, dict) else {})
     server_log_cfg = cfg.get("server_log", {}) or {}
+    server_log_cfg = cast(
+        Dict[str, Any], server_log_cfg if isinstance(server_log_cfg, dict) else {}
+    )
     return RepoConfig(
         raw=cfg,
         root=root,
@@ -527,18 +545,16 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         ),
         server_log=LogConfig(
             path=root
-            / server_log_cfg.get(
-                "path", DEFAULT_REPO_CONFIG["server_log"]["path"]  # type: ignore[index]
-            ),
+            / server_log_cfg.get("path", DEFAULT_REPO_CONFIG["server_log"]["path"]),
             max_bytes=int(
                 server_log_cfg.get(
-                    "max_bytes", DEFAULT_REPO_CONFIG["server_log"]["max_bytes"]  # type: ignore[index]
+                    "max_bytes", DEFAULT_REPO_CONFIG["server_log"]["max_bytes"]
                 )
             ),
             backup_count=int(
                 server_log_cfg.get(
                     "backup_count",
-                    DEFAULT_REPO_CONFIG["server_log"]["backup_count"],  # type: ignore[index]
+                    DEFAULT_REPO_CONFIG["server_log"]["backup_count"],
                 )
             ),
         ),
@@ -962,9 +978,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
         if "voice" in media_cfg and not isinstance(media_cfg.get("voice"), bool):
             raise ConfigError("telegram_bot.media.voice must be boolean")
         for key in ("max_image_bytes", "max_voice_bytes"):
-            if key in media_cfg and not isinstance(media_cfg.get(key), int):
+            value = media_cfg.get(key)
+            if value is not None and not isinstance(value, int):
                 raise ConfigError(f"telegram_bot.media.{key} must be an integer")
-            if isinstance(media_cfg.get(key), int) and media_cfg.get(key) <= 0:
+            if isinstance(value, int) and value <= 0:
                 raise ConfigError(f"telegram_bot.media.{key} must be greater than 0")
         if "image_prompt" in media_cfg and not isinstance(
             media_cfg.get("image_prompt"), str
@@ -977,9 +994,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
         if "enabled" in shell_cfg and not isinstance(shell_cfg.get("enabled"), bool):
             raise ConfigError("telegram_bot.shell.enabled must be boolean")
         for key in ("timeout_ms", "max_output_chars"):
-            if key in shell_cfg and not isinstance(shell_cfg.get(key), int):
+            value = shell_cfg.get(key)
+            if value is not None and not isinstance(value, int):
                 raise ConfigError(f"telegram_bot.shell.{key} must be an integer")
-            if isinstance(shell_cfg.get(key), int) and shell_cfg.get(key) <= 0:
+            if isinstance(value, int) and value <= 0:
                 raise ConfigError(f"telegram_bot.shell.{key} must be greater than 0")
     if "state_file" in telegram_cfg and not isinstance(
         telegram_cfg.get("state_file"), str
@@ -997,10 +1015,8 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             polling_cfg.get("timeout_seconds"), int
         ):
             raise ConfigError("telegram_bot.polling.timeout_seconds must be an integer")
-        if (
-            isinstance(polling_cfg.get("timeout_seconds"), int)
-            and polling_cfg.get("timeout_seconds") <= 0
-        ):
+        timeout_seconds = polling_cfg.get("timeout_seconds")
+        if isinstance(timeout_seconds, int) and timeout_seconds <= 0:
             raise ConfigError(
                 "telegram_bot.polling.timeout_seconds must be greater than 0"
             )

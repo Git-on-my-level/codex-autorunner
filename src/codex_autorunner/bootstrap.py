@@ -4,8 +4,8 @@ import yaml
 
 from .core.about_car import ensure_about_car_file_for_repo
 from .core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG, resolve_config_data
-from .manifest import load_manifest
 from .core.utils import atomic_write
+from .manifest import load_manifest
 
 GITIGNORE_CONTENT = "*"
 

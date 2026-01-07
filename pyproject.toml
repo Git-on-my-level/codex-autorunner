@@ -30,6 +30,7 @@ dev = [
   "mypy>=1.10",
   "pytest>=7.0",
   "ruff>=0.5.0",
+  "types-PyYAML",
 ]
 telegram = [
   "httpx>=0.27",
@@ -62,16 +63,40 @@ line-length = 88
 target-version = "py39"
 
 [tool.ruff.lint]
-select = ["E", "F"]
-ignore = ["E402", "E501", "F403"]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/codex_autorunner/logging_utils.py" = ["F403"]
+"src/codex_autorunner/pty_session.py" = ["F403"]
+"src/codex_autorunner/static_assets.py" = ["F403"]
+"src/codex_autorunner/cli.py" = ["B008"]
+"src/codex_autorunner/routes/terminal_images.py" = ["B008"]
+"src/codex_autorunner/routes/voice.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.9"
 warn_return_any = true
 no_implicit_optional = true
 ignore_missing_imports = true
-ignore_errors = true
+warn_unused_ignores = true
 files = [
-  "src/codex_autorunner/core",
-  "src/codex_autorunner/integrations/app_server",
+  "src/codex_autorunner",
 ]
+
+[[tool.mypy.overrides]]
+module = ["codex_autorunner.core", "codex_autorunner.core.*"]
+ignore_errors = false
+
+[[tool.mypy.overrides]]
+module = [
+  "codex_autorunner.integrations.app_server",
+  "codex_autorunner.integrations.app_server.*",
+]
+ignore_errors = false
+
+[[tool.mypy.overrides]]
+module = [
+  "codex_autorunner.manifest",
+]
+ignore_errors = true

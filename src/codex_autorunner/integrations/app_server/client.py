@@ -3,10 +3,10 @@ import json
 import logging
 import random
 import re
-from importlib import metadata as importlib_metadata
 from dataclasses import dataclass
+from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Union
+from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Union, cast
 
 from ...core.logging_utils import log_event
 
@@ -83,7 +83,7 @@ class TurnHandle:
 class _TurnState:
     turn_id: str
     thread_id: Optional[str]
-    future: asyncio.Future
+    future: asyncio.Future["TurnResult"]
     agent_messages: list[str]
     errors: list[str]
     raw_events: list[Dict[str, Any]]
@@ -119,7 +119,7 @@ class CodexAppServerClient:
         self._stderr_task: Optional[asyncio.Task] = None
         self._start_lock: Optional[asyncio.Lock] = None
         self._write_lock: Optional[asyncio.Lock] = None
-        self._pending: Dict[int, asyncio.Future] = {}
+        self._pending: Dict[int, asyncio.Future[Any]] = {}
         self._pending_methods: Dict[int, str] = {}
         self._turns: Dict[TurnKey, _TurnState] = {}
         self._pending_turns: Dict[str, _TurnState] = {}
@@ -402,7 +402,7 @@ class CodexAppServerClient:
     ) -> Any:
         request_id = self._next_request_id()
         loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
+        future: asyncio.Future[Any] = loop.create_future()
         self._pending[request_id] = future
         self._pending_methods[request_id] = method
         log_event(
@@ -523,6 +523,8 @@ class CodexAppServerClient:
             message = json.loads(payload)
         except json.JSONDecodeError:
             return
+        if not isinstance(message, dict):
+            return
         await self._handle_message(message)
 
     async def _drain_stderr(self) -> None:
@@ -556,6 +558,8 @@ class CodexAppServerClient:
 
     async def _handle_response(self, message: Dict[str, Any]) -> None:
         req_id = message.get("id")
+        if not isinstance(req_id, int):
+            return
         future = self._pending.pop(req_id, None)
         method = self._pending_methods.pop(req_id, None)
         if future is None:
@@ -594,10 +598,9 @@ class CodexAppServerClient:
     async def _handle_server_request(self, message: Dict[str, Any]) -> None:
         method = message.get("method")
         req_id = message.get("id")
-        if method in APPROVAL_METHODS:
-            params = (
-                message.get("params") if isinstance(message.get("params"), dict) else {}
-            )
+        if isinstance(method, str) and method in APPROVAL_METHODS:
+            params_raw = message.get("params")
+            params: Dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
             log_event(
                 self._logger,
                 logging.INFO,
@@ -751,7 +754,7 @@ class CodexAppServerClient:
         if state is not None:
             return state
         loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
+        future = cast(asyncio.Future[TurnResult], loop.create_future())
         state = _TurnState(
             turn_id=turn_id,
             thread_id=thread_id,
@@ -768,7 +771,7 @@ class CodexAppServerClient:
         if state is not None:
             return state
         loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
+        future = cast(asyncio.Future[TurnResult], loop.create_future())
         state = _TurnState(
             turn_id=turn_id,
             thread_id=None,

@@ -3,7 +3,6 @@ from pathlib import Path
 
 from .core.utils import canonicalize_path
 
-
 WORKSPACE_ID_HEX_LEN = 12
 
 

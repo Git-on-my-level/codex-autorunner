@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from contextlib import ExitStack
 import logging
+from contextlib import ExitStack
 from importlib import resources
 from pathlib import Path
 from typing import Optional

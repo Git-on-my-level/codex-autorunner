@@ -3,8 +3,8 @@ Base routes: Index, state streaming, WebSocket terminal, and logs.
 """
 
 import asyncio
-import logging
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -14,11 +14,11 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from ..codex_cli import extract_flag_value
-from ..web.pty_session import ActiveSession, PTYSession, REPLAY_END
-from ..core.state import SessionRecord, load_state, now_iso, persist_session_registry
-from ..web.static_assets import index_response_headers, render_index_html
-from ..web.schemas import StateResponse, VersionResponse
 from ..core.logging_utils import safe_log
+from ..core.state import SessionRecord, load_state, now_iso, persist_session_registry
+from ..web.pty_session import REPLAY_END, ActiveSession, PTYSession
+from ..web.schemas import StateResponse, VersionResponse
+from ..web.static_assets import index_response_headers, render_index_html
 from .shared import (
     build_codex_terminal_cmd,
     log_stream,
@@ -109,6 +109,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
     async def terminal(ws: WebSocket):
         await ws.accept()
         app = ws.scope.get("app")
+        if app is None:
+            await ws.close()
+            return
         logger = app.state.logger
         engine = app.state.engine
         terminal_sessions: dict[str, ActiveSession] = app.state.terminal_sessions
@@ -275,6 +278,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 ),
             )
         include_replay_end = attach_only or mode == "resume" or bool(client_session_id)
+        if active_session is None:
+            await ws.close()
+            return
         queue = active_session.add_subscriber(include_replay_end=include_replay_end)
 
         async def pty_to_ws():
@@ -413,8 +419,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             active_session.remove_subscriber(queue)
             if not active_session.pty.isalive():
                 async with terminal_lock:
-                    terminal_sessions.pop(session_id, None)
                     if session_id:
+                        terminal_sessions.pop(session_id, None)
                         session_registry.pop(session_id, None)
                         repo_to_session = {
                             repo: sid

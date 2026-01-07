@@ -15,6 +15,7 @@ from ..core.doc_chat import (
     DocChatValidationError,
     _normalize_kind,
 )
+from ..core.utils import atomic_write
 from ..snapshot import (
     SnapshotError,
     generate_snapshot,
@@ -34,7 +35,6 @@ from ..usage import (
     parse_iso_datetime,
     summarize_repo_usage,
 )
-from ..core.utils import atomic_write
 from ..web.schemas import (
     DocChatPayload,
     DocContentRequest,
@@ -94,9 +94,9 @@ def build_docs_routes() -> APIRouter:
                 engine,
             )
         except SnapshotError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         return {
             "content": result.content,
@@ -113,7 +113,7 @@ def build_docs_routes() -> APIRouter:
             payload_dict = payload.model_dump(exclude_none=True) if payload else None
             doc_req = doc_chat.parse_request(kind, payload_dict)
         except DocChatValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         repo_blocked = doc_chat.repo_blocked_reason()
         if repo_blocked:
@@ -134,7 +134,7 @@ def build_docs_routes() -> APIRouter:
             async with doc_chat.doc_lock(doc_req.kind):
                 result = await doc_chat.execute(doc_req)
         except DocChatBusyError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         if result.get("status") != "ok":
             detail = result.get("detail") or "Doc chat failed"
@@ -153,9 +153,9 @@ def build_docs_routes() -> APIRouter:
             async with doc_chat.doc_lock(key):
                 content = doc_chat.apply_saved_patch(key)
         except DocChatBusyError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except DocChatError as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {
             "status": "ok",
             "kind": key,
@@ -172,7 +172,7 @@ def build_docs_routes() -> APIRouter:
             async with doc_chat.doc_lock(key):
                 content = doc_chat.discard_patch(key)
         except DocChatError as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"status": "ok", "kind": key, "content": content}
 
     @router.get("/api/docs/{kind}/chat/pending")
@@ -197,7 +197,7 @@ def build_docs_routes() -> APIRouter:
             docs = generate_docs_from_spec(engine, spec_path=spec_override)
             write_ingested_docs(engine, docs, force=force)
         except SpecIngestError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return docs
 
     @router.post("/api/docs/clear", response_model=DocsResponse)
@@ -206,7 +206,7 @@ def build_docs_routes() -> APIRouter:
         try:
             docs = clear_work_docs(engine)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return docs
 
     @router.get("/api/usage", response_model=RepoUsageResponse)
@@ -218,7 +218,7 @@ def build_docs_routes() -> APIRouter:
             since_dt = parse_iso_datetime(since)
             until_dt = parse_iso_datetime(until)
         except UsageError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         summary = summarize_repo_usage(
             engine.repo_root,
             default_codex_home(),
@@ -247,7 +247,7 @@ def build_docs_routes() -> APIRouter:
             since_dt = parse_iso_datetime(since)
             until_dt = parse_iso_datetime(until)
         except UsageError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             series, status = get_repo_usage_series_cached(
                 engine.repo_root,
@@ -258,7 +258,7 @@ def build_docs_routes() -> APIRouter:
                 segment=segment,
             )
         except UsageError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "mode": "repo",
             "repo": str(engine.repo_root),

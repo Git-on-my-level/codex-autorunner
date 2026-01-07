@@ -77,28 +77,34 @@ def _write_update_status(status: str, message: str, **extra) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _read_update_status() -> Optional[dict]:
+def _read_update_status() -> Optional[dict[str, object]]:
     path = _update_status_path()
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+    if isinstance(payload, dict):
+        return payload
+    return None
 
 
 def _update_lock_path() -> Path:
     return Path.home() / ".codex-autorunner" / "update.lock"
 
 
-def _read_update_lock() -> Optional[dict]:
+def _read_update_lock() -> Optional[dict[str, object]]:
     path = _update_lock_path()
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+    if isinstance(payload, dict):
+        return payload
+    return None
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -143,18 +149,18 @@ def _acquire_update_lock(
     }
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
+    except FileExistsError as exc:
         existing = _update_lock_active()
         if existing:
             msg = f"Update already running (pid {existing.get('pid')})."
             logger.info(msg)
-            raise UpdateInProgressError(msg)
+            raise UpdateInProgressError(msg) from exc
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+        except FileExistsError as exc:
             msg = "Update already running."
             logger.info(msg)
-            raise UpdateInProgressError(msg)
+            raise UpdateInProgressError(msg) from exc
     with os.fdopen(fd, "w") as handle:
         handle.write(json.dumps(payload))
     return True
@@ -580,7 +586,7 @@ def build_system_routes() -> APIRouter:
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:
                 logger.error("Update check error: %s", e, exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
     @router.post("/system/update", response_model=SystemUpdateResponse)
     async def system_update(
@@ -630,14 +636,14 @@ def build_system_routes() -> APIRouter:
                 "target": update_target,
             }
         except UpdateInProgressError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as e:
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:
                 logger.error("Update error: %s", e, exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
     @router.get("/system/update/status", response_model=SystemUpdateStatusResponse)
     async def system_update_status():

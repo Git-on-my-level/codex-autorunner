@@ -8,9 +8,9 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ..core.state import persist_session_registry
 from ..web.schemas import (
+    SessionsResponse,
     SessionStopRequest,
     SessionStopResponse,
-    SessionsResponse,
 )
 
 

@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.cli import app
+
 pytest.importorskip("typer")
 CliRunner = pytest.importorskip("typer.testing").CliRunner
-
-from codex_autorunner.cli import app
 
 
 runner = CliRunner()

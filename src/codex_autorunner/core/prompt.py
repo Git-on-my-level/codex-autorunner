@@ -24,7 +24,7 @@ def build_doc_paths(config: Config) -> Mapping[str, str]:
 
 
 def load_prompt_template(config: Config) -> str:
-    template_path: Path = config.prompt_template if config.prompt_template else None
+    template_path: Optional[Path] = config.prompt_template
     if template_path and template_path.exists():
         return template_path.read_text(encoding="utf-8")
     return DEFAULT_PROMPT_TEMPLATE
