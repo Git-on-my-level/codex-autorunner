@@ -1,0 +1,16 @@
+# TODO
+- [x] Stage 3: expand mypy coverage to `src/codex_autorunner/integrations/app_server` (remove ignores, add local typing fixes, add/confirm third-party stubs, keep changes localized)
+- [x] Stage 4: expand ruff ruleset with `I` and `B` (and optionally `UP`), apply fixes in one pass, document any justified per-file ignores
+- [x] Stage 5: tighten mypy settings repo-wide (remove global `ignore_errors`, add explicit temporary module ignores if needed, enable `warn_unused_ignores`, evaluate `disallow_untyped_defs` once stable)
+- [x] Stage 6: verify deadcode baseline hygiene and update `.deadcode-baseline.json` only if confirmed; record rationale in progress
+- [x] End-to-end validation pass: run `./scripts/check.sh`, resolve remaining issues, and capture learnings for the next agent run
+- [x] Tighten mypy: remove `ignore_errors` for `codex_autorunner.bootstrap` and fix any new errors
+- [x] Tighten mypy: remove `ignore_errors` for `codex_autorunner.cli` and fix any new errors
+- [x] Tighten mypy: remove `ignore_errors` for `codex_autorunner.routes.*` and fix any new errors
+- [x] Tighten mypy: remove `ignore_errors` for `codex_autorunner.web.*` and fix any new errors
+- [x] Tighten mypy: remove `ignore_errors` for `codex_autorunner.voice.*` and fix any new errors
+- [x] Tighten mypy: remove `ignore_errors` for `codex_autorunner.integrations.github.*` and fix any new errors
+- [x] Tighten mypy: remove `ignore_errors` for `codex_autorunner.integrations.telegram.*` and fix any new errors
+- [x] Ruff follow-up: decided to defer `UP` (pyupgrade) because it would require widespread typing syntax updates
+- [ ] Enable full mypy coverage by removing remaining ignore overrides in `pyproject.toml` (bootstrap/cli/routes/web/voice/github/telegram) and fix any new errors
+- [ ] Enable mypy for `codex_autorunner.manifest` (remove ignore, fix any new errors)
