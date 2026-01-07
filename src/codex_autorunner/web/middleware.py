@@ -113,12 +113,13 @@ class BasePathRouterMiddleware:
 
 
 class AuthTokenMiddleware:
-    """Middleware that enforces an auth token on API/WS endpoints."""
+    """Middleware that enforces an auth token on all non-public endpoints."""
 
     def __init__(self, app, token: str, base_path: str = ""):
         self.app = app
         self.token = token
         self.base_path = _normalize_base_path(base_path)
+        self.public_prefixes = ("/static", "/health", "/cat")
 
     def __getattr__(self, name):
         return getattr(self.app, name)
@@ -138,15 +139,32 @@ class AuthTokenMiddleware:
             return stripped or "/"
         return path
 
+    def _strip_repo_mount(self, path: str) -> str:
+        if not path.startswith("/repos/"):
+            return path
+        parts = path.split("/", 3)
+        if len(parts) < 4:
+            return path
+        if not parts[3]:
+            return path
+        remainder = f"/{parts[3]}"
+        return remainder or "/"
+
+    def _is_public_path(self, path: str) -> bool:
+        if path == "/":
+            return True
+        for prefix in self.public_prefixes:
+            if path == prefix or path.startswith(f"{prefix}/"):
+                return True
+        return False
+
     def _requires_auth(self, scope) -> bool:
         scope_type = scope.get("type")
         if scope_type not in ("http", "websocket"):
             return False
         full_path = self._strip_base_path(self._full_path(scope))
-        for prefix in ("/api", "/ws", "/hub"):
-            if full_path == prefix or full_path.startswith(f"{prefix}/"):
-                return True
-        return False
+        repo_path = self._strip_repo_mount(full_path)
+        return not self._is_public_path(repo_path)
 
     def _extract_header_token(self, scope) -> str | None:
         headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
