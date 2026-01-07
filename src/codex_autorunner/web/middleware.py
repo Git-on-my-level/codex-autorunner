@@ -59,9 +59,19 @@ class BasePathRouterMiddleware:
         if scope["type"] == "websocket":
             headers = [(b"location", target.encode("utf-8"))]
             await send(
-                {"type": "http.response.start", "status": 308, "headers": headers}
+                {
+                    "type": "websocket.http.response.start",
+                    "status": 308,
+                    "headers": headers,
+                }
             )
-            await send({"type": "http.response.body", "body": b"", "more_body": False})
+            await send(
+                {
+                    "type": "websocket.http.response.body",
+                    "body": b"",
+                    "more_body": False,
+                }
+            )
             return
         response = RedirectResponse(target, status_code=308)
         await response(scope, receive, send)

@@ -117,9 +117,11 @@ def test_websocket_redirects_to_canonical_base():
     messages = anyio.run(_run)
     assert not called
     assert messages
+    assert messages[0]["type"] == "websocket.http.response.start"
     assert messages[0]["status"] == 308
     headers = dict(messages[0].get("headers") or [])
     assert headers.get(b"location") == b"/car/api/terminal"
+    assert messages[1]["type"] == "websocket.http.response.body"
 
 
 def test_mounted_apps_work_under_base_path():
