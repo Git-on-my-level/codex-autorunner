@@ -129,6 +129,10 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "timeout_ms": 120000,
             "max_output_chars": 3800,
         },
+        "command_registration": {
+            "enabled": True,
+            "scopes": [{"type": "default", "language_code": ""}],
+        },
         "state_file": ".codex-autorunner/telegram_state.json",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
@@ -274,6 +278,10 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "enabled": False,
             "timeout_ms": 120000,
             "max_output_chars": 3800,
+        },
+        "command_registration": {
+            "enabled": True,
+            "scopes": [{"type": "default", "language_code": ""}],
         },
         "state_file": ".codex-autorunner/telegram_state.json",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
@@ -1220,6 +1228,41 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(f"telegram_bot.shell.{key} must be an integer")
             if isinstance(value, int) and value <= 0:
                 raise ConfigError(f"telegram_bot.shell.{key} must be greater than 0")
+    command_reg_cfg = telegram_cfg.get("command_registration")
+    if command_reg_cfg is not None and not isinstance(command_reg_cfg, dict):
+        raise ConfigError("telegram_bot.command_registration must be a mapping")
+    if isinstance(command_reg_cfg, dict):
+        if "enabled" in command_reg_cfg and not isinstance(
+            command_reg_cfg.get("enabled"), bool
+        ):
+            raise ConfigError("telegram_bot.command_registration.enabled must be boolean")
+        if "scopes" in command_reg_cfg:
+            scopes = command_reg_cfg.get("scopes")
+            if not isinstance(scopes, list):
+                raise ConfigError(
+                    "telegram_bot.command_registration.scopes must be a list"
+                )
+            for scope in scopes:
+                if isinstance(scope, str):
+                    continue
+                if not isinstance(scope, dict):
+                    raise ConfigError(
+                        "telegram_bot.command_registration.scopes must contain strings or mappings"
+                    )
+                scope_payload = scope.get("scope")
+                if scope_payload is not None and not isinstance(scope_payload, dict):
+                    raise ConfigError(
+                        "telegram_bot.command_registration.scopes.scope must be a mapping"
+                    )
+                if "type" in scope and not isinstance(scope.get("type"), str):
+                    raise ConfigError(
+                        "telegram_bot.command_registration.scopes.type must be a string"
+                    )
+                language_code = scope.get("language_code")
+                if language_code is not None and not isinstance(language_code, str):
+                    raise ConfigError(
+                        "telegram_bot.command_registration.scopes.language_code must be a string or null"
+                    )
     if "state_file" in telegram_cfg and not isinstance(
         telegram_cfg.get("state_file"), str
     ):

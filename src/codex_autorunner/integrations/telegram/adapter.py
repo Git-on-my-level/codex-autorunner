@@ -1021,6 +1021,53 @@ class TelegramBotClient:
         result = await self._request("getFile", {"file_id": file_id})
         return result if isinstance(result, dict) else {}
 
+    async def get_my_commands(
+        self,
+        *,
+        scope: Optional[dict[str, Any]] = None,
+        language_code: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        log_event(
+            self._logger,
+            logging.DEBUG,
+            "telegram.request",
+            method="getMyCommands",
+            scope=scope,
+            language_code=language_code,
+        )
+        payload: dict[str, Any] = {}
+        if scope is not None:
+            payload["scope"] = scope
+        if language_code is not None:
+            payload["language_code"] = language_code
+        result = await self._request("getMyCommands", payload)
+        if not isinstance(result, list):
+            return []
+        return [item for item in result if isinstance(item, dict)]
+
+    async def set_my_commands(
+        self,
+        commands: Sequence[dict[str, str]],
+        *,
+        scope: Optional[dict[str, Any]] = None,
+        language_code: Optional[str] = None,
+    ) -> bool:
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.set_my_commands",
+            command_count=len(commands),
+            scope=scope,
+            language_code=language_code,
+        )
+        payload: dict[str, Any] = {"commands": list(commands)}
+        if scope is not None:
+            payload["scope"] = scope
+        if language_code is not None:
+            payload["language_code"] = language_code
+        result = await self._request("setMyCommands", payload)
+        return bool(result) if isinstance(result, bool) else False
+
     async def download_file(self, file_path: str) -> bytes:
         url = f"{self._file_base_url}/{file_path}"
         log_event(

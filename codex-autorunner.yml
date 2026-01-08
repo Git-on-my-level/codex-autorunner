@@ -123,6 +123,12 @@ repo:
       timeout_ms: 120000
       # Max output characters to show inline before attaching full output.
       max_output_chars: 3800
+    command_registration:
+      # Auto-register bot commands so Telegram shows the slash command menu.
+      enabled: true
+      scopes:
+        - type: default
+          language_code: ""
     state_file: .codex-autorunner/telegram_state.json
     # Optional env var that contains the full app-server command.
     app_server_command_env: CAR_TELEGRAM_APP_SERVER_COMMAND
@@ -224,6 +230,12 @@ hub:
       timeout_ms: 120000
       # Max output characters to show inline before attaching full output.
       max_output_chars: 3800
+    command_registration:
+      # Auto-register bot commands so Telegram shows the slash command menu.
+      enabled: true
+      scopes:
+        - type: default
+          language_code: ""
     state_file: .codex-autorunner/telegram_state.json
     # Optional env var that contains the full app-server command.
     app_server_command_env: CAR_TELEGRAM_APP_SERVER_COMMAND

@@ -34,6 +34,7 @@ from .config import (
     TelegramBotLockError,
     TelegramMediaCandidate,
 )
+from .commands_registry import build_command_payloads, diff_command_lists
 from .constants import (
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     DEFAULT_WORKSPACE_STATE_ROOT,
@@ -358,6 +359,7 @@ class TelegramBotService(
         self._voice_manager.start()
         try:
             await self._prime_bot_identity()
+            await self._register_bot_commands()
             await self._restore_pending_approvals()
             await self._outbox_manager.restore()
             await self._voice_manager.restore()
@@ -449,6 +451,95 @@ class TelegramBotService(
             username = payload.get("username")
             if isinstance(username, str) and username:
                 self._bot_username = username
+
+    async def _register_bot_commands(self) -> None:
+        registration = self._config.command_registration
+        if not registration.enabled:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "telegram.commands.disabled",
+            )
+            return
+        desired, invalid = build_command_payloads(self._command_specs)
+        if invalid:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.commands.invalid",
+                invalid=invalid,
+            )
+        if not desired:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.commands.empty",
+            )
+            return
+        if len(desired) > 100:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.commands.truncated",
+                desired_count=len(desired),
+            )
+            desired = desired[:100]
+        for scope_spec in registration.scopes:
+            scope = scope_spec.scope
+            language_code = scope_spec.language_code
+            try:
+                current = await self._bot.get_my_commands(
+                    scope=scope,
+                    language_code=language_code,
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.commands.get_failed",
+                    scope=scope,
+                    language_code=language_code,
+                    exc=exc,
+                )
+                continue
+            diff = diff_command_lists(desired, current)
+            if not diff.needs_update:
+                log_event(
+                    self._logger,
+                    logging.DEBUG,
+                    "telegram.commands.up_to_date",
+                    scope=scope,
+                    language_code=language_code,
+                )
+                continue
+            try:
+                updated = await self._bot.set_my_commands(
+                    desired,
+                    scope=scope,
+                    language_code=language_code,
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.commands.set_failed",
+                    scope=scope,
+                    language_code=language_code,
+                    exc=exc,
+                )
+                continue
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.commands.updated",
+                scope=scope,
+                language_code=language_code,
+                updated=updated,
+                added=diff.added,
+                removed=diff.removed,
+                changed=diff.changed,
+                order_changed=diff.order_changed,
+            )
 
     def _prime_poller_offset(self) -> None:
         last_update_id = self._store.get_last_update_id_global()

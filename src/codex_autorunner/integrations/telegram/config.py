@@ -79,6 +79,18 @@ class TelegramBotShellConfig:
 
 
 @dataclass(frozen=True)
+class TelegramBotCommandScope:
+    scope: dict[str, Any]
+    language_code: str
+
+
+@dataclass(frozen=True)
+class TelegramBotCommandRegistration:
+    enabled: bool
+    scopes: list[TelegramBotCommandScope]
+
+
+@dataclass(frozen=True)
 class TelegramMediaCandidate:
     kind: str
     file_id: str
@@ -105,6 +117,7 @@ class TelegramBotConfig:
     concurrency: TelegramBotConcurrency
     media: TelegramBotMediaConfig
     shell: TelegramBotShellConfig
+    command_registration: TelegramBotCommandRegistration
     state_file: Path
     app_server_command_env: str
     app_server_command: list[str]
@@ -234,6 +247,18 @@ class TelegramBotConfig:
             max_output_chars=shell_max_output_chars,
         )
 
+        command_reg_raw_value = cfg.get("command_registration")
+        command_reg_raw: dict[str, Any] = (
+            command_reg_raw_value
+            if isinstance(command_reg_raw_value, dict)
+            else {}
+        )
+        command_reg_enabled = bool(command_reg_raw.get("enabled", True))
+        scopes = _parse_command_scopes(command_reg_raw.get("scopes"))
+        command_registration = TelegramBotCommandRegistration(
+            enabled=command_reg_enabled, scopes=scopes
+        )
+
         state_file = Path(cfg.get("state_file", DEFAULT_STATE_FILE))
         if not state_file.is_absolute():
             state_file = (root / state_file).resolve()
@@ -280,6 +305,7 @@ class TelegramBotConfig:
             concurrency=concurrency,
             media=media,
             shell=shell,
+            command_registration=command_registration,
             state_file=state_file,
             app_server_command_env=app_server_command_env,
             app_server_command=app_server_command,
@@ -347,3 +373,43 @@ def _normalize_parse_mode(raw: Any) -> Optional[str]:
     if not cleaned:
         return None
     return PARSE_MODE_ALIASES.get(cleaned.lower(), cleaned)
+
+
+def _parse_command_scopes(raw: Any) -> list[TelegramBotCommandScope]:
+    scopes: list[TelegramBotCommandScope] = []
+    if raw is None:
+        raw = [{"type": "default", "language_code": ""}]
+    if isinstance(raw, list):
+        for item in raw:
+            scope_payload: dict[str, Any] = {"type": "default"}
+            language_code = ""
+            if isinstance(item, str):
+                scope_payload = {"type": item}
+            elif isinstance(item, dict):
+                if isinstance(item.get("scope"), dict):
+                    scope_payload = dict(item.get("scope", {}))
+                else:
+                    scope_payload = {
+                        "type": str(item.get("type", "default"))
+                        if item.get("type") is not None
+                        else "default"
+                    }
+                    for key, value in item.items():
+                        if key in ("scope", "type", "language_code"):
+                            continue
+                        scope_payload[key] = value
+                language_code_raw = item.get("language_code", "")
+                if language_code_raw is not None:
+                    language_code = str(language_code_raw)
+            if "type" not in scope_payload:
+                scope_payload["type"] = "default"
+            scopes.append(
+                TelegramBotCommandScope(
+                    scope=scope_payload, language_code=language_code
+                )
+            )
+    if not scopes:
+        scopes.append(
+            TelegramBotCommandScope(scope={"type": "default"}, language_code="")
+        )
+    return scopes

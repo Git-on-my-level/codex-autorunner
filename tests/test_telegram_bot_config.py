@@ -111,3 +111,20 @@ def test_telegram_bot_config_shell_overrides(tmp_path: Path) -> None:
     assert cfg.shell.enabled is True
     assert cfg.shell.timeout_ms == 5000
     assert cfg.shell.max_output_chars == 123
+
+
+def test_telegram_bot_config_command_registration_defaults(tmp_path: Path) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "123",
+    }
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    registration = cfg.command_registration
+    assert registration.enabled is True
+    assert registration.scopes[0].scope["type"] == "default"
