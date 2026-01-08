@@ -255,9 +255,10 @@ class GitHubService:
         self.repo_root = repo_root
         self.raw_config = raw_config or {}
         self.github_path = repo_root / ".codex-autorunner" / "github.json"
-        self.gh_bin = self._resolve_gh_bin()
+        self.gh_bin: Optional[str] = None
+        self.gh_path, self.gh_override = self._load_gh_path()
 
-    def _resolve_gh_bin(self) -> Optional[str]:
+    def _load_gh_path(self) -> tuple[str, bool]:
         cfg = self.raw_config if isinstance(self.raw_config, dict) else {}
         github_cfg_raw = cfg.get("github")
         github_cfg: dict[str, Any] = (
@@ -265,7 +266,12 @@ class GitHubService:
         )
         gh_path = github_cfg.get("gh_path")
         override = str(gh_path).strip() if isinstance(gh_path, str) and gh_path else ""
-        return resolve_executable(override or "gh")
+        return override or "gh", bool(override)
+
+    def _resolve_gh_bin(self) -> Optional[str]:
+        if self.gh_bin is None:
+            self.gh_bin = resolve_executable(self.gh_path)
+        return self.gh_bin
 
     def _gh(
         self,
@@ -275,14 +281,22 @@ class GitHubService:
         timeout_seconds: int = 30,
         check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
-        if not self.gh_bin:
+        gh_bin = self._resolve_gh_bin()
+        if not gh_bin:
             raise GitHubError("GitHub CLI (gh) not available", status_code=500)
-        return _run(
-            [self.gh_bin] + args,
-            cwd=cwd or self.repo_root,
-            timeout_seconds=timeout_seconds,
-            check=check,
-        )
+        try:
+            return _run(
+                [gh_bin] + args,
+                cwd=cwd or self.repo_root,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+        except GitHubError as exc:
+            if "Missing binary:" in str(exc):
+                raise GitHubError(
+                    "GitHub CLI (gh) not available", status_code=500
+                ) from exc
+            raise
 
     # ── persistence ────────────────────────────────────────────────────────────
     def read_link_state(self) -> dict:
@@ -296,7 +310,7 @@ class GitHubService:
 
     # ── capability/status ──────────────────────────────────────────────────────
     def gh_available(self) -> bool:
-        return self.gh_bin is not None
+        return self._resolve_gh_bin() is not None
 
     def gh_authenticated(self) -> bool:
         if not self.gh_available():

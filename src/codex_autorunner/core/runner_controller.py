@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 
 from .engine import Engine, LockError
 from .locks import process_alive, read_lock_info
@@ -8,9 +9,17 @@ from .runner_process import build_runner_cmd, spawn_detached
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 
 
+SpawnRunnerFn = Callable[[list[str], Engine], object]
+
+
+def _spawn_detached(cmd: list[str], engine: Engine) -> object:
+    return spawn_detached(cmd, cwd=engine.repo_root)
+
+
 class ProcessRunnerController:
-    def __init__(self, engine: Engine):
+    def __init__(self, engine: Engine, *, spawn_fn: SpawnRunnerFn | None = None):
         self.engine = engine
+        self._spawn_fn = spawn_fn or _spawn_detached
         self._lock = threading.Lock()
 
     @property
@@ -82,7 +91,7 @@ class ProcessRunnerController:
             action=action,
             once=once,
         )
-        spawn_detached(cmd, cwd=self.engine.repo_root)
+        self._spawn_fn(cmd, self.engine)
 
     def start(self, once: bool = False) -> None:
         with self._lock:

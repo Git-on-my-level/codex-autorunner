@@ -47,6 +47,12 @@ cd codex-autorunner
 pip install -e .
 ```
 
+### Optional extras
+- Telegram bot support: `pip install codex-autorunner[telegram]`
+- Voice transcription support: `pip install codex-autorunner[voice]`
+- Dev tools (lint/test): `pip install codex-autorunner[dev]`
+- Local dev alternative: `pip install -e .[extra]`
+
 ### Opinionated setup (macOS headless hub at `~/car-workspace`)
 - One-shot setup (user scope): `scripts/install-local-mac-hub.sh`. It pipx-installs this repo, creates/initializes `~/car-workspace` as a hub, writes a launchd agent plist, and loads it. Defaults: host `0.0.0.0`, port `4173`, label `com.codex.autorunner`. Override via env (`WORKSPACE`, `HOST`, `PORT`, `LABEL`, `PLIST_PATH`, `PACKAGE_SRC`).
 - Create/update the launchd agent plist and (re)load it: `scripts/launchd-hub.sh` (or `make launchd-hub`).
@@ -118,6 +124,13 @@ If you set a base path, prefix all checks with it.
 - The UI/API are unauthenticated. Exposing them to the public web enables remote code execution on your machine (terminal + runner).
 - Keep the server bound to `127.0.0.1` and use Tailscale (or another VPN) for remote access.
 - If you must expose it, put it behind an auth-enforcing reverse proxy (basic auth/SSO) and restrict network access. Do not expose it publicly without protections.
+
+### Auth token (optional)
+If you set `server.auth_token_env`, the API requires `Authorization: Bearer <token>` on every request.
+- Set the config: `server.auth_token_env: CAR_SERVER_TOKEN`.
+- Export the token before starting the server: `export CAR_SERVER_TOKEN="..."`.
+- Browser UI: visit `http://host:port/?token=...` once. The UI stores it in `sessionStorage` and removes it from the URL; websocket connections will include `token=...` automatically.
+- CLI: requests automatically attach the token from `server.auth_token_env`; if the env var is missing, CLI commands will error.
 
 ## Git hooks
 - Install dev tools: `pip install -e .[dev]`

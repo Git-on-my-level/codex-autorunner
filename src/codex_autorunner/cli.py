@@ -93,6 +93,17 @@ def _resolve_auth_token(env_name: str) -> Optional[str]:
     return value or None
 
 
+def _require_auth_token(env_name: Optional[str]) -> Optional[str]:
+    if not env_name:
+        return None
+    token = _resolve_auth_token(env_name)
+    if not token:
+        _raise_exit(
+            f"server.auth_token_env is set to {env_name}, but the environment variable is missing."
+        )
+    return token
+
+
 def _is_loopback_host(host: str) -> bool:
     if host == "localhost":
         return True
@@ -112,8 +123,17 @@ def _enforce_bind_auth(host: str, token_env: str) -> None:
     )
 
 
-def _request_json(method: str, url: str, payload: Optional[dict] = None) -> dict:
-    response = httpx.request(method, url, json=payload, timeout=2.0)
+def _request_json(
+    method: str,
+    url: str,
+    payload: Optional[dict] = None,
+    token_env: Optional[str] = None,
+) -> dict:
+    headers = None
+    if token_env:
+        token = _require_auth_token(token_env)
+        headers = {"Authorization": f"Bearer {token}"}
+    response = httpx.request(method, url, json=payload, timeout=2.0, headers=headers)
     response.raise_for_status()
     data = response.json()
     return data if isinstance(data, dict) else {}
@@ -236,7 +256,7 @@ def sessions(
     payload = None
     source = "server"
     try:
-        payload = _request_json("GET", url)
+        payload = _request_json("GET", url, token_env=config.server_auth_token_env)
     except Exception:
         state = load_state(engine.state_path)
         payload = {
@@ -295,7 +315,9 @@ def stop_session(
 
     url = _build_server_url(config, "/api/sessions/stop")
     try:
-        response = _request_json("POST", url, payload)
+        response = _request_json(
+            "POST", url, payload, token_env=config.server_auth_token_env
+        )
         stopped_id = response.get("session_id", payload.get("session_id", ""))
         typer.echo(f"Stopped session {stopped_id}")
         return

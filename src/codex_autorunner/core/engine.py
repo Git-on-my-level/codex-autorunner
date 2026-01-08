@@ -249,16 +249,22 @@ class Engine:
     def read_run_block(self, run_id: int) -> Optional[str]:
         """Return a single run block from the log."""
         index_entry = self._load_run_index().get(str(run_id))
+        run_log = None
         if index_entry:
-            block = self._read_log_range(index_entry)
-            if block is not None:
-                return block
-        run_log = self._run_log_path(run_id)
+            run_log_raw = index_entry.get("run_log_path")
+            if isinstance(run_log_raw, str) and run_log_raw:
+                run_log = Path(run_log_raw)
+        if run_log is None:
+            run_log = self._run_log_path(run_id)
         if run_log.exists():
             try:
                 return run_log.read_text(encoding="utf-8")
             except Exception:
                 return None
+        if index_entry:
+            block = self._read_log_range(index_entry)
+            if block is not None:
+                return block
         if not self.log_path.exists():
             return None
         start = f"=== run {run_id} start"
@@ -458,11 +464,13 @@ class Engine:
             entry["start_offset"] = offset[0] if offset else None
             entry["started_at"] = now_iso()
             entry["log_path"] = str(self.log_path)
+            entry["run_log_path"] = str(self._run_log_path(run_id))
         elif marker == "end":
             entry["end_offset"] = offset[1] if offset else None
             entry["finished_at"] = now_iso()
             entry["exit_code"] = exit_code
             entry.setdefault("log_path", str(self.log_path))
+            entry.setdefault("run_log_path", str(self._run_log_path(run_id)))
         index[key] = entry
         self._save_run_index(index)
 

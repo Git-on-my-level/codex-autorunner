@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -165,14 +166,30 @@ def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     monkeypatch.setattr(Engine, "run_loop", fake_run_loop)
 
-    supervisor = HubSupervisor(load_config(hub_root))  # type: ignore[arg-type]
+    threads: list[threading.Thread] = []
+
+    def spawn_fn(cmd: list[str], engine: Engine) -> object:
+        action = cmd[3] if len(cmd) > 3 else ""
+        once = action == "once" or "--once" in cmd
+
+        def _run() -> None:
+            engine.run_loop(stop_after_runs=1 if once else None)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        threads.append(thread)
+        thread.start()
+        return thread
+
+    supervisor = HubSupervisor(
+        load_config(hub_root),  # type: ignore[arg-type]
+        spawn_fn=spawn_fn,
+    )
     supervisor.scan()
     supervisor.run_repo("alpha", once=True)
     supervisor.run_repo("beta", once=True)
 
-    for runner in supervisor._runners.values():
-        if runner._thread:
-            runner._thread.join(timeout=1.0)
+    for thread in threads:
+        thread.join(timeout=1.0)
 
     snapshots = supervisor.list_repos()
     assert set(run_calls) == {"alpha", "beta"}

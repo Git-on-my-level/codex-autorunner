@@ -28,7 +28,7 @@ def test_sync_pr_invokes_codex_with_small_model(
                 "args": ["--yolo", "exec"],
                 "models": {"small": "gpt-5.1-codex-mini", "large": None},
             },
-            "github": {"sync_agent_timeout_seconds": 123},
+            "github": {"sync_agent_timeout_seconds": 123, "gh_path": "gh"},
         },
     )
 
@@ -84,7 +84,7 @@ def test_sync_pr_omits_model_when_small_is_null(
                 "args": ["--yolo", "exec"],
                 "models": {"small": None},
             },
-            "github": {"sync_agent_timeout_seconds": 5},
+            "github": {"sync_agent_timeout_seconds": 5, "gh_path": "gh"},
         },
     )
 
@@ -129,7 +129,7 @@ def test_sync_pr_surfaces_agent_failure(
                 "args": ["--yolo", "exec"],
                 "models": {"small": "gpt-5.1-codex-mini"},
             },
-            "github": {"sync_agent_timeout_seconds": 5},
+            "github": {"sync_agent_timeout_seconds": 5, "gh_path": "gh"},
         },
     )
 
