@@ -144,6 +144,8 @@ class TelegramBotService(
         self._pending_review_custom: dict[str, dict[str, Any]] = {}
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
+        self._outbox_inflight: set[str] = set()
+        self._outbox_lock: Optional[asyncio.Lock] = None
         self._bot_username: Optional[str] = None
         self._token_usage_by_thread: "collections.OrderedDict[str, dict[str, Any]]" = (
             collections.OrderedDict()
@@ -174,6 +176,33 @@ class TelegramBotService(
         self._voice_task: Optional[asyncio.Task[None]] = None
         self._command_specs = build_command_specs(self)
         self._instance_lock_path: Optional[Path] = None
+
+    def _ensure_outbox_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        lock = self._outbox_lock
+        lock_loop = getattr(lock, "_loop", None) if lock else None
+        if (
+            lock is None
+            or lock_loop is None
+            or lock_loop is not loop
+            or lock_loop.is_closed()
+        ):
+            lock = asyncio.Lock()
+            self._outbox_lock = lock
+        return lock
+
+    async def _mark_outbox_inflight(self, record_id: str) -> bool:
+        lock = self._ensure_outbox_lock()
+        async with lock:
+            if record_id in self._outbox_inflight:
+                return False
+            self._outbox_inflight.add(record_id)
+            return True
+
+    async def _clear_outbox_inflight(self, record_id: str) -> None:
+        lock = self._ensure_outbox_lock()
+        async with lock:
+            self._outbox_inflight.discard(record_id)
 
     def _acquire_instance_lock(self) -> None:
         token = self._config.bot_token
@@ -481,9 +510,7 @@ class TelegramBotService(
     async def _handle_message_inner(
         self, message: TelegramMessage, *, topic_key: Optional[str] = None
     ) -> None:
-        await message_handlers.handle_message_inner(
-            self, message, topic_key=topic_key
-        )
+        await message_handlers.handle_message_inner(self, message, topic_key=topic_key)
 
     def _coalesce_key_for_topic(self, key: str, user_id: Optional[int]) -> str:
         return message_handlers.coalesce_key_for_topic(self, key, user_id)

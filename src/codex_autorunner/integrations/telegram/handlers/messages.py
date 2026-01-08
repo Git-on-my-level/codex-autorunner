@@ -213,15 +213,11 @@ async def handle_message_inner(
 
     handlers._enqueue_topic_work(
         key,
-        lambda: handlers._handle_normal_message(
-            message, runtime, text_override=text
-        ),
+        lambda: handlers._handle_normal_message(message, runtime, text_override=text),
     )
 
 
-def coalesce_key_for_topic(
-    handlers: Any, key: str, user_id: Optional[int]
-) -> str:
+def coalesce_key_for_topic(handlers: Any, key: str, user_id: Optional[int]) -> str:
     if user_id is None:
         return f"{key}:user:unknown"
     return f"{key}:user:{user_id}"

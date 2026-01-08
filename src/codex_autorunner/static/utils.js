@@ -15,6 +15,9 @@ export function getAuthToken() {
   if (token) {
     return token;
   }
+  if (!window?.location?.href) {
+    return null;
+  }
   const url = new URL(window.location.href);
   const urlToken = url.searchParams.get("token");
   if (!urlToken) {
@@ -26,7 +29,9 @@ export function getAuthToken() {
     // Ignore storage errors; token can still be used for this session.
   }
   url.searchParams.delete("token");
-  history.replaceState(null, "", url.toString());
+  if (typeof history !== "undefined" && history.replaceState) {
+    history.replaceState(null, "", url.toString());
+  }
   return urlToken;
 }
 

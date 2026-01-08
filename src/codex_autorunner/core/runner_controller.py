@@ -8,7 +8,6 @@ from .locks import process_alive, read_lock_info
 from .runner_process import build_runner_cmd, spawn_detached
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 
-
 SpawnRunnerFn = Callable[[list[str], Engine], object]
 
 

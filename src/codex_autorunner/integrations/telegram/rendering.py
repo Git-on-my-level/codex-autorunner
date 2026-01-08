@@ -66,7 +66,9 @@ def _format_telegram_markdown(text: str, version: str) -> str:
     parts: list[str] = []
     last = 0
     for match in _CODE_BLOCK_RE.finditer(text):
-        parts.append(_format_telegram_markdown_inline(text[last : match.start()], version))
+        parts.append(
+            _format_telegram_markdown_inline(text[last : match.start()], version)
+        )
         code = _escape_markdown_code(match.group(1), version=version)
         parts.append(f"```\n{code}\n```")
         last = match.end()

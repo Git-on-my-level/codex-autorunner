@@ -9,10 +9,10 @@ from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from ..app_server.client import CodexAppServerClient
+from .adapter import TELEGRAM_MAX_MESSAGE_LENGTH
 from .constants import (
     APP_SERVER_START_BACKOFF_INITIAL_SECONDS,
     APP_SERVER_START_BACKOFF_MAX_SECONDS,
-    TELEGRAM_MAX_MESSAGE_LENGTH,
     TurnKey,
 )
 from .helpers import _app_server_env, _seed_codex_home
@@ -77,7 +77,9 @@ class TelegramRuntimeHelpers:
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, APP_SERVER_START_BACKOFF_MAX_SECONDS)
 
-    def _log_app_server_start_failure(self, workspace_root: Path, exc: Exception) -> None:
+    def _log_app_server_start_failure(
+        self, workspace_root: Path, exc: Exception
+    ) -> None:
         log_event(
             self._logger,
             logging.WARNING,
@@ -106,7 +108,9 @@ class TelegramRuntimeHelpers:
             return normalized_path
         return None
 
-    def _turn_key(self, thread_id: Optional[str], turn_id: Optional[str]) -> Optional[TurnKey]:
+    def _turn_key(
+        self, thread_id: Optional[str], turn_id: Optional[str]
+    ) -> Optional[TurnKey]:
         if not isinstance(thread_id, str) or not thread_id:
             return None
         if not isinstance(turn_id, str) or not turn_id:

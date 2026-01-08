@@ -98,9 +98,7 @@ def test_select_image_candidate_uses_document() -> None:
 
 
 def test_select_voice_candidate_prefers_voice() -> None:
-    message = _message(
-        voice=TelegramVoice("v1", None, 3, "audio/ogg", 100)
-    )
+    message = _message(voice=TelegramVoice("v1", None, 3, "audio/ogg", 100))
     candidate = select_voice_candidate(message)
     assert candidate is not None
     assert candidate.kind == "voice"

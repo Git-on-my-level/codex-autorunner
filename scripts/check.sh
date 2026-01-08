@@ -13,11 +13,11 @@ need_cmd() {
   fi
 }
 
-need_cmd python
-need_cmd black
-need_cmd ruff
-need_cmd mypy
-need_cmd pytest
+PYTHON_BIN="python"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+fi
+need_cmd "$PYTHON_BIN"
 need_cmd node
 
 if [ -x "./node_modules/.bin/eslint" ]; then
@@ -35,21 +35,21 @@ if [ -d tests ]; then
 fi
 
 echo "Formatting check (black)..."
-python -m black --check "${paths[@]}"
+"$PYTHON_BIN" -m black --check "${paths[@]}"
 
 echo "Linting Python (ruff)..."
-ruff check "${paths[@]}"
+"$PYTHON_BIN" -m ruff check "${paths[@]}"
 
 echo "Type check (mypy)..."
-mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server
+"$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server
 
 echo "Linting JS (eslint)..."
 "$ESLINT_BIN" "src/codex_autorunner/static/**/*.js"
 
 echo "Running tests (pytest)..."
-python -m pytest
+"$PYTHON_BIN" -m pytest
 
 echo "Dead-code check (heuristic)..."
-python scripts/deadcode.py --check
+"$PYTHON_BIN" scripts/deadcode.py --check
 
 echo "Checks passed."

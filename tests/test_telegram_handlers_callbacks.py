@@ -18,7 +18,9 @@ class _HandlerStub:
     def _resolve_topic_key(self, chat_id: int, thread_id: object) -> str:
         return f"{chat_id}:{thread_id}"
 
-    async def _answer_callback(self, _callback: TelegramCallbackQuery, text: str) -> None:
+    async def _answer_callback(
+        self, _callback: TelegramCallbackQuery, text: str
+    ) -> None:
         self.calls.append(("answer", text))
 
     async def _resume_thread_by_id(
