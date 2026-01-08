@@ -80,6 +80,7 @@ def test_github_context_pr_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(svc, "gh_authenticated", lambda: True)
     monkeypatch.setattr(svc, "repo_info", lambda: _stub_repo_info(slug))
     monkeypatch.setattr(svc, "pr_view", lambda **_: pr)
+    monkeypatch.setattr(svc, "pr_review_threads", lambda **_: [])
 
     result = svc.build_context_file_from_url(url)
     assert result and result.get("path")
@@ -89,6 +90,49 @@ def test_github_context_pr_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert f"Repo: {slug}" in text
     assert f"PR: #{number}" in text
     assert "Files:" in text
+
+
+def test_github_context_pr_review_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    pr = _fixture("tests/fixtures/github_pr.json")
+    url = pr.get("url")
+    assert url
+    parsed = parse_github_url(url)
+    assert parsed
+    slug, kind, number = parsed
+    assert kind == "pr"
+    svc = GitHubService(tmp_path)
+    monkeypatch.setattr(svc, "gh_available", lambda: True)
+    monkeypatch.setattr(svc, "gh_authenticated", lambda: True)
+    monkeypatch.setattr(svc, "repo_info", lambda: _stub_repo_info(slug))
+    monkeypatch.setattr(svc, "pr_view", lambda **_: pr)
+    monkeypatch.setattr(
+        svc,
+        "pr_review_threads",
+        lambda **_: [
+            {
+                "isResolved": False,
+                "comments": [
+                    {
+                        "author": {"login": "octocat"},
+                        "body": "Please rename this variable.",
+                        "path": "src/app.py",
+                        "line": 42,
+                        "createdAt": "2026-01-01T00:00:00Z",
+                    }
+                ],
+            }
+        ],
+    )
+
+    result = svc.build_context_file_from_url(url)
+    assert result and result.get("path")
+    path = tmp_path / result["path"]
+    text = path.read_text(encoding="utf-8")
+    assert "Review Threads:" in text
+    assert "src/app.py:42 octocat" in text
+    assert "Please rename this variable." in text
 
 
 def test_github_context_rejects_other_repo(

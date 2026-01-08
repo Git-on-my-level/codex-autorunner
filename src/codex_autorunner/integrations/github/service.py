@@ -434,6 +434,75 @@ class GitHubService:
             ) from exc
         return payload if isinstance(payload, dict) else {}
 
+    def pr_review_threads(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        number: int,
+        cwd: Optional[Path] = None,
+    ) -> list[dict[str, Any]]:
+        query = (
+            "query($owner:String!,$repo:String!,$number:Int!){"
+            "repository(owner:$owner,name:$repo){"
+            "pullRequest(number:$number){"
+            "reviewThreads(first:50){"
+            "nodes{isResolved comments(first:20){nodes{author{login} body path line createdAt}}}"
+            "}"
+            "}"
+            "}"
+            "}"
+        )
+        proc = self._gh(
+            [
+                "api",
+                "graphql",
+                "-f",
+                f"query={query}",
+                "-F",
+                f"owner={owner}",
+                "-F",
+                f"repo={repo}",
+                "-F",
+                f"number={int(number)}",
+            ],
+            cwd=cwd or self.repo_root,
+            check=False,
+            timeout_seconds=30,
+        )
+        if proc.returncode != 0:
+            return []
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return []
+        nodes = _get_nested(
+            payload, "data", "repository", "pullRequest", "reviewThreads", "nodes"
+        )
+        if not isinstance(nodes, list):
+            return []
+        threads: list[dict[str, Any]] = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            comments_nodes = _get_nested(node, "comments", "nodes")
+            comments: list[dict[str, Any]] = []
+            if isinstance(comments_nodes, list):
+                for comment in comments_nodes:
+                    if not isinstance(comment, dict):
+                        continue
+                    comments.append(
+                        {
+                            "author": comment.get("author"),
+                            "body": comment.get("body"),
+                            "path": comment.get("path"),
+                            "line": comment.get("line"),
+                            "createdAt": comment.get("createdAt"),
+                        }
+                    )
+            threads.append({"isResolved": node.get("isResolved"), "comments": comments})
+        return threads
+
     def build_context_file_from_url(self, url: str) -> Optional[dict]:
         parsed = parse_github_url(url)
         if not parsed:
@@ -452,7 +521,13 @@ class GitHubService:
             lines = _format_issue_context(issue_obj, repo=repo.name_with_owner)
         else:
             pr_obj = self.pr_view(number=number)
-            lines = _format_pr_context(pr_obj, repo=repo.name_with_owner)
+            owner, repo_name = repo.name_with_owner.split("/", 1)
+            review_threads = self.pr_review_threads(
+                owner=owner, repo=repo_name, number=number
+            )
+            lines = _format_pr_context(
+                pr_obj, repo=repo.name_with_owner, review_threads=review_threads
+            )
 
         rel_dir = Path(".codex-autorunner") / "github_context"
         abs_dir = self.repo_root / rel_dir
@@ -727,7 +802,53 @@ def _format_issue_context(issue: dict, *, repo: str) -> list[str]:
     return lines
 
 
-def _format_pr_context(pr: dict, *, repo: str) -> list[str]:
+def _format_review_location(path: Any, line: Any) -> str:
+    path_val = str(path).strip() if path else ""
+    if path_val and isinstance(line, int):
+        return f"{path_val}:{line}"
+    if path_val:
+        return path_val
+    if isinstance(line, int):
+        return f"(unknown file):{line}"
+    return "(unknown file)"
+
+
+def _format_review_threads(review_threads: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    thread_index = 0
+    for thread in review_threads:
+        if not isinstance(thread, dict):
+            continue
+        comments = thread.get("comments")
+        if not isinstance(comments, list) or not comments:
+            continue
+        thread_index += 1
+        status = "resolved" if thread.get("isResolved") else "unresolved"
+        lines.append(f"- Thread {thread_index} ({status})")
+        for comment in comments:
+            if not isinstance(comment, dict):
+                continue
+            author = _format_author(comment.get("author"))
+            created_at = comment.get("createdAt") or ""
+            location = _format_review_location(
+                comment.get("path"), comment.get("line")
+            )
+            header = f"  - {location} {author}".strip()
+            if created_at:
+                header = f"{header} ({created_at})"
+            lines.append(header)
+            body = _safe_text(comment.get("body") or "")
+            if not body:
+                lines.append("    (no body)")
+            else:
+                for line in body.splitlines():
+                    lines.append(f"    {line}")
+    return lines
+
+
+def _format_pr_context(
+    pr: dict, *, repo: str, review_threads: Optional[list[dict[str, Any]]] = None
+) -> list[str]:
     number = pr.get("number") or ""
     title = pr.get("title") or ""
     url = pr.get("url") or ""
@@ -776,4 +897,12 @@ def _format_pr_context(pr: dict, *, repo: str) -> list[str]:
         "Files:",
     ]
     lines.extend(file_lines or ["(no files)"])
+    review_lines = (
+        _format_review_threads(review_threads)
+        if isinstance(review_threads, list)
+        else []
+    )
+    if review_lines:
+        lines.extend(["", "Review Threads:"])
+        lines.extend(review_lines)
     return lines
