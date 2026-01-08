@@ -90,6 +90,7 @@ from ..helpers import (
     _format_persist_note,
     _format_rate_limits,
     _format_review_commit_label,
+    _format_resume_summary,
     _format_sandbox_policy,
     _format_shell_body,
     _format_skills_list,
@@ -1976,13 +1977,6 @@ class TelegramCommandHandlers:
         callback: Optional[TelegramCallbackQuery] = None,
     ) -> None:
         chat_id, thread_id_val = _split_topic_key(key)
-        preview = None
-        state = self._resume_options.get(key)
-        if state:
-            for item_id, label in state.items:
-                if item_id == thread_id:
-                    preview = label
-                    break
         self._resume_options.pop(key, None)
         record = self._router.get_topic(key)
         if record is None or not record.workspace_path:
@@ -2035,9 +2029,6 @@ class TelegramCommandHandlers:
             return
         info = _extract_thread_info(result)
         resumed_path = info.get("workspace_path")
-        result_preview = _format_thread_preview(result)
-        if result_preview != "(no preview)":
-            preview = result_preview
         if record is None or not record.workspace_path:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
@@ -2118,9 +2109,7 @@ class TelegramCommandHandlers:
             overwrite_defaults=True,
         )
         await self._answer_callback(callback, "Resumed thread")
-        message = f"Resumed thread {thread_id}."
-        if preview and preview != "(no preview)":
-            message = f"{message}\nLast:\n{preview}"
+        message = _format_resume_summary(thread_id, result)
         await self._finalize_selection(key, callback, message)
 
     async def _handle_status(
