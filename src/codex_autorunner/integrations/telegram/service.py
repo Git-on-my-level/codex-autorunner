@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.state import now_iso
+from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
+from ...manifest import load_manifest
 from ...voice import VoiceConfig, VoiceService
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from .adapter import (
@@ -88,6 +90,7 @@ class TelegramBotService(
         manifest_path: Optional[Path] = None,
         voice_config: Optional[VoiceConfig] = None,
         voice_service: Optional[VoiceService] = None,
+        housekeeping_config: Optional[HousekeepingConfig] = None,
         update_repo_url: Optional[str] = None,
         update_repo_ref: Optional[str] = None,
     ) -> None:
@@ -119,6 +122,7 @@ class TelegramBotService(
         self._model_pending: dict[str, ModelOption] = {}
         self._voice_config = voice_config
         self._voice_service = voice_service
+        self._housekeeping_config = housekeeping_config
         if self._voice_service is None and voice_config is not None:
             try:
                 self._voice_service = VoiceService(voice_config, logger=self._logger)
@@ -174,8 +178,63 @@ class TelegramBotService(
             logger=self._logger,
         )
         self._voice_task: Optional[asyncio.Task[None]] = None
+        self._housekeeping_task: Optional[asyncio.Task[None]] = None
         self._command_specs = build_command_specs(self)
         self._instance_lock_path: Optional[Path] = None
+
+    def _housekeeping_roots(self) -> list[Path]:
+        roots: set[Path] = set()
+        try:
+            state = self._store.load()
+            for record in state.topics.values():
+                if isinstance(record.workspace_path, str) and record.workspace_path:
+                    roots.add(Path(record.workspace_path).expanduser().resolve())
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.housekeeping.state_failed",
+                exc=exc,
+            )
+        if self._hub_root and self._manifest_path and self._manifest_path.exists():
+            try:
+                manifest = load_manifest(self._manifest_path, self._hub_root)
+                for repo in manifest.repos:
+                    roots.add((self._hub_root / repo.path).resolve())
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.housekeeping.manifest_failed",
+                    exc=exc,
+                )
+        if self._config.root:
+            roots.add(self._config.root.resolve())
+        return sorted(roots)
+
+    async def _housekeeping_loop(self) -> None:
+        config = self._housekeeping_config
+        if config is None or not config.enabled:
+            return
+        interval = max(config.interval_seconds, 1)
+        while True:
+            try:
+                roots = self._housekeeping_roots()
+                if roots:
+                    await asyncio.to_thread(
+                        run_housekeeping_for_roots,
+                        config,
+                        roots,
+                        self._logger,
+                    )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.housekeeping.failed",
+                    exc=exc,
+                )
+            await asyncio.sleep(interval)
 
     def _ensure_outbox_lock(self) -> asyncio.Lock:
         loop = asyncio.get_running_loop()
@@ -305,6 +364,7 @@ class TelegramBotService(
             self._prime_poller_offset()
             self._outbox_task = asyncio.create_task(self._outbox_manager.run_loop())
             self._voice_task = asyncio.create_task(self._voice_manager.run_loop())
+            self._housekeeping_task = asyncio.create_task(self._housekeeping_loop())
             log_event(
                 self._logger,
                 logging.INFO,
@@ -351,6 +411,12 @@ class TelegramBotService(
                     self._voice_task.cancel()
                     try:
                         await self._voice_task
+                    except asyncio.CancelledError:
+                        pass
+                if self._housekeeping_task is not None:
+                    self._housekeeping_task.cancel()
+                    try:
+                        await self._housekeeping_task
                     except asyncio.CancelledError:
                         pass
             finally:

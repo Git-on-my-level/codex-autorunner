@@ -821,6 +821,7 @@ def telegram_start(
                 config.manifest_path if isinstance(config, HubConfig) else None
             ),
             voice_config=voice_config,
+            housekeeping_config=config.housekeeping,
             update_repo_url=update_repo_url,
             update_repo_ref=update_repo_ref,
         )

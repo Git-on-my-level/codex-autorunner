@@ -30,6 +30,7 @@ from ..core.usage import (
     summarize_hub_usage,
 )
 from ..manifest import load_manifest
+from ..housekeeping import run_housekeeping_once
 from ..routes.system import build_system_routes
 from ..voice import VoiceConfig, VoiceService
 from .middleware import AuthTokenMiddleware, BasePathRouterMiddleware
@@ -291,7 +292,29 @@ def _app_lifespan(context: AppContext):
                         exc,
                     )
 
+        async def _housekeeping_loop():
+            config = app.state.config.housekeeping
+            interval = max(config.interval_seconds, 1)
+            while True:
+                try:
+                    await asyncio.to_thread(
+                        run_housekeeping_once,
+                        config,
+                        app.state.engine.repo_root,
+                        logger=app.state.logger,
+                    )
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "Housekeeping task failed",
+                        exc,
+                    )
+                await asyncio.sleep(interval)
+
         asyncio.create_task(_cleanup_loop())
+        if app.state.config.housekeeping.enabled:
+            asyncio.create_task(_housekeeping_loop())
 
         if (
             context.tui_idle_seconds is not None
@@ -472,6 +495,28 @@ def create_hub_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.hub_started = True
+        if app.state.config.housekeeping.enabled:
+            interval = max(app.state.config.housekeeping.interval_seconds, 1)
+
+            async def _housekeeping_loop():
+                while True:
+                    try:
+                        await asyncio.to_thread(
+                            run_housekeeping_once,
+                            app.state.config.housekeeping,
+                            app.state.config.root,
+                            logger=app.state.logger,
+                        )
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Housekeeping task failed",
+                            exc,
+                        )
+                    await asyncio.sleep(interval)
+
+            asyncio.create_task(_housekeeping_loop())
         for prefix, sub_app in list(repo_apps.items()):
             await _start_repo_app(prefix, sub_app)
         try:

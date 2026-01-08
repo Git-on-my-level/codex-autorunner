@@ -6,6 +6,8 @@ from typing import IO, Any, Dict, List, Optional, Union, cast
 
 import yaml
 
+from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
+
 try:
     from dotenv import load_dotenv
 except ModuleNotFoundError:  # pragma: no cover
@@ -171,6 +173,64 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "max_bytes": 10_000_000,
         "backup_count": 3,
     },
+    "housekeeping": {
+        "enabled": True,
+        "interval_seconds": 3600,
+        "min_file_age_seconds": 600,
+        "dry_run": False,
+        "rules": [
+            {
+                "name": "run_logs",
+                "kind": "directory",
+                "path": ".codex-autorunner/runs",
+                "glob": "run-*.log",
+                "recursive": False,
+                "max_files": 200,
+                "max_total_bytes": 500_000_000,
+                "max_age_days": 30,
+            },
+            {
+                "name": "terminal_image_uploads",
+                "kind": "directory",
+                "path": ".codex-autorunner/uploads/terminal-images",
+                "glob": "*",
+                "recursive": False,
+                "max_files": 500,
+                "max_total_bytes": 200_000_000,
+                "max_age_days": 14,
+            },
+            {
+                "name": "telegram_images",
+                "kind": "directory",
+                "path": ".codex-autorunner/uploads/telegram-images",
+                "glob": "*",
+                "recursive": False,
+                "max_files": 500,
+                "max_total_bytes": 200_000_000,
+                "max_age_days": 14,
+            },
+            {
+                "name": "telegram_voice",
+                "kind": "directory",
+                "path": ".codex-autorunner/uploads/telegram-voice",
+                "glob": "*",
+                "recursive": False,
+                "max_files": 500,
+                "max_total_bytes": 500_000_000,
+                "max_age_days": 14,
+            },
+            {
+                "name": "github_context",
+                "kind": "directory",
+                "path": ".codex-autorunner/github_context",
+                "glob": "*",
+                "recursive": False,
+                "max_files": 200,
+                "max_total_bytes": 100_000_000,
+                "max_age_days": 30,
+            },
+        ],
+    },
 }
 
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
@@ -247,6 +307,80 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     },
     # Hub already has hub.log, but we still support an explicit server_log for consistency.
     "server_log": None,
+    "housekeeping": {
+        "enabled": True,
+        "interval_seconds": 3600,
+        "min_file_age_seconds": 600,
+        "dry_run": False,
+        "rules": [
+            {
+                "name": "run_logs",
+                "kind": "directory",
+                "path": ".codex-autorunner/runs",
+                "glob": "run-*.log",
+                "recursive": False,
+                "max_files": 200,
+                "max_total_bytes": 500_000_000,
+                "max_age_days": 30,
+            },
+            {
+                "name": "terminal_image_uploads",
+                "kind": "directory",
+                "path": ".codex-autorunner/uploads/terminal-images",
+                "glob": "*",
+                "recursive": False,
+                "max_files": 500,
+                "max_total_bytes": 200_000_000,
+                "max_age_days": 14,
+            },
+            {
+                "name": "telegram_images",
+                "kind": "directory",
+                "path": ".codex-autorunner/uploads/telegram-images",
+                "glob": "*",
+                "recursive": False,
+                "max_files": 500,
+                "max_total_bytes": 200_000_000,
+                "max_age_days": 14,
+            },
+            {
+                "name": "telegram_voice",
+                "kind": "directory",
+                "path": ".codex-autorunner/uploads/telegram-voice",
+                "glob": "*",
+                "recursive": False,
+                "max_files": 500,
+                "max_total_bytes": 500_000_000,
+                "max_age_days": 14,
+            },
+            {
+                "name": "github_context",
+                "kind": "directory",
+                "path": ".codex-autorunner/github_context",
+                "glob": "*",
+                "recursive": False,
+                "max_files": 200,
+                "max_total_bytes": 100_000_000,
+                "max_age_days": 30,
+            },
+            {
+                "name": "update_cache",
+                "kind": "directory",
+                "path": "~/.codex-autorunner/update_cache",
+                "glob": "*",
+                "recursive": True,
+                "max_files": 2000,
+                "max_total_bytes": 1_000_000_000,
+                "max_age_days": 30,
+            },
+            {
+                "name": "update_log",
+                "kind": "file",
+                "path": "~/.codex-autorunner/update-standalone.log",
+                "max_bytes": 5_000_000,
+            },
+        ],
+    },
 }
 
 # Backwards-compatible alias for repo defaults
@@ -292,6 +426,7 @@ class RepoConfig:
     log: LogConfig
     server_log: LogConfig
     voice: Dict[str, Any]
+    housekeeping: HousekeepingConfig
 
     def doc_path(self, key: str) -> Path:
         return self.root / self.docs[key]
@@ -316,6 +451,7 @@ class HubConfig:
     server_auth_token_env: str
     log: LogConfig
     server_log: LogConfig
+    housekeeping: HousekeepingConfig
 
 
 # Alias used by existing code paths that only support repo mode
@@ -559,6 +695,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
             ),
         ),
         voice=voice_cfg,
+        housekeeping=parse_housekeeping_config(cfg.get("housekeeping")),
     )
 
 
@@ -602,6 +739,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
                 server_log_cfg.get("backup_count", log_cfg["backup_count"])
             ),
         ),
+        housekeeping=parse_housekeeping_config(cfg.get("housekeeping")),
     )
 
 
@@ -827,6 +965,7 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
     voice_cfg = cfg.get("voice", {})
     if voice_cfg is not None and not isinstance(voice_cfg, dict):
         raise ConfigError("voice section must be a mapping if provided")
+    _validate_housekeeping_config(cfg)
     _validate_telegram_bot_config(cfg)
 
 
@@ -888,7 +1027,89 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         for key in ("max_bytes", "backup_count"):
             if key in server_log_cfg and not isinstance(server_log_cfg.get(key), int):
                 raise ConfigError(f"server_log.{key} must be an integer")
+    _validate_housekeeping_config(cfg)
     _validate_telegram_bot_config(cfg)
+
+
+def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
+    housekeeping_cfg = cfg.get("housekeeping")
+    if housekeeping_cfg is None:
+        return
+    if not isinstance(housekeeping_cfg, dict):
+        raise ConfigError("housekeeping section must be a mapping if provided")
+    if "enabled" in housekeeping_cfg and not isinstance(
+        housekeeping_cfg.get("enabled"), bool
+    ):
+        raise ConfigError("housekeeping.enabled must be boolean")
+    if "interval_seconds" in housekeeping_cfg and not isinstance(
+        housekeeping_cfg.get("interval_seconds"), int
+    ):
+        raise ConfigError("housekeeping.interval_seconds must be an integer")
+    interval_seconds = housekeeping_cfg.get("interval_seconds")
+    if isinstance(interval_seconds, int) and interval_seconds <= 0:
+        raise ConfigError("housekeeping.interval_seconds must be greater than 0")
+    if "min_file_age_seconds" in housekeeping_cfg and not isinstance(
+        housekeeping_cfg.get("min_file_age_seconds"), int
+    ):
+        raise ConfigError("housekeeping.min_file_age_seconds must be an integer")
+    min_file_age_seconds = housekeeping_cfg.get("min_file_age_seconds")
+    if isinstance(min_file_age_seconds, int) and min_file_age_seconds < 0:
+        raise ConfigError("housekeeping.min_file_age_seconds must be >= 0")
+    if "dry_run" in housekeeping_cfg and not isinstance(
+        housekeeping_cfg.get("dry_run"), bool
+    ):
+        raise ConfigError("housekeeping.dry_run must be boolean")
+    rules = housekeeping_cfg.get("rules")
+    if rules is not None and not isinstance(rules, list):
+        raise ConfigError("housekeeping.rules must be a list if provided")
+    if isinstance(rules, list):
+        for idx, rule in enumerate(rules):
+            if not isinstance(rule, dict):
+                raise ConfigError(
+                    f"housekeeping.rules[{idx}] must be a mapping if provided"
+                )
+            if "name" in rule and not isinstance(rule.get("name"), str):
+                raise ConfigError(
+                    f"housekeeping.rules[{idx}].name must be a string if provided"
+                )
+            if "kind" in rule:
+                kind = rule.get("kind")
+                if not isinstance(kind, str):
+                    raise ConfigError(
+                        f"housekeeping.rules[{idx}].kind must be a string"
+                    )
+                if kind not in ("directory", "file"):
+                    raise ConfigError(
+                        f"housekeeping.rules[{idx}].kind must be 'directory' or 'file'"
+                    )
+            if "path" in rule and not isinstance(rule.get("path"), str):
+                raise ConfigError(
+                    f"housekeeping.rules[{idx}].path must be a string"
+                )
+            if "glob" in rule and not isinstance(rule.get("glob"), str):
+                raise ConfigError(
+                    f"housekeeping.rules[{idx}].glob must be a string if provided"
+                )
+            if "recursive" in rule and not isinstance(rule.get("recursive"), bool):
+                raise ConfigError(
+                    f"housekeeping.rules[{idx}].recursive must be boolean if provided"
+                )
+            for key in (
+                "max_files",
+                "max_total_bytes",
+                "max_age_days",
+                "max_bytes",
+                "max_lines",
+            ):
+                if key in rule and not isinstance(rule.get(key), int):
+                    raise ConfigError(
+                        f"housekeeping.rules[{idx}].{key} must be an integer if provided"
+                    )
+                value = rule.get(key)
+                if isinstance(value, int) and value < 0:
+                    raise ConfigError(
+                        f"housekeeping.rules[{idx}].{key} must be >= 0"
+                    )
 
 
 def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
