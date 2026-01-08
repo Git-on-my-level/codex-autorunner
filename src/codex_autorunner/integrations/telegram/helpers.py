@@ -1922,7 +1922,7 @@ def is_interrupt_status(status: Optional[str]) -> bool:
     if not status:
         return False
     normalized = status.strip().lower()
-    return normalized in {"interrupted", "cancelled", "aborted"}
+    return normalized in {"interrupted", "cancelled", "canceled", "aborted"}
 
 
 def _is_no_agent_response(text: str) -> bool:

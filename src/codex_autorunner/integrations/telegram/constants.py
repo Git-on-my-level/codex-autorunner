@@ -71,6 +71,7 @@ TRACE_MESSAGE_TOKENS = (
     "timed out",
     "timeout",
     "aborted",
+    "canceled",
     "cancelled",
 )
 PLACEHOLDER_TEXT = "Working..."
