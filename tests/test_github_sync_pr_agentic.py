@@ -166,3 +166,47 @@ def test_sync_pr_surfaces_agent_failure(
     assert "cmd:" in msg
     assert "agent failed" in msg
     assert gh_called["pr_create"] is False
+
+
+def test_sync_pr_missing_codex_binary_maps_to_github_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    svc = GitHubService(
+        repo_root,
+        raw_config={
+            "codex": {
+                "binary": "missing-codex",
+                "args": ["--yolo", "exec"],
+                "models": {"small": "gpt-5.1-codex-mini"},
+            },
+            "github": {"sync_agent_timeout_seconds": 5, "gh_path": "gh"},
+        },
+    )
+
+    monkeypatch.setattr(svc, "gh_available", lambda: True)
+    monkeypatch.setattr(svc, "gh_authenticated", lambda: True)
+    monkeypatch.setattr(
+        svc,
+        "repo_info",
+        lambda: type(
+            "R", (), {"default_branch": "main", "name_with_owner": "o/r", "url": "u"}
+        )(),
+    )
+    monkeypatch.setattr(svc, "current_branch", lambda **_: "feature/test")
+    monkeypatch.setattr(svc, "is_clean", lambda **_: True)
+    monkeypatch.setattr(svc, "pr_for_branch", lambda **_: None)
+    monkeypatch.setattr(svc, "read_link_state", lambda: {})
+
+    def fake_run(cmd, **_kwargs):
+        if cmd and Path(cmd[0]).name == "missing-codex":
+            raise FileNotFoundError("missing")
+        return _ok_completed()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(GitHubError) as exc:
+        svc.sync_pr(draft=True)
+    assert "Missing binary: missing-codex" in str(exc.value)

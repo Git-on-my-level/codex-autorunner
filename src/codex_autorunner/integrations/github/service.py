@@ -1,8 +1,6 @@
 import json
-import os
 import re
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -140,14 +138,7 @@ def _run_codex_sync_agent(
         model_small = "gpt-5.1-codex-mini"
     model_flag: list[str] = ["--model", str(model_small)] if model_small else []
 
-    resolved = resolve_executable(binary)
-    if not resolved:
-        if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
-            resolved = binary
-        else:
-            raise GitHubError(f"Missing binary: {binary}", status_code=500)
-
-    cmd = [resolved, *model_flag, *cleaned_args, prompt]
+    cmd = [binary, *model_flag, *cleaned_args, prompt]
 
     github_cfg = raw_config.get("github") if isinstance(raw_config, dict) else None
     github_cfg = github_cfg if isinstance(github_cfg, dict) else {}
@@ -164,7 +155,7 @@ def _run_codex_sync_agent(
             check=False,
         )
     except FileNotFoundError as exc:
-        raise GitHubError(f"Missing binary: {resolved}", status_code=500) from exc
+        raise GitHubError(f"Missing binary: {binary}", status_code=500) from exc
     except subprocess.TimeoutExpired as exc:
         raise GitHubError(
             f"Codex sync agent timed out after {timeout_seconds}s: {_sanitize_cmd(cmd[:-1])}",
@@ -259,7 +250,6 @@ class GitHubService:
         self.repo_root = repo_root
         self.raw_config = raw_config or {}
         self.github_path = repo_root / ".codex-autorunner" / "github.json"
-        self.gh_bin: Optional[str] = None
         self.gh_path, self.gh_override = self._load_gh_path()
 
     def _load_gh_path(self) -> tuple[str, bool]:
@@ -272,11 +262,6 @@ class GitHubService:
         override = str(gh_path).strip() if isinstance(gh_path, str) and gh_path else ""
         return override or "gh", bool(override)
 
-    def _resolve_gh_bin(self) -> Optional[str]:
-        if self.gh_bin is None:
-            self.gh_bin = resolve_executable(self.gh_path)
-        return self.gh_bin
-
     def _gh(
         self,
         args: list[str],
@@ -285,12 +270,9 @@ class GitHubService:
         timeout_seconds: int = 30,
         check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
-        gh_bin = self._resolve_gh_bin()
-        if not gh_bin:
-            raise GitHubError("GitHub CLI (gh) not available", status_code=500)
         try:
             return _run(
-                [gh_bin] + args,
+                [self.gh_path] + args,
                 cwd=cwd or self.repo_root,
                 timeout_seconds=timeout_seconds,
                 check=check,
@@ -314,7 +296,7 @@ class GitHubService:
 
     # ── capability/status ──────────────────────────────────────────────────────
     def gh_available(self) -> bool:
-        return self._resolve_gh_bin() is not None
+        return resolve_executable(self.gh_path) is not None
 
     def gh_authenticated(self) -> bool:
         if not self.gh_available():
