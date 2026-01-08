@@ -33,7 +33,8 @@ def require_optional_dependencies(
     deps_list = ", ".join(missing)
     message = (
         f"{feature} requires optional dependencies ({deps_list}). "
-        f"Install with `pip install -e .[{extra_name}]`."
+        f"Install with `pip install codex-autorunner[{extra_name}]` "
+        f"(or `pip install -e .[{extra_name}]` for local dev)."
     )
     if hint:
         message = f"{message} {hint}"

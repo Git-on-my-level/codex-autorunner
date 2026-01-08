@@ -1,12 +1,9 @@
 import dataclasses
 import enum
 import logging
-import os
 import re
 import shutil
 import subprocess
-import sys
-import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -18,7 +15,7 @@ from .config import HubConfig, load_config
 from .engine import Engine
 from .git_utils import git_available, git_is_clean, git_upstream_status
 from .locks import process_alive, read_lock_info
-from .runner_controller import ProcessRunnerController
+from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
 
@@ -163,20 +160,22 @@ def save_hub_state(state_path: Path, state: HubState, hub_root: Path) -> None:
 
 
 class RepoRunner:
-    def __init__(self, repo_id: str, repo_root: Path):
+    def __init__(
+        self,
+        repo_id: str,
+        repo_root: Path,
+        *,
+        spawn_fn: Optional[SpawnRunnerFn] = None,
+    ):
         self.repo_id = repo_id
         self._engine = Engine(repo_root)
-        self._controller = ProcessRunnerController(self._engine)
-        self._thread: Optional[threading.Thread] = None
+        self._controller = ProcessRunnerController(self._engine, spawn_fn=spawn_fn)
 
     @property
     def running(self) -> bool:
         return self._controller.running
 
     def start(self, once: bool = False) -> None:
-        if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
-            self._start_in_thread(once=once)
-            return
         self._controller.start(once=once)
 
     def stop(self) -> None:
@@ -186,24 +185,17 @@ class RepoRunner:
         return self._controller.kill()
 
     def resume(self, once: bool = False) -> None:
-        if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
-            self._start_in_thread(once=once)
-            return
         self._controller.resume(once=once)
-
-    def _start_in_thread(self, once: bool) -> None:
-        def _run() -> None:
-            self._engine.run_loop(stop_after_runs=1 if once else None)
-
-        self._thread = threading.Thread(target=_run, daemon=True)
-        self._thread.start()
 
 
 class HubSupervisor:
-    def __init__(self, hub_config: HubConfig):
+    def __init__(
+        self, hub_config: HubConfig, *, spawn_fn: Optional[SpawnRunnerFn] = None
+    ):
         self.hub_config = hub_config
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
         self._runners: Dict[str, RepoRunner] = {}
+        self._spawn_fn = spawn_fn
         self.state = load_hub_state(self.state_path, self.hub_config.root)
         self._list_cache_at: Optional[float] = None
         self._list_cache: Optional[List[RepoSnapshot]] = None
@@ -650,7 +642,7 @@ class HubSupervisor:
             raise ValueError(f"Repo {repo_id} is not initialized")
         if not config_path.exists():
             return None
-        runner = RepoRunner(repo_id, repo_root)
+        runner = RepoRunner(repo_id, repo_root, spawn_fn=self._spawn_fn)
         self._runners[repo_id] = runner
         return runner
 

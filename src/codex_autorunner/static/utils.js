@@ -3,6 +3,37 @@ import { BASE_PATH } from "./env.js";
 
 const toast = document.getElementById("toast");
 const decoder = new TextDecoder();
+const AUTH_TOKEN_KEY = "car_auth_token";
+
+export function getAuthToken() {
+  let token = null;
+  try {
+    token = sessionStorage.getItem(AUTH_TOKEN_KEY);
+  } catch (_err) {
+    token = null;
+  }
+  if (token) {
+    return token;
+  }
+  if (!window?.location?.href) {
+    return null;
+  }
+  const url = new URL(window.location.href);
+  const urlToken = url.searchParams.get("token");
+  if (!urlToken) {
+    return null;
+  }
+  try {
+    sessionStorage.setItem(AUTH_TOKEN_KEY, urlToken);
+  } catch (_err) {
+    // Ignore storage errors; token can still be used for this session.
+  }
+  url.searchParams.delete("token");
+  if (typeof history !== "undefined" && history.replaceState) {
+    history.replaceState(null, "", url.toString());
+  }
+  return urlToken;
+}
 
 export function resolvePath(path) {
   if (!path) return path;
@@ -26,7 +57,13 @@ export function buildWsUrl(path, query = "") {
   const resolved = resolvePath(path);
   const normalized = resolved.startsWith("/") ? resolved : `/${resolved}`;
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${window.location.host}${normalized}${query}`;
+  const params = new URLSearchParams(query.startsWith("?") ? query.slice(1) : query);
+  const token = getAuthToken();
+  if (token && !params.has("token")) {
+    params.set("token", token);
+  }
+  const suffix = params.toString();
+  return `${proto}://${window.location.host}${normalized}${suffix ? `?${suffix}` : ""}`;
 }
 
 export function flash(message, type = "info") {
@@ -62,6 +99,10 @@ export async function api(path, options = {}) {
   const headers = options.headers ? { ...options.headers } : {};
   const opts = { ...options, headers };
   const target = resolvePath(path);
+  const token = getAuthToken();
+  if (token && !headers.Authorization) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   if (opts.body && typeof opts.body === "object" && !(opts.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(opts.body);
@@ -86,6 +127,10 @@ export function streamEvents(
   let fetchBody = body;
   const target = resolvePath(path);
   const headers = {};
+  const token = getAuthToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   if (fetchBody && typeof fetchBody === "object" && !(fetchBody instanceof FormData)) {
     headers["Content-Type"] = "application/json";
     fetchBody = JSON.stringify(fetchBody);
