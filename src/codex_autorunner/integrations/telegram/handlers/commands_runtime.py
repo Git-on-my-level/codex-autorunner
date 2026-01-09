@@ -3783,6 +3783,21 @@ class TelegramCommandHandlers:
         callback: TelegramCallbackQuery,
         parsed: CompactCallback,
     ) -> None:
+        async def _send_compact_status(text: str) -> None:
+            try:
+                await self._send_message(
+                    callback.chat_id,
+                    text,
+                    thread_id=callback.thread_id,
+                    reply_to=callback.message_id,
+                )
+            except Exception:
+                await self._send_message(
+                    callback.chat_id,
+                    text,
+                    thread_id=callback.thread_id,
+                )
+
         state = self._compact_pending.get(key)
         if not state or callback.message_id != state.message_id:
             await self._answer_callback(callback, "Selection expired")
@@ -3826,12 +3841,14 @@ class TelegramCommandHandlers:
         if callback.chat_id is None:
             return
         await self._answer_callback(callback, "Starting new thread...")
-        await self._edit_message_text(
+        edited = await self._edit_message_text(
             callback.chat_id,
             state.message_id,
             f"{state.display_text}\n\nStarting a new thread with this summary...",
             reply_markup=None,
         )
+        if not edited:
+            await _send_compact_status("Starting a new thread with this summary...")
         message = TelegramMessage(
             update_id=callback.update_id,
             message_id=callback.message_id or 0,
@@ -3855,12 +3872,7 @@ class TelegramCommandHandlers:
                 reply_markup=None,
             )
             if not edited:
-                await self._send_message(
-                    callback.chat_id,
-                    "Failed to start new thread with summary.",
-                    thread_id=callback.thread_id,
-                    reply_to=callback.message_id,
-                )
+                await _send_compact_status("Failed to start new thread with summary.")
             if failure_message:
                 await self._send_message(
                     callback.chat_id,
@@ -3875,12 +3887,7 @@ class TelegramCommandHandlers:
             reply_markup=None,
         )
         if not edited:
-            await self._send_message(
-                callback.chat_id,
-                "Started a new thread with this summary.",
-                thread_id=callback.thread_id,
-                reply_to=callback.message_id,
-            )
+            await _send_compact_status("Started a new thread with this summary.")
 
     async def _handle_rollout(
         self, message: TelegramMessage, _args: str, _runtime: Any
