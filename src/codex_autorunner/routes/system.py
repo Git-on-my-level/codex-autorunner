@@ -77,6 +77,20 @@ def _write_update_status(status: str, message: str, **extra) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _is_valid_git_repo(path: Path) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0
+
+
 def _read_update_status() -> Optional[dict[str, object]]:
     path = _update_status_path()
     if not path.exists():
@@ -380,19 +394,35 @@ def _system_update_worker(
 
         update_dir.parent.mkdir(parents=True, exist_ok=True)
 
+        updated = False
         if update_dir.exists() and (update_dir / ".git").exists():
-            logger.info(
-                "Updating source in %s from %s (%s)", update_dir, repo_url, repo_ref
-            )
-            try:
-                _run_cmd(
-                    ["git", "remote", "set-url", "origin", repo_url], cwd=update_dir
+            if not _is_valid_git_repo(update_dir):
+                logger.warning(
+                    "Update cache exists but is not a valid git repo; removing %s",
+                    update_dir,
                 )
-            except Exception:
-                _run_cmd(["git", "remote", "add", "origin", repo_url], cwd=update_dir)
-            _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
-            _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
-        else:
+                shutil.rmtree(update_dir)
+            else:
+                logger.info(
+                    "Updating source in %s from %s (%s)",
+                    update_dir,
+                    repo_url,
+                    repo_ref,
+                )
+                try:
+                    _run_cmd(
+                        ["git", "remote", "set-url", "origin", repo_url],
+                        cwd=update_dir,
+                    )
+                except Exception:
+                    _run_cmd(
+                        ["git", "remote", "add", "origin", repo_url],
+                        cwd=update_dir,
+                    )
+                _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
+                _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
+                updated = True
+        if not updated:
             if update_dir.exists():
                 shutil.rmtree(update_dir)
             logger.info("Cloning %s into %s", repo_url, update_dir)
