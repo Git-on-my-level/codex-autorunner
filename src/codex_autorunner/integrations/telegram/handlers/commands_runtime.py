@@ -3840,15 +3840,15 @@ class TelegramCommandHandlers:
             return
         if callback.chat_id is None:
             return
-        await self._answer_callback(callback, "Starting new thread...")
+        await self._answer_callback(callback, "Applying summary...")
         edited = await self._edit_message_text(
             callback.chat_id,
             state.message_id,
-            f"{state.display_text}\n\nStarting a new thread with this summary...",
+            f"{state.display_text}\n\nApplying summary...",
             reply_markup=None,
         )
         if not edited:
-            await _send_compact_status("Starting a new thread with this summary...")
+            await _send_compact_status("Applying summary...")
         message = TelegramMessage(
             update_id=callback.update_id,
             message_id=callback.message_id or 0,
@@ -3883,11 +3883,11 @@ class TelegramCommandHandlers:
         edited = await self._edit_message_text(
             callback.chat_id,
             state.message_id,
-            f"{state.display_text}\n\nStarted a new thread with this summary.",
+            f"{state.display_text}\n\nSummary applied.",
             reply_markup=None,
         )
         if not edited:
-            await _send_compact_status("Started a new thread with this summary.")
+            await _send_compact_status("Summary applied.")
 
     async def _handle_rollout(
         self, message: TelegramMessage, _args: str, _runtime: Any
