@@ -869,7 +869,7 @@ class TelegramCommandHandlers:
                 await self._edit_message_text(
                     message.chat_id,
                     runtime.interrupt_message_id,
-                    "Interrupt did not stop the turn (completed normally).",
+                    "Interrupt requested; turn completed.",
                 )
             runtime.interrupt_message_id = None
             runtime.interrupt_turn_id = None
@@ -2722,7 +2722,7 @@ class TelegramCommandHandlers:
                 await self._edit_message_text(
                     message.chat_id,
                     runtime.interrupt_message_id,
-                    "Interrupt did not stop the turn (completed normally).",
+                    "Interrupt requested; turn completed.",
                 )
             runtime.interrupt_message_id = None
             runtime.interrupt_turn_id = None
