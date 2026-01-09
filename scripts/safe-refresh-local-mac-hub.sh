@@ -73,6 +73,14 @@ import json, pathlib, time
 path = pathlib.Path("${UPDATE_STATUS_PATH}")
 path.parent.mkdir(parents=True, exist_ok=True)
 payload = {"status": "${status}", "message": "${message}", "at": time.time()}
+try:
+    existing = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    existing = None
+if isinstance(existing, dict):
+    for key in ("notify_chat_id", "notify_thread_id", "notify_reply_to", "notify_sent_at"):
+        if key not in payload and key in existing:
+            payload[key] = existing[key]
 path.write_text(json.dumps(payload), encoding="utf-8")
 PY
 }
