@@ -28,6 +28,15 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 - serve (API/UI)
 - hub: `car hub serve|scan|create` (worktrees via UI/API)
 
+## Python venv
+- Always use the project venv (`.venv/bin/python`) for running Python and tests.
+
+## GitHub CLI
+- Use the `gh` CLI for GitHub interactions whenever possible.
+
+## Make targets
+- Prefer running common scripts via `make` targets when available.
+
 ## Safe updates (launchd mac hub)
 - Preferred path: `scripts/safe-refresh-local-mac-hub.sh` (staged venv swap, launchd reload, `/health` + static/telegram checks, rollback on failure).
 - `/system/update` and Telegram `/update` use the safe refresh script when available.
