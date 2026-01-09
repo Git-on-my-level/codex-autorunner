@@ -3601,6 +3601,15 @@ class TelegramCommandHandlers:
         client = await self._client_for_workspace(record.workspace_path)
         if client is None:
             return False, "Topic not bound. Use /bind <repo_id> or /bind <path>."
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.compact.apply.start",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            summary_len=len(summary_text),
+            workspace_path=record.workspace_path,
+        )
         try:
             thread = await client.thread_start(record.workspace_path)
         except Exception as exc:
@@ -3620,6 +3629,14 @@ class TelegramCommandHandlers:
         new_thread_id = _extract_thread_id(thread)
         if not new_thread_id:
             return False, "Failed to start a new Codex thread."
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.compact.apply.thread_started",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            codex_thread_id=new_thread_id,
+        )
         record = self._apply_thread_result(
             message.chat_id,
             message.thread_id,
@@ -3637,9 +3654,26 @@ class TelegramCommandHandlers:
             send_failure_response=False,
         )
         if isinstance(seed_outcome, _TurnRunFailure):
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.compact.apply.turn_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                failure_message=seed_outcome.failure_message,
+            )
             return False, seed_outcome.failure_message
         if seed_outcome.turn_id:
             self._token_usage_by_turn.pop(seed_outcome.turn_id, None)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.compact.apply.turn_completed",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            codex_thread_id=new_thread_id,
+            turn_id=seed_outcome.turn_id,
+        )
         return True, None
 
     async def _handle_compact(
@@ -3754,6 +3788,14 @@ class TelegramCommandHandlers:
             await self._answer_callback(callback, "Selection expired")
             return
         if parsed.action == "cancel":
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.compact.callback.cancel",
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+                message_id=callback.message_id,
+            )
             self._compact_pending.pop(key, None)
             if callback.chat_id is not None:
                 await self._edit_message_text(
@@ -3767,6 +3809,15 @@ class TelegramCommandHandlers:
         if parsed.action != "apply":
             await self._answer_callback(callback, "Selection expired")
             return
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.compact.callback.apply",
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            message_id=callback.message_id,
+            summary_len=len(state.summary_text),
+        )
         self._compact_pending.pop(key, None)
         record = self._router.get_topic(key)
         if record is None or not record.workspace_path:
