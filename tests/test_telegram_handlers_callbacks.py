@@ -3,16 +3,18 @@ import pytest
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramCallbackQuery,
     encode_bind_callback,
+    encode_compact_callback,
     encode_resume_callback,
 )
 from codex_autorunner.integrations.telegram.handlers.callbacks import handle_callback
-from codex_autorunner.integrations.telegram.types import SelectionState
+from codex_autorunner.integrations.telegram.types import CompactState, SelectionState
 
 
 class _HandlerStub:
     def __init__(self) -> None:
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
+        self._compact_pending: dict[str, CompactState] = {}
         self.calls: list[tuple[str, object]] = []
 
     def _resolve_topic_key(self, chat_id: int, thread_id: object) -> str:
@@ -32,6 +34,15 @@ class _HandlerStub:
         self, key: str, repo_id: str, _callback: TelegramCallbackQuery
     ) -> None:
         self.calls.append(("bind", key, repo_id))
+
+    async def _handle_compact_callback(
+        self, key: str, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        state = self._compact_pending.get(key)
+        if not state or _callback.message_id != state.message_id:
+            await self._answer_callback(_callback, "Selection expired")
+            return
+        self.calls.append(("compact", key, parsed))
 
 
 @pytest.mark.anyio
@@ -84,3 +95,45 @@ async def test_handle_callback_bind_selection_ok() -> None:
     )
     await handle_callback(handlers, callback)
     assert handlers.calls == [("bind", key, "repo_1")]
+
+
+@pytest.mark.anyio
+async def test_handle_callback_compact_selection_expired() -> None:
+    handlers = _HandlerStub()
+    callback = TelegramCallbackQuery(
+        update_id=3,
+        callback_id="cb3",
+        from_user_id=4,
+        data=encode_compact_callback("apply"),
+        message_id=5,
+        chat_id=15,
+        thread_id=16,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls == [("answer", "Selection expired")]
+
+
+@pytest.mark.anyio
+async def test_handle_callback_compact_selection_ok() -> None:
+    handlers = _HandlerStub()
+    key = handlers._resolve_topic_key(20, 21)
+    handlers._compact_pending[key] = CompactState(
+        summary_text="summary",
+        display_text="summary",
+        message_id=7,
+        created_at="now",
+    )
+    callback = TelegramCallbackQuery(
+        update_id=4,
+        callback_id="cb4",
+        from_user_id=5,
+        data=encode_compact_callback("apply"),
+        message_id=7,
+        chat_id=20,
+        thread_id=21,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls
+    assert handlers.calls[0][0] == "compact"
+    assert handlers.calls[0][1] == key
+    assert handlers.calls[0][2] is not None

@@ -33,6 +33,14 @@ class TurnContext:
 
 
 @dataclass
+class CompactState:
+    summary_text: str
+    display_text: str
+    message_id: int
+    created_at: str
+
+
+@dataclass
 class SelectionState:
     items: list[tuple[str, str]]
     page: int = 0

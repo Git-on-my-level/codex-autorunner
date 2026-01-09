@@ -174,6 +174,11 @@ class CancelCallback:
 
 
 @dataclass(frozen=True)
+class CompactCallback:
+    action: str
+
+
+@dataclass(frozen=True)
 class PageCallback:
     kind: str
     page: int
@@ -626,6 +631,12 @@ def encode_page_callback(kind: str, page: int) -> str:
     return data
 
 
+def encode_compact_callback(action: str) -> str:
+    data = f"compact:{action}"
+    _validate_callback_data(data)
+    return data
+
+
 def parse_callback_data(
     data: Optional[str],
 ) -> Optional[
@@ -639,6 +650,7 @@ def parse_callback_data(
         UpdateConfirmCallback,
         ReviewCommitCallback,
         CancelCallback,
+        CompactCallback,
         PageCallback,
     ]
 ]:
@@ -690,6 +702,11 @@ def parse_callback_data(
         if not kind:
             return None
         return CancelCallback(kind=kind)
+    if data.startswith("compact:"):
+        _, _, action = data.partition(":")
+        if not action:
+            return None
+        return CompactCallback(action=action)
     if data.startswith("page:"):
         _, _, rest = data.partition(":")
         kind, sep, page = rest.partition(":")
@@ -754,6 +771,19 @@ def build_model_keyboard(
         rows.append([InlineButton(label, callback_data)])
     if include_cancel:
         rows.append([InlineButton("Cancel", encode_cancel_callback("model"))])
+    return build_inline_keyboard(rows)
+
+
+def build_compact_keyboard() -> dict[str, Any]:
+    rows = [
+        [
+            InlineButton(
+                "Start new thread with this summary",
+                encode_compact_callback("apply"),
+            )
+        ],
+        [InlineButton("Cancel", encode_compact_callback("cancel"))],
+    ]
     return build_inline_keyboard(rows)
 
 

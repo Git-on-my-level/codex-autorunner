@@ -6,6 +6,7 @@ from ..adapter import (
     ApprovalCallback,
     BindCallback,
     CancelCallback,
+    CompactCallback,
     EffortCallback,
     ModelCallback,
     PageCallback,
@@ -63,6 +64,9 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
     elif isinstance(parsed, CancelCallback):
         if key:
             await handlers._handle_selection_cancel(key, parsed, callback)
+    elif isinstance(parsed, CompactCallback):
+        if key:
+            await handlers._handle_compact_callback(key, callback, parsed)
     elif isinstance(parsed, PageCallback):
         if key:
             await handlers._handle_selection_page(key, parsed, callback)

@@ -65,6 +65,7 @@ from .state import (
 )
 from .transport import TelegramMessageTransport
 from .types import (
+    CompactState,
     ModelPickerState,
     PendingApproval,
     ReviewCommitSelectionState,
@@ -147,6 +148,7 @@ class TelegramBotService(
         self._review_commit_options: dict[str, ReviewCommitSelectionState] = {}
         self._review_commit_subjects: dict[str, dict[str, str]] = {}
         self._pending_review_custom: dict[str, dict[str, Any]] = {}
+        self._compact_pending: dict[str, CompactState] = {}
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
         self._outbox_inflight: set[str] = set()

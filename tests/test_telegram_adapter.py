@@ -7,6 +7,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     ApprovalCallback,
     BindCallback,
     CancelCallback,
+    CompactCallback,
     PageCallback,
     ResumeCallback,
     ReviewCommitCallback,
@@ -27,6 +28,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     encode_approval_callback,
     encode_bind_callback,
     encode_cancel_callback,
+    encode_compact_callback,
     encode_page_callback,
     encode_resume_callback,
     encode_review_commit_callback,
@@ -381,6 +383,16 @@ def test_build_keyboards() -> None:
     assert review_keyboard["inline_keyboard"][0][0]["callback_data"].startswith(
         "review_commit:"
     )
+
+
+def test_compact_callback_round_trip() -> None:
+    data = encode_compact_callback("apply")
+    parsed = parse_callback_data(data)
+    assert parsed == CompactCallback(action="apply")
+
+
+def test_compact_callback_invalid() -> None:
+    assert parse_callback_data("compact:") is None
 
 
 def test_next_update_offset() -> None:

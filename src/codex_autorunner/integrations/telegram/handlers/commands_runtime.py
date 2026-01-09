@@ -6,6 +6,7 @@ import re
 import secrets
 import shlex
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
@@ -24,10 +25,12 @@ from ...app_server.client import (
 )
 from ..adapter import (
     TELEGRAM_MAX_MESSAGE_LENGTH,
+    CompactCallback,
     InlineButton,
     TelegramCallbackQuery,
     TelegramCommand,
     TelegramMessage,
+    build_compact_keyboard,
     build_inline_keyboard,
     build_update_confirm_keyboard,
     encode_cancel_callback,
@@ -122,6 +125,7 @@ from ..helpers import (
 )
 from ..state import APPROVAL_MODE_YOLO, PendingVoiceRecord, parse_topic_key, topic_key
 from ..types import (
+    CompactState,
     ModelPickerState,
     ReviewCommitSelectionState,
     SelectionState,
@@ -138,6 +142,36 @@ PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
 PROMPT_CONTEXT_HINT = (
     "If the user asks to write a prompt, put the prompt in a ```code block```."
 )
+
+
+@dataclass
+class _TurnRunResult:
+    record: "TelegramTopicRecord"
+    thread_id: Optional[str]
+    turn_id: Optional[str]
+    response: str
+    placeholder_id: Optional[int]
+    elapsed_seconds: Optional[float]
+    token_usage: Optional[dict[str, Any]]
+    transcript_message_id: Optional[int]
+    transcript_text: Optional[str]
+
+
+@dataclass
+class _TurnRunFailure:
+    failure_message: str
+    placeholder_id: Optional[int]
+    transcript_message_id: Optional[int]
+    transcript_text: Optional[str]
+
+
+@dataclass
+class _RuntimeStub:
+    current_turn_id: Optional[str] = None
+    current_turn_key: Optional[TurnKey] = None
+    interrupt_requested: bool = False
+    interrupt_message_id: Optional[int] = None
+    interrupt_turn_id: Optional[str] = None
 
 
 def _wrap_injected_context(text: str) -> str:
@@ -590,25 +624,86 @@ class TelegramCommandHandlers:
         transcript_message_id: Optional[int] = None,
         transcript_text: Optional[str] = None,
     ) -> None:
+        outcome = await self._run_turn_and_collect_result(
+            message,
+            runtime,
+            text_override=text_override,
+            input_items=input_items,
+            record=record,
+            send_placeholder=send_placeholder,
+            transcript_message_id=transcript_message_id,
+            transcript_text=transcript_text,
+            allow_new_thread=True,
+            send_failure_response=True,
+        )
+        if isinstance(outcome, _TurnRunFailure):
+            return
+        response_sent = await self._deliver_turn_response(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            placeholder_id=outcome.placeholder_id,
+            response=outcome.response,
+        )
+        await self._send_turn_metrics(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            elapsed_seconds=outcome.elapsed_seconds,
+            token_usage=outcome.token_usage,
+        )
+        if outcome.turn_id:
+            self._token_usage_by_turn.pop(outcome.turn_id, None)
+        if response_sent:
+            await self._delete_message(message.chat_id, outcome.placeholder_id)
+            await self._finalize_voice_transcript(
+                message.chat_id,
+                outcome.transcript_message_id,
+                outcome.transcript_text,
+            )
+
+    async def _run_turn_and_collect_result(
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        *,
+        text_override: Optional[str] = None,
+        input_items: Optional[list[dict[str, Any]]] = None,
+        record: Optional["TelegramTopicRecord"] = None,
+        send_placeholder: bool = True,
+        transcript_message_id: Optional[int] = None,
+        transcript_text: Optional[str] = None,
+        allow_new_thread: bool = True,
+        missing_thread_message: Optional[str] = None,
+        send_failure_response: bool = True,
+    ) -> _TurnRunResult | _TurnRunFailure:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         record = record or self._router.get_topic(key)
         if record is None or not record.workspace_path:
-            await self._send_message(
-                message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
+            failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
+            if send_failure_response:
+                await self._send_message(
+                    message.chat_id,
+                    failure_message,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+            return _TurnRunFailure(
+                failure_message, None, transcript_message_id, transcript_text
             )
-            return
         client = await self._client_for_workspace(record.workspace_path)
         if client is None:
-            await self._send_message(
-                message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
+            failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
+            if send_failure_response:
+                await self._send_message(
+                    message.chat_id,
+                    failure_message,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+            return _TurnRunFailure(
+                failure_message, None, transcript_message_id, transcript_text
             )
-            return
         if record.active_thread_id:
             conflict_key = self._find_thread_conflict(
                 record.active_thread_id,
@@ -621,10 +716,20 @@ class TelegramCommandHandlers:
                     record.active_thread_id,
                     conflict_key,
                 )
-                return
+                return _TurnRunFailure(
+                    "Thread conflict detected.",
+                    None,
+                    transcript_message_id,
+                    transcript_text,
+                )
             verified = await self._verify_active_thread(message, record)
             if not verified:
-                return
+                return _TurnRunFailure(
+                    "Active thread verification failed.",
+                    None,
+                    transcript_message_id,
+                    transcript_text,
+                )
             record = verified
         thread_id = record.active_thread_id
         turn_handle = None
@@ -641,7 +746,7 @@ class TelegramCommandHandlers:
         prompt_text, injected = await self._maybe_inject_github_context(
             prompt_text, record
         )
-        if injected:
+        if injected and send_failure_response:
             await self._send_message(
                 message.chat_id,
                 "gh CLI used, github context injected",
@@ -660,23 +765,58 @@ class TelegramCommandHandlers:
             )
         try:
             if not thread_id:
+                if not allow_new_thread:
+                    failure_message = (
+                        missing_thread_message
+                        or "No active thread. Use /new to start one."
+                    )
+                    if send_failure_response:
+                        await self._send_message(
+                            message.chat_id,
+                            failure_message,
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                        )
+                    return _TurnRunFailure(
+                        failure_message,
+                        None,
+                        transcript_message_id,
+                        transcript_text,
+                    )
                 workspace_path = record.workspace_path
                 if not workspace_path:
-                    return
+                    return _TurnRunFailure(
+                        "Workspace missing.",
+                        None,
+                        transcript_message_id,
+                        transcript_text,
+                    )
                 thread = await client.thread_start(workspace_path)
                 if not await self._require_thread_workspace(
                     message, workspace_path, thread, action="thread_start"
                 ):
-                    return
+                    return _TurnRunFailure(
+                        "Thread workspace mismatch.",
+                        None,
+                        transcript_message_id,
+                        transcript_text,
+                    )
                 thread_id = _extract_thread_id(thread)
                 if not thread_id:
-                    await self._send_message(
-                        message.chat_id,
-                        "Failed to start a new Codex thread.",
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
+                    failure_message = "Failed to start a new Codex thread."
+                    if send_failure_response:
+                        await self._send_message(
+                            message.chat_id,
+                            failure_message,
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                        )
+                    return _TurnRunFailure(
+                        failure_message,
+                        None,
+                        transcript_message_id,
+                        transcript_text,
                     )
-                    return
                 record = self._apply_thread_result(
                     message.chat_id,
                     message.thread_id,
@@ -758,15 +898,22 @@ class TelegramCommandHandlers:
                     runtime.current_turn_id = None
                     runtime.current_turn_key = None
                     runtime.interrupt_requested = False
-                    await self._send_message(
-                        message.chat_id,
-                        "Turn collision detected; please retry.",
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
+                    failure_message = "Turn collision detected; please retry."
+                    if send_failure_response:
+                        await self._send_message(
+                            message.chat_id,
+                            failure_message,
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                        )
+                        if placeholder_id is not None:
+                            await self._delete_message(message.chat_id, placeholder_id)
+                    return _TurnRunFailure(
+                        failure_message,
+                        placeholder_id,
+                        transcript_message_id,
+                        transcript_text,
                     )
-                    if placeholder_id is not None:
-                        await self._delete_message(message.chat_id, placeholder_id)
-                    return
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
@@ -801,25 +948,31 @@ class TelegramCommandHandlers:
                 thread_id=message.thread_id,
                 exc=exc,
             )
-            response_sent = await self._deliver_turn_response(
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                placeholder_id=placeholder_id,
-                response=_with_conversation_id(
-                    failure_message,
+            if send_failure_response:
+                response_sent = await self._deliver_turn_response(
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
-                ),
-            )
-            if response_sent:
-                await self._delete_message(message.chat_id, placeholder_id)
-                await self._finalize_voice_transcript(
-                    message.chat_id,
-                    transcript_message_id,
-                    transcript_text,
+                    reply_to=message.message_id,
+                    placeholder_id=placeholder_id,
+                    response=_with_conversation_id(
+                        failure_message,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                    ),
                 )
-            return
+                if response_sent:
+                    await self._delete_message(message.chat_id, placeholder_id)
+                    await self._finalize_voice_transcript(
+                        message.chat_id,
+                        transcript_message_id,
+                        transcript_text,
+                    )
+            return _TurnRunFailure(
+                failure_message,
+                placeholder_id,
+                transcript_message_id,
+                transcript_text,
+            )
         finally:
             if turn_handle is not None:
                 if turn_key is not None:
@@ -886,33 +1039,21 @@ class TelegramCommandHandlers:
             agent_message_count=len(result.agent_messages),
             error_count=len(result.errors),
         )
-        response_sent = await self._deliver_turn_response(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            placeholder_id=placeholder_id,
-            response=response,
-        )
         turn_id = turn_handle.turn_id if turn_handle else None
         token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
         if token_usage is None and thread_id:
             token_usage = self._token_usage_by_thread.get(thread_id)
-        await self._send_turn_metrics(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
+        return _TurnRunResult(
+            record=record,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            response=response,
+            placeholder_id=placeholder_id,
             elapsed_seconds=turn_elapsed_seconds,
             token_usage=token_usage,
+            transcript_message_id=transcript_message_id,
+            transcript_text=transcript_text,
         )
-        if turn_id:
-            self._token_usage_by_turn.pop(turn_id, None)
-        if response_sent:
-            await self._delete_message(message.chat_id, placeholder_id)
-            await self._finalize_voice_transcript(
-                message.chat_id,
-                transcript_message_id,
-                transcript_text,
-            )
 
     def _maybe_append_whisper_disclaimer(
         self,
@@ -3379,6 +3520,126 @@ class TelegramCommandHandlers:
             record=record,
         )
 
+    def _prepare_compact_summary_delivery(self, summary_text: str) -> tuple[str, bytes | None]:
+        summary_text = summary_text.strip() or "(no summary)"
+        if len(summary_text) <= TELEGRAM_MAX_MESSAGE_LENGTH:
+            return summary_text, None
+        header = "Summary preview:\n"
+        footer = "\n\nFull summary attached as compact-summary.txt"
+        preview_limit = TELEGRAM_MAX_MESSAGE_LENGTH - len(header) - len(footer)
+        if preview_limit < 20:
+            preview_limit = 20
+        preview = _compact_preview(summary_text, limit=preview_limit)
+        display_text = f"{header}{preview}{footer}"
+        if len(display_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            display_text = display_text[: TELEGRAM_MAX_MESSAGE_LENGTH - 3] + "..."
+        return display_text, summary_text.encode("utf-8")
+
+    async def _send_compact_summary_message(
+        self,
+        message: TelegramMessage,
+        summary_text: str,
+        *,
+        reply_markup: Optional[dict[str, Any]] = None,
+    ) -> tuple[Optional[int], str]:
+        display_text, attachment = self._prepare_compact_summary_delivery(summary_text)
+        payload_text, parse_mode = self._prepare_outgoing_text(
+            display_text,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        message_id = None
+        try:
+            response = await self._bot.send_message(
+                message.chat_id,
+                payload_text,
+                message_thread_id=message.thread_id,
+                reply_to_message_id=message.message_id,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+            message_id = response.get("message_id") if isinstance(response, dict) else None
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.compact.send_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+        if attachment is not None:
+            await self._send_document(
+                message.chat_id,
+                attachment,
+                filename="compact-summary.txt",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                caption="Full summary attached.",
+            )
+        return message_id if isinstance(message_id, int) else None, display_text
+
+    def _build_compact_seed_prompt(self, summary_text: str) -> str:
+        summary_text = summary_text.strip() or "(no summary)"
+        return (
+            "Context handoff from previous thread:\n\n"
+            f"{summary_text}\n\n"
+            "Continue from this context. Ask for missing info if needed."
+        )
+
+    async def _apply_compact_summary(
+        self,
+        message: TelegramMessage,
+        record: "TelegramTopicRecord",
+        summary_text: str,
+    ) -> tuple[bool, str | None]:
+        if not record.workspace_path:
+            return False, "Topic not bound. Use /bind <repo_id> or /bind <path>."
+        client = await self._client_for_workspace(record.workspace_path)
+        if client is None:
+            return False, "Topic not bound. Use /bind <repo_id> or /bind <path>."
+        try:
+            thread = await client.thread_start(record.workspace_path)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.compact.thread_start.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            return False, "Failed to start a new Codex thread."
+        if not await self._require_thread_workspace(
+            message, record.workspace_path, thread, action="thread_start"
+        ):
+            return False, "Failed to start a new Codex thread."
+        new_thread_id = _extract_thread_id(thread)
+        if not new_thread_id:
+            return False, "Failed to start a new Codex thread."
+        record = self._apply_thread_result(
+            message.chat_id,
+            message.thread_id,
+            thread,
+            active_thread_id=new_thread_id,
+        )
+        seed_text = self._build_compact_seed_prompt(summary_text)
+        seed_outcome = await self._run_turn_and_collect_result(
+            message,
+            _RuntimeStub(),
+            text_override=seed_text,
+            record=record,
+            send_placeholder=False,
+            allow_new_thread=False,
+            send_failure_response=False,
+        )
+        if isinstance(seed_outcome, _TurnRunFailure):
+            return False, seed_outcome.failure_message
+        if seed_outcome.turn_id:
+            self._token_usage_by_turn.pop(seed_outcome.turn_id, None)
+        return True, None
+
     async def _handle_compact(
         self, message: TelegramMessage, args: str, runtime: Any
     ) -> None:
@@ -3394,12 +3655,160 @@ class TelegramCommandHandlers:
                 record=record,
             )
             return
-        await self._send_message(
-            message.chat_id,
-            "Compact is not available via the app-server. Use /new or /compact soft for a summary.",
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
+        auto_apply = bool(argv and argv[0].lower() == "apply")
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        if not record.active_thread_id:
+            await self._send_message(
+                message.chat_id,
+                "No active thread to compact. Use /new to start one.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        conflict_key = self._find_thread_conflict(record.active_thread_id, key=key)
+        if conflict_key:
+            self._router.set_active_thread(message.chat_id, message.thread_id, None)
+            await self._handle_thread_conflict(
+                message,
+                record.active_thread_id,
+                conflict_key,
+            )
+            return
+        verified = await self._verify_active_thread(message, record)
+        if not verified:
+            return
+        record = verified
+        outcome = await self._run_turn_and_collect_result(
+            message,
+            runtime,
+            text_override=COMPACT_SUMMARY_PROMPT,
+            record=record,
+            allow_new_thread=False,
+            missing_thread_message="No active thread to compact. Use /new to start one.",
+            send_failure_response=True,
         )
+        if isinstance(outcome, _TurnRunFailure):
+            return
+        summary_text = outcome.response.strip() or "(no summary)"
+        reply_markup = None if auto_apply else build_compact_keyboard()
+        summary_message_id, display_text = await self._send_compact_summary_message(
+            message,
+            summary_text,
+            reply_markup=reply_markup,
+        )
+        if outcome.turn_id:
+            self._token_usage_by_turn.pop(outcome.turn_id, None)
+        await self._delete_message(message.chat_id, outcome.placeholder_id)
+        await self._finalize_voice_transcript(
+            message.chat_id,
+            outcome.transcript_message_id,
+            outcome.transcript_text,
+        )
+        if auto_apply:
+            success, failure_message = await self._apply_compact_summary(
+                message, record, summary_text
+            )
+            if not success:
+                await self._send_message(
+                    message.chat_id,
+                    failure_message or "Failed to start new thread with summary.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                "Started a new thread with the summary.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if summary_message_id is None:
+            await self._send_message(
+                message.chat_id,
+                "Failed to send compact summary; try again.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        self._compact_pending[key] = CompactState(
+            summary_text=summary_text,
+            display_text=display_text,
+            message_id=summary_message_id,
+            created_at=now_iso(),
+        )
+
+    async def _handle_compact_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: CompactCallback,
+    ) -> None:
+        state = self._compact_pending.get(key)
+        if not state or callback.message_id != state.message_id:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        if parsed.action == "cancel":
+            self._compact_pending.pop(key, None)
+            if callback.chat_id is not None:
+                await self._edit_message_text(
+                    callback.chat_id,
+                    state.message_id,
+                    f"{state.display_text}\n\nCompact canceled.",
+                    reply_markup=None,
+                )
+            await self._answer_callback(callback, "Canceled")
+            return
+        if parsed.action != "apply":
+            await self._answer_callback(callback, "Selection expired")
+            return
+        self._compact_pending.pop(key, None)
+        record = self._router.get_topic(key)
+        if record is None or not record.workspace_path:
+            await self._answer_callback(callback, "Selection expired")
+            return
+        if callback.chat_id is None:
+            return
+        message = TelegramMessage(
+            update_id=callback.update_id,
+            message_id=callback.message_id or 0,
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            from_user_id=callback.from_user_id,
+            text=None,
+            date=None,
+            is_topic_message=callback.thread_id is not None,
+        )
+        success, failure_message = await self._apply_compact_summary(
+            message,
+            record,
+            state.summary_text,
+        )
+        if not success:
+            await self._edit_message_text(
+                callback.chat_id,
+                state.message_id,
+                f"{state.display_text}\n\nFailed to start new thread with summary.",
+                reply_markup=None,
+            )
+            if failure_message:
+                await self._send_message(
+                    callback.chat_id,
+                    failure_message,
+                    thread_id=callback.thread_id,
+                )
+            await self._answer_callback(callback, "Failed")
+            return
+        await self._edit_message_text(
+            callback.chat_id,
+            state.message_id,
+            f"{state.display_text}\n\nStarted a new thread with this summary.",
+            reply_markup=None,
+        )
+        await self._answer_callback(callback, "Started")
 
     async def _handle_rollout(
         self, message: TelegramMessage, _args: str, _runtime: Any
