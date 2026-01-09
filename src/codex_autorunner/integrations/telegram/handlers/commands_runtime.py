@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import secrets
 import shlex
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
@@ -3988,13 +3990,14 @@ class TelegramCommandHandlers:
         if callback and selection_key:
             await self._answer_callback(callback, "Update started")
             await self._finalize_selection(selection_key, callback, message)
-            return
-        await self._send_message(
-            chat_id,
-            message,
-            thread_id=thread_id,
-            reply_to=reply_to,
-        )
+        else:
+            await self._send_message(
+                chat_id,
+                message,
+                thread_id=thread_id,
+                reply_to=reply_to,
+            )
+        self._schedule_update_status_watch(chat_id, thread_id)
 
     async def _prompt_update_selection(
         self,
@@ -4040,11 +4043,84 @@ class TelegramCommandHandlers:
             reply_markup=build_update_confirm_keyboard(),
         )
 
+    def _update_status_path(self) -> Path:
+        return Path.home() / ".codex-autorunner" / "update_status.json"
+
+    def _read_update_status(self) -> Optional[dict[str, Any]]:
+        path = self._update_status_path()
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _format_update_status_message(
+        self, status: Optional[dict[str, Any]]
+    ) -> str:
+        if not status:
+            return "No update status recorded."
+        state = str(status.get("status") or "unknown")
+        message = str(status.get("message") or "")
+        timestamp = status.get("at")
+        rendered_time = ""
+        if isinstance(timestamp, (int, float)):
+            rendered_time = datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
+        lines = [f"Update status: {state}"]
+        if message:
+            lines.append(f"Message: {message}")
+        if rendered_time:
+            lines.append(f"Last updated: {rendered_time}")
+        return "\n".join(lines)
+
+    async def _handle_update_status(
+        self, message: TelegramMessage, reply_to: Optional[int] = None
+    ) -> None:
+        status = self._read_update_status()
+        await self._send_message(
+            message.chat_id,
+            self._format_update_status_message(status),
+            thread_id=message.thread_id,
+            reply_to=reply_to or message.message_id,
+        )
+
+    def _schedule_update_status_watch(
+        self,
+        chat_id: int,
+        thread_id: Optional[int],
+        *,
+        timeout_seconds: float = 300.0,
+        interval_seconds: float = 2.0,
+    ) -> None:
+        async def _watch() -> None:
+            deadline = time.monotonic() + timeout_seconds
+            while time.monotonic() < deadline:
+                status = self._read_update_status()
+                if status and status.get("status") in ("ok", "error"):
+                    await self._send_message(
+                        chat_id,
+                        self._format_update_status_message(status),
+                        thread_id=thread_id,
+                    )
+                    return
+                await asyncio.sleep(interval_seconds)
+            await self._send_message(
+                chat_id,
+                "Update still running. Use /update status for the latest state.",
+                thread_id=thread_id,
+            )
+
+        asyncio.create_task(_watch())
+
     async def _handle_update(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
         argv = self._parse_command_args(args)
         target_raw = argv[0] if argv else None
+        if target_raw and target_raw.lower() == "status":
+            await self._handle_update_status(message)
+            return
         if not target_raw:
             if self._has_active_turns():
                 await self._prompt_update_confirmation(message)
