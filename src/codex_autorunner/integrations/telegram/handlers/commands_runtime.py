@@ -144,6 +144,20 @@ PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
 PROMPT_CONTEXT_HINT = (
     "If the user asks to write a prompt, put the prompt in a ```code block```."
 )
+CAR_CONTEXT_KEYWORDS = (
+    "car",
+    "codex",
+    "todo",
+    "progress",
+    "opinions",
+    "spec",
+    "summary",
+    "autorunner",
+    "work docs",
+)
+CAR_CONTEXT_HINT = (
+    "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules."
+)
 FILES_HINT_TEMPLATE = (
     "Inbox: {inbox}\n"
     "Outbox (pending): {outbox}\n"
@@ -764,6 +778,16 @@ class TelegramCommandHandlers:
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
+        prompt_text, injected = self._maybe_inject_car_context(prompt_text)
+        if injected:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.car_context.injected",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
+            )
         prompt_text, injected = self._maybe_inject_prompt_context(prompt_text)
         if injected:
             log_event(
@@ -1170,6 +1194,20 @@ class TelegramCommandHandlers:
             return prompt_text, False
         separator = "\n" if prompt_text.endswith("\n") else "\n\n"
         injection = wrap_injected_context(PROMPT_CONTEXT_HINT)
+        return f"{prompt_text}{separator}{injection}", True
+
+    def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:
+        if not prompt_text or not prompt_text.strip():
+            return prompt_text, False
+        lowered = prompt_text.lower()
+        if "about_car.md" in lowered:
+            return prompt_text, False
+        if CAR_CONTEXT_HINT in prompt_text:
+            return prompt_text, False
+        if not any(keyword in lowered for keyword in CAR_CONTEXT_KEYWORDS):
+            return prompt_text, False
+        separator = "\n" if prompt_text.endswith("\n") else "\n\n"
+        injection = wrap_injected_context(CAR_CONTEXT_HINT)
         return f"{prompt_text}{separator}{injection}", True
 
     async def _handle_image_message(

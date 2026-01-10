@@ -34,6 +34,9 @@ const chatDecoder = new TextDecoder();
 const chatState = Object.fromEntries(
   DOC_TYPES.map((k) => [k, createChatState()])
 );
+const VOICE_TRANSCRIPT_DISCLAIMER_TEXT =
+  CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
+  "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.";
 
 // Track history navigation position for up/down arrow prompt recall
 let historyNavIndex = -1;
@@ -1150,10 +1153,27 @@ function applyVoiceTranscript(text) {
   }
   const current = chatUI.input.value.trim();
   const prefix = current ? current + " " : "";
-  chatUI.input.value = `${prefix}${text}`.trim();
+  let next = `${prefix}${text}`.trim();
+  next = appendVoiceTranscriptDisclaimer(next);
+  chatUI.input.value = next;
   autoResizeTextarea(chatUI.input);
   chatUI.input.focus();
   flash("Voice transcript added");
+}
+
+function appendVoiceTranscriptDisclaimer(text) {
+  const base = text === undefined || text === null ? "" : String(text);
+  if (!base.trim()) return base;
+  const injection = wrapInjectedContext(VOICE_TRANSCRIPT_DISCLAIMER_TEXT);
+  if (base.includes(VOICE_TRANSCRIPT_DISCLAIMER_TEXT) || base.includes(injection)) {
+    return base;
+  }
+  const separator = base.endsWith("\n") ? "\n" : "\n\n";
+  return `${base}${separator}${injection}`;
+}
+
+function wrapInjectedContext(text) {
+  return `<injected context>\n${text}\n</injected context>`;
 }
 
 function initDocVoice() {

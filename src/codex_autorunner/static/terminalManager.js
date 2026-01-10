@@ -37,7 +37,6 @@ const XTERM_COLOR_MODE_RGB = 0x03000000;
 
 const CAR_CONTEXT_HOOK_ID = "car_context";
 const GITHUB_CONTEXT_HOOK_ID = "github_context";
-const PROMPT_CONTEXT_HOOK_ID = "prompt_context";
 const CAR_CONTEXT_KEYWORDS = [
   "car",
   "codex",
@@ -51,9 +50,12 @@ const CAR_CONTEXT_KEYWORDS = [
 ];
 const GITHUB_LINK_RE =
   /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/\d+(?:[/?#][^\s]*)?/i;
-const PROMPT_CONTEXT_RE = /\bprompt\b/i;
-const PROMPT_CONTEXT_HINT =
-  "If the user asks to write a prompt, put the prompt in a ```code block```.";
+const CAR_CONTEXT_HINT_TEXT =
+  "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.";
+const CAR_CONTEXT_HINT = wrapInjectedContext(CAR_CONTEXT_HINT_TEXT);
+const VOICE_TRANSCRIPT_DISCLAIMER_TEXT =
+  CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
+  "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.";
 const INJECTED_CONTEXT_TAG_RE = /<injected context>/i;
 
 function wrapInjectedContext(text) {
@@ -250,7 +252,6 @@ export class TerminalManager {
 
     this._registerTextInputHook(this._buildCarContextHook());
     this._registerTextInputHook(this._buildGithubContextHook());
-    this._registerTextInputHook(this._buildPromptContextHook());
 
     // Bind methods that are used as callbacks
     this._handleResize = this._handleResize.bind(this);
@@ -493,11 +494,15 @@ export class TerminalManager {
         const hit = CAR_CONTEXT_KEYWORDS.some((kw) => lowered.includes(kw));
         if (!hit) return null;
         if (lowered.includes("about_car.md")) return null;
+        if (
+          text.includes(CAR_CONTEXT_HINT_TEXT) ||
+          text.includes(CAR_CONTEXT_HINT)
+        ) {
+          return null;
+        }
 
         manager._markTextInputHookFired(CAR_CONTEXT_HOOK_ID);
-        const injection = wrapInjectedContextIfNeeded(
-          "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules."
-        );
+        const injection = wrapInjectedContextIfNeeded(CAR_CONTEXT_HINT);
         const separator = text.endsWith("\n") ? "\n" : "\n\n";
         return { text: `${text}${separator}${injection}` };
       },
@@ -523,20 +528,6 @@ export class TerminalManager {
         } catch (_err) {
           return null;
         }
-      },
-    };
-  }
-
-  _buildPromptContextHook() {
-    return {
-      id: PROMPT_CONTEXT_HOOK_ID,
-      apply: ({ text }) => {
-        if (!text || !text.trim()) return null;
-        if (!PROMPT_CONTEXT_RE.test(text)) return null;
-        if (text.includes(PROMPT_CONTEXT_HINT)) return null;
-        const injection = wrapInjectedContextIfNeeded(PROMPT_CONTEXT_HINT);
-        const separator = text.endsWith("\n") ? "\n" : "\n\n";
-        return { text: `${text}${separator}${injection}` };
       },
     };
   }
@@ -3350,11 +3341,26 @@ export class TerminalManager {
       next += " ";
     }
     next += transcript;
+    next = this._appendVoiceTranscriptDisclaimer(next);
     this.textInputTextareaEl.value = next;
     this._persistTextInputDraft();
     this._updateComposerSticky();
     this._safeFocus(this.textInputTextareaEl);
     return true;
+  }
+
+  _appendVoiceTranscriptDisclaimer(text) {
+    const base = text === undefined || text === null ? "" : String(text);
+    if (!base.trim()) return base;
+    const injection = wrapInjectedContextIfNeeded(VOICE_TRANSCRIPT_DISCLAIMER_TEXT);
+    if (
+      base.includes(VOICE_TRANSCRIPT_DISCLAIMER_TEXT) ||
+      base.includes(injection)
+    ) {
+      return base;
+    }
+    const separator = base.endsWith("\n") ? "\n" : "\n\n";
+    return `${base}${separator}${injection}`;
   }
 
   _sendVoiceTranscript(text) {
@@ -3376,7 +3382,8 @@ export class TerminalManager {
       }
       return;
     }
-    const payload = text.endsWith("\n") ? text : `${text}\n`;
+    const message = this._appendVoiceTranscriptDisclaimer(text);
+    const payload = message.endsWith("\n") ? message : `${message}\n`;
     this.socket.send(textEncoder.encode(payload));
     this.term?.focus();
     flash("Voice transcript sent to terminal");
