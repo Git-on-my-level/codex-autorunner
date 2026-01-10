@@ -147,7 +147,9 @@ PROMPT_CONTEXT_HINT = (
 FILES_HINT_TEMPLATE = (
     "Inbox: {inbox}\n"
     "Outbox (pending): {outbox}\n"
-    "To send a file to the user, place it in the outbox pending directory."
+    "Place files in outbox pending to send after this turn finishes.\n"
+    "Check delivery with /files outbox.\n"
+    "Max file size: {max_bytes} bytes."
 )
 
 
@@ -1720,7 +1722,11 @@ class TelegramCommandHandlers:
         inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
         outbox_dir = self._files_outbox_pending_dir(workspace_path, topic_key)
         hint = wrap_injected_context(
-            FILES_HINT_TEMPLATE.format(inbox=str(inbox_dir), outbox=str(outbox_dir))
+            FILES_HINT_TEMPLATE.format(
+                inbox=str(inbox_dir),
+                outbox=str(outbox_dir),
+                max_bytes=self._config.media.max_file_bytes,
+            )
         )
         parts = [
             header,
