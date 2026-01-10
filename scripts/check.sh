@@ -3,6 +3,11 @@
 
 set -euo pipefail
 
+# Avoid leaking git hook environment into subprocesses (e.g. tests).
+unset GIT_DIR
+unset GIT_WORK_TREE
+unset GIT_INDEX_FILE
+
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 

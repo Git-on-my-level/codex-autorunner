@@ -12,6 +12,7 @@ Thanks for helping improve codex-autorunner.
 - For small fixes, a focused PR is fine without prior discussion.
 
 ## Development
+- Bootstrap dev env (venv, dev deps, npm deps, hooks): `make setup`
 - Install dev deps: `pip install -e .[dev]`
 - Run tests: `python -m pytest` (or `make test`)
 - JS lint (UI): `npm run lint:js`

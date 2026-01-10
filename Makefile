@@ -17,7 +17,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev
+.PHONY: install dev hooks test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install
 
 install:
 	$(PYTHON) -m pip install .
@@ -36,6 +36,15 @@ venv-dev: $(VENV)/.installed-dev
 $(VENV)/.installed-dev: $(VENV_PYTHON) pyproject.toml
 	$(VENV_PIP) install -e .[dev]
 	@touch $(VENV)/.installed-dev
+
+setup: venv-dev npm-install hooks
+	@echo "Setup complete. Activate with: source $(VENV)/bin/activate"
+
+npm-install: node_modules/.installed
+
+node_modules/.installed: package.json package-lock.json
+	npm install
+	@touch node_modules/.installed
 
 hooks:
 	git config core.hooksPath .githooks
