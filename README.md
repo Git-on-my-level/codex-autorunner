@@ -29,7 +29,8 @@ Mobile-first experience, code on the go with Whisper support (BYOK)
 - Initializes a repo with Codex-friendly docs and config.
 - Runs Codex in a loop against the repo, streaming logs.
 - Tracks state, logs, and config under `.codex-autorunner/`.
-- Exposes an HTTP API and web UI for docs, logs, runner control, and a Codex TUI terminal.
+- Exposes a power-user HTTP API and web UI for docs, logs, runner control, and a Codex TUI terminal.
+- Optionally runs a Telegram bot for interactive, user-in-the-loop Codex sessions.
 - Generates a pasteable repo snapshot (`.codex-autorunner/SNAPSHOT.md`) for sharing with other LLM chats.
 
 CLI commands are available as `codex-autorunner` or the shorter `car`.
@@ -102,7 +103,14 @@ If you set a base path, prefix all checks with it.
 - Local overrides live in `codex-autorunner.override.yml` (gitignored). Use it for machine-specific tweaks; keep secrets in env vars.
 - Repo config lives at `.codex-autorunner/config.yml` (generated). Edit it for repo-specific changes.
 
-## Run the web server/UI
+## Interfaces
+
+CAR supports two interfaces with the same core engine. The web UI is the power
+user control plane for multi-repo visibility and system control. The Telegram
+bot is optimized for interactive back-and-forth, mirroring the Codex TUI
+experience inside Telegram with user-in-the-loop approvals.
+
+### Web UI (control plane)
 1) Ensure the repo is initialized (`codex-autorunner init`) so `.codex-autorunner/config.yml` exists.
 2) Start the API/UI backend: `codex-autorunner serve` (or `car serve`) — defaults to `127.0.0.1:4173`; override via `server.host`/`server.port` in `.codex-autorunner/config.yml`.
 3) Open `http://127.0.0.1:4173` to use the UI, or call the FastAPI endpoints under `/api/*`.
@@ -110,7 +118,7 @@ If you set a base path, prefix all checks with it.
    - If you need to serve under a proxy prefix (e.g., `/car`), set `server.base_path` in `.codex-autorunner/config.yml` or pass `--base-path` to `car serve/hub serve`; all HTTP/WS endpoints will be reachable under that prefix. Proxy must forward that prefix (e.g., Caddy `handle /car/* { reverse_proxy ... }` with a 404 fallback for everything else).
    - Chat composer shortcuts: desktop uses Cmd+Enter (or Ctrl+Enter) to send and Shift+Enter for newline; mobile uses Enter to send and Shift+Enter for newline.
 
-## Telegram bot (polling)
+### Telegram bot (interactive sessions)
 - The interactive Telegram bot is separate from `notifications.telegram` (which is one-way notifications).
 - Each operator should create their own Telegram bot token. Multi-user use requires explicit allowlists.
 - Quickstart:
@@ -118,12 +126,17 @@ If you set a base path, prefix all checks with it.
   2) In config, set `telegram_bot.enabled: true` and fill `allowed_user_ids` + `allowed_chat_ids`.
   3) Run `car telegram start --path <repo_or_hub>`.
   4) Use `/bind` (hub mode) and `/new` or `/resume` in Telegram.
-- Details: `docs/telegram/architecture.md` and `docs/ops/telegram-bot-runbook.md`.
+- How it works (high level):
+  - The bot polls the Telegram Bot API, allowlists chat/user IDs, and routes each topic to a workspace + Codex thread.
+  - Messages and media are forwarded to the Codex app-server, streaming responses back to Telegram.
+  - Approvals can be requested inline, giving a hands-on, TUI-like workflow without leaving Telegram.
+- Details: `docs/telegram/architecture.md`, `docs/ops/telegram-bot-runbook.md`, and `docs/telegram/security.md`.
 
 ## Security and remote access
-- The UI/API are unauthenticated. Exposing them to the public web enables remote code execution on your machine (terminal + runner).
+- The UI/API are effectively privileged access and can execute code on your machine (terminal + runner).
 - Keep the server bound to `127.0.0.1` and use Tailscale (or another VPN) for remote access.
-- If you must expose it, put it behind an auth-enforcing reverse proxy (basic auth/SSO) and restrict network access. Do not expose it publicly without protections.
+- If you must expose it, set `server.auth_token_env` and also put it behind an auth-enforcing reverse proxy (basic auth/SSO).
+- Do not expose it publicly without protections. See `docs/web/security.md` for details.
 
 ### Auth token (optional)
 If you set `server.auth_token_env`, the API requires `Authorization: Bearer <token>` on every request.

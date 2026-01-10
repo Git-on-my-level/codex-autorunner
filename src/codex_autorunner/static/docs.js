@@ -4,6 +4,7 @@ import {
   statusPill,
   confirmModal,
   resolvePath,
+  getAuthToken,
   isMobileViewport,
 } from "./utils.js";
 import { loadState } from "./state.js";
@@ -632,9 +633,14 @@ async function sendDocChat() {
 
 async function performDocChatRequest(kind, entry, state) {
   const endpoint = resolvePath(`/api/docs/${kind}/chat`);
+  const headers = { "Content-Type": "application/json" };
+  const token = getAuthToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   const res = await fetch(endpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ message: entry.prompt, stream: true }),
     signal: state.controller.signal,
   });

@@ -1,5 +1,36 @@
 const hasWindow = typeof window !== "undefined" && typeof window.location !== "undefined";
 const pathname = hasWindow ? window.location.pathname || "/" : "/";
+const AUTH_TOKEN_KEY = "car_auth_token";
+
+function getAuthToken() {
+  let token = null;
+  try {
+    token = sessionStorage.getItem(AUTH_TOKEN_KEY);
+  } catch (_err) {
+    token = null;
+  }
+  if (token) {
+    return token;
+  }
+  if (!hasWindow || !window.location.href) {
+    return null;
+  }
+  const url = new URL(window.location.href);
+  const urlToken = url.searchParams.get("token");
+  if (!urlToken) {
+    return null;
+  }
+  try {
+    sessionStorage.setItem(AUTH_TOKEN_KEY, urlToken);
+  } catch (_err) {
+    // Ignore storage errors; token can still be used for this session.
+  }
+  url.searchParams.delete("token");
+  if (typeof history !== "undefined" && history.replaceState) {
+    history.replaceState(null, "", url.toString());
+  }
+  return urlToken;
+}
 
 function normalizeBase(base) {
   if (!base || base === "/") return "";
@@ -53,7 +84,12 @@ export async function detectContext() {
     return { mode, repoId: REPO_ID };
   }
   try {
-    const res = await fetch(hubEndpoint);
+    const headers = {};
+    const token = getAuthToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    const res = await fetch(hubEndpoint, { headers });
     mode = res.ok ? "hub" : "repo";
   } catch (err) {
     mode = "repo";

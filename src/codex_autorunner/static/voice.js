@@ -1,4 +1,4 @@
-import { flash, resolvePath } from "./utils.js";
+import { flash, resolvePath, getAuthToken } from "./utils.js";
 
 // SVG mic icon (more polished than emoji)
 const MIC_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>`;
@@ -41,7 +41,12 @@ function supportsVoice() {
 }
 
 async function fetchVoiceConfig() {
-  const res = await fetch(resolvePath("/api/voice/config"));
+  const headers = {};
+  const token = getAuthToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const res = await fetch(resolvePath("/api/voice/config"), { headers });
   if (!res.ok) throw new Error("Voice config unavailable");
   return res.json();
 }
@@ -420,9 +425,15 @@ export async function initVoiceInput({
     const ext = getExtensionForMime(blob.type);
     formData.append("file", blob, `voice.${ext}`);
     const url = resolvePath("/api/voice/transcribe");
+    const headers = {};
+    const token = getAuthToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
     const res = await fetch(url, {
       method: "POST",
       body: formData,
+      headers,
     });
     let payload = {};
     try {
