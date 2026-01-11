@@ -5,6 +5,7 @@ import {
   resolvePath,
   confirmModal,
   inputModal,
+  openModal,
 } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
@@ -637,22 +638,31 @@ function initHubSettings() {
   const closeBtn = document.getElementById("hub-settings-close");
   const updateBtn = document.getElementById("hub-update-btn");
   const updateTarget = document.getElementById("hub-update-target");
+  let closeModal = null;
+
+  const hideModal = () => {
+    if (closeModal) {
+      const close = closeModal;
+      closeModal = null;
+      close();
+    }
+  };
 
   if (settingsBtn && modal) {
     settingsBtn.addEventListener("click", () => {
-      modal.hidden = false;
+      const triggerEl = document.activeElement;
+      hideModal();
+      closeModal = openModal(modal, {
+        initialFocus: closeBtn || updateBtn || modal,
+        returnFocusTo: triggerEl,
+        onRequestClose: hideModal,
+      });
     });
   }
 
   if (closeBtn && modal) {
     closeBtn.addEventListener("click", () => {
-      modal.hidden = true;
-    });
-  }
-
-  if (modal) {
-    modal.addEventListener("click", (e) => {
-      if (e.target === modal) modal.hidden = true;
+      hideModal();
     });
   }
 
@@ -994,27 +1004,37 @@ async function createRepo(repoId, repoPath, gitInit, gitUrl) {
   }
 }
 
-function showCreateRepoModal() {
-  const modal = document.getElementById("create-repo-modal");
-  if (modal) {
-    modal.hidden = false;
-    const input = document.getElementById("create-repo-id");
-    if (input) {
-      input.value = "";
-      input.focus();
-    }
-    const pathInput = document.getElementById("create-repo-path");
-    if (pathInput) pathInput.value = "";
-    const urlInput = document.getElementById("create-repo-url");
-    if (urlInput) urlInput.value = "";
-    const gitCheck = document.getElementById("create-repo-git");
-    if (gitCheck) gitCheck.checked = true;
+let closeCreateRepoModal = null;
+
+function hideCreateRepoModal() {
+  if (closeCreateRepoModal) {
+    const close = closeCreateRepoModal;
+    closeCreateRepoModal = null;
+    close();
   }
 }
 
-function hideCreateRepoModal() {
+function showCreateRepoModal() {
   const modal = document.getElementById("create-repo-modal");
-  if (modal) modal.hidden = true;
+  if (!modal) return;
+  const triggerEl = document.activeElement;
+  hideCreateRepoModal();
+  const input = document.getElementById("create-repo-id");
+  closeCreateRepoModal = openModal(modal, {
+    initialFocus: input || modal,
+    returnFocusTo: triggerEl,
+    onRequestClose: hideCreateRepoModal,
+  });
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+  const pathInput = document.getElementById("create-repo-path");
+  if (pathInput) pathInput.value = "";
+  const urlInput = document.getElementById("create-repo-url");
+  if (urlInput) urlInput.value = "";
+  const gitCheck = document.getElementById("create-repo-git");
+  if (gitCheck) gitCheck.checked = true;
 }
 
 async function handleCreateRepoSubmit() {
@@ -1190,21 +1210,6 @@ function attachHubHandlers() {
     if (e.key === "Enter") {
       e.preventDefault();
       handleCreateRepoSubmit();
-    }
-  });
-
-  // Close modal on Escape key
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      hideCreateRepoModal();
-    }
-  });
-
-  // Close modal when clicking overlay background
-  const createRepoModal = document.getElementById("create-repo-modal");
-  createRepoModal?.addEventListener("click", (e) => {
-    if (e.target === createRepoModal) {
-      hideCreateRepoModal();
     }
   });
 

@@ -46,6 +46,7 @@ def test_voice_ui_transcribe_flow_without_opt_in():
             this.children = [];
             this.classList = new StubClassList();
             this.style = {};
+            this.attributes = new Map();
             this.events = new Map();
           }
           appendChild(child) { this.children.push(child); return child; }
@@ -63,6 +64,10 @@ def test_voice_ui_transcribe_flow_without_opt_in():
           }
           removeEventListener() {}
           focus() {}
+          querySelector() { return null; }
+          querySelectorAll() { return []; }
+          setAttribute(name, value) { this.attributes.set(name, value); }
+          removeAttribute(name) { this.attributes.delete(name); }
           getTracks() { return []; }
         }
 
@@ -85,6 +90,7 @@ def test_voice_ui_transcribe_flow_without_opt_in():
           createElement: (tag) => new StubElement(tag),
           addEventListener: () => {},
           removeEventListener: () => {},
+          activeElement: null,
         };
 
         globalThis.window = {

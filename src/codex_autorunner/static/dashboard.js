@@ -1,4 +1,4 @@
-import { api, flash, statusPill, confirmModal } from "./utils.js";
+import { api, flash, statusPill, confirmModal, openModal } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";
 import { renderTodoPreview } from "./todoPreview.js";
@@ -579,22 +579,31 @@ function initSettings() {
   const closeBtn = document.getElementById("repo-settings-close");
   const updateBtn = document.getElementById("repo-update-btn");
   const updateTarget = document.getElementById("repo-update-target");
+  let closeModal = null;
+
+  const hideModal = () => {
+    if (closeModal) {
+      const close = closeModal;
+      closeModal = null;
+      close();
+    }
+  };
 
   if (settingsBtn && modal) {
     settingsBtn.addEventListener("click", () => {
-      modal.hidden = false;
+      const triggerEl = document.activeElement;
+      hideModal();
+      closeModal = openModal(modal, {
+        initialFocus: closeBtn || updateBtn || modal,
+        returnFocusTo: triggerEl,
+        onRequestClose: hideModal,
+      });
     });
   }
 
   if (closeBtn && modal) {
     closeBtn.addEventListener("click", () => {
-      modal.hidden = true;
-    });
-  }
-
-  if (modal) {
-    modal.addEventListener("click", (e) => {
-      if (e.target === modal) modal.hidden = true;
+      hideModal();
     });
   }
 

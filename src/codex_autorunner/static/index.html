@@ -572,7 +572,15 @@
     
     <!-- Confirmation Modal -->
     <div id="confirm-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog">
+      <div
+        class="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-modal-title"
+        aria-describedby="confirm-modal-message"
+        tabindex="-1"
+      >
+        <span id="confirm-modal-title" class="sr-only">Confirmation</span>
         <p id="confirm-modal-message"></p>
         <div class="modal-actions">
           <button id="confirm-modal-cancel" class="ghost">Cancel</button>
@@ -583,7 +591,15 @@
     
     <!-- Input Modal -->
     <div id="input-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog modal-input">
+      <div
+        class="modal-dialog modal-input"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="input-modal-title"
+        aria-describedby="input-modal-message"
+        tabindex="-1"
+      >
+        <span id="input-modal-title" class="sr-only">Input</span>
         <p id="input-modal-message"></p>
         <input type="text" id="input-modal-input" autocomplete="off" spellcheck="false" />
         <div class="modal-actions">
@@ -595,11 +611,18 @@
     
     <!-- Create Repo Modal -->
     <div id="create-repo-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog modal-create-repo">
+      <div
+        class="modal-dialog modal-create-repo"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-repo-modal-title"
+        aria-describedby="create-repo-modal-body"
+        tabindex="-1"
+      >
         <div class="modal-header">
-          <span class="label">Create New Repository</span>
+          <span class="label" id="create-repo-modal-title">Create New Repository</span>
         </div>
-        <div class="modal-body">
+        <div class="modal-body" id="create-repo-modal-body">
           <div class="form-group">
             <label for="create-repo-id">Repo ID <span class="required">*</span></label>
             <input type="text" id="create-repo-id" placeholder="my-project" autocomplete="off" spellcheck="false" />
@@ -631,11 +654,18 @@
 
     <!-- Hub Settings Modal -->
     <div id="hub-settings-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog">
+      <div
+        class="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hub-settings-modal-title"
+        aria-describedby="hub-settings-modal-body"
+        tabindex="-1"
+      >
         <div class="modal-header">
-          <span class="label">Hub Settings</span>
+          <span class="label" id="hub-settings-modal-title">Hub Settings</span>
         </div>
-        <div class="modal-body">
+        <div class="modal-body" id="hub-settings-modal-body">
           <p class="muted small">System-wide settings for Codex Autorunner.</p>
           <div class="form-group">
             <label>System Update</label>
@@ -656,11 +686,18 @@
 
     <!-- Repo Settings Modal -->
     <div id="repo-settings-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog">
+      <div
+        class="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="repo-settings-modal-title"
+        aria-describedby="repo-settings-modal-body"
+        tabindex="-1"
+      >
         <div class="modal-header">
-          <span class="label">Repo Settings</span>
+          <span class="label" id="repo-settings-modal-title">Repo Settings</span>
         </div>
-        <div class="modal-body">
+        <div class="modal-body" id="repo-settings-modal-body">
           <p class="muted small">Settings for the current repository session.</p>
           <div class="form-group">
             <label>System Update</label>
