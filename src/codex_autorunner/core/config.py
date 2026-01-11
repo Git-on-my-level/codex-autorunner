@@ -182,6 +182,11 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "max_bytes": 10_000_000,
         "backup_count": 3,
     },
+    "static_assets": {
+        "cache_root": ".codex-autorunner/static-cache",
+        "max_cache_entries": 5,
+        "max_cache_age_days": 30,
+    },
     "housekeeping": {
         "enabled": True,
         "interval_seconds": 3600,
@@ -335,6 +340,11 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     },
     # Hub already has hub.log, but we still support an explicit server_log for consistency.
     "server_log": None,
+    "static_assets": {
+        "cache_root": ".codex-autorunner/static-cache",
+        "max_cache_entries": 5,
+        "max_cache_age_days": 30,
+    },
     "housekeeping": {
         "enabled": True,
         "interval_seconds": 3600,
@@ -437,6 +447,13 @@ class LogConfig:
 
 
 @dataclasses.dataclass
+class StaticAssetsConfig:
+    cache_root: Path
+    max_cache_entries: int
+    max_cache_age_days: Optional[int]
+
+
+@dataclasses.dataclass
 class RepoConfig:
     raw: Dict[str, Any]
     root: Path
@@ -464,6 +481,7 @@ class RepoConfig:
     log: LogConfig
     server_log: LogConfig
     voice: Dict[str, Any]
+    static_assets: StaticAssetsConfig
     housekeeping: HousekeepingConfig
 
     def doc_path(self, key: str) -> Path:
@@ -489,6 +507,7 @@ class HubConfig:
     server_auth_token_env: str
     log: LogConfig
     server_log: LogConfig
+    static_assets: StaticAssetsConfig
     housekeeping: HousekeepingConfig
 
 
@@ -571,6 +590,33 @@ def _normalize_base_path(path: Optional[str]) -> str:
         normalized = "/" + normalized
     normalized = normalized.rstrip("/")
     return normalized or ""
+
+
+def _parse_static_assets_config(
+    cfg: Optional[Dict[str, Any]],
+    root: Path,
+    defaults: Dict[str, Any],
+) -> StaticAssetsConfig:
+    if not isinstance(cfg, dict):
+        cfg = defaults
+    cache_root_raw = cfg.get("cache_root", defaults.get("cache_root"))
+    cache_root = Path(str(cache_root_raw))
+    if not cache_root.is_absolute():
+        cache_root = root / cache_root
+    max_cache_entries = int(
+        cfg.get("max_cache_entries", defaults.get("max_cache_entries", 0))
+    )
+    max_cache_age_days_raw = cfg.get(
+        "max_cache_age_days", defaults.get("max_cache_age_days")
+    )
+    max_cache_age_days = (
+        int(max_cache_age_days_raw) if max_cache_age_days_raw is not None else None
+    )
+    return StaticAssetsConfig(
+        cache_root=cache_root,
+        max_cache_entries=max_cache_entries,
+        max_cache_age_days=max_cache_age_days,
+    )
 
 
 def find_nearest_config_path(start: Path) -> Optional[Path]:
@@ -733,6 +779,9 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
             ),
         ),
         voice=voice_cfg,
+        static_assets=_parse_static_assets_config(
+            cfg.get("static_assets"), root, DEFAULT_REPO_CONFIG["static_assets"]
+        ),
         housekeeping=parse_housekeeping_config(cfg.get("housekeeping")),
     )
 
@@ -776,6 +825,9 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
             backup_count=int(
                 server_log_cfg.get("backup_count", log_cfg["backup_count"])
             ),
+        ),
+        static_assets=_parse_static_assets_config(
+            cfg.get("static_assets"), root, DEFAULT_HUB_CONFIG["static_assets"]
         ),
         housekeeping=parse_housekeeping_config(cfg.get("housekeeping")),
     )
@@ -1003,6 +1055,7 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
     voice_cfg = cfg.get("voice", {})
     if voice_cfg is not None and not isinstance(voice_cfg, dict):
         raise ConfigError("voice section must be a mapping if provided")
+    _validate_static_assets_config(cfg, scope="repo")
     _validate_housekeeping_config(cfg)
     _validate_telegram_bot_config(cfg)
 
@@ -1065,6 +1118,7 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         for key in ("max_bytes", "backup_count"):
             if key in server_log_cfg and not isinstance(server_log_cfg.get(key), int):
                 raise ConfigError(f"server_log.{key} must be an integer")
+    _validate_static_assets_config(cfg, scope="hub")
     _validate_housekeeping_config(cfg)
     _validate_telegram_bot_config(cfg)
 
@@ -1144,6 +1198,29 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
                 value = rule.get(key)
                 if isinstance(value, int) and value < 0:
                     raise ConfigError(f"housekeeping.rules[{idx}].{key} must be >= 0")
+
+
+def _validate_static_assets_config(cfg: Dict[str, Any], scope: str) -> None:
+    static_cfg = cfg.get("static_assets")
+    if static_cfg is None:
+        return
+    if not isinstance(static_cfg, dict):
+        raise ConfigError(f"{scope}.static_assets must be a mapping if provided")
+    cache_root = static_cfg.get("cache_root")
+    if cache_root is not None and not isinstance(cache_root, str):
+        raise ConfigError(f"{scope}.static_assets.cache_root must be a string")
+    max_entries = static_cfg.get("max_cache_entries")
+    if max_entries is not None and not isinstance(max_entries, int):
+        raise ConfigError(f"{scope}.static_assets.max_cache_entries must be an integer")
+    if isinstance(max_entries, int) and max_entries < 0:
+        raise ConfigError(f"{scope}.static_assets.max_cache_entries must be >= 0")
+    max_age_days = static_cfg.get("max_cache_age_days")
+    if max_age_days is not None and not isinstance(max_age_days, int):
+        raise ConfigError(
+            f"{scope}.static_assets.max_cache_age_days must be an integer or null"
+        )
+    if isinstance(max_age_days, int) and max_age_days < 0:
+        raise ConfigError(f"{scope}.static_assets.max_cache_age_days must be >= 0")
 
 
 def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:

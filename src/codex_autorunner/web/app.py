@@ -45,9 +45,9 @@ from .schemas import (
 from .static_assets import (
     asset_version,
     index_response_headers,
+    materialize_static_assets,
     render_index_html,
     require_static_assets,
-    resolve_static_dir,
 )
 from .terminal_sessions import parse_tui_idle_seconds, prune_terminal_registry
 
@@ -171,7 +171,12 @@ def _build_app_context(
             repo_to_session,
             terminal_max_idle_seconds,
         )
-    static_dir, static_context = resolve_static_dir()
+    static_dir, static_context = materialize_static_assets(
+        config.static_assets.cache_root,
+        max_cache_entries=config.static_assets.max_cache_entries,
+        max_cache_age_days=config.static_assets.max_cache_age_days,
+        logger=logger,
+    )
     try:
         require_static_assets(static_dir, logger)
     except Exception:
@@ -242,7 +247,12 @@ def _build_hub_context(
         logging.INFO,
         f"Hub app ready at {config.root}",
     )
-    static_dir, static_context = resolve_static_dir()
+    static_dir, static_context = materialize_static_assets(
+        config.static_assets.cache_root,
+        max_cache_entries=config.static_assets.max_cache_entries,
+        max_cache_age_days=config.static_assets.max_cache_age_days,
+        logger=logger,
+    )
     try:
         require_static_assets(static_dir, logger)
     except Exception:

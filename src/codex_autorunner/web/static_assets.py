@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
+import shutil
+import time
 from contextlib import ExitStack
 from importlib import resources
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
+from uuid import uuid4
 
 from ..core.logging_utils import safe_log
 
@@ -30,26 +35,52 @@ def missing_static_assets(static_dir: Path) -> list[str]:
     return missing
 
 
-def asset_version(static_dir: Path) -> str:
-    candidates = [
-        static_dir / "index.html",
-        static_dir / "styles.css",
-        static_dir / "app.js",
-    ]
+def _iter_asset_files(static_dir: Path) -> Iterable[Path]:
     try:
-        candidates.extend(static_dir.rglob("*.js"))
+        for path in static_dir.rglob("*"):
+            try:
+                if path.is_dir():
+                    continue
+                yield path
+            except OSError:
+                continue
     except Exception:
-        pass
-    mtimes = []
-    for path in candidates:
-        try:
-            stat = path.stat()
-        except FileNotFoundError:
-            continue
-        mtimes.append(stat.st_mtime_ns)
-    if not mtimes:
+        return
+
+
+def _hash_file(path: Path, digest: "hashlib._Hash") -> None:
+    try:
+        if path.is_symlink():
+            digest.update(b"SYMLINK:")
+            try:
+                target = path.readlink()
+            except OSError:
+                target = Path("dangling")
+            digest.update(str(target).encode("utf-8", errors="replace"))
+            return
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+    except OSError:
+        digest.update(b"UNREADABLE")
+
+
+def asset_version(static_dir: Path) -> str:
+    digest = hashlib.sha256()
+    files = sorted(_iter_asset_files(static_dir), key=lambda p: p.as_posix())
+    if not files:
         return "0"
-    return str(max(mtimes))
+    for path in files:
+        try:
+            rel_path = path.relative_to(static_dir)
+        except ValueError:
+            rel_path = path
+        digest.update(rel_path.as_posix().encode("utf-8", errors="replace"))
+        _hash_file(path, digest)
+    return digest.hexdigest()
 
 
 def render_index_html(static_dir: Path, version: Optional[str]) -> str:
@@ -87,6 +118,280 @@ def resolve_static_dir() -> tuple[Path, Optional[ExitStack]]:
     stack.close()
     fallback = Path(__file__).resolve().parent.parent / "static"
     return fallback, None
+
+
+def _cleanup_temp_dir(path: Path, logger: logging.Logger) -> None:
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        safe_log(
+            logger,
+            logging.WARNING,
+            "Failed to remove temporary static cache dir %s",
+            path,
+            exc=exc,
+        )
+
+
+def _acquire_cache_lock(lock_path: Path, logger: logging.Logger) -> bool:
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    except Exception as exc:
+        safe_log(
+            logger,
+            logging.WARNING,
+            "Failed to create static cache lock %s",
+            lock_path,
+            exc=exc,
+        )
+        return False
+    try:
+        os.write(fd, str(os.getpid()).encode("utf-8"))
+    except Exception:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+    return True
+
+
+def _release_cache_lock(lock_path: Path, logger: logging.Logger) -> None:
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        safe_log(
+            logger,
+            logging.WARNING,
+            "Failed to remove static cache lock %s",
+            lock_path,
+            exc=exc,
+        )
+
+
+def _cache_dir_mtime(path: Path) -> float:
+    index_path = path / "index.html"
+    try:
+        return index_path.stat().st_mtime
+    except OSError:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+
+def _list_cache_entries(cache_root: Path) -> list[Path]:
+    if not cache_root.exists():
+        return []
+    entries: list[Path] = []
+    try:
+        for entry in cache_root.iterdir():
+            if entry.name.startswith("."):
+                continue
+            try:
+                if entry.is_dir():
+                    entries.append(entry)
+            except OSError:
+                continue
+    except OSError:
+        return []
+    return entries
+
+
+def _select_latest_valid_cache(cache_root: Path) -> Optional[Path]:
+    candidates = []
+    for entry in _list_cache_entries(cache_root):
+        if not missing_static_assets(entry):
+            candidates.append(entry)
+    if not candidates:
+        return None
+    candidates.sort(key=_cache_dir_mtime, reverse=True)
+    return candidates[0]
+
+
+def _prune_cache_entries(
+    cache_root: Path,
+    *,
+    keep: set[Path],
+    max_cache_entries: int,
+    max_cache_age_days: Optional[int],
+    logger: logging.Logger,
+) -> None:
+    if max_cache_entries <= 0 and max_cache_age_days is None:
+        return
+    entries = _list_cache_entries(cache_root)
+    if not entries:
+        return
+    now = time.time()
+    if max_cache_age_days is not None:
+        cutoff = now - (max_cache_age_days * 86400)
+        for entry in list(entries):
+            if entry in keep:
+                continue
+            if _cache_dir_mtime(entry) < cutoff:
+                try:
+                    shutil.rmtree(entry)
+                    entries.remove(entry)
+                except Exception as exc:
+                    safe_log(
+                        logger,
+                        logging.WARNING,
+                        "Failed to remove stale static cache dir %s",
+                        entry,
+                        exc=exc,
+                    )
+    if max_cache_entries > 0 and len(entries) > max_cache_entries:
+        removable = [entry for entry in entries if entry not in keep]
+        removable.sort(key=_cache_dir_mtime)
+        for entry in removable[: len(entries) - max_cache_entries]:
+            try:
+                shutil.rmtree(entry)
+            except Exception as exc:
+                safe_log(
+                    logger,
+                    logging.WARNING,
+                    "Failed to remove old static cache dir %s",
+                    entry,
+                    exc=exc,
+                )
+
+
+def materialize_static_assets(
+    cache_root: Path,
+    *,
+    max_cache_entries: int,
+    max_cache_age_days: Optional[int],
+    logger: logging.Logger,
+) -> tuple[Path, Optional[ExitStack]]:
+    static_dir, static_context = resolve_static_dir()
+    existing_cache = _select_latest_valid_cache(cache_root)
+    missing_source = missing_static_assets(static_dir)
+    if missing_source:
+        if static_context is not None:
+            static_context.close()
+        if existing_cache is not None:
+            _prune_cache_entries(
+                cache_root,
+                keep={existing_cache},
+                max_cache_entries=max_cache_entries,
+                max_cache_age_days=max_cache_age_days,
+                logger=logger,
+            )
+            return existing_cache, None
+        raise RuntimeError("Static UI assets missing; reinstall package")
+    fingerprint = asset_version(static_dir)
+    target_dir = cache_root / fingerprint
+    if target_dir.exists() and not missing_static_assets(target_dir):
+        if static_context is not None:
+            static_context.close()
+        _prune_cache_entries(
+            cache_root,
+            keep={target_dir},
+            max_cache_entries=max_cache_entries,
+            max_cache_age_days=max_cache_age_days,
+            logger=logger,
+        )
+        return target_dir, None
+    try:
+        cache_root.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        safe_log(
+            logger,
+            logging.WARNING,
+            "Failed to create static cache root %s",
+            cache_root,
+            exc=exc,
+        )
+        if static_context is not None:
+            static_context.close()
+        if existing_cache is not None:
+            return existing_cache, None
+        raise RuntimeError("Static UI assets missing; reinstall package") from exc
+    lock_path = cache_root / f".lock-{fingerprint}"
+    lock_acquired = _acquire_cache_lock(lock_path, logger)
+    if not lock_acquired:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if target_dir.exists() and not missing_static_assets(target_dir):
+                if static_context is not None:
+                    static_context.close()
+                _prune_cache_entries(
+                    cache_root,
+                    keep={target_dir},
+                    max_cache_entries=max_cache_entries,
+                    max_cache_age_days=max_cache_age_days,
+                    logger=logger,
+                )
+                return target_dir, None
+            time.sleep(0.2)
+    temp_dir = cache_root / f".tmp-{fingerprint}-{uuid4().hex}"
+    try:
+        shutil.copytree(static_dir, temp_dir, symlinks=True)
+        missing = missing_static_assets(temp_dir)
+        if missing:
+            safe_log(
+                logger,
+                logging.WARNING,
+                "Static UI assets missing in cache copy %s: %s",
+                temp_dir,
+                ", ".join(missing),
+            )
+            raise RuntimeError("Static UI assets missing; reinstall package")
+        if target_dir.exists():
+            existing_missing = missing_static_assets(target_dir)
+            if not existing_missing:
+                _cleanup_temp_dir(temp_dir, logger)
+                if static_context is not None:
+                    static_context.close()
+                _prune_cache_entries(
+                    cache_root,
+                    keep={target_dir},
+                    max_cache_entries=max_cache_entries,
+                    max_cache_age_days=max_cache_age_days,
+                    logger=logger,
+                )
+                return target_dir, None
+            try:
+                shutil.rmtree(target_dir)
+            except Exception as exc:
+                safe_log(
+                    logger,
+                    logging.WARNING,
+                    "Failed to replace stale static cache dir %s",
+                    target_dir,
+                    exc=exc,
+                )
+                raise RuntimeError(
+                    "Static UI assets missing; reinstall package"
+                ) from exc
+        temp_dir.replace(target_dir)
+    except Exception as exc:
+        _cleanup_temp_dir(temp_dir, logger)
+        if static_context is not None:
+            static_context.close()
+        if existing_cache is not None:
+            return existing_cache, None
+        raise RuntimeError("Static UI assets missing; reinstall package") from exc
+    finally:
+        if lock_acquired:
+            _release_cache_lock(lock_path, logger)
+    if static_context is not None:
+        static_context.close()
+    _prune_cache_entries(
+        cache_root,
+        keep={target_dir},
+        max_cache_entries=max_cache_entries,
+        max_cache_age_days=max_cache_age_days,
+        logger=logger,
+    )
+    return target_dir, None
 
 
 def require_static_assets(static_dir: Path, logger: logging.Logger) -> None:
