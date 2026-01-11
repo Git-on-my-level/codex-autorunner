@@ -174,6 +174,7 @@ class TelegramBotService(
         self._cache_timestamps: dict[str, dict[object, float]] = {}
         self._last_update_ids: dict[str, int] = {}
         self._last_update_persisted_at: dict[str, float] = {}
+        self._spawned_tasks: set[asyncio.Task[Any]] = set()
         self._outbox_manager = TelegramOutboxManager(
             self._store,
             send_message=self._send_message,
@@ -461,6 +462,12 @@ class TelegramBotService(
                         await self._cache_cleanup_task
                     except asyncio.CancelledError:
                         pass
+                if self._spawned_tasks:
+                    for task in list(self._spawned_tasks):
+                        task.cancel()
+                    await asyncio.gather(
+                        *self._spawned_tasks, return_exceptions=True
+                    )
             finally:
                 try:
                     await self._bot.close()
@@ -614,11 +621,15 @@ class TelegramBotService(
                 poller_offset=offset,
             )
 
-    def _spawn_task(self, coro: Coroutine[Any, Any, Any]) -> None:
+    def _spawn_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task: asyncio.Task[Any] = asyncio.create_task(coro)
+        self._spawned_tasks.add(task)
         task.add_done_callback(self._log_task_result)
+        return task
 
     def _log_task_result(self, task: asyncio.Future) -> None:
+        if isinstance(task, asyncio.Task):
+            self._spawned_tasks.discard(task)
         try:
             task.result()
         except asyncio.CancelledError:

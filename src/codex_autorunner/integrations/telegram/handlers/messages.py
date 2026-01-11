@@ -247,7 +247,7 @@ async def buffer_coalesced_message(
         task = buffer.task
         if task is not None and task is not asyncio.current_task():
             task.cancel()
-        buffer.task = asyncio.create_task(coalesce_flush_after(handlers, key))
+        buffer.task = handlers._spawn_task(coalesce_flush_after(handlers, key))
 
 
 async def coalesce_flush_after(handlers: Any, key: str) -> None:

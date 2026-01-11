@@ -4919,7 +4919,7 @@ class TelegramCommandHandlers:
                 thread_id=thread_id,
             )
 
-        asyncio.create_task(_watch())
+        self._spawn_task(_watch())
 
     def _mark_update_notified(self, status: dict[str, Any]) -> None:
         path = self._update_status_path()
