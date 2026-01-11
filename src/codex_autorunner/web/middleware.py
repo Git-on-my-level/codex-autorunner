@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
+import time
+import uuid
 from urllib.parse import parse_qs
 
 from fastapi.responses import RedirectResponse, Response
 
 from ..core.config import _normalize_base_path
+from ..core.logging_utils import log_event
+from ..core.request_context import reset_request_id, set_request_id
 from .static_assets import security_headers
 
 
@@ -263,3 +268,100 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         return await self.app(scope, receive, send_wrapper)
+
+
+class RequestIdMiddleware:
+    """Attach request ids and emit structured request logs."""
+
+    def __init__(self, app, header_name: str = "x-request-id"):
+        self.app = app
+        self.header_name = header_name.lower()
+        self.header_bytes = self.header_name.encode("latin-1")
+
+    def __getattr__(self, name):
+        return getattr(self.app, name)
+
+    def _extract_request_id(self, scope) -> str:
+        for name, value in scope.get("headers") or []:
+            if name.lower() == self.header_bytes:
+                try:
+                    candidate = value.decode("utf-8").strip()
+                except Exception:
+                    candidate = ""
+                if candidate:
+                    return candidate
+        return uuid.uuid4().hex
+
+    def _get_logger(self, scope) -> logging.Logger:
+        app = scope.get("app")
+        state = getattr(app, "state", None) if app else None
+        logger = getattr(state, "logger", None)
+        if isinstance(logger, logging.Logger):
+            return logger
+        return logging.getLogger("codex_autorunner.web")
+
+    async def __call__(self, scope, receive, send):
+        scope_type = scope.get("type")
+        if scope_type != "http":
+            return await self.app(scope, receive, send)
+
+        request_id = self._extract_request_id(scope)
+        token = set_request_id(request_id)
+        logger = self._get_logger(scope)
+        method = scope.get("method") or "GET"
+        path = scope.get("path") or "/"
+        client = scope.get("client")
+        client_addr = None
+        if client and len(client) >= 2:
+            client_addr = f"{client[0]}:{client[1]}"
+        start = time.monotonic()
+        status_code = None
+
+        log_event(
+            logger,
+            logging.INFO,
+            "http.request",
+            method=method,
+            path=path,
+            client=client_addr,
+        )
+
+        async def send_wrapper(message):
+            nonlocal status_code
+            if message.get("type") == "http.response.start":
+                status_code = message.get("status")
+                headers = list(message.get("headers") or [])
+                existing = {name.lower() for name, _ in headers}
+                if self.header_bytes not in existing:
+                    headers.append((self.header_bytes, request_id.encode("latin-1")))
+                message["headers"] = headers
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception as exc:
+            duration_ms = (time.monotonic() - start) * 1000
+            log_event(
+                logger,
+                logging.ERROR,
+                "http.response",
+                method=method,
+                path=path,
+                status=status_code or 500,
+                duration_ms=round(duration_ms, 2),
+                exc=exc,
+            )
+            raise
+        else:
+            duration_ms = (time.monotonic() - start) * 1000
+            log_event(
+                logger,
+                logging.INFO,
+                "http.response",
+                method=method,
+                path=path,
+                status=status_code or 200,
+                duration_ms=round(duration_ms, 2),
+            )
+        finally:
+            reset_request_id(token)

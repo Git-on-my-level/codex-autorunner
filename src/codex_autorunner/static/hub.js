@@ -33,6 +33,8 @@ const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
 const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
+const HUB_JOB_POLL_INTERVAL_MS = 1200;
+const HUB_JOB_TIMEOUT_MS = 180000;
 
 const hubUsageChartState = {
   segment: "none",
@@ -96,6 +98,34 @@ function setButtonLoading(scanning) {
       btn.classList.remove("loading");
     }
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollHubJob(jobId, { timeoutMs = HUB_JOB_TIMEOUT_MS } = {}) {
+  const start = Date.now();
+  for (;;) {
+    const job = await api(`/hub/jobs/${jobId}`, { method: "GET" });
+    if (job.status === "succeeded") return job;
+    if (job.status === "failed") {
+      const err = job.error || "Hub job failed";
+      throw new Error(err);
+    }
+    if (Date.now() - start > timeoutMs) {
+      throw new Error("Hub job timed out");
+    }
+    await sleep(HUB_JOB_POLL_INTERVAL_MS);
+  }
+}
+
+async function startHubJob(path, { body, startedMessage } = {}) {
+  const job = await api(path, { method: "POST", body });
+  if (startedMessage) {
+    flash(startedMessage);
+  }
+  return pollHubJob(job.job_id);
 }
 
 function formatTimeCompact(isoString) {
@@ -882,11 +912,10 @@ async function refreshRepoPrCache(repos) {
   renderRepos(hubData.repos || []);
 }
 
-async function refreshHub({ scan = false } = {}) {
+async function refreshHub() {
   setButtonLoading(true);
   try {
-    const path = scan ? "/hub/repos/scan" : "/hub/repos";
-    const data = await api(path, { method: scan ? "POST" : "GET" });
+    const data = await api("/hub/repos", { method: "GET" });
     hubData = data;
     saveSessionCache(HUB_CACHE_KEY, hubData);
     renderSummary(data.repos || []);
@@ -900,6 +929,18 @@ async function refreshHub({ scan = false } = {}) {
   }
 }
 
+async function triggerHubScan() {
+  setButtonLoading(true);
+  try {
+    await startHubJob("/hub/jobs/scan", { startedMessage: "Hub scan queued" });
+    await refreshHub();
+  } catch (err) {
+    flash(err.message || "Hub scan failed", "error");
+  } finally {
+    setButtonLoading(false);
+  }
+}
+
 async function createRepo(repoId, repoPath, gitInit, gitUrl) {
   try {
     const payload = {};
@@ -907,10 +948,16 @@ async function createRepo(repoId, repoPath, gitInit, gitUrl) {
     if (repoPath) payload.path = repoPath;
     payload.git_init = gitInit;
     if (gitUrl) payload.git_url = gitUrl;
-    await api("/hub/repos", { method: "POST", body: payload });
+    const job = await startHubJob("/hub/jobs/repos", {
+      body: payload,
+      startedMessage: "Repo creation queued",
+    });
     const label = repoId || repoPath || "repo";
     flash(`Created repo: ${label}`);
     await refreshHub();
+    if (job?.result?.mounted && job?.result?.id) {
+      window.location.href = resolvePath(`/repos/${job.result.id}/`);
+    }
     return true;
   } catch (err) {
     flash(err.message || "Failed to create repo", "error");
@@ -978,11 +1025,12 @@ async function handleRepoAction(repoId, action) {
         confirmText: "Create",
       });
       if (!branch) return;
-      const created = await api("/hub/worktrees/create", {
-        method: "POST",
+      const job = await startHubJob("/hub/jobs/worktrees/create", {
         body: { base_repo_id: repoId, branch },
+        startedMessage: "Worktree creation queued",
       });
-      flash(`Created worktree: ${created.id}`);
+      const created = job?.result;
+      flash(`Created worktree: ${created?.id || branch}`);
       await refreshHub();
       if (created?.mounted) {
         window.location.href = resolvePath(`/repos/${created.id}/`);
@@ -999,9 +1047,9 @@ async function handleRepoAction(repoId, action) {
         { confirmText: "Remove", danger: true }
       );
       if (!ok) return;
-      await api("/hub/worktrees/cleanup", {
-        method: "POST",
+      await startHubJob("/hub/jobs/worktrees/cleanup", {
         body: { worktree_repo_id: repoId },
+        startedMessage: "Worktree cleanup queued",
       });
       flash(`Removed worktree: ${repoId}`);
       await refreshHub();
@@ -1064,13 +1112,13 @@ async function handleRepoAction(repoId, action) {
         );
         if (!forceOk) return;
       }
-      await api(`/hub/repos/${repoId}/remove`, {
-        method: "POST",
+      await startHubJob(`/hub/jobs/repos/${repoId}/remove`, {
         body: {
           force: needsForce,
           delete_dir: true,
           delete_worktrees: worktrees.length > 0,
         },
+        startedMessage: "Repo removal queued",
       });
       flash(`Removed repo: ${repoId}`);
       await refreshHub();
@@ -1099,9 +1147,9 @@ function attachHubHandlers() {
   const createSubmitBtn = document.getElementById("create-repo-submit");
   const createRepoId = document.getElementById("create-repo-id");
 
-  scanBtn?.addEventListener("click", () => refreshHub({ scan: true }));
-  quickScanBtn?.addEventListener("click", () => refreshHub({ scan: true }));
-  refreshBtn?.addEventListener("click", () => refreshHub({ scan: false }));
+  scanBtn?.addEventListener("click", () => triggerHubScan());
+  quickScanBtn?.addEventListener("click", () => triggerHubScan());
+  refreshBtn?.addEventListener("click", () => refreshHub());
   hubUsageRefresh?.addEventListener("click", () => loadHubUsage());
 
   newRepoBtn?.addEventListener("click", showCreateRepoModal);

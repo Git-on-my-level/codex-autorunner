@@ -97,6 +97,17 @@ class ResponseModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+class HubJobResponse(ResponseModel):
+    job_id: str
+    kind: str
+    status: str
+    created_at: str
+    started_at: Optional[str]
+    finished_at: Optional[str]
+    result: Optional[Dict[str, Any]]
+    error: Optional[str]
+
+
 class StateResponse(ResponseModel):
     last_run_id: Optional[int]
     status: str
