@@ -6,8 +6,9 @@
         const AUTH_TOKEN_KEY = "car_auth_token";
         const url = new URL(window.location.href);
         const params = url.searchParams;
-        const token = params.get("token");
+        let token = params.get("token");
         if (token) {
+          window.__CAR_AUTH_TOKEN = token;
           try {
             sessionStorage.setItem(AUTH_TOKEN_KEY, token);
           } catch (_err) {
@@ -16,6 +17,13 @@
           params.delete("token");
           if (typeof history !== "undefined" && history.replaceState) {
             history.replaceState(null, "", url.toString());
+          }
+        } else {
+          try {
+            token = sessionStorage.getItem(AUTH_TOKEN_KEY);
+            if (token) window.__CAR_AUTH_TOKEN = token;
+          } catch (_err) {
+            // Ignore storage errors; token may still be in memory.
           }
         }
 
@@ -49,15 +57,7 @@
         window.__CAR_BASE_PREFIX = basePrefix || "";
         window.__CAR_REPO_ID = repoId;
         window.__CAR_BASE_PATH = repoId ? `${basePrefix}/repos/${repoId}` : basePrefix;
-        let tokenPresent = Boolean(token);
-        if (!tokenPresent) {
-          try {
-            tokenPresent = Boolean(sessionStorage.getItem(AUTH_TOKEN_KEY));
-          } catch (_err) {
-            tokenPresent = false;
-          }
-        }
-        window.__AUTH_TOKEN_PRESENT = tokenPresent;
+        window.__AUTH_TOKEN_PRESENT = Boolean(window.__CAR_AUTH_TOKEN);
       })();
     </script>
     <meta charset="utf-8" />

@@ -12,7 +12,13 @@ export function getAuthToken() {
   } catch (_err) {
     token = null;
   }
-  return token;
+  if (token) {
+    return token;
+  }
+  if (window?.__CAR_AUTH_TOKEN) {
+    return window.__CAR_AUTH_TOKEN;
+  }
+  return null;
 }
 
 export function resolvePath(path) {
