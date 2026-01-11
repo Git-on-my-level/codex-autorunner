@@ -12,27 +12,7 @@ export function getAuthToken() {
   } catch (_err) {
     token = null;
   }
-  if (token) {
-    return token;
-  }
-  if (!window?.location?.href) {
-    return null;
-  }
-  const url = new URL(window.location.href);
-  const urlToken = url.searchParams.get("token");
-  if (!urlToken) {
-    return null;
-  }
-  try {
-    sessionStorage.setItem(AUTH_TOKEN_KEY, urlToken);
-  } catch (_err) {
-    // Ignore storage errors; token can still be used for this session.
-  }
-  url.searchParams.delete("token");
-  if (typeof history !== "undefined" && history.replaceState) {
-    history.replaceState(null, "", url.toString());
-  }
-  return urlToken;
+  return token;
 }
 
 export function resolvePath(path) {

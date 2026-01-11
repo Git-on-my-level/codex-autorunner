@@ -12,24 +12,7 @@ function getAuthToken() {
   if (token) {
     return token;
   }
-  if (!hasWindow || !window.location.href) {
-    return null;
-  }
-  const url = new URL(window.location.href);
-  const urlToken = url.searchParams.get("token");
-  if (!urlToken) {
-    return null;
-  }
-  try {
-    sessionStorage.setItem(AUTH_TOKEN_KEY, urlToken);
-  } catch (_err) {
-    // Ignore storage errors; token can still be used for this session.
-  }
-  url.searchParams.delete("token");
-  if (typeof history !== "undefined" && history.replaceState) {
-    history.replaceState(null, "", url.toString());
-  }
-  return urlToken;
+  return null;
 }
 
 function normalizeBase(base) {
@@ -63,13 +46,27 @@ function detectBasePrefix(path) {
   return "";
 }
 
-const basePrefix = detectBasePrefix(pathname);
+const basePrefix =
+  hasWindow && typeof window.__CAR_BASE_PREFIX !== "undefined"
+    ? window.__CAR_BASE_PREFIX
+    : detectBasePrefix(pathname);
 
-const repoMatch = pathname.match(/\/repos\/([^/]+)/);
-const repoId = repoMatch && repoMatch[1] ? repoMatch[1] : null;
+const repoId =
+  hasWindow && typeof window.__CAR_REPO_ID !== "undefined"
+    ? window.__CAR_REPO_ID
+    : (() => {
+        const match = pathname.match(/\/repos\/([^/]+)/);
+        return match && match[1] ? match[1] : null;
+      })();
+
+const derivedBasePath = repoId ? `${basePrefix}/repos/${repoId}` : basePrefix;
+const basePath =
+  hasWindow && typeof window.__CAR_BASE_PATH !== "undefined"
+    ? window.__CAR_BASE_PATH
+    : derivedBasePath;
 
 export const REPO_ID = repoId;
-export const BASE_PATH = repoId ? `${basePrefix}/repos/${repoId}` : basePrefix;
+export const BASE_PATH = basePath;
 export const HUB_BASE = basePrefix || "/";
 
 let mode = repoId ? "repo" : "unknown";

@@ -4,32 +4,21 @@
     <script>
       (() => {
         const AUTH_TOKEN_KEY = "car_auth_token";
-        const search = window.location.search || "";
-        if (!search) return;
-        const params = new URLSearchParams(search);
+        const url = new URL(window.location.href);
+        const params = url.searchParams;
         const token = params.get("token");
-        if (!token) return;
-        try {
-          sessionStorage.setItem(AUTH_TOKEN_KEY, token);
-        } catch (_err) {
-          // Ignore storage errors; token can still be used for this load.
+        if (token) {
+          try {
+            sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+          } catch (_err) {
+            // Ignore storage errors; token can still be used for this load.
+          }
+          params.delete("token");
+          if (typeof history !== "undefined" && history.replaceState) {
+            history.replaceState(null, "", url.toString());
+          }
         }
-        params.delete("token");
-        if (typeof history !== "undefined" && history.replaceState) {
-          const next = new URL(window.location.href);
-          next.search = params.toString();
-          history.replaceState(null, "", next.toString());
-        }
-      })();
-    </script>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="theme-color" content="#0a0c12" />
-    <title>Codex Autorunner</title>
-    <script>
-      (() => {
+
         const normalizeBase = (base) => {
           if (!base || base === "/") return "";
           let normalized = base.startsWith("/") ? base : `/${base}`;
@@ -51,7 +40,35 @@
           if (parts.length) return normalizeBase(`/${parts[0]}`);
           return "";
         };
-        const basePrefix = detectBasePrefix(window.location.pathname || "/");
+
+        const pathname = window.location.pathname || "/";
+        const basePrefix = detectBasePrefix(pathname);
+        const repoMatch = pathname.match(/\/repos\/([^/]+)/);
+        const repoId = repoMatch && repoMatch[1] ? repoMatch[1] : null;
+
+        window.__CAR_BASE_PREFIX = basePrefix || "";
+        window.__CAR_REPO_ID = repoId;
+        window.__CAR_BASE_PATH = repoId ? `${basePrefix}/repos/${repoId}` : basePrefix;
+        let tokenPresent = Boolean(token);
+        if (!tokenPresent) {
+          try {
+            tokenPresent = Boolean(sessionStorage.getItem(AUTH_TOKEN_KEY));
+          } catch (_err) {
+            tokenPresent = false;
+          }
+        }
+        window.__AUTH_TOKEN_PRESENT = tokenPresent;
+      })();
+    </script>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#0a0c12" />
+    <title>Codex Autorunner</title>
+    <script>
+      (() => {
+        const basePrefix = window.__CAR_BASE_PREFIX || "";
         const base = basePrefix || "/";
         const baseTag = document.createElement("base");
         baseTag.href = base.endsWith("/") ? base : `${base}/`;
