@@ -33,6 +33,14 @@ else
   echo "Missing required command: eslint. Install dev deps via 'npm install'." >&2
   exit 1
 fi
+if [ -x "./node_modules/.bin/tsc" ]; then
+  TSC_BIN="./node_modules/.bin/tsc"
+elif command -v tsc >/dev/null 2>&1; then
+  TSC_BIN="tsc"
+else
+  echo "Missing required command: tsc. Install dev deps via 'npm install'." >&2
+  exit 1
+fi
 
 paths=(src)
 if [ -d tests ]; then
@@ -53,6 +61,9 @@ echo "Type check (mypy)..."
 
 echo "Linting JS (eslint)..."
 "$ESLINT_BIN" "src/codex_autorunner/static/**/*.js"
+
+echo "Type check (tsc)..."
+"$TSC_BIN" -p tsconfig.json
 
 echo "Running tests (pytest)..."
 "$PYTHON_BIN" -m pytest

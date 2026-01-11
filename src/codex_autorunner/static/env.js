@@ -84,6 +84,7 @@ export async function detectContext() {
     return { mode, repoId: REPO_ID };
   }
   try {
+    /** @type {Record<string, string>} */
     const headers = {};
     const token = getAuthToken();
     if (token) {

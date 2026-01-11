@@ -2,9 +2,11 @@
   "name": "codex-autorunner-ui",
   "private": true,
   "scripts": {
-    "lint:js": "eslint \"src/codex_autorunner/static/**/*.js\""
+    "lint:js": "eslint \"src/codex_autorunner/static/**/*.js\"",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
-    "eslint": "^8.57.0"
+    "eslint": "^8.57.0",
+    "typescript": "^5.9.3"
   }
 }

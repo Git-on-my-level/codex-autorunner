@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2020", "DOM"],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/codex_autorunner/static/types.d.ts",
+    "src/codex_autorunner/static/constants.js",
+    "src/codex_autorunner/static/env.js",
+    "src/codex_autorunner/static/bus.js",
+    "src/codex_autorunner/static/utils.js"
+  ],
+  "exclude": ["node_modules", ".venv", "build"]
+}

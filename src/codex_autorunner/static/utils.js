@@ -5,6 +5,22 @@ const toast = document.getElementById("toast");
 const decoder = new TextDecoder();
 const AUTH_TOKEN_KEY = "car_auth_token";
 
+/**
+ * @typedef {Object} ApiOptions
+ * @property {string} [method]
+ * @property {any} [body]
+ * @property {Record<string, string>} [headers]
+ */
+
+/**
+ * @typedef {Object} StreamOptions
+ * @property {string} [method]
+ * @property {any} [body]
+ * @property {(data: string, event: string) => void} [onMessage]
+ * @property {(err: Error) => void} [onError]
+ * @property {() => void} [onFinish]
+ */
+
 export function getAuthToken() {
   let token = null;
   try {
@@ -167,7 +183,12 @@ async function buildErrorMessage(res) {
   return `Request failed (${res.status})`;
 }
 
+/**
+ * @param {string} path
+ * @param {ApiOptions} [options]
+ */
 export async function api(path, options = {}) {
+  /** @type {Record<string, string>} */
   const headers = options.headers ? { ...options.headers } : {};
   const opts = { ...options, headers };
   const target = resolvePath(path);
@@ -191,13 +212,16 @@ export async function api(path, options = {}) {
   return res.text();
 }
 
-export function streamEvents(
-  path,
-  { method = "GET", body = null, onMessage, onError, onFinish } = {}
-) {
+/**
+ * @param {string} path
+ * @param {StreamOptions} [options]
+ */
+export function streamEvents(path, options = {}) {
+  const { method = "GET", body = null, onMessage, onError, onFinish } = options;
   const controller = new AbortController();
   let fetchBody = body;
   const target = resolvePath(path);
+  /** @type {Record<string, string>} */
   const headers = {};
   const token = getAuthToken();
   if (token) {
@@ -500,9 +524,15 @@ export function inputModal(message, options = {}) {
   return new Promise((resolve) => {
     const overlay = document.getElementById("input-modal");
     const messageEl = document.getElementById("input-modal-message");
-    const inputEl = document.getElementById("input-modal-input");
-    const okBtn = document.getElementById("input-modal-ok");
-    const cancelBtn = document.getElementById("input-modal-cancel");
+    const inputEl = /** @type {HTMLInputElement} */ (
+      document.getElementById("input-modal-input")
+    );
+    const okBtn = /** @type {HTMLButtonElement} */ (
+      document.getElementById("input-modal-ok")
+    );
+    const cancelBtn = /** @type {HTMLButtonElement} */ (
+      document.getElementById("input-modal-cancel")
+    );
 
     const triggerEl = document.activeElement;
     messageEl.textContent = message;
