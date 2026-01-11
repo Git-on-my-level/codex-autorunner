@@ -95,6 +95,68 @@ export function statusPill(el, status) {
   }
 }
 
+function extractErrorDetail(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const detail = payload.detail ?? payload.message ?? payload.error;
+  if (!detail) return "";
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (!item) return "";
+        if (typeof item === "string") return item;
+        if (typeof item === "object") {
+          const msg = item.msg || item.message || "";
+          const loc = Array.isArray(item.loc) ? item.loc.join(".") : item.loc;
+          if (msg && loc) return `${loc}: ${msg}`;
+          if (msg) return msg;
+        }
+        try {
+          return JSON.stringify(item);
+        } catch (_err) {
+          return String(item);
+        }
+      })
+      .filter(Boolean);
+    return parts.join(" | ");
+  }
+  try {
+    return JSON.stringify(detail);
+  } catch (_err) {
+    return String(detail);
+  }
+}
+
+async function buildErrorMessage(res) {
+  if (res.status === 401) {
+    return "Unauthorized. Provide a valid token to access this server.";
+  }
+  let text = "";
+  try {
+    text = await res.text();
+  } catch (_err) {
+    text = "";
+  }
+  let payload = null;
+  const contentType = res.headers.get("content-type") || "";
+  const trimmed = text.trim();
+  if (
+    contentType.includes("application/json") ||
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[")
+  ) {
+    try {
+      payload = JSON.parse(text);
+    } catch (_err) {
+      payload = null;
+    }
+  }
+  const detail = extractErrorDetail(payload);
+  if (detail) return detail;
+  if (text) return text;
+  return `Request failed (${res.status})`;
+}
+
 export async function api(path, options = {}) {
   const headers = options.headers ? { ...options.headers } : {};
   const opts = { ...options, headers };
@@ -109,8 +171,8 @@ export async function api(path, options = {}) {
   }
   const res = await fetch(target, opts);
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `Request failed (${res.status})`);
+    const message = await buildErrorMessage(res);
+    throw new Error(message);
   }
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) {
@@ -138,8 +200,8 @@ export function streamEvents(
   fetch(target, { method, body: fetchBody, headers, signal: controller.signal })
     .then(async (res) => {
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `Request failed (${res.status})`);
+        const message = await buildErrorMessage(res);
+        throw new Error(message);
       }
       if (!res.body) {
         throw new Error("Streaming not supported in this browser");

@@ -2730,6 +2730,37 @@ label {
   height: 100%;
 }
 
+.log-load-btn {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 6px 12px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  z-index: 10;
+  transition: all 0.15s ease;
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+}
+
+.log-load-btn:not(.hidden) {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.log-load-btn:hover {
+  border-color: rgba(108, 245, 216, 0.5);
+  color: var(--accent);
+}
+
 .log-jump-btn {
   position: absolute;
   bottom: 16px;

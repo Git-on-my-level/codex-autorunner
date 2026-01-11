@@ -1,4 +1,4 @@
-import { api, flash, streamEvents } from "./utils.js";
+import { api, confirmModal, flash, streamEvents } from "./utils.js";
 import { publish } from "./bus.js";
 import { CONSTANTS } from "./constants.js";
 
@@ -73,7 +73,12 @@ export function resumeRun() {
   return runAction("/api/run/resume", null, "Resume requested");
 }
 
-export function killRun() {
+export async function killRun() {
+  const confirmed = await confirmModal(
+    "Kill the runner process? This stops it immediately and may leave partial state.",
+    { confirmText: "Kill runner", cancelText: "Cancel", danger: true }
+  );
+  if (!confirmed) return null;
   return runAction("/api/run/kill", null, "Kill signal sent");
 }
 

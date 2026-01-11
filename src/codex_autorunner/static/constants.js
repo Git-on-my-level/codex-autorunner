@@ -4,6 +4,8 @@ export const CONSTANTS = {
     POLLING_INTERVAL: 15000,
     LOG_SCROLL_THRESHOLD: 50,
     MAX_LOG_LINES_IN_DOM: 2000, // Limit DOM nodes for performance
+    MAX_LOG_LINES_IN_MEMORY: 10000, // Cap memory usage for long-running logs
+    LOG_PAGE_SIZE: 500,
     // Auto-refresh intervals (in ms)
     AUTO_REFRESH_INTERVAL: 30000, // 30 seconds for periodic refresh
     AUTO_REFRESH_USAGE_INTERVAL: 60000, // 60 seconds for usage data (less critical)

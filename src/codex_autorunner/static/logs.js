@@ -9,10 +9,17 @@ const toggleLogStreamButton = document.getElementById("toggle-log-stream");
 const showTimestampToggle = document.getElementById("log-show-timestamp");
 const showRunToggle = document.getElementById("log-show-run");
 const jumpBottomButton = document.getElementById("log-jump-bottom");
+const loadOlderButton = document.getElementById("log-load-older");
 let stopLogStream = null;
 let lastKnownRunId = null;
 let rawLogLines = [];
 let autoScrollEnabled = true;
+let renderedStartIndex = 0;
+let renderedEndIndex = 0;
+let isViewingTail = true;
+let renderState = null;
+let logContexts = [];
+let logContextState = { inPromptBlock: false, inDiffBlock: false };
 // Matches doc-chat metadata lines (start/result) that we might want to hide for cleaner view
 const DOC_CHAT_META_RE = /doc-chat id=[a-f0-9]+ (result=|exit_code=)/i;
 
@@ -197,67 +204,221 @@ function shouldOmitLine(line) {
   return false;
 }
 
-function formatLogLines(lines) {
-  const cleaned = [];
-  let context = {
+function resetRenderState() {
+  renderState = {
     inPromptBlock: false,
+    promptBlockDetails: null,
+    promptBlockContent: null,
     promptBlockType: null,
+    promptLineCount: 0,
     inDiffBlock: false,
   };
+}
 
-  for (const raw of lines) {
-    if (shouldOmitLine(raw)) continue;
-    const processed = processLine(raw).trimEnd();
-    const classification = classifyLine(raw, context);
+function resetLogContexts() {
+  logContexts = [];
+  logContextState = { inPromptBlock: false, inDiffBlock: false };
+}
 
-    // Track diff context
-    if (classification.startDiff) {
-      context.inDiffBlock = true;
-    }
-    if (classification.resetDiff) {
-      context.inDiffBlock = false;
-    }
-    // Blank lines or non-diff content after several lines ends diff context
-    const isBlankLine = processed.trim() === "";
-    if (isBlankLine && context.inDiffBlock) {
-      // Keep diff context for now, but consecutive blanks will end it
-    }
-
-    // Track prompt block context
-    if (classification.type === "prompt-marker") {
-      context.inPromptBlock = true;
-      context.inDiffBlock = false; // Reset diff in prompt blocks
-      const match = processed.match(/<(\w+)>/);
-      context.promptBlockType = match ? match[1] : null;
-    } else if (classification.type === "prompt-marker-end") {
-      context.inPromptBlock = false;
-      context.promptBlockType = null;
-    }
-
-    const isRunBoundary = /^=== run \d+/.test(processed);
-    if (
-      isRunBoundary &&
-      cleaned.length &&
-      cleaned[cleaned.length - 1].text !== ""
-    ) {
-      cleaned.push({ text: "", type: "blank", priority: 10 });
-    }
-
-    const isBlank = processed.trim() === "";
-    if (isBlank) {
-      if (cleaned.length && cleaned[cleaned.length - 1].text === "") continue;
-      cleaned.push({ text: "", type: "blank", priority: 10 });
-      continue;
-    }
-
-    cleaned.push({
-      text: processed,
-      type: classification.type,
-      priority: classification.priority,
-      raw: raw,
-    });
+function updateLogContextForLine(line) {
+  logContexts.push({ ...logContextState });
+  const classification = classifyLine(line, logContextState);
+  if (classification.startDiff) {
+    logContextState.inDiffBlock = true;
   }
-  return cleaned;
+  if (classification.resetDiff) {
+    logContextState.inDiffBlock = false;
+  }
+  if (classification.type === "prompt-marker") {
+    logContextState.inPromptBlock = true;
+    logContextState.inDiffBlock = false;
+  } else if (classification.type === "prompt-marker-end") {
+    logContextState.inPromptBlock = false;
+  }
+}
+
+function rebuildLogContexts() {
+  resetLogContexts();
+  rawLogLines.forEach((line) => updateLogContextForLine(line));
+}
+
+function finalizePromptBlock() {
+  if (!renderState || !renderState.promptBlockDetails) return;
+  const countEl = renderState.promptBlockDetails.querySelector(
+    ".log-context-count"
+  );
+  if (countEl) {
+    countEl.textContent = `(${renderState.promptLineCount} lines)`;
+  }
+}
+
+function startPromptBlock(output, label) {
+  renderState.promptBlockType = label;
+  renderState.promptBlockDetails = document.createElement("details");
+  renderState.promptBlockDetails.className = "log-context-block";
+  const summary = document.createElement("summary");
+  summary.className = "log-context-summary";
+  summary.innerHTML = `<span class="log-context-icon">▶</span> ${label} <span class="log-context-count"></span>`;
+  renderState.promptBlockDetails.appendChild(summary);
+  renderState.promptBlockContent = document.createElement("div");
+  renderState.promptBlockContent.className = "log-context-content";
+  renderState.promptBlockDetails.appendChild(renderState.promptBlockContent);
+  renderState.promptLineCount = 0;
+  output.appendChild(renderState.promptBlockDetails);
+}
+
+function appendRenderedLine(line, output) {
+  if (!renderState) resetRenderState();
+  if (shouldOmitLine(line)) return;
+
+  const processed = processLine(line).trimEnd();
+  const classification = classifyLine(line, renderState);
+
+  if (classification.startDiff) {
+    renderState.inDiffBlock = true;
+  }
+  if (classification.resetDiff) {
+    renderState.inDiffBlock = false;
+  }
+
+  if (classification.type === "prompt-marker") {
+    renderState.inPromptBlock = true;
+    renderState.inDiffBlock = false;
+    const match = processed.match(/<(\w+)>/);
+    const blockLabel = match ? match[1] : "CONTEXT";
+    startPromptBlock(output, blockLabel);
+    return;
+  }
+
+  if (classification.type === "prompt-marker-end") {
+    finalizePromptBlock();
+    renderState.promptBlockDetails = null;
+    renderState.promptBlockContent = null;
+    renderState.promptBlockType = null;
+    renderState.promptLineCount = 0;
+    renderState.inPromptBlock = false;
+    return;
+  }
+
+  if (
+    renderState.promptBlockContent &&
+    renderState.inPromptBlock &&
+    (classification.type === "prompt-context" || classification.type === "output")
+  ) {
+    const div = document.createElement("div");
+    div.textContent = processed;
+    div.className = "log-line log-prompt-context";
+    renderState.promptBlockContent.appendChild(div);
+    renderState.promptLineCount++;
+    return;
+  }
+
+  const isBlank = processed.trim() === "";
+  const div = document.createElement("div");
+  div.textContent = processed;
+
+  if (isBlank) {
+    div.className = "log-line log-blank";
+  } else {
+    div.className = `log-line log-${classification.type}`;
+    div.dataset.logType = classification.type;
+    div.dataset.priority = classification.priority;
+  }
+
+  if (classification.type === "thinking-label" || classification.type === "thinking") {
+    div.dataset.icon = "💭";
+  } else if (classification.type === "exec-label" || classification.type === "exec-command") {
+    div.dataset.icon = "⚡";
+  } else if (
+    classification.type === "file-update-label" ||
+    classification.type === "file-modified"
+  ) {
+    div.dataset.icon = "📝";
+  } else if (classification.type === "agent-output") {
+    div.dataset.icon = "✨";
+  } else if (classification.type === "run-start" || classification.type === "run-end") {
+    div.dataset.icon = "🔄";
+  } else if (classification.type === "success") {
+    div.dataset.icon = "✓";
+  } else if (classification.type === "tokens") {
+    div.dataset.icon = "📊";
+  }
+
+  output.appendChild(div);
+}
+
+function trimLogBuffer() {
+  const maxLines = CONSTANTS.UI.MAX_LOG_LINES_IN_MEMORY;
+  if (!maxLines || rawLogLines.length <= maxLines) return;
+  const overflow = rawLogLines.length - maxLines;
+  rawLogLines = rawLogLines.slice(overflow);
+  if (logContexts.length > overflow) {
+    logContexts = logContexts.slice(overflow);
+  } else {
+    logContexts = [];
+  }
+  renderedStartIndex = Math.max(0, renderedStartIndex - overflow);
+  renderedEndIndex = Math.max(0, renderedEndIndex - overflow);
+}
+
+function updateLoadOlderButton() {
+  if (!loadOlderButton) return;
+  if (renderedStartIndex > 0) {
+    loadOlderButton.classList.remove("hidden");
+  } else {
+    loadOlderButton.classList.add("hidden");
+  }
+}
+
+function renderLogWindow({ startIndex = null, followTail = true } = {}) {
+  const output = document.getElementById("log-output");
+
+  if (rawLogLines.length === 0) {
+    output.innerHTML = "";
+    output.textContent = "(empty log)";
+    output.dataset.isPlaceholder = "true";
+    renderedStartIndex = 0;
+    renderedEndIndex = 0;
+    isViewingTail = true;
+    updateLoadOlderButton();
+    return;
+  }
+
+  const endIndex = rawLogLines.length;
+  let windowStart = startIndex;
+  if (followTail || windowStart === null) {
+    windowStart = Math.max(0, endIndex - CONSTANTS.UI.MAX_LOG_LINES_IN_DOM);
+  }
+  const windowEnd = Math.min(
+    endIndex,
+    windowStart + CONSTANTS.UI.MAX_LOG_LINES_IN_DOM
+  );
+
+  output.innerHTML = "";
+  delete output.dataset.isPlaceholder;
+  resetRenderState();
+  const startContext = logContexts[windowStart];
+  if (startContext) {
+    renderState.inPromptBlock = startContext.inPromptBlock;
+    renderState.inDiffBlock = startContext.inDiffBlock;
+    if (renderState.inPromptBlock) {
+      startPromptBlock(output, "CONTEXT (continued)");
+    }
+  }
+
+  for (let i = windowStart; i < windowEnd; i += 1) {
+    appendRenderedLine(rawLogLines[i], output);
+  }
+  finalizePromptBlock();
+
+  renderedStartIndex = windowStart;
+  renderedEndIndex = windowEnd;
+  isViewingTail = followTail && windowEnd === endIndex;
+  updateLoadOlderButton();
+
+  if (isViewingTail) {
+    scrollLogsToBottom(true);
+  }
 }
 
 function appendLogLine(line) {
@@ -266,30 +427,33 @@ function appendLogLine(line) {
     output.innerHTML = "";
     delete output.dataset.isPlaceholder;
     rawLogLines = [];
+    resetRenderState();
+    resetLogContexts();
+    renderedStartIndex = 0;
+    renderedEndIndex = 0;
+    isViewingTail = true;
   }
 
   rawLogLines.push(line);
-  if (rawLogLines.length > CONSTANTS.UI.MAX_LOG_LINES_IN_DOM) {
-    rawLogLines.shift();
-  }
+  updateLogContextForLine(line);
+  trimLogBuffer();
 
-  const processed = processLine(line).trimEnd();
-  if (shouldOmitLine(line)) {
+  if (!isViewingTail) {
     publish("logs:line", line);
+    updateLoadOlderButton();
     return;
   }
 
-  const classification = classifyLine(line, {});
-  const div = document.createElement("div");
-  div.textContent = processed;
-  div.className = `log-line log-${classification.type}`;
-  div.dataset.logType = classification.type;
-  output.appendChild(div);
-
+  appendRenderedLine(line, output);
+  renderedEndIndex = rawLogLines.length;
   if (output.childElementCount > CONSTANTS.UI.MAX_LOG_LINES_IN_DOM) {
     output.firstElementChild.remove();
   }
-
+  renderedStartIndex = Math.max(
+    0,
+    renderedEndIndex - output.childElementCount
+  );
+  updateLoadOlderButton();
   publish("logs:line", line);
   scrollLogsToBottom();
 }
@@ -343,7 +507,10 @@ async function loadLogs() {
 
     if (text) {
       rawLogLines = text.split("\n");
+      trimLogBuffer();
+      rebuildLogContexts();
       delete output.dataset.isPlaceholder;
+      isViewingTail = true;
       renderLogs();
 
       // Update cache if we are looking at the latest logs (no specific run ID)
@@ -356,6 +523,12 @@ async function loadLogs() {
       output.textContent = "(empty log)";
       output.dataset.isPlaceholder = "true";
       rawLogLines = [];
+      resetRenderState();
+      resetLogContexts();
+      renderedStartIndex = 0;
+      renderedEndIndex = 0;
+      isViewingTail = true;
+      updateLoadOlderButton();
       if (!runId) {
         saveToCache("logs:tail", "");
       }
@@ -383,6 +556,12 @@ function startLogStreaming() {
   output.textContent = "(listening...)";
   output.dataset.isPlaceholder = "true";
   rawLogLines = [];
+  resetRenderState();
+  resetLogContexts();
+  renderedStartIndex = 0;
+  renderedEndIndex = 0;
+  isViewingTail = true;
+  updateLoadOlderButton();
 
   stopLogStream = streamEvents("/api/logs/stream", {
     onMessage: (data) => {
@@ -411,121 +590,7 @@ function syncRunIdPlaceholder(state) {
 }
 
 function renderLogs() {
-  const output = document.getElementById("log-output");
-
-  if (rawLogLines.length === 0) {
-    output.innerHTML = "";
-    output.textContent = "(empty log)";
-    output.dataset.isPlaceholder = "true";
-    return;
-  }
-
-  // Full re-render with classification
-  const lines = formatLogLines(rawLogLines);
-
-  if (lines.length > 0) {
-    delete output.dataset.isPlaceholder;
-    output.innerHTML = "";
-    const fragment = document.createDocumentFragment();
-
-    let promptBlockDetails = null;
-    let promptBlockContent = null;
-    let promptBlockType = null;
-    let promptLineCount = 0;
-
-    lines.forEach((lineData) => {
-      // Handle collapsible prompt context blocks
-      if (lineData.type === "prompt-marker") {
-        // Start a new collapsible block
-        const match = lineData.text.match(/<(\w+)>/);
-        promptBlockType = match ? match[1] : "CONTEXT";
-        promptBlockDetails = document.createElement("details");
-        promptBlockDetails.className = "log-context-block";
-        const summary = document.createElement("summary");
-        summary.className = "log-context-summary";
-        summary.innerHTML = `<span class="log-context-icon">▶</span> ${promptBlockType} <span class="log-context-count"></span>`;
-        promptBlockDetails.appendChild(summary);
-        promptBlockContent = document.createElement("div");
-        promptBlockContent.className = "log-context-content";
-        promptBlockDetails.appendChild(promptBlockContent);
-        promptLineCount = 0;
-        fragment.appendChild(promptBlockDetails);
-        return;
-      }
-
-      if (lineData.type === "prompt-marker-end") {
-        // Close the block and update count
-        if (promptBlockDetails) {
-          const countEl =
-            promptBlockDetails.querySelector(".log-context-count");
-          if (countEl) {
-            countEl.textContent = `(${promptLineCount} lines)`;
-          }
-        }
-        promptBlockDetails = null;
-        promptBlockContent = null;
-        promptBlockType = null;
-        promptLineCount = 0;
-        return;
-      }
-
-      // If we're inside a prompt block, add to it
-      if (
-        promptBlockContent &&
-        (lineData.type === "prompt-context" || lineData.type === "output")
-      ) {
-        const div = document.createElement("div");
-        div.textContent = lineData.text;
-        div.className = "log-line log-prompt-context";
-        promptBlockContent.appendChild(div);
-        promptLineCount++;
-        return;
-      }
-
-      const div = document.createElement("div");
-      div.textContent = lineData.text;
-
-      if (lineData.type === "blank") {
-        div.className = "log-line log-blank";
-      } else {
-        div.className = `log-line log-${lineData.type}`;
-        div.dataset.logType = lineData.type;
-        div.dataset.priority = lineData.priority;
-      }
-
-      // Add icons/prefixes for certain types
-      if (lineData.type === "thinking-label" || lineData.type === "thinking") {
-        div.dataset.icon = "💭";
-      } else if (
-        lineData.type === "exec-label" ||
-        lineData.type === "exec-command"
-      ) {
-        div.dataset.icon = "⚡";
-      } else if (
-        lineData.type === "file-update-label" ||
-        lineData.type === "file-modified"
-      ) {
-        div.dataset.icon = "📝";
-      } else if (lineData.type === "agent-output") {
-        div.dataset.icon = "✨";
-      } else if (lineData.type === "run-start" || lineData.type === "run-end") {
-        div.dataset.icon = "🔄";
-      } else if (lineData.type === "success") {
-        div.dataset.icon = "✓";
-      } else if (lineData.type === "tokens") {
-        div.dataset.icon = "📊";
-      }
-
-      fragment.appendChild(div);
-    });
-
-    output.appendChild(fragment);
-  } else {
-    output.innerHTML = "";
-    output.textContent = "(empty log)";
-    output.dataset.isPlaceholder = "true";
-  }
-  scrollLogsToBottom();
+  renderLogWindow({ followTail: isViewingTail });
 }
 
 export function initLogs() {
@@ -551,9 +616,26 @@ export function initLogs() {
   // Jump to bottom button
   if (jumpBottomButton) {
     jumpBottomButton.addEventListener("click", () => {
+      if (!isViewingTail) {
+        isViewingTail = true;
+        renderLogs();
+      }
       autoScrollEnabled = true;
       scrollLogsToBottom(true);
       jumpBottomButton.classList.add("hidden");
+    });
+  }
+
+  if (loadOlderButton) {
+    loadOlderButton.addEventListener("click", () => {
+      if (renderedStartIndex <= 0) return;
+      const nextStart = Math.max(
+        0,
+        renderedStartIndex - CONSTANTS.UI.LOG_PAGE_SIZE
+      );
+      isViewingTail = false;
+      autoScrollEnabled = false;
+      renderLogWindow({ startIndex: nextStart, followTail: false });
     });
   }
 
@@ -569,7 +651,10 @@ export function initLogs() {
     const output = document.getElementById("log-output");
     rawLogLines = cachedLogs.split("\n");
     if (rawLogLines.length > 0) {
+      trimLogBuffer();
+      rebuildLogContexts();
       delete output.dataset.isPlaceholder;
+      isViewingTail = true;
       renderLogs();
       scrollLogsToBottom(true);
     }
