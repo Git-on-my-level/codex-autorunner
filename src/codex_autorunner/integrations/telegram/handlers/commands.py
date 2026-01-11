@@ -64,6 +64,12 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             handlers._handle_debug,
             allow_during_turn=True,
         ),
+        "ids": CommandSpec(
+            "ids",
+            "show chat/user/thread IDs",
+            handlers._handle_ids,
+            allow_during_turn=True,
+        ),
         "diff": CommandSpec(
             "diff",
             "show git diff for the bound workspace",

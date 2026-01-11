@@ -3062,6 +3062,27 @@ class TelegramCommandHandlers:
             reply_to=message.message_id,
         )
 
+    async def _handle_ids(
+        self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
+    ) -> None:
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        lines = [
+            f"Chat ID: {message.chat_id}",
+            f"Thread ID: {message.thread_id or 'none'}",
+            f"User ID: {message.from_user_id or 'unknown'}",
+            f"Topic key: {key}",
+            "Allowlist example:",
+            f"telegram_bot.allowed_chat_ids: [{message.chat_id}]",
+        ]
+        if message.from_user_id is not None:
+            lines.append(f"telegram_bot.allowed_user_ids: [{message.from_user_id}]")
+        await self._send_message(
+            message.chat_id,
+            "\n".join(lines),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
     async def _read_rate_limits(
         self, workspace_path: Optional[str]
     ) -> Optional[dict[str, Any]]:
