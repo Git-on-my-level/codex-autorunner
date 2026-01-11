@@ -1,26 +1,20 @@
 import asyncio
 import logging
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ..core import update as update_core
 from ..core.config import HubConfig
 from ..core.update import (
     UpdateInProgressError,
     _normalize_update_ref,
     _normalize_update_target,
-    _pid_is_running,
     _read_update_status,
     _spawn_update_process,
     _system_update_check,
-    _system_update_worker,
-    _update_lock_active,
-    _update_lock_path,
-    _update_status_path,
 )
 from ..web.schemas import (
     SystemHealthResponse,
@@ -31,12 +25,20 @@ from ..web.schemas import (
 )
 from ..web.static_assets import missing_static_assets
 
+_pid_is_running = update_core._pid_is_running
+_system_update_worker = update_core._system_update_worker
+_update_lock_active = update_core._update_lock_active
+_update_lock_path = update_core._update_lock_path
+_update_status_path = update_core._update_status_path
+shutil = update_core.shutil
+subprocess = update_core.subprocess
+
 
 def build_system_routes() -> APIRouter:
     router = APIRouter()
 
     @router.get("/health", response_model=SystemHealthResponse)
-    async def system_health(request: Request):
+    def system_health(request: Request):
         try:
             config = request.app.state.config
         except AttributeError:
@@ -75,7 +77,7 @@ def build_system_routes() -> APIRouter:
         }
 
     @router.get("/system/update/check", response_model=SystemUpdateCheckResponse)
-    async def system_update_check(request: Request):
+    def system_update_check(request: Request):
         """
         Check if an update is available by comparing local git state vs remote.
         If local git state is unavailable, report that an update may be available.
@@ -106,9 +108,7 @@ def build_system_routes() -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e)) from e
 
     @router.post("/system/update", response_model=SystemUpdateResponse)
-    async def system_update(
-        request: Request, payload: Optional[SystemUpdateRequest] = None
-    ):
+    def system_update(request: Request, payload: Optional[SystemUpdateRequest] = None):
         """
         Pull latest code and refresh the running service.
         This will restart the server if successful.
@@ -164,8 +164,13 @@ def build_system_routes() -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e)) from e
 
     @router.get("/system/update/status", response_model=SystemUpdateStatusResponse)
+<<<<<<< ours
     async def system_update_status():
         status = await asyncio.to_thread(_read_update_status)
+=======
+    def system_update_status():
+        status = _read_update_status()
+>>>>>>> theirs
         if status is None:
             return {"status": "unknown", "message": "No update status recorded."}
         return status

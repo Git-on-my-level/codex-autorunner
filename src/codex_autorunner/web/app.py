@@ -630,7 +630,7 @@ def create_hub_app(
         }
 
     @app.get("/hub/repos")
-    async def list_repos():
+    def list_repos():
         safe_log(app.state.logger, logging.INFO, "Hub list_repos")
         snapshots = await asyncio.to_thread(context.supervisor.list_repos)
         _refresh_mounts(snapshots)
@@ -646,7 +646,7 @@ def create_hub_app(
         return {"asset_version": app.state.asset_version}
 
     @app.post("/hub/repos/scan")
-    async def scan_repos():
+    def scan_repos():
         safe_log(app.state.logger, logging.INFO, "Hub scan_repos")
         snapshots = await asyncio.to_thread(context.supervisor.scan)
         _refresh_mounts(snapshots)
@@ -658,7 +658,7 @@ def create_hub_app(
         }
 
     @app.post("/hub/repos")
-    async def create_repo(payload: HubCreateRepoRequest):
+    def create_repo(payload: HubCreateRepoRequest):
         git_url = payload.git_url
         repo_id = payload.repo_id
         if not repo_id and not git_url:
@@ -696,7 +696,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.get("/hub/repos/{repo_id}/remove-check")
-    async def remove_repo_check(repo_id: str):
+    def remove_repo_check(repo_id: str):
         safe_log(app.state.logger, logging.INFO, f"Hub remove-check {repo_id}")
         try:
             return await asyncio.to_thread(
@@ -706,7 +706,7 @@ def create_hub_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/hub/repos/{repo_id}/remove")
-    async def remove_repo(repo_id: str, payload: Optional[HubRemoveRepoRequest] = None):
+    def remove_repo(repo_id: str, payload: Optional[HubRemoveRepoRequest] = None):
         payload = payload or HubRemoveRepoRequest()
         force = payload.force
         delete_dir = payload.delete_dir
@@ -730,7 +730,7 @@ def create_hub_app(
         return {"status": "ok"}
 
     @app.post("/hub/worktrees/create")
-    async def create_worktree(payload: HubCreateWorktreeRequest):
+    def create_worktree(payload: HubCreateWorktreeRequest):
         base_repo_id = payload.base_repo_id
         branch = payload.branch
         force = payload.force
@@ -753,7 +753,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/worktrees/cleanup")
-    async def cleanup_worktree(payload: HubCleanupWorktreeRequest):
+    def cleanup_worktree(payload: HubCleanupWorktreeRequest):
         worktree_repo_id = payload.worktree_repo_id
         delete_branch = payload.delete_branch
         delete_remote = payload.delete_remote
@@ -775,7 +775,7 @@ def create_hub_app(
         return {"status": "ok"}
 
     @app.post("/hub/repos/{repo_id}/run")
-    async def run_repo(repo_id: str, payload: Optional[RunControlRequest] = None):
+    def run_repo(repo_id: str, payload: Optional[RunControlRequest] = None):
         once = payload.once if payload else False
         safe_log(
             app.state.logger,
@@ -794,7 +794,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/stop")
-    async def stop_repo(repo_id: str):
+    def stop_repo(repo_id: str):
         safe_log(app.state.logger, logging.INFO, f"Hub stop {repo_id}")
         try:
             snapshot = await asyncio.to_thread(context.supervisor.stop_repo, repo_id)
@@ -803,7 +803,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/resume")
-    async def resume_repo(repo_id: str, payload: Optional[RunControlRequest] = None):
+    def resume_repo(repo_id: str, payload: Optional[RunControlRequest] = None):
         once = payload.once if payload else False
         safe_log(
             app.state.logger,
@@ -822,7 +822,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/kill")
-    async def kill_repo(repo_id: str):
+    def kill_repo(repo_id: str):
         safe_log(app.state.logger, logging.INFO, f"Hub kill {repo_id}")
         try:
             snapshot = await asyncio.to_thread(context.supervisor.kill_repo, repo_id)
@@ -831,7 +831,7 @@ def create_hub_app(
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/init")
-    async def init_repo(repo_id: str):
+    def init_repo(repo_id: str):
         safe_log(app.state.logger, logging.INFO, f"Hub init {repo_id}")
         try:
             snapshot = await asyncio.to_thread(context.supervisor.init_repo, repo_id)

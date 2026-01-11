@@ -27,6 +27,11 @@ from .shared import (
 )
 
 ALT_SCREEN_ENTER = b"\x1b[?1049h"
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
 
 
 def build_base_routes(static_dir: Path) -> APIRouter:
@@ -78,11 +83,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         return StreamingResponse(
             state_stream(engine, manager, logger=request.app.state.logger),
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            },
+            headers=SSE_HEADERS,
         )
 
     @router.get("/api/logs")
@@ -109,11 +110,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         return StreamingResponse(
             log_stream(engine.log_path),
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            },
+            headers=SSE_HEADERS,
         )
 
     @router.websocket("/api/terminal")
