@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import socket
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Coroutine, Optional, Sequence
 
@@ -36,8 +37,15 @@ from .config import (
     TelegramMediaCandidate,
 )
 from .constants import (
+    CACHE_CLEANUP_INTERVAL_SECONDS,
+    COALESCE_BUFFER_TTL_SECONDS,
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     DEFAULT_WORKSPACE_STATE_ROOT,
+    MODEL_PENDING_TTL_SECONDS,
+    PENDING_APPROVAL_TTL_SECONDS,
+    REASONING_BUFFER_TTL_SECONDS,
+    SELECTION_STATE_TTL_SECONDS,
+    TURN_PREVIEW_TTL_SECONDS,
     TurnKey,
 )
 from .dispatch import dispatch_update
@@ -161,6 +169,8 @@ class TelegramBotService(
             collections.OrderedDict()
         )
         self._outbox_task: Optional[asyncio.Task[None]] = None
+        self._cache_cleanup_task: Optional[asyncio.Task[None]] = None
+        self._cache_timestamps: dict[str, dict[object, float]] = {}
         self._outbox_manager = TelegramOutboxManager(
             self._store,
             send_message=self._send_message,
@@ -369,6 +379,7 @@ class TelegramBotService(
             self._outbox_task = asyncio.create_task(self._outbox_manager.run_loop())
             self._voice_task = asyncio.create_task(self._voice_manager.run_loop())
             self._housekeeping_task = asyncio.create_task(self._housekeeping_loop())
+            self._cache_cleanup_task = asyncio.create_task(self._cache_cleanup_loop())
             log_event(
                 self._logger,
                 logging.INFO,
@@ -439,6 +450,12 @@ class TelegramBotService(
                     self._housekeeping_task.cancel()
                     try:
                         await self._housekeeping_task
+                    except asyncio.CancelledError:
+                        pass
+                if self._cache_cleanup_task is not None:
+                    self._cache_cleanup_task.cancel()
+                    try:
+                        await self._cache_cleanup_task
                     except asyncio.CancelledError:
                         pass
             finally:
@@ -585,10 +602,10 @@ class TelegramBotService(
         stored = self._store.update_last_update_id_global(last_update_id)
         if updates:
             max_update_id = max(update.update_id for update in updates)
-            log_event(
-                self._logger,
-                logging.INFO,
-                "telegram.poll.offset.updated",
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.poll.offset.updated",
                 incoming_update_id=max_update_id,
                 stored_global_update_id=stored,
                 poller_offset=offset,
@@ -605,6 +622,101 @@ class TelegramBotService(
             return
         except Exception as exc:
             log_event(self._logger, logging.WARNING, "telegram.task.failed", exc=exc)
+
+    def _touch_cache_timestamp(self, cache_name: str, key: object) -> None:
+        cache = self._cache_timestamps.setdefault(cache_name, {})
+        cache[key] = time.monotonic()
+
+    def _evict_expired_cache_entries(self, cache_name: str, ttl_seconds: float) -> None:
+        cache = self._cache_timestamps.get(cache_name)
+        if not cache:
+            return
+        now = time.monotonic()
+        expired: list[object] = []
+        for key, updated_at in cache.items():
+            if (now - updated_at) > ttl_seconds:
+                expired.append(key)
+        if not expired:
+            return
+        for key in expired:
+            cache.pop(key, None)
+            if cache_name == "reasoning_buffers":
+                self._reasoning_buffers.pop(key, None)
+            elif cache_name == "turn_preview":
+                self._turn_preview_text.pop(key, None)
+                self._turn_preview_updated_at.pop(key, None)
+            elif cache_name == "coalesced_buffers":
+                self._coalesced_buffers.pop(key, None)
+                self._coalesce_locks.pop(key, None)
+            elif cache_name == "resume_options":
+                self._resume_options.pop(key, None)
+            elif cache_name == "bind_options":
+                self._bind_options.pop(key, None)
+            elif cache_name == "update_options":
+                self._update_options.pop(key, None)
+            elif cache_name == "update_confirm_options":
+                self._update_confirm_options.pop(key, None)
+            elif cache_name == "review_commit_options":
+                self._review_commit_options.pop(key, None)
+            elif cache_name == "review_commit_subjects":
+                self._review_commit_subjects.pop(key, None)
+            elif cache_name == "pending_review_custom":
+                self._pending_review_custom.pop(key, None)
+            elif cache_name == "compact_pending":
+                self._compact_pending.pop(key, None)
+            elif cache_name == "model_options":
+                self._model_options.pop(key, None)
+            elif cache_name == "model_pending":
+                self._model_pending.pop(key, None)
+            elif cache_name == "pending_approvals":
+                self._pending_approvals.pop(key, None)
+
+    async def _cache_cleanup_loop(self) -> None:
+        interval = max(CACHE_CLEANUP_INTERVAL_SECONDS, 1.0)
+        while True:
+            await asyncio.sleep(interval)
+            self._evict_expired_cache_entries(
+                "reasoning_buffers", REASONING_BUFFER_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "turn_preview", TURN_PREVIEW_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "coalesced_buffers", COALESCE_BUFFER_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "resume_options", SELECTION_STATE_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "bind_options", SELECTION_STATE_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "update_options", SELECTION_STATE_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "update_confirm_options", SELECTION_STATE_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "review_commit_options", SELECTION_STATE_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "review_commit_subjects", SELECTION_STATE_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "pending_review_custom", SELECTION_STATE_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "compact_pending", SELECTION_STATE_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "model_options", SELECTION_STATE_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "model_pending", MODEL_PENDING_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "pending_approvals", PENDING_APPROVAL_TTL_SECONDS
+            )
 
     async def _interrupt_timeout_check(
         self, key: str, turn_id: str, message_id: int

@@ -162,6 +162,7 @@ class TelegramApprovalHandlers:
             future=future,
         )
         self._pending_approvals[request_id] = pending
+        self._touch_cache_timestamp("pending_approvals", request_id)
         runtime = self._router.runtime_for(ctx.topic_key)
         runtime.pending_request_id = request_id
         try:

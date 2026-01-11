@@ -243,6 +243,7 @@ async def buffer_coalesced_message(
             handlers._coalesced_buffers[key] = buffer
         else:
             buffer.parts.append(text)
+        handlers._touch_cache_timestamp("coalesced_buffers", key)
         task = buffer.task
         if task is not None and task is not asyncio.current_task():
             task.cancel()

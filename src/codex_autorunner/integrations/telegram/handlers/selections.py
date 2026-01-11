@@ -179,6 +179,7 @@ class TelegramSelectionHandlers:
             return
         self._model_options.pop(key, None)
         self._model_pending[key] = option
+        self._touch_cache_timestamp("model_pending", key)
         if option.default_effort:
             prompt = (
                 f"Select a reasoning effort for {option.model_id} "

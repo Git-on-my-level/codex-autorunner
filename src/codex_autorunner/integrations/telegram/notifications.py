@@ -49,6 +49,7 @@ class TelegramNotificationHandlers:
             buffer = self._reasoning_buffers.get(item_id, "")
             buffer = f"{buffer}{delta}"
             self._reasoning_buffers[item_id] = buffer
+            self._touch_cache_timestamp("reasoning_buffers", item_id)
             preview = _extract_first_bold_span(buffer)
             if preview:
                 await self._update_placeholder_preview(
@@ -62,6 +63,7 @@ class TelegramNotificationHandlers:
             buffer = self._reasoning_buffers.get(item_id, "")
             buffer = f"{buffer}\n\n"
             self._reasoning_buffers[item_id] = buffer
+            self._touch_cache_timestamp("reasoning_buffers", item_id)
             return
         if method == "item/completed":
             item = params.get("item") if isinstance(params, dict) else None
@@ -93,6 +95,7 @@ class TelegramNotificationHandlers:
             return
         self._turn_preview_text[turn_key] = normalized
         self._turn_preview_updated_at[turn_key] = now
+        self._touch_cache_timestamp("turn_preview", turn_key)
         if STREAM_PREVIEW_PREFIX:
             message_text = f"{STREAM_PREVIEW_PREFIX} {normalized}"
         else:

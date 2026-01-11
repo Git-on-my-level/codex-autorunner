@@ -2101,6 +2101,7 @@ class TelegramCommandHandlers:
             state = SelectionState(items=items)
             keyboard = self._build_bind_keyboard(state)
             self._bind_options[key] = state
+            self._touch_cache_timestamp("bind_options", key)
             await self._send_message(
                 message.chat_id,
                 self._selection_prompt(BIND_PICKER_PROMPT, state),
@@ -2509,6 +2510,7 @@ class TelegramCommandHandlers:
         state = SelectionState(items=items, button_labels=button_labels)
         keyboard = self._build_resume_keyboard(state)
         self._resume_options[key] = state
+        self._touch_cache_timestamp("resume_options", key)
         await self._send_message(
             message.chat_id,
             self._selection_prompt(RESUME_PICKER_PROMPT, state),
@@ -3251,6 +3253,7 @@ class TelegramCommandHandlers:
                 options={option.model_id: option for option in options},
             )
             self._model_options[key] = state
+            self._touch_cache_timestamp("model_options", key)
             try:
                 keyboard = self._build_model_keyboard(state)
             except ValueError:
@@ -3618,6 +3621,7 @@ class TelegramCommandHandlers:
                     instructions = instructions[1:]
                 if not instructions.strip():
                     self._pending_review_custom[key] = {"delivery": delivery}
+                    self._touch_cache_timestamp("pending_review_custom", key)
                     cancel_keyboard = build_inline_keyboard(
                         [
                             [
@@ -3680,6 +3684,8 @@ class TelegramCommandHandlers:
         state = ReviewCommitSelectionState(items=items, delivery=delivery)
         self._review_commit_options[key] = state
         self._review_commit_subjects[key] = subjects
+        self._touch_cache_timestamp("review_commit_options", key)
+        self._touch_cache_timestamp("review_commit_subjects", key)
         keyboard = self._build_review_commit_keyboard(state)
         await self._send_message(
             message.chat_id,
@@ -4459,6 +4465,7 @@ class TelegramCommandHandlers:
             message_id=summary_message_id,
             created_at=now_iso(),
         )
+        self._touch_cache_timestamp("compact_pending", key)
 
     async def _handle_compact_callback(
         self,
@@ -4807,6 +4814,7 @@ class TelegramCommandHandlers:
         state = SelectionState(items=list(UPDATE_TARGET_OPTIONS))
         keyboard = self._build_update_keyboard(state)
         self._update_options[key] = state
+        self._touch_cache_timestamp("update_options", key)
         await self._send_message(
             message.chat_id,
             prompt,
@@ -4825,6 +4833,7 @@ class TelegramCommandHandlers:
         state = SelectionState(items=list(UPDATE_TARGET_OPTIONS))
         keyboard = self._build_update_keyboard(state)
         self._update_options[key] = state
+        self._touch_cache_timestamp("update_options", key)
         await self._update_selection_message(key, callback, prompt, keyboard)
 
     def _has_active_turns(self) -> bool:
@@ -4833,6 +4842,7 @@ class TelegramCommandHandlers:
     async def _prompt_update_confirmation(self, message: TelegramMessage) -> None:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         self._update_confirm_options[key] = True
+        self._touch_cache_timestamp("update_confirm_options", key)
         await self._send_message(
             message.chat_id,
             "An active Codex turn is running. Updating will restart the service. Continue?",
