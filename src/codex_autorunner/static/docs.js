@@ -6,6 +6,8 @@ import {
   resolvePath,
   getAuthToken,
   isMobileViewport,
+  getUrlParams,
+  updateUrlParams,
 } from "./utils.js";
 import { loadState } from "./state.js";
 import { publish } from "./bus.js";
@@ -146,6 +148,14 @@ function truncateText(text, maxLen) {
   return normalized.length > maxLen
     ? normalized.slice(0, maxLen) + "…"
     : normalized;
+}
+
+function getDocFromUrl() {
+  const params = getUrlParams();
+  const kind = params.get("doc");
+  if (!kind) return null;
+  if (kind === "snapshot") return kind;
+  return DOC_TYPES.includes(kind) ? kind : null;
 }
 
 /**
@@ -962,6 +972,7 @@ function setDoc(kind) {
     reloadPatch(kind, true);
     renderChat(kind);
   }
+  updateUrlParams({ doc: kind });
 }
 
 async function importIssueToSpec() {
@@ -1201,6 +1212,10 @@ function initDocVoice() {
 }
 
 export function initDocs() {
+  const urlDoc = getDocFromUrl();
+  if (urlDoc) {
+    activeDoc = urlDoc;
+  }
   docButtons.forEach((btn) =>
     btn.addEventListener("click", () => {
       setDoc(btn.dataset.doc);

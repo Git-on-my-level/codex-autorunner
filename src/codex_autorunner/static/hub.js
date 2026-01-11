@@ -667,7 +667,9 @@ function buildActions(repo) {
   const actions = [];
   const missing = !repo.exists_on_disk;
   const kind = repo.kind || "base";
-  if (!missing && (repo.init_error || repo.mount_error)) {
+  if (!missing && repo.mount_error) {
+    actions.push({ key: "init", label: "Retry mount", kind: "primary" });
+  } else if (!missing && repo.init_error) {
     actions.push({
       key: "init",
       label: repo.initialized ? "Re-init" : "Init",
@@ -691,6 +693,31 @@ function buildActions(repo) {
     actions.push({ key: "remove_repo", label: "Remove", kind: "danger" });
   }
   return actions;
+}
+
+function buildMountBadge(repo) {
+  if (!repo) return "";
+  const missing = !repo.exists_on_disk;
+  let label = "";
+  let className = "pill pill-small";
+  let title = "";
+  if (missing) {
+    label = "missing";
+    className += " pill-error";
+    title = "Repo path not found on disk";
+  } else if (repo.mount_error) {
+    label = "mount error";
+    className += " pill-error";
+    title = repo.mount_error;
+  } else if (repo.mounted === true) {
+    label = "mounted";
+    className += " pill-idle";
+  } else {
+    label = "not mounted";
+    className += " pill-warn";
+  }
+  const titleAttr = title ? ` title="${title}"` : "";
+  return `<span class="${className} hub-mount-pill"${titleAttr}>${label}</span>`;
 }
 
 function inferBaseId(repo) {
@@ -756,6 +783,7 @@ function renderRepos(repos) {
       )
       .join("");
 
+    const mountBadge = buildMountBadge(repo);
     const lockBadge =
       repo.lock_status && repo.lock_status !== "unlocked"
         ? `<span class="pill pill-small pill-warn">${repo.lock_status.replace(
@@ -816,6 +844,7 @@ function renderRepos(repos) {
       <div class="hub-repo-row">
         <div class="hub-repo-left">
             <span class="pill pill-small hub-status-pill">${repo.status}</span>
+            ${mountBadge}
             ${lockBadge}
             ${initBadge}
           </div>

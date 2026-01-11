@@ -1,4 +1,5 @@
 import { publish } from "./bus.js";
+import { getUrlParams, updateUrlParams } from "./utils.js";
 
 const tabs = [];
 
@@ -21,6 +22,7 @@ export function initTabs(defaultTab = "dashboard") {
     const buttons = container.querySelectorAll(".tab");
     buttons.forEach((btn) => btn.classList.toggle("active", btn.dataset.target === id));
     
+    updateUrlParams({ tab: id });
     publish("tab:change", id);
   };
 
@@ -33,8 +35,15 @@ export function initTabs(defaultTab = "dashboard") {
     container.appendChild(btn);
   });
 
-  if (tabs.some(t => t.id === defaultTab)) {
-    setActivePanel(defaultTab);
+  const params = getUrlParams();
+  const requested = params.get("tab");
+  const initialTab = tabs.some((t) => t.id === requested)
+    ? requested
+    : tabs.some((t) => t.id === defaultTab)
+      ? defaultTab
+      : tabs[0]?.id;
+  if (initialTab) {
+    setActivePanel(initialTab);
   } else if (tabs.length > 0) {
     setActivePanel(tabs[0].id);
   }

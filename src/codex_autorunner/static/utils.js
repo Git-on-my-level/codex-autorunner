@@ -53,6 +53,30 @@ export function resolvePath(path) {
   return `${BASE_PATH}/${path}`;
 }
 
+export function getUrlParams() {
+  try {
+    return new URLSearchParams(window.location.search || "");
+  } catch (_err) {
+    return new URLSearchParams();
+  }
+}
+
+export function updateUrlParams(updates = {}) {
+  if (!window?.location?.href) return;
+  if (typeof history === "undefined" || !history.replaceState) return;
+  const url = new URL(window.location.href);
+  const params = url.searchParams;
+  Object.entries(updates).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") {
+      params.delete(key);
+    } else {
+      params.set(key, String(value));
+    }
+  });
+  url.search = params.toString();
+  history.replaceState(null, "", url.toString());
+}
+
 export function buildWsUrl(path, query = "") {
   const resolved = resolvePath(path);
   const normalized = resolved.startsWith("/") ? resolved : `/${resolved}`;

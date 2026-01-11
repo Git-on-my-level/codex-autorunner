@@ -1,4 +1,4 @@
-import { api, flash, streamEvents } from "./utils.js";
+import { api, flash, streamEvents, getUrlParams, updateUrlParams } from "./utils.js";
 import { publish, subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";
 import { CONSTANTS } from "./constants.js";
@@ -370,6 +370,30 @@ function updateLoadOlderButton() {
   }
 }
 
+function applyLogUrlState() {
+  const params = getUrlParams();
+  const runId = params.get("run");
+  const tail = params.get("tail");
+  if (runId !== null && logRunIdInput) {
+    logRunIdInput.value = runId;
+  }
+  if (tail !== null && logTailInput) {
+    logTailInput.value = tail;
+  }
+  if (runId) {
+    isViewingTail = false;
+  }
+}
+
+function syncLogUrlState() {
+  const runId = logRunIdInput?.value?.trim() || "";
+  const tail = logTailInput?.value?.trim() || "";
+  updateUrlParams({
+    run: runId || null,
+    tail: runId ? null : tail || null,
+  });
+}
+
 function renderLogWindow({ startIndex = null, followTail = true } = {}) {
   const output = document.getElementById("log-output");
 
@@ -489,6 +513,7 @@ function setLogStreamButton(active) {
 }
 
 async function loadLogs() {
+  syncLogUrlState();
   const runId = logRunIdInput.value;
   const tail = logTailInput.value || "200";
   const params = new URLSearchParams();
@@ -594,6 +619,7 @@ function renderLogs() {
 }
 
 export function initLogs() {
+  applyLogUrlState();
   document.getElementById("load-logs").addEventListener("click", loadLogs);
   toggleLogStreamButton.addEventListener("click", () => {
     if (stopLogStream) {
