@@ -5,6 +5,7 @@ from urllib.parse import parse_qs
 from fastapi.responses import RedirectResponse, Response
 
 from ..core.config import _normalize_base_path
+from .static_assets import security_headers
 
 
 class BasePathRouterMiddleware:
@@ -222,3 +223,43 @@ class AuthTokenMiddleware:
             return await self._reject_http(scope, receive, send)
 
         return await self.app(scope, receive, send)
+
+
+class SecurityHeadersMiddleware:
+    """Attach security headers to HTML responses."""
+
+    def __init__(self, app):
+        self.app = app
+        self.headers = security_headers()
+
+    def __getattr__(self, name):
+        return getattr(self.app, name)
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        async def send_wrapper(message):
+            if message.get("type") == "http.response.start":
+                headers = list(message.get("headers") or [])
+                existing = {name.lower() for name, _ in headers}
+                content_type = None
+                for name, value in headers:
+                    if name.lower() == b"content-type":
+                        try:
+                            content_type = value.decode("latin-1").lower()
+                        except Exception:
+                            content_type = None
+                        break
+                if content_type and content_type.startswith("text/html"):
+                    for name, value in self.headers.items():
+                        key = name.lower().encode("latin-1")
+                        if key in existing:
+                            continue
+                        headers.append(
+                            (name.encode("latin-1"), value.encode("latin-1"))
+                        )
+                    message["headers"] = headers
+            await send(message)
+
+        return await self.app(scope, receive, send_wrapper)

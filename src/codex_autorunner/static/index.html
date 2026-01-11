@@ -1,6 +1,27 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script>
+      (() => {
+        const AUTH_TOKEN_KEY = "car_auth_token";
+        const search = window.location.search || "";
+        if (!search) return;
+        const params = new URLSearchParams(search);
+        const token = params.get("token");
+        if (!token) return;
+        try {
+          sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+        } catch (_err) {
+          // Ignore storage errors; token can still be used for this load.
+        }
+        params.delete("token");
+        if (typeof history !== "undefined" && history.replaceState) {
+          const next = new URL(window.location.href);
+          next.search = params.toString();
+          history.replaceState(null, "", next.toString());
+        }
+      })();
+    </script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />

@@ -91,12 +91,31 @@ def render_index_html(static_dir: Path, version: Optional[str]) -> str:
     return text
 
 
-def index_response_headers() -> dict[str, str]:
+def security_headers() -> dict[str, str]:
     return {
+        "Content-Security-Policy": (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data:; "
+            "font-src 'self' data:; "
+            "connect-src 'self' ws: wss:; "
+            "frame-ancestors 'none'"
+        ),
+        "Referrer-Policy": "same-origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+    }
+
+
+def index_response_headers() -> dict[str, str]:
+    headers = {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         "Pragma": "no-cache",
         "Expires": "0",
     }
+    headers.update(security_headers())
+    return headers
 
 
 def resolve_static_dir() -> tuple[Path, Optional[ExitStack]]:

@@ -33,7 +33,11 @@ from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
 from ..voice import VoiceConfig, VoiceService
-from .middleware import AuthTokenMiddleware, BasePathRouterMiddleware
+from .middleware import (
+    AuthTokenMiddleware,
+    BasePathRouterMiddleware,
+    SecurityHeadersMiddleware,
+)
 from .runner_manager import RunnerManager
 from .schemas import (
     HubCleanupWorktreeRequest,
@@ -403,6 +407,7 @@ def create_app(
         asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
+    asgi_app = SecurityHeadersMiddleware(asgi_app)
 
     return asgi_app
 
@@ -853,6 +858,7 @@ def create_hub_app(
         asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
+    asgi_app = SecurityHeadersMiddleware(asgi_app)
 
     return asgi_app
 
