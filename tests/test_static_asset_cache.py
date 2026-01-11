@@ -122,3 +122,20 @@ def test_create_app_serves_cached_static_assets(tmp_path: Path, monkeypatch) -> 
     assert res.status_code == 200
     static_res = client.get("/static/app.js")
     assert static_res.status_code == 200
+
+
+def test_static_assets_cached_and_compressed(tmp_path: Path, monkeypatch) -> None:
+    seed_repo_files(tmp_path, force=True, git_required=False)
+    source_dir = tmp_path / "source_static"
+    _write_required_assets(source_dir)
+    (source_dir / "big.js").write_text("a" * 2048, encoding="utf-8")
+    monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
+    app = create_app(tmp_path)
+    client = TestClient(app)
+    cache_res = client.get("/static/app.js")
+    assert cache_res.status_code == 200
+    cache_control = cache_res.headers.get("Cache-Control", "")
+    assert "max-age=31536000" in cache_control
+    gzip_res = client.get("/static/big.js", headers={"Accept-Encoding": "gzip"})
+    assert gzip_res.status_code == 200
+    assert gzip_res.headers.get("Content-Encoding") == "gzip"

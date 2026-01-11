@@ -12,6 +12,7 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
 from ..core.config import ConfigError, HubConfig, _normalize_base_path, load_config
@@ -404,7 +405,12 @@ def create_app(
     context = _build_app_context(repo_root, base_path)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
     _apply_app_context(app, context)
-    app.mount("/static", StaticFiles(directory=context.static_dir), name="static")
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+    app.mount(
+        "/static",
+        CacheStaticFiles(directory=context.static_dir),
+        name="static",
+    )
     # Route handlers
     app.include_router(build_repo_router(context.static_dir))
 
@@ -426,7 +432,12 @@ def create_hub_app(
     context = _build_hub_context(hub_root, base_path)
     app = FastAPI(redirect_slashes=False)
     _apply_hub_context(app, context)
-    app.mount("/static", StaticFiles(directory=context.static_dir), name="static")
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+    app.mount(
+        "/static",
+        CacheStaticFiles(directory=context.static_dir),
+        name="static",
+    )
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
     repo_apps: dict[str, ASGIApp] = {}
@@ -980,3 +991,18 @@ def _resolve_auth_token(env_name: str) -> Optional[str]:
         return None
     value = value.strip()
     return value or None
+
+
+_STATIC_CACHE_CONTROL = "public, max-age=31536000, immutable"
+
+
+class CacheStaticFiles(StaticFiles):
+    def __init__(self, *args, cache_control: str = _STATIC_CACHE_CONTROL, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._cache_control = cache_control
+
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 206, 304):
+            response.headers.setdefault("Cache-Control", self._cache_control)
+        return response
