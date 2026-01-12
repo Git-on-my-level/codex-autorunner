@@ -1327,9 +1327,11 @@ class TelegramBotClient:
             method=method,
             retry_after=retry_after,
         )
-        await self._wait_for_rate_limit(method)
+        await self._wait_for_rate_limit(method, min_delay=delay)
 
-    async def _wait_for_rate_limit(self, method: str) -> None:
+    async def _wait_for_rate_limit(
+        self, method: str, min_delay: Optional[float] = None
+    ) -> None:
         lock = self._ensure_rate_limit_lock()
         async with lock:
             until = self._rate_limit_until
@@ -1337,6 +1339,8 @@ class TelegramBotClient:
             return
         loop = asyncio.get_running_loop()
         delay = until - loop.time()
+        if min_delay is not None and delay < min_delay:
+            delay = min_delay
         if delay <= 0:
             async with lock:
                 if self._rate_limit_until == until:
