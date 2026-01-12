@@ -129,6 +129,24 @@ def test_api_docs_includes_summary(repo: Path):
     assert data["summary"] == "summary body\n"
 
 
+def test_api_docs_clear_returns_full_payload_and_resets_work_docs(repo: Path):
+    client = _client(repo)
+    res = client.post("/api/docs/clear")
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert set(data.keys()) >= {"todo", "progress", "opinions", "spec", "summary"}
+    assert data["todo"] == "# TODO\n\n"
+    assert data["progress"] == "# Progress\n\n"
+    assert data["opinions"] == "# Opinions\n\n"
+    assert data["spec"] == "spec body\n"
+    assert data["summary"] == "summary body\n"
+
+    work_dir = repo / ".codex-autorunner"
+    assert (work_dir / "TODO.md").read_text(encoding="utf-8") == "# TODO\n\n"
+    assert (work_dir / "PROGRESS.md").read_text(encoding="utf-8") == "# Progress\n\n"
+    assert (work_dir / "OPINIONS.md").read_text(encoding="utf-8") == "# Opinions\n\n"
+
+
 def test_chat_accepts_summary_kind(repo: Path, monkeypatch: pytest.MonkeyPatch):
     prompts: list[str] = []
 

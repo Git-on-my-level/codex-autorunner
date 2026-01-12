@@ -205,6 +205,8 @@ def build_docs_routes() -> APIRouter:
         engine = request.app.state.engine
         try:
             docs = clear_work_docs(engine)
+            docs["spec"] = engine.docs.read_doc("spec")
+            docs["summary"] = engine.docs.read_doc("summary")
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return docs
