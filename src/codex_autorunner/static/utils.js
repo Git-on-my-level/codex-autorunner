@@ -260,6 +260,7 @@ export function streamEvents(path, options = {}) {
               dataLines.push(line.slice(5).trimStart());
             }
           }
+          if (!dataLines.length) continue;
           const data = dataLines.join("\n");
           if (onMessage) onMessage(data, event || "message");
         }
