@@ -25,7 +25,6 @@ from ..web.schemas import (
 )
 from ..web.static_assets import missing_static_assets
 
-<<<<<<< ours
 _pid_is_running = update_core._pid_is_running
 _system_update_worker = update_core._system_update_worker
 _update_lock_active = update_core._update_lock_active
@@ -39,7 +38,7 @@ def build_system_routes() -> APIRouter:
     router = APIRouter()
 
     @router.get("/health", response_model=SystemHealthResponse)
-    def system_health(request: Request):
+    async def system_health(request: Request):
         try:
             config = request.app.state.config
         except AttributeError:
@@ -78,7 +77,7 @@ def build_system_routes() -> APIRouter:
         }
 
     @router.get("/system/update/check", response_model=SystemUpdateCheckResponse)
-    def system_update_check(request: Request):
+    async def system_update_check(request: Request):
         """
         Check if an update is available by comparing local git state vs remote.
         If local git state is unavailable, report that an update may be available.
@@ -109,7 +108,9 @@ def build_system_routes() -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e)) from e
 
     @router.post("/system/update", response_model=SystemUpdateResponse)
-    def system_update(request: Request, payload: Optional[SystemUpdateRequest] = None):
+    async def system_update(
+        request: Request, payload: Optional[SystemUpdateRequest] = None
+    ):
         """
         Pull latest code and refresh the running service.
         This will restart the server if successful.
@@ -165,13 +166,8 @@ def build_system_routes() -> APIRouter:
             raise HTTPException(status_code=500, detail=str(e)) from e
 
     @router.get("/system/update/status", response_model=SystemUpdateStatusResponse)
-<<<<<<< ours
     async def system_update_status():
         status = await asyncio.to_thread(_read_update_status)
-=======
-    def system_update_status():
-        status = _read_update_status()
->>>>>>> theirs
         if status is None:
             return {"status": "unknown", "message": "No update status recorded."}
         return status

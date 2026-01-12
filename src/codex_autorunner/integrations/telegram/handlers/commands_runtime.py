@@ -74,6 +74,7 @@ from ..constants import (
 from ..handlers import messages as message_handlers
 from ..helpers import (
     _approval_age_seconds,
+    _clear_pending_compact_seed,
     _clear_policy_overrides,
     _coerce_model_options,
     _coerce_thread_list,
@@ -81,7 +82,6 @@ from ..helpers import (
     _compose_agent_response,
     _compose_interrupt_response,
     _consume_raw_token,
-    _clear_pending_compact_seed,
     _extract_command_result,
     _extract_first_user_preview,
     _extract_rate_limits,
@@ -4374,9 +4374,7 @@ class TelegramCommandHandlers:
         record = self._router.update_topic(
             message.chat_id,
             message.thread_id,
-            lambda record: _set_pending_compact_seed(
-                record, seed_text, new_thread_id
-            ),
+            lambda record: _set_pending_compact_seed(record, seed_text, new_thread_id),
         )
         log_event(
             self._logger,

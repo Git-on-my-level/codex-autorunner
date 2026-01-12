@@ -299,9 +299,7 @@ class TelegramBotConfig:
         if app_server_max_handles <= 0:
             app_server_max_handles = None
         app_server_idle_ttl_seconds = int(
-            app_server_raw.get(
-                "idle_ttl_seconds", DEFAULT_APP_SERVER_IDLE_TTL_SECONDS
-            )
+            app_server_raw.get("idle_ttl_seconds", DEFAULT_APP_SERVER_IDLE_TTL_SECONDS)
         )
         if app_server_idle_ttl_seconds <= 0:
             app_server_idle_ttl_seconds = None
