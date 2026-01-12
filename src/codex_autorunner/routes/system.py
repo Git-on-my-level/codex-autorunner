@@ -25,6 +25,7 @@ from ..web.schemas import (
 )
 from ..web.static_assets import missing_static_assets
 
+<<<<<<< ours
 _pid_is_running = update_core._pid_is_running
 _system_update_worker = update_core._system_update_worker
 _update_lock_active = update_core._update_lock_active

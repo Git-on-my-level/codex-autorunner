@@ -17,10 +17,10 @@ from ....core.config import load_config
 from ....core.injected_context import wrap_injected_context
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
+from ....core.update import _normalize_update_target, _spawn_update_process
 from ....core.utils import canonicalize_path
 from ....integrations.github.service import GitHubService
 from ....manifest import load_manifest
-from ....core.update import _normalize_update_target, _spawn_update_process
 from ...app_server.client import (
     CodexAppServerClient,
     CodexAppServerDisconnected,

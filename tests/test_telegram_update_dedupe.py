@@ -27,8 +27,8 @@ async def test_update_dedupe_skips_frequent_persist(
         key = "chat:thread"
         now = 100.0
         service._last_update_ids[key] = 10
-        service._last_update_persisted_at[key] = (
-            now - (UPDATE_ID_PERSIST_INTERVAL_SECONDS / 2)
+        service._last_update_persisted_at[key] = now - (
+            UPDATE_ID_PERSIST_INTERVAL_SECONDS / 2
         )
         calls: list[int] = []
 

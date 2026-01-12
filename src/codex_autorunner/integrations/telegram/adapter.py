@@ -10,6 +10,7 @@ import httpx
 from ...core.logging_utils import log_event
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .retry import _extract_retry_after_seconds
+
 _RATE_LIMIT_BUFFER_SECONDS = 0.0
 
 INTERRUPT_ALIASES = {
@@ -1234,6 +1235,7 @@ class TelegramBotClient:
 
     async def _request(self, method: str, payload: dict[str, Any]) -> Any:
         url = f"{self._base_url}/{method}"
+
         async def send() -> httpx.Response:
             return await self._client.post(url, json=payload)
 
@@ -1243,6 +1245,7 @@ class TelegramBotClient:
         self, method: str, data: dict[str, Any], files: dict[str, Any]
     ) -> Any:
         url = f"{self._base_url}/{method}"
+
         async def send() -> httpx.Response:
             return await self._client.post(url, data=data, files=files)
 

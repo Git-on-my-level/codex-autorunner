@@ -7,7 +7,10 @@ import pytest
 from codex_autorunner.core.state import now_iso
 from codex_autorunner.integrations.telegram import outbox as outbox_module
 from codex_autorunner.integrations.telegram.outbox import TelegramOutboxManager
-from codex_autorunner.integrations.telegram.state import OutboxRecord, TelegramStateStore
+from codex_autorunner.integrations.telegram.state import (
+    OutboxRecord,
+    TelegramStateStore,
+)
 
 
 @pytest.mark.anyio

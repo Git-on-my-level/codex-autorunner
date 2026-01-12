@@ -20,7 +20,6 @@ from ...core.utils import (
     subprocess_env,
 )
 from ...integrations.github.service import find_github_links, parse_github_url
-from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .constants import (
     DEFAULT_MODEL_LIST_LIMIT,
     DEFAULT_PAGE_SIZE,
@@ -30,6 +29,7 @@ from .constants import (
     RESUME_PREVIEW_USER_LIMIT,
     REVIEW_COMMIT_BUTTON_LABEL_LIMIT,
     SHELL_OUTPUT_TRUNCATION_SUFFIX,
+    TELEGRAM_MAX_MESSAGE_LENGTH,
     THREAD_LIST_PAGE_LIMIT,
     TRACE_MESSAGE_TOKENS,
     VALID_REASONING_EFFORTS,

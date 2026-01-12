@@ -19,6 +19,7 @@ async def test_spawned_task_tracking(tmp_path: Path) -> None:
     )
     service = TelegramBotService(config)
     try:
+
         async def _noop() -> None:
             return None
 

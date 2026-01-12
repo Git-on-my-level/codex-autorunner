@@ -468,9 +468,7 @@ class TelegramBotService(
                 if self._spawned_tasks:
                     for task in list(self._spawned_tasks):
                         task.cancel()
-                    await asyncio.gather(
-                        *self._spawned_tasks, return_exceptions=True
-                    )
+                    await asyncio.gather(*self._spawned_tasks, return_exceptions=True)
             finally:
                 try:
                     await self._bot.close()
@@ -619,10 +617,10 @@ class TelegramBotService(
             self._logger,
             logging.INFO,
             "telegram.poll.offset.updated",
-                incoming_update_id=max_update_id,
-                stored_global_update_id=stored,
-                poller_offset=offset,
-            )
+            incoming_update_id=max_update_id,
+            stored_global_update_id=stored,
+            poller_offset=offset,
+        )
 
     def _spawn_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task: asyncio.Task[Any] = asyncio.create_task(coro)
@@ -695,9 +693,7 @@ class TelegramBotService(
             self._evict_expired_cache_entries(
                 "reasoning_buffers", REASONING_BUFFER_TTL_SECONDS
             )
-            self._evict_expired_cache_entries(
-                "turn_preview", TURN_PREVIEW_TTL_SECONDS
-            )
+            self._evict_expired_cache_entries("turn_preview", TURN_PREVIEW_TTL_SECONDS)
             self._evict_expired_cache_entries(
                 "coalesced_buffers", COALESCE_BUFFER_TTL_SECONDS
             )
