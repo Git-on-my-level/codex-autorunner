@@ -902,6 +902,7 @@ class TelegramBotClient:
             self._owns_client = False
         self._rate_limit_until: Optional[float] = None
         self._rate_limit_lock: Optional[asyncio.Lock] = None
+        self._rate_limit_lock_loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def close(self) -> None:
         if self._owns_client:
@@ -1300,7 +1301,7 @@ class TelegramBotClient:
     def _ensure_rate_limit_lock(self) -> asyncio.Lock:
         loop = asyncio.get_running_loop()
         lock = self._rate_limit_lock
-        lock_loop = getattr(lock, "_loop", None) if lock else None
+        lock_loop = self._rate_limit_lock_loop
         if (
             lock is None
             or lock_loop is None
@@ -1309,6 +1310,7 @@ class TelegramBotClient:
         ):
             lock = asyncio.Lock()
             self._rate_limit_lock = lock
+            self._rate_limit_lock_loop = loop
             self._rate_limit_until = None
         return lock
 
