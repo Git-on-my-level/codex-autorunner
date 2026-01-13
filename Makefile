@@ -17,7 +17,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install
+.PHONY: install dev hooks test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts
 
 install:
 	$(PYTHON) -m pip install .
@@ -87,3 +87,6 @@ refresh-launchd:
 		PIPX_VENV="$(PIPX_VENV)" \
 		PIPX_PYTHON="$(PIPX_PYTHON)" \
 		scripts/safe-refresh-local-mac-hub.sh
+
+car-artifacts:
+	scripts/car-artifact-sizes.sh
