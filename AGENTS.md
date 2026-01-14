@@ -37,6 +37,9 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 ## Git commits
 - Use a longer timeout for `git commit` commands so pre-commit hooks can finish.
 
+## Releases
+- Release workflow details live in `docs/ops/release.md`.
+
 ## Make targets
 - Prefer running common scripts via `make` targets when available.
 

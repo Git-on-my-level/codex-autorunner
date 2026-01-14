@@ -1,4 +1,5 @@
 # codex-autorunner
+[![PyPI](https://img.shields.io/pypi/v/codex-autorunner.svg)](https://pypi.org/project/codex-autorunner/)
 
 An opinionated autorunner that uses the Codex CLI to work on large tasks via a simple loop. On each loop we feed the Codex instance the last one's final output along with core documents.
 1. TODO - Tracks long-horizon tasks
