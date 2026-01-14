@@ -1,4 +1,5 @@
 import dataclasses
+import ipaddress
 import json
 from os import PathLike
 from pathlib import Path
@@ -80,6 +81,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "port": 4173,
         "base_path": "",
         "auth_token_env": "",
+        "allowed_hosts": [],
+        "allowed_origins": [],
     },
     "notifications": {
         "enabled": "auto",
@@ -345,6 +348,8 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "port": 4173,
         "base_path": "",
         "auth_token_env": "",
+        "allowed_hosts": [],
+        "allowed_origins": [],
     },
     # Hub already has hub.log, but we still support an explicit server_log for consistency.
     "server_log": None,
@@ -484,6 +489,8 @@ class RepoConfig:
     server_port: int
     server_base_path: str
     server_auth_token_env: str
+    server_allowed_hosts: List[str]
+    server_allowed_origins: List[str]
     notifications: Dict[str, Any]
     terminal_idle_timeout_seconds: Optional[int]
     log: LogConfig
@@ -513,6 +520,8 @@ class HubConfig:
     server_port: int
     server_base_path: str
     server_auth_token_env: str
+    server_allowed_hosts: List[str]
+    server_allowed_origins: List[str]
     log: LogConfig
     server_log: LogConfig
     static_assets: StaticAssetsConfig
@@ -760,6 +769,8 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         server_port=int(cfg["server"].get("port")),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
+        server_allowed_hosts=list(cfg["server"].get("allowed_hosts") or []),
+        server_allowed_origins=list(cfg["server"].get("allowed_origins") or []),
         notifications=notifications_cfg,
         terminal_idle_timeout_seconds=idle_timeout_seconds,
         log=LogConfig(
@@ -822,6 +833,8 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         server_port=int(cfg["server"]["port"]),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
         server_auth_token_env=str(cfg["server"].get("auth_token_env", "")),
+        server_allowed_hosts=list(cfg["server"].get("allowed_hosts") or []),
+        server_allowed_origins=list(cfg["server"].get("allowed_origins") or []),
         log=LogConfig(
             path=root / log_cfg["path"],
             max_bytes=int(log_cfg["max_bytes"]),
@@ -844,6 +857,41 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
 def _validate_version(cfg: Dict[str, Any]) -> None:
     if cfg.get("version") != CONFIG_VERSION:
         raise ConfigError(f"Unsupported config version; expected {CONFIG_VERSION}")
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_server_security(server: Dict[str, Any]) -> None:
+    allowed_hosts = server.get("allowed_hosts")
+    if allowed_hosts is not None and not isinstance(allowed_hosts, list):
+        raise ConfigError("server.allowed_hosts must be a list of strings if provided")
+    if isinstance(allowed_hosts, list):
+        for entry in allowed_hosts:
+            if not isinstance(entry, str):
+                raise ConfigError("server.allowed_hosts must be a list of strings")
+
+    allowed_origins = server.get("allowed_origins")
+    if allowed_origins is not None and not isinstance(allowed_origins, list):
+        raise ConfigError(
+            "server.allowed_origins must be a list of strings if provided"
+        )
+    if isinstance(allowed_origins, list):
+        for entry in allowed_origins:
+            if not isinstance(entry, str):
+                raise ConfigError("server.allowed_origins must be a list of strings")
+
+    host = str(server.get("host", ""))
+    if not _is_loopback_host(host) and not allowed_hosts:
+        raise ConfigError(
+            "server.allowed_hosts must be set when binding to a non-loopback host"
+        )
 
 
 def _validate_repo_config(cfg: Dict[str, Any]) -> None:
@@ -941,6 +989,7 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         server.get("auth_token_env", ""), str
     ):
         raise ConfigError("server.auth_token_env must be a string if provided")
+    _validate_server_security(server)
     notifications_cfg = cfg.get("notifications")
     if notifications_cfg is not None:
         if not isinstance(notifications_cfg, dict):
@@ -1115,6 +1164,7 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         server.get("auth_token_env", ""), str
     ):
         raise ConfigError("server.auth_token_env must be a string if provided")
+    _validate_server_security(server)
     server_log_cfg = cfg.get("server_log")
     if server_log_cfg is not None and not isinstance(server_log_cfg, dict):
         raise ConfigError("server_log section must be a mapping or null")

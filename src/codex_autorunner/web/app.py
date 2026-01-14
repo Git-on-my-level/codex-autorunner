@@ -15,7 +15,13 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
-from ..core.config import ConfigError, HubConfig, _normalize_base_path, load_config
+from ..core.config import (
+    ConfigError,
+    HubConfig,
+    _is_loopback_host,
+    _normalize_base_path,
+    load_config,
+)
 from ..core.doc_chat import DocChatService
 from ..core.engine import Engine, LockError
 from ..core.hub import HubSupervisor
@@ -39,6 +45,7 @@ from .hub_jobs import HubJobManager
 from .middleware import (
     AuthTokenMiddleware,
     BasePathRouterMiddleware,
+    HostOriginMiddleware,
     RequestIdMiddleware,
     SecurityHeadersMiddleware,
 )
@@ -414,12 +421,17 @@ def create_app(
     # Route handlers
     app.include_router(build_repo_router(context.static_dir))
 
+    allowed_hosts = _resolve_allowed_hosts(
+        context.engine.config.server_host, context.engine.config.server_allowed_hosts
+    )
+    allowed_origins = context.engine.config.server_allowed_origins
     auth_token = _resolve_auth_token(context.engine.config.server_auth_token_env)
     asgi_app: ASGIApp = app
     if auth_token:
         asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
+    asgi_app = HostOriginMiddleware(asgi_app, allowed_hosts, allowed_origins)
     asgi_app = RequestIdMiddleware(asgi_app)
     asgi_app = SecurityHeadersMiddleware(asgi_app)
 
@@ -972,12 +984,17 @@ def create_hub_app(
 
     app.include_router(build_system_routes())
 
+    allowed_hosts = _resolve_allowed_hosts(
+        context.config.server_host, context.config.server_allowed_hosts
+    )
+    allowed_origins = context.config.server_allowed_origins
     auth_token = _resolve_auth_token(context.config.server_auth_token_env)
     asgi_app: ASGIApp = app
     if auth_token:
         asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
     if context.base_path:
         asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
+    asgi_app = HostOriginMiddleware(asgi_app, allowed_hosts, allowed_origins)
     asgi_app = RequestIdMiddleware(asgi_app)
     asgi_app = SecurityHeadersMiddleware(asgi_app)
 
@@ -992,6 +1009,15 @@ def _resolve_auth_token(env_name: str) -> Optional[str]:
         return None
     value = value.strip()
     return value or None
+
+
+def _resolve_allowed_hosts(host: str, allowed_hosts: list[str]) -> list[str]:
+    cleaned = [entry.strip() for entry in allowed_hosts if entry and entry.strip()]
+    if cleaned:
+        return cleaned
+    if _is_loopback_host(host):
+        return ["localhost", "127.0.0.1", "::1"]
+    return []
 
 
 _STATIC_CACHE_CONTROL = "public, max-age=31536000, immutable"

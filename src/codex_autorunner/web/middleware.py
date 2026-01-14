@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from fastapi.responses import RedirectResponse, Response
 
@@ -226,6 +226,156 @@ class AuthTokenMiddleware:
             if scope.get("type") == "websocket":
                 return await self._reject_ws(scope, receive, send)
             return await self._reject_http(scope, receive, send)
+
+        return await self.app(scope, receive, send)
+
+
+class HostOriginMiddleware:
+    """Validate Host and Origin headers for localhost hardening."""
+
+    def __init__(self, app, allowed_hosts, allowed_origins):
+        self.app = app
+        self.allowed_hosts = [
+            entry.strip().lower()
+            for entry in (allowed_hosts or [])
+            if isinstance(entry, str) and entry.strip()
+        ]
+        self.allowed_origins = {
+            entry
+            for entry in (
+                self._normalize_origin(raw)
+                for raw in (allowed_origins or [])
+                if isinstance(raw, str) and raw.strip()
+            )
+            if entry is not None
+        }
+
+    def __getattr__(self, name):
+        return getattr(self.app, name)
+
+    def _header(self, scope, key: bytes) -> str | None:
+        headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
+        raw = headers.get(key)
+        if not raw:
+            return None
+        try:
+            return raw.decode("latin-1")
+        except Exception:
+            return None
+
+    def _split_host_port(self, value: str) -> tuple[str, str | None]:
+        value = value.strip().lower()
+        if not value:
+            return "", None
+        if value.startswith("["):
+            end = value.find("]")
+            if end != -1:
+                host = value[1:end]
+                rest = value[end + 1 :]
+                if rest.startswith(":") and len(rest) > 1:
+                    return host, rest[1:]
+                return host, None
+        if value.count(":") == 1:
+            host, port = value.rsplit(":", 1)
+            if host and port:
+                return host, port
+        return value, None
+
+    def _host_allowed(self, host_header: str | None) -> bool:
+        if not self.allowed_hosts:
+            return True
+        if not host_header:
+            return False
+        header_host, header_port = self._split_host_port(host_header)
+        for allowed in self.allowed_hosts:
+            if allowed == "*":
+                return True
+            allowed_host, allowed_port = self._split_host_port(allowed)
+            if allowed_host != header_host:
+                continue
+            if allowed_port is None or allowed_port == header_port:
+                return True
+        return False
+
+    def _normalize_origin(self, origin: str) -> str | None:
+        value = origin.strip().lower()
+        if not value:
+            return None
+        if value == "null":
+            return value
+        parsed = urlparse(value)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return value
+
+    def _origin_scheme(self, scheme: str) -> str:
+        if scheme == "ws":
+            return "http"
+        if scheme == "wss":
+            return "https"
+        return scheme
+
+    def _request_origin(self, scheme: str, host_header: str | None) -> str | None:
+        if not host_header:
+            return None
+        normalized_scheme = self._origin_scheme(scheme).lower()
+        return f"{normalized_scheme}://{host_header.strip().lower()}"
+
+    def _origin_allowed(
+        self, origin: str | None, scheme: str, host: str | None
+    ) -> bool:
+        if not origin:
+            return True
+        normalized = self._normalize_origin(origin)
+        if not normalized:
+            return False
+        if normalized in self.allowed_origins:
+            return True
+        request_origin = self._request_origin(scheme, host)
+        return request_origin == normalized
+
+    async def _reject_http(self, scope, receive, send, status: int, body: str) -> None:
+        response = Response(content=body, status_code=status)
+        await response(scope, receive, send)
+
+    async def _reject_ws(self, send, status: int, body: str) -> None:
+        await send(
+            {
+                "type": "websocket.http.response.start",
+                "status": status,
+                "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+            }
+        )
+        await send(
+            {
+                "type": "websocket.http.response.body",
+                "body": body.encode("utf-8"),
+                "more_body": False,
+            }
+        )
+
+    async def __call__(self, scope, receive, send):
+        scope_type = scope.get("type")
+        if scope_type not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+
+        host = self._header(scope, b"host")
+        if not self._host_allowed(host):
+            if scope_type == "websocket":
+                return await self._reject_ws(send, 400, "Invalid host")
+            return await self._reject_http(scope, receive, send, 400, "Invalid host")
+
+        origin = self._header(scope, b"origin")
+        scheme = scope.get("scheme") or "http"
+        if scope_type == "websocket":
+            if origin and not self._origin_allowed(origin, scheme, host):
+                return await self._reject_ws(send, 403, "Forbidden")
+            return await self.app(scope, receive, send)
+
+        method = (scope.get("method") or "GET").upper()
+        if method in {"POST", "PUT", "PATCH", "DELETE"} and origin:
+            if not self._origin_allowed(origin, scheme, host):
+                return await self._reject_http(scope, receive, send, 403, "Forbidden")
 
         return await self.app(scope, receive, send)
 

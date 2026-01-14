@@ -76,6 +76,10 @@ repo:
     base_path: ""
     # Optional env var containing the bearer token required for /api and websocket access.
     auth_token_env: ""
+    # Allowed Host header values; empty uses loopback defaults when bound to loopback.
+    allowed_hosts: []
+    # Allowed Origin values for unsafe requests; empty enforces same-origin only.
+    allowed_origins: []
 
   notifications:
     # enabled: true|false|"auto" (auto enables if any target env vars are present)
@@ -259,6 +263,10 @@ hub:
     base_path: ""
     # Optional env var containing the bearer token required for /api and websocket access.
     auth_token_env: ""
+    # Allowed Host header values; empty uses loopback defaults when bound to loopback.
+    allowed_hosts: []
+    # Allowed Origin values for unsafe requests; empty enforces same-origin only.
+    allowed_origins: []
 
   # Optional explicit server log for the hub (null uses hub.log only).
   server_log: null

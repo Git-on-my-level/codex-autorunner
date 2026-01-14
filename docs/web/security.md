@@ -41,6 +41,25 @@ The following endpoints remain public so health checks and static assets work:
 All API endpoints, hub endpoints, and repo endpoints require the auth token
 once configured.
 
+## Localhost hardening (Host/Origin checks)
+
+When auth is disabled, CAR still enforces basic browser protections to reduce
+localhost CSRF/DNS rebinding risk:
+
+- Host header allowlisting: loopback binds default to `localhost`, `127.0.0.1`,
+  and `::1` (port variations allowed).
+- Origin validation: for unsafe methods (POST/PUT/PATCH/DELETE) and WebSocket
+  handshakes, requests with an `Origin` header must match the server origin or
+  an explicit allowlist.
+- CLI and non-browser clients continue to work because requests without an
+  `Origin` header are allowed.
+
+Config:
+
+- `server.allowed_hosts`: explicit host allowlist. Required when binding to a
+  non-loopback host.
+- `server.allowed_origins`: extra allowed origins (scheme + host + port).
+
 ## Recommendations
 
 - Prefer local-only access (`127.0.0.1`) or a private network like Tailscale.
