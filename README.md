@@ -36,7 +36,12 @@ Mobile-first experience, code on the go with Whisper support (BYOK)
 CLI commands are available as `codex-autorunner` or the shorter `car`.
 
 ## Install
-GitHub (pipx):
+PyPI (pipx):
+```
+pipx install codex-autorunner
+```
+
+GitHub (pipx, dev):
 ```
 pipx install git+https://github.com/Git-on-my-level/codex-autorunner.git
 ```

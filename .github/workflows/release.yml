@@ -1,0 +1,76 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify tag matches version
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          tag = os.environ["GITHUB_REF_NAME"]
+          version = tag[1:] if tag.startswith("v") else tag
+          with open("pyproject.toml", "rb") as f:
+            data = tomllib.load(f)
+          project_version = data["project"]["version"]
+          if version != project_version:
+            raise SystemExit(
+              f"Tag version {version} does not match pyproject.toml version {project_version}"
+            )
+          print(f"Release version {project_version} matches tag {tag}.")
+          PY
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Smoke test wheel
+        run: |
+          python -m venv .venv-wheel
+          ./.venv-wheel/bin/python -m pip install --upgrade pip
+          ./.venv-wheel/bin/python -m pip install dist/*.whl
+          ./.venv-wheel/bin/python - <<'PY'
+          from codex_autorunner.web.static_assets import missing_static_assets, resolve_static_dir
+
+          static_dir, _ = resolve_static_dir()
+          missing = missing_static_assets(static_dir)
+          if missing:
+            raise SystemExit(f"Missing static assets in wheel: {missing}")
+          print("Static assets present in wheel.")
+          PY
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      id-token: write
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

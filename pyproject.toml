@@ -23,6 +23,12 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Operating System :: OS Independent",
 ]
+keywords = ["codex", "automation", "agent", "cli", "fastapi"]
+
+[project.urls]
+Homepage = "https://github.com/Git-on-my-level/codex-autorunner"
+Repository = "https://github.com/Git-on-my-level/codex-autorunner"
+Issues = "https://github.com/Git-on-my-level/codex-autorunner/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -51,6 +57,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools]
+include-package-data = true
 
 [tool.setuptools.package-data]
 codex_autorunner = ["static/*", "static/**/*"]
