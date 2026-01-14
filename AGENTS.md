@@ -34,6 +34,9 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 ## GitHub CLI
 - Use the `gh` CLI for GitHub interactions whenever possible.
 
+## Git commits
+- Use a longer timeout for `git commit` commands so pre-commit hooks can finish.
+
 ## Make targets
 - Prefer running common scripts via `make` targets when available.
 
