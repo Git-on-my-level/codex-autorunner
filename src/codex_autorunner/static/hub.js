@@ -3,6 +3,7 @@ import {
   flash,
   statusPill,
   resolvePath,
+  escapeHtml,
   confirmModal,
   inputModal,
   openModal,
@@ -206,13 +207,13 @@ function renderHubUsage(data) {
       ? Math.round((cached / totals.input_tokens) * 100)
       : 0;
     div.innerHTML = `
-      <span class="hub-usage-chip-name">${repo.id}</span>
-      <span class="hub-usage-chip-total">${formatTokensCompact(
-        totals.total_tokens
+      <span class="hub-usage-chip-name">${escapeHtml(repo.id)}</span>
+      <span class="hub-usage-chip-total">${escapeHtml(
+        formatTokensCompact(totals.total_tokens)
       )}</span>
-      <span class="hub-usage-chip-meta">${
-        repo.events ?? 0
-      }ev · ${cachePercent}%↻</span>
+      <span class="hub-usage-chip-meta">${escapeHtml(
+        `${repo.events ?? 0}ev · ${cachePercent}%↻`
+      )}</span>
     `;
     hubUsageList.appendChild(div);
   });
@@ -222,10 +223,12 @@ function renderHubUsage(data) {
     const totals = data.unmatched.totals || {};
     div.innerHTML = `
       <span class="hub-usage-chip-name">other</span>
-      <span class="hub-usage-chip-total">${formatTokensCompact(
-        totals.total_tokens
+      <span class="hub-usage-chip-total">${escapeHtml(
+        formatTokensCompact(totals.total_tokens)
       )}</span>
-      <span class="hub-usage-chip-meta">${data.unmatched.events}ev</span>
+      <span class="hub-usage-chip-meta">${escapeHtml(
+        `${data.unmatched.events}ev`
+      )}</span>
     `;
     hubUsageList.appendChild(div);
   }
@@ -510,8 +513,8 @@ function attachHubUsageChartInteraction(container, state) {
     const bucketLabel = chartState.buckets[clampedIndex];
     const rows = [];
     rows.push(
-      `<div class="usage-chart-tooltip-row"><span>Total</span><span>${formatTokensCompact(
-        totals
+      `<div class="usage-chart-tooltip-row"><span>Total</span><span>${escapeHtml(
+        formatTokensCompact(totals)
       )}</span></div>`
     );
 
@@ -526,16 +529,18 @@ function attachHubUsageChartInteraction(container, state) {
         .slice(0, 6);
       ranked.forEach((entry) => {
         rows.push(
-          `<div class="usage-chart-tooltip-row"><span>${entry.key}</span><span>${formatTokensCompact(
-            entry.value
+          `<div class="usage-chart-tooltip-row"><span>${escapeHtml(
+            entry.key
+          )}</span><span>${escapeHtml(
+            formatTokensCompact(entry.value)
           )}</span></div>`
         );
       });
     }
 
-    tooltip.innerHTML = `<div class="usage-chart-tooltip-title">${bucketLabel}</div>${rows.join(
-      ""
-    )}`;
+    tooltip.innerHTML = `<div class="usage-chart-tooltip-title">${escapeHtml(
+      bucketLabel
+    )}</div>${rows.join("")}`;
 
     const tooltipRect = tooltip.getBoundingClientRect();
     let tooltipLeft = x + 12;
@@ -788,8 +793,10 @@ function buildMountBadge(repo) {
     label = "not mounted";
     className += " pill-warn";
   }
-  const titleAttr = title ? ` title="${title}"` : "";
-  return `<span class="${className} hub-mount-pill"${titleAttr}>${label}</span>`;
+  const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+  return `<span class="${className} hub-mount-pill"${titleAttr}>${escapeHtml(
+    label
+  )}</span>`;
 }
 
 function inferBaseId(repo) {
@@ -915,19 +922,18 @@ function renderRepos(repos) {
       .map(
         (action) =>
           `<button class="${action.kind} sm" data-action="${
-            action.key
-          }" data-repo="${repo.id}"${
-            action.title ? ` title="${action.title}"` : ""
-          }>${action.label}</button>`
+            escapeHtml(action.key)
+          }" data-repo="${escapeHtml(repo.id)}"${
+            action.title ? ` title="${escapeHtml(action.title)}"` : ""
+          }>${escapeHtml(action.label)}</button>`
       )
       .join("");
 
     const mountBadge = buildMountBadge(repo);
     const lockBadge =
       repo.lock_status && repo.lock_status !== "unlocked"
-        ? `<span class="pill pill-small pill-warn">${repo.lock_status.replace(
-            "_",
-            " "
+        ? `<span class="pill pill-small pill-warn">${escapeHtml(
+            repo.lock_status.replace("_", " ")
           )}</span>`
         : "";
     const initBadge = !repo.initialized
@@ -943,7 +949,9 @@ function renderRepos(repos) {
     } else if (repo.mount_error) {
       noteText = `Cannot open: ${repo.mount_error}`;
     }
-    const note = noteText ? `<div class="hub-repo-note">${noteText}</div>` : "";
+    const note = noteText
+      ? `<div class="hub-repo-note">${escapeHtml(noteText)}</div>`
+      : "";
 
     // Show open indicator only for navigable repos
     const openIndicator = canNavigate
@@ -966,29 +974,39 @@ function renderRepos(repos) {
     }
     const infoLine =
       infoItems.length > 0
-        ? `<span class="hub-repo-info-line">${infoItems.join(" · ")}</span>`
+        ? `<span class="hub-repo-info-line">${escapeHtml(
+            infoItems.join(" · ")
+          )}</span>`
         : "";
 
     // Best-effort PR pill for mounted repos (does not block rendering).
     const prInfo = repoPrCache.get(repo.id)?.data;
     const prPill = prInfo?.links?.files
-      ? `<a class="pill pill-small hub-pr-pill" href="${
+      ? `<a class="pill pill-small hub-pr-pill" href="${escapeHtml(
           prInfo.links.files
-        }" target="_blank" rel="noopener noreferrer" title="${
+        )}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(
           prInfo.pr?.title || "Open PR files"
-        }">PR${prInfo.pr?.number ? ` #${prInfo.pr.number}` : ""}</a>`
+        )}">PR${
+          prInfo.pr?.number
+            ? ` #${escapeHtml(prInfo.pr.number)}`
+            : ""
+        }</a>`
       : "";
 
     card.innerHTML = `
       <div class="hub-repo-row">
         <div class="hub-repo-left">
-            <span class="pill pill-small hub-status-pill">${repo.status}</span>
+            <span class="pill pill-small hub-status-pill">${escapeHtml(
+              repo.status
+            )}</span>
             ${mountBadge}
             ${lockBadge}
             ${initBadge}
           </div>
         <div class="hub-repo-center">
-          <span class="hub-repo-title">${repo.display_name}</span>
+          <span class="hub-repo-title">${escapeHtml(
+            repo.display_name
+          )}</span>
           <div class="hub-repo-subline">
             ${infoLine}
             ${prPill}
@@ -1482,3 +1500,12 @@ export function initHub() {
     immediate: false, // Already called refreshHub() above
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test Exports
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const __hubTest = {
+  renderRepos,
+  renderHubUsage,
+};

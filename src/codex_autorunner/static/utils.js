@@ -79,6 +79,16 @@ export function updateUrlParams(updates = {}) {
   history.replaceState(null, "", url.toString());
 }
 
+export function escapeHtml(value) {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export function buildWsUrl(path, query = "") {
   const resolved = resolvePath(path);
   const normalized = resolved.startsWith("/") ? resolved : `/${resolved}`;
