@@ -1,0 +1,16 @@
+[Unit]
+Description=Codex Autorunner hub
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/you/car-workspace
+EnvironmentFile=%h/.config/codex-autorunner/codex-autorunner.env
+# Replace the ExecStart path with `which car` or the codex-autorunner binary.
+# Use CAR_BASE_PATH=/ if you do not need a base path.
+ExecStart=/home/you/.local/bin/car hub serve --host 127.0.0.1 --port 4173 --path /home/you/car-workspace --base-path ${CAR_BASE_PATH}
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

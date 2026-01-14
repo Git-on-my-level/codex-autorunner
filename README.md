@@ -60,6 +60,7 @@ pip install -e .
 ### Opinionated setup (macOS headless hub at `~/car-workspace`)
 - One-shot setup (user scope): `scripts/install-local-mac-hub.sh`. It pipx-installs this repo, creates/initializes `~/car-workspace` as a hub, writes a launchd agent plist, and loads it. Defaults: host `127.0.0.1`, port `4173`, label `com.codex.autorunner`. Override via env (`WORKSPACE`, `HOST`, `PORT`, `LABEL`, `PLIST_PATH`, `PACKAGE_SRC`). For remote access, prefer a VPN like Tailscale and keep the hub bound to loopback; if you bind to a non-loopback host, the script configures `server.auth_token_env` + a token in `.codex-autorunner/.env`.
 - Create/update the launchd agent plist and (re)load it: `scripts/launchd-hub.sh` (or `make launchd-hub`).
+- Linux users: see `docs/ops/systemd.md` for systemd hub/Telegram setup.
 - Manual path if you prefer:
   - `pipx install .`
   - `car init --mode hub --path ~/car-workspace`
