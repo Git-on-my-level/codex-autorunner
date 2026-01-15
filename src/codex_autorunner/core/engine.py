@@ -120,7 +120,12 @@ class Engine:
             raise LockError(
                 "Another autorunner is active; stop it before continuing"
             ) from exc
-        write_lock_info(self.lock_path, os.getpid(), started_at=now_iso())
+        write_lock_info(
+            self.lock_path,
+            os.getpid(),
+            started_at=now_iso(),
+            lock_file=self._lock_handle.file,
+        )
 
     def release_lock(self) -> None:
         if self._lock_handle is not None:

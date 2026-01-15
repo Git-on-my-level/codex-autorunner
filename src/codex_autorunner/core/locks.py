@@ -91,6 +91,20 @@ class FileLock:
             lock_file.close()
             self._file = None
 
+    @property
+    def file(self) -> IO[str]:
+        if self._file is None:
+            raise FileLockError("Lock is not acquired")
+        return self._file
+
+    def write_text(self, content: str) -> None:
+        lock_file = self.file
+        lock_file.seek(0)
+        lock_file.truncate()
+        lock_file.write(content)
+        lock_file.flush()
+        os.fsync(lock_file.fileno())
+
     def __enter__(self) -> "FileLock":
         self.acquire()
         return self
@@ -133,11 +147,25 @@ def read_lock_info(lock_path: Path) -> LockInfo:
     return LockInfo(pid=pid, started_at=None, host=None)
 
 
-def write_lock_info(lock_path: Path, pid: int, *, started_at: str) -> None:
+def write_lock_info(
+    lock_path: Path,
+    pid: int,
+    *,
+    started_at: str,
+    lock_file: Optional[IO[str]] = None,
+) -> None:
     payload = {
         "pid": pid,
         "started_at": started_at,
         "host": socket.gethostname(),
     }
+    content = json.dumps(payload) + "\n"
+    if lock_file is not None:
+        lock_file.seek(0)
+        lock_file.truncate()
+        lock_file.write(content)
+        lock_file.flush()
+        os.fsync(lock_file.fileno())
+        return
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(lock_path, json.dumps(payload) + "\n")
+    atomic_write(lock_path, content)
