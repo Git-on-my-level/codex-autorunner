@@ -52,8 +52,9 @@ class _DummyTransport(TelegramMessageTransport):
 
 
 @pytest.mark.anyio
-async def test_send_long_message_uses_document() -> None:
-    transport = _DummyTransport(parse_mode="Markdown")
+@pytest.mark.parametrize("parse_mode", ["Markdown", "MarkdownV2", "HTML"])
+async def test_send_long_message_uses_markdown_document(parse_mode: str) -> None:
+    transport = _DummyTransport(parse_mode=parse_mode)
     long_text = "x" * (TELEGRAM_MAX_MESSAGE_LENGTH + 5)
 
     await transport._send_message(123, long_text)
@@ -61,5 +62,6 @@ async def test_send_long_message_uses_document() -> None:
     assert not transport._bot.sent_messages
     assert len(transport._bot.sent_docs) == 1
     payload = transport._bot.sent_docs[0]
-    assert payload["filename"].endswith(".md")
-    assert payload["caption"] == "Response too long; see attached."
+    assert payload["filename"] == "response.md"
+    assert payload["caption"] == "Response too long; attached as response.md."
+    assert payload["document"] == long_text.encode("utf-8")

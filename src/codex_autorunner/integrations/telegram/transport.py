@@ -230,18 +230,13 @@ class TelegramMessageTransport:
         if parse_mode:
             rendered, used_mode = self._render_message(text)
             if used_mode and len(rendered) > TELEGRAM_MAX_MESSAGE_LENGTH:
-                extension = "txt"
-                if used_mode in ("Markdown", "MarkdownV2"):
-                    extension = "md"
-                elif used_mode == "HTML":
-                    extension = "html"
                 await self._send_document(
                     chat_id,
                     text.encode("utf-8"),
-                    filename=f"response.{extension}",
+                    filename="response.md",
                     thread_id=thread_id,
                     reply_to=reply_to,
-                    caption="Response too long; see attached.",
+                    caption="Response too long; attached as response.md.",
                 )
                 return
             payload_text = rendered if used_mode else text
