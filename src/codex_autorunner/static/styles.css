@@ -2323,6 +2323,11 @@ button.icon-btn {
   background: var(--error);
 }
 
+.doc-chat-entry.interrupted .status-dot {
+  background: var(--accent-2);
+  box-shadow: 0 0 0 2px rgba(108, 168, 255, 0.2);
+}
+
 .doc-chat-empty {
   padding: 8px 0;
   text-align: center;

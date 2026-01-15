@@ -1,9 +1,11 @@
 import asyncio
+import contextlib
 import re
 import threading
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from .core.app_server_prompts import (
     build_spec_ingest_prompt as build_app_server_spec_ingest_prompt,
@@ -26,11 +28,22 @@ from .integrations.app_server.client import CodexAppServerError
 from .integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 
 SPEC_INGEST_TIMEOUT_SECONDS = 240
+SPEC_INGEST_INTERRUPT_GRACE_SECONDS = 10
 SPEC_INGEST_PATCH_NAME = "spec-ingest.patch"
 
 
 class SpecIngestError(Exception):
     """Raised when ingesting a SPEC fails."""
+
+
+@dataclass
+class ActiveSpecIngestTurn:
+    thread_id: str
+    turn_id: str
+    client: Any
+    interrupted: bool = False
+    interrupt_sent: bool = False
+    interrupt_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 def ensure_can_overwrite(engine: Engine, force: bool) -> None:
@@ -78,6 +91,9 @@ class SpecIngestService:
             self.engine.repo_root / ".codex-autorunner" / "locks" / "spec_ingest.lock"
         )
         self._thread_lock = threading.Lock()
+        self._active_turn: Optional[ActiveSpecIngestTurn] = None
+        self._active_turn_lock = threading.Lock()
+        self._pending_interrupt = False
 
     def _ensure_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -139,6 +155,70 @@ class SpecIngestService:
             raise SpecIngestError("App-server backend is not configured")
         return self._app_server_supervisor
 
+    def _get_active_turn(self) -> Optional[ActiveSpecIngestTurn]:
+        with self._active_turn_lock:
+            return self._active_turn
+
+    def _clear_active_turn(self, turn_id: str) -> None:
+        with self._active_turn_lock:
+            if self._active_turn and self._active_turn.turn_id == turn_id:
+                self._active_turn = None
+
+    def _register_active_turn(
+        self, client: Any, turn_id: str, thread_id: str
+    ) -> ActiveSpecIngestTurn:
+        interrupt_event = asyncio.Event()
+        active = ActiveSpecIngestTurn(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            client=client,
+            interrupted=False,
+            interrupt_sent=False,
+            interrupt_event=interrupt_event,
+        )
+        with self._active_turn_lock:
+            self._active_turn = active
+            if self._pending_interrupt:
+                self._pending_interrupt = False
+                active.interrupted = True
+                interrupt_event.set()
+        return active
+
+    async def _interrupt_turn(self, active: ActiveSpecIngestTurn) -> None:
+        if active.interrupt_sent:
+            return
+        active.interrupt_sent = True
+        try:
+            await asyncio.wait_for(
+                active.client.turn_interrupt(
+                    active.turn_id, thread_id=active.thread_id
+                ),
+                timeout=SPEC_INGEST_INTERRUPT_GRACE_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            pass
+        except CodexAppServerError:
+            pass
+
+    async def interrupt(self) -> Dict[str, str]:
+        active = self._get_active_turn()
+        if active is None:
+            with self._active_turn_lock:
+                self._pending_interrupt = True
+            return self._assemble_response(
+                {},
+                status="interrupted",
+                agent_message="Spec ingest interrupted",
+            )
+        active.interrupted = True
+        active.interrupt_event.set()
+        await self._interrupt_turn(active)
+        return self._assemble_response(
+            {},
+            status="interrupted",
+            agent_message="Spec ingest interrupted",
+        )
+
     def _allowed_targets(self) -> Dict[str, str]:
         config = self.engine.config
         rel = {}
@@ -161,9 +241,10 @@ class SpecIngestService:
         *,
         patch: Optional[str] = None,
         agent_message: Optional[str] = None,
+        status: str = "ok",
     ) -> Dict[str, str]:
         return {
-            "status": "ok",
+            "status": status,
             "todo": docs.get("todo", self.engine.docs.read_doc("todo")),
             "progress": docs.get("progress", self.engine.docs.read_doc("progress")),
             "opinions": docs.get("opinions", self.engine.docs.read_doc("opinions")),
@@ -266,10 +347,46 @@ class SpecIngestService:
             approval_policy="never",
             sandbox_policy="readOnly",
         )
+        active = self._register_active_turn(client, handle.turn_id, handle.thread_id)
+        turn_task = asyncio.create_task(handle.wait(timeout=None))
+        timeout_task = asyncio.create_task(asyncio.sleep(SPEC_INGEST_TIMEOUT_SECONDS))
+        interrupt_task = asyncio.create_task(active.interrupt_event.wait())
         try:
-            result = await handle.wait(timeout=SPEC_INGEST_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError as exc:
-            raise SpecIngestError("Spec ingest agent timed out") from exc
+            tasks = {turn_task, timeout_task, interrupt_task}
+            done, _pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            if timeout_task in done:
+                turn_task.add_done_callback(lambda task: task.exception())
+                raise SpecIngestError("Spec ingest agent timed out")
+            if interrupt_task in done:
+                active.interrupted = True
+                await self._interrupt_turn(active)
+                done, _pending = await asyncio.wait(
+                    {turn_task}, timeout=SPEC_INGEST_INTERRUPT_GRACE_SECONDS
+                )
+                if not done:
+                    turn_task.add_done_callback(lambda task: task.exception())
+                    return self._assemble_response(
+                        {},
+                        status="interrupted",
+                        agent_message="Spec ingest interrupted",
+                    )
+            result = await turn_task
+        finally:
+            self._clear_active_turn(handle.turn_id)
+            timeout_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await timeout_task
+            interrupt_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await interrupt_task
+        if active.interrupted:
+            return self._assemble_response(
+                {},
+                status="interrupted",
+                agent_message="Spec ingest interrupted",
+            )
         if result.errors:
             raise SpecIngestError(result.errors[-1])
         output = "\n".join(result.agent_messages).strip()

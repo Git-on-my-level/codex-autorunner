@@ -42,6 +42,7 @@ const specIngestState = {
   agentMessage: "",
   error: "",
   busy: false,
+  controller: null,
 };
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT =
   CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
@@ -105,6 +106,7 @@ const specIngestUI = {
   panel: document.getElementById("spec-ingest-followup"),
   input: document.getElementById("spec-ingest-input"),
   continueBtn: document.getElementById("spec-ingest-continue"),
+  cancelBtn: document.getElementById("spec-ingest-cancel"),
   patchMain: document.getElementById("spec-ingest-patch-main"),
   patchSummary: document.getElementById("spec-ingest-patch-summary"),
   patchBody: document.getElementById("spec-ingest-patch-body"),
@@ -151,6 +153,12 @@ function parseChatPayload(payload) {
   if (!payload) return { response: "" };
   if (typeof payload === "string") return { response: payload };
   if (payload.status && payload.status !== "ok") {
+    if (payload.status === "interrupted") {
+      return {
+        interrupted: true,
+        detail: payload.detail || "Doc chat interrupted",
+      };
+    }
     return { error: payload.detail || "Doc chat failed" };
   }
   return {
@@ -165,6 +173,18 @@ function parseSpecIngestPayload(payload) {
     return { error: "Spec ingest failed" };
   }
   if (payload.status && payload.status !== "ok") {
+    if (payload.status === "interrupted") {
+      return {
+        interrupted: true,
+        todo: payload.todo || "",
+        progress: payload.progress || "",
+        opinions: payload.opinions || "",
+        spec: payload.spec || "",
+        summary: payload.summary || "",
+        patch: payload.patch || "",
+        agentMessage: payload.agent_message || payload.agentMessage || "",
+      };
+    }
     return { error: payload.detail || "Spec ingest failed" };
   }
   return {
@@ -451,6 +471,12 @@ function renderSpecIngestPatch() {
   if (!specIngestUI.patchMain) return;
   const isSpec = activeDoc === "spec";
   const hasPatch = !!(specIngestState.patch || "").trim();
+  if (specIngestUI.continueBtn)
+    specIngestUI.continueBtn.disabled = specIngestState.busy;
+  if (specIngestUI.cancelBtn) {
+    specIngestUI.cancelBtn.disabled = !specIngestState.busy;
+    specIngestUI.cancelBtn.classList.toggle("hidden", !specIngestState.busy);
+  }
   specIngestUI.patchMain.classList.toggle("hidden", !isSpec || !hasPatch);
   if (!isSpec || !hasPatch) {
     updateDocVisibility();
@@ -480,6 +506,8 @@ function renderChat(kind = activeDoc) {
     ? "running"
     : state.status === "error"
     ? "error"
+    : state.status === "interrupted"
+    ? "interrupted"
     : "idle";
   statusPill(chatUI.status, pillState);
 
@@ -661,16 +689,28 @@ function markChatError(state, entry, message) {
   renderChat();
 }
 
+async function interruptDocChat(kind) {
+  try {
+    await api(`/api/docs/${kind}/chat/interrupt`, { method: "POST" });
+  } catch (err) {
+    flash(err.message || "Failed to interrupt doc chat", "error");
+  }
+}
+
 function cancelDocChat() {
   const state = getChatState(activeDoc);
   if (state.status !== "running") return;
+  interruptDocChat(activeDoc);
   if (state.controller) state.controller.abort();
   const entry = state.history[0];
   if (entry && entry.status === "running") {
-    entry.status = "error";
-    entry.error = "Cancelled";
+    entry.status = "interrupted";
+    entry.error = "Interrupted";
   }
-  state.status = "idle";
+  state.status = "interrupted";
+  state.error = "";
+  state.streamText = "";
+  state.statusText = "";
   state.controller = null;
   renderChat();
 }
@@ -717,16 +757,19 @@ async function sendDocChat() {
 
   try {
     await performDocChatRequest(activeDoc, entry, state);
-    if (entry.status !== "error") {
+    if (entry.status === "interrupted") {
+      state.status = "interrupted";
+      state.error = "";
+    } else if (entry.status !== "error") {
       state.status = "idle";
       state.error = "";
     }
   } catch (err) {
     if (err.name === "AbortError") {
-      entry.status = "error";
-      entry.error = "Cancelled";
+      entry.status = "interrupted";
+      entry.error = "Interrupted";
       state.error = "";
-      state.status = "idle";
+      state.status = "interrupted";
     } else {
       markChatError(state, entry, err.message || "Doc chat failed");
     }
@@ -771,7 +814,11 @@ async function performDocChatRequest(kind, entry, state) {
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("text/event-stream")) {
     await readChatStream(res, state, entry, kind);
-    if (entry.status !== "error" && entry.status !== "done") {
+    if (
+      entry.status !== "error" &&
+      entry.status !== "done" &&
+      entry.status !== "interrupted"
+    ) {
       entry.status = "done";
     }
   } else {
@@ -930,6 +977,17 @@ async function handleStreamEvent(event, rawData, state, entry, kind) {
     markChatError(state, entry, message);
     throw new Error(message);
   }
+  if (event === "interrupted") {
+    const message =
+      (parsed && parsed.detail) || rawData || "Doc chat interrupted";
+    entry.status = "interrupted";
+    entry.error = message;
+    state.error = "";
+    state.status = "interrupted";
+    state.streamText = entry.response || "";
+    renderChat(kind);
+    return;
+  }
   if (event === "done" || event === "finish") {
     entry.status = "done";
     return;
@@ -938,6 +996,14 @@ async function handleStreamEvent(event, rawData, state, entry, kind) {
 
 function applyChatResult(payload, state, entry) {
   const parsed = parseChatPayload(payload);
+  if (parsed.interrupted) {
+    entry.status = "interrupted";
+    entry.error = parsed.detail || "Doc chat interrupted";
+    state.status = "interrupted";
+    state.error = "";
+    state.patch = "";
+    return;
+  }
   if (parsed.error) {
     markChatError(state, entry, parsed.error);
     return;
@@ -1387,6 +1453,9 @@ export function initDocs() {
   if (specIngestUI.continueBtn) {
     specIngestUI.continueBtn.addEventListener("click", continueSpecIngest);
   }
+  if (specIngestUI.cancelBtn) {
+    specIngestUI.cancelBtn.addEventListener("click", cancelSpecIngest);
+  }
   if (specIngestUI.input) {
     specIngestUI.input.addEventListener("input", () => {
       autoResizeTextarea(specIngestUI.input);
@@ -1630,26 +1699,61 @@ async function ingestSpec() {
   button.disabled = true;
   button.classList.add("loading");
   specIngestState.busy = true;
+  specIngestState.controller = new AbortController();
+  renderSpecIngestPatch();
   try {
     const data = await api("/api/ingest-spec", {
       method: "POST",
       body: { force: needsForce },
+      signal: specIngestState.controller.signal,
     });
     const parsed = parseSpecIngestPayload(data);
     if (parsed.error) throw new Error(parsed.error);
+    if (parsed.interrupted) {
+      specIngestState.patch = "";
+      specIngestState.agentMessage = parsed.agentMessage || "";
+      applySpecIngestDocs(parsed);
+      renderSpecIngestPatch();
+      flash("Spec ingest interrupted");
+      return;
+    }
     specIngestState.patch = parsed.patch || "";
     specIngestState.agentMessage = parsed.agentMessage || "";
     applySpecIngestDocs(parsed);
     renderSpecIngestPatch();
     flash(parsed.patch ? "Spec ingest patch ready" : "Ingested SPEC into docs");
   } catch (err) {
-    flash(err.message, "error");
+    if (err.name === "AbortError") {
+      return;
+    } else {
+      flash(err.message, "error");
+    }
   } finally {
     button.disabled = false;
     button.classList.remove("loading");
     specIngestState.busy = false;
+    specIngestState.controller = null;
     renderSpecIngestPatch();
   }
+}
+
+async function interruptSpecIngest() {
+  try {
+    await api("/api/ingest-spec/interrupt", { method: "POST" });
+  } catch (err) {
+    flash(err.message || "Failed to interrupt spec ingest", "error");
+  }
+}
+
+function cancelSpecIngest() {
+  if (!specIngestState.busy) return;
+  interruptSpecIngest();
+  if (specIngestState.controller) specIngestState.controller.abort();
+  specIngestState.busy = false;
+  specIngestState.controller = null;
+  if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
+  flash("Spec ingest interrupted");
+  renderSpecIngestPatch();
 }
 
 async function continueSpecIngest() {
@@ -1665,13 +1769,24 @@ async function continueSpecIngest() {
   );
   specIngestState.busy = true;
   if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = true;
+  specIngestState.controller = new AbortController();
+  renderSpecIngestPatch();
   try {
     const data = await api("/api/ingest-spec", {
       method: "POST",
       body: { force: needsForce, message },
+      signal: specIngestState.controller.signal,
     });
     const parsed = parseSpecIngestPayload(data);
     if (parsed.error) throw new Error(parsed.error);
+    if (parsed.interrupted) {
+      specIngestState.patch = "";
+      specIngestState.agentMessage = parsed.agentMessage || "";
+      applySpecIngestDocs(parsed);
+      renderSpecIngestPatch();
+      flash("Spec ingest interrupted");
+      return;
+    }
     specIngestState.patch = parsed.patch || "";
     specIngestState.agentMessage = parsed.agentMessage || "";
     applySpecIngestDocs(parsed);
@@ -1680,10 +1795,15 @@ async function continueSpecIngest() {
     autoResizeTextarea(specIngestUI.input);
     flash(parsed.patch ? "Spec ingest patch updated" : "Spec ingest updated docs");
   } catch (err) {
-    flash(err.message, "error");
+    if (err.name === "AbortError") {
+      return;
+    } else {
+      flash(err.message, "error");
+    }
   } finally {
     specIngestState.busy = false;
     if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
+    specIngestState.controller = null;
     renderSpecIngestPatch();
   }
 }

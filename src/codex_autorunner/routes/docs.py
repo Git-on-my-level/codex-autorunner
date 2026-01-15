@@ -139,6 +139,14 @@ def build_docs_routes() -> APIRouter:
             raise HTTPException(status_code=500, detail=detail)
         return result
 
+    @router.post("/api/docs/{kind}/chat/interrupt")
+    async def interrupt_chat(kind: str, request: Request):
+        doc_chat = request.app.state.doc_chat
+        try:
+            return await doc_chat.interrupt(kind)
+        except DocChatValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @router.post("/api/docs/{kind}/chat/apply")
     async def apply_chat_patch(kind: str, request: Request):
         doc_chat = request.app.state.doc_chat
@@ -209,6 +217,15 @@ def build_docs_routes() -> APIRouter:
             docs = await spec_ingest.execute(
                 force=force, spec_path=spec_override, message=message
             )
+        except SpecIngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return docs
+
+    @router.post("/api/ingest-spec/interrupt", response_model=IngestSpecResponse)
+    async def ingest_spec_interrupt(request: Request):
+        spec_ingest = request.app.state.spec_ingest
+        try:
+            docs = await spec_ingest.interrupt()
         except SpecIngestError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return docs

@@ -1,12 +1,14 @@
 import asyncio
+import contextlib
 import json
 import re
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 from ..integrations.app_server.client import CodexAppServerError
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
@@ -30,6 +32,7 @@ from .state import load_state
 
 ALLOWED_DOC_KINDS = ("todo", "progress", "opinions", "spec", "summary")
 DOC_CHAT_TIMEOUT_SECONDS = 180
+DOC_CHAT_INTERRUPT_GRACE_SECONDS = 10
 DOC_CHAT_PATCH_NAME = "doc-chat.patch"
 
 
@@ -38,6 +41,17 @@ class DocChatRequest:
     kind: str
     message: str
     stream: bool = False
+
+
+@dataclass
+class ActiveDocChatTurn:
+    kind: str
+    thread_id: str
+    turn_id: str
+    client: Any
+    interrupted: bool = False
+    interrupt_sent: bool = False
+    interrupt_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class DocChatError(Exception):
@@ -95,11 +109,82 @@ class DocChatService:
         self._app_server_threads = app_server_threads or AppServerThreadRegistry(
             default_app_server_threads_path(self.engine.repo_root)
         )
+        self._active_turns: Dict[str, ActiveDocChatTurn] = {}
+        self._active_turns_lock = threading.Lock()
+        self._pending_interrupts: set[str] = set()
 
     def _repo_config(self) -> RepoConfig:
         if not isinstance(self.engine.config, RepoConfig):
             raise DocChatError("Doc chat requires repo mode config")
         return self.engine.config
+
+    def _get_active_turn(self, kind: str) -> Optional[ActiveDocChatTurn]:
+        with self._active_turns_lock:
+            return self._active_turns.get(kind)
+
+    def _clear_active_turn(self, kind: str, turn_id: str) -> None:
+        with self._active_turns_lock:
+            current = self._active_turns.get(kind)
+            if current and current.turn_id == turn_id:
+                self._active_turns.pop(kind, None)
+
+    def _register_active_turn(
+        self, kind: str, client: Any, turn_id: str, thread_id: str
+    ) -> ActiveDocChatTurn:
+        interrupt_event = asyncio.Event()
+        active = ActiveDocChatTurn(
+            kind=kind,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            client=client,
+            interrupted=False,
+            interrupt_sent=False,
+            interrupt_event=interrupt_event,
+        )
+        with self._active_turns_lock:
+            self._active_turns[kind] = active
+            if kind in self._pending_interrupts:
+                self._pending_interrupts.remove(kind)
+                active.interrupted = True
+                interrupt_event.set()
+        return active
+
+    async def _interrupt_turn(self, active: ActiveDocChatTurn) -> None:
+        if active.interrupt_sent:
+            return
+        active.interrupt_sent = True
+        chat_id = self._chat_id()
+        try:
+            await asyncio.wait_for(
+                active.client.turn_interrupt(
+                    active.turn_id, thread_id=active.thread_id
+                ),
+                timeout=DOC_CHAT_INTERRUPT_GRACE_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            self._log(
+                chat_id,
+                "result=error " 'detail="interrupt_timeout" backend=app_server',
+            )
+        except CodexAppServerError as exc:
+            self._log(
+                chat_id,
+                "result=error "
+                f'detail="interrupt_failed:{self._compact_message(str(exc))}" '
+                "backend=app_server",
+            )
+
+    async def interrupt(self, kind: str) -> Dict[str, str]:
+        key = _normalize_kind(kind)
+        active = self._get_active_turn(key)
+        if active is None:
+            with self._active_turns_lock:
+                self._pending_interrupts.add(key)
+            return {"status": "interrupted", "kind": key, "detail": "No active turn"}
+        active.interrupted = True
+        active.interrupt_event.set()
+        await self._interrupt_turn(active)
+        return {"status": "interrupted", "kind": key, "detail": "Doc chat interrupted"}
 
     def parse_request(self, kind: str, payload: Optional[dict]) -> DocChatRequest:
         if payload is None or not isinstance(payload, dict):
@@ -365,7 +450,61 @@ class DocChatService:
                 approval_policy="never",
                 sandbox_policy="readOnly",
             )
-            turn_result = await handle.wait(timeout=DOC_CHAT_TIMEOUT_SECONDS)
+            active = self._register_active_turn(
+                request.kind, client, handle.turn_id, handle.thread_id
+            )
+            turn_task = asyncio.create_task(handle.wait(timeout=None))
+            timeout_task = asyncio.create_task(asyncio.sleep(DOC_CHAT_TIMEOUT_SECONDS))
+            interrupt_task = asyncio.create_task(active.interrupt_event.wait())
+            try:
+                tasks = {turn_task, timeout_task, interrupt_task}
+                done, _pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+                if timeout_task in done:
+                    turn_task.add_done_callback(lambda task: task.exception())
+                    raise asyncio.TimeoutError()
+                if interrupt_task in done:
+                    active.interrupted = True
+                    await self._interrupt_turn(active)
+                    done, _pending = await asyncio.wait(
+                        {turn_task}, timeout=DOC_CHAT_INTERRUPT_GRACE_SECONDS
+                    )
+                    if not done:
+                        turn_task.add_done_callback(lambda task: task.exception())
+                        duration_ms = int((time.time() - started_at) * 1000)
+                        self._log(
+                            chat_id,
+                            "result=interrupted "
+                            f"kind={request.kind} path={doc_pointer} "
+                            f"duration_ms={duration_ms} "
+                            f'message="{message_for_log}" backend=app_server',
+                        )
+                        self._cleanup_patch()
+                        return {
+                            "status": "interrupted",
+                            "detail": "Doc chat interrupted",
+                        }
+                turn_result = await turn_task
+            finally:
+                self._clear_active_turn(request.kind, handle.turn_id)
+                timeout_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await timeout_task
+                interrupt_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await interrupt_task
+            if active.interrupted:
+                duration_ms = int((time.time() - started_at) * 1000)
+                self._log(
+                    chat_id,
+                    "result=interrupted "
+                    f"kind={request.kind} path={doc_pointer} "
+                    f"duration_ms={duration_ms} "
+                    f'message="{message_for_log}" backend=app_server',
+                )
+                self._cleanup_patch()
+                return {"status": "interrupted", "detail": "Doc chat interrupted"}
             if turn_result.errors:
                 raise DocChatError(turn_result.errors[-1])
             output = "\n".join(turn_result.agent_messages).strip()
@@ -456,6 +595,11 @@ class DocChatService:
                 if result.get("status") == "ok":
                     yield format_sse("update", result)
                     yield format_sse("done", {"status": "ok"})
+                elif result.get("status") == "interrupted":
+                    yield format_sse(
+                        "interrupted",
+                        {"detail": result.get("detail") or "Doc chat interrupted"},
+                    )
                 else:
                     detail = result.get("detail") or "Doc chat failed"
                     yield format_sse("error", {"detail": detail})

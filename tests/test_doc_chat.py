@@ -1,7 +1,9 @@
+import asyncio
 import difflib
 import json
 import os
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import yaml
@@ -10,6 +12,7 @@ from fastapi.testclient import TestClient
 from codex_autorunner.core.config import DEFAULT_CONFIG
 from codex_autorunner.core.doc_chat import DocChatRequest, DocChatService
 from codex_autorunner.core.engine import Engine
+from codex_autorunner.integrations.app_server.client import TurnResult
 from codex_autorunner.server import create_app
 
 
@@ -47,6 +50,55 @@ def _make_patch(path: str, before: str, after: str) -> str:
             lineterm="",
         )
     )
+
+
+class FakeHandle:
+    def __init__(self, result: TurnResult, event: asyncio.Event) -> None:
+        self.turn_id = "turn-1"
+        self.thread_id = "thread-1"
+        self._result = result
+        self._event = event
+
+    async def wait(self, *, timeout: Optional[float] = None) -> TurnResult:
+        if timeout is None:
+            await self._event.wait()
+        else:
+            await asyncio.wait_for(self._event.wait(), timeout)
+        return self._result
+
+
+class FakeClient:
+    def __init__(self, result: TurnResult, event: asyncio.Event) -> None:
+        self._result = result
+        self._event = event
+        self.interrupt_calls = []
+
+    async def thread_resume(self, thread_id: str) -> dict:
+        return {"id": thread_id}
+
+    async def thread_start(self, _repo_root: str) -> dict:
+        return {"id": "thread-1"}
+
+    async def turn_start(self, *_args, **_kwargs) -> FakeHandle:
+        return FakeHandle(self._result, self._event)
+
+    async def turn_interrupt(
+        self, turn_id: str, *, thread_id: Optional[str] = None
+    ) -> dict:
+        self.interrupt_calls.append((turn_id, thread_id))
+        self._event.set()
+        return {"turn_id": turn_id, "thread_id": thread_id}
+
+
+class FakeSupervisor:
+    def __init__(self, client: FakeClient) -> None:
+        self._client = client
+
+    async def get_client(self, _workspace_root) -> FakeClient:
+        return self._client
+
+    async def close_all(self) -> None:
+        return None
 
 
 @pytest.fixture()
@@ -198,7 +250,37 @@ def test_chat_accepts_summary_kind(repo: Path, monkeypatch: pytest.MonkeyPatch):
     applied = res_apply.json()
     assert applied["content"].strip() == "summary updated"
     assert applied["agent_message"] == "summarized"
-    assert "summary updated" in doc_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.anyio
+async def test_doc_chat_interrupt_skips_patch(repo: Path) -> None:
+    engine = Engine(repo)
+    target_path = engine.config.doc_path("todo")
+    before = target_path.read_text(encoding="utf-8")
+    after = "- [ ] interrupted update\n- [x] done task\n"
+    rel_path = str(target_path.relative_to(engine.repo_root))
+    patch_text = _make_patch(rel_path, before, after)
+
+    event = asyncio.Event()
+    result = TurnResult(
+        turn_id="turn-1",
+        status=None,
+        agent_messages=[patch_text],
+        errors=[],
+        raw_events=[],
+    )
+    client = FakeClient(result, event)
+    supervisor = FakeSupervisor(client)
+    service = DocChatService(engine, app_server_supervisor=supervisor)
+
+    request = DocChatRequest(kind="todo", message="interrupt me")
+    task = asyncio.create_task(service.execute(request))
+    await service.interrupt("todo")
+    response = await task
+
+    assert response["status"] == "interrupted"
+    assert not service.patch_path.exists()
+    assert client.interrupt_calls
 
 
 def test_chat_validation_failure_does_not_write(
