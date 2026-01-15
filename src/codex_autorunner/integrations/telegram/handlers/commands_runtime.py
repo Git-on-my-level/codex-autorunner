@@ -2250,7 +2250,14 @@ class TelegramCommandHandlers:
         )
         await self._send_message(
             message.chat_id,
-            f"Started new thread {thread_id}.",
+            "\n".join(
+                [
+                    f"Started new thread {thread_id}.",
+                    f"Directory: {record.workspace_path or 'unbound'}",
+                    f"Model: {record.model or 'default'}",
+                    f"Effort: {record.effort or 'default'}",
+                ]
+            ),
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -2796,7 +2803,13 @@ class TelegramCommandHandlers:
             overwrite_defaults=True,
         )
         await self._answer_callback(callback, "Resumed thread")
-        message = _format_resume_summary(thread_id, result)
+        message = _format_resume_summary(
+            thread_id,
+            result,
+            workspace_path=record.workspace_path,
+            model=record.model,
+            effort=record.effort,
+        )
         await self._finalize_selection(key, callback, message)
 
     async def _handle_status(
