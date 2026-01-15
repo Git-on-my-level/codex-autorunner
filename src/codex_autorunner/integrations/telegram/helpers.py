@@ -795,7 +795,9 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/review detached ...")
     lines.append("")
     lines.append("Other:")
-    lines.append("!<cmd> - run a bash command in the bound workspace")
+    lines.append(
+        "!<cmd> - run a bash command in the bound workspace (non-interactive; long-running commands time out)"
+    )
     return "\n".join(lines)
 
 
@@ -1822,11 +1824,22 @@ def _format_thread_preview(entry: Any) -> str:
     return _format_preview_parts(user_preview, assistant_preview)
 
 
-def _format_resume_summary(thread_id: str, entry: Any) -> str:
+def _format_resume_summary(
+    thread_id: str,
+    entry: Any,
+    *,
+    workspace_path: Optional[str] = None,
+    model: Optional[str] = None,
+    effort: Optional[str] = None,
+) -> str:
     user_preview, assistant_preview = _extract_thread_resume_parts(entry)
     # Keep raw whitespace for resume summaries; long messages are chunked by the
     # Telegram adapter (send_message_chunks) so we avoid truncation here.
     parts = [f"Resumed thread `{thread_id}`"]
+    if workspace_path or model or effort:
+        parts.append(f"Directory: {workspace_path or 'unbound'}")
+        parts.append(f"Model: {model or 'default'}")
+        parts.append(f"Effort: {effort or 'default'}")
     if user_preview:
         parts.extend(["", "User:", user_preview])
     if assistant_preview:

@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import re
 import secrets
 import shlex
@@ -2250,7 +2251,14 @@ class TelegramCommandHandlers:
         )
         await self._send_message(
             message.chat_id,
-            f"Started new thread {thread_id}.",
+            "\n".join(
+                [
+                    f"Started new thread {thread_id}.",
+                    f"Directory: {record.workspace_path or 'unbound'}",
+                    f"Model: {record.model or 'default'}",
+                    f"Effort: {record.effort or 'default'}",
+                ]
+            ),
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -2788,7 +2796,7 @@ class TelegramCommandHandlers:
                 conflict_topic=conflict_key,
             )
             return
-        self._apply_thread_result(
+        updated_record = self._apply_thread_result(
             chat_id,
             thread_id_val,
             result,
@@ -2796,7 +2804,13 @@ class TelegramCommandHandlers:
             overwrite_defaults=True,
         )
         await self._answer_callback(callback, "Resumed thread")
-        message = _format_resume_summary(thread_id, result)
+        message = _format_resume_summary(
+            thread_id,
+            result,
+            workspace_path=updated_record.workspace_path,
+            model=updated_record.model,
+            effort=updated_record.effort,
+        )
         await self._finalize_selection(key, callback, message)
 
     async def _handle_status(
@@ -3827,8 +3841,41 @@ class TelegramCommandHandlers:
         }
         if sandbox_policy:
             params["sandboxPolicy"] = _normalize_sandbox_policy(sandbox_policy)
+        timeout_seconds = max(0.1, self._config.shell.timeout_ms / 1000.0)
+        request_timeout = timeout_seconds + 1.0
         try:
-            result = await client.request("command/exec", params)
+            result = await client.request(
+                "command/exec", params, timeout=request_timeout
+            )
+        except asyncio.TimeoutError:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.shell.timeout",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                command=command_text,
+                timeout_seconds=timeout_seconds,
+            )
+            timeout_label = int(math.ceil(timeout_seconds))
+            timeout_message = (
+                f"Shell command timed out after {timeout_label}s: `{command_text}`.\n"
+                "Interactive commands (top/htop/watch/tail -f) do not exit. "
+                "Try a one-shot flag like `top -l 1` (macOS) or "
+                "`top -b -n 1` (Linux)."
+            )
+            await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=placeholder_id,
+                response=_with_conversation_id(
+                    timeout_message,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+            )
+            return
         except Exception as exc:
             log_event(
                 self._logger,

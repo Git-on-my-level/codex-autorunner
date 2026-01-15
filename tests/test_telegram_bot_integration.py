@@ -341,6 +341,32 @@ async def test_bang_shell_attaches_output(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_bang_shell_timeout_message(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(
+        tmp_path,
+        fixture_command("command_exec_hang"),
+        overrides={"shell": {"enabled": True, "timeout_ms": 100}},
+    )
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        runtime = service._router.runtime_for(
+            service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        )
+        message = build_message("!top", message_id=11)
+        await service._handle_bang_shell(message, "!top", runtime)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert any("timed out" in msg["text"] for msg in fake_bot.messages)
+    assert any("top -l 1" in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
 async def test_diff_command_uses_app_server(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
