@@ -228,7 +228,7 @@ class DocChatService:
     async def interrupt(self, _kind: Optional[str] = None) -> Dict[str, str]:
         active = self._get_active_turn()
         if active is None:
-            pending = self.doc_busy()
+            pending = self._local_busy()
             with self._active_turn_lock:
                 self._pending_interrupt = pending
             return {
@@ -284,6 +284,12 @@ class DocChatService:
         finally:
             file_lock.release()
         return False
+
+    def _local_busy(self) -> bool:
+        if self._thread_lock.locked():
+            return True
+        lock = self._lock
+        return bool(lock and lock.locked())
 
     def _ensure_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -472,12 +478,16 @@ class DocChatService:
             patch_for_doc = self._build_patch(target, before, after)
             if not patch_for_doc.strip():
                 continue
-            base_hash = self._hash_content(before)
             existing = drafts.get(kind)
-            if existing and docs.get(kind, {}).get("source") == "draft":
-                base_hash = existing.base_hash or self._hash_content(
+            try:
+                disk_hash = self._hash_content(
                     config.doc_path(kind).read_text(encoding="utf-8")
                 )
+            except OSError:
+                disk_hash = self._hash_content(before)
+            base_hash = disk_hash
+            if existing and existing.base_hash:
+                base_hash = existing.base_hash
             updated[kind] = DocChatDraftState(
                 content=after,
                 patch=patch_for_doc,

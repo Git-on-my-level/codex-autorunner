@@ -16,6 +16,7 @@ from codex_autorunner.core.doc_chat import (
     DocChatService,
 )
 from codex_autorunner.core.engine import Engine
+from codex_autorunner.core.locks import FileLock
 from codex_autorunner.integrations.app_server.client import TurnResult
 from codex_autorunner.server import create_app
 
@@ -304,6 +305,22 @@ async def test_doc_chat_interrupt_skips_patch(repo: Path) -> None:
     assert client.interrupt_calls
 
 
+@pytest.mark.anyio
+async def test_doc_chat_interrupt_ignores_external_lock(repo: Path) -> None:
+    engine = Engine(repo)
+    service = DocChatService(engine)
+    lock = FileLock(service._doc_lock_path())
+    lock.acquire(blocking=False)
+    try:
+        response = await service.interrupt("todo")
+    finally:
+        lock.release()
+
+    assert response["status"] == "interrupted"
+    with service._active_turn_lock:
+        assert not service._pending_interrupt
+
+
 def test_chat_validation_failure_does_not_write(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -398,6 +415,40 @@ def test_doc_chat_preserves_base_hash_on_draft_updates(repo: Path) -> None:
     )
 
     assert updated["todo"].base_hash == base_hash
+
+
+def test_doc_chat_apply_allows_stacked_drafts(repo: Path) -> None:
+    engine = Engine(repo)
+    service = DocChatService(engine)
+    target_path = engine.config.doc_path("todo")
+    before = target_path.read_text(encoding="utf-8")
+    rel_path = str(target_path.relative_to(engine.repo_root))
+    first_after = before + "- [ ] draft task\n"
+    first_patch = _make_patch(rel_path, before, first_after)
+    draft = DocChatDraftState(
+        content=first_after,
+        patch=first_patch,
+        agent_message="drafted",
+        created_at="2024-01-01T00:00:00Z",
+        base_hash=service._hash_content(before),
+    )
+    drafts = {"todo": draft}
+    service._save_drafts(drafts)
+
+    docs = service._doc_bases(drafts)
+    second_after = first_after + "- [ ] followup\n"
+    second_patch = _make_patch(rel_path, first_after, second_after)
+    updated, _kinds, _payloads = service._apply_patch_to_drafts(
+        patch_text_raw=second_patch,
+        drafts=drafts,
+        docs=docs,
+        agent_message="refined",
+        allowed_kinds=("todo",),
+    )
+    service._save_drafts(updated)
+
+    applied = service.apply_saved_patch("todo")
+    assert "- [ ] followup" in applied
 
 
 def test_prompt_includes_all_docs_and_recent_run(
