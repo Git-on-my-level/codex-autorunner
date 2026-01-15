@@ -83,6 +83,31 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
         "request_timeout": None,
+        "prompts": {
+            "doc_chat": {
+                "max_chars": 12000,
+                "message_max_chars": 2000,
+                "target_excerpt_max_chars": 4000,
+                "recent_summary_max_chars": 2000,
+            },
+            "spec_ingest": {
+                "max_chars": 12000,
+                "message_max_chars": 2000,
+                "spec_excerpt_max_chars": 5000,
+            },
+            "autorunner": {
+                "max_chars": 16000,
+                "message_max_chars": 2000,
+                "todo_excerpt_max_chars": 4000,
+                "prev_run_max_chars": 3000,
+            },
+        },
+    },
+    "doc_chat": {
+        "backend": "app_server",
+    },
+    "spec_ingest": {
+        "backend": "app_server",
     },
     "server": {
         "host": "127.0.0.1",
@@ -358,6 +383,25 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
         "request_timeout": None,
+        "prompts": {
+            "doc_chat": {
+                "max_chars": 12000,
+                "message_max_chars": 2000,
+                "target_excerpt_max_chars": 4000,
+                "recent_summary_max_chars": 2000,
+            },
+            "spec_ingest": {
+                "max_chars": 12000,
+                "message_max_chars": 2000,
+                "spec_excerpt_max_chars": 5000,
+            },
+            "autorunner": {
+                "max_chars": 16000,
+                "message_max_chars": 2000,
+                "todo_excerpt_max_chars": 4000,
+                "prev_run_max_chars": 3000,
+            },
+        },
     },
     "server": {
         "host": "127.0.0.1",
@@ -484,12 +528,43 @@ class StaticAssetsConfig:
 
 
 @dataclasses.dataclass
+class AppServerDocChatPromptConfig:
+    max_chars: int
+    message_max_chars: int
+    target_excerpt_max_chars: int
+    recent_summary_max_chars: int
+
+
+@dataclasses.dataclass
+class AppServerSpecIngestPromptConfig:
+    max_chars: int
+    message_max_chars: int
+    spec_excerpt_max_chars: int
+
+
+@dataclasses.dataclass
+class AppServerAutorunnerPromptConfig:
+    max_chars: int
+    message_max_chars: int
+    todo_excerpt_max_chars: int
+    prev_run_max_chars: int
+
+
+@dataclasses.dataclass
+class AppServerPromptsConfig:
+    doc_chat: AppServerDocChatPromptConfig
+    spec_ingest: AppServerSpecIngestPromptConfig
+    autorunner: AppServerAutorunnerPromptConfig
+
+
+@dataclasses.dataclass
 class AppServerConfig:
     command: List[str]
     state_root: Path
     max_handles: Optional[int]
     idle_ttl_seconds: Optional[int]
     request_timeout: Optional[float]
+    prompts: AppServerPromptsConfig
 
 
 @dataclasses.dataclass
@@ -512,6 +587,8 @@ class RepoConfig:
     git_auto_commit: bool
     git_commit_message_template: str
     app_server: AppServerConfig
+    doc_chat_backend: str
+    spec_ingest_backend: str
     server_host: str
     server_port: int
     server_base_path: str
@@ -647,6 +724,76 @@ def _parse_command(raw: Any) -> List[str]:
     return []
 
 
+def _parse_prompt_int(cfg: Dict[str, Any], defaults: Dict[str, Any], key: str) -> int:
+    raw = cfg.get(key)
+    if raw is None:
+        raw = defaults.get(key, 0)
+    return int(raw)
+
+
+def _parse_app_server_prompts_config(
+    cfg: Optional[Dict[str, Any]],
+    defaults: Optional[Dict[str, Any]],
+) -> AppServerPromptsConfig:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+    doc_chat_cfg = cfg.get("doc_chat")
+    doc_chat_defaults = defaults.get("doc_chat")
+    doc_chat_cfg = doc_chat_cfg if isinstance(doc_chat_cfg, dict) else {}
+    doc_chat_defaults = doc_chat_defaults if isinstance(doc_chat_defaults, dict) else {}
+    spec_ingest_cfg = cfg.get("spec_ingest")
+    spec_ingest_defaults = defaults.get("spec_ingest")
+    spec_ingest_cfg = spec_ingest_cfg if isinstance(spec_ingest_cfg, dict) else {}
+    spec_ingest_defaults = (
+        spec_ingest_defaults if isinstance(spec_ingest_defaults, dict) else {}
+    )
+    autorunner_cfg = cfg.get("autorunner")
+    autorunner_defaults = defaults.get("autorunner")
+    autorunner_cfg = autorunner_cfg if isinstance(autorunner_cfg, dict) else {}
+    autorunner_defaults = (
+        autorunner_defaults if isinstance(autorunner_defaults, dict) else {}
+    )
+    return AppServerPromptsConfig(
+        doc_chat=AppServerDocChatPromptConfig(
+            max_chars=_parse_prompt_int(doc_chat_cfg, doc_chat_defaults, "max_chars"),
+            message_max_chars=_parse_prompt_int(
+                doc_chat_cfg, doc_chat_defaults, "message_max_chars"
+            ),
+            target_excerpt_max_chars=_parse_prompt_int(
+                doc_chat_cfg, doc_chat_defaults, "target_excerpt_max_chars"
+            ),
+            recent_summary_max_chars=_parse_prompt_int(
+                doc_chat_cfg, doc_chat_defaults, "recent_summary_max_chars"
+            ),
+        ),
+        spec_ingest=AppServerSpecIngestPromptConfig(
+            max_chars=_parse_prompt_int(
+                spec_ingest_cfg, spec_ingest_defaults, "max_chars"
+            ),
+            message_max_chars=_parse_prompt_int(
+                spec_ingest_cfg, spec_ingest_defaults, "message_max_chars"
+            ),
+            spec_excerpt_max_chars=_parse_prompt_int(
+                spec_ingest_cfg, spec_ingest_defaults, "spec_excerpt_max_chars"
+            ),
+        ),
+        autorunner=AppServerAutorunnerPromptConfig(
+            max_chars=_parse_prompt_int(
+                autorunner_cfg, autorunner_defaults, "max_chars"
+            ),
+            message_max_chars=_parse_prompt_int(
+                autorunner_cfg, autorunner_defaults, "message_max_chars"
+            ),
+            todo_excerpt_max_chars=_parse_prompt_int(
+                autorunner_cfg, autorunner_defaults, "todo_excerpt_max_chars"
+            ),
+            prev_run_max_chars=_parse_prompt_int(
+                autorunner_cfg, autorunner_defaults, "prev_run_max_chars"
+            ),
+        ),
+    )
+
+
 def _parse_app_server_config(
     cfg: Optional[Dict[str, Any]],
     root: Path,
@@ -672,12 +819,15 @@ def _parse_app_server_config(
     )
     if request_timeout is not None and request_timeout <= 0:
         request_timeout = None
+    prompt_defaults = defaults.get("prompts")
+    prompts = _parse_app_server_prompts_config(cfg.get("prompts"), prompt_defaults)
     return AppServerConfig(
         command=command,
         state_root=state_root,
         max_handles=max_handles,
         idle_ttl_seconds=idle_ttl_seconds,
         request_timeout=request_timeout,
+        prompts=prompts,
     )
 
 
@@ -819,6 +969,10 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     server_log_cfg = cast(
         Dict[str, Any], server_log_cfg if isinstance(server_log_cfg, dict) else {}
     )
+    doc_chat_raw = cfg.get("doc_chat")
+    doc_chat_cfg = doc_chat_raw if isinstance(doc_chat_raw, dict) else {}
+    spec_ingest_raw = cfg.get("spec_ingest")
+    spec_ingest_cfg = spec_ingest_raw if isinstance(spec_ingest_raw, dict) else {}
     return RepoConfig(
         raw=cfg,
         root=root,
@@ -841,6 +995,14 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
             cfg.get("app_server"),
             root,
             DEFAULT_REPO_CONFIG["app_server"],
+        ),
+        doc_chat_backend=str(
+            doc_chat_cfg.get("backend", DEFAULT_REPO_CONFIG["doc_chat"]["backend"])
+        ),
+        spec_ingest_backend=str(
+            spec_ingest_cfg.get(
+                "backend", DEFAULT_REPO_CONFIG["spec_ingest"]["backend"]
+            )
         ),
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
@@ -1001,6 +1163,47 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
     ):
         if not isinstance(app_server_cfg.get("request_timeout"), (int, float)):
             raise ConfigError("app_server.request_timeout must be a number or null")
+    prompts = app_server_cfg.get("prompts")
+    if prompts is not None:
+        if not isinstance(prompts, dict):
+            raise ConfigError("app_server.prompts must be a mapping if provided")
+        expected = {
+            "doc_chat": {
+                "max_chars": 1,
+                "message_max_chars": 1,
+                "target_excerpt_max_chars": 0,
+                "recent_summary_max_chars": 0,
+            },
+            "spec_ingest": {
+                "max_chars": 1,
+                "message_max_chars": 1,
+                "spec_excerpt_max_chars": 0,
+            },
+            "autorunner": {
+                "max_chars": 1,
+                "message_max_chars": 1,
+                "todo_excerpt_max_chars": 0,
+                "prev_run_max_chars": 0,
+            },
+        }
+        for section, keys in expected.items():
+            section_cfg = prompts.get(section)
+            if section_cfg is None:
+                continue
+            if not isinstance(section_cfg, dict):
+                raise ConfigError(f"app_server.prompts.{section} must be a mapping")
+            for key, min_value in keys.items():
+                if key not in section_cfg:
+                    continue
+                value = section_cfg.get(key)
+                if value is None or not isinstance(value, int):
+                    raise ConfigError(
+                        f"app_server.prompts.{section}.{key} must be an integer"
+                    )
+                if value < min_value:
+                    raise ConfigError(
+                        f"app_server.prompts.{section}.{key} must be >= {min_value}"
+                    )
 
 
 def _validate_repo_config(cfg: Dict[str, Any]) -> None:
@@ -1102,6 +1305,24 @@ def _validate_repo_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("server.auth_token_env must be a string if provided")
     _validate_server_security(server)
     _validate_app_server_config(cfg)
+    doc_chat_cfg = cfg.get("doc_chat")
+    if doc_chat_cfg is not None:
+        if not isinstance(doc_chat_cfg, dict):
+            raise ConfigError("doc_chat section must be a mapping if provided")
+        backend = doc_chat_cfg.get("backend")
+        if backend is not None and not isinstance(backend, str):
+            raise ConfigError("doc_chat.backend must be a string if provided")
+        if backend and backend not in ("cli", "app_server"):
+            raise ConfigError("doc_chat.backend must be 'cli' or 'app_server'")
+    spec_ingest_cfg = cfg.get("spec_ingest")
+    if spec_ingest_cfg is not None:
+        if not isinstance(spec_ingest_cfg, dict):
+            raise ConfigError("spec_ingest section must be a mapping if provided")
+        backend = spec_ingest_cfg.get("backend")
+        if backend is not None and not isinstance(backend, str):
+            raise ConfigError("spec_ingest.backend must be a string if provided")
+        if backend and backend not in ("cli", "app_server"):
+            raise ConfigError("spec_ingest.backend must be 'cli' or 'app_server'")
     notifications_cfg = cfg.get("notifications")
     if notifications_cfg is not None:
         if not isinstance(notifications_cfg, dict):

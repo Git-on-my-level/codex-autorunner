@@ -81,6 +81,46 @@ repo:
     idle_ttl_seconds: 3600
     # Per-request timeout (seconds); null/<=0 uses the client default.
     request_timeout: null
+    # Prompt limits for app-server flows (doc chat, spec ingest, autorunner).
+    prompts:
+      doc_chat:
+        max_chars: 12000
+        message_max_chars: 2000
+        target_excerpt_max_chars: 4000
+        recent_summary_max_chars: 2000
+      spec_ingest:
+        max_chars: 12000
+        message_max_chars: 2000
+        spec_excerpt_max_chars: 5000
+      autorunner:
+        max_chars: 16000
+        message_max_chars: 2000
+        todo_excerpt_max_chars: 4000
+        prev_run_max_chars: 3000
+    # Prompt limits for app-server flows (doc chat, spec ingest, autorunner).
+    prompts:
+      doc_chat:
+        max_chars: 12000
+        message_max_chars: 2000
+        target_excerpt_max_chars: 4000
+        recent_summary_max_chars: 2000
+      spec_ingest:
+        max_chars: 12000
+        message_max_chars: 2000
+        spec_excerpt_max_chars: 5000
+      autorunner:
+        max_chars: 16000
+        message_max_chars: 2000
+        todo_excerpt_max_chars: 4000
+        prev_run_max_chars: 3000
+
+  doc_chat:
+    # Backend used for doc chat (app_server|cli).
+    backend: app_server
+
+  spec_ingest:
+    # Backend used for SPEC ingest (app_server|cli).
+    backend: app_server
 
   server:
     # Bind host/port for the local UI/API. Use 0.0.0.0 only if you intend to expose it.

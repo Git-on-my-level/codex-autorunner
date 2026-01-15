@@ -14,6 +14,7 @@ from codex_autorunner.server import create_app
 
 def _write_default_config(repo_root: Path) -> None:
     data = json.loads(json.dumps(DEFAULT_CONFIG))
+    data.setdefault("doc_chat", {})["backend"] = "cli"
     config_path = repo_root / ".codex-autorunner" / "config.yml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.safe_dump(data), encoding="utf-8")

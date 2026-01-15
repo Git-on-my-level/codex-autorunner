@@ -47,6 +47,7 @@ from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
+from ..spec_ingest import SpecIngestService
 from ..voice import VoiceConfig, VoiceService
 from .hub_jobs import HubJobManager
 from .middleware import (
@@ -81,6 +82,7 @@ class AppContext:
     engine: Engine
     manager: RunnerManager
     doc_chat: DocChatService
+    spec_ingest: SpecIngestService
     app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
     app_server_prune_interval: Optional[float]
     app_server_threads: AppServerThreadRegistry
@@ -173,7 +175,6 @@ def _build_app_context(
     )
     engine = Engine(config.root)
     manager = RunnerManager(engine)
-    doc_chat = DocChatService(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
     voice_missing_reason: Optional[str] = None
     try:
@@ -218,6 +219,16 @@ def _build_app_context(
     )
     app_server_threads = AppServerThreadRegistry(
         default_app_server_threads_path(engine.repo_root)
+    )
+    doc_chat = DocChatService(
+        engine,
+        app_server_supervisor=app_server_supervisor,
+        app_server_threads=app_server_threads,
+    )
+    spec_ingest = SpecIngestService(
+        engine,
+        app_server_supervisor=app_server_supervisor,
+        app_server_threads=app_server_threads,
     )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:
@@ -269,6 +280,7 @@ def _build_app_context(
         engine=engine,
         manager=manager,
         doc_chat=doc_chat,
+        spec_ingest=spec_ingest,
         app_server_supervisor=app_server_supervisor,
         app_server_prune_interval=app_server_prune_interval,
         app_server_threads=app_server_threads,
@@ -298,6 +310,7 @@ def _apply_app_context(app: FastAPI, context: AppContext) -> None:
     app.state.config = context.engine.config  # Expose config consistently
     app.state.manager = context.manager
     app.state.doc_chat = context.doc_chat
+    app.state.spec_ingest = context.spec_ingest
     app.state.app_server_supervisor = context.app_server_supervisor
     app.state.app_server_prune_interval = context.app_server_prune_interval
     app.state.app_server_threads = context.app_server_threads

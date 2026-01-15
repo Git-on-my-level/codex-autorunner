@@ -32,8 +32,6 @@ from ..core.utils import atomic_write
 from ..spec_ingest import (
     SpecIngestError,
     clear_work_docs,
-    generate_docs_from_spec,
-    write_ingested_docs,
 )
 from ..web.schemas import (
     DocChatPayload,
@@ -41,6 +39,7 @@ from ..web.schemas import (
     DocsResponse,
     DocWriteResponse,
     IngestSpecRequest,
+    IngestSpecResponse,
     RepoUsageResponse,
     SnapshotCreateResponse,
     SnapshotRequest,
@@ -184,21 +183,50 @@ def build_docs_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="No pending patch")
         return pending
 
-    @router.post("/api/ingest-spec", response_model=DocsResponse)
-    def ingest_spec(request: Request, payload: Optional[IngestSpecRequest] = None):
-        engine = request.app.state.engine
+    @router.post("/api/ingest-spec", response_model=IngestSpecResponse)
+    async def ingest_spec(
+        request: Request, payload: Optional[IngestSpecRequest] = None
+    ):
+        spec_ingest = request.app.state.spec_ingest
         force = False
         spec_override: Optional[Path] = None
+        message: Optional[str] = None
         if payload:
             force = payload.force
             if payload.spec_path:
                 spec_override = Path(str(payload.spec_path))
+            message = payload.message
         try:
-            docs = generate_docs_from_spec(engine, spec_path=spec_override)
-            write_ingested_docs(engine, docs, force=force)
+            docs = await spec_ingest.execute(
+                force=force, spec_path=spec_override, message=message
+            )
         except SpecIngestError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return docs
+
+    @router.get("/api/ingest-spec/pending", response_model=IngestSpecResponse)
+    def ingest_spec_pending(request: Request):
+        spec_ingest = request.app.state.spec_ingest
+        pending = spec_ingest.pending_patch()
+        if not pending:
+            raise HTTPException(status_code=404, detail="No pending spec ingest patch")
+        return pending
+
+    @router.post("/api/ingest-spec/apply", response_model=IngestSpecResponse)
+    def ingest_spec_apply(request: Request):
+        spec_ingest = request.app.state.spec_ingest
+        try:
+            return spec_ingest.apply_patch()
+        except SpecIngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/api/ingest-spec/discard", response_model=IngestSpecResponse)
+    def ingest_spec_discard(request: Request):
+        spec_ingest = request.app.state.spec_ingest
+        try:
+            return spec_ingest.discard_patch()
+        except SpecIngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/api/docs/clear", response_model=DocsResponse)
     def clear_docs(request: Request):

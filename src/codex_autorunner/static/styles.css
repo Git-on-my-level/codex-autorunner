@@ -1776,6 +1776,38 @@ button.icon-btn {
   display: none;
 }
 
+.spec-ingest-followup {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.spec-ingest-followup.hidden {
+  display: none;
+}
+
+.spec-ingest-followup textarea {
+  flex: 1 1 auto;
+  min-height: 42px;
+  max-height: 120px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.3;
+  resize: vertical;
+}
+
+.spec-ingest-followup textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
 /* Shared compose panel styling (terminal + doc chat) */
 .compose-panel {
   margin-top: 4px;

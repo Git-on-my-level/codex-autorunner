@@ -67,6 +67,7 @@ class DocChatPayload(Payload):
 class IngestSpecRequest(Payload):
     force: bool = False
     spec_path: Optional[str] = None
+    message: Optional[str] = None
 
 
 class AppServerThreadResetRequest(Payload):
@@ -173,6 +174,17 @@ class DocsResponse(ResponseModel):
     opinions: str
     spec: str
     summary: str
+
+
+class IngestSpecResponse(ResponseModel):
+    status: str
+    todo: str
+    progress: str
+    opinions: str
+    spec: str
+    summary: str
+    patch: Optional[str] = None
+    agent_message: Optional[str] = None
 
 
 class AppServerThreadsResponse(ResponseModel):
