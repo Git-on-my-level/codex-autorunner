@@ -93,6 +93,24 @@ def test_app_server_supervisor_reused(repo, monkeypatch) -> None:
 
 
 @pytest.mark.anyio
+async def test_autorunner_reuses_supervisor_across_turns(repo, monkeypatch) -> None:
+    engine = Engine(repo)
+    FakeSupervisor.instances = []
+
+    result = _make_turn_result()
+    FakeSupervisor.shared_client = FakeClient(lambda: FakeHandle(result))
+    monkeypatch.setattr(engine_module, "WorkspaceAppServerSupervisor", FakeSupervisor)
+
+    exit_code = await engine._run_codex_app_server_async("prompt", 1)
+    assert exit_code == 0
+
+    exit_code = await engine._run_codex_app_server_async("prompt", 2)
+    assert exit_code == 0
+
+    assert len(FakeSupervisor.instances) == 1
+
+
+@pytest.mark.anyio
 async def test_autorunner_turn_timeout_uses_config(repo, monkeypatch) -> None:
     engine = Engine(repo)
     engine.config.app_server.turn_timeout_seconds = 42
