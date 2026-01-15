@@ -399,6 +399,8 @@ class TelegramBotService(
                 allowed_chats=len(self._config.allowed_chat_ids),
                 allowed_users=len(self._config.allowed_user_ids),
                 require_topics=self._config.require_topics,
+                max_parallel_turns=self._config.concurrency.max_parallel_turns,
+                per_topic_queue=self._config.concurrency.per_topic_queue,
                 media_enabled=self._config.media.enabled,
                 media_images=self._config.media.images,
                 media_voice=self._config.media.voice,

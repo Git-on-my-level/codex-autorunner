@@ -139,10 +139,11 @@ class TelegramMessageTransport:
         *,
         thread_id: Optional[int],
         reply_to: Optional[int],
+        text: str = PLACEHOLDER_TEXT,
     ) -> Optional[int]:
         try:
             payload_text, parse_mode = self._prepare_outgoing_text(
-                PLACEHOLDER_TEXT,
+                text,
                 chat_id=chat_id,
                 thread_id=thread_id,
                 reply_to=reply_to,
