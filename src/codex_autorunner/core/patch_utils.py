@@ -39,14 +39,15 @@ def _extract_patch_targets(patch_text: str) -> List[str]:
 def _apply_patch_section(
     target_path: str, lines: List[str], *, targets: List[str], output: List[str]
 ) -> None:
-    if not target_path:
+    normalized_target = _normalize_target_path(target_path)
+    if not normalized_target:
         return
-    header = f"--- a/{target_path}\n+++ b/{target_path}\n"
+    header = f"--- a/{normalized_target}\n+++ b/{normalized_target}\n"
     if not lines:
         lines = [_PATCH_EMPTY_HUNK]
     body = "\n".join(lines)
     output.append(header + body + ("\n" if body else ""))
-    targets.append(target_path)
+    targets.append(f"a/{normalized_target}")
 
 
 def _convert_apply_patch_format(patch_text: str) -> Tuple[str, List[str]]:
@@ -103,12 +104,13 @@ def normalize_patch_text(
     else:
         targets = _extract_patch_targets(normalized)
     if not targets and default_target:
-        header = f"--- a/{default_target}\n+++ b/{default_target}\n"
+        normalized_target = _normalize_target_path(default_target)
+        header = f"--- a/{normalized_target}\n+++ b/{normalized_target}\n"
         if normalized and not normalized.startswith("@@"):
             normalized = header + "\n" + normalized
         else:
             normalized = header + normalized
-        targets = [default_target]
+        targets = [f"a/{normalized_target}"]
     if not targets:
         raise PatchError("Patch file missing file headers")
     if not normalized.endswith("\n"):
