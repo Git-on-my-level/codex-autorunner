@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -12,12 +13,17 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import IO, Iterator, Optional
 
+import yaml
+
+from ..manifest import MANIFEST_VERSION
+from ..web.static_assets import missing_static_assets, resolve_static_dir
 from .about_car import ensure_about_car_file
 from .codex_runner import run_codex_streaming
-from .config import ConfigError, RepoConfig, load_config
+from .config import ConfigError, HubConfig, RepoConfig, _is_loopback_host, load_config
 from .docs import DocsManager
 from .locks import process_alive, read_lock_info, write_lock_info
 from .notifications import NotificationManager
+from .optional_dependencies import missing_optional_dependencies
 from .prompt import build_final_summary_prompt, build_prompt
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
@@ -703,18 +709,317 @@ def _read_tail_text(path: Path, *, max_bytes: int) -> str:
         return ""
 
 
-def doctor(repo_root: Path) -> None:
-    root = find_repo_root(repo_root)
-    config = load_config(root)
-    if not isinstance(config, RepoConfig):
-        raise ConfigError("Doctor requires repo mode configuration")
-    missing = []
-    for key in ("todo", "progress", "opinions"):
-        path = config.doc_path(key)
-        if not path.exists():
-            missing.append(path)
-    if missing:
-        names = ", ".join(str(p) for p in missing)
-        raise ConfigError(f"Missing doc files: {names}")
-    if not ensure_executable(config.codex_binary):
-        raise ConfigError(f"Codex binary not found in PATH: {config.codex_binary}")
+@dataclasses.dataclass(frozen=True)
+class DoctorCheck:
+    check_id: str
+    status: str
+    message: str
+    fix: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        payload = {
+            "id": self.check_id,
+            "status": self.status,
+            "message": self.message,
+        }
+        if self.fix:
+            payload["fix"] = self.fix
+        return payload
+
+
+@dataclasses.dataclass(frozen=True)
+class DoctorReport:
+    checks: list[DoctorCheck]
+
+    def has_errors(self) -> bool:
+        return any(check.status == "error" for check in self.checks)
+
+    def to_dict(self) -> dict:
+        return {
+            "ok": sum(1 for check in self.checks if check.status == "ok"),
+            "warnings": sum(1 for check in self.checks if check.status == "warning"),
+            "errors": sum(1 for check in self.checks if check.status == "error"),
+            "checks": [check.to_dict() for check in self.checks],
+        }
+
+
+def _append_check(
+    checks: list[DoctorCheck],
+    check_id: str,
+    status: str,
+    message: str,
+    fix: Optional[str] = None,
+) -> None:
+    checks.append(
+        DoctorCheck(check_id=check_id, status=status, message=message, fix=fix)
+    )
+
+
+def _parse_manifest_version(manifest_path: Path) -> Optional[int]:
+    try:
+        raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    version = raw.get("version")
+    return int(version) if isinstance(version, int) else None
+
+
+def _manifest_has_worktrees(manifest_path: Path) -> bool:
+    try:
+        raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return False
+    if not isinstance(raw, dict):
+        return False
+    repos = raw.get("repos")
+    if not isinstance(repos, list):
+        return False
+    for entry in repos:
+        if isinstance(entry, dict) and entry.get("kind") == "worktree":
+            return True
+    return False
+
+
+def doctor(start_path: Path) -> DoctorReport:
+    config = load_config(start_path)
+    checks: list[DoctorCheck] = []
+    root = config.root
+
+    if isinstance(config, RepoConfig):
+        missing = []
+        for key in ("todo", "progress", "opinions"):
+            path = config.doc_path(key)
+            if not path.exists():
+                missing.append(path)
+        if missing:
+            names = ", ".join(str(p) for p in missing)
+            _append_check(
+                checks,
+                "docs.required",
+                "error",
+                f"Missing doc files: {names}",
+                "Run `car init` or create the missing files.",
+            )
+        else:
+            _append_check(
+                checks,
+                "docs.required",
+                "ok",
+                "Required doc files are present.",
+            )
+
+        if ensure_executable(config.codex_binary):
+            _append_check(
+                checks,
+                "codex.binary",
+                "ok",
+                f"Codex binary resolved: {config.codex_binary}",
+            )
+        else:
+            _append_check(
+                checks,
+                "codex.binary",
+                "error",
+                f"Codex binary not found in PATH: {config.codex_binary}",
+                "Install Codex or set codex.binary to a full path.",
+            )
+
+        voice_enabled = bool(config.voice.get("enabled", True))
+        if voice_enabled:
+            missing_voice = missing_optional_dependencies(
+                (("httpx", "httpx"), ("multipart", "python-multipart"))
+            )
+            if missing_voice:
+                deps_list = ", ".join(missing_voice)
+                _append_check(
+                    checks,
+                    "voice.dependencies",
+                    "error",
+                    f"Voice is enabled but missing optional deps: {deps_list}",
+                    "Install with `pip install codex-autorunner[voice]`.",
+                )
+            else:
+                _append_check(
+                    checks,
+                    "voice.dependencies",
+                    "ok",
+                    "Voice dependencies are installed.",
+                )
+
+    env_candidates = [
+        root / ".env",
+        root / ".codex-autorunner" / ".env",
+    ]
+    env_found = [str(path) for path in env_candidates if path.exists()]
+    if env_found:
+        _append_check(
+            checks,
+            "dotenv.locations",
+            "ok",
+            f"Found .env files: {', '.join(env_found)}",
+        )
+    else:
+        _append_check(
+            checks,
+            "dotenv.locations",
+            "warning",
+            "No .env files found in repo root or .codex-autorunner/.env.",
+            "Create one of these files if you rely on env vars.",
+        )
+
+    host = str(config.server_host or "")
+    if not _is_loopback_host(host):
+        if not config.server_auth_token_env:
+            _append_check(
+                checks,
+                "server.auth",
+                "error",
+                f"Non-loopback host {host} requires server.auth_token_env.",
+                "Set server.auth_token_env or bind to 127.0.0.1.",
+            )
+        else:
+            token_val = os.environ.get(config.server_auth_token_env)
+            if not token_val:
+                _append_check(
+                    checks,
+                    "server.auth",
+                    "warning",
+                    f"Auth token env var {config.server_auth_token_env} is not set.",
+                    "Export the env var or add it to .env.",
+                )
+            else:
+                _append_check(
+                    checks,
+                    "server.auth",
+                    "ok",
+                    "Server auth token env var is set for non-loopback host.",
+                )
+
+    static_dir, static_context = resolve_static_dir()
+    try:
+        missing_assets = missing_static_assets(static_dir)
+        if missing_assets:
+            _append_check(
+                checks,
+                "static.assets",
+                "error",
+                f"Static UI assets missing in {static_dir}: {', '.join(missing_assets)}",
+                "Reinstall the package or rebuild the UI assets.",
+            )
+        else:
+            _append_check(
+                checks,
+                "static.assets",
+                "ok",
+                f"Static UI assets present in {static_dir}",
+            )
+    finally:
+        if static_context is not None:
+            static_context.close()
+
+    if isinstance(config, HubConfig):
+        if config.manifest_path.exists():
+            version = _parse_manifest_version(config.manifest_path)
+            if version is None:
+                _append_check(
+                    checks,
+                    "hub.manifest.version",
+                    "error",
+                    f"Failed to read manifest version from {config.manifest_path}.",
+                    "Fix the manifest YAML or regenerate it with `car hub scan`.",
+                )
+            elif version != MANIFEST_VERSION:
+                _append_check(
+                    checks,
+                    "hub.manifest.version",
+                    "error",
+                    f"Hub manifest version {version} unsupported (expected {MANIFEST_VERSION}).",
+                    "Regenerate the manifest (delete it and run `car hub scan`).",
+                )
+            else:
+                _append_check(
+                    checks,
+                    "hub.manifest.version",
+                    "ok",
+                    f"Hub manifest version {version} is supported.",
+                )
+        else:
+            _append_check(
+                checks,
+                "hub.manifest.exists",
+                "warning",
+                f"Hub manifest missing at {config.manifest_path}.",
+                "Run `car hub scan` or `car hub create` to generate it.",
+            )
+
+        if not config.repos_root.exists():
+            _append_check(
+                checks,
+                "hub.repos_root",
+                "error",
+                f"Hub repos_root does not exist: {config.repos_root}",
+                "Create the directory or update hub.repos_root in config.",
+            )
+        elif not config.repos_root.is_dir():
+            _append_check(
+                checks,
+                "hub.repos_root",
+                "error",
+                f"Hub repos_root is not a directory: {config.repos_root}",
+                "Point hub.repos_root at a directory.",
+            )
+        else:
+            _append_check(
+                checks,
+                "hub.repos_root",
+                "ok",
+                f"Hub repos_root exists: {config.repos_root}",
+            )
+
+        manifest_has_worktrees = (
+            config.manifest_path.exists()
+            and _manifest_has_worktrees(config.manifest_path)
+        )
+        worktrees_enabled = config.worktrees_root.exists() or manifest_has_worktrees
+        if worktrees_enabled:
+            if ensure_executable("git"):
+                _append_check(
+                    checks,
+                    "hub.git",
+                    "ok",
+                    "git is available for hub worktrees.",
+                )
+            else:
+                _append_check(
+                    checks,
+                    "hub.git",
+                    "error",
+                    "git is not available but hub worktrees are enabled.",
+                    "Install git or disable worktrees.",
+                )
+
+    telegram_cfg = None
+    if isinstance(config.raw, dict):
+        telegram_cfg = config.raw.get("telegram_bot")
+    if isinstance(telegram_cfg, dict) and telegram_cfg.get("enabled") is True:
+        missing_telegram = missing_optional_dependencies((("httpx", "httpx"),))
+        if missing_telegram:
+            deps_list = ", ".join(missing_telegram)
+            _append_check(
+                checks,
+                "telegram.dependencies",
+                "error",
+                f"Telegram is enabled but missing optional deps: {deps_list}",
+                "Install with `pip install codex-autorunner[telegram]`.",
+            )
+        else:
+            _append_check(
+                checks,
+                "telegram.dependencies",
+                "ok",
+                "Telegram dependencies are installed.",
+            )
+
+    return DoctorReport(checks=checks)

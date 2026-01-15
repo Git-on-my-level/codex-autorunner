@@ -641,13 +641,27 @@ def clear_docs_cmd(
 
 
 @app.command("doctor")
-def doctor_cmd(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")):
-    """Validate repo setup."""
-    engine = _require_repo_config(repo)
+def doctor_cmd(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo or hub path"),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON for scripting"),
+):
+    """Validate repo or hub setup."""
     try:
-        doctor(engine.repo_root)
+        report = doctor(repo or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
+    if json_output:
+        typer.echo(json.dumps(report.to_dict(), indent=2))
+        if report.has_errors():
+            raise typer.Exit(code=1)
+        return
+    for check in report.checks:
+        line = f"- {check.status.upper()}: {check.message}"
+        if check.fix:
+            line = f"{line} Fix: {check.fix}"
+        typer.echo(line)
+    if report.has_errors():
+        _raise_exit("Doctor check failed")
     typer.echo("Doctor check passed")
 
 
