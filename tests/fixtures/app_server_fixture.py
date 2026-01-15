@@ -301,6 +301,8 @@ class FixtureServer:
                 self._send_turn_completed(turn_id, status="interrupted")
             return
         if method == "command/exec":
+            if self._scenario == "command_exec_hang":
+                return
             self.send(
                 {
                     "id": req_id,
