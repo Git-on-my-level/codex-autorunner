@@ -121,6 +121,13 @@ class HubAppContext:
     logger: logging.Logger
 
 
+@dataclass(frozen=True)
+class ServerOverrides:
+    allowed_hosts: Optional[list[str]] = None
+    allowed_origins: Optional[list[str]] = None
+    auth_token_env: Optional[str] = None
+
+
 def _app_server_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]:
     if not idle_ttl_seconds or idle_ttl_seconds <= 0:
         return None
@@ -541,7 +548,9 @@ def _app_lifespan(context: AppContext):
 
 
 def create_app(
-    repo_root: Optional[Path] = None, base_path: Optional[str] = None
+    repo_root: Optional[Path] = None,
+    base_path: Optional[str] = None,
+    server_overrides: Optional[ServerOverrides] = None,
 ) -> ASGIApp:
     context = _build_app_context(repo_root, base_path)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
@@ -559,7 +568,15 @@ def create_app(
         context.engine.config.server_host, context.engine.config.server_allowed_hosts
     )
     allowed_origins = context.engine.config.server_allowed_origins
-    auth_token = _resolve_auth_token(context.engine.config.server_auth_token_env)
+    auth_token_env = context.engine.config.server_auth_token_env
+    if server_overrides is not None:
+        if server_overrides.allowed_hosts is not None:
+            allowed_hosts = list(server_overrides.allowed_hosts)
+        if server_overrides.allowed_origins is not None:
+            allowed_origins = list(server_overrides.allowed_origins)
+        if server_overrides.auth_token_env is not None:
+            auth_token_env = server_overrides.auth_token_env
+    auth_token = _resolve_auth_token(auth_token_env)
     app.state.auth_token = auth_token
     asgi_app: ASGIApp = app
     if auth_token:
@@ -590,6 +607,15 @@ def create_hub_app(
     repo_apps: dict[str, ASGIApp] = {}
     repo_startup_complete: set[str] = set()
     app.state.hub_started = False
+    repo_server_overrides: Optional[ServerOverrides] = None
+    if context.config.repo_server_inherit:
+        repo_server_overrides = ServerOverrides(
+            allowed_hosts=_resolve_allowed_hosts(
+                context.config.server_host, context.config.server_allowed_hosts
+            ),
+            allowed_origins=list(context.config.server_allowed_origins),
+            auth_token_env=context.config.server_auth_token_env,
+        )
 
     def _unwrap_fastapi(sub_app: ASGIApp) -> Optional[FastAPI]:
         current: ASGIApp = sub_app
@@ -627,7 +653,11 @@ def create_hub_app(
             return False
         try:
             # Hub already handles the base path; avoid reapplying it in child apps.
-            sub_app = create_app(repo_path, base_path="")
+            sub_app = create_app(
+                repo_path,
+                base_path="",
+                server_overrides=repo_server_overrides,
+            )
         except ConfigError as exc:
             mount_errors[prefix] = str(exc)
             try:

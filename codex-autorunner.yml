@@ -254,6 +254,8 @@ hub:
     manifest: .codex-autorunner/manifest.yml
     discover_depth: 1
     auto_init_missing: true
+    # When serving repos via the hub, reuse hub server security settings.
+    repo_server_inherit: true
     # Where to pull system updates from (main upstream).
     update_repo_url: https://github.com/Git-on-my-level/codex-autorunner.git
     update_repo_ref: main
