@@ -132,6 +132,10 @@ def test_chat_rejects_invalid_payload(repo: Path):
     assert res.status_code == 400
     assert res.json()["detail"] == "invalid payload"
 
+    res = client.post("/api/docs/chat", json={"message": "hi", "targets": ["specs"]})
+    assert res.status_code == 400
+    assert res.json()["detail"] == "invalid doc kind"
+
 
 def test_parse_request_enforces_kind_targets(repo: Path) -> None:
     engine = Engine(repo)

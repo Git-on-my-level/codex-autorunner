@@ -255,14 +255,16 @@ class DocChatService:
                 try:
                     normalized.append(_normalize_kind(str(entry)))
                 except DocChatValidationError:
-                    continue
+                    raise
             if normalized:
                 targets = tuple(dict.fromkeys(normalized))
+            else:
+                raise DocChatValidationError("target is required")
         elif isinstance(raw_targets, str) and raw_targets.strip():
             try:
                 targets = (_normalize_kind(raw_targets),)
             except DocChatValidationError:
-                targets = None
+                raise
         if kind:
             normalized_kind = _normalize_kind(kind)
             if targets is None:
