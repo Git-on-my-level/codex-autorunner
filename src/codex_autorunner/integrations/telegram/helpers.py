@@ -795,7 +795,9 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/review detached ...")
     lines.append("")
     lines.append("Other:")
-    lines.append("!<cmd> - run a bash command in the bound workspace")
+    lines.append(
+        "!<cmd> - run a bash command in the bound workspace (non-interactive; long-running commands time out)"
+    )
     return "\n".join(lines)
 
 
