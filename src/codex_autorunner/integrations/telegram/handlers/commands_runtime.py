@@ -55,6 +55,7 @@ from ..constants import (
     MAX_TOPIC_THREAD_HISTORY,
     MODEL_PICKER_PROMPT,
     PLACEHOLDER_TEXT,
+    QUEUED_PLACEHOLDER_TEXT,
     RESUME_MISSING_IDS_LOG_LIMIT,
     RESUME_PICKER_PROMPT,
     RESUME_PREVIEW_ASSISTANT_LIMIT,
@@ -939,12 +940,42 @@ class TelegramCommandHandlers:
             )
 
             turn_semaphore = self._ensure_turn_semaphore()
+            queued = turn_semaphore.locked()
+            placeholder_text = PLACEHOLDER_TEXT
+            if queued:
+                placeholder_text = QUEUED_PLACEHOLDER_TEXT
+            if send_placeholder:
+                placeholder_id = await self._send_placeholder(
+                    message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                    text=placeholder_text,
+                )
+            queue_started_at = time.monotonic()
             async with turn_semaphore:
-                if send_placeholder:
-                    placeholder_id = await self._send_placeholder(
+                queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.turn.queue_wait",
+                    topic_key=key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    codex_thread_id=thread_id,
+                    queue_wait_ms=queue_wait_ms,
+                    queued=queued,
+                    max_parallel_turns=self._config.concurrency.max_parallel_turns,
+                    per_topic_queue=self._config.concurrency.per_topic_queue,
+                )
+                if (
+                    queued
+                    and placeholder_id is not None
+                    and placeholder_text != PLACEHOLDER_TEXT
+                ):
+                    await self._edit_message_text(
                         message.chat_id,
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
+                        placeholder_id,
+                        PLACEHOLDER_TEXT,
                     )
                 turn_handle = await client.turn_start(
                     thread_id,
@@ -3442,14 +3473,44 @@ class TelegramCommandHandlers:
         placeholder_id: Optional[int] = None
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
+        queued = False
+        placeholder_text = PLACEHOLDER_TEXT
         try:
             turn_semaphore = self._ensure_turn_semaphore()
+            queued = turn_semaphore.locked()
+            if queued:
+                placeholder_text = QUEUED_PLACEHOLDER_TEXT
+            placeholder_id = await self._send_placeholder(
+                message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                text=placeholder_text,
+            )
+            queue_started_at = time.monotonic()
             async with turn_semaphore:
-                placeholder_id = await self._send_placeholder(
-                    message.chat_id,
+                queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.review.queue_wait",
+                    chat_id=message.chat_id,
                     thread_id=message.thread_id,
-                    reply_to=message.message_id,
+                    codex_thread_id=thread_id,
+                    queue_wait_ms=queue_wait_ms,
+                    queued=queued,
+                    max_parallel_turns=self._config.concurrency.max_parallel_turns,
+                    per_topic_queue=self._config.concurrency.per_topic_queue,
                 )
+                if (
+                    queued
+                    and placeholder_id is not None
+                    and placeholder_text != PLACEHOLDER_TEXT
+                ):
+                    await self._edit_message_text(
+                        message.chat_id,
+                        placeholder_id,
+                        PLACEHOLDER_TEXT,
+                    )
                 turn_handle = await client.review_start(
                     thread_id,
                     target=target,
