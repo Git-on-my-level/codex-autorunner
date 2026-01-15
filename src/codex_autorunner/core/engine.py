@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import dataclasses
 import json
@@ -11,20 +12,24 @@ import traceback
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import IO, Iterator, Optional
+from typing import IO, Any, Iterator, Optional
 
 import yaml
 
+from ..integrations.app_server.client import CodexAppServerError
+from ..integrations.app_server.env import build_app_server_env
+from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
 from ..web.static_assets import missing_static_assets, resolve_static_dir
 from .about_car import ensure_about_car_file
-from .codex_runner import run_codex_streaming
+from .app_server_prompts import build_autorunner_prompt
+from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
 from .config import ConfigError, HubConfig, RepoConfig, _is_loopback_host, load_config
 from .docs import DocsManager
 from .locks import process_alive, read_lock_info, write_lock_info
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
-from .prompt import build_final_summary_prompt, build_prompt
+from .prompt import build_final_summary_prompt
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
     atomic_write,
@@ -43,6 +48,11 @@ def timestamp() -> str:
 
 SUMMARY_FINALIZED_MARKER = "CAR:SUMMARY_FINALIZED"
 SUMMARY_FINALIZED_MARKER_PREFIX = f"<!-- {SUMMARY_FINALIZED_MARKER}"
+AUTORUNNER_APP_SERVER_MESSAGE = (
+    "Continue working through TODO items from top to bottom."
+)
+AUTORUNNER_STOP_POLL_SECONDS = 1.0
+AUTORUNNER_INTERRUPT_GRACE_SECONDS = 30.0
 
 
 class Engine:
@@ -61,6 +71,12 @@ class Engine:
         self.stop_path = self.repo_root / ".codex-autorunner" / "stop"
         self._active_global_handler: Optional[RotatingFileHandler] = None
         self._active_run_log: Optional[IO[str]] = None
+        self._app_server_threads = AppServerThreadRegistry(
+            default_app_server_threads_path(self.repo_root)
+        )
+        self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+        self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
+        self._last_run_interrupted = False
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
         try:
             ensure_about_car_file(self.config)
@@ -164,7 +180,13 @@ class Engine:
         new_text += stamp
         atomic_write(path, new_text)
 
-    def _execute_run_step(self, prompt: str, run_id: int) -> int:
+    async def _execute_run_step(
+        self,
+        prompt: str,
+        run_id: int,
+        *,
+        external_stop_flag: Optional[threading.Event] = None,
+    ) -> int:
         """
         Execute a single run step:
         1. Update state to 'running'
@@ -175,9 +197,14 @@ class Engine:
         6. Commit if successful and auto-commit is enabled
         """
         self._update_state("running", run_id, None, started=True)
+        self._last_run_interrupted = False
         with self._run_log_context(run_id):
             self._write_run_marker(run_id, "start")
-            exit_code = self.run_codex_cli(prompt, run_id)
+            exit_code = await self._run_codex_app_server_async(
+                prompt,
+                run_id,
+                external_stop_flag=external_stop_flag,
+            )
             self._write_run_marker(run_id, "end", exit_code=exit_code)
 
         self._update_state(
@@ -190,18 +217,24 @@ class Engine:
             self.notifier.notify_run_finished(run_id=run_id, exit_code=exit_code)
 
         if exit_code == 0 and self.config.git_auto_commit:
+            if self._last_run_interrupted:
+                return exit_code
             self.maybe_git_commit(run_id)
 
         return exit_code
 
-    def _run_final_summary_job(self, run_id: int) -> int:
+    async def _run_final_summary_job(
+        self, run_id: int, *, external_stop_flag: Optional[threading.Event] = None
+    ) -> int:
         """
         Run a dedicated Codex invocation that produces/updates SUMMARY.md as the final user report.
         """
         prev_output = self.extract_prev_output(run_id - 1)
         prompt = build_final_summary_prompt(self.config, self.docs, prev_output)
 
-        exit_code = self._execute_run_step(prompt, run_id)
+        exit_code = await self._execute_run_step(
+            prompt, run_id, external_stop_flag=external_stop_flag
+        )
 
         if exit_code == 0:
             self._stamp_summary_finalized(run_id)
@@ -506,16 +539,142 @@ class Engine:
         except Exception:
             return None
 
-    def run_codex_cli(self, prompt: str, run_id: int) -> int:
-        def _log_stdout(line: str) -> None:
-            self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
-
-        return run_codex_streaming(
+    def _build_app_server_prompt(self, prev_output: Optional[str]) -> str:
+        return build_autorunner_prompt(
             self.config,
-            self.repo_root,
-            prompt,
-            on_stdout_line=_log_stdout,
+            message=AUTORUNNER_APP_SERVER_MESSAGE,
+            prev_run_summary=prev_output,
         )
+
+    def run_codex_app_server(
+        self,
+        prompt: str,
+        run_id: int,
+        *,
+        external_stop_flag: Optional[threading.Event] = None,
+    ) -> int:
+        try:
+            return asyncio.run(
+                self._run_codex_app_server_async(
+                    prompt,
+                    run_id,
+                    external_stop_flag=external_stop_flag,
+                    reuse_supervisor=False,
+                )
+            )
+        except RuntimeError as exc:
+            if "asyncio.run" in str(exc):
+                self.log_line(
+                    run_id,
+                    "error: app-server backend cannot run inside an active event loop",
+                )
+                return 1
+            raise
+
+    async def _run_codex_app_server_async(
+        self,
+        prompt: str,
+        run_id: int,
+        *,
+        external_stop_flag: Optional[threading.Event] = None,
+        reuse_supervisor: bool = True,
+    ) -> int:
+        config = self.config
+        if not config.app_server.command:
+            self.log_line(
+                run_id,
+                "error: app-server backend requires app_server.command to be configured",
+            )
+            return 1
+
+        def _env_builder(
+            workspace_root: Path, _workspace_id: str, state_dir: Path
+        ) -> dict[str, str]:
+            state_dir.mkdir(parents=True, exist_ok=True)
+            return build_app_server_env(
+                config.app_server.command,
+                workspace_root,
+                state_dir,
+                logger=self._app_server_logger,
+                event_prefix="autorunner",
+            )
+
+        supervisor = (
+            self._ensure_app_server_supervisor(_env_builder)
+            if reuse_supervisor
+            else self._build_app_server_supervisor(_env_builder)
+        )
+        try:
+            client = await supervisor.get_client(self.repo_root)
+            thread_id = self._app_server_threads.get_thread_id("autorunner")
+            if thread_id:
+                try:
+                    resume_result = await client.thread_resume(thread_id)
+                    resumed = resume_result.get("id")
+                    if isinstance(resumed, str) and resumed:
+                        thread_id = resumed
+                        self._app_server_threads.set_thread_id("autorunner", thread_id)
+                except CodexAppServerError:
+                    self._app_server_threads.reset_thread("autorunner")
+                    thread_id = None
+            if not thread_id:
+                thread = await client.thread_start(str(self.repo_root))
+                thread_id = thread.get("id")
+                if not isinstance(thread_id, str) or not thread_id:
+                    self.log_line(
+                        run_id, "error: app-server did not return a thread id"
+                    )
+                    return 1
+                self._app_server_threads.set_thread_id("autorunner", thread_id)
+            turn_kwargs: dict[str, Any] = {}
+            if config.codex_model:
+                turn_kwargs["model"] = str(config.codex_model)
+            if config.codex_reasoning:
+                turn_kwargs["effort"] = str(config.codex_reasoning)
+            handle = await client.turn_start(
+                thread_id,
+                prompt,
+                approval_policy="never",
+                sandbox_policy="dangerFullAccess",
+                **turn_kwargs,
+            )
+            turn_timeout = config.app_server.turn_timeout_seconds
+            turn_result, interrupted = await self._wait_for_turn_with_stop(
+                client,
+                handle,
+                run_id,
+                timeout=turn_timeout,
+                external_stop_flag=external_stop_flag,
+                supervisor=supervisor,
+            )
+            self._last_run_interrupted = interrupted
+            self._log_app_server_output(run_id, turn_result.agent_messages)
+            if turn_result.errors:
+                for error in turn_result.errors:
+                    self.log_line(run_id, f"error: {error}")
+                return 1
+            return 0
+        except asyncio.TimeoutError:
+            self.log_line(run_id, "error: app-server turn timed out")
+            return 1
+        except CodexAppServerError as exc:
+            self.log_line(run_id, f"error: {exc}")
+            return 1
+        except Exception as exc:  # pragma: no cover - defensive
+            self.log_line(run_id, f"error: app-server failed: {exc}")
+            return 1
+        finally:
+            if not reuse_supervisor:
+                await supervisor.close_all()
+
+    def _log_app_server_output(self, run_id: int, messages: list[str]) -> None:
+        if not messages:
+            return
+        for message in messages:
+            text = str(message)
+            lines = text.splitlines() or [""]
+            for line in lines:
+                self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
 
     def maybe_git_commit(self, run_id: int) -> None:
         msg = self.config.git_commit_message_template.replace(
@@ -534,7 +693,118 @@ class Engine:
         subprocess.run(add_cmd, cwd=self.repo_root, check=False)
         subprocess.run(["git", "commit", "-m", msg], cwd=self.repo_root, check=False)
 
-    def run_loop(
+    def _build_app_server_supervisor(
+        self, env_builder: Any
+    ) -> WorkspaceAppServerSupervisor:
+        config = self.config.app_server
+        return WorkspaceAppServerSupervisor(
+            config.command,
+            state_root=config.state_root,
+            env_builder=env_builder,
+            logger=self._app_server_logger,
+            max_handles=config.max_handles,
+            idle_ttl_seconds=config.idle_ttl_seconds,
+            request_timeout=config.request_timeout,
+        )
+
+    def _ensure_app_server_supervisor(
+        self, env_builder: Any
+    ) -> WorkspaceAppServerSupervisor:
+        if self._app_server_supervisor is None:
+            self._app_server_supervisor = self._build_app_server_supervisor(env_builder)
+        return self._app_server_supervisor
+
+    async def _close_app_server_supervisor(self) -> None:
+        if self._app_server_supervisor is None:
+            return
+        supervisor = self._app_server_supervisor
+        self._app_server_supervisor = None
+        try:
+            await supervisor.close_all()
+        except Exception as exc:
+            self._app_server_logger.warning(
+                "app-server supervisor close failed: %s", exc
+            )
+
+    async def _wait_for_stop(
+        self, external_stop_flag: Optional[threading.Event]
+    ) -> None:
+        while not self._should_stop(external_stop_flag):
+            await asyncio.sleep(AUTORUNNER_STOP_POLL_SECONDS)
+
+    async def _wait_for_turn_with_stop(
+        self,
+        client: Any,
+        handle: Any,
+        run_id: int,
+        *,
+        timeout: Optional[float],
+        external_stop_flag: Optional[threading.Event],
+        supervisor: Optional[WorkspaceAppServerSupervisor] = None,
+    ) -> tuple[Any, bool]:
+        stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
+        turn_task = asyncio.create_task(handle.wait(timeout=None))
+        timeout_task: Optional[asyncio.Task] = (
+            asyncio.create_task(asyncio.sleep(timeout)) if timeout else None
+        )
+        interrupted = False
+        try:
+            tasks = {stop_task, turn_task}
+            if timeout_task is not None:
+                tasks.add(timeout_task)
+            done, _pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            if turn_task in done:
+                result = await turn_task
+                return result, interrupted
+            timed_out = timeout_task is not None and timeout_task in done
+            stopped = stop_task in done
+            if timed_out:
+                self.log_line(
+                    run_id, "error: app-server turn timed out; interrupting app-server"
+                )
+            if stopped and not turn_task.done():
+                interrupted = True
+                self.log_line(run_id, "info: stop requested; interrupting app-server")
+            if not turn_task.done():
+                try:
+                    await client.turn_interrupt(
+                        handle.turn_id, thread_id=handle.thread_id
+                    )
+                except CodexAppServerError as exc:
+                    self.log_line(run_id, f"error: app-server interrupt failed: {exc}")
+                    if interrupted:
+                        self.kill_running_process()
+                    raise
+                done, _pending = await asyncio.wait(
+                    {turn_task}, timeout=AUTORUNNER_INTERRUPT_GRACE_SECONDS
+                )
+                if not done:
+                    self.log_line(
+                        run_id,
+                        "error: app-server interrupt timed out; cleaning up",
+                    )
+                    if interrupted:
+                        self.kill_running_process()
+                        raise CodexAppServerError("App-server interrupt timed out")
+                    if supervisor is not None:
+                        await supervisor.close_all()
+                    raise asyncio.TimeoutError()
+            result = await turn_task
+            if timed_out:
+                raise asyncio.TimeoutError()
+            return result, interrupted
+        finally:
+            stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+            if timeout_task is not None:
+                timeout_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await timeout_task
+
+    async def _run_loop_async(
         self,
         stop_after_runs: Optional[int] = None,
         external_stop_flag: Optional[threading.Event] = None,
@@ -569,7 +839,9 @@ class Engine:
 
                 if self.todos_done():
                     if not self.summary_finalized():
-                        exit_code = self._run_final_summary_job(run_id)
+                        exit_code = await self._run_final_summary_job(
+                            run_id, external_stop_flag=external_stop_flag
+                        )
                         last_exit_code = exit_code
                     else:
                         current = load_state(self.state_path)
@@ -580,9 +852,11 @@ class Engine:
                     break
 
                 prev_output = self.extract_prev_output(run_id - 1)
-                prompt = build_prompt(self.config, self.docs, prev_output)
+                prompt = self._build_app_server_prompt(prev_output)
 
-                exit_code = self._execute_run_step(prompt, run_id)
+                exit_code = await self._execute_run_step(
+                    prompt, run_id, external_stop_flag=external_stop_flag
+                )
                 last_exit_code = exit_code
 
                 if exit_code != 0:
@@ -590,7 +864,9 @@ class Engine:
 
                 # If TODO is now complete, run the final report job once and stop.
                 if self.todos_done() and not self.summary_finalized():
-                    exit_code = self._run_final_summary_job(run_id + 1)
+                    exit_code = await self._run_final_summary_job(
+                        run_id + 1, external_stop_flag=external_stop_flag
+                    )
                     last_exit_code = exit_code
                     break
 
@@ -602,7 +878,7 @@ class Engine:
                     self.clear_stop_request()
                     self._update_state("idle", run_id - 1, exit_code, finished=True)
                     break
-                time.sleep(self.config.runner_sleep_seconds)
+                await asyncio.sleep(self.config.runner_sleep_seconds)
         except Exception as exc:
             # Never silently die: persist the reason to the agent log and surface in state.
             try:
@@ -616,8 +892,22 @@ class Engine:
                 self._update_state("error", run_id, 1, finished=True)
             except Exception:
                 pass
+        finally:
+            await self._close_app_server_supervisor()
         # IMPORTANT: lock ownership is managed by the caller (CLI/Hub/Server runner).
         # Engine.run_loop must never unconditionally mutate the lock file.
+
+    def run_loop(
+        self,
+        stop_after_runs: Optional[int] = None,
+        external_stop_flag: Optional[threading.Event] = None,
+    ) -> None:
+        try:
+            asyncio.run(self._run_loop_async(stop_after_runs, external_stop_flag))
+        except RuntimeError as exc:
+            if "asyncio.run" in str(exc):
+                raise
+            raise
 
     def run_once(self) -> None:
         self.run_loop(stop_after_runs=1)

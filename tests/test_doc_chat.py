@@ -1,3 +1,4 @@
+import difflib
 import json
 import os
 from pathlib import Path
@@ -34,6 +35,18 @@ def _seed_repo(tmp_path: Path) -> Path:
     (work / "SPEC.md").write_text("spec body\n", encoding="utf-8")
     (work / "SUMMARY.md").write_text("summary body\n", encoding="utf-8")
     return repo
+
+
+def _make_patch(path: str, before: str, after: str) -> str:
+    return "\n".join(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+            lineterm="",
+        )
+    )
 
 
 @pytest.fixture()
@@ -81,20 +94,27 @@ def test_chat_busy_conflict(repo: Path, monkeypatch: pytest.MonkeyPatch):
 def test_chat_success_writes_doc_and_returns_agent_message(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    prompts: list[str] = []
+    async def fake_execute(self, request: DocChatRequest) -> dict:  # type: ignore[override]
+        target_path = self.engine.config.doc_path(request.kind)
+        before = target_path.read_text(encoding="utf-8")
+        after = "- [ ] rewritten task\n- [x] done task\n"
+        rel_path = str(target_path.relative_to(self.engine.repo_root))
+        patch_text = _make_patch(rel_path, before, after)
+        self.patch_path.write_text(patch_text, encoding="utf-8")
+        self.last_agent_message = "cleaned"
+        return {
+            "status": "ok",
+            "kind": request.kind,
+            "patch": patch_text,
+            "content": after,
+            "agent_message": "cleaned",
+        }
 
-    async def fake_run(self, prompt: str, chat_id: str) -> str:  # type: ignore[override]
-        prompts.append(prompt)
-        path = self.engine.config.doc_path("todo")
-        path.write_text("- [ ] rewritten task\n- [x] done task\n", encoding="utf-8")
-        return "Agent: cleaned"
-
-    monkeypatch.setattr(DocChatService, "_run_codex_cli", fake_run)
-    monkeypatch.setattr(
-        DocChatService, "_recent_run_summary", lambda self: "last run summary"
-    )
+    monkeypatch.setattr(DocChatService, "_execute_app_server", fake_execute)
 
     client = _client(repo)
+    doc_path = repo / ".codex-autorunner" / "TODO.md"
+    original = doc_path.read_text(encoding="utf-8")
     res = client.post("/api/docs/todo/chat", json={"message": "rewrite the todo"})
     assert res.status_code == 200, res.text
     data = res.json()
@@ -102,8 +122,7 @@ def test_chat_success_writes_doc_and_returns_agent_message(
     assert data["agent_message"] == "cleaned"
     assert "- [ ] rewritten task" in data["patch"]
 
-    doc_path = repo / ".codex-autorunner" / "TODO.md"
-    assert "rewritten" in doc_path.read_text(encoding="utf-8")
+    assert doc_path.read_text(encoding="utf-8") == original
 
     res_apply = client.post("/api/docs/todo/chat/apply")
     assert res_apply.status_code == 200, res_apply.text
@@ -113,11 +132,7 @@ def test_chat_success_writes_doc_and_returns_agent_message(
         "- [x] done task",
     ]
     assert applied["agent_message"] == "cleaned"
-
-    prompt = prompts[0]
-    assert "User request: rewrite the todo" in prompt
-    assert "<TARGET_DOC>" in prompt and "</TARGET_DOC>" in prompt
-    assert "last run summary" in prompt
+    assert "rewritten" in doc_path.read_text(encoding="utf-8")
 
 
 def test_api_docs_includes_summary(repo: Path):
@@ -148,20 +163,27 @@ def test_api_docs_clear_returns_full_payload_and_resets_work_docs(repo: Path):
 
 
 def test_chat_accepts_summary_kind(repo: Path, monkeypatch: pytest.MonkeyPatch):
-    prompts: list[str] = []
+    async def fake_execute(self, request: DocChatRequest) -> dict:  # type: ignore[override]
+        target_path = self.engine.config.doc_path(request.kind)
+        before = target_path.read_text(encoding="utf-8")
+        after = "summary updated\n"
+        rel_path = str(target_path.relative_to(self.engine.repo_root))
+        patch_text = _make_patch(rel_path, before, after)
+        self.patch_path.write_text(patch_text, encoding="utf-8")
+        self.last_agent_message = "summarized"
+        return {
+            "status": "ok",
+            "kind": request.kind,
+            "patch": patch_text,
+            "content": after,
+            "agent_message": "summarized",
+        }
 
-    async def fake_run(self, prompt: str, chat_id: str) -> str:  # type: ignore[override]
-        prompts.append(prompt)
-        path = self.engine.config.doc_path("summary")
-        path.write_text("summary updated\n", encoding="utf-8")
-        return "Agent: summarized"
-
-    monkeypatch.setattr(DocChatService, "_run_codex_cli", fake_run)
-    monkeypatch.setattr(
-        DocChatService, "_recent_run_summary", lambda self: "last run summary"
-    )
+    monkeypatch.setattr(DocChatService, "_execute_app_server", fake_execute)
 
     client = _client(repo)
+    doc_path = repo / ".codex-autorunner" / "SUMMARY.md"
+    original = doc_path.read_text(encoding="utf-8")
     res = client.post("/api/docs/summary/chat", json={"message": "rewrite the summary"})
     assert res.status_code == 200, res.text
     data = res.json()
@@ -169,18 +191,14 @@ def test_chat_accepts_summary_kind(repo: Path, monkeypatch: pytest.MonkeyPatch):
     assert data["agent_message"] == "summarized"
     assert "summary updated" in data["patch"]
 
-    doc_path = repo / ".codex-autorunner" / "SUMMARY.md"
-    assert "summary updated" in doc_path.read_text(encoding="utf-8")
+    assert doc_path.read_text(encoding="utf-8") == original
 
     res_apply = client.post("/api/docs/summary/chat/apply")
     assert res_apply.status_code == 200, res_apply.text
     applied = res_apply.json()
     assert applied["content"].strip() == "summary updated"
     assert applied["agent_message"] == "summarized"
-
-    prompt = prompts[0]
-    assert "Target doc: SUMMARY" in prompt
-    assert "User request: rewrite the summary" in prompt
+    assert "summary updated" in doc_path.read_text(encoding="utf-8")
 
 
 def test_chat_validation_failure_does_not_write(
@@ -188,17 +206,29 @@ def test_chat_validation_failure_does_not_write(
 ):
     existing = (repo / ".codex-autorunner" / "TODO.md").read_text(encoding="utf-8")
 
-    async def fake_run(self, prompt: str, chat_id: str) -> str:  # type: ignore[override]
-        # overwrite with bad content
-        (repo / ".codex-autorunner" / "TODO.md").write_text(
-            "bad content\n", encoding="utf-8"
-        )
-        return "Agent: nope"
+    async def fake_execute(self, request: DocChatRequest) -> dict:  # type: ignore[override]
+        target_path = self.engine.config.doc_path(request.kind)
+        before = target_path.read_text(encoding="utf-8")
+        after = "bad content\n"
+        rel_path = str(target_path.relative_to(self.engine.repo_root))
+        patch_text = _make_patch(rel_path, before, after)
+        self.patch_path.write_text(patch_text, encoding="utf-8")
+        self.last_agent_message = "nope"
+        return {
+            "status": "ok",
+            "kind": request.kind,
+            "patch": patch_text,
+            "content": after,
+            "agent_message": "nope",
+        }
 
-    monkeypatch.setattr(DocChatService, "_run_codex_cli", fake_run)
+    monkeypatch.setattr(DocChatService, "_execute_app_server", fake_execute)
     client = _client(repo)
     res = client.post("/api/docs/todo/chat", json={"message": "break it"})
     assert res.status_code == 200
+    assert (repo / ".codex-autorunner" / "TODO.md").read_text(
+        encoding="utf-8"
+    ) == existing
     res_discard = client.post("/api/docs/todo/chat/discard")
     assert res_discard.status_code == 200
     assert (repo / ".codex-autorunner" / "TODO.md").read_text(
@@ -213,12 +243,13 @@ def test_prompt_includes_all_docs_and_recent_run(
     service = DocChatService(engine)
     monkeypatch.setattr(service, "_recent_run_summary", lambda: "recent notes")
     request = DocChatRequest(kind="progress", message="summarize", stream=False)
-    prompt = service._build_prompt(request)
+    prompt = service._build_app_server_prompt(request)
     assert "Target doc: PROGRESS" in prompt
-    assert "User request: summarize" in prompt
-    assert "<RECENT_RUN>\nrecent notes\n</RECENT_RUN>" in prompt
-    assert "first task" in prompt
+    assert "User request:\nsummarize" in prompt
+    assert "<RECENT_RUN_SUMMARY>\nrecent notes\n</RECENT_RUN_SUMMARY>" in prompt
+    assert "Doc path: .codex-autorunner/PROGRESS.md" in prompt
+    assert "TODO: .codex-autorunner/TODO.md" in prompt
+    assert "OPINIONS: .codex-autorunner/OPINIONS.md" in prompt
+    assert "SPEC: .codex-autorunner/SPEC.md" in prompt
     assert "progress body" in prompt
-    assert "opinions body" in prompt
-    assert "spec body" in prompt
-    assert "<TARGET_DOC>" in prompt and "</TARGET_DOC>" in prompt
+    assert "<TARGET_DOC_EXCERPT>" in prompt and "</TARGET_DOC_EXCERPT>" in prompt

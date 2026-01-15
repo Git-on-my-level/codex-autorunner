@@ -3,7 +3,7 @@ from typing import Mapping, Optional
 
 from .config import Config
 from .docs import DocsManager
-from .prompts import DEFAULT_PROMPT_TEMPLATE, FINAL_SUMMARY_PROMPT_TEMPLATE
+from .prompts import FINAL_SUMMARY_PROMPT_TEMPLATE
 
 
 def _display_path(root: Path, path: Path) -> str:
@@ -21,13 +21,6 @@ def build_doc_paths(config: Config) -> Mapping[str, str]:
         "spec": _display_path(config.root, config.doc_path("spec")),
         "summary": _display_path(config.root, config.doc_path("summary")),
     }
-
-
-def load_prompt_template(config: Config) -> str:
-    template_path: Optional[Path] = config.prompt_template
-    if template_path and template_path.exists():
-        return template_path.read_text(encoding="utf-8")
-    return DEFAULT_PROMPT_TEMPLATE
 
 
 def build_prompt_text(
@@ -57,26 +50,6 @@ def build_prompt_text(
     for marker, value in replacements.items():
         template = template.replace(marker, value)
     return template
-
-
-def build_prompt(
-    config: Config, docs: DocsManager, prev_run_output: Optional[str]
-) -> str:
-    doc_paths = build_doc_paths(config)
-    template = load_prompt_template(config)
-    doc_contents = {
-        "todo": docs.read_doc("todo"),
-        "progress": docs.read_doc("progress"),
-        "opinions": docs.read_doc("opinions"),
-        "spec": docs.read_doc("spec"),
-        "summary": docs.read_doc("summary"),
-    }
-    return build_prompt_text(
-        template=template,
-        docs=doc_contents,
-        doc_paths=doc_paths,
-        prev_run_output=prev_run_output,
-    )
 
 
 def build_final_summary_prompt(

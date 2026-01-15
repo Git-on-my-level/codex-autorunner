@@ -36,6 +36,13 @@ const chatDecoder = new TextDecoder();
 const chatState = Object.fromEntries(
   DOC_TYPES.map((k) => [k, createChatState()])
 );
+const specIngestState = {
+  status: "idle",
+  patch: "",
+  agentMessage: "",
+  error: "",
+  busy: false,
+};
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT =
   CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
   "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.";
@@ -94,6 +101,18 @@ const docActionsUI = {
   paste: document.getElementById("spec-paste"),
 };
 
+const specIngestUI = {
+  panel: document.getElementById("spec-ingest-followup"),
+  input: document.getElementById("spec-ingest-input"),
+  continueBtn: document.getElementById("spec-ingest-continue"),
+  patchMain: document.getElementById("spec-ingest-patch-main"),
+  patchSummary: document.getElementById("spec-ingest-patch-summary"),
+  patchBody: document.getElementById("spec-ingest-patch-body"),
+  patchApply: document.getElementById("spec-ingest-patch-apply"),
+  patchDiscard: document.getElementById("spec-ingest-patch-discard"),
+  patchReload: document.getElementById("spec-ingest-patch-reload"),
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chat State Management
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,6 +150,24 @@ function parseChatPayload(payload) {
     response: payload.agent_message || payload.message || payload.content || "",
     content: payload.content || "",
     patch: payload.patch || "",
+  };
+}
+
+function parseSpecIngestPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return { error: "Spec ingest failed" };
+  }
+  if (payload.status && payload.status !== "ok") {
+    return { error: payload.detail || "Spec ingest failed" };
+  }
+  return {
+    todo: payload.todo || "",
+    progress: payload.progress || "",
+    opinions: payload.opinions || "",
+    spec: payload.spec || "",
+    summary: payload.summary || "",
+    patch: payload.patch || "",
+    agentMessage: payload.agent_message || payload.agentMessage || "",
   };
 }
 
@@ -367,6 +404,63 @@ async function applyDocUpdateFromChat(kind, content) {
   return true;
 }
 
+function applySpecIngestDocs(payload) {
+  if (!payload) return;
+  docsCache = {
+    ...docsCache,
+    todo: payload.todo ?? docsCache.todo,
+    progress: payload.progress ?? docsCache.progress,
+    opinions: payload.opinions ?? docsCache.opinions,
+    spec: payload.spec ?? docsCache.spec,
+    summary: payload.summary ?? docsCache.summary,
+  };
+  const textarea = getDocTextarea();
+  if (textarea && activeDoc !== "snapshot") {
+    textarea.value = docsCache[activeDoc] || "";
+    document.getElementById(
+      "doc-status"
+    ).textContent = `Editing ${activeDoc.toUpperCase()}`;
+  }
+  updateStandardActionButtons(activeDoc);
+  renderTodoPreview(docsCache.todo);
+  publish("docs:updated", { kind: "todo", content: docsCache.todo });
+  publish("docs:updated", { kind: "progress", content: docsCache.progress });
+  publish("docs:updated", { kind: "opinions", content: docsCache.opinions });
+  publish("docs:updated", { kind: "spec", content: docsCache.spec });
+  publish("docs:updated", { kind: "summary", content: docsCache.summary });
+  loadState({ notify: false }).catch(() => {});
+}
+
+function updateDocVisibility() {
+  const docContent = getDocTextarea();
+  if (!docContent) return;
+  const chatHasPatch = !!(getChatState(activeDoc).patch || "").trim();
+  const specHasPatch =
+    activeDoc === "spec" && !!(specIngestState.patch || "").trim();
+  docContent.classList.toggle("hidden", chatHasPatch || specHasPatch);
+}
+
+function renderSpecIngestPatch() {
+  if (!specIngestUI.patchMain) return;
+  const isSpec = activeDoc === "spec";
+  const hasPatch = !!(specIngestState.patch || "").trim();
+  specIngestUI.patchMain.classList.toggle("hidden", !isSpec || !hasPatch);
+  if (!isSpec || !hasPatch) {
+    updateDocVisibility();
+    return;
+  }
+  specIngestUI.patchBody.innerHTML = renderDiffHtml(specIngestState.patch);
+  specIngestUI.patchSummary.textContent =
+    specIngestState.agentMessage || "Spec ingest patch ready";
+  if (specIngestUI.patchApply)
+    specIngestUI.patchApply.disabled = specIngestState.busy || !hasPatch;
+  if (specIngestUI.patchDiscard)
+    specIngestUI.patchDiscard.disabled = specIngestState.busy || !hasPatch;
+  if (specIngestUI.patchReload)
+    specIngestUI.patchReload.disabled = specIngestState.busy;
+  updateDocVisibility();
+}
+
 function renderChat(kind = activeDoc) {
   if (kind !== activeDoc) return;
   const state = getChatState(kind);
@@ -448,10 +542,7 @@ function renderChat(kind = activeDoc) {
     if (chatUI.patchReload) chatUI.patchReload.disabled = isRunning;
   }
 
-  const docContent = getDocTextarea();
-  if (docContent) {
-    docContent.classList.toggle("hidden", hasPatch);
-  }
+  updateDocVisibility();
 
   renderChatHistory(state);
 }
@@ -934,6 +1025,9 @@ function setDoc(kind) {
   if (specIssueUI.row) {
     specIssueUI.row.classList.toggle("hidden", kind !== "spec");
   }
+  if (specIngestUI.panel) {
+    specIngestUI.panel.classList.toggle("hidden", kind !== "spec");
+  }
   
   // Toggle action button sets - snapshot has its own, others share standard
   if (docActionsUI.standard) {
@@ -964,6 +1058,11 @@ function setDoc(kind) {
       chatUI.patchMain.classList.add("hidden");
     }
   }
+  if (specIngestUI.patchMain) {
+    if (isSnapshot) {
+      specIngestUI.patchMain.classList.add("hidden");
+    }
+  }
   
   // Update snapshot button states when switching to snapshot
   if (isSnapshot) {
@@ -971,6 +1070,11 @@ function setDoc(kind) {
   } else {
     reloadPatch(kind, true);
     renderChat(kind);
+    if (kind === "spec") {
+      reloadSpecIngestPatch(true);
+    } else {
+      renderSpecIngestPatch();
+    }
   }
   updateUrlParams({ doc: kind });
 }
@@ -1231,6 +1335,28 @@ export function initDocs() {
   });
   document.getElementById("ingest-spec").addEventListener("click", ingestSpec);
   document.getElementById("clear-docs").addEventListener("click", clearDocs);
+  if (specIngestUI.continueBtn) {
+    specIngestUI.continueBtn.addEventListener("click", continueSpecIngest);
+  }
+  if (specIngestUI.input) {
+    specIngestUI.input.addEventListener("input", () => {
+      autoResizeTextarea(specIngestUI.input);
+    });
+    specIngestUI.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        continueSpecIngest();
+      }
+    });
+  }
+  if (specIngestUI.patchApply)
+    specIngestUI.patchApply.addEventListener("click", applySpecIngestPatch);
+  if (specIngestUI.patchDiscard)
+    specIngestUI.patchDiscard.addEventListener("click", discardSpecIngestPatch);
+  if (specIngestUI.patchReload)
+    specIngestUI.patchReload.addEventListener("click", () =>
+      reloadSpecIngestPatch(false)
+    );
   if (docActionsUI.copy) {
     docActionsUI.copy.addEventListener("click", () =>
       copyDocToClipboard(activeDoc)
@@ -1330,6 +1456,7 @@ export function initDocs() {
   
   initDocVoice();
   reloadPatch(activeDoc, true);
+  reloadSpecIngestPatch(true);
 
   // Cmd+Enter or Ctrl+Enter sends, Enter adds newline on all devices.
   // Up/Down arrows navigate prompt history when input is empty
@@ -1430,6 +1557,7 @@ export function initDocs() {
 }
 
 async function ingestSpec() {
+  if (specIngestState.busy) return;
   const needsForce = ["todo", "progress", "opinions"].some(
     (k) => (docsCache[k] || "").trim().length > 0
   );
@@ -1442,30 +1570,141 @@ async function ingestSpec() {
   const button = document.getElementById("ingest-spec");
   button.disabled = true;
   button.classList.add("loading");
+  specIngestState.busy = true;
   try {
     const data = await api("/api/ingest-spec", {
       method: "POST",
       body: { force: needsForce },
     });
-    docsCache = { ...docsCache, ...data };
-    setDoc(activeDoc);
-    renderTodoPreview(docsCache.todo);
-    publish("docs:updated", { kind: "todo", content: docsCache.todo });
-    publish("docs:updated", { kind: "progress", content: docsCache.progress });
-    publish("docs:updated", { kind: "opinions", content: docsCache.opinions });
-    await loadState({ notify: false });
-    flash("Ingested SPEC into docs");
+    const parsed = parseSpecIngestPayload(data);
+    if (parsed.error) throw new Error(parsed.error);
+    specIngestState.patch = parsed.patch || "";
+    specIngestState.agentMessage = parsed.agentMessage || "";
+    applySpecIngestDocs(parsed);
+    renderSpecIngestPatch();
+    flash(parsed.patch ? "Spec ingest patch ready" : "Ingested SPEC into docs");
   } catch (err) {
     flash(err.message, "error");
   } finally {
     button.disabled = false;
     button.classList.remove("loading");
+    specIngestState.busy = false;
+    renderSpecIngestPatch();
+  }
+}
+
+async function continueSpecIngest() {
+  if (specIngestState.busy) return;
+  if (!specIngestUI.input) return;
+  const message = (specIngestUI.input.value || "").trim();
+  if (!message) {
+    flash("Enter a follow-up prompt to continue", "error");
+    return;
+  }
+  const needsForce = ["todo", "progress", "opinions"].some(
+    (k) => (docsCache[k] || "").trim().length > 0
+  );
+  specIngestState.busy = true;
+  if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = true;
+  try {
+    const data = await api("/api/ingest-spec", {
+      method: "POST",
+      body: { force: needsForce, message },
+    });
+    const parsed = parseSpecIngestPayload(data);
+    if (parsed.error) throw new Error(parsed.error);
+    specIngestState.patch = parsed.patch || "";
+    specIngestState.agentMessage = parsed.agentMessage || "";
+    applySpecIngestDocs(parsed);
+    renderSpecIngestPatch();
+    specIngestUI.input.value = "";
+    autoResizeTextarea(specIngestUI.input);
+    flash(parsed.patch ? "Spec ingest patch updated" : "Spec ingest updated docs");
+  } catch (err) {
+    flash(err.message, "error");
+  } finally {
+    specIngestState.busy = false;
+    if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
+    renderSpecIngestPatch();
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Spec Ingestion & Doc Clearing
 // ─────────────────────────────────────────────────────────────────────────────
+
+async function applySpecIngestPatch() {
+  if (!specIngestState.patch) {
+    flash("No spec ingest patch to apply", "error");
+    return;
+  }
+  specIngestState.busy = true;
+  renderSpecIngestPatch();
+  try {
+    const res = await api("/api/ingest-spec/apply", { method: "POST" });
+    const parsed = parseSpecIngestPayload(res);
+    if (parsed.error) throw new Error(parsed.error);
+    specIngestState.patch = "";
+    specIngestState.agentMessage = "";
+    applySpecIngestDocs(parsed);
+    flash("Spec ingest patch applied");
+  } catch (err) {
+    flash(err.message || "Failed to apply spec ingest patch", "error");
+  } finally {
+    specIngestState.busy = false;
+    renderSpecIngestPatch();
+  }
+}
+
+async function discardSpecIngestPatch() {
+  if (!specIngestState.patch) return;
+  specIngestState.busy = true;
+  renderSpecIngestPatch();
+  try {
+    const res = await api("/api/ingest-spec/discard", { method: "POST" });
+    const parsed = parseSpecIngestPayload(res);
+    if (parsed.error) throw new Error(parsed.error);
+    specIngestState.patch = "";
+    specIngestState.agentMessage = "";
+    applySpecIngestDocs(parsed);
+    flash("Spec ingest patch discarded");
+  } catch (err) {
+    flash(err.message || "Failed to discard spec ingest patch", "error");
+  } finally {
+    specIngestState.busy = false;
+    renderSpecIngestPatch();
+  }
+}
+
+async function reloadSpecIngestPatch(silent = false) {
+  try {
+    const res = await api("/api/ingest-spec/pending", { method: "GET" });
+    const parsed = parseSpecIngestPayload(res);
+    if (parsed.error) throw new Error(parsed.error);
+    if (parsed.patch) {
+      specIngestState.patch = parsed.patch;
+      specIngestState.agentMessage = parsed.agentMessage || "";
+      applySpecIngestDocs(parsed);
+      renderSpecIngestPatch();
+      if (!silent) flash("Loaded spec ingest patch");
+      return;
+    }
+  } catch (err) {
+    const message = err?.message || "";
+    if (message.includes("No pending spec ingest patch")) {
+      specIngestState.patch = "";
+      specIngestState.agentMessage = "";
+      renderSpecIngestPatch();
+      return;
+    }
+    if (!silent) {
+      flash(message || "Failed to load spec ingest patch", "error");
+    }
+  }
+  if (!specIngestState.patch) {
+    renderSpecIngestPatch();
+  }
+}
 
 async function clearDocs() {
   const confirmed = await confirmModal(

@@ -27,6 +27,8 @@ from .core.usage import (
     summarize_repo_usage,
 )
 from .core.utils import RepoNotFoundError, default_editor, find_repo_root
+from .integrations.app_server.env import build_app_server_env
+from .integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from .integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
 from .integrations.telegram.service import (
     TelegramBotConfig,
@@ -36,12 +38,7 @@ from .integrations.telegram.service import (
 )
 from .manifest import load_manifest
 from .server import create_app, create_hub_app
-from .spec_ingest import (
-    SpecIngestError,
-    clear_work_docs,
-    generate_docs_from_spec,
-    write_ingested_docs,
-)
+from .spec_ingest import SpecIngestError, SpecIngestService, clear_work_docs
 from .voice import VoiceConfig
 
 app = typer.Typer(add_completion=False)
@@ -611,8 +608,42 @@ def ingest_spec_cmd(
     """Generate TODO/PROGRESS/OPINIONS from SPEC using Codex."""
     try:
         engine = _require_repo_config(repo)
-        docs = generate_docs_from_spec(engine, spec_path=spec)
-        write_ingested_docs(engine, docs, force=force)
+        config = engine.config
+        if not config.app_server.command:
+            raise SpecIngestError("app_server.command must be configured")
+
+        async def _run_ingest() -> dict:
+            logger = logging.getLogger("codex_autorunner.cli.app_server")
+
+            def _env_builder(
+                workspace_root: Path, _workspace_id: str, state_dir: Path
+            ) -> dict[str, str]:
+                state_dir.mkdir(parents=True, exist_ok=True)
+                return build_app_server_env(
+                    config.app_server.command,
+                    workspace_root,
+                    state_dir,
+                    logger=logger,
+                    event_prefix="cli",
+                )
+
+            supervisor = WorkspaceAppServerSupervisor(
+                config.app_server.command,
+                state_root=config.app_server.state_root,
+                env_builder=_env_builder,
+                logger=logger,
+                max_handles=config.app_server.max_handles,
+                idle_ttl_seconds=config.app_server.idle_ttl_seconds,
+                request_timeout=config.app_server.request_timeout,
+            )
+            service = SpecIngestService(engine, app_server_supervisor=supervisor)
+            try:
+                await service.execute(force=force, spec_path=spec, message=None)
+                return service.apply_patch()
+            finally:
+                await supervisor.close_all()
+
+        docs = asyncio.run(_run_ingest())
     except (ConfigError, SpecIngestError) as exc:
         _raise_exit(str(exc), cause=exc)
 

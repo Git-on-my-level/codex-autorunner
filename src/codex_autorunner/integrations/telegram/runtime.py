@@ -9,13 +9,13 @@ from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from ..app_server.client import CodexAppServerClient
+from ..app_server.env import build_app_server_env
 from .constants import (
     APP_SERVER_START_BACKOFF_INITIAL_SECONDS,
     APP_SERVER_START_BACKOFF_MAX_SECONDS,
     TELEGRAM_MAX_MESSAGE_LENGTH,
     TurnKey,
 )
-from .helpers import _app_server_env, _seed_codex_home
 from .rendering import _format_telegram_html, _format_telegram_markdown
 from .state import TOPIC_ROOT, parse_topic_key
 from .types import TurnContext
@@ -55,12 +55,13 @@ class TelegramRuntimeHelpers:
     def _build_workspace_env(
         self, workspace_root: Path, workspace_id: str, state_dir: Path
     ) -> dict[str, str]:
-        env = _app_server_env(self._config.app_server_command, workspace_root)
-        codex_home = state_dir / "codex_home"
-        codex_home.mkdir(parents=True, exist_ok=True)
-        _seed_codex_home(codex_home, logger=self._logger)
-        env["CODEX_HOME"] = str(codex_home)
-        return env
+        return build_app_server_env(
+            self._config.app_server_command,
+            workspace_root,
+            state_dir,
+            logger=self._logger,
+            event_prefix="telegram",
+        )
 
     async def _client_for_workspace(
         self, workspace_path: Optional[str]
