@@ -294,9 +294,10 @@ async def test_doc_chat_interrupt_skips_patch(repo: Path) -> None:
     service = DocChatService(engine, app_server_supervisor=supervisor)
 
     request = DocChatRequest(message="interrupt me", targets=("todo",))
-    task = asyncio.create_task(service.execute(request))
-    await service.interrupt("todo")
-    response = await task
+    async with service.doc_lock():
+        task = asyncio.create_task(service.execute(request))
+        await service.interrupt("todo")
+        response = await task
 
     assert response["status"] == "interrupted"
     assert not service._drafts_path.exists()

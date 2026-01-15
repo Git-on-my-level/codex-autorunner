@@ -224,8 +224,9 @@ class DocChatService:
     async def interrupt(self, _kind: Optional[str] = None) -> Dict[str, str]:
         active = self._get_active_turn()
         if active is None:
+            pending = self.doc_busy()
             with self._active_turn_lock:
-                self._pending_interrupt = True
+                self._pending_interrupt = pending
             return {
                 "status": "interrupted",
                 "detail": "No active turn",
@@ -311,6 +312,8 @@ class DocChatService:
             file_lock.release()
             lock.release()
             self._thread_lock.release()
+            with self._active_turn_lock:
+                self._pending_interrupt = False
 
     def _doc_lock_path(self) -> Path:
         return self._lock_root / "doc_chat.lock"
