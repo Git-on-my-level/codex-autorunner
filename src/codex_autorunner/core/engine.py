@@ -97,16 +97,6 @@ class Engine:
         return Engine(root)
 
     def acquire_lock(self, force: bool = False) -> None:
-        if self.lock_path.exists():
-            info = read_lock_info(self.lock_path)
-            pid = info.pid
-            if pid and process_alive(pid):
-                if not force:
-                    raise LockError(
-                        f"Another autorunner is active (pid={pid}); use --force to override"
-                    )
-            else:
-                self.lock_path.unlink(missing_ok=True)
         self._lock_handle = FileLock(self.lock_path)
         try:
             self._lock_handle.acquire(blocking=False)
@@ -120,6 +110,14 @@ class Engine:
             raise LockError(
                 "Another autorunner is active; stop it before continuing"
             ) from exc
+        info = read_lock_info(self.lock_path)
+        pid = info.pid
+        if pid and process_alive(pid) and not force:
+            self._lock_handle.release()
+            self._lock_handle = None
+            raise LockError(
+                f"Another autorunner is active (pid={pid}); use --force to override"
+            )
         write_lock_info(
             self.lock_path,
             os.getpid(),
