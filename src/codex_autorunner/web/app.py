@@ -530,7 +530,10 @@ def _app_lifespan(context: AppContext):
 
 
 def create_app(
-    repo_root: Optional[Path] = None, base_path: Optional[str] = None
+    repo_root: Optional[Path] = None,
+    base_path: Optional[str] = None,
+    extra_allowed_hosts: Optional[list[str]] = None,
+    extra_allowed_origins: Optional[list[str]] = None,
 ) -> ASGIApp:
     context = _build_app_context(repo_root, base_path)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
@@ -547,7 +550,11 @@ def create_app(
     allowed_hosts = _resolve_allowed_hosts(
         context.engine.config.server_host, context.engine.config.server_allowed_hosts
     )
-    allowed_origins = context.engine.config.server_allowed_origins
+    if extra_allowed_hosts:
+        allowed_hosts = allowed_hosts + list(extra_allowed_hosts)
+    allowed_origins = list(context.engine.config.server_allowed_origins or [])
+    if extra_allowed_origins:
+        allowed_origins.extend(list(extra_allowed_origins))
     auth_token = _resolve_auth_token(context.engine.config.server_auth_token_env)
     app.state.auth_token = auth_token
     asgi_app: ASGIApp = app
@@ -609,6 +616,11 @@ def create_hub_app(
             except Exception:
                 pass
 
+    hub_allowed_hosts = _resolve_allowed_hosts(
+        context.config.server_host, context.config.server_allowed_hosts
+    )
+    hub_allowed_origins = list(context.config.server_allowed_origins or [])
+
     def _mount_repo(prefix: str, repo_path: Path) -> bool:
         if prefix in mounted_repos:
             return True
@@ -616,7 +628,12 @@ def create_hub_app(
             return False
         try:
             # Hub already handles the base path; avoid reapplying it in child apps.
-            sub_app = create_app(repo_path, base_path="")
+            sub_app = create_app(
+                repo_path,
+                base_path="",
+                extra_allowed_hosts=hub_allowed_hosts,
+                extra_allowed_origins=hub_allowed_origins,
+            )
         except ConfigError as exc:
             mount_errors[prefix] = str(exc)
             try:
