@@ -155,7 +155,11 @@ def apply_patch_file(repo_root: Path, patch_path: Path, targets: Sequence[str]) 
 
 
 def preview_patch(
-    repo_root: Path, patch_text: str, targets: Sequence[str]
+    repo_root: Path,
+    patch_text: str,
+    targets: Sequence[str],
+    *,
+    base_content: Optional[dict[str, str]] = None,
 ) -> dict[str, str]:
     strip = infer_patch_strip(targets)
     normalized_targets = normalize_targets(targets)
@@ -165,6 +169,9 @@ def preview_patch(
             source = repo_root / target
             dest = root / target
             dest.parent.mkdir(parents=True, exist_ok=True)
+            if base_content and target in base_content:
+                dest.write_text(base_content[target], encoding="utf-8")
+                continue
             if source.exists():
                 dest.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
             else:

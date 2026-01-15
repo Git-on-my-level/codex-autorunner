@@ -48,6 +48,10 @@ def test_doc_chat_ui_stream_flow():
             return child;
           }}
 
+          setAttribute(_name, _value) {{
+            // stub - do nothing
+          }}
+
           addEventListener(event, handler) {{
             // stub - do nothing
           }}
@@ -76,7 +80,7 @@ def test_doc_chat_ui_stream_flow():
           'data: {{"status":"running"}}',
           '',
           'event: update',
-          'data: {{"status":"ok","patch":"--- a/.codex-autorunner/TODO.md\\\\n+++ b/.codex-autorunner/TODO.md\\\\n@@\\\\n- [ ] first\\\\n+ [ ] streamed task","agent_message":"Done"}}',
+          'data: {{"status":"ok","agent_message":"Done","updated":["todo"],"drafts":{{"todo":{{"patch":"--- a/.codex-autorunner/TODO.md\\\\n+++ b/.codex-autorunner/TODO.md\\\\n@@\\\\n- [ ] first\\\\n+ [ ] streamed task","content":"- [ ] streamed task","agent_message":"Done"}}}}}}',
           '',
           'event: done',
           'data: {{"status":"ok"}}',
@@ -137,26 +141,30 @@ def test_doc_chat_ui_stream_flow():
 
         const textarea = document.getElementById("doc-content");
         textarea.value = "";
-        const state = helpers.getChatState("todo");
+        const state = helpers.getChatState();
         state.status = "running";
         state.controller = new AbortController();
         const entry = {{
           id: "1",
           prompt: "rewrite",
+          targets: ["todo"],
           response: "",
           status: "running",
           time: Date.now(),
-          lastAppliedContent: null,
-          patch: "",
+          drafts: {{}},
+          updated: [],
         }};
         state.history.unshift(entry);
 
-        await helpers.performDocChatRequest("todo", entry, state);
-        assert.equal(state.patch.includes("streamed task"), true);
+        await helpers.performDocChatRequest(entry, state);
+        assert.equal(
+          document.getElementById("doc-patch-body").innerHTML.includes("streamed task"),
+          true
+        );
         assert.equal(textarea.value.trim(), "");
         await helpers.applyPatch("todo");
         state.status = entry.status === "error" ? "error" : "idle";
-        helpers.renderChat("todo");
+        helpers.renderChat();
 
         assert.equal(entry.status, "done");
         assert.equal(state.streamText.trim(), "Done");

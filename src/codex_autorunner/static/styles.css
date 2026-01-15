@@ -1418,6 +1418,46 @@ button.icon-btn {
   margin-bottom: 8px;
 }
 
+.doc-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  background: rgba(108, 245, 216, 0.08);
+}
+
+.doc-banner.hidden {
+  display: none;
+}
+
+.doc-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.doc-banner-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.doc-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.doc-banner-detail {
+  word-break: break-word;
+}
+
 .spec-issue-import {
   display: flex;
   gap: 8px;
@@ -1482,6 +1522,18 @@ button.icon-btn {
   background: rgba(108, 245, 216, 0.08);
 }
 
+.chip.has-draft::after {
+  content: "•";
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--accent-2);
+}
+
+.chip.previewing {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+}
+
 /* Editor textarea */
 .doc-editor textarea {
   width: 100%;
@@ -1522,6 +1574,12 @@ button.icon-btn {
   border-color: var(--accent);
 }
 
+.doc-editor textarea.doc-preview {
+  background: rgba(108, 168, 255, 0.08);
+  border-color: var(--accent-2);
+  cursor: default;
+}
+
 /* Removed .snapshot-editor - snapshot now uses shared doc editor */
 
 .doc-patch-main {
@@ -1537,6 +1595,10 @@ button.icon-btn {
 
 .doc-patch-main.hidden {
   display: none;
+}
+
+.doc-patch-main.previewing {
+  border-color: var(--accent-2);
 }
 
 .doc-patch-header {
@@ -1599,10 +1661,21 @@ button.icon-btn {
   font-size: 12px;
 }
 
+.doc-patch-meta {
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 2px;
+}
+
 .doc-patch-actions {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.doc-patch-actions button.active {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
 }
 
 .doc-patch-body {
@@ -2109,6 +2182,109 @@ button.icon-btn {
   font-size: 11px;
 }
 
+/* App-server event stream */
+.doc-chat-events {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.doc-chat-events.hidden {
+  display: none;
+}
+
+.doc-chat-events-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.doc-chat-events-count {
+  background: var(--border);
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 9px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.doc-chat-events-list {
+  max-height: 140px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.doc-chat-event {
+  border-bottom: 1px solid var(--border);
+  padding: 3px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.doc-chat-event:last-child {
+  border-bottom: none;
+}
+
+.doc-chat-event-title {
+  font-weight: 500;
+  font-size: 10px;
+  color: var(--accent-2);
+}
+
+.doc-chat-event-summary {
+  font-size: 11px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.doc-chat-event-detail {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.doc-chat-event-meta {
+  font-size: 9px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.doc-chat-event.command .doc-chat-event-title {
+  color: #8be9fd;
+}
+
+.doc-chat-event.file .doc-chat-event-title {
+  color: #f1fa8c;
+}
+
+.doc-chat-event.error .doc-chat-event-title {
+  color: var(--error);
+}
+
+.doc-chat-event.thinking .doc-chat-event-title {
+  color: var(--accent);
+}
+
+.doc-chat-events-empty {
+  font-size: 10px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+
 /* Collapsible history */
 .doc-chat-history-details {
   border: 1px solid var(--border);
@@ -2283,6 +2459,11 @@ button.icon-btn {
   background: var(--error);
 }
 
+.doc-chat-entry.interrupted .status-dot {
+  background: var(--accent-2);
+  box-shadow: 0 0 0 2px rgba(108, 168, 255, 0.2);
+}
+
 .doc-chat-empty {
   padding: 8px 0;
   text-align: center;
@@ -2309,6 +2490,20 @@ button.icon-btn {
   margin-top: 4px;
   max-height: 100px;
   overflow-y: auto;
+}
+
+.doc-chat-entry-tags {
+  color: var(--muted);
+  font-size: 9px;
+  margin-bottom: 2px;
+}
+
+.doc-chat-entry-draft-label {
+  margin-top: 4px;
+  font-size: 9px;
+  color: var(--accent-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .doc-chat-entry-body pre {
@@ -4188,6 +4383,33 @@ button.loading::after {
     max-height: 80px;
     padding: 6px;
     font-size: 11px;
+  }
+
+  .doc-chat-events {
+    padding: 6px;
+  }
+
+  .doc-chat-events-list {
+    max-height: 80px;
+  }
+
+  .doc-chat-event-title {
+    font-size: 9px;
+  }
+
+  .doc-chat-event-summary {
+    font-size: 10px;
+  }
+
+  .doc-chat-event-detail,
+  .doc-chat-event-meta {
+    font-size: 8px;
+  }
+
+  .doc-chat-events-count {
+    font-size: 8px;
+    padding: 1px 4px;
+    min-width: 14px;
   }
 
   .doc-chat-history-details {

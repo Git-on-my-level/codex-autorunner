@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .state import state_lock
-from .utils import atomic_write, read_json
+from .locks import file_lock
+from .utils import atomic_write
 
 APP_SERVER_THREADS_FILENAME = ".codex-autorunner/app_server_threads.json"
 APP_SERVER_THREADS_VERSION = 1
+APP_SERVER_THREADS_CORRUPT_SUFFIX = ".corrupt"
+APP_SERVER_THREADS_NOTICE_SUFFIX = ".corrupt.json"
 DOC_CHAT_KINDS = ("todo", "progress", "opinions", "spec", "summary")
 DOC_CHAT_PREFIX = "doc_chat."
-DOC_CHAT_KEYS = {f"{DOC_CHAT_PREFIX}{kind}" for kind in DOC_CHAT_KINDS}
+DOC_CHAT_KEY = "doc_chat"
+DOC_CHAT_KEYS = {DOC_CHAT_KEY} | {f"{DOC_CHAT_PREFIX}{kind}" for kind in DOC_CHAT_KINDS}
 FEATURE_KEYS = DOC_CHAT_KEYS | {"spec_ingest", "autorunner"}
 
 
@@ -39,23 +43,53 @@ class AppServerThreadRegistry:
     def path(self) -> Path:
         return self._path
 
+    def _lock_path(self) -> Path:
+        return self._path.with_suffix(self._path.suffix + ".lock")
+
+    def _notice_path(self) -> Path:
+        return self._path.with_name(
+            f"{self._path.name}{APP_SERVER_THREADS_NOTICE_SUFFIX}"
+        )
+
+    def _stamp(self) -> str:
+        return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    def corruption_notice(self) -> Optional[dict]:
+        path = self._notice_path()
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def clear_corruption_notice(self) -> None:
+        self._notice_path().unlink(missing_ok=True)
+
     def load(self) -> dict[str, str]:
-        with state_lock(self._path):
+        with file_lock(self._lock_path()):
             return self._load_unlocked()
 
     def feature_map(self) -> dict[str, object]:
         threads = self.load()
-        return {
+        doc_chat_thread = threads.get(DOC_CHAT_KEY)
+        payload: dict[str, object] = {
             "doc_chat": {
-                kind: threads.get(f"{DOC_CHAT_PREFIX}{kind}") for kind in DOC_CHAT_KINDS
+                kind: doc_chat_thread or threads.get(f"{DOC_CHAT_PREFIX}{kind}")
+                for kind in DOC_CHAT_KINDS
             },
             "spec_ingest": threads.get("spec_ingest"),
             "autorunner": threads.get("autorunner"),
         }
+        notice = self.corruption_notice()
+        if notice:
+            payload["corruption"] = notice
+        return payload
 
     def get_thread_id(self, key: str) -> Optional[str]:
         normalized = normalize_feature_key(key)
-        with state_lock(self._path):
+        with file_lock(self._lock_path()):
             threads = self._load_unlocked()
             return threads.get(normalized)
 
@@ -63,14 +97,14 @@ class AppServerThreadRegistry:
         normalized = normalize_feature_key(key)
         if not isinstance(thread_id, str) or not thread_id:
             raise ValueError("thread id is required")
-        with state_lock(self._path):
+        with file_lock(self._lock_path()):
             threads = self._load_unlocked()
             threads[normalized] = thread_id
             self._save_unlocked(threads)
 
     def reset_thread(self, key: str) -> bool:
         normalized = normalize_feature_key(key)
-        with state_lock(self._path):
+        with file_lock(self._lock_path()):
             threads = self._load_unlocked()
             if normalized not in threads:
                 return False
@@ -78,8 +112,23 @@ class AppServerThreadRegistry:
             self._save_unlocked(threads)
             return True
 
+    def reset_all(self) -> None:
+        with file_lock(self._lock_path()):
+            self._save_unlocked({})
+            self.clear_corruption_notice()
+
     def _load_unlocked(self) -> dict[str, str]:
-        data = read_json(self._path)
+        if not self._path.exists():
+            return {}
+        try:
+            raw = self._path.read_text(encoding="utf-8")
+        except OSError:
+            return {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            self._handle_corrupt_registry(str(exc))
+            return {}
         if not isinstance(data, dict):
             return {}
         threads_raw = data.get("threads")
@@ -99,3 +148,29 @@ class AppServerThreadRegistry:
             "threads": threads,
         }
         atomic_write(self._path, json.dumps(payload, indent=2) + "\n")
+
+    def _handle_corrupt_registry(self, detail: str) -> None:
+        stamp = self._stamp()
+        backup_path = self._path.with_name(
+            f"{self._path.name}{APP_SERVER_THREADS_CORRUPT_SUFFIX}.{stamp}"
+        )
+        try:
+            self._path.replace(backup_path)
+            backup_value = str(backup_path)
+        except OSError:
+            backup_value = ""
+        notice = {
+            "status": "corrupt",
+            "message": "Conversation state reset due to corrupted registry.",
+            "detail": detail,
+            "detected_at": stamp,
+            "backup_path": backup_value,
+        }
+        try:
+            atomic_write(self._notice_path(), json.dumps(notice, indent=2) + "\n")
+        except Exception:
+            pass
+        try:
+            self._save_unlocked({})
+        except Exception:
+            pass

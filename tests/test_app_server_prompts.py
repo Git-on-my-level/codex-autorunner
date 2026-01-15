@@ -25,11 +25,19 @@ def test_doc_chat_prompt_limits_and_instructions(repo: Path) -> None:
     )
     message = "B" * (limits.message_max_chars + 200)
     recent = "C" * (limits.recent_summary_max_chars + 200)
+    docs = {
+        key: {
+            "content": config.doc_path(key).read_text(encoding="utf-8"),
+            "source": "disk",
+        }
+        for key in ("todo", "progress", "opinions", "spec", "summary")
+    }
     prompt = build_doc_chat_prompt(
         config,
-        kind="todo",
         message=message,
         recent_summary=recent,
+        docs=docs,
+        targets=("todo",),
     )
     assert len(prompt) <= limits.max_chars
     assert "Do NOT write files" in prompt

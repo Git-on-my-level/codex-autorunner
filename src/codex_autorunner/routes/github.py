@@ -130,7 +130,7 @@ def build_github_routes() -> APIRouter:
         repo_blocked = doc_chat.repo_blocked_reason()
         if repo_blocked:
             raise HTTPException(status_code=409, detail=repo_blocked)
-        if doc_chat.doc_busy("spec"):
+        if doc_chat.doc_busy():
             raise HTTPException(
                 status_code=409, detail="Doc chat already running for spec"
             )
@@ -141,9 +141,9 @@ def build_github_routes() -> APIRouter:
                 svc.build_spec_prompt_from_issue, str(issue)
             )
             doc_req = doc_chat.parse_request(
-                "spec", {"message": prompt, "stream": False}
+                {"message": prompt, "stream": False}, kind="spec"
             )
-            async with doc_chat.doc_lock("spec"):
+            async with doc_chat.doc_lock():
                 result = await doc_chat.execute(doc_req)
             if result.get("status") != "ok":
                 detail = result.get("detail") or "SPEC generation failed"

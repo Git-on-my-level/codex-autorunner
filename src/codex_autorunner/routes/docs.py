@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from ..core.doc_chat import (
     DocChatBusyError,
+    DocChatConflictError,
     DocChatError,
     DocChatValidationError,
     _normalize_kind,
@@ -103,25 +104,26 @@ def build_docs_routes() -> APIRouter:
             "state": result.state,
         }
 
-    @router.post("/api/docs/{kind}/chat")
-    async def chat_doc(
-        kind: str, request: Request, payload: Optional[DocChatPayload] = None
+    async def _handle_doc_chat_request(
+        request: Request,
+        *,
+        kind: Optional[str],
+        payload: Optional[DocChatPayload],
     ):
         doc_chat = request.app.state.doc_chat
-        try:
-            payload_dict = payload.model_dump(exclude_none=True) if payload else None
-            doc_req = doc_chat.parse_request(kind, payload_dict)
-        except DocChatValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
         repo_blocked = doc_chat.repo_blocked_reason()
         if repo_blocked:
             raise HTTPException(status_code=409, detail=repo_blocked)
+        try:
+            payload_dict = payload.model_dump(exclude_none=True) if payload else None
+            doc_req = doc_chat.parse_request(payload_dict, kind=kind)
+        except DocChatValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        if doc_chat.doc_busy(doc_req.kind):
+        if doc_chat.doc_busy():
             raise HTTPException(
                 status_code=409,
-                detail=f"Doc chat already running for {doc_req.kind}",
+                detail="Doc chat already running",
             )
 
         if doc_req.stream:
@@ -130,7 +132,7 @@ def build_docs_routes() -> APIRouter:
             )
 
         try:
-            async with doc_chat.doc_lock(doc_req.kind):
+            async with doc_chat.doc_lock():
                 result = await doc_chat.execute(doc_req)
         except DocChatBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -139,6 +141,32 @@ def build_docs_routes() -> APIRouter:
             detail = result.get("detail") or "Doc chat failed"
             raise HTTPException(status_code=500, detail=detail)
         return result
+
+    @router.post("/api/docs/chat")
+    async def chat_docs(request: Request, payload: Optional[DocChatPayload] = None):
+        return await _handle_doc_chat_request(request, kind=None, payload=payload)
+
+    @router.post("/api/docs/{kind}/chat")
+    async def chat_doc(
+        kind: str, request: Request, payload: Optional[DocChatPayload] = None
+    ):
+        return await _handle_doc_chat_request(request, kind=kind, payload=payload)
+
+    @router.post("/api/docs/chat/interrupt")
+    async def interrupt_chat(request: Request):
+        doc_chat = request.app.state.doc_chat
+        try:
+            return await doc_chat.interrupt()
+        except DocChatValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/api/docs/{kind}/chat/interrupt")
+    async def interrupt_chat_kind(kind: str, request: Request):
+        doc_chat = request.app.state.doc_chat
+        try:
+            return await doc_chat.interrupt(kind)
+        except DocChatValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/api/docs/{kind}/chat/apply")
     async def apply_chat_patch(kind: str, request: Request):
@@ -150,8 +178,11 @@ def build_docs_routes() -> APIRouter:
 
         try:
             async with doc_chat.doc_lock(key):
+                pending = doc_chat.pending_patch(key)
                 content = doc_chat.apply_saved_patch(key)
         except DocChatBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except DocChatConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except DocChatError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -159,14 +190,19 @@ def build_docs_routes() -> APIRouter:
             "status": "ok",
             "kind": key,
             "content": content,
-            "agent_message": doc_chat.last_agent_message
+            "agent_message": (pending or {}).get("agent_message")
             or f"Updated {key.upper()} via doc chat.",
+            "created_at": (pending or {}).get("created_at"),
+            "base_hash": (pending or {}).get("base_hash"),
         }
 
     @router.post("/api/docs/{kind}/chat/discard")
     async def discard_chat_patch(kind: str, request: Request):
         doc_chat = request.app.state.doc_chat
         key = _normalize_kind(kind)
+        repo_blocked = doc_chat.repo_blocked_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         try:
             async with doc_chat.doc_lock(key):
                 content = doc_chat.discard_patch(key)
@@ -178,6 +214,9 @@ def build_docs_routes() -> APIRouter:
     async def pending_chat_patch(kind: str, request: Request):
         doc_chat = request.app.state.doc_chat
         key = _normalize_kind(kind)
+        repo_blocked = doc_chat.repo_blocked_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         pending = doc_chat.pending_patch(key)
         if not pending:
             raise HTTPException(status_code=404, detail="No pending patch")
@@ -187,6 +226,10 @@ def build_docs_routes() -> APIRouter:
     async def ingest_spec(
         request: Request, payload: Optional[IngestSpecRequest] = None
     ):
+        engine = request.app.state.engine
+        repo_blocked = engine.repo_busy_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         spec_ingest = request.app.state.spec_ingest
         force = False
         spec_override: Optional[Path] = None
@@ -204,16 +247,38 @@ def build_docs_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return docs
 
+    @router.post("/api/ingest-spec/interrupt", response_model=IngestSpecResponse)
+    async def ingest_spec_interrupt(request: Request):
+        spec_ingest = request.app.state.spec_ingest
+        try:
+            docs = await spec_ingest.interrupt()
+        except SpecIngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return docs
+
     @router.get("/api/ingest-spec/pending", response_model=IngestSpecResponse)
     def ingest_spec_pending(request: Request):
+        engine = request.app.state.engine
+        repo_blocked = engine.repo_busy_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         spec_ingest = request.app.state.spec_ingest
-        pending = spec_ingest.pending_patch()
-        if not pending:
-            raise HTTPException(status_code=404, detail="No pending spec ingest patch")
-        return pending
+        try:
+            pending = spec_ingest.pending_patch()
+            if not pending:
+                raise HTTPException(
+                    status_code=404, detail="No pending spec ingest patch"
+                )
+            return pending
+        except SpecIngestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/api/ingest-spec/apply", response_model=IngestSpecResponse)
     def ingest_spec_apply(request: Request):
+        engine = request.app.state.engine
+        repo_blocked = engine.repo_busy_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         spec_ingest = request.app.state.spec_ingest
         try:
             return spec_ingest.apply_patch()
@@ -222,6 +287,10 @@ def build_docs_routes() -> APIRouter:
 
     @router.post("/api/ingest-spec/discard", response_model=IngestSpecResponse)
     def ingest_spec_discard(request: Request):
+        engine = request.app.state.engine
+        repo_blocked = engine.repo_busy_reason()
+        if repo_blocked:
+            raise HTTPException(status_code=409, detail=repo_blocked)
         spec_ingest = request.app.state.spec_ingest
         try:
             return spec_ingest.discard_patch()

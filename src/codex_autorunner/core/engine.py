@@ -26,7 +26,13 @@ from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
 from .config import ConfigError, HubConfig, RepoConfig, _is_loopback_host, load_config
 from .docs import DocsManager
-from .locks import process_alive, read_lock_info, write_lock_info
+from .locks import (
+    FileLock,
+    FileLockBusy,
+    process_alive,
+    read_lock_info,
+    write_lock_info,
+)
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
 from .prompt import build_final_summary_prompt
@@ -77,6 +83,7 @@ class Engine:
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         self._last_run_interrupted = False
+        self._lock_handle: Optional[FileLock] = None
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
         try:
             ensure_about_car_file(self.config)
@@ -90,21 +97,54 @@ class Engine:
         return Engine(root)
 
     def acquire_lock(self, force: bool = False) -> None:
+        self._lock_handle = FileLock(self.lock_path)
+        try:
+            self._lock_handle.acquire(blocking=False)
+        except FileLockBusy as exc:
+            info = read_lock_info(self.lock_path)
+            pid = info.pid
+            if pid and process_alive(pid):
+                raise LockError(
+                    f"Another autorunner is active (pid={pid}); stop it before continuing"
+                ) from exc
+            raise LockError(
+                "Another autorunner is active; stop it before continuing"
+            ) from exc
+        info = read_lock_info(self.lock_path)
+        pid = info.pid
+        if pid and process_alive(pid) and not force:
+            self._lock_handle.release()
+            self._lock_handle = None
+            raise LockError(
+                f"Another autorunner is active (pid={pid}); use --force to override"
+            )
+        write_lock_info(
+            self.lock_path,
+            os.getpid(),
+            started_at=now_iso(),
+            lock_file=self._lock_handle.file,
+        )
+
+    def release_lock(self) -> None:
+        if self._lock_handle is not None:
+            self._lock_handle.release()
+            self._lock_handle = None
+        if self.lock_path.exists():
+            self.lock_path.unlink()
+
+    def repo_busy_reason(self) -> Optional[str]:
         if self.lock_path.exists():
             info = read_lock_info(self.lock_path)
             pid = info.pid
             if pid and process_alive(pid):
-                if not force:
-                    raise LockError(
-                        f"Another autorunner is active (pid={pid}); use --force to override"
-                    )
-            else:
-                self.lock_path.unlink(missing_ok=True)
-        write_lock_info(self.lock_path, os.getpid(), started_at=now_iso())
+                host = f" on {info.host}" if info.host else ""
+                return f"Autorunner is running (pid={pid}{host}); try again later."
+            return "Autorunner lock present; clear or resume before continuing."
 
-    def release_lock(self) -> None:
-        if self.lock_path.exists():
-            self.lock_path.unlink()
+        state = load_state(self.state_path)
+        if state.status == "running":
+            return "Autorunner is currently running; try again later."
+        return None
 
     def request_stop(self) -> None:
         self.stop_path.parent.mkdir(parents=True, exist_ok=True)

@@ -13,31 +13,30 @@ from .config import (
 TRUNCATION_MARKER = "...[truncated]"
 
 
-DOC_CHAT_APP_SERVER_TEMPLATE = """You are Codex, an autonomous coding assistant helping rewrite a single work doc for this repository.
-
-Target doc: {doc_title}
-Doc path: {target_path}
+DOC_CHAT_APP_SERVER_TEMPLATE = """You are Codex, an autonomous coding assistant helping maintain the work docs for this repository.
 
 Instructions:
-- Read {target_path} for full context; read other work docs as needed.
-- Do NOT write files. Return a unified diff patch that updates only {target_path}.
+- Use the base doc content below. Drafts (if present) are the authoritative base.
+- Do NOT write files. Return a unified diff patch that updates any of the work docs listed.
 - Output format:
 Agent: <short summary>
 <PATCH>
 ... unified diff ...
 </PATCH>
 
-Work docs (read from disk as needed):
+Work docs (paths):
 - TODO: {todo_path}
 - PROGRESS: {progress_path}
 - OPINIONS: {opinions_path}
 - SPEC: {spec_path}
 - SUMMARY: {summary_path}
 
+{target_docs_block}
+
 User request:
 {message}
 
-{target_excerpt_block}
+{docs_context_block}
 {recent_summary_block}
 """
 
@@ -140,9 +139,10 @@ def _shrink_prompt(
 def build_doc_chat_prompt(
     config: Config,
     *,
-    kind: str,
     message: str,
     recent_summary: Optional[str],
+    docs: dict[str, dict[str, str]],
+    targets: Optional[tuple[str, ...]] = None,
 ) -> str:
     prompt_cfg: AppServerDocChatPromptConfig = config.app_server.prompts.doc_chat
     doc_paths = {
@@ -152,35 +152,41 @@ def build_doc_chat_prompt(
         "spec": _display_path(config.root, config.doc_path("spec")),
         "summary": _display_path(config.root, config.doc_path("summary")),
     }
-    target_path = _display_path(config.root, config.doc_path(kind))
     message_text = truncate_text(message, prompt_cfg.message_max_chars)
-    target_excerpt = truncate_text(
-        config.doc_path(kind).read_text(encoding="utf-8"),
-        prompt_cfg.target_excerpt_max_chars,
-    )
+    doc_blocks = []
+    for key, path in doc_paths.items():
+        payload = docs.get(key, {})
+        source = payload.get("source") or "disk"
+        content = truncate_text(
+            str(payload.get("content") or ""), prompt_cfg.target_excerpt_max_chars
+        )
+        if not content.strip():
+            content = "(empty)"
+        label = f"{key.upper()} [{path}] ({source.upper()})"
+        doc_blocks.append(f"{label}\n{content}")
+    docs_context = "\n\n".join(doc_blocks)
     recent_text = truncate_text(
         recent_summary or "", prompt_cfg.recent_summary_max_chars
     )
+    target_docs = ", ".join(targets or ())
 
     sections = {
         "message": message_text,
-        "target_excerpt": target_excerpt,
+        "docs_context": docs_context,
         "recent_summary": recent_text,
+        "target_docs": target_docs,
     }
 
     def render() -> str:
         return DOC_CHAT_APP_SERVER_TEMPLATE.format(
-            doc_title=kind.upper(),
-            target_path=target_path,
             todo_path=doc_paths["todo"],
             progress_path=doc_paths["progress"],
             opinions_path=doc_paths["opinions"],
             spec_path=doc_paths["spec"],
             summary_path=doc_paths["summary"],
             message=sections["message"],
-            target_excerpt_block=_optional_block(
-                "TARGET_DOC_EXCERPT", sections["target_excerpt"]
-            ),
+            target_docs_block=_optional_block("TARGET_DOCS", sections["target_docs"]),
+            docs_context_block=_optional_block("DOC_BASES", sections["docs_context"]),
             recent_summary_block=_optional_block(
                 "RECENT_RUN_SUMMARY", sections["recent_summary"]
             ),
@@ -190,7 +196,7 @@ def build_doc_chat_prompt(
         max_chars=prompt_cfg.max_chars,
         render=render,
         sections=sections,
-        order=["recent_summary", "target_excerpt", "message"],
+        order=["recent_summary", "docs_context", "message"],
     )
 
 

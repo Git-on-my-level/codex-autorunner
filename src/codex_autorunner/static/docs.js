@@ -25,6 +25,8 @@ const CLEARABLE_DOCS = ["todo", "progress", "opinions"];
 const COPYABLE_DOCS = ["spec", "summary"];
 const PASTEABLE_DOCS = ["spec"];
 const CHAT_HISTORY_LIMIT = 8;
+const CHAT_EVENT_LIMIT = CONSTANTS.UI?.DOC_CHAT_EVENT_LIMIT || 12;
+const CHAT_EVENT_MAX = Math.max(60, CHAT_EVENT_LIMIT * 8);
 
 const docButtons = document.querySelectorAll(".chip[data-doc]");
 let docsCache = { todo: "", progress: "", opinions: "", spec: "", summary: "" };
@@ -33,15 +35,18 @@ let snapshotBusy = false;
 let activeDoc = "todo";
 
 const chatDecoder = new TextDecoder();
-const chatState = Object.fromEntries(
-  DOC_TYPES.map((k) => [k, createChatState()])
-);
+const chatState = createChatState();
+const draftState = {
+  data: {},
+  preview: {},
+};
 const specIngestState = {
   status: "idle",
   patch: "",
   agentMessage: "",
   error: "",
   busy: false,
+  controller: null,
 };
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT =
   CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
@@ -58,10 +63,16 @@ const chatUI = {
   status: document.getElementById("doc-chat-status"),
   response: document.getElementById("doc-chat-response"),
   responseWrapper: document.getElementById("doc-chat-response-wrapper"),
+  eventsMain: document.getElementById("doc-chat-events"),
+  eventsList: document.getElementById("doc-chat-events-list"),
+  eventsCount: document.getElementById("doc-chat-events-count"),
+  eventsToggle: document.getElementById("doc-chat-events-toggle"),
   patchMain: document.getElementById("doc-patch-main"),
   patchSummary: document.getElementById("doc-patch-summary"),
+  patchMeta: document.getElementById("doc-patch-meta"),
   patchBody: document.getElementById("doc-patch-body"),
   patchApply: document.getElementById("doc-patch-apply"),
+  patchPreview: document.getElementById("doc-patch-preview"),
   patchDiscard: document.getElementById("doc-patch-discard"),
   patchReload: document.getElementById("doc-patch-reload"),
   history: document.getElementById("doc-chat-history"),
@@ -105,12 +116,20 @@ const specIngestUI = {
   panel: document.getElementById("spec-ingest-followup"),
   input: document.getElementById("spec-ingest-input"),
   continueBtn: document.getElementById("spec-ingest-continue"),
+  cancelBtn: document.getElementById("spec-ingest-cancel"),
   patchMain: document.getElementById("spec-ingest-patch-main"),
   patchSummary: document.getElementById("spec-ingest-patch-summary"),
   patchBody: document.getElementById("spec-ingest-patch-body"),
   patchApply: document.getElementById("spec-ingest-patch-apply"),
   patchDiscard: document.getElementById("spec-ingest-patch-discard"),
   patchReload: document.getElementById("spec-ingest-patch-reload"),
+};
+
+const threadRegistryUI = {
+  banner: document.getElementById("doc-thread-registry-banner"),
+  detail: document.getElementById("doc-thread-registry-detail"),
+  reset: document.getElementById("doc-thread-registry-reset"),
+  download: document.getElementById("doc-thread-registry-download"),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,15 +144,18 @@ function createChatState() {
     error: "",
     streamText: "",
     controller: null,
-    patch: "",
+    events: [],
+    eventsExpanded: false,
+    eventController: null,
+    eventTurnId: null,
+    eventThreadId: null,
+    eventItemIndex: {},
+    eventError: "",
   };
 }
 
-function getChatState(kind = activeDoc) {
-  if (!chatState[kind]) {
-    chatState[kind] = createChatState();
-  }
-  return chatState[kind];
+function getChatState() {
+  return chatState;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -144,12 +166,30 @@ function parseChatPayload(payload) {
   if (!payload) return { response: "" };
   if (typeof payload === "string") return { response: payload };
   if (payload.status && payload.status !== "ok") {
+    if (payload.status === "interrupted") {
+      return {
+        interrupted: true,
+        detail: payload.detail || "Doc chat interrupted",
+      };
+    }
     return { error: payload.detail || "Doc chat failed" };
   }
   return {
-    response: payload.agent_message || payload.message || payload.content || "",
+    response:
+      payload.agent_message ||
+      payload.agentMessage ||
+      payload.message ||
+      payload.content ||
+      "",
     content: payload.content || "",
     patch: payload.patch || "",
+    drafts: normalizeDraftMap(payload.drafts || payload.draft),
+    updated: Array.isArray(payload.updated)
+      ? payload.updated.filter((entry) => typeof entry === "string")
+      : [],
+    createdAt: payload.created_at || payload.createdAt || "",
+    baseHash: payload.base_hash || payload.baseHash || "",
+    agentMessage: payload.agent_message || payload.agentMessage || "",
   };
 }
 
@@ -158,6 +198,18 @@ function parseSpecIngestPayload(payload) {
     return { error: "Spec ingest failed" };
   }
   if (payload.status && payload.status !== "ok") {
+    if (payload.status === "interrupted") {
+      return {
+        interrupted: true,
+        todo: payload.todo || "",
+        progress: payload.progress || "",
+        opinions: payload.opinions || "",
+        spec: payload.spec || "",
+        summary: payload.summary || "",
+        patch: payload.patch || "",
+        agentMessage: payload.agent_message || payload.agentMessage || "",
+      };
+    }
     return { error: payload.detail || "Spec ingest failed" };
   }
   return {
@@ -179,6 +231,45 @@ function parseMaybeJson(raw) {
   }
 }
 
+function normalizeDraftPayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const content = typeof payload.content === "string" ? payload.content : "";
+  const patch = typeof payload.patch === "string" ? payload.patch : "";
+  if (!content && !patch) return null;
+  return {
+    content,
+    patch,
+    agentMessage:
+      typeof payload.agent_message === "string"
+        ? payload.agent_message
+        : typeof payload.agentMessage === "string"
+        ? payload.agentMessage
+        : "",
+    createdAt:
+      typeof payload.created_at === "string"
+        ? payload.created_at
+        : typeof payload.createdAt === "string"
+        ? payload.createdAt
+        : "",
+    baseHash:
+      typeof payload.base_hash === "string"
+        ? payload.base_hash
+        : typeof payload.baseHash === "string"
+        ? payload.baseHash
+        : "",
+  };
+}
+
+function normalizeDraftMap(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const drafts = {};
+  Object.entries(raw).forEach(([kind, entry]) => {
+    const normalized = normalizeDraftPayload(entry);
+    if (normalized) drafts[kind] = normalized;
+  });
+  return drafts;
+}
+
 function truncateText(text, maxLen) {
   if (!text) return "";
   const normalized = text.replace(/\s+/g, " ").trim();
@@ -187,12 +278,100 @@ function truncateText(text, maxLen) {
     : normalized;
 }
 
+function setDraft(kind, draft) {
+  if (!DOC_TYPES.includes(kind)) return;
+  if (!draft) {
+    delete draftState.data[kind];
+    delete draftState.preview[kind];
+  } else {
+    draftState.data[kind] = draft;
+  }
+  updateDocDraftIndicators();
+}
+
+function getDraft(kind) {
+  return draftState.data[kind] || null;
+}
+
+function hasDraft(kind) {
+  return !!getDraft(kind);
+}
+
+function isDraftPreview(kind) {
+  return !!draftState.preview[kind];
+}
+
+function setDraftPreview(kind, value) {
+  if (!DOC_TYPES.includes(kind)) return;
+  if (value) {
+    draftState.preview[kind] = true;
+  } else {
+    delete draftState.preview[kind];
+  }
+  updateDocDraftIndicators();
+}
+
+function updateDocDraftIndicators() {
+  docButtons.forEach((btn) => {
+    const kind = btn.dataset.doc;
+    if (!DOC_TYPES.includes(kind)) return;
+    btn.classList.toggle("has-draft", hasDraft(kind));
+    btn.classList.toggle(
+      "previewing",
+      hasDraft(kind) && isDraftPreview(kind)
+    );
+  });
+}
+
+function formatDraftTimestamp(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function applyDraftUpdates(drafts) {
+  if (!drafts || typeof drafts !== "object") return;
+  Object.entries(drafts).forEach(([kind, entry]) => {
+    const normalized = normalizeDraftPayload(entry);
+    if (normalized) setDraft(kind, normalized);
+  });
+  if (hasDraft(activeDoc) && isDraftPreview(activeDoc)) {
+    syncDocEditor(activeDoc, { force: true });
+  }
+}
+
+function resetChatEvents(state, { preserve = false } = {}) {
+  if (state.eventController) {
+    state.eventController.abort();
+  }
+  state.eventController = null;
+  state.eventTurnId = null;
+  state.eventThreadId = null;
+  state.eventItemIndex = {};
+  state.eventError = "";
+  if (!preserve) {
+    state.events = [];
+    state.eventsExpanded = false;
+  }
+}
+
 function getDocFromUrl() {
   const params = getUrlParams();
   const kind = params.get("doc");
   if (!kind) return null;
   if (kind === "snapshot") return kind;
   return DOC_TYPES.includes(kind) ? kind : null;
+}
+
+function getDocChatTargets() {
+  if (!DOC_TYPES.includes(activeDoc)) return [];
+  return [activeDoc];
 }
 
 /**
@@ -342,6 +521,10 @@ async function copyDocToClipboard(kind = activeDoc) {
 
 async function pasteSpecFromClipboard() {
   if (!PASTEABLE_DOCS.includes(activeDoc)) return;
+  if (hasDraft(activeDoc) && isDraftPreview(activeDoc)) {
+    flash("Exit draft preview before pasting.", "error");
+    return;
+  }
   const textarea = getDocTextarea();
   if (!textarea) return;
   try {
@@ -356,7 +539,7 @@ async function pasteSpecFromClipboard() {
     }
     textarea.value = text;
     textarea.focus();
-    updateStandardActionButtons("spec");
+    updateDocControls("spec");
     flash("SPEC replaced from clipboard");
   } catch {
     flash("Paste failed", "error");
@@ -367,13 +550,14 @@ async function pasteSpecFromClipboard() {
 // Chat UI Rendering
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function applyDocUpdateFromChat(kind, content) {
+async function applyDocUpdateFromChat(kind, content, { force = false } = {}) {
   if (!content) return false;
   const textarea = getDocTextarea();
   const viewingSameDoc = activeDoc === kind;
+  const previewing = hasDraft(kind) && isDraftPreview(kind);
   if (viewingSameDoc && textarea) {
     const cached = docsCache[kind] || "";
-    if (textarea.value !== cached) {
+    if (!force && !previewing && textarea.value !== cached) {
       const ok = await confirmModal(
         `You have unsaved ${kind.toUpperCase()} edits. Overwrite with chat result?`
       );
@@ -387,14 +571,12 @@ async function applyDocUpdateFromChat(kind, content) {
   }
 
   docsCache[kind] = content;
-  if (viewingSameDoc && textarea) {
+  if (viewingSameDoc && textarea && !previewing) {
     textarea.value = content;
-    document.getElementById(
-      "doc-status"
-    ).textContent = `Editing ${kind.toUpperCase()}`;
+    updateDocStatus(kind);
   }
   if (viewingSameDoc) {
-    updateStandardActionButtons(kind);
+    updateDocControls(kind);
   }
   publish("docs:updated", { kind, content });
   if (kind === "todo") {
@@ -414,14 +596,10 @@ function applySpecIngestDocs(payload) {
     spec: payload.spec ?? docsCache.spec,
     summary: payload.summary ?? docsCache.summary,
   };
-  const textarea = getDocTextarea();
-  if (textarea && activeDoc !== "snapshot") {
-    textarea.value = docsCache[activeDoc] || "";
-    document.getElementById(
-      "doc-status"
-    ).textContent = `Editing ${activeDoc.toUpperCase()}`;
+  if (activeDoc !== "snapshot") {
+    syncDocEditor(activeDoc, { force: true });
   }
-  updateStandardActionButtons(activeDoc);
+  updateDocControls(activeDoc);
   renderTodoPreview(docsCache.todo);
   publish("docs:updated", { kind: "todo", content: docsCache.todo });
   publish("docs:updated", { kind: "progress", content: docsCache.progress });
@@ -434,16 +612,21 @@ function applySpecIngestDocs(payload) {
 function updateDocVisibility() {
   const docContent = getDocTextarea();
   if (!docContent) return;
-  const chatHasPatch = !!(getChatState(activeDoc).patch || "").trim();
   const specHasPatch =
     activeDoc === "spec" && !!(specIngestState.patch || "").trim();
-  docContent.classList.toggle("hidden", chatHasPatch || specHasPatch);
+  docContent.classList.toggle("hidden", specHasPatch);
 }
 
 function renderSpecIngestPatch() {
   if (!specIngestUI.patchMain) return;
   const isSpec = activeDoc === "spec";
   const hasPatch = !!(specIngestState.patch || "").trim();
+  if (specIngestUI.continueBtn)
+    specIngestUI.continueBtn.disabled = specIngestState.busy;
+  if (specIngestUI.cancelBtn) {
+    specIngestUI.cancelBtn.disabled = !specIngestState.busy;
+    specIngestUI.cancelBtn.classList.toggle("hidden", !specIngestState.busy);
+  }
   specIngestUI.patchMain.classList.toggle("hidden", !isSpec || !hasPatch);
   if (!isSpec || !hasPatch) {
     updateDocVisibility();
@@ -461,9 +644,329 @@ function renderSpecIngestPatch() {
   updateDocVisibility();
 }
 
-function renderChat(kind = activeDoc) {
-  if (kind !== activeDoc) return;
-  const state = getChatState(kind);
+function updateDocStatus(kind) {
+  const status = document.getElementById("doc-status");
+  if (!status) return;
+  if (kind === "snapshot") {
+    status.textContent = snapshotBusy ? "Working…" : "Viewing SNAPSHOT";
+    return;
+  }
+  const draft = getDraft(kind);
+  if (draft && isDraftPreview(kind)) {
+    status.textContent = `Previewing ${kind.toUpperCase()} draft`;
+    return;
+  }
+  status.textContent = `Editing ${kind.toUpperCase()}`;
+}
+
+function syncDocEditor(kind, { force = false } = {}) {
+  const textarea = getDocTextarea();
+  if (!textarea) return;
+  if (kind === "snapshot") {
+    textarea.readOnly = true;
+    textarea.classList.remove("doc-preview");
+    textarea.value = snapshotCache.content || "";
+    textarea.placeholder = "(snapshot will appear here)";
+    updateDocStatus(kind);
+    return;
+  }
+  const draft = getDraft(kind);
+  const previewing = !!draft && isDraftPreview(kind);
+  const nextValue = previewing ? draft.content : docsCache[kind] || "";
+  if (force || textarea.value !== nextValue) {
+    textarea.value = nextValue;
+  }
+  textarea.readOnly = previewing;
+  textarea.classList.toggle("doc-preview", previewing);
+  textarea.placeholder = previewing ? "(draft preview)" : "";
+  updateDocStatus(kind);
+}
+
+function updateDocControls(kind) {
+  const saveBtn = document.getElementById("save-doc");
+  if (saveBtn) {
+    const previewing = hasDraft(kind) && isDraftPreview(kind);
+    saveBtn.disabled = kind === "snapshot" || previewing;
+  }
+  updateStandardActionButtons(kind);
+}
+
+function extractCommand(item, params) {
+  const command = item?.command ?? params?.command;
+  if (Array.isArray(command)) {
+    return command.map((part) => String(part)).join(" ").trim();
+  }
+  if (typeof command === "string") return command.trim();
+  return "";
+}
+
+function extractFiles(payload) {
+  const files = [];
+  const addEntry = (entry) => {
+    if (typeof entry === "string" && entry.trim()) {
+      files.push(entry.trim());
+      return;
+    }
+    if (entry && typeof entry === "object") {
+      const path = entry.path || entry.file || entry.name;
+      if (typeof path === "string" && path.trim()) {
+        files.push(path.trim());
+      }
+    }
+  };
+  if (!payload || typeof payload !== "object") return files;
+  for (const key of ["files", "fileChanges", "paths"]) {
+    const value = payload[key];
+    if (Array.isArray(value)) {
+      value.forEach(addEntry);
+    }
+  }
+  for (const key of ["path", "file", "name"]) {
+    addEntry(payload[key]);
+  }
+  return files;
+}
+
+function extractErrorMessage(params) {
+  if (!params || typeof params !== "object") return "";
+  const err = params.error;
+  if (err && typeof err === "object") {
+    const message = typeof err.message === "string" ? err.message : "";
+    const details =
+      typeof err.additionalDetails === "string"
+        ? err.additionalDetails
+        : typeof err.details === "string"
+        ? err.details
+        : "";
+    if (message && details && message !== details) {
+      return `${message} (${details})`;
+    }
+    return message || details;
+  }
+  if (typeof err === "string") return err;
+  if (typeof params.message === "string") return params.message;
+  return "";
+}
+
+function addChatEvent(state, entry) {
+  state.events.push(entry);
+  if (state.events.length > CHAT_EVENT_MAX) {
+    state.events = state.events.slice(-CHAT_EVENT_MAX);
+    state.eventItemIndex = {};
+    state.events.forEach((evt, idx) => {
+      if (evt.itemId) state.eventItemIndex[evt.itemId] = idx;
+    });
+  }
+}
+
+function applyAppServerEvent(state, payload) {
+  const message =
+    payload && typeof payload === "object" ? payload.message || payload : payload;
+  if (!message || typeof message !== "object") return;
+  const method = message.method || "app-server";
+  const params = message.params || {};
+  const item = params.item || {};
+  const itemId = params.itemId || item.id || item.itemId || null;
+  const receivedAt =
+    payload && typeof payload === "object"
+      ? payload.received_at || payload.receivedAt || Date.now()
+      : Date.now();
+
+  if (method === "item/reasoning/summaryTextDelta") {
+    const delta = params.delta || "";
+    if (!delta) return;
+    const existingIndex =
+      itemId && state.eventItemIndex[itemId] !== undefined
+        ? state.eventItemIndex[itemId]
+        : null;
+    if (existingIndex !== null) {
+      const existing = state.events[existingIndex];
+      existing.summary = `${existing.summary || ""}${delta}`;
+      existing.time = receivedAt;
+      return;
+    }
+    const entry = {
+      id: payload?.id || `${Date.now()}`,
+      title: "Thinking",
+      summary: delta,
+      detail: "",
+      kind: "thinking",
+      time: receivedAt,
+      itemId,
+      method,
+    };
+    addChatEvent(state, entry);
+    if (itemId) state.eventItemIndex[itemId] = state.events.length - 1;
+    return;
+  }
+
+  if (method === "item/reasoning/summaryPartAdded") {
+    const existingIndex =
+      itemId && state.eventItemIndex[itemId] !== undefined
+        ? state.eventItemIndex[itemId]
+        : null;
+    if (existingIndex !== null) {
+      const existing = state.events[existingIndex];
+      existing.summary = `${existing.summary || ""}\n\n`;
+      existing.time = receivedAt;
+    }
+    return;
+  }
+
+  let title = method;
+  let summary = "";
+  let detail = "";
+  let kind = "event";
+
+  if (method === "item/completed") {
+    const itemType = item.type;
+    if (itemType === "commandExecution") {
+      title = "Command";
+      summary = extractCommand(item, params);
+      kind = "command";
+      if (item.exitCode !== undefined && item.exitCode !== null) {
+        detail = `exit ${item.exitCode}`;
+      }
+    } else if (itemType === "fileChange") {
+      title = "File change";
+      const files = extractFiles(item);
+      summary = files.join(", ") || "Updated files";
+      kind = "file";
+    } else if (itemType === "tool") {
+      title = "Tool";
+      summary = item.name || item.tool || item.id || "Tool call";
+      kind = "command";
+    } else if (itemType === "agentMessage") {
+      title = "Agent";
+      summary = item.text || "Agent message";
+    } else {
+      title = itemType ? `Item ${itemType}` : "Item completed";
+      summary = item.text || item.message || "";
+    }
+  } else if (method === "item/commandExecution/requestApproval") {
+    title = "Command approval";
+    summary = extractCommand(item, params) || "Approval requested";
+    kind = "command";
+  } else if (method === "item/fileChange/requestApproval") {
+    title = "File approval";
+    const files = extractFiles(params);
+    summary = files.join(", ") || "Approval requested";
+    kind = "file";
+  } else if (method === "turn/completed") {
+    title = "Turn completed";
+    summary = params.status || "completed";
+    kind = "status";
+  } else if (method === "error") {
+    title = "Error";
+    summary = extractErrorMessage(params) || "App-server error";
+    kind = "error";
+  } else if (method.includes("outputDelta")) {
+    title = "Output";
+    summary = params.delta || params.text || "";
+  } else if (params.delta) {
+    title = "Delta";
+    summary = params.delta;
+  }
+
+  const entry = {
+    id: payload?.id || `${Date.now()}`,
+    title,
+    summary: summary || "(no details)",
+    detail,
+    kind,
+    time: receivedAt,
+    itemId,
+    method,
+  };
+  addChatEvent(state, entry);
+  if (itemId) state.eventItemIndex[itemId] = state.events.length - 1;
+}
+
+function renderChatEvents(state) {
+  if (activeDoc === "snapshot") return;
+  if (!chatUI.eventsMain || !chatUI.eventsList || !chatUI.eventsCount) return;
+  const hasEvents = state.events.length > 0;
+  const isRunning = state.status === "running";
+  const showEvents = hasEvents || isRunning;
+  chatUI.eventsMain.classList.toggle("hidden", !showEvents);
+  chatUI.eventsCount.textContent = state.events.length;
+  if (!showEvents) return;
+
+  const limit = CHAT_EVENT_LIMIT;
+  const expanded = !!state.eventsExpanded;
+  const showCount = expanded
+    ? state.events.length
+    : Math.min(state.events.length, limit);
+  const visible = state.events.slice(-showCount);
+
+  if (chatUI.eventsToggle) {
+    const hiddenCount = Math.max(0, state.events.length - showCount);
+    chatUI.eventsToggle.classList.toggle("hidden", hiddenCount === 0);
+    chatUI.eventsToggle.textContent = expanded
+      ? "Show recent"
+      : `Show more (${hiddenCount})`;
+  }
+
+  chatUI.eventsList.innerHTML = "";
+  if (state.eventError) {
+    const error = document.createElement("div");
+    error.className = "doc-chat-event error";
+    const title = document.createElement("div");
+    title.className = "doc-chat-event-title";
+    title.textContent = "Event stream error";
+    const summary = document.createElement("div");
+    summary.className = "doc-chat-event-summary";
+    summary.textContent = state.eventError;
+    error.appendChild(title);
+    error.appendChild(summary);
+    chatUI.eventsList.appendChild(error);
+  }
+  if (!hasEvents) {
+    const empty = document.createElement("div");
+    empty.className = "doc-chat-events-empty";
+    empty.textContent = isRunning ? "Waiting for updates..." : "No updates yet.";
+    chatUI.eventsList.appendChild(empty);
+    return;
+  }
+
+  visible.forEach((entry) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = `doc-chat-event ${entry.kind || ""}`.trim();
+
+    const title = document.createElement("div");
+    title.className = "doc-chat-event-title";
+    title.textContent = entry.title || entry.method || "Update";
+
+    const summary = document.createElement("div");
+    summary.className = "doc-chat-event-summary";
+    summary.textContent = entry.summary || "(no details)";
+
+    wrapper.appendChild(title);
+    wrapper.appendChild(summary);
+
+    if (entry.detail) {
+      const detail = document.createElement("div");
+      detail.className = "doc-chat-event-detail";
+      detail.textContent = entry.detail;
+      wrapper.appendChild(detail);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "doc-chat-event-meta";
+    meta.textContent = entry.time
+      ? new Date(entry.time).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : "";
+    wrapper.appendChild(meta);
+
+    chatUI.eventsList.appendChild(wrapper);
+  });
+}
+
+function renderChat() {
+  const state = getChatState();
   const latest = state.history[0];
   const isRunning = state.status === "running";
   const hasError = !!state.error;
@@ -473,6 +976,8 @@ function renderChat(kind = activeDoc) {
     ? "running"
     : state.status === "error"
     ? "error"
+    : state.status === "interrupted"
+    ? "interrupted"
     : "idle";
   statusPill(chatUI.status, pillState);
 
@@ -528,22 +1033,56 @@ function renderChat(kind = activeDoc) {
   chatUI.response.textContent = responseText;
   chatUI.response.classList.toggle("streaming", isRunning && state.streamText);
 
-  const hasPatch = !!(state.patch && state.patch.trim());
+  const draft = getDraft(activeDoc);
+  const hasPatch = !!(draft && (draft.patch || "").trim());
+  const previewing = hasPatch && isDraftPreview(activeDoc);
   if (chatUI.patchMain) {
     chatUI.patchMain.classList.toggle("hidden", !hasPatch);
+    chatUI.patchMain.classList.toggle("previewing", previewing);
     // Use syntax-highlighted diff rendering
     chatUI.patchBody.innerHTML = hasPatch
-      ? renderDiffHtml(state.patch)
-      : "(no patch)";
-    chatUI.patchSummary.textContent = latest?.response || state.error || "";
+      ? renderDiffHtml(draft.patch)
+      : "(no draft)";
+    if (hasPatch) {
+      chatUI.patchSummary.textContent =
+        draft?.agentMessage ||
+        latest?.response ||
+        state.error ||
+        "Draft ready";
+    } else {
+      chatUI.patchSummary.textContent = "";
+    }
+    if (chatUI.patchMeta) {
+      const metaParts = [];
+      if (hasPatch && draft?.createdAt) {
+        metaParts.push(`drafted ${formatDraftTimestamp(draft.createdAt)}`);
+      }
+      if (hasPatch && draft?.baseHash) {
+        metaParts.push(`base ${draft.baseHash.slice(0, 7)}`);
+      }
+      chatUI.patchMeta.textContent = metaParts.join(" · ");
+    }
     if (chatUI.patchApply) chatUI.patchApply.disabled = isRunning || !hasPatch;
     if (chatUI.patchDiscard)
       chatUI.patchDiscard.disabled = isRunning || !hasPatch;
     if (chatUI.patchReload) chatUI.patchReload.disabled = isRunning;
+    if (chatUI.patchPreview) {
+      chatUI.patchPreview.disabled = isRunning || !hasPatch;
+      chatUI.patchPreview.textContent = previewing
+        ? "Hide preview"
+        : "Preview draft";
+      chatUI.patchPreview.classList.toggle("active", previewing);
+      chatUI.patchPreview.setAttribute(
+        "aria-pressed",
+        previewing ? "true" : "false"
+      );
+    }
   }
 
   updateDocVisibility();
+  updateDocControls(activeDoc);
 
+  renderChatEvents(state);
   renderChatHistory(state);
 }
 
@@ -592,7 +1131,12 @@ function renderChatHistory(state) {
 
     const response = document.createElement("div");
     response.className = "response";
-    const preview = entry.error || entry.response || "(pending...)";
+    const preview =
+      entry.error ||
+      entry.response ||
+      (entry.updated && entry.updated.length
+        ? `Drafted: ${entry.updated.map((k) => k.toUpperCase()).join(", ")}`
+        : "(pending...)");
     response.textContent = truncateText(preview, 80);
     response.title = preview;
 
@@ -602,17 +1146,39 @@ function renderChatHistory(state) {
     summary.textContent = "View details";
     const body = document.createElement("div");
     body.className = "doc-chat-entry-body";
+    if (entry.targets && entry.targets.length) {
+      const targets = document.createElement("div");
+      targets.className = "doc-chat-entry-tags";
+      targets.textContent = `Targets: ${entry.targets
+        .map((k) => k.toUpperCase())
+        .join(", ")}`;
+      body.appendChild(targets);
+    }
+    if (entry.updated && entry.updated.length) {
+      const updated = document.createElement("div");
+      updated.className = "doc-chat-entry-tags";
+      updated.textContent = `Drafts: ${entry.updated
+        .map((k) => k.toUpperCase())
+        .join(", ")}`;
+      body.appendChild(updated);
+    }
     if (entry.response) {
       const respBlock = document.createElement("pre");
       respBlock.textContent = entry.response;
       body.appendChild(respBlock);
     }
-    if (entry.patch) {
+    const drafts = entry.drafts || {};
+    Object.entries(drafts).forEach(([kind, draft]) => {
+      if (!draft || !draft.patch) return;
+      const label = document.createElement("div");
+      label.className = "doc-chat-entry-draft-label";
+      label.textContent = `${kind.toUpperCase()} draft`;
+      body.appendChild(label);
       const patchBlock = document.createElement("pre");
       patchBlock.className = "doc-chat-entry-patch";
-      patchBlock.textContent = entry.patch;
+      patchBlock.textContent = draft.patch;
       body.appendChild(patchBlock);
-    }
+    });
     detail.appendChild(summary);
     detail.appendChild(body);
 
@@ -650,27 +1216,39 @@ function markChatError(state, entry, message) {
   entry.error = message;
   state.error = message;
   state.status = "error";
-  state.patch = "";
   renderChat();
 }
 
+async function interruptDocChat() {
+  try {
+    await api("/api/docs/chat/interrupt", { method: "POST" });
+  } catch (err) {
+    flash(err.message || "Failed to interrupt doc chat", "error");
+  }
+}
+
 function cancelDocChat() {
-  const state = getChatState(activeDoc);
+  const state = getChatState();
   if (state.status !== "running") return;
+  interruptDocChat();
   if (state.controller) state.controller.abort();
+  resetChatEvents(state, { preserve: true });
   const entry = state.history[0];
   if (entry && entry.status === "running") {
-    entry.status = "error";
-    entry.error = "Cancelled";
+    entry.status = "interrupted";
+    entry.error = "Interrupted";
   }
-  state.status = "idle";
+  state.status = "interrupted";
+  state.error = "";
+  state.streamText = "";
+  state.statusText = "";
   state.controller = null;
   renderChat();
 }
 
 async function sendDocChat() {
   const message = (chatUI.input.value || "").trim();
-  const state = getChatState(activeDoc);
+  const state = getChatState();
   if (!message) {
     state.error = "Enter a message to send.";
     renderChat();
@@ -678,14 +1256,17 @@ async function sendDocChat() {
   }
   if (state.status === "running") return;
 
+  resetChatEvents(state);
+  const targets = getDocChatTargets();
   const entry = {
     id: `${Date.now()}`,
     prompt: message,
+    targets,
     response: "",
     status: "running",
     time: Date.now(),
-    lastAppliedContent: null,
-    patch: "",
+    drafts: {},
+    updated: [],
   };
   state.history.unshift(entry);
   if (state.history.length > CHAT_HISTORY_LIMIT * 2) {
@@ -694,7 +1275,6 @@ async function sendDocChat() {
   state.status = "running";
   state.error = "";
   state.streamText = "";
-  state.patch = "";
   state.statusText = "queued";
   state.controller = new AbortController();
 
@@ -709,19 +1289,24 @@ async function sendDocChat() {
   chatUI.input.focus();
 
   try {
-    await performDocChatRequest(activeDoc, entry, state);
-    if (entry.status !== "error") {
+    await performDocChatRequest(entry, state);
+    if (entry.status === "interrupted") {
+      state.status = "interrupted";
+      state.error = "";
+    } else if (entry.status !== "error") {
       state.status = "idle";
       state.error = "";
     }
   } catch (err) {
     if (err.name === "AbortError") {
-      entry.status = "error";
-      entry.error = "Cancelled";
+      entry.status = "interrupted";
+      entry.error = "Interrupted";
       state.error = "";
-      state.status = "idle";
+      state.status = "interrupted";
+      resetChatEvents(state, { preserve: true });
     } else {
       markChatError(state, entry, err.message || "Doc chat failed");
+      resetChatEvents(state, { preserve: true });
     }
   } finally {
     state.controller = null;
@@ -735,17 +1320,21 @@ async function sendDocChat() {
 // Chat Networking & Streaming
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function performDocChatRequest(kind, entry, state) {
-  const endpoint = resolvePath(`/api/docs/${kind}/chat`);
+async function performDocChatRequest(entry, state) {
+  const endpoint = resolvePath("/api/docs/chat");
   const headers = { "Content-Type": "application/json" };
   const token = getAuthToken();
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
+  const payload = { message: entry.prompt, stream: true };
+  if (entry.targets && entry.targets.length) {
+    payload.targets = entry.targets;
+  }
   const res = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message: entry.prompt, stream: true }),
+    body: JSON.stringify(payload),
     signal: state.controller.signal,
   });
 
@@ -763,8 +1352,12 @@ async function performDocChatRequest(kind, entry, state) {
 
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("text/event-stream")) {
-    await readChatStream(res, state, entry, kind);
-    if (entry.status !== "error" && entry.status !== "done") {
+    await readChatStream(res, state, entry);
+    if (
+      entry.status !== "error" &&
+      entry.status !== "done" &&
+      entry.status !== "interrupted"
+    ) {
       entry.status = "done";
     }
   } else {
@@ -775,85 +1368,199 @@ async function performDocChatRequest(kind, entry, state) {
   }
 }
 
+async function startDocChatEventStream(payload) {
+  const threadId = payload?.thread_id || payload?.threadId;
+  const turnId = payload?.turn_id || payload?.turnId;
+  if (!threadId || !turnId) return;
+  const state = getChatState();
+  if (state.eventTurnId === turnId && state.eventThreadId === threadId) {
+    return;
+  }
+  resetChatEvents(state);
+  state.eventTurnId = turnId;
+  state.eventThreadId = threadId;
+  state.eventController = new AbortController();
+  renderChatEvents(state);
+
+  const endpoint = resolvePath(
+    `/api/app-server/turns/${encodeURIComponent(turnId)}/events`
+  );
+  const url = `${endpoint}?thread_id=${encodeURIComponent(threadId)}`;
+  const headers = {};
+  const token = getAuthToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers,
+      signal: state.eventController.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `Event stream failed (${res.status})`);
+    }
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("text/event-stream")) {
+      throw new Error("Event stream unavailable");
+    }
+    await readAppServerEventStream(res, state);
+  } catch (err) {
+    if (err.name === "AbortError") return;
+    state.eventError = err.message || "Failed to stream app-server events";
+    renderChatEvents(state);
+  }
+}
+
+async function readAppServerEventStream(res, state) {
+  if (!res.body) throw new Error("Streaming not supported in this browser");
+  const reader = res.body.getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += chatDecoder.decode(value, { stream: true });
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop();
+    for (const chunk of chunks) {
+      if (!chunk.trim()) continue;
+      let event = "message";
+      const dataLines = [];
+      chunk.split("\n").forEach((line) => {
+        if (line.startsWith("event:")) {
+          event = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+      });
+      if (dataLines.length === 0) continue;
+      const data = dataLines.join("\n");
+      await handleAppServerStreamEvent(event || "message", data, state);
+    }
+  }
+}
+
+async function handleAppServerStreamEvent(_event, rawData, state) {
+  if (!rawData) return;
+  const parsed = parseMaybeJson(rawData);
+  applyAppServerEvent(state, parsed);
+  renderChatEvents(state);
+}
+
+async function toggleDraftPreview(kind = activeDoc) {
+  const draft = getDraft(kind);
+  if (!draft) return;
+  const nextValue = !isDraftPreview(kind);
+  if (nextValue) {
+    const textarea = getDocTextarea();
+    if (textarea) {
+      const cached = docsCache[kind] || "";
+      if (textarea.value !== cached) {
+        const ok = await confirmModal(
+          `You have unsaved ${kind.toUpperCase()} edits. Overwrite with draft preview?`
+        );
+        if (!ok) return;
+      }
+    }
+  }
+  setDraftPreview(kind, nextValue);
+  syncDocEditor(kind, { force: true });
+  renderChat();
+}
+
 async function applyPatch(kind = activeDoc) {
-  const state = getChatState(kind);
-  if (!state.patch) {
-    flash("No patch to apply", "error");
+  const state = getChatState();
+  const draft = getDraft(kind);
+  if (!draft) {
+    flash("No draft to apply", "error");
     return;
   }
   try {
     const res = await api(`/api/docs/${kind}/chat/apply`, { method: "POST" });
     const applied = parseChatPayload(res);
     if (applied.error) throw new Error(applied.error);
+    setDraftPreview(kind, false);
+    setDraft(kind, null);
     if (applied.content) {
-      await applyDocUpdateFromChat(kind, applied.content);
+      await applyDocUpdateFromChat(kind, applied.content, { force: true });
     }
-    state.patch = "";
     const latest = state.history[0];
     if (latest) latest.status = "done";
-    flash("Patch applied");
+    flash("Draft applied");
   } catch (err) {
-    flash(err.message || "Failed to apply patch", "error");
+    flash(err.message || "Failed to apply draft", "error");
   } finally {
-    renderChat(kind);
+    renderChat();
+    syncDocEditor(kind, { force: true });
   }
 }
 
 async function discardPatch(kind = activeDoc) {
-  const state = getChatState(kind);
-  if (!state.patch) return;
+  const state = getChatState();
+  const draft = getDraft(kind);
+  if (!draft) return;
   try {
     const res = await api(`/api/docs/${kind}/chat/discard`, { method: "POST" });
     const parsed = parseChatPayload(res);
+    setDraftPreview(kind, false);
+    setDraft(kind, null);
     if (parsed.content) {
-      await applyDocUpdateFromChat(kind, parsed.content);
+      await applyDocUpdateFromChat(kind, parsed.content, { force: true });
     }
-    state.patch = "";
     const latest = state.history[0];
-    if (latest && latest.status === "needs-apply") {
-      latest.status = "done";
+    if (latest) {
+      latest.status = latest.status === "running" ? "done" : latest.status;
     }
-    flash("Discarded chat patch");
+    flash("Draft discarded");
   } catch (err) {
-    flash(err.message || "Failed to discard patch", "error");
+    flash(err.message || "Failed to discard draft", "error");
   } finally {
-    renderChat(kind);
+    renderChat();
+    syncDocEditor(kind, { force: true });
   }
 }
 
 async function reloadPatch(kind = activeDoc, silent = false) {
-  const state = getChatState(kind);
   try {
     const res = await api(`/api/docs/${kind}/chat/pending`, { method: "GET" });
     const parsed = parseChatPayload(res);
     if (parsed.error) throw new Error(parsed.error);
-    if (parsed.patch) {
-      state.patch = parsed.patch;
-      const entry = state.history[0] || {
-        id: `${Date.now()}`,
-        prompt: "(pending patch)",
-        response: parsed.response || "",
-        status: "needs-apply",
-        time: Date.now(),
-        lastAppliedContent: null,
-        patch: parsed.patch,
-      };
-      entry.patch = parsed.patch;
-      entry.response = parsed.response || entry.response;
-      entry.status = "needs-apply";
-      if (!state.history[0]) state.history.unshift(entry);
-      if (parsed.content) {
-        await applyDocUpdateFromChat(kind, parsed.content);
+    const normalized = normalizeDraftPayload({
+      content: parsed.content,
+      patch: parsed.patch,
+      agent_message: parsed.agentMessage || parsed.response || "",
+      created_at: parsed.createdAt || "",
+      base_hash: parsed.baseHash || "",
+    });
+    if (normalized) {
+      setDraft(kind, normalized);
+      if (isDraftPreview(kind)) {
+        syncDocEditor(kind, { force: true });
       }
-      renderChat(kind);
-      if (!silent) flash("Loaded pending patch");
+      renderChat();
+      if (!silent) flash("Loaded pending draft");
+      return;
     }
   } catch (err) {
-    if (!silent) flash(err.message || "No pending patch", "error");
+    const message = err?.message || "";
+    if (message.includes("No pending")) {
+      setDraft(kind, null);
+      if (isDraftPreview(kind)) {
+        setDraftPreview(kind, false);
+        syncDocEditor(kind, { force: true });
+      }
+      if (!silent) flash("No pending draft", "error");
+    } else if (!silent) {
+      flash(message || "Failed to load pending draft", "error");
+    }
+    renderChat();
   }
 }
 
-async function readChatStream(res, state, entry, kind) {
+async function refreshAllDrafts() {
+  await Promise.all(DOC_TYPES.map((kind) => reloadPatch(kind, true)));
+}
+
+async function readChatStream(res, state, entry) {
   if (!res.body) throw new Error("Streaming not supported in this browser");
   const reader = res.body.getReader();
   let buffer = "";
@@ -875,17 +1582,21 @@ async function readChatStream(res, state, entry, kind) {
         }
       });
       const data = dataLines.join("\n");
-      await handleStreamEvent(event || "message", data, state, entry, kind);
+      await handleStreamEvent(event || "message", data, state, entry);
     }
   }
 }
 
-async function handleStreamEvent(event, rawData, state, entry, kind) {
+async function handleStreamEvent(event, rawData, state, entry) {
   const parsed = parseMaybeJson(rawData);
+  if (event === "turn") {
+    void startDocChatEventStream(parsed);
+    return;
+  }
   if (event === "status") {
     state.statusText =
       typeof parsed === "string" ? parsed : parsed.status || "";
-    renderChat(kind);
+    renderChat();
     return;
   }
   if (event === "token") {
@@ -895,23 +1606,24 @@ async function handleStreamEvent(event, rawData, state, entry, kind) {
         : parsed.token || parsed.text || rawData || "";
     entry.response = (entry.response || "") + token;
     state.streamText = entry.response;
-    renderChat(kind);
+    renderChat();
     return;
   }
   if (event === "update") {
     const payload = parseChatPayload(parsed);
     entry.response = payload.response || entry.response;
     state.streamText = entry.response;
-    if (payload.patch) {
-      state.patch = payload.patch;
-      entry.patch = payload.patch;
-      entry.status = "needs-apply";
-      entry.response = payload.response || entry.response;
-      if (payload.content) {
-        await applyDocUpdateFromChat(kind, payload.content);
-      }
+    const updated =
+      (payload.updated && payload.updated.length
+        ? payload.updated
+        : Object.keys(payload.drafts || {})) || [];
+    if (updated.length) {
+      entry.updated = updated;
+      entry.drafts = payload.drafts || {};
+      applyDraftUpdates(payload.drafts);
+      entry.status = "done";
     }
-    renderChat(kind);
+    renderChat();
     return;
   }
   if (event === "error") {
@@ -921,16 +1633,37 @@ async function handleStreamEvent(event, rawData, state, entry, kind) {
       rawData ||
       "Doc chat failed";
     markChatError(state, entry, message);
+    resetChatEvents(state, { preserve: true });
     throw new Error(message);
+  }
+  if (event === "interrupted") {
+    const message =
+      (parsed && parsed.detail) || rawData || "Doc chat interrupted";
+    entry.status = "interrupted";
+    entry.error = message;
+    state.error = "";
+    state.status = "interrupted";
+    state.streamText = entry.response || "";
+    resetChatEvents(state, { preserve: true });
+    renderChat();
+    return;
   }
   if (event === "done" || event === "finish") {
     entry.status = "done";
+    resetChatEvents(state, { preserve: true });
     return;
   }
 }
 
 function applyChatResult(payload, state, entry) {
   const parsed = parseChatPayload(payload);
+  if (parsed.interrupted) {
+    entry.status = "interrupted";
+    entry.error = parsed.detail || "Doc chat interrupted";
+    state.status = "interrupted";
+    state.error = "";
+    return;
+  }
   if (parsed.error) {
     markChatError(state, entry, parsed.error);
     return;
@@ -938,11 +1671,14 @@ function applyChatResult(payload, state, entry) {
   entry.status = "done";
   entry.response = parsed.response || "(no response)";
   state.streamText = entry.response;
-  if (parsed.patch) {
-    state.patch = parsed.patch;
-    entry.patch = parsed.patch;
-    entry.status = "needs-apply";
-    entry.response = parsed.response || entry.response;
+  const updated =
+    (parsed.updated && parsed.updated.length
+      ? parsed.updated
+      : Object.keys(parsed.drafts || {})) || [];
+  if (updated.length) {
+    entry.updated = updated;
+    entry.drafts = parsed.drafts || {};
+    applyDraftUpdates(parsed.drafts);
   }
 }
 
@@ -956,8 +1692,8 @@ async function loadDocs() {
     docsCache = { ...docsCache, ...data };
     setDoc(activeDoc);
     renderTodoPreview(docsCache.todo);
-    document.getElementById("doc-status").textContent = "Loaded";
     publish("docs:loaded", docsCache);
+    refreshAllDrafts().catch(() => {});
   } catch (err) {
     flash(err.message);
   }
@@ -973,23 +1709,28 @@ async function safeLoadDocs() {
     return;
   }
   const textarea = getDocTextarea();
+  const draft = getDraft(activeDoc);
+  const previewing = !!draft && isDraftPreview(activeDoc);
   if (textarea) {
     const currentValue = textarea.value;
-    const cachedValue = docsCache[activeDoc] || "";
+    const cachedValue = previewing ? draft.content : docsCache[activeDoc] || "";
     // Skip refresh if there are unsaved local changes
     if (currentValue !== cachedValue) {
       return;
     }
   }
   // Also skip if a chat operation is in progress
-  const state = getChatState(activeDoc);
+  const state = getChatState();
   if (state.status === "running") {
     return;
   }
   try {
     const data = await api("/api/docs");
     // Check again after fetch - user might have started editing
-    if (textarea && textarea.value !== (docsCache[activeDoc] || "")) {
+    if (
+      textarea &&
+      textarea.value !== (previewing ? draft.content : docsCache[activeDoc] || "")
+    ) {
       return;
     }
     docsCache = { ...docsCache, ...data };
@@ -1007,19 +1748,10 @@ function setDoc(kind) {
   docButtons.forEach((btn) =>
     btn.classList.toggle("active", btn.dataset.doc === kind)
   );
-  const textarea = document.getElementById("doc-content");
   const isSnapshot = kind === "snapshot";
   
   // Handle snapshot vs regular doc display
-  if (isSnapshot) {
-    textarea.value = snapshotCache.content || "";
-    textarea.placeholder = "(snapshot will appear here)";
-    document.getElementById("doc-status").textContent = "Viewing SNAPSHOT";
-  } else {
-    textarea.value = docsCache[kind] || "";
-    textarea.placeholder = "";
-    document.getElementById("doc-status").textContent = `Editing ${kind.toUpperCase()}`;
-  }
+  syncDocEditor(kind, { force: true });
   
   // Toggle spec issue import UI
   if (specIssueUI.row) {
@@ -1044,7 +1776,7 @@ function setDoc(kind) {
   if (docActionsUI.clear) {
     docActionsUI.clear.classList.toggle("hidden", !CLEARABLE_DOCS.includes(kind));
   }
-  updateStandardActionButtons(kind);
+  updateDocControls(kind);
   
   // Toggle chat panel visibility - hide for snapshot
   const chatPanel = document.querySelector(".doc-chat-panel");
@@ -1069,7 +1801,7 @@ function setDoc(kind) {
     renderSnapshotButtons();
   } else {
     reloadPatch(kind, true);
-    renderChat(kind);
+    renderChat();
     if (kind === "spec") {
       reloadSpecIngestPatch(true);
     } else {
@@ -1086,7 +1818,7 @@ async function importIssueToSpec() {
     flash("Enter a GitHub issue number or URL", "error");
     return;
   }
-  const state = getChatState("spec");
+  const state = getChatState();
   if (state.status === "running") {
     flash("SPEC chat is running; try again shortly", "error");
     return;
@@ -1098,35 +1830,26 @@ async function importIssueToSpec() {
     const entry = {
       id: `${Date.now()}`,
       prompt: `Import issue → SPEC: ${issue}`,
+      targets: ["spec"],
       response: "",
       status: "running",
       time: Date.now(),
-      lastAppliedContent: null,
-      patch: "",
+      drafts: {},
+      updated: [],
     };
     state.history.unshift(entry);
     state.status = "running";
     state.error = "";
     state.streamText = "";
-    state.patch = "";
     state.statusText = "importing issue";
-    renderChat("spec");
+    renderChat();
 
     const res = await api("/api/github/spec/from-issue", {
       method: "POST",
       body: { issue },
     });
     applyChatResult(res, state, entry);
-    if (res?.content) {
-      await applyDocUpdateFromChat("spec", res.content);
-    }
-    if (res?.patch) {
-      state.patch = res.patch;
-      entry.patch = res.patch;
-      entry.status = "needs-apply";
-    } else {
-      entry.status = "done";
-    }
+    entry.status = "done";
     state.status = "idle";
     // Hide input row and reset toggle after successful import
     if (specIssueUI.inputRow) {
@@ -1138,7 +1861,7 @@ async function importIssueToSpec() {
     if (specIssueUI.input) {
       specIssueUI.input.value = "";
     }
-    flash("Imported issue into pending SPEC patch");
+    flash("Imported issue into pending SPEC draft");
   } catch (err) {
     const message = err?.message || "Issue import failed";
     const entry = state.history[0];
@@ -1152,7 +1875,7 @@ async function importIssueToSpec() {
   } finally {
     specIssueUI.button.disabled = false;
     specIssueUI.button.classList.remove("loading");
-    renderChat("spec");
+    renderChat();
   }
 }
 
@@ -1160,6 +1883,10 @@ async function saveDoc() {
   // Snapshot is read-only, no saving
   if (activeDoc === "snapshot") {
     flash("Snapshot is read-only. Use Generate to update.", "error");
+    return;
+  }
+  if (hasDraft(activeDoc) && isDraftPreview(activeDoc)) {
+    flash("Exit draft preview before saving.", "error");
     return;
   }
   const content = document.getElementById("doc-content").value;
@@ -1315,6 +2042,48 @@ function initDocVoice() {
   });
 }
 
+function renderThreadRegistryBanner(notice) {
+  if (!threadRegistryUI.banner) return;
+  const active = notice && notice.status === "corrupt";
+  threadRegistryUI.banner.classList.toggle("hidden", !active);
+  if (!active) return;
+  const backupPath =
+    notice && typeof notice.backup_path === "string" ? notice.backup_path : "";
+  if (threadRegistryUI.detail) {
+    threadRegistryUI.detail.textContent = backupPath
+      ? `Backup: ${backupPath}`
+      : "Backup unavailable";
+    threadRegistryUI.detail.title = backupPath || "";
+  }
+  if (threadRegistryUI.download) {
+    threadRegistryUI.download.classList.toggle("hidden", !backupPath);
+  }
+}
+
+async function loadThreadRegistryStatus() {
+  if (!threadRegistryUI.banner) return;
+  try {
+    const data = await api("/api/app-server/threads");
+    renderThreadRegistryBanner(data?.corruption);
+  } catch (err) {
+    console.error("Failed to load thread registry status", err);
+  }
+}
+
+async function resetThreadRegistry() {
+  try {
+    await api("/api/app-server/threads/reset-all", { method: "POST" });
+    renderThreadRegistryBanner(null);
+    flash("Conversations reset");
+  } catch (err) {
+    flash(err.message || "Failed to reset conversations", "error");
+  }
+}
+
+function downloadThreadRegistryBackup() {
+  window.location.href = resolvePath("/api/app-server/threads/backup");
+}
+
 export function initDocs() {
   const urlDoc = getDocFromUrl();
   if (urlDoc) {
@@ -1337,6 +2106,9 @@ export function initDocs() {
   document.getElementById("clear-docs").addEventListener("click", clearDocs);
   if (specIngestUI.continueBtn) {
     specIngestUI.continueBtn.addEventListener("click", continueSpecIngest);
+  }
+  if (specIngestUI.cancelBtn) {
+    specIngestUI.cancelBtn.addEventListener("click", cancelSpecIngest);
   }
   if (specIngestUI.input) {
     specIngestUI.input.addEventListener("input", () => {
@@ -1365,11 +2137,20 @@ export function initDocs() {
   if (docActionsUI.paste) {
     docActionsUI.paste.addEventListener("click", pasteSpecFromClipboard);
   }
+  if (threadRegistryUI.reset) {
+    threadRegistryUI.reset.addEventListener("click", resetThreadRegistry);
+  }
+  if (threadRegistryUI.download) {
+    threadRegistryUI.download.addEventListener(
+      "click",
+      downloadThreadRegistryBackup
+    );
+  }
   const docContent = getDocTextarea();
   if (docContent) {
     docContent.addEventListener("input", () => {
       if (activeDoc !== "snapshot") {
-        updateStandardActionButtons(activeDoc);
+        updateDocControls(activeDoc);
       }
     });
   }
@@ -1395,6 +2176,13 @@ export function initDocs() {
     triggerSend();
   });
   chatUI.cancel.addEventListener("click", cancelDocChat);
+  if (chatUI.eventsToggle) {
+    chatUI.eventsToggle.addEventListener("click", () => {
+      const state = getChatState();
+      state.eventsExpanded = !state.eventsExpanded;
+      renderChat();
+    });
+  }
   if (chatUI.patchApply)
     chatUI.patchApply.addEventListener("click", () => applyPatch(activeDoc));
   if (chatUI.patchDiscard)
@@ -1404,6 +2192,10 @@ export function initDocs() {
   if (chatUI.patchReload)
     chatUI.patchReload.addEventListener("click", () =>
       reloadPatch(activeDoc, true)
+    );
+  if (chatUI.patchPreview)
+    chatUI.patchPreview.addEventListener("click", () =>
+      toggleDraftPreview(activeDoc)
     );
   if (specIssueUI.toggle) {
     specIssueUI.toggle.addEventListener("click", () => {
@@ -1455,7 +2247,8 @@ export function initDocs() {
   }
   
   initDocVoice();
-  reloadPatch(activeDoc, true);
+  loadThreadRegistryStatus();
+  refreshAllDrafts();
   reloadSpecIngestPatch(true);
 
   // Cmd+Enter or Ctrl+Enter sends, Enter adds newline on all devices.
@@ -1473,7 +2266,7 @@ export function initDocs() {
 
     // Up arrow: recall previous prompts from history
     if (e.key === "ArrowUp") {
-      const state = getChatState(activeDoc);
+      const state = getChatState();
       const isEmpty = chatUI.input.value.trim() === "";
       const atStart = chatUI.input.selectionStart === 0;
       if ((isEmpty || atStart) && state.history.length > 0) {
@@ -1495,7 +2288,7 @@ export function initDocs() {
 
     // Down arrow: navigate forward in history or clear
     if (e.key === "ArrowDown") {
-      const state = getChatState(activeDoc);
+      const state = getChatState();
       const atEnd = chatUI.input.selectionStart === chatUI.input.value.length;
       if (historyNavIndex >= 0 && atEnd) {
         e.preventDefault();
@@ -1517,7 +2310,7 @@ export function initDocs() {
 
   // Clear errors on input, auto-resize textarea, and reset history navigation
   chatUI.input.addEventListener("input", () => {
-    const state = getChatState(activeDoc);
+    const state = getChatState();
     if (state.error) {
       state.error = "";
       renderChat();
@@ -1541,7 +2334,7 @@ export function initDocs() {
 
   loadDocs();
   loadSnapshot().catch(() => {}); // Pre-load snapshot data
-  renderChat(activeDoc);
+  renderChat();
   document.body.dataset.docsReady = "true";
   publish("docs:ready");
 
@@ -1571,26 +2364,61 @@ async function ingestSpec() {
   button.disabled = true;
   button.classList.add("loading");
   specIngestState.busy = true;
+  specIngestState.controller = new AbortController();
+  renderSpecIngestPatch();
   try {
     const data = await api("/api/ingest-spec", {
       method: "POST",
       body: { force: needsForce },
+      signal: specIngestState.controller.signal,
     });
     const parsed = parseSpecIngestPayload(data);
     if (parsed.error) throw new Error(parsed.error);
+    if (parsed.interrupted) {
+      specIngestState.patch = "";
+      specIngestState.agentMessage = parsed.agentMessage || "";
+      applySpecIngestDocs(parsed);
+      renderSpecIngestPatch();
+      flash("Spec ingest interrupted");
+      return;
+    }
     specIngestState.patch = parsed.patch || "";
     specIngestState.agentMessage = parsed.agentMessage || "";
     applySpecIngestDocs(parsed);
     renderSpecIngestPatch();
     flash(parsed.patch ? "Spec ingest patch ready" : "Ingested SPEC into docs");
   } catch (err) {
-    flash(err.message, "error");
+    if (err.name === "AbortError") {
+      return;
+    } else {
+      flash(err.message, "error");
+    }
   } finally {
     button.disabled = false;
     button.classList.remove("loading");
     specIngestState.busy = false;
+    specIngestState.controller = null;
     renderSpecIngestPatch();
   }
+}
+
+async function interruptSpecIngest() {
+  try {
+    await api("/api/ingest-spec/interrupt", { method: "POST" });
+  } catch (err) {
+    flash(err.message || "Failed to interrupt spec ingest", "error");
+  }
+}
+
+function cancelSpecIngest() {
+  if (!specIngestState.busy) return;
+  interruptSpecIngest();
+  if (specIngestState.controller) specIngestState.controller.abort();
+  specIngestState.busy = false;
+  specIngestState.controller = null;
+  if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
+  flash("Spec ingest interrupted");
+  renderSpecIngestPatch();
 }
 
 async function continueSpecIngest() {
@@ -1606,13 +2434,24 @@ async function continueSpecIngest() {
   );
   specIngestState.busy = true;
   if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = true;
+  specIngestState.controller = new AbortController();
+  renderSpecIngestPatch();
   try {
     const data = await api("/api/ingest-spec", {
       method: "POST",
       body: { force: needsForce, message },
+      signal: specIngestState.controller.signal,
     });
     const parsed = parseSpecIngestPayload(data);
     if (parsed.error) throw new Error(parsed.error);
+    if (parsed.interrupted) {
+      specIngestState.patch = "";
+      specIngestState.agentMessage = parsed.agentMessage || "";
+      applySpecIngestDocs(parsed);
+      renderSpecIngestPatch();
+      flash("Spec ingest interrupted");
+      return;
+    }
     specIngestState.patch = parsed.patch || "";
     specIngestState.agentMessage = parsed.agentMessage || "";
     applySpecIngestDocs(parsed);
@@ -1621,10 +2460,15 @@ async function continueSpecIngest() {
     autoResizeTextarea(specIngestUI.input);
     flash(parsed.patch ? "Spec ingest patch updated" : "Spec ingest updated docs");
   } catch (err) {
-    flash(err.message, "error");
+    if (err.name === "AbortError") {
+      return;
+    } else {
+      flash(err.message, "error");
+    }
   } finally {
     specIngestState.busy = false;
     if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
+    specIngestState.controller = null;
     renderSpecIngestPatch();
   }
 }

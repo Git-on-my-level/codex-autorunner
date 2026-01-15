@@ -115,7 +115,13 @@ export function statusPill(el, status) {
   el.textContent = normalized;
   el.classList.remove("pill-idle", "pill-running", "pill-error", "pill-warn");
   const errorStates = ["error", "init_error"];
-  const warnStates = ["locked", "missing", "uninitialized", "initializing"];
+  const warnStates = [
+    "locked",
+    "missing",
+    "uninitialized",
+    "initializing",
+    "interrupted",
+  ];
   if (normalized === "running") {
     el.classList.add("pill-running");
   } else if (errorStates.includes(normalized)) {

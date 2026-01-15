@@ -5,17 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+from .locks import file_lock
 from .utils import atomic_write, read_json
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows fallback
-    fcntl = None  # type: ignore[assignment]
-
-try:
-    import msvcrt
-except ImportError:  # pragma: no cover - POSIX default
-    msvcrt = None  # type: ignore[assignment]
 
 
 @dataclasses.dataclass
@@ -127,21 +118,8 @@ def save_state(state_path: Path, state: RunnerState) -> None:
 @contextmanager
 def state_lock(state_path: Path) -> Iterator[None]:
     lock_path = state_path.with_suffix(state_path.suffix + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as lock_file:
-        if fcntl is not None:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        elif msvcrt is not None:
-            lock_file.seek(0)
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-        try:
-            yield
-        finally:
-            if fcntl is not None:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            elif msvcrt is not None:
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+    with file_lock(lock_path):
+        yield
 
 
 def persist_session_registry(

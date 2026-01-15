@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
+from ..core.app_server_events import AppServerEventBuffer
 from ..core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -42,6 +43,7 @@ from ..core.usage import (
     parse_iso_datetime,
 )
 from ..housekeeping import run_housekeeping_once
+from ..integrations.app_server.client import NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import load_manifest
@@ -86,6 +88,7 @@ class AppContext:
     app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
     app_server_prune_interval: Optional[float]
     app_server_threads: AppServerThreadRegistry
+    app_server_events: AppServerEventBuffer
     voice_config: VoiceConfig
     voice_missing_reason: Optional[str]
     voice_service: Optional[VoiceService]
@@ -129,6 +132,7 @@ def _build_app_server_supervisor(
     *,
     logger: logging.Logger,
     event_prefix: str,
+    notification_handler: Optional[NotificationHandler] = None,
 ) -> tuple[Optional[WorkspaceAppServerSupervisor], Optional[float]]:
     if not config.command:
         return None, None
@@ -158,6 +162,7 @@ def _build_app_server_supervisor(
         max_handles=config.max_handles,
         idle_ttl_seconds=config.idle_ttl_seconds,
         request_timeout=config.request_timeout,
+        notification_handler=notification_handler,
     )
     return supervisor, _app_server_prune_interval(config.idle_ttl_seconds)
 
@@ -212,10 +217,12 @@ def _build_app_context(
         logging.INFO,
         f"Repo server ready at {engine.repo_root}",
     )
+    app_server_events = AppServerEventBuffer()
     app_server_supervisor, app_server_prune_interval = _build_app_server_supervisor(
         engine.config.app_server,
         logger=logger,
         event_prefix="web.app_server",
+        notification_handler=app_server_events.handle_notification,
     )
     app_server_threads = AppServerThreadRegistry(
         default_app_server_threads_path(engine.repo_root)
@@ -224,11 +231,13 @@ def _build_app_context(
         engine,
         app_server_supervisor=app_server_supervisor,
         app_server_threads=app_server_threads,
+        app_server_events=app_server_events,
     )
     spec_ingest = SpecIngestService(
         engine,
         app_server_supervisor=app_server_supervisor,
         app_server_threads=app_server_threads,
+        app_server_events=app_server_events,
     )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:
@@ -284,6 +293,7 @@ def _build_app_context(
         app_server_supervisor=app_server_supervisor,
         app_server_prune_interval=app_server_prune_interval,
         app_server_threads=app_server_threads,
+        app_server_events=app_server_events,
         voice_config=voice_config,
         voice_missing_reason=voice_missing_reason,
         voice_service=voice_service,
@@ -314,6 +324,7 @@ def _apply_app_context(app: FastAPI, context: AppContext) -> None:
     app.state.app_server_supervisor = context.app_server_supervisor
     app.state.app_server_prune_interval = context.app_server_prune_interval
     app.state.app_server_threads = context.app_server_threads
+    app.state.app_server_events = context.app_server_events
     app.state.voice_config = context.voice_config
     app.state.voice_missing_reason = context.voice_missing_reason
     app.state.voice_service = context.voice_service

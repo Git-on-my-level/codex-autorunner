@@ -1,9 +1,13 @@
 import asyncio
+import contextlib
 import re
-from contextlib import asynccontextmanager
+import threading
+from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
+from .core.app_server_events import AppServerEventBuffer
 from .core.app_server_prompts import (
     build_spec_ingest_prompt as build_app_server_spec_ingest_prompt,
 )
@@ -12,6 +16,7 @@ from .core.app_server_threads import (
     default_app_server_threads_path,
 )
 from .core.engine import Engine
+from .core.locks import FileLock, FileLockBusy, FileLockError
 from .core.patch_utils import (
     PatchError,
     apply_patch_file,
@@ -24,11 +29,22 @@ from .integrations.app_server.client import CodexAppServerError
 from .integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 
 SPEC_INGEST_TIMEOUT_SECONDS = 240
+SPEC_INGEST_INTERRUPT_GRACE_SECONDS = 10
 SPEC_INGEST_PATCH_NAME = "spec-ingest.patch"
 
 
 class SpecIngestError(Exception):
     """Raised when ingesting a SPEC fails."""
+
+
+@dataclass
+class ActiveSpecIngestTurn:
+    thread_id: str
+    turn_id: str
+    client: Any
+    interrupted: bool = False
+    interrupt_sent: bool = False
+    interrupt_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 def ensure_can_overwrite(engine: Engine, force: bool) -> None:
@@ -61,17 +77,26 @@ class SpecIngestService:
         *,
         app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
         app_server_threads: Optional[AppServerThreadRegistry] = None,
+        app_server_events: Optional[AppServerEventBuffer] = None,
     ) -> None:
         self.engine = engine
         self._app_server_supervisor = app_server_supervisor
         self._app_server_threads = app_server_threads or AppServerThreadRegistry(
             default_app_server_threads_path(self.engine.repo_root)
         )
+        self._app_server_events = app_server_events
         self.patch_path = (
             self.engine.repo_root / ".codex-autorunner" / SPEC_INGEST_PATCH_NAME
         )
         self.last_agent_message: Optional[str] = None
         self._lock: Optional[asyncio.Lock] = None
+        self._lock_path = (
+            self.engine.repo_root / ".codex-autorunner" / "locks" / "spec_ingest.lock"
+        )
+        self._thread_lock = threading.Lock()
+        self._active_turn: Optional[ActiveSpecIngestTurn] = None
+        self._active_turn_lock = threading.Lock()
+        self._pending_interrupt = False
 
     def _ensure_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -82,21 +107,138 @@ class SpecIngestService:
                 self._lock = asyncio.Lock()
         return self._lock
 
-    @asynccontextmanager
-    async def ingest_lock(self):
+    def _ingest_busy(self) -> bool:
         lock = self._ensure_lock()
         if lock.locked():
+            return True
+        file_lock = FileLock(self._lock_path)
+        try:
+            file_lock.acquire(blocking=False)
+        except FileLockBusy:
+            return True
+        except FileLockError:
+            return True
+        finally:
+            file_lock.release()
+        return False
+
+    @asynccontextmanager
+    async def ingest_lock(self):
+        if not self._thread_lock.acquire(blocking=False):
+            raise SpecIngestError("Spec ingest is already running")
+        lock = self._ensure_lock()
+        if lock.locked():
+            self._thread_lock.release()
             raise SpecIngestError("Spec ingest is already running")
         await lock.acquire()
+        file_lock = FileLock(self._lock_path)
+        try:
+            try:
+                file_lock.acquire(blocking=False)
+            except FileLockBusy as exc:
+                raise SpecIngestError("Spec ingest is already running") from exc
+            except FileLockError as exc:
+                raise SpecIngestError(str(exc)) from exc
+            yield
+        finally:
+            file_lock.release()
+            lock.release()
+            self._thread_lock.release()
+            with self._active_turn_lock:
+                self._pending_interrupt = False
+
+    @contextmanager
+    def _patch_lock(self):
+        if not self._thread_lock.acquire(blocking=False):
+            raise SpecIngestError("Spec ingest is already running")
+        lock = self._ensure_lock()
+        if lock.locked():
+            self._thread_lock.release()
+            raise SpecIngestError("Spec ingest is already running")
+        file_lock = FileLock(self._lock_path)
+        try:
+            file_lock.acquire(blocking=False)
+        except FileLockBusy as exc:
+            self._thread_lock.release()
+            raise SpecIngestError("Spec ingest is already running") from exc
+        except FileLockError as exc:
+            self._thread_lock.release()
+            raise SpecIngestError(str(exc)) from exc
         try:
             yield
         finally:
-            lock.release()
+            file_lock.release()
+            self._thread_lock.release()
 
     def _ensure_app_server(self) -> WorkspaceAppServerSupervisor:
         if self._app_server_supervisor is None:
             raise SpecIngestError("App-server backend is not configured")
         return self._app_server_supervisor
+
+    def _get_active_turn(self) -> Optional[ActiveSpecIngestTurn]:
+        with self._active_turn_lock:
+            return self._active_turn
+
+    def _clear_active_turn(self, turn_id: str) -> None:
+        with self._active_turn_lock:
+            if self._active_turn and self._active_turn.turn_id == turn_id:
+                self._active_turn = None
+
+    def _register_active_turn(
+        self, client: Any, turn_id: str, thread_id: str
+    ) -> ActiveSpecIngestTurn:
+        interrupt_event = asyncio.Event()
+        active = ActiveSpecIngestTurn(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            client=client,
+            interrupted=False,
+            interrupt_sent=False,
+            interrupt_event=interrupt_event,
+        )
+        with self._active_turn_lock:
+            self._active_turn = active
+            if self._pending_interrupt:
+                self._pending_interrupt = False
+                active.interrupted = True
+                interrupt_event.set()
+        return active
+
+    async def _interrupt_turn(self, active: ActiveSpecIngestTurn) -> None:
+        if active.interrupt_sent:
+            return
+        active.interrupt_sent = True
+        try:
+            await asyncio.wait_for(
+                active.client.turn_interrupt(
+                    active.turn_id, thread_id=active.thread_id
+                ),
+                timeout=SPEC_INGEST_INTERRUPT_GRACE_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            pass
+        except CodexAppServerError:
+            pass
+
+    async def interrupt(self) -> Dict[str, str]:
+        active = self._get_active_turn()
+        if active is None:
+            pending = self._ingest_busy()
+            with self._active_turn_lock:
+                self._pending_interrupt = pending
+            return self._assemble_response(
+                {},
+                status="interrupted",
+                agent_message="Spec ingest interrupted",
+            )
+        active.interrupted = True
+        active.interrupt_event.set()
+        await self._interrupt_turn(active)
+        return self._assemble_response(
+            {},
+            status="interrupted",
+            agent_message="Spec ingest interrupted",
+        )
 
     def _allowed_targets(self) -> Dict[str, str]:
         config = self.engine.config
@@ -120,9 +262,10 @@ class SpecIngestService:
         *,
         patch: Optional[str] = None,
         agent_message: Optional[str] = None,
+        status: str = "ok",
     ) -> Dict[str, str]:
         return {
-            "status": "ok",
+            "status": status,
             "todo": docs.get("todo", self.engine.docs.read_doc("todo")),
             "progress": docs.get("progress", self.engine.docs.read_doc("progress")),
             "opinions": docs.get("opinions", self.engine.docs.read_doc("opinions")),
@@ -133,53 +276,56 @@ class SpecIngestService:
         }
 
     def pending_patch(self) -> Optional[Dict[str, str]]:
-        if not self.patch_path.exists():
-            return None
-        patch_text_raw = self.patch_path.read_text(encoding="utf-8")
-        targets = self._allowed_targets()
-        try:
-            patch_text, raw_targets = normalize_patch_text(patch_text_raw)
-            ensure_patch_targets_allowed(raw_targets, targets.values())
-            preview = preview_patch(self.engine.repo_root, patch_text, raw_targets)
-        except PatchError:
-            return None
-        docs = {
-            key: preview.get(path, self.engine.docs.read_doc(key))
-            for key, path in targets.items()
-        }
-        return self._assemble_response(
-            docs, patch=patch_text, agent_message=self.last_agent_message
-        )
+        with self._patch_lock():
+            if not self.patch_path.exists():
+                return None
+            patch_text_raw = self.patch_path.read_text(encoding="utf-8")
+            targets = self._allowed_targets()
+            try:
+                patch_text, raw_targets = normalize_patch_text(patch_text_raw)
+                ensure_patch_targets_allowed(raw_targets, targets.values())
+                preview = preview_patch(self.engine.repo_root, patch_text, raw_targets)
+            except PatchError:
+                return None
+            docs = {
+                key: preview.get(path, self.engine.docs.read_doc(key))
+                for key, path in targets.items()
+            }
+            return self._assemble_response(
+                docs, patch=patch_text, agent_message=self.last_agent_message
+            )
 
     def apply_patch(self) -> Dict[str, str]:
-        if not self.patch_path.exists():
-            raise SpecIngestError("No pending spec ingest patch")
-        patch_text_raw = self.patch_path.read_text(encoding="utf-8")
-        targets = self._allowed_targets()
-        try:
-            patch_text, raw_targets = normalize_patch_text(patch_text_raw)
-            ensure_patch_targets_allowed(raw_targets, targets.values())
-            self.patch_path.write_text(patch_text, encoding="utf-8")
-            apply_patch_file(self.engine.repo_root, self.patch_path, raw_targets)
-        except PatchError as exc:
-            raise SpecIngestError(str(exc)) from exc
-        self.patch_path.unlink(missing_ok=True)
-        return self._assemble_response(
-            {
-                key: self.engine.docs.read_doc(key)
-                for key in ("todo", "progress", "opinions")
-            }
-        )
+        with self._patch_lock():
+            if not self.patch_path.exists():
+                raise SpecIngestError("No pending spec ingest patch")
+            patch_text_raw = self.patch_path.read_text(encoding="utf-8")
+            targets = self._allowed_targets()
+            try:
+                patch_text, raw_targets = normalize_patch_text(patch_text_raw)
+                ensure_patch_targets_allowed(raw_targets, targets.values())
+                self.patch_path.write_text(patch_text, encoding="utf-8")
+                apply_patch_file(self.engine.repo_root, self.patch_path, raw_targets)
+            except PatchError as exc:
+                raise SpecIngestError(str(exc)) from exc
+            self.patch_path.unlink(missing_ok=True)
+            return self._assemble_response(
+                {
+                    key: self.engine.docs.read_doc(key)
+                    for key in ("todo", "progress", "opinions")
+                }
+            )
 
     def discard_patch(self) -> Dict[str, str]:
-        if self.patch_path.exists():
-            self.patch_path.unlink(missing_ok=True)
-        return self._assemble_response(
-            {
-                key: self.engine.docs.read_doc(key)
-                for key in ("todo", "progress", "opinions")
-            }
-        )
+        with self._patch_lock():
+            if self.patch_path.exists():
+                self.patch_path.unlink(missing_ok=True)
+            return self._assemble_response(
+                {
+                    key: self.engine.docs.read_doc(key)
+                    for key in ("todo", "progress", "opinions")
+                }
+            )
 
     async def _execute_app_server(
         self,
@@ -222,10 +368,53 @@ class SpecIngestService:
             approval_policy="never",
             sandbox_policy="readOnly",
         )
+        active = self._register_active_turn(client, handle.turn_id, handle.thread_id)
+        if self._app_server_events is not None:
+            try:
+                await self._app_server_events.register_turn(
+                    handle.thread_id, handle.turn_id
+                )
+            except Exception:
+                pass
+        turn_task = asyncio.create_task(handle.wait(timeout=None))
+        timeout_task = asyncio.create_task(asyncio.sleep(SPEC_INGEST_TIMEOUT_SECONDS))
+        interrupt_task = asyncio.create_task(active.interrupt_event.wait())
         try:
-            result = await handle.wait(timeout=SPEC_INGEST_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError as exc:
-            raise SpecIngestError("Spec ingest agent timed out") from exc
+            tasks = {turn_task, timeout_task, interrupt_task}
+            done, _pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            if timeout_task in done:
+                turn_task.add_done_callback(lambda task: task.exception())
+                raise SpecIngestError("Spec ingest agent timed out")
+            if interrupt_task in done:
+                active.interrupted = True
+                await self._interrupt_turn(active)
+                done, _pending = await asyncio.wait(
+                    {turn_task}, timeout=SPEC_INGEST_INTERRUPT_GRACE_SECONDS
+                )
+                if not done:
+                    turn_task.add_done_callback(lambda task: task.exception())
+                    return self._assemble_response(
+                        {},
+                        status="interrupted",
+                        agent_message="Spec ingest interrupted",
+                    )
+            result = await turn_task
+        finally:
+            self._clear_active_turn(handle.turn_id)
+            timeout_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await timeout_task
+            interrupt_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await interrupt_task
+        if active.interrupted:
+            return self._assemble_response(
+                {},
+                status="interrupted",
+                agent_message="Spec ingest interrupted",
+            )
         if result.errors:
             raise SpecIngestError(result.errors[-1])
         output = "\n".join(result.agent_messages).strip()
