@@ -117,7 +117,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "yolo_sandbox_policy": "dangerFullAccess",
         },
         "concurrency": {
-            "max_parallel_turns": 2,
+            "max_parallel_turns": 5,
             "per_topic_queue": True,
         },
         "media": {
@@ -291,7 +291,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "yolo_sandbox_policy": "dangerFullAccess",
         },
         "concurrency": {
-            "max_parallel_turns": 2,
+            "max_parallel_turns": 5,
             "per_topic_queue": True,
         },
         "media": {

@@ -120,7 +120,7 @@ repo:
       yolo_approval_policy: never
       yolo_sandbox_policy: dangerFullAccess
     concurrency:
-      max_parallel_turns: 4
+      max_parallel_turns: 5
       per_topic_queue: true
     shell:
       # Allow !<cmd> execution (enabled by default).
@@ -229,7 +229,7 @@ hub:
       yolo_approval_policy: never
       yolo_sandbox_policy: dangerFullAccess
     concurrency:
-      max_parallel_turns: 4
+      max_parallel_turns: 5
       per_topic_queue: true
     shell:
       # Allow !<cmd> execution (enabled by default).
