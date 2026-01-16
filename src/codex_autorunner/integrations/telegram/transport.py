@@ -9,6 +9,8 @@ from ...core.state import now_iso
 from .adapter import TelegramCallbackQuery
 from .constants import PLACEHOLDER_TEXT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .helpers import _format_turn_metrics, _should_trace_message, _with_conversation_id
+from .overflow import split_markdown_message, trim_markdown_message
+from .rendering import _format_telegram_html, _format_telegram_markdown
 from .state import OutboxRecord
 
 
@@ -233,6 +235,51 @@ class TelegramMessageTransport:
         if parse_mode:
             rendered, used_mode = self._render_message(text)
             if used_mode and len(rendered) > TELEGRAM_MAX_MESSAGE_LENGTH:
+                overflow_mode = getattr(self._config, "message_overflow", "document")
+                if overflow_mode == "split" and used_mode == "HTML":
+                    chunks = split_markdown_message(
+                        text,
+                        max_len=TELEGRAM_MAX_MESSAGE_LENGTH,
+                    )
+                    for idx, chunk in enumerate(chunks):
+                        await self._bot.send_message(
+                            chat_id,
+                            chunk,
+                            message_thread_id=thread_id,
+                            reply_to_message_id=reply_to if idx == 0 else None,
+                            reply_markup=reply_markup if idx == 0 else None,
+                            parse_mode="HTML",
+                        )
+                    return
+                if overflow_mode == "trim":
+                    if used_mode == "HTML":
+                        renderer = _format_telegram_html
+                    elif used_mode in ("Markdown", "MarkdownV2"):
+
+                        def _render_markdown(value: str, mode: str = used_mode) -> str:
+                            return _format_telegram_markdown(value, mode)
+
+                        renderer = _render_markdown
+                    else:
+
+                        def _render_text(value: str) -> str:
+                            return value
+
+                        renderer = _render_text
+                    trimmed = trim_markdown_message(
+                        text,
+                        max_len=TELEGRAM_MAX_MESSAGE_LENGTH,
+                        render=renderer,
+                    )
+                    await self._bot.send_message_chunks(
+                        chat_id,
+                        trimmed,
+                        message_thread_id=thread_id,
+                        reply_to_message_id=reply_to,
+                        reply_markup=reply_markup,
+                        parse_mode=used_mode,
+                    )
+                    return
                 await self._send_document(
                     chat_id,
                     text.encode("utf-8"),

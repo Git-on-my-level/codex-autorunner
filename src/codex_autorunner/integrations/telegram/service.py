@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Coroutine, Optional, Sequence
 
 if TYPE_CHECKING:
+    from .progress_stream import TurnProgressTracker
     from .state import TelegramTopicRecord
 
 from ...core.locks import process_alive
@@ -41,9 +42,11 @@ from .constants import (
     COALESCE_BUFFER_TTL_SECONDS,
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     DEFAULT_WORKSPACE_STATE_ROOT,
+    MEDIA_BATCH_BUFFER_TTL_SECONDS,
     MODEL_PENDING_TTL_SECONDS,
     OVERSIZE_WARNING_TTL_SECONDS,
     PENDING_APPROVAL_TTL_SECONDS,
+    PROGRESS_STREAM_TTL_SECONDS,
     REASONING_BUFFER_TTL_SECONDS,
     SELECTION_STATE_TTL_SECONDS,
     TURN_PREVIEW_TTL_SECONDS,
@@ -155,6 +158,9 @@ class TelegramBotService(
         self._turn_preview_updated_at: dict[TurnKey, float] = {}
         self._turn_progress_text: dict[TurnKey, str] = {}
         self._turn_progress_updated_at: dict[TurnKey, float] = {}
+        self._turn_progress_trackers: dict[TurnKey, "TurnProgressTracker"] = {}
+        self._turn_progress_rendered: dict[TurnKey, str] = {}
+        self._turn_progress_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._resume_options: dict[str, SelectionState] = {}
@@ -167,6 +173,8 @@ class TelegramBotService(
         self._compact_pending: dict[str, CompactState] = {}
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
+        self._media_batch_buffers: dict[str, message_handlers._MediaBatchBuffer] = {}
+        self._media_batch_locks: dict[str, asyncio.Lock] = {}
         self._outbox_inflight: set[str] = set()
         self._outbox_lock: Optional[asyncio.Lock] = None
         self._bot_username: Optional[str] = None
@@ -670,11 +678,21 @@ class TelegramBotService(
             elif cache_name == "turn_progress":
                 self._turn_progress_text.pop(key, None)
                 self._turn_progress_updated_at.pop(key, None)
+            elif cache_name == "progress_trackers":
+                self._turn_progress_trackers.pop(key, None)
+                self._turn_progress_rendered.pop(key, None)
+                self._turn_progress_updated_at.pop(key, None)
+                task = self._turn_progress_tasks.pop(key, None)
+                if task and not task.done():
+                    task.cancel()
             elif cache_name == "oversize_warnings":
                 self._oversize_warnings.discard(key)
             elif cache_name == "coalesced_buffers":
                 self._coalesced_buffers.pop(key, None)
                 self._coalesce_locks.pop(key, None)
+            elif cache_name == "media_batch_buffers":
+                self._media_batch_buffers.pop(key, None)
+                self._media_batch_locks.pop(key, None)
             elif cache_name == "resume_options":
                 self._resume_options.pop(key, None)
             elif cache_name == "bind_options":
@@ -710,10 +728,16 @@ class TelegramBotService(
                 "turn_progress", TURN_PROGRESS_TTL_SECONDS
             )
             self._evict_expired_cache_entries(
+                "progress_trackers", PROGRESS_STREAM_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
                 "oversize_warnings", OVERSIZE_WARNING_TTL_SECONDS
             )
             self._evict_expired_cache_entries(
                 "coalesced_buffers", COALESCE_BUFFER_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "media_batch_buffers", MEDIA_BATCH_BUFFER_TTL_SECONDS
             )
             self._evict_expired_cache_entries(
                 "resume_options", SELECTION_STATE_TTL_SECONDS
