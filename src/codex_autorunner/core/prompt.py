@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Mapping, Optional
 
@@ -47,9 +48,8 @@ def build_prompt_text(
         "{{SPEC_PATH}}": doc_paths.get("spec", ""),
         "{{SUMMARY_PATH}}": doc_paths.get("summary", ""),
     }
-    for marker, value in replacements.items():
-        template = template.replace(marker, value)
-    return template
+    pattern = re.compile("|".join(re.escape(key) for key in replacements))
+    return pattern.sub(lambda match: replacements[match.group(0)], template)
 
 
 def build_final_summary_prompt(

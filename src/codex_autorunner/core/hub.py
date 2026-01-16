@@ -3,7 +3,6 @@ import enum
 import logging
 import re
 import shutil
-import subprocess
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -13,13 +12,23 @@ from ..discovery import DiscoveryRecord, discover_and_init
 from ..manifest import Manifest, load_manifest, save_manifest
 from .config import HubConfig, load_config
 from .engine import Engine
-from .git_utils import git_available, git_is_clean, git_upstream_status
+from .git_utils import (
+    GitError,
+    git_available,
+    git_is_clean,
+    git_upstream_status,
+    run_git,
+)
 from .locks import process_alive, read_lock_info
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub")
+
+
+def _git_failure_detail(proc) -> str:
+    return (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
 
 
 class RepoStatus(str, enum.Enum):
@@ -320,7 +329,12 @@ class HubSupervisor:
         target.mkdir(parents=True, exist_ok=True)
 
         if git_init and not (target / ".git").exists():
-            subprocess.run(["git", "init"], cwd=target, check=False)
+            try:
+                proc = run_git(["init"], target, check=False)
+            except GitError as exc:
+                raise ValueError(f"git init failed: {exc}") from exc
+            if proc.returncode != 0:
+                raise ValueError(f"git init failed: {_git_failure_detail(proc)}")
         if git_init and not (target / ".git").exists():
             raise ValueError(f"git init failed for {target}")
 
@@ -373,17 +387,17 @@ class HubSupervisor:
 
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        proc = subprocess.run(
-            ["git", "clone", git_url, str(target)],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            proc = run_git(
+                ["clone", git_url, str(target)],
+                target.parent,
+                check=False,
+                timeout_seconds=300,
+            )
+        except GitError as exc:
+            raise ValueError(f"git clone failed: {exc}") from exc
         if proc.returncode != 0:
-            detail = (
-                proc.stderr or proc.stdout or ""
-            ).strip() or f"exit {proc.returncode}"
-            raise ValueError(f"git clone failed: {detail}")
+            raise ValueError(f"git clone failed: {_git_failure_detail(proc)}")
 
         seed_repo_files(target, force=False, git_required=False)
         manifest.ensure_repo(
@@ -427,34 +441,33 @@ class HubSupervisor:
 
         # Create the worktree (branch may or may not exist locally).
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        exists = subprocess.run(
-            ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
-            cwd=base_path,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if exists.returncode == 0:
-            proc = subprocess.run(
-                ["git", "worktree", "add", str(worktree_path), branch],
-                cwd=base_path,
+        try:
+            exists = run_git(
+                ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+                base_path,
                 check=False,
-                capture_output=True,
-                text=True,
             )
-        else:
-            proc = subprocess.run(
-                ["git", "worktree", "add", "-b", branch, str(worktree_path)],
-                cwd=base_path,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+        except GitError as exc:
+            raise ValueError(f"git worktree add failed: {exc}") from exc
+        try:
+            if exists.returncode == 0:
+                proc = run_git(
+                    ["worktree", "add", str(worktree_path), branch],
+                    base_path,
+                    check=False,
+                    timeout_seconds=120,
+                )
+            else:
+                proc = run_git(
+                    ["worktree", "add", "-b", branch, str(worktree_path)],
+                    base_path,
+                    check=False,
+                    timeout_seconds=120,
+                )
+        except GitError as exc:
+            raise ValueError(f"git worktree add failed: {exc}") from exc
         if proc.returncode != 0:
-            detail = (
-                proc.stderr or proc.stdout or ""
-            ).strip() or f"exit {proc.returncode}"
-            raise ValueError(f"git worktree add failed: {detail}")
+            raise ValueError(f"git worktree add failed: {_git_failure_detail(proc)}")
 
         seed_repo_files(worktree_path, force=force, git_required=False)
         manifest.ensure_repo(
@@ -495,45 +508,53 @@ class HubSupervisor:
             runner.stop()
 
         # Remove worktree from base repo.
-        proc = subprocess.run(
-            ["git", "worktree", "remove", "--force", str(worktree_path)],
-            cwd=base_path,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            proc = run_git(
+                ["worktree", "remove", "--force", str(worktree_path)],
+                base_path,
+                check=False,
+                timeout_seconds=120,
+            )
+        except GitError as exc:
+            raise ValueError(f"git worktree remove failed: {exc}") from exc
         if proc.returncode != 0:
-            detail = (
-                proc.stderr or proc.stdout or ""
-            ).strip() or f"exit {proc.returncode}"
+            detail = _git_failure_detail(proc)
             detail_lower = detail.lower()
             # If the worktree is already gone (deleted via UI/Hub), continue cleanup.
             if "not a working tree" not in detail_lower:
                 raise ValueError(f"git worktree remove failed: {detail}")
-        subprocess.run(
-            ["git", "worktree", "prune"],
-            cwd=base_path,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            proc = run_git(["worktree", "prune"], base_path, check=False)
+            if proc.returncode != 0:
+                logger.warning(
+                    "git worktree prune failed: %s", _git_failure_detail(proc)
+                )
+        except GitError as exc:
+            logger.warning("git worktree prune failed: %s", exc)
 
         if delete_branch and entry.branch:
-            subprocess.run(
-                ["git", "branch", "-D", entry.branch],
-                cwd=base_path,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                proc = run_git(["branch", "-D", entry.branch], base_path, check=False)
+                if proc.returncode != 0:
+                    logger.warning(
+                        "git branch delete failed: %s", _git_failure_detail(proc)
+                    )
+            except GitError as exc:
+                logger.warning("git branch delete failed: %s", exc)
         if delete_remote and entry.branch:
-            subprocess.run(
-                ["git", "push", "origin", "--delete", entry.branch],
-                cwd=base_path,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            try:
+                proc = run_git(
+                    ["push", "origin", "--delete", entry.branch],
+                    base_path,
+                    check=False,
+                    timeout_seconds=120,
+                )
+                if proc.returncode != 0:
+                    logger.warning(
+                        "git push delete failed: %s", _git_failure_detail(proc)
+                    )
+            except GitError as exc:
+                logger.warning("git push delete failed: %s", exc)
 
         manifest.repos = [r for r in manifest.repos if r.id != worktree_repo_id]
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
