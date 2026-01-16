@@ -983,12 +983,20 @@ function renderChat() {
     : state.status === "interrupted"
     ? "interrupted"
     : "idle";
-  statusPill(chatUI.status, pillState);
+  if (chatUI.status) {
+    statusPill(chatUI.status, pillState);
+  }
 
   // Update input state
-  chatUI.send.disabled = isRunning;
-  chatUI.input.disabled = isRunning;
-  chatUI.cancel.classList.toggle("hidden", !isRunning);
+  if (chatUI.send) {
+    chatUI.send.disabled = isRunning;
+  }
+  if (chatUI.input) {
+    chatUI.input.disabled = isRunning;
+  }
+  if (chatUI.cancel) {
+    chatUI.cancel.classList.toggle("hidden", !isRunning);
+  }
   if (chatUI.voiceBtn) {
     chatUI.voiceBtn.disabled =
       isRunning && !chatUI.voiceBtn.classList.contains("voice-retry");
@@ -1006,16 +1014,18 @@ function renderChat() {
   }
 
   // Update hint text - show status inline when running
-  if (isRunning) {
-    const statusText = state.statusText || "processing";
-    chatUI.hint.textContent = statusText;
-    chatUI.hint.classList.add("loading");
-  } else {
-    const sendHint = isMobileViewport()
-      ? "Tap Send to send · Enter for newline"
-      : "Cmd+Enter / Ctrl+Enter to send · Enter for newline";
-    chatUI.hint.textContent = sendHint;
-    chatUI.hint.classList.remove("loading");
+  if (chatUI.hint) {
+    if (isRunning) {
+      const statusText = state.statusText || "processing";
+      chatUI.hint.textContent = statusText;
+      chatUI.hint.classList.add("loading");
+    } else {
+      const sendHint = isMobileViewport()
+        ? "Tap Send to send · Enter for newline"
+        : "Cmd+Enter / Ctrl+Enter to send · Enter for newline";
+      chatUI.hint.textContent = sendHint;
+      chatUI.hint.classList.remove("loading");
+    }
   }
 
   // Handle error display
@@ -2098,6 +2108,9 @@ function downloadThreadRegistryBackup() {
 }
 
 export function initDocs() {
+  if (!chatUI.send || !chatUI.input) {
+    console.warn("Doc chat UI elements missing; skipping doc chat init.");
+  }
   const urlDoc = getDocFromUrl();
   if (urlDoc) {
     activeDoc = urlDoc;
@@ -2175,20 +2188,24 @@ export function initDocs() {
     lastSendTapAt = now;
     sendDocChat();
   };
-  chatUI.send.addEventListener("pointerup", (e) => {
-    if (e.pointerType !== "touch") return;
-    if (e.cancelable) e.preventDefault();
-    suppressNextSendClick = true;
-    triggerSend();
-  });
-  chatUI.send.addEventListener("click", () => {
-    if (suppressNextSendClick) {
-      suppressNextSendClick = false;
-      return;
-    }
-    triggerSend();
-  });
-  chatUI.cancel.addEventListener("click", cancelDocChat);
+  if (chatUI.send) {
+    chatUI.send.addEventListener("pointerup", (e) => {
+      if (e.pointerType !== "touch") return;
+      if (e.cancelable) e.preventDefault();
+      suppressNextSendClick = true;
+      triggerSend();
+    });
+    chatUI.send.addEventListener("click", () => {
+      if (suppressNextSendClick) {
+        suppressNextSendClick = false;
+        return;
+      }
+      triggerSend();
+    });
+  }
+  if (chatUI.cancel) {
+    chatUI.cancel.addEventListener("click", cancelDocChat);
+  }
   if (chatUI.newThread) {
     chatUI.newThread.addEventListener("click", startNewDocChatThread);
   }
@@ -2269,72 +2286,76 @@ export function initDocs() {
 
   // Cmd+Enter or Ctrl+Enter sends, Enter adds newline on all devices.
   // Up/Down arrows navigate prompt history when input is empty
-  chatUI.input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.isComposing) {
-      const shouldSend = e.metaKey || e.ctrlKey;
-      if (shouldSend) {
-        e.preventDefault();
-        sendDocChat();
+  if (chatUI.input) {
+    chatUI.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing) {
+        const shouldSend = e.metaKey || e.ctrlKey;
+        if (shouldSend) {
+          e.preventDefault();
+          sendDocChat();
+        }
+        e.stopPropagation();
+        return;
       }
-      e.stopPropagation();
-      return;
-    }
 
-    // Up arrow: recall previous prompts from history
-    if (e.key === "ArrowUp") {
-      const state = getChatState();
-      const isEmpty = chatUI.input.value.trim() === "";
-      const atStart = chatUI.input.selectionStart === 0;
-      if ((isEmpty || atStart) && state.history.length > 0) {
-        e.preventDefault();
-        const maxIndex = state.history.length - 1;
-        if (historyNavIndex < maxIndex) {
-          historyNavIndex++;
-          chatUI.input.value = state.history[historyNavIndex].prompt || "";
+      // Up arrow: recall previous prompts from history
+      if (e.key === "ArrowUp") {
+        const state = getChatState();
+        const isEmpty = chatUI.input.value.trim() === "";
+        const atStart = chatUI.input.selectionStart === 0;
+        if ((isEmpty || atStart) && state.history.length > 0) {
+          e.preventDefault();
+          const maxIndex = state.history.length - 1;
+          if (historyNavIndex < maxIndex) {
+            historyNavIndex++;
+            chatUI.input.value = state.history[historyNavIndex].prompt || "";
+            autoResizeTextarea(chatUI.input);
+            // Move cursor to end
+            chatUI.input.setSelectionRange(
+              chatUI.input.value.length,
+              chatUI.input.value.length
+            );
+          }
+        }
+        return;
+      }
+
+      // Down arrow: navigate forward in history or clear
+      if (e.key === "ArrowDown") {
+        const state = getChatState();
+        const atEnd = chatUI.input.selectionStart === chatUI.input.value.length;
+        if (historyNavIndex >= 0 && atEnd) {
+          e.preventDefault();
+          historyNavIndex--;
+          if (historyNavIndex >= 0) {
+            chatUI.input.value = state.history[historyNavIndex].prompt || "";
+          } else {
+            chatUI.input.value = "";
+          }
           autoResizeTextarea(chatUI.input);
-          // Move cursor to end
           chatUI.input.setSelectionRange(
             chatUI.input.value.length,
             chatUI.input.value.length
           );
         }
+        return;
       }
-      return;
-    }
-
-    // Down arrow: navigate forward in history or clear
-    if (e.key === "ArrowDown") {
-      const state = getChatState();
-      const atEnd = chatUI.input.selectionStart === chatUI.input.value.length;
-      if (historyNavIndex >= 0 && atEnd) {
-        e.preventDefault();
-        historyNavIndex--;
-        if (historyNavIndex >= 0) {
-          chatUI.input.value = state.history[historyNavIndex].prompt || "";
-        } else {
-          chatUI.input.value = "";
-        }
-        autoResizeTextarea(chatUI.input);
-        chatUI.input.setSelectionRange(
-          chatUI.input.value.length,
-          chatUI.input.value.length
-        );
-      }
-      return;
-    }
-  });
+    });
+  }
 
   // Clear errors on input, auto-resize textarea, and reset history navigation
-  chatUI.input.addEventListener("input", () => {
-    const state = getChatState();
-    if (state.error) {
-      state.error = "";
-      renderChat();
-    }
-    // Reset history navigation when user types
-    historyNavIndex = -1;
-    autoResizeTextarea(chatUI.input);
-  });
+  if (chatUI.input) {
+    chatUI.input.addEventListener("input", () => {
+      const state = getChatState();
+      if (state.error) {
+        state.error = "";
+        renderChat();
+      }
+      // Reset history navigation when user types
+      historyNavIndex = -1;
+      autoResizeTextarea(chatUI.input);
+    });
+  }
 
   // Ctrl+S / Cmd+S saves the current doc
   document.addEventListener("keydown", (e) => {

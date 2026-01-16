@@ -91,7 +91,19 @@
   addStylesheet("static/styles.css");
   addStylesheet("static/vendor/xterm.css");
 
-  fetch("api/version", { cache: "no-store" })
+  const isHubPage =
+    pathname === `${basePrefix || ""}/hub` ||
+    pathname.startsWith(`${basePrefix || ""}/hub/`);
+  const versionPath = repoId
+    ? `${window.__CAR_BASE_PATH || ""}/api/version`
+    : isHubPage
+    ? `${basePrefix || ""}/hub/version`
+    : `${basePrefix || ""}/api/version`;
+  const normalizedVersionPath = versionPath.startsWith("/")
+    ? versionPath
+    : `/${versionPath}`;
+
+  fetch(normalizedVersionPath, { cache: "no-store" })
     .then((res) => (res.ok ? res.json() : null))
     .then((data) => {
       const assetVersion = data && data.asset_version;
