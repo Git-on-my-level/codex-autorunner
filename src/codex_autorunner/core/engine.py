@@ -8,6 +8,7 @@ import signal
 import threading
 import time
 import traceback
+from collections import Counter
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -15,7 +16,12 @@ from typing import IO, Any, Iterator, Optional
 
 import yaml
 
-from ..integrations.app_server.client import CodexAppServerError
+from ..integrations.app_server.client import (
+    CodexAppServerError,
+    _extract_thread_id,
+    _extract_thread_id_for_turn,
+    _extract_turn_id,
+)
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
@@ -24,7 +30,7 @@ from .about_car import ensure_about_car_file
 from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
 from .config import ConfigError, HubConfig, RepoConfig, _is_loopback_host, load_config
-from .docs import DocsManager
+from .docs import DocsManager, parse_todos
 from .git_utils import GitError, run_git
 from .locks import (
     FileLock,
@@ -61,6 +67,16 @@ AUTORUNNER_STOP_POLL_SECONDS = 1.0
 AUTORUNNER_INTERRUPT_GRACE_SECONDS = 30.0
 
 
+@dataclasses.dataclass
+class RunTelemetry:
+    run_id: int
+    thread_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    token_total: Optional[dict[str, Any]] = None
+    plan: Optional[Any] = None
+    diff: Optional[Any] = None
+
+
 class Engine:
     def __init__(self, repo_root: Path):
         config = load_config(repo_root)
@@ -82,6 +98,8 @@ class Engine:
         )
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
+        self._run_telemetry_lock = threading.Lock()
+        self._run_telemetry: Optional[RunTelemetry] = None
         self._last_run_interrupted = False
         self._lock_handle: Optional[FileLock] = None
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
@@ -236,8 +254,13 @@ class Engine:
         5. Update state to 'idle' or 'error'
         6. Commit if successful and auto-commit is enabled
         """
+        try:
+            todo_before = self.docs.read_doc("todo")
+        except Exception:
+            todo_before = ""
         self._update_state("running", run_id, None, started=True)
         self._last_run_interrupted = False
+        self._start_run_telemetry(run_id)
         with self._run_log_context(run_id):
             self._write_run_marker(run_id, "start")
             exit_code = await self._run_codex_app_server_async(
@@ -247,6 +270,58 @@ class Engine:
             )
             self._write_run_marker(run_id, "end", exit_code=exit_code)
 
+        try:
+            todo_after = self.docs.read_doc("todo")
+        except Exception:
+            todo_after = ""
+        todo_delta = self._compute_todo_attribution(todo_before, todo_after)
+        run_updates: dict[str, Any] = {"todo": todo_delta}
+        telemetry = self._snapshot_run_telemetry(run_id)
+        if (
+            telemetry
+            and telemetry.thread_id
+            and isinstance(telemetry.token_total, dict)
+        ):
+            baseline = self._find_thread_token_baseline(
+                thread_id=telemetry.thread_id, run_id=run_id
+            )
+            delta = self._compute_token_delta(baseline, telemetry.token_total)
+            run_updates["token_usage"] = {
+                "delta": delta,
+                "thread_total_before": baseline,
+                "thread_total_after": telemetry.token_total,
+            }
+        artifacts: dict[str, str] = {}
+        if telemetry and telemetry.plan is not None:
+            try:
+                plan_content = (
+                    telemetry.plan
+                    if isinstance(telemetry.plan, str)
+                    else json.dumps(
+                        telemetry.plan, ensure_ascii=True, indent=2, default=str
+                    )
+                )
+            except Exception:
+                plan_content = json.dumps(
+                    {"plan": str(telemetry.plan)}, ensure_ascii=True, indent=2
+                )
+            plan_path = self._write_run_artifact(run_id, "plan.json", plan_content)
+            artifacts["plan_path"] = str(plan_path)
+        if telemetry and telemetry.diff is not None:
+            diff_content = (
+                telemetry.diff
+                if isinstance(telemetry.diff, str)
+                else json.dumps(
+                    telemetry.diff, ensure_ascii=True, indent=2, default=str
+                )
+            )
+            diff_path = self._write_run_artifact(run_id, "diff.patch", diff_content)
+            artifacts["diff_path"] = str(diff_path)
+        if artifacts:
+            run_updates["artifacts"] = artifacts
+        if run_updates:
+            self._merge_run_index_entry(run_id, run_updates)
+        self._clear_run_telemetry(run_id)
         self._update_state(
             "error" if exit_code != 0 else "idle",
             run_id,
@@ -509,6 +584,85 @@ class Engine:
                 except Exception:
                     pass
 
+    def _start_run_telemetry(self, run_id: int) -> None:
+        with self._run_telemetry_lock:
+            self._run_telemetry = RunTelemetry(run_id=run_id)
+
+    def _update_run_telemetry(self, run_id: int, **updates: Any) -> None:
+        with self._run_telemetry_lock:
+            telemetry = self._run_telemetry
+            if telemetry is None or telemetry.run_id != run_id:
+                return
+            for key, value in updates.items():
+                if hasattr(telemetry, key):
+                    setattr(telemetry, key, value)
+
+    def _snapshot_run_telemetry(self, run_id: int) -> Optional[RunTelemetry]:
+        with self._run_telemetry_lock:
+            telemetry = self._run_telemetry
+            if telemetry is None or telemetry.run_id != run_id:
+                return None
+            return dataclasses.replace(telemetry)
+
+    def _clear_run_telemetry(self, run_id: int) -> None:
+        with self._run_telemetry_lock:
+            telemetry = self._run_telemetry
+            if telemetry is None or telemetry.run_id != run_id:
+                return
+            self._run_telemetry = None
+
+    async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
+        if not isinstance(message, dict):
+            return
+        method = message.get("method")
+        if method not in (
+            "thread/tokenUsage/updated",
+            "turn/plan/updated",
+            "turn/diff/updated",
+        ):
+            return
+        params_raw = message.get("params")
+        params = params_raw if isinstance(params_raw, dict) else {}
+        thread_id = (
+            _extract_thread_id_for_turn(params)
+            or _extract_thread_id(params)
+            or _extract_thread_id(message)
+        )
+        turn_id = _extract_turn_id(params) or _extract_turn_id(message)
+        with self._run_telemetry_lock:
+            telemetry = self._run_telemetry
+            if telemetry is None:
+                return
+            if telemetry.thread_id and thread_id and telemetry.thread_id != thread_id:
+                return
+            if telemetry.turn_id and turn_id and telemetry.turn_id != turn_id:
+                return
+            if telemetry.thread_id is None and thread_id:
+                telemetry.thread_id = thread_id
+            if telemetry.turn_id is None and turn_id:
+                telemetry.turn_id = turn_id
+            if method == "thread/tokenUsage/updated":
+                token_usage = (
+                    params.get("token_usage") or params.get("tokenUsage") or {}
+                )
+                if isinstance(token_usage, dict):
+                    total = token_usage.get("total") or token_usage.get("totals")
+                    if isinstance(total, dict):
+                        telemetry.token_total = total
+                return
+            if method == "turn/plan/updated":
+                telemetry.plan = params.get("plan") if "plan" in params else params
+                return
+            if method == "turn/diff/updated":
+                diff = (
+                    params.get("diff")
+                    or params.get("patch")
+                    or params.get("content")
+                    or params.get("value")
+                )
+                telemetry.diff = diff if diff is not None else params
+                return
+
     def _load_run_index(self) -> dict[str, dict]:
         if not self.run_index_path.exists():
             return {}
@@ -528,6 +682,16 @@ class Engine:
             atomic_write(self.run_index_path, f"{payload}\n")
         except Exception:
             pass
+
+    def _merge_run_index_entry(self, run_id: int, updates: dict[str, Any]) -> None:
+        index = self._load_run_index()
+        key = str(run_id)
+        entry = index.get(key, {})
+        if not isinstance(entry, dict):
+            entry = {}
+        entry.update(updates)
+        index[key] = entry
+        self._save_run_index(index)
 
     def _update_run_index(
         self,
@@ -552,6 +716,148 @@ class Engine:
             entry.setdefault("run_log_path", str(self._run_log_path(run_id)))
         index[key] = entry
         self._save_run_index(index)
+
+    def _list_from_counts(self, source: list[str], counts: Counter[str]) -> list[str]:
+        if not source or not counts:
+            return []
+        remaining = Counter(counts)
+        items: list[str] = []
+        for entry in source:
+            if remaining[entry] > 0:
+                items.append(entry)
+                remaining[entry] -= 1
+        return items
+
+    def _compute_todo_attribution(
+        self, before_text: str, after_text: str
+    ) -> dict[str, Any]:
+        before_out, before_done = parse_todos(before_text or "")
+        after_out, after_done = parse_todos(after_text or "")
+        before_out_counter = Counter(before_out)
+        before_done_counter = Counter(before_done)
+        after_out_counter = Counter(after_out)
+        after_done_counter = Counter(after_done)
+
+        completed_counts: Counter[str] = Counter()
+        for item, count in after_done_counter.items():
+            if before_out_counter[item] > 0:
+                completed_counts[item] = min(before_out_counter[item], count)
+
+        reopened_counts: Counter[str] = Counter()
+        for item, count in after_out_counter.items():
+            if before_done_counter[item] > 0:
+                reopened_counts[item] = min(before_done_counter[item], count)
+
+        new_outstanding_counts = after_out_counter - before_out_counter
+        added_counts = new_outstanding_counts - reopened_counts
+
+        completed = self._list_from_counts(after_done, completed_counts)
+        reopened = self._list_from_counts(after_out, reopened_counts)
+        added = self._list_from_counts(after_out, added_counts)
+
+        return {
+            "completed": completed,
+            "added": added,
+            "reopened": reopened,
+            "counts": {
+                "completed": len(completed),
+                "added": len(added),
+                "reopened": len(reopened),
+            },
+        }
+
+    def _find_thread_token_baseline(
+        self, *, thread_id: str, run_id: int
+    ) -> Optional[dict[str, Any]]:
+        index = self._load_run_index()
+        best_run = -1
+        baseline: Optional[dict[str, Any]] = None
+        for key, entry in index.items():
+            try:
+                entry_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            if entry_id >= run_id:
+                continue
+            app_server = entry.get("app_server")
+            if not isinstance(app_server, dict):
+                continue
+            if app_server.get("thread_id") != thread_id:
+                continue
+            token_usage = entry.get("token_usage")
+            if not isinstance(token_usage, dict):
+                continue
+            total = token_usage.get("thread_total_after")
+            if isinstance(total, dict) and entry_id > best_run:
+                best_run = entry_id
+                baseline = total
+        return baseline
+
+    def _compute_token_delta(
+        self,
+        baseline: Optional[dict[str, Any]],
+        final_total: Optional[dict[str, Any]],
+    ) -> Optional[dict[str, Any]]:
+        if not isinstance(final_total, dict):
+            return None
+        base = baseline if isinstance(baseline, dict) else {}
+        delta: dict[str, Any] = {}
+        for key, value in final_total.items():
+            if not isinstance(value, (int, float)):
+                continue
+            prior = base.get(key, 0)
+            if isinstance(prior, (int, float)):
+                delta[key] = value - prior
+            else:
+                delta[key] = value
+        return delta
+
+    def _build_app_server_meta(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+        thread_info: Optional[dict[str, Any]],
+        model: Optional[str],
+        reasoning_effort: Optional[str],
+    ) -> dict[str, Any]:
+        meta: dict[str, Any] = {"thread_id": thread_id, "turn_id": turn_id}
+        if model:
+            meta["model"] = model
+        if reasoning_effort:
+            meta["reasoning_effort"] = reasoning_effort
+        if not isinstance(thread_info, dict):
+            return meta
+
+        def _first_string(keys: tuple[str, ...]) -> Optional[str]:
+            for key in keys:
+                value = thread_info.get(key)
+                if isinstance(value, str) and value:
+                    return value
+            return None
+
+        if "model" not in meta:
+            thread_model = _first_string(("model", "model_id", "modelId", "model_name"))
+            if thread_model:
+                meta["model"] = thread_model
+        provider = _first_string(
+            ("model_provider", "modelProvider", "provider", "model_provider_name")
+        )
+        if provider:
+            meta["model_provider"] = provider
+        if "reasoning_effort" not in meta:
+            thread_effort = _first_string(
+                ("reasoning_effort", "reasoningEffort", "effort")
+            )
+            if thread_effort:
+                meta["reasoning_effort"] = thread_effort
+        return meta
+
+    def _write_run_artifact(self, run_id: int, name: str, content: str) -> Path:
+        self._ensure_run_log_dir()
+        path = self.log_path.parent / "runs" / f"run-{run_id}.{name}"
+        atomic_write(path, content)
+        return path
 
     def _read_log_range(self, entry: dict) -> Optional[str]:
         start = entry.get("start_offset")
@@ -644,9 +950,24 @@ class Engine:
             if reuse_supervisor
             else self._build_app_server_supervisor(_env_builder)
         )
+        with state_lock(self.state_path):
+            state = load_state(self.state_path)
+        effective_model = state.autorunner_model_override or config.codex_model
+        effective_effort = state.autorunner_effort_override or config.codex_reasoning
+        approval_policy = state.autorunner_approval_policy or "never"
+        sandbox_mode = state.autorunner_sandbox_mode or "dangerFullAccess"
+        if sandbox_mode == "workspaceWrite":
+            sandbox_policy: Any = {
+                "type": "workspaceWrite",
+                "writableRoots": [str(self.repo_root)],
+                "networkAccess": bool(state.autorunner_workspace_write_network),
+            }
+        else:
+            sandbox_policy = "dangerFullAccess"
         try:
             client = await supervisor.get_client(self.repo_root)
             thread_id = self._app_server_threads.get_thread_id("autorunner")
+            thread_info: Optional[dict[str, Any]] = None
             if thread_id:
                 try:
                     resume_result = await client.thread_resume(thread_id)
@@ -654,6 +975,8 @@ class Engine:
                     if isinstance(resumed, str) and resumed:
                         thread_id = resumed
                         self._app_server_threads.set_thread_id("autorunner", thread_id)
+                    if isinstance(resume_result, dict):
+                        thread_info = resume_result
                 except CodexAppServerError:
                     self._app_server_threads.reset_thread("autorunner")
                     thread_id = None
@@ -666,17 +989,32 @@ class Engine:
                     )
                     return 1
                 self._app_server_threads.set_thread_id("autorunner", thread_id)
+                if isinstance(thread, dict):
+                    thread_info = thread
+            if thread_id:
+                self._update_run_telemetry(run_id, thread_id=thread_id)
             turn_kwargs: dict[str, Any] = {}
-            if config.codex_model:
-                turn_kwargs["model"] = str(config.codex_model)
-            if config.codex_reasoning:
-                turn_kwargs["effort"] = str(config.codex_reasoning)
+            if effective_model:
+                turn_kwargs["model"] = str(effective_model)
+            if effective_effort:
+                turn_kwargs["effort"] = str(effective_effort)
             handle = await client.turn_start(
                 thread_id,
                 prompt,
-                approval_policy="never",
-                sandbox_policy="dangerFullAccess",
+                approval_policy=approval_policy,
+                sandbox_policy=sandbox_policy,
                 **turn_kwargs,
+            )
+            app_server_meta = self._build_app_server_meta(
+                thread_id=thread_id,
+                turn_id=handle.turn_id,
+                thread_info=thread_info,
+                model=turn_kwargs.get("model"),
+                reasoning_effort=turn_kwargs.get("effort"),
+            )
+            self._merge_run_index_entry(run_id, {"app_server": app_server_meta})
+            self._update_run_telemetry(
+                run_id, thread_id=thread_id, turn_id=handle.turn_id
             )
             turn_timeout = config.app_server.turn_timeout_seconds
             turn_result, interrupted = await self._wait_for_turn_with_stop(
@@ -765,6 +1103,7 @@ class Engine:
             state_root=config.state_root,
             env_builder=env_builder,
             logger=self._app_server_logger,
+            notification_handler=self._handle_app_server_notification,
             max_handles=config.max_handles,
             idle_ttl_seconds=config.idle_ttl_seconds,
             request_timeout=config.request_timeout,
@@ -1002,6 +1341,11 @@ class Engine:
                 last_exit_code=exit_code,
                 last_run_started_at=last_run_started_at,
                 last_run_finished_at=last_run_finished_at,
+                autorunner_model_override=current.autorunner_model_override,
+                autorunner_effort_override=current.autorunner_effort_override,
+                autorunner_approval_policy=current.autorunner_approval_policy,
+                autorunner_sandbox_mode=current.autorunner_sandbox_mode,
+                autorunner_workspace_write_network=current.autorunner_workspace_write_network,
                 runner_pid=runner_pid,
                 sessions=current.sessions,
                 repo_to_session=current.repo_to_session,

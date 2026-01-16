@@ -33,6 +33,8 @@ DEFAULT_PROGRESS_STREAM_ENABLED = True
 DEFAULT_PROGRESS_STREAM_MAX_ACTIONS = 5
 DEFAULT_PROGRESS_STREAM_MAX_OUTPUT_CHARS = 120
 DEFAULT_PROGRESS_STREAM_MIN_EDIT_INTERVAL_SECONDS = 1.0
+DEFAULT_MESSAGE_OVERFLOW = "document"
+MESSAGE_OVERFLOW_OPTIONS = {"document", "split", "trim"}
 
 PARSE_MODE_ALIASES = {
     "html": "HTML",
@@ -147,6 +149,7 @@ class TelegramBotConfig:
     app_server_idle_ttl_seconds: Optional[int]
     poll_timeout_seconds: int
     poll_allowed_updates: list[str]
+    message_overflow: str
 
     @classmethod
     def from_raw(
@@ -325,6 +328,13 @@ class TelegramBotConfig:
             min_edit_interval_seconds=progress_min_edit_interval_seconds,
         )
 
+        message_overflow = str(
+            cfg.get("message_overflow", DEFAULT_MESSAGE_OVERFLOW)
+        ).strip()
+        if message_overflow:
+            message_overflow = message_overflow.lower()
+        if message_overflow not in MESSAGE_OVERFLOW_OPTIONS:
+            message_overflow = DEFAULT_MESSAGE_OVERFLOW
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
             command_reg_raw_value if isinstance(command_reg_raw_value, dict) else {}
@@ -405,6 +415,7 @@ class TelegramBotConfig:
             app_server_idle_ttl_seconds=app_server_idle_ttl_seconds,
             poll_timeout_seconds=poll_timeout_seconds,
             poll_allowed_updates=poll_allowed_updates,
+            message_overflow=message_overflow,
         )
 
     def validate(self) -> None:

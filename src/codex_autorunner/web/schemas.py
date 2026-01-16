@@ -82,6 +82,18 @@ class AppServerThreadResetRequest(Payload):
     )
 
 
+class AppServerThreadArchiveRequest(Payload):
+    thread_id: str = Field(validation_alias=AliasChoices("thread_id", "threadId", "id"))
+
+
+class SessionSettingsRequest(Payload):
+    autorunner_model_override: Optional[str] = None
+    autorunner_effort_override: Optional[str] = None
+    autorunner_approval_policy: Optional[str] = None
+    autorunner_sandbox_mode: Optional[str] = None
+    autorunner_workspace_write_network: Optional[bool] = None
+
+
 class GithubIssueRequest(Payload):
     issue: str
 
@@ -133,6 +145,14 @@ class StateResponse(ResponseModel):
     runner_pid: Optional[int]
     terminal_idle_timeout_seconds: Optional[int]
     codex_model: str
+
+
+class SessionSettingsResponse(ResponseModel):
+    autorunner_model_override: Optional[str]
+    autorunner_effort_override: Optional[str]
+    autorunner_approval_policy: Optional[str]
+    autorunner_sandbox_mode: Optional[str]
+    autorunner_workspace_write_network: Optional[bool]
 
 
 class VersionResponse(ResponseModel):
@@ -204,6 +224,12 @@ class AppServerThreadResetResponse(ResponseModel):
     status: str
     key: str
     cleared: bool
+
+
+class AppServerThreadArchiveResponse(ResponseModel):
+    status: str
+    thread_id: str
+    archived: bool
 
 
 class AppServerThreadResetAllResponse(ResponseModel):

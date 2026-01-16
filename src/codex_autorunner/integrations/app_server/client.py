@@ -221,6 +221,23 @@ class CodexAppServerClient:
                     break
         return result
 
+    async def thread_archive(self, thread_id: str, **kwargs: Any) -> Any:
+        params: Dict[str, Any] = {"threadId": thread_id}
+        params.update(kwargs)
+        return await self.request("thread/archive", params)
+
+    async def model_list(self, **kwargs: Any) -> Any:
+        params = kwargs if kwargs else {}
+        return await self.request("model/list", params)
+
+    async def account_read(self, **kwargs: Any) -> Any:
+        params = kwargs if kwargs else {}
+        return await self.request("account/read", params)
+
+    async def rate_limits_read(self, **kwargs: Any) -> Any:
+        params = kwargs if kwargs else {}
+        return await self.request("account/rateLimits/read", params)
+
     async def turn_start(
         self,
         thread_id: str,

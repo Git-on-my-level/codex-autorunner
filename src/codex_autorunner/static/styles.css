@@ -171,6 +171,8 @@
   --accent-2: #6ca8ff;
   --border: #1a2033;
   --error: #ff5566;
+  --success: #58d68d;
+  --warning: #ffd166;
   --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
   --radius: 3px;
 }
@@ -5178,7 +5180,230 @@ button.loading::after {
     font-size: 9px;
   }
 
-  .diff-content {
+.diff-content {
     font-size: 10px;
+  }
+}
+
+/* ===== Repo Settings Extensions ===== */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.settings-toggle-row {
+  margin-top: 10px;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.form-hint.warning {
+  color: var(--warning);
+}
+
+.thread-tools-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.thread-tool-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.thread-tool-label {
+  color: var(--muted);
+}
+
+.thread-tool-value {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.thread-tools-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ===== Runs Panel ===== */
+.runs-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.runs-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.runs-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.runs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.runs-table th,
+.runs-table td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.runs-row {
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.runs-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.runs-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 16px 8px;
+}
+
+.runs-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.runs-pill-ok {
+  background: rgba(88, 214, 141, 0.15);
+  color: var(--success);
+}
+
+.runs-pill-error {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--error);
+}
+
+.runs-pill-running {
+  background: rgba(255, 209, 102, 0.15);
+  color: var(--warning);
+}
+
+.runs-todo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.runs-todo-item {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.runs-todo-text {
+  font-weight: 500;
+}
+
+.runs-todo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--muted);
+  align-items: center;
+}
+
+.runs-todo-runs {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.runs-chip {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* ===== Run Details Modal ===== */
+.run-details-modal {
+  width: min(960px, 92vw);
+}
+
+.run-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.run-details-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.run-details-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.run-details-artifact {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.run-details-actions {
+  align-items: center;
+}
+
+@media (max-width: 900px) {
+  .runs-layout {
+    grid-template-columns: 1fr;
   }
 }

@@ -16,6 +16,11 @@ class RunnerState:
     last_exit_code: Optional[int]
     last_run_started_at: Optional[str]
     last_run_finished_at: Optional[str]
+    autorunner_model_override: Optional[str] = None
+    autorunner_effort_override: Optional[str] = None
+    autorunner_approval_policy: Optional[str] = None
+    autorunner_sandbox_mode: Optional[str] = None
+    autorunner_workspace_write_network: Optional[bool] = None
     runner_pid: Optional[int] = None
     sessions: dict[str, "SessionRecord"] = dataclasses.field(default_factory=dict)
     repo_to_session: dict[str, str] = dataclasses.field(default_factory=dict)
@@ -27,6 +32,11 @@ class RunnerState:
             "last_exit_code": self.last_exit_code,
             "last_run_started_at": self.last_run_started_at,
             "last_run_finished_at": self.last_run_finished_at,
+            "autorunner_model_override": self.autorunner_model_override,
+            "autorunner_effort_override": self.autorunner_effort_override,
+            "autorunner_approval_policy": self.autorunner_approval_policy,
+            "autorunner_sandbox_mode": self.autorunner_sandbox_mode,
+            "autorunner_workspace_write_network": self.autorunner_workspace_write_network,
             "runner_pid": self.runner_pid,
             "sessions": {
                 session_id: record.to_dict()
@@ -105,6 +115,13 @@ def load_state(state_path: Path) -> RunnerState:
         last_exit_code=data.get("last_exit_code"),
         last_run_started_at=data.get("last_run_started_at"),
         last_run_finished_at=data.get("last_run_finished_at"),
+        autorunner_model_override=data.get("autorunner_model_override"),
+        autorunner_effort_override=data.get("autorunner_effort_override"),
+        autorunner_approval_policy=data.get("autorunner_approval_policy"),
+        autorunner_sandbox_mode=data.get("autorunner_sandbox_mode"),
+        autorunner_workspace_write_network=data.get(
+            "autorunner_workspace_write_network"
+        ),
         runner_pid=data.get("runner_pid"),
         sessions=sessions,
         repo_to_session=repo_to_session,
