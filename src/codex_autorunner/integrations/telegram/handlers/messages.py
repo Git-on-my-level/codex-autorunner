@@ -58,6 +58,19 @@ def _message_text_candidate(message: TelegramMessage) -> tuple[str, str, Any]:
     return raw_text, text_candidate, entities
 
 
+async def _clear_pending_options(
+    handlers: Any, key: str, message: TelegramMessage
+) -> None:
+    handlers._resume_options.pop(key, None)
+    handlers._bind_options.pop(key, None)
+    handlers._model_options.pop(key, None)
+    handlers._model_pending.pop(key, None)
+    handlers._review_commit_options.pop(key, None)
+    handlers._review_commit_subjects.pop(key, None)
+    pending_review_custom = handlers._pending_review_custom.pop(key, None)
+    await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
+
+
 async def handle_message(handlers: Any, message: TelegramMessage) -> None:
     if message.is_edited:
         await handle_edited_message(handlers, message)
@@ -83,6 +96,10 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
     if has_media and not should_bypass:
         if handlers._config.media.batch_uploads and has_batchable_media(message):
             if handlers._config.media.enabled:
+                topic_key = handlers._resolve_topic_key(
+                    message.chat_id, message.thread_id
+                )
+                await _clear_pending_options(handlers, topic_key, message)
                 await flush_coalesced_message(handlers, message)
                 await buffer_media_batch(handlers, message)
                 return

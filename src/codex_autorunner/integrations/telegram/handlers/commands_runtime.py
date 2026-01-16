@@ -1914,9 +1914,11 @@ class TelegramCommandHandlers:
         prompt_parts.append(hint)
         combined_prompt = "\n\n".join(prompt_parts)
 
-        input_items: list[dict[str, Any]] = [{"type": "text", "text": combined_prompt}]
-        for image_path in saved_image_paths:
-            input_items.append({"type": "localImage", "path": str(image_path)})
+        input_items: Optional[list[dict[str, Any]]] = None
+        if saved_image_paths:
+            input_items = [{"type": "text", "text": combined_prompt}]
+            for image_path in saved_image_paths:
+                input_items.append({"type": "localImage", "path": str(image_path)})
 
         last_message = sorted_messages[-1]
         reply_to_id = last_message.message_id
