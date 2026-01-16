@@ -1,5 +1,7 @@
-PYTHON ?= python
 VENV ?= .venv
+export PATH := $(CURDIR)/$(VENV)/bin:$(PATH)
+
+PYTHON ?= python3
 VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/pip
 HOST ?= 127.0.0.1
@@ -38,14 +40,22 @@ $(VENV)/.installed-dev: $(VENV_PYTHON) pyproject.toml
 	@touch $(VENV)/.installed-dev
 
 setup: venv-dev npm-install hooks
-	@echo "Setup complete. Activate with: source $(VENV)/bin/activate"
+	@echo "Setup complete. Venv is automatically used by Make targets."
 
 npm-install: node_modules/.installed
 
-node_modules/.installed: package.json $(wildcard package-lock.json)
-	@if [ -f package-lock.json ]; then \
+node_modules/.installed: package.json $(wildcard package-lock.json) $(wildcard pnpm-lock.yaml)
+	@if [ -f pnpm-lock.yaml ]; then \
+		echo "Detected pnpm-lock.yaml, using pnpm..."; \
+		pnpm install; \
+	elif [ -f package-lock.json ]; then \
+		echo "Detected package-lock.json, using npm..."; \
 		npm ci; \
+	elif command -v pnpm >/dev/null 2>&1; then \
+		echo "pnpm detected, using pnpm..."; \
+		pnpm install; \
 	else \
+		echo "Falling back to npm..."; \
 		npm install; \
 	fi
 	@touch node_modules/.installed

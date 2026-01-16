@@ -61,10 +61,7 @@ let historyNavIndex = -1;
 
 const chatUI = {
   status: document.getElementById("doc-chat-status"),
-  eventsMain: document.getElementById("doc-chat-events"),
-  eventsList: document.getElementById("doc-chat-events-list"),
-  eventsCount: document.getElementById("doc-chat-events-count"),
-  eventsToggle: document.getElementById("doc-chat-events-toggle"),
+  stream: document.getElementById("doc-chat-stream"),
   patchMain: document.getElementById("doc-patch-main"),
   patchSummary: document.getElementById("doc-patch-summary"),
   patchMeta: document.getElementById("doc-patch-meta"),
@@ -73,8 +70,6 @@ const chatUI = {
   patchPreview: document.getElementById("doc-patch-preview"),
   patchDiscard: document.getElementById("doc-patch-discard"),
   patchReload: document.getElementById("doc-patch-reload"),
-  history: document.getElementById("doc-chat-history"),
-  historyCount: document.getElementById("doc-chat-history-count"),
   error: document.getElementById("doc-chat-error"),
   input: document.getElementById("doc-chat-input"),
   send: document.getElementById("doc-chat-send"),
@@ -886,87 +881,211 @@ function applyAppServerEvent(state, payload) {
   if (itemId) state.eventItemIndex[itemId] = state.events.length - 1;
 }
 
-function renderChatEvents(state) {
+// Constants for unified chat stream
+const THINKING_PREVIEW_MAX_LEN = 120;
+
+// Extract a compact thinking preview from events (like Telegram)
+function getThinkingPreview(events) {
+  // Find the latest thinking event
+  for (let i = events.length - 1; i >= 0; i--) {
+    const evt = events[i];
+    if (evt.kind === "thinking" && evt.summary) {
+      // Normalize and truncate
+      let text = evt.summary.replace(/\s+/g, " ").trim();
+      if (text.length > THINKING_PREVIEW_MAX_LEN) {
+        text = text.slice(0, THINKING_PREVIEW_MAX_LEN) + "…";
+      }
+      return text;
+    }
+  }
+  return null;
+}
+
+// Get notable tool calls from events (commands, file changes)
+function getToolCalls(events) {
+  const tools = [];
+  for (const evt of events) {
+    if (evt.kind === "command" || evt.kind === "file") {
+      tools.push({
+        type: evt.kind,
+        name: evt.summary || evt.title,
+        detail: evt.detail,
+      });
+    }
+  }
+  return tools;
+}
+
+// Render tool call pills for the current turn
+function renderToolCallPills(tools) {
+  if (!tools.length) return null;
+  const container = document.createElement("div");
+  container.className = "chat-tool-calls";
+  // Show up to 5 tool calls
+  const visibleTools = tools.slice(-5);
+  for (const tool of visibleTools) {
+    const pill = document.createElement("span");
+    pill.className = `chat-tool-pill ${tool.type}`;
+    pill.textContent = tool.type === "command" ? `$ ${tool.name}` : `📄 ${tool.name}`;
+    if (tool.detail) pill.title = tool.detail;
+    container.appendChild(pill);
+  }
+  if (tools.length > 5) {
+    const more = document.createElement("span");
+    more.className = "chat-tool-pill muted";
+    more.textContent = `+${tools.length - 5} more`;
+    container.appendChild(more);
+  }
+  return container;
+}
+
+// Unified chat stream renderer
+function renderChatStream(state) {
+  if (!chatUI.stream) return;
   if (activeDoc === "snapshot") return;
-  if (!chatUI.eventsMain || !chatUI.eventsList || !chatUI.eventsCount) return;
-  const hasEvents = state.events.length > 0;
-  const isRunning = state.status === "running";
-  const showEvents = hasEvents || isRunning;
-  chatUI.eventsMain.classList.toggle("hidden", !showEvents);
-  chatUI.eventsCount.textContent = state.events.length;
-  if (!showEvents) return;
 
-  const limit = CHAT_EVENT_LIMIT;
-  const expanded = !!state.eventsExpanded;
-  const showCount = expanded
-    ? state.events.length
-    : Math.min(state.events.length, limit);
-  const visible = state.events.slice(-showCount);
+  chatUI.stream.innerHTML = "";
+  const count = state.history.length;
 
-  if (chatUI.eventsToggle) {
-    const hiddenCount = Math.max(0, state.events.length - showCount);
-    chatUI.eventsToggle.classList.toggle("hidden", hiddenCount === 0);
-    chatUI.eventsToggle.textContent = expanded
-      ? "Show recent"
-      : `Show more (${hiddenCount})`;
-  }
-
-  chatUI.eventsList.innerHTML = "";
-  if (state.eventError) {
-    const error = document.createElement("div");
-    error.className = "doc-chat-event error";
-    const title = document.createElement("div");
-    title.className = "doc-chat-event-title";
-    title.textContent = "Event stream error";
-    const summary = document.createElement("div");
-    summary.className = "doc-chat-event-summary";
-    summary.textContent = state.eventError;
-    error.appendChild(title);
-    error.appendChild(summary);
-    chatUI.eventsList.appendChild(error);
-  }
-  if (!hasEvents) {
+  if (count === 0) {
     const empty = document.createElement("div");
-    empty.className = "doc-chat-events-empty";
-    empty.textContent = isRunning ? "Waiting for updates..." : "No updates yet.";
-    chatUI.eventsList.appendChild(empty);
+    empty.className = "chat-empty";
+    empty.textContent = "No messages yet. Start a conversation about the work docs.";
+    chatUI.stream.appendChild(empty);
     return;
   }
 
-  visible.forEach((entry) => {
-    const wrapper = document.createElement("div");
-    wrapper.className = `doc-chat-event ${entry.kind || ""}`.trim();
+  // Render messages - newest at top (already in reverse chronological order)
+  state.history.slice(0, CHAT_HISTORY_LIMIT).forEach((entry, idx) => {
+    const isLatest = idx === 0;
+    const isRunning = entry.status === "running";
+    const msg = document.createElement("div");
+    msg.className = `chat-message ${entry.status}`;
 
-    const title = document.createElement("div");
-    title.className = "doc-chat-event-title";
-    title.textContent = entry.title || entry.method || "Update";
+    // User prompt bubble
+    const userBubble = document.createElement("div");
+    userBubble.className = "chat-bubble user";
+    
+    const promptText = document.createElement("div");
+    promptText.className = "chat-prompt";
+    promptText.textContent = entry.prompt || "(no prompt)";
+    userBubble.appendChild(promptText);
 
-    const summary = document.createElement("div");
-    summary.className = "doc-chat-event-summary";
-    summary.textContent = entry.summary || "(no details)";
-
-    wrapper.appendChild(title);
-    wrapper.appendChild(summary);
-
-    if (entry.detail) {
-      const detail = document.createElement("div");
-      detail.className = "doc-chat-event-detail";
-      detail.textContent = entry.detail;
-      wrapper.appendChild(detail);
-    }
-
-    const meta = document.createElement("div");
-    meta.className = "doc-chat-event-meta";
-    meta.textContent = entry.time
+    // Timestamp and copy button row
+    const userMeta = document.createElement("div");
+    userMeta.className = "chat-meta";
+    
+    const stamp = document.createElement("span");
+    stamp.className = "chat-time";
+    stamp.textContent = entry.time
       ? new Date(entry.time).toLocaleTimeString([], {
           hour: "2-digit",
           minute: "2-digit",
         })
       : "";
-    wrapper.appendChild(meta);
+    userMeta.appendChild(stamp);
 
-    chatUI.eventsList.appendChild(wrapper);
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "chat-copy-btn";
+    copyBtn.title = "Edit this prompt";
+    copyBtn.innerHTML = "✎";
+    copyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      chatUI.input.value = entry.prompt;
+      autoResizeTextarea(chatUI.input);
+      chatUI.input.focus();
+      historyNavIndex = -1;
+      flash("Prompt restored to input");
+    });
+    userMeta.appendChild(copyBtn);
+    
+    userBubble.appendChild(userMeta);
+    msg.appendChild(userBubble);
+
+    // Assistant response bubble
+    const assistantBubble = document.createElement("div");
+    assistantBubble.className = "chat-bubble assistant";
+
+    // For running entries, show thinking preview and tool calls
+    if (isRunning && isLatest) {
+      // Show thinking indicator with preview
+      const thinkingPreview = getThinkingPreview(state.events);
+      const toolCalls = getToolCalls(state.events);
+
+      if (thinkingPreview || toolCalls.length > 0 || state.statusText) {
+        // Thinking preview
+        if (thinkingPreview) {
+          const thinking = document.createElement("div");
+          thinking.className = "chat-thinking";
+          thinking.innerHTML = `<span class="thinking-indicator">⚡</span> ${escapeHtml(thinkingPreview)}`;
+          assistantBubble.appendChild(thinking);
+        } else if (state.statusText && state.statusText !== "queued") {
+          const status = document.createElement("div");
+          status.className = "chat-status-text";
+          status.innerHTML = `<span class="thinking-indicator">⚡</span> ${escapeHtml(state.statusText)}`;
+          assistantBubble.appendChild(status);
+        }
+
+        // Tool calls
+        if (toolCalls.length > 0) {
+          const toolsEl = renderToolCallPills(toolCalls);
+          if (toolsEl) assistantBubble.appendChild(toolsEl);
+        }
+
+        // Streaming response text if available
+        if (state.streamText || entry.response) {
+          const responseDiv = document.createElement("div");
+          responseDiv.className = "chat-response streaming";
+          responseDiv.textContent = state.streamText || entry.response;
+          assistantBubble.appendChild(responseDiv);
+        }
+      } else {
+        // Just show "Working..." if no preview available
+        const waiting = document.createElement("div");
+        waiting.className = "chat-waiting";
+        waiting.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span> Working...';
+        assistantBubble.appendChild(waiting);
+      }
+    } else {
+      // Completed entry - show response
+      const responseDiv = document.createElement("div");
+      responseDiv.className = "chat-response";
+      
+      if (entry.error) {
+        responseDiv.className += " error";
+        responseDiv.textContent = entry.error;
+      } else if (entry.status === "interrupted") {
+        responseDiv.className += " interrupted";
+        responseDiv.textContent = entry.response || "Interrupted";
+      } else {
+        responseDiv.textContent = entry.response || "(no response)";
+      }
+      assistantBubble.appendChild(responseDiv);
+
+      // Show updated docs tags
+      if (entry.updated && entry.updated.length) {
+        const tagsDiv = document.createElement("div");
+        tagsDiv.className = "chat-tags";
+        entry.updated.forEach((doc) => {
+          const tag = document.createElement("span");
+          tag.className = "chat-tag";
+          tag.textContent = doc.toUpperCase();
+          tagsDiv.appendChild(tag);
+        });
+        assistantBubble.appendChild(tagsDiv);
+      }
+    }
+
+    msg.appendChild(assistantBubble);
+    chatUI.stream.appendChild(msg);
   });
+}
+
+// Helper to escape HTML in thinking preview
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 function renderChat() {
@@ -1086,113 +1205,9 @@ function renderChat() {
   updateDocVisibility();
   updateDocControls(activeDoc);
 
-  renderChatEvents(state);
-  renderChatHistory(state);
+  renderChatStream(state);
 }
 
-function renderChatHistory(state) {
-  if (!chatUI.history) return;
-
-  const count = state.history.length;
-  chatUI.historyCount.textContent = count;
-
-  chatUI.history.innerHTML = "";
-  if (count === 0) {
-    const empty = document.createElement("div");
-    empty.className = "doc-chat-empty";
-    empty.textContent = "No messages yet.";
-    chatUI.history.appendChild(empty);
-    return;
-  }
-
-  state.history.slice(0, CHAT_HISTORY_LIMIT).forEach((entry) => {
-    const wrapper = document.createElement("div");
-    wrapper.className = `doc-chat-entry ${entry.status}`;
-
-    const header = document.createElement("div");
-    header.className = "doc-chat-entry-header";
-
-    // Prompt row with copy button
-    const promptRow = document.createElement("div");
-    promptRow.className = "prompt-row";
-    const prompt = document.createElement("div");
-    prompt.className = "prompt";
-    prompt.textContent = entry.prompt || "(no prompt)";
-    prompt.title = entry.prompt;
-
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "copy-prompt-btn";
-    copyBtn.title = "Copy to input";
-    copyBtn.innerHTML = "↑";
-    copyBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      chatUI.input.value = entry.prompt;
-      autoResizeTextarea(chatUI.input);
-      chatUI.input.focus();
-      historyNavIndex = -1;
-      flash("Prompt restored to input");
-    });
-
-    promptRow.appendChild(prompt);
-    promptRow.appendChild(copyBtn);
-
-    const meta = document.createElement("div");
-    meta.className = "meta";
-
-    const dot = document.createElement("span");
-    dot.className = "status-dot";
-
-    const stamp = document.createElement("span");
-    stamp.textContent = entry.time
-      ? new Date(entry.time).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : entry.status;
-
-    meta.appendChild(dot);
-    meta.appendChild(stamp);
-
-    header.appendChild(promptRow);
-    header.appendChild(meta);
-
-    const response = document.createElement("div");
-    response.className = "doc-chat-entry-response";
-    const isLatest = entry === state.history[0];
-    const runningText =
-      (isLatest && state.streamText) ||
-      entry.response ||
-      (isLatest && state.statusText) ||
-      "queued";
-    const responseText =
-      entry.error ||
-      (entry.status === "running" ? runningText : entry.response || "(no response)");
-    response.textContent = responseText;
-    response.classList.toggle(
-      "streaming",
-      entry.status === "running" && !!(state.streamText || entry.response)
-    );
-
-    wrapper.appendChild(header);
-    wrapper.appendChild(response);
-
-    const tags = [];
-    if (entry.targets && entry.targets.length) {
-      tags.push(`Targets: ${entry.targets.map((k) => k.toUpperCase()).join(", ")}`);
-    }
-    if (entry.updated && entry.updated.length) {
-      tags.push(`Drafts: ${entry.updated.map((k) => k.toUpperCase()).join(", ")}`);
-    }
-    if (tags.length) {
-      const tagLine = document.createElement("div");
-      tagLine.className = "doc-chat-entry-tags";
-      tagLine.textContent = tags.join(" · ");
-      wrapper.appendChild(tagLine);
-    }
-
-    chatUI.history.appendChild(wrapper);
-  });
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Chat Actions & Error Handling
@@ -1389,7 +1404,7 @@ async function startDocChatEventStream(payload) {
   state.eventTurnId = turnId;
   state.eventThreadId = threadId;
   state.eventController = new AbortController();
-  renderChatEvents(state);
+  renderChatStream(state);
 
   const endpoint = resolvePath(
     `/api/app-server/turns/${encodeURIComponent(turnId)}/events`
@@ -1416,7 +1431,7 @@ async function startDocChatEventStream(payload) {
   } catch (err) {
     if (err.name === "AbortError") return;
     state.eventError = err.message || "Failed to stream app-server events";
-    renderChatEvents(state);
+    renderChatStream(state);
   }
 }
 
@@ -1461,7 +1476,7 @@ async function handleAppServerStreamEvent(_event, rawData, state) {
       renderChat();
     }
   }
-  renderChatEvents(state);
+  renderChatStream(state);
 }
 
 async function toggleDraftPreview(kind = activeDoc) {
@@ -2208,13 +2223,6 @@ export function initDocs() {
   }
   if (chatUI.newThread) {
     chatUI.newThread.addEventListener("click", startNewDocChatThread);
-  }
-  if (chatUI.eventsToggle) {
-    chatUI.eventsToggle.addEventListener("click", () => {
-      const state = getChatState();
-      state.eventsExpanded = !state.eventsExpanded;
-      renderChat();
-    });
   }
   if (chatUI.patchApply)
     chatUI.patchApply.addEventListener("click", () => applyPatch(activeDoc));
