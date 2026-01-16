@@ -46,6 +46,7 @@ class DocChatRequest:
     message: str
     stream: bool = False
     targets: Optional[tuple[str, ...]] = None
+    context_doc: Optional[str] = None
 
 
 @dataclass
@@ -249,6 +250,17 @@ class DocChatService:
         stream = bool(payload.get("stream", False))
         raw_targets = payload.get("targets") or payload.get("target")
         targets: Optional[tuple[str, ...]] = None
+        raw_context = (
+            payload.get("context_doc")
+            or payload.get("contextDoc")
+            or payload.get("viewing")
+        )
+        context_doc: Optional[str] = None
+        if isinstance(raw_context, str) and raw_context.strip():
+            try:
+                context_doc = _normalize_kind(raw_context)
+            except DocChatValidationError:
+                raise
         if isinstance(raw_targets, (list, tuple)):
             normalized = []
             for entry in raw_targets:
@@ -273,7 +285,16 @@ class DocChatService:
                 if any(target != normalized_kind for target in targets):
                     raise DocChatValidationError("target must match doc kind")
                 targets = (normalized_kind,)
-        return DocChatRequest(message=message, stream=stream, targets=targets)
+            if context_doc is None:
+                context_doc = normalized_kind
+            elif context_doc != normalized_kind:
+                raise DocChatValidationError("context_doc must match doc kind")
+        return DocChatRequest(
+            message=message,
+            stream=stream,
+            targets=targets,
+            context_doc=context_doc,
+        )
 
     def repo_blocked_reason(self) -> Optional[str]:
         return self.engine.repo_busy_reason()
@@ -452,7 +473,7 @@ class DocChatService:
             message=request.message,
             recent_summary=self._recent_run_summary(),
             docs=docs,
-            targets=request.targets,
+            context_doc=request.context_doc,
         )
 
     def _ensure_app_server(self) -> WorkspaceAppServerSupervisor:
@@ -853,7 +874,7 @@ class DocChatService:
             updated_kinds: list[str] = []
             payloads: dict[str, dict] = {}
             created_at = now_iso()
-            allowed_kinds = request.targets or ALLOWED_DOC_KINDS
+            allowed_kinds = ALLOWED_DOC_KINDS
             unexpected: list[str] = []
             config = self._repo_config()
             for kind in ALLOWED_DOC_KINDS:
@@ -895,7 +916,7 @@ class DocChatService:
                         drafts=updated,
                         docs=docs,
                         agent_message=agent_message,
-                        allowed_kinds=request.targets,
+                        allowed_kinds=allowed_kinds,
                     )
                 except PatchError as exc:
                     raise DocChatError(str(exc)) from exc

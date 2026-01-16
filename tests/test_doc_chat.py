@@ -499,10 +499,13 @@ def test_prompt_includes_all_docs_and_recent_run(
     engine = Engine(repo)
     service = DocChatService(engine)
     monkeypatch.setattr(service, "_recent_run_summary", lambda: "recent notes")
-    request = DocChatRequest(message="summarize", targets=("progress",))
+    request = DocChatRequest(message="summarize", context_doc="progress")
     docs = service._doc_bases(service._load_drafts())
     prompt = service._build_app_server_prompt(request, docs)
-    assert "<TARGET_DOCS>\nprogress\n</TARGET_DOCS>" in prompt
+    assert (
+        "<USER_VIEWING>\nThe user is currently looking at PROGRESS.\n</USER_VIEWING>"
+        in prompt
+    )
     assert "User request:\nsummarize" in prompt
     assert "<RECENT_RUN_SUMMARY>\nrecent notes\n</RECENT_RUN_SUMMARY>" in prompt
     assert "TODO: .codex-autorunner/TODO.md" in prompt

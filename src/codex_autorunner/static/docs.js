@@ -3,7 +3,6 @@ import {
   flash,
   statusPill,
   confirmModal,
-  ingestModal,
   resolvePath,
   getAuthToken,
   isMobileViewport,
@@ -16,7 +15,6 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { initVoiceInput } from "./voice.js";
 import { renderTodoPreview } from "./todoPreview.js";
-import { saveToCache, loadFromCache, clearCache } from "./cache.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants & State
@@ -29,7 +27,6 @@ const PASTEABLE_DOCS = ["spec"];
 const CHAT_HISTORY_LIMIT = 8;
 const CHAT_EVENT_LIMIT = CONSTANTS.UI?.DOC_CHAT_EVENT_LIMIT || 12;
 const CHAT_EVENT_MAX = Math.max(60, CHAT_EVENT_LIMIT * 8);
-const CHAT_CACHE_KEY = "doc-chat-history";
 
 const docButtons = document.querySelectorAll(".chip[data-doc]");
 let docsCache = { todo: "", progress: "", opinions: "", spec: "", summary: "" };
@@ -64,7 +61,10 @@ let historyNavIndex = -1;
 
 const chatUI = {
   status: document.getElementById("doc-chat-status"),
-  stream: document.getElementById("doc-chat-stream"),
+  eventsMain: document.getElementById("doc-chat-events"),
+  eventsList: document.getElementById("doc-chat-events-list"),
+  eventsCount: document.getElementById("doc-chat-events-count"),
+  eventsToggle: document.getElementById("doc-chat-events-toggle"),
   patchMain: document.getElementById("doc-patch-main"),
   patchSummary: document.getElementById("doc-patch-summary"),
   patchMeta: document.getElementById("doc-patch-meta"),
@@ -73,6 +73,8 @@ const chatUI = {
   patchPreview: document.getElementById("doc-patch-preview"),
   patchDiscard: document.getElementById("doc-patch-discard"),
   patchReload: document.getElementById("doc-patch-reload"),
+  history: document.getElementById("doc-chat-history"),
+  historyCount: document.getElementById("doc-chat-history-count"),
   error: document.getElementById("doc-chat-error"),
   input: document.getElementById("doc-chat-input"),
   send: document.getElementById("doc-chat-send"),
@@ -109,6 +111,10 @@ const docActionsUI = {
 };
 
 const specIngestUI = {
+  panel: document.getElementById("spec-ingest-followup"),
+  input: document.getElementById("spec-ingest-input"),
+  continueBtn: document.getElementById("spec-ingest-continue"),
+  cancelBtn: document.getElementById("spec-ingest-cancel"),
   patchMain: document.getElementById("spec-ingest-patch-main"),
   patchSummary: document.getElementById("spec-ingest-patch-summary"),
   patchBody: document.getElementById("spec-ingest-patch-body"),
@@ -129,10 +135,8 @@ const threadRegistryUI = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function createChatState() {
-  // Load persisted history from cache
-  const cachedHistory = loadFromCache(CHAT_CACHE_KEY);
   return {
-    history: Array.isArray(cachedHistory) ? cachedHistory : [],
+    history: [],
     status: "idle",
     statusText: "",
     error: "",
@@ -150,19 +154,6 @@ function createChatState() {
 
 function getChatState() {
   return chatState;
-}
-
-function persistChatHistory() {
-  // Only persist completed entries (not running ones)
-  const toPersist = chatState.history
-    .filter((e) => e.status !== "running")
-    .slice(0, CHAT_HISTORY_LIMIT);
-  saveToCache(CHAT_CACHE_KEY, toPersist);
-}
-
-function clearChatHistory() {
-  chatState.history = [];
-  clearCache(CHAT_CACHE_KEY);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -369,11 +360,9 @@ function getDocFromUrl() {
   return DOC_TYPES.includes(kind) ? kind : null;
 }
 
-function getDocChatTargets() {
-  // Don't restrict targets by active tab - let the backend handle all docs.
-  // Restricting causes confusing errors when users mention docs by name
-  // but are viewing a different tab.
-  return [];
+function getDocChatViewing() {
+  if (!DOC_TYPES.includes(activeDoc)) return "";
+  return activeDoc;
 }
 
 /**
@@ -616,16 +605,19 @@ function updateDocVisibility() {
   if (!docContent) return;
   const specHasPatch =
     activeDoc === "spec" && !!(specIngestState.patch || "").trim();
-  const chatDraft = getDraft(activeDoc);
-  const chatHasPatch = !!(chatDraft && (chatDraft.patch || "").trim());
-  // Hide doc content when showing a diff
-  docContent.classList.toggle("hidden", specHasPatch || chatHasPatch);
+  docContent.classList.toggle("hidden", specHasPatch);
 }
 
 function renderSpecIngestPatch() {
   if (!specIngestUI.patchMain) return;
   const isSpec = activeDoc === "spec";
   const hasPatch = !!(specIngestState.patch || "").trim();
+  if (specIngestUI.continueBtn)
+    specIngestUI.continueBtn.disabled = specIngestState.busy;
+  if (specIngestUI.cancelBtn) {
+    specIngestUI.cancelBtn.disabled = !specIngestState.busy;
+    specIngestUI.cancelBtn.classList.toggle("hidden", !specIngestState.busy);
+  }
   specIngestUI.patchMain.classList.toggle("hidden", !isSpec || !hasPatch);
   if (!isSpec || !hasPatch) {
     updateDocVisibility();
@@ -894,228 +886,87 @@ function applyAppServerEvent(state, payload) {
   if (itemId) state.eventItemIndex[itemId] = state.events.length - 1;
 }
 
-// Constants for unified chat stream
-const THINKING_PREVIEW_MAX_LEN = 120;
-
-// Extract a compact thinking preview from events (like Telegram)
-function getThinkingPreview(events) {
-  // Find the latest thinking event
-  for (let i = events.length - 1; i >= 0; i--) {
-    const evt = events[i];
-    if (evt.kind === "thinking" && evt.summary) {
-      // Normalize and truncate
-      let text = evt.summary.replace(/\s+/g, " ").trim();
-      if (text.length > THINKING_PREVIEW_MAX_LEN) {
-        text = text.slice(0, THINKING_PREVIEW_MAX_LEN) + "…";
-      }
-      return text;
-    }
-  }
-  return null;
-}
-
-// Get notable tool calls from events (commands, file changes)
-function getToolCalls(events) {
-  const tools = [];
-  for (const evt of events) {
-    if (evt.kind === "command" || evt.kind === "file") {
-      tools.push({
-        type: evt.kind,
-        name: evt.summary || evt.title,
-        detail: evt.detail,
-      });
-    }
-  }
-  return tools;
-}
-
-// Capture tool calls from state.events into entry for persistence
-function captureToolCalls(state, entry) {
-  const tools = getToolCalls(state.events);
-  if (tools.length > 0) {
-    entry.toolCalls = tools;
-  }
-  // Clear events after capturing to prevent accumulation across turns
-  state.events = [];
-}
-
-// Render tool call pills for the current turn
-function renderToolCallPills(tools) {
-  if (!tools.length) return null;
-  const container = document.createElement("div");
-  container.className = "chat-tool-calls";
-  // Show up to 5 tool calls
-  const visibleTools = tools.slice(-5);
-  for (const tool of visibleTools) {
-    const pill = document.createElement("span");
-    pill.className = `chat-tool-pill ${tool.type}`;
-    pill.textContent = tool.type === "command" ? `$ ${tool.name}` : `📄 ${tool.name}`;
-    if (tool.detail) pill.title = tool.detail;
-    container.appendChild(pill);
-  }
-  if (tools.length > 5) {
-    const more = document.createElement("span");
-    more.className = "chat-tool-pill muted";
-    more.textContent = `+${tools.length - 5} more`;
-    container.appendChild(more);
-  }
-  return container;
-}
-
-// Unified chat stream renderer
-function renderChatStream(state) {
-  if (!chatUI.stream) return;
+function renderChatEvents(state) {
   if (activeDoc === "snapshot") return;
+  if (!chatUI.eventsMain || !chatUI.eventsList || !chatUI.eventsCount) return;
+  const hasEvents = state.events.length > 0;
+  const isRunning = state.status === "running";
+  const showEvents = hasEvents || isRunning;
+  chatUI.eventsMain.classList.toggle("hidden", !showEvents);
+  chatUI.eventsCount.textContent = state.events.length;
+  if (!showEvents) return;
 
-  chatUI.stream.innerHTML = "";
-  const count = state.history.length;
+  const limit = CHAT_EVENT_LIMIT;
+  const expanded = !!state.eventsExpanded;
+  const showCount = expanded
+    ? state.events.length
+    : Math.min(state.events.length, limit);
+  const visible = state.events.slice(-showCount);
 
-  if (count === 0) {
+  if (chatUI.eventsToggle) {
+    const hiddenCount = Math.max(0, state.events.length - showCount);
+    chatUI.eventsToggle.classList.toggle("hidden", hiddenCount === 0);
+    chatUI.eventsToggle.textContent = expanded
+      ? "Show recent"
+      : `Show more (${hiddenCount})`;
+  }
+
+  chatUI.eventsList.innerHTML = "";
+  if (state.eventError) {
+    const error = document.createElement("div");
+    error.className = "doc-chat-event error";
+    const title = document.createElement("div");
+    title.className = "doc-chat-event-title";
+    title.textContent = "Event stream error";
+    const summary = document.createElement("div");
+    summary.className = "doc-chat-event-summary";
+    summary.textContent = state.eventError;
+    error.appendChild(title);
+    error.appendChild(summary);
+    chatUI.eventsList.appendChild(error);
+  }
+  if (!hasEvents) {
     const empty = document.createElement("div");
-    empty.className = "chat-empty";
-    empty.textContent = "No messages yet. Start a conversation about the work docs.";
-    chatUI.stream.appendChild(empty);
+    empty.className = "doc-chat-events-empty";
+    empty.textContent = isRunning ? "Waiting for updates..." : "No updates yet.";
+    chatUI.eventsList.appendChild(empty);
     return;
   }
 
-  // Render messages - newest at top (already in reverse chronological order)
-  state.history.slice(0, CHAT_HISTORY_LIMIT).forEach((entry, idx) => {
-    const isLatest = idx === 0;
-    const isRunning = entry.status === "running";
-    const msg = document.createElement("div");
-    msg.className = `chat-message ${entry.status}`;
+  visible.forEach((entry) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = `doc-chat-event ${entry.kind || ""}`.trim();
 
-    // User prompt bubble - compact layout with inline timestamp
-    const userBubble = document.createElement("div");
-    userBubble.className = "chat-bubble user";
+    const title = document.createElement("div");
+    title.className = "doc-chat-event-title";
+    title.textContent = entry.title || entry.method || "Update";
 
-    // Header row with timestamp and edit button
-    const headerRow = document.createElement("div");
-    headerRow.className = "chat-header";
+    const summary = document.createElement("div");
+    summary.className = "doc-chat-event-summary";
+    summary.textContent = entry.summary || "(no details)";
 
-    const stamp = document.createElement("span");
-    stamp.className = "chat-time";
-    stamp.textContent = entry.time
+    wrapper.appendChild(title);
+    wrapper.appendChild(summary);
+
+    if (entry.detail) {
+      const detail = document.createElement("div");
+      detail.className = "doc-chat-event-detail";
+      detail.textContent = entry.detail;
+      wrapper.appendChild(detail);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "doc-chat-event-meta";
+    meta.textContent = entry.time
       ? new Date(entry.time).toLocaleTimeString([], {
           hour: "2-digit",
           minute: "2-digit",
         })
       : "";
-    headerRow.appendChild(stamp);
+    wrapper.appendChild(meta);
 
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "chat-copy-btn";
-    copyBtn.title = "Edit this prompt";
-    copyBtn.innerHTML = "✎";
-    copyBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      chatUI.input.value = entry.prompt;
-      autoResizeTextarea(chatUI.input);
-      chatUI.input.focus();
-      historyNavIndex = -1;
-      flash("Prompt restored to input");
-    });
-    headerRow.appendChild(copyBtn);
-
-    userBubble.appendChild(headerRow);
-
-    const promptText = document.createElement("div");
-    promptText.className = "chat-prompt";
-    promptText.textContent = entry.prompt || "(no prompt)";
-    userBubble.appendChild(promptText);
-
-    msg.appendChild(userBubble);
-
-    // Assistant response bubble
-    const assistantBubble = document.createElement("div");
-    assistantBubble.className = "chat-bubble assistant";
-
-    // For running entries, show thinking preview and tool calls
-    if (isRunning && isLatest) {
-      // Show thinking indicator with preview
-      const thinkingPreview = getThinkingPreview(state.events);
-      const toolCalls = getToolCalls(state.events);
-
-      if (thinkingPreview || toolCalls.length > 0 || state.statusText) {
-        // Thinking preview
-        if (thinkingPreview) {
-          const thinking = document.createElement("div");
-          thinking.className = "chat-thinking";
-          thinking.innerHTML = `<span class="thinking-indicator">⚡</span> ${escapeHtml(thinkingPreview)}`;
-          assistantBubble.appendChild(thinking);
-        } else if (state.statusText && state.statusText !== "queued") {
-          const status = document.createElement("div");
-          status.className = "chat-status-text";
-          status.innerHTML = `<span class="thinking-indicator">⚡</span> ${escapeHtml(state.statusText)}`;
-          assistantBubble.appendChild(status);
-        }
-
-        // Tool calls
-        if (toolCalls.length > 0) {
-          const toolsEl = renderToolCallPills(toolCalls);
-          if (toolsEl) assistantBubble.appendChild(toolsEl);
-        }
-
-        // Streaming response text if available
-        if (state.streamText || entry.response) {
-          const responseDiv = document.createElement("div");
-          responseDiv.className = "chat-response streaming";
-          responseDiv.textContent = state.streamText || entry.response;
-          assistantBubble.appendChild(responseDiv);
-        }
-      } else {
-        // Just show "Working..." if no preview available
-        const waiting = document.createElement("div");
-        waiting.className = "chat-waiting";
-        waiting.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span> Working...';
-        assistantBubble.appendChild(waiting);
-      }
-    } else {
-      // Completed entry - show compact action summary if available
-      if (entry.toolCalls && entry.toolCalls.length > 0) {
-        const toolsEl = renderToolCallPills(entry.toolCalls);
-        if (toolsEl) assistantBubble.appendChild(toolsEl);
-      }
-
-      // Show response
-      const responseDiv = document.createElement("div");
-      responseDiv.className = "chat-response";
-      
-      if (entry.error) {
-        responseDiv.className += " error";
-        responseDiv.textContent = entry.error;
-      } else if (entry.status === "interrupted") {
-        responseDiv.className += " interrupted";
-        responseDiv.textContent = entry.response || "Interrupted";
-      } else {
-        responseDiv.textContent = entry.response || "(no response)";
-      }
-      assistantBubble.appendChild(responseDiv);
-
-      // Show updated docs tags inline with response
-      if (entry.updated && entry.updated.length) {
-        const tagsDiv = document.createElement("div");
-        tagsDiv.className = "chat-tags";
-        entry.updated.forEach((doc) => {
-          const tag = document.createElement("span");
-          tag.className = "chat-tag";
-          tag.textContent = doc.toUpperCase();
-          tagsDiv.appendChild(tag);
-        });
-        assistantBubble.appendChild(tagsDiv);
-      }
-    }
-
-    msg.appendChild(assistantBubble);
-    chatUI.stream.appendChild(msg);
+    chatUI.eventsList.appendChild(wrapper);
   });
-}
-
-// Helper to escape HTML in thinking preview
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
 }
 
 function renderChat() {
@@ -1235,9 +1086,115 @@ function renderChat() {
   updateDocVisibility();
   updateDocControls(activeDoc);
 
-  renderChatStream(state);
+  renderChatEvents(state);
+  renderChatHistory(state);
 }
 
+function renderChatHistory(state) {
+  if (!chatUI.history) return;
+
+  const count = state.history.length;
+  chatUI.historyCount.textContent = count;
+
+  chatUI.history.innerHTML = "";
+  if (count === 0) {
+    const empty = document.createElement("div");
+    empty.className = "doc-chat-empty";
+    empty.textContent = "No messages yet.";
+    chatUI.history.appendChild(empty);
+    return;
+  }
+
+  state.history.slice(0, CHAT_HISTORY_LIMIT).forEach((entry) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = `doc-chat-entry ${entry.status}`;
+
+    const header = document.createElement("div");
+    header.className = "doc-chat-entry-header";
+
+    // Prompt row with copy button
+    const promptRow = document.createElement("div");
+    promptRow.className = "prompt-row";
+    const prompt = document.createElement("div");
+    prompt.className = "prompt";
+    prompt.textContent = entry.prompt || "(no prompt)";
+    prompt.title = entry.prompt;
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-prompt-btn";
+    copyBtn.title = "Copy to input";
+    copyBtn.innerHTML = "↑";
+    copyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      chatUI.input.value = entry.prompt;
+      autoResizeTextarea(chatUI.input);
+      chatUI.input.focus();
+      historyNavIndex = -1;
+      flash("Prompt restored to input");
+    });
+
+    promptRow.appendChild(prompt);
+    promptRow.appendChild(copyBtn);
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+
+    const dot = document.createElement("span");
+    dot.className = "status-dot";
+
+    const stamp = document.createElement("span");
+    stamp.textContent = entry.time
+      ? new Date(entry.time).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : entry.status;
+
+    meta.appendChild(dot);
+    meta.appendChild(stamp);
+
+    header.appendChild(promptRow);
+    header.appendChild(meta);
+
+    const response = document.createElement("div");
+    response.className = "doc-chat-entry-response";
+    const isLatest = entry === state.history[0];
+    const runningText =
+      (isLatest && state.streamText) ||
+      entry.response ||
+      (isLatest && state.statusText) ||
+      "queued";
+    const responseText =
+      entry.error ||
+      (entry.status === "running" ? runningText : entry.response || "(no response)");
+    response.textContent = responseText;
+    response.classList.toggle(
+      "streaming",
+      entry.status === "running" && !!(state.streamText || entry.response)
+    );
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(response);
+
+    const tags = [];
+    if (entry.viewing) {
+      tags.push(`Viewing: ${entry.viewing.toUpperCase()}`);
+    } else if (entry.targets && entry.targets.length) {
+      tags.push(`Targets: ${entry.targets.map((k) => k.toUpperCase()).join(", ")}`);
+    }
+    if (entry.updated && entry.updated.length) {
+      tags.push(`Drafts: ${entry.updated.map((k) => k.toUpperCase()).join(", ")}`);
+    }
+    if (tags.length) {
+      const tagLine = document.createElement("div");
+      tagLine.className = "doc-chat-entry-tags";
+      tagLine.textContent = tags.join(" · ");
+      wrapper.appendChild(tagLine);
+    }
+
+    chatUI.history.appendChild(wrapper);
+  });
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Chat Actions & Error Handling
@@ -1249,6 +1206,12 @@ function markChatError(state, entry, message) {
   state.error = message;
   state.status = "error";
   renderChat();
+}
+
+function restoreChatInput(entry) {
+  if (!entry?.prompt || chatUI.input.value) return;
+  chatUI.input.value = entry.prompt;
+  autoResizeTextarea(chatUI.input);
 }
 
 async function interruptDocChat() {
@@ -1288,7 +1251,7 @@ async function startNewDocChatThread() {
       method: "POST",
       body: { key: "doc_chat" },
     });
-    clearChatHistory();
+    state.history = [];
     state.status = "idle";
     state.statusText = "";
     state.error = "";
@@ -1311,14 +1274,19 @@ async function sendDocChat() {
     renderChat();
     return;
   }
-  if (state.status === "running") return;
+  if (state.status === "running") {
+    state.error = "Doc chat already running.";
+    renderChat();
+    flash("Doc chat already running", "error");
+    return;
+  }
 
   resetChatEvents(state);
-  const targets = getDocChatTargets();
+  const viewing = getDocChatViewing();
   const entry = {
     id: `${Date.now()}`,
     prompt: message,
-    targets,
+    viewing,
     response: "",
     status: "running",
     time: Date.now(),
@@ -1359,13 +1327,13 @@ async function sendDocChat() {
       state.status = "interrupted";
       resetChatEvents(state, { preserve: true });
     } else {
+      restoreChatInput(entry);
       markChatError(state, entry, err.message || "Doc chat failed");
       resetChatEvents(state, { preserve: true });
     }
   } finally {
     state.controller = null;
     if (state.status !== "running") {
-      persistChatHistory();
       renderChat();
     }
   }
@@ -1383,8 +1351,8 @@ async function performDocChatRequest(entry, state) {
     headers.Authorization = `Bearer ${token}`;
   }
   const payload = { message: entry.prompt, stream: true };
-  if (entry.targets && entry.targets.length) {
-    payload.targets = entry.targets;
+  if (entry.viewing) {
+    payload.context_doc = entry.viewing;
   }
   const res = await fetch(endpoint, {
     method: "POST",
@@ -1408,7 +1376,6 @@ async function performDocChatRequest(entry, state) {
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("text/event-stream")) {
     await readChatStream(res, state, entry);
-    captureToolCalls(state, entry);
     if (
       entry.status !== "error" &&
       entry.status !== "done" &&
@@ -1436,7 +1403,7 @@ async function startDocChatEventStream(payload) {
   state.eventTurnId = turnId;
   state.eventThreadId = threadId;
   state.eventController = new AbortController();
-  renderChatStream(state);
+  renderChatEvents(state);
 
   const endpoint = resolvePath(
     `/api/app-server/turns/${encodeURIComponent(turnId)}/events`
@@ -1463,7 +1430,7 @@ async function startDocChatEventStream(payload) {
   } catch (err) {
     if (err.name === "AbortError") return;
     state.eventError = err.message || "Failed to stream app-server events";
-    renderChatStream(state);
+    renderChatEvents(state);
   }
 }
 
@@ -1508,7 +1475,7 @@ async function handleAppServerStreamEvent(_event, rawData, state) {
       renderChat();
     }
   }
-  renderChatStream(state);
+  renderChatEvents(state);
 }
 
 async function toggleDraftPreview(kind = activeDoc) {
@@ -1613,7 +1580,7 @@ async function reloadPatch(kind = activeDoc, silent = false) {
         setDraftPreview(kind, false);
         syncDocEditor(kind, { force: true });
       }
-      if (!silent) flash("No pending draft", "error");
+      if (!silent) flash("No pending draft");
     } else if (!silent) {
       flash(message || "Failed to load pending draft", "error");
     }
@@ -1827,6 +1794,9 @@ function setDoc(kind) {
   if (specIssueUI.row) {
     specIssueUI.row.classList.toggle("hidden", kind !== "spec");
   }
+  if (specIngestUI.panel) {
+    specIngestUI.panel.classList.toggle("hidden", kind !== "spec");
+  }
   
   // Toggle action button sets - snapshot has its own, others share standard
   if (docActionsUI.standard) {
@@ -1942,7 +1912,6 @@ async function importIssueToSpec() {
   } finally {
     specIssueUI.button.disabled = false;
     specIssueUI.button.classList.remove("loading");
-    persistChatHistory();
     renderChat();
   }
 }
@@ -2175,6 +2144,23 @@ export function initDocs() {
   });
   document.getElementById("ingest-spec").addEventListener("click", ingestSpec);
   document.getElementById("clear-docs").addEventListener("click", clearDocs);
+  if (specIngestUI.continueBtn) {
+    specIngestUI.continueBtn.addEventListener("click", continueSpecIngest);
+  }
+  if (specIngestUI.cancelBtn) {
+    specIngestUI.cancelBtn.addEventListener("click", cancelSpecIngest);
+  }
+  if (specIngestUI.input) {
+    specIngestUI.input.addEventListener("input", () => {
+      autoResizeTextarea(specIngestUI.input);
+    });
+    specIngestUI.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        continueSpecIngest();
+      }
+    });
+  }
   if (specIngestUI.patchApply)
     specIngestUI.patchApply.addEventListener("click", applySpecIngestPatch);
   if (specIngestUI.patchDiscard)
@@ -2236,6 +2222,13 @@ export function initDocs() {
   }
   if (chatUI.newThread) {
     chatUI.newThread.addEventListener("click", startNewDocChatThread);
+  }
+  if (chatUI.eventsToggle) {
+    chatUI.eventsToggle.addEventListener("click", () => {
+      const state = getChatState();
+      state.eventsExpanded = !state.eventsExpanded;
+      renderChat();
+    });
   }
   if (chatUI.patchApply)
     chatUI.patchApply.addEventListener("click", () => applyPatch(activeDoc));
@@ -2412,21 +2405,12 @@ async function ingestSpec() {
   const needsForce = ["todo", "progress", "opinions"].some(
     (k) => (docsCache[k] || "").trim().length > 0
   );
-  
-  // Show ingest modal with optional refinement
-  const result = await ingestModal(
-    needsForce
-      ? "Overwrite TODO, PROGRESS, and OPINIONS from SPEC? Existing content will be replaced."
-      : "Ready to ingest SPEC into TODO, PROGRESS, and OPINIONS?",
-    {
-      showRefinement: true,
-      confirmText: "Ingest",
-      cancelText: "Cancel",
-    }
-  );
-  
-  if (!result.confirmed) return;
-  
+  if (needsForce) {
+    const ok = await confirmModal(
+      "Overwrite TODO, PROGRESS, and OPINIONS from SPEC? Existing content will be replaced."
+    );
+    if (!ok) return;
+  }
   const button = document.getElementById("ingest-spec");
   button.disabled = true;
   button.classList.add("loading");
@@ -2434,13 +2418,9 @@ async function ingestSpec() {
   specIngestState.controller = new AbortController();
   renderSpecIngestPatch();
   try {
-    const body = { force: needsForce };
-    if (result.message) {
-      body.message = result.message;
-    }
     const data = await api("/api/ingest-spec", {
       method: "POST",
-      body,
+      body: { force: needsForce },
       signal: specIngestState.controller.signal,
     });
     const parsed = parseSpecIngestPayload(data);
@@ -2473,6 +2453,76 @@ async function ingestSpec() {
   }
 }
 
+async function interruptSpecIngest() {
+  try {
+    await api("/api/ingest-spec/interrupt", { method: "POST" });
+  } catch (err) {
+    flash(err.message || "Failed to interrupt spec ingest", "error");
+  }
+}
+
+function cancelSpecIngest() {
+  if (!specIngestState.busy) return;
+  interruptSpecIngest();
+  if (specIngestState.controller) specIngestState.controller.abort();
+  specIngestState.busy = false;
+  specIngestState.controller = null;
+  if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
+  flash("Spec ingest interrupted");
+  renderSpecIngestPatch();
+}
+
+async function continueSpecIngest() {
+  if (specIngestState.busy) return;
+  if (!specIngestUI.input) return;
+  const message = (specIngestUI.input.value || "").trim();
+  if (!message) {
+    flash("Enter a follow-up prompt to continue", "error");
+    return;
+  }
+  const needsForce = ["todo", "progress", "opinions"].some(
+    (k) => (docsCache[k] || "").trim().length > 0
+  );
+  specIngestState.busy = true;
+  if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = true;
+  specIngestState.controller = new AbortController();
+  renderSpecIngestPatch();
+  try {
+    const data = await api("/api/ingest-spec", {
+      method: "POST",
+      body: { force: needsForce, message },
+      signal: specIngestState.controller.signal,
+    });
+    const parsed = parseSpecIngestPayload(data);
+    if (parsed.error) throw new Error(parsed.error);
+    if (parsed.interrupted) {
+      specIngestState.patch = "";
+      specIngestState.agentMessage = parsed.agentMessage || "";
+      applySpecIngestDocs(parsed);
+      renderSpecIngestPatch();
+      flash("Spec ingest interrupted");
+      return;
+    }
+    specIngestState.patch = parsed.patch || "";
+    specIngestState.agentMessage = parsed.agentMessage || "";
+    applySpecIngestDocs(parsed);
+    renderSpecIngestPatch();
+    specIngestUI.input.value = "";
+    autoResizeTextarea(specIngestUI.input);
+    flash(parsed.patch ? "Spec ingest patch updated" : "Spec ingest updated docs");
+  } catch (err) {
+    if (err.name === "AbortError") {
+      return;
+    } else {
+      flash(err.message, "error");
+    }
+  } finally {
+    specIngestState.busy = false;
+    if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
+    specIngestState.controller = null;
+    renderSpecIngestPatch();
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Spec Ingestion & Doc Clearing

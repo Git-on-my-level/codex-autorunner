@@ -64,6 +64,10 @@ class DocChatPayload(Payload):
     stream: bool = False
     targets: Optional[List[str]] = None
     target: Optional[str] = None
+    context_doc: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("context_doc", "contextDoc", "viewing"),
+    )
 
 
 class IngestSpecRequest(Payload):

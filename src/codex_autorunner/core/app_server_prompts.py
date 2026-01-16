@@ -28,7 +28,7 @@ Work docs (paths):
 - SPEC: {spec_path}
 - SUMMARY: {summary_path}
 
-{target_docs_block}
+{user_viewing_block}
 
 User request:
 {message}
@@ -170,7 +170,7 @@ def build_doc_chat_prompt(
     message: str,
     recent_summary: Optional[str],
     docs: dict[str, dict[str, str]],
-    targets: Optional[tuple[str, ...]] = None,
+    context_doc: Optional[str] = None,
 ) -> str:
     prompt_cfg: AppServerDocChatPromptConfig = config.app_server.prompts.doc_chat
     doc_paths = {
@@ -196,13 +196,15 @@ def build_doc_chat_prompt(
     recent_text = truncate_text(
         recent_summary or "", prompt_cfg.recent_summary_max_chars
     )
-    target_docs = ", ".join(targets or ())
+    user_viewing = ""
+    if context_doc:
+        user_viewing = f"The user is currently looking at {context_doc.upper()}."
 
     sections = {
         "message": message_text,
         "docs_context": docs_context,
         "recent_summary": recent_text,
-        "target_docs": target_docs,
+        "user_viewing": user_viewing,
     }
 
     def render() -> str:
@@ -213,7 +215,9 @@ def build_doc_chat_prompt(
             spec_path=doc_paths["spec"],
             summary_path=doc_paths["summary"],
             message=sections["message"],
-            target_docs_block=_optional_block("TARGET_DOCS", sections["target_docs"]),
+            user_viewing_block=_optional_block(
+                "USER_VIEWING", sections["user_viewing"]
+            ),
             docs_context_block=_optional_block("DOC_BASES", sections["docs_context"]),
             recent_summary_block=_optional_block(
                 "RECENT_RUN_SUMMARY", sections["recent_summary"]

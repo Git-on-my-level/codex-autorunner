@@ -37,7 +37,7 @@ def test_doc_chat_prompt_limits_and_instructions(repo: Path) -> None:
         message=message,
         recent_summary=recent,
         docs=docs,
-        targets=("todo",),
+        context_doc="todo",
     )
     assert len(prompt) <= limits.max_chars
     assert "edit the files directly" in prompt
