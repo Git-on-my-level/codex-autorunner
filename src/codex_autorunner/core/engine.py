@@ -275,7 +275,11 @@ class Engine:
         except Exception:
             todo_after = ""
         todo_delta = self._compute_todo_attribution(todo_before, todo_after)
-        run_updates: dict[str, Any] = {"todo": todo_delta}
+        todo_snapshot = self._build_todo_snapshot(todo_before, todo_after)
+        run_updates: dict[str, Any] = {
+            "todo": todo_delta,
+            "todo_snapshot": todo_snapshot,
+        }
         telemetry = self._snapshot_run_telemetry(run_id)
         if (
             telemetry
@@ -763,6 +767,28 @@ class Engine:
                 "completed": len(completed),
                 "added": len(added),
                 "reopened": len(reopened),
+            },
+        }
+
+    def _build_todo_snapshot(self, before_text: str, after_text: str) -> dict[str, Any]:
+        before_out, before_done = parse_todos(before_text or "")
+        after_out, after_done = parse_todos(after_text or "")
+        return {
+            "before": {
+                "outstanding": before_out,
+                "done": before_done,
+                "counts": {
+                    "outstanding": len(before_out),
+                    "done": len(before_done),
+                },
+            },
+            "after": {
+                "outstanding": after_out,
+                "done": after_done,
+                "counts": {
+                    "outstanding": len(after_out),
+                    "done": len(after_done),
+                },
             },
         }
 
