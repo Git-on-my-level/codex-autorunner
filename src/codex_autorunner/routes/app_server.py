@@ -9,7 +9,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from ..core.app_server_threads import normalize_feature_key
 from ..core.utils import is_within
+from ..integrations.app_server.client import CodexAppServerError
 from ..web.schemas import (
+    AppServerThreadArchiveRequest,
+    AppServerThreadArchiveResponse,
     AppServerThreadResetAllResponse,
     AppServerThreadResetRequest,
     AppServerThreadResetResponse,
@@ -41,6 +44,16 @@ def build_app_server_routes() -> APIRouter:
         registry = request.app.state.app_server_threads
         return registry.feature_map()
 
+    @router.get("/api/app-server/models")
+    async def app_server_models(request: Request):
+        engine = request.app.state.engine
+        supervisor = request.app.state.app_server_supervisor
+        try:
+            client = await supervisor.get_client(engine.repo_root)
+            return await client.model_list()
+        except CodexAppServerError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     @router.post(
         "/api/app-server/threads/reset", response_model=AppServerThreadResetResponse
     )
@@ -52,6 +65,25 @@ def build_app_server_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         cleared = registry.reset_thread(key)
         return {"status": "ok", "key": key, "cleared": cleared}
+
+    @router.post(
+        "/api/app-server/threads/archive",
+        response_model=AppServerThreadArchiveResponse,
+    )
+    async def archive_app_server_thread(
+        request: Request, payload: AppServerThreadArchiveRequest
+    ):
+        thread_id = payload.thread_id.strip()
+        if not thread_id:
+            raise HTTPException(status_code=400, detail="thread_id is required")
+        engine = request.app.state.engine
+        supervisor = request.app.state.app_server_supervisor
+        try:
+            client = await supervisor.get_client(engine.repo_root)
+            await client.thread_archive(thread_id)
+        except CodexAppServerError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"status": "ok", "thread_id": thread_id, "archived": True}
 
     @router.post(
         "/api/app-server/threads/reset-all",
@@ -76,5 +108,25 @@ def build_app_server_routes() -> APIRouter:
         if not path.exists():
             raise HTTPException(status_code=404, detail="Backup not found")
         return FileResponse(path, filename=path.name)
+
+    @router.get("/api/app-server/account")
+    async def app_server_account(request: Request):
+        engine = request.app.state.engine
+        supervisor = request.app.state.app_server_supervisor
+        try:
+            client = await supervisor.get_client(engine.repo_root)
+            return await client.account_read()
+        except CodexAppServerError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @router.get("/api/app-server/rate-limits")
+    async def app_server_rate_limits(request: Request):
+        engine = request.app.state.engine
+        supervisor = request.app.state.app_server_supervisor
+        try:
+            client = await supervisor.get_client(engine.repo_root)
+            return await client.rate_limits_read()
+        except CodexAppServerError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return router

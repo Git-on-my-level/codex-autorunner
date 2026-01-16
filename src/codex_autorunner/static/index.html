@@ -405,6 +405,50 @@
           </div>
         </section>
 
+        <section id="runs" class="panel">
+          <div class="inline-toolbar runs-toolbar">
+            <button id="runs-refresh" class="primary sm">Refresh</button>
+            <label>
+              Attribution
+              <select id="runs-attribution-mode">
+                <option value="split">Split (default)</option>
+                <option value="full">Full (upper bound)</option>
+              </select>
+            </label>
+            <label>
+              TODO filter
+              <input id="runs-todo-search" type="text" placeholder="Search TODOs" />
+            </label>
+          </div>
+          <div class="runs-layout">
+            <div class="runs-card">
+              <div class="runs-card-header">
+                <span class="label">Runs</span>
+              </div>
+              <table class="runs-table">
+                <thead>
+                  <tr>
+                    <th>Run</th>
+                    <th>Status</th>
+                    <th>Started</th>
+                    <th>Model</th>
+                    <th>Tokens</th>
+                    <th>Completed TODOs</th>
+                  </tr>
+                </thead>
+                <tbody id="runs-table-body"></tbody>
+              </table>
+            </div>
+            <div class="runs-card">
+              <div class="runs-card-header runs-card-header-inline">
+                <span class="label">Tokens per TODO</span>
+                <span id="runs-todo-summary" class="muted small">–</span>
+              </div>
+              <div id="runs-todo-list" class="runs-todo-list">No TODOs yet.</div>
+            </div>
+          </div>
+        </section>
+
         <section id="terminal" class="panel">
           <div class="inline-toolbar">
             <span id="terminal-status" class="muted">Disconnected</span>
@@ -668,9 +712,92 @@
             <button id="repo-update-btn" class="primary sm">Update CAR</button>
             <span class="form-hint">Pull latest code and restart selected services</span>
           </div>
+          <div class="form-group">
+            <label>Autorunner Settings</label>
+            <div class="settings-grid">
+              <div>
+                <label for="autorunner-model-select" class="muted small">Model</label>
+                <select id="autorunner-model-select"></select>
+              </div>
+              <div>
+                <label for="autorunner-effort-select" class="muted small">Reasoning effort</label>
+                <select id="autorunner-effort-select"></select>
+              </div>
+              <div>
+                <label for="autorunner-approval-select" class="muted small">Approval policy</label>
+                <select id="autorunner-approval-select"></select>
+              </div>
+              <div>
+                <label for="autorunner-sandbox-select" class="muted small">Sandbox</label>
+                <select id="autorunner-sandbox-select"></select>
+              </div>
+            </div>
+            <div id="autorunner-network-row" class="settings-toggle-row">
+              <label class="form-checkbox">
+                <input id="autorunner-network-toggle" type="checkbox" />
+                <span>Allow network access in workspace-write mode</span>
+              </label>
+            </div>
+            <div class="settings-actions">
+              <button id="autorunner-settings-save" class="primary sm">Save settings</button>
+              <button id="autorunner-settings-reload" class="ghost sm">Reload</button>
+            </div>
+            <span id="autorunner-settings-warning" class="form-hint warning">Changing these settings starts a new autorunner conversation.</span>
+          </div>
+          <div class="form-group">
+            <label>Thread Tools</label>
+            <div id="thread-tools-list" class="thread-tools-list"></div>
+            <div class="thread-tools-actions">
+              <button id="thread-new-autorunner" class="ghost sm">New autorunner thread</button>
+              <button id="thread-archive-autorunner" class="ghost sm">Archive autorunner thread</button>
+              <button id="thread-reset-all" class="danger sm">Reset all conversations</button>
+              <button id="thread-backup-download" class="ghost sm">Download backup</button>
+            </div>
+            <span class="form-hint">Resetting conversations clears stored thread IDs and restarts chats.</span>
+          </div>
         </div>
         <div class="modal-actions">
           <button id="repo-settings-close" class="ghost">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="run-details-modal" class="modal-overlay" hidden>
+      <div
+        class="modal-dialog run-details-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="run-details-title"
+        aria-describedby="run-details-meta"
+        tabindex="-1"
+      >
+        <div class="modal-header">
+          <span class="label" id="run-details-title">Run</span>
+        </div>
+        <div class="modal-body">
+          <div id="run-details-meta" class="muted small">–</div>
+          <div class="run-details-grid">
+            <div class="run-details-section">
+              <div class="run-details-title">Completed TODOs</div>
+              <div id="run-details-todos" class="run-details-list">–</div>
+            </div>
+            <div class="run-details-section">
+              <div class="run-details-title">Token breakdown</div>
+              <div id="run-details-tokens" class="run-details-list">–</div>
+            </div>
+          </div>
+          <div class="run-details-section">
+            <div class="run-details-title">Plan</div>
+            <pre id="run-details-plan" class="run-details-artifact">–</pre>
+          </div>
+          <div class="run-details-section">
+            <div class="run-details-title">Diff</div>
+            <pre id="run-details-diff" class="run-details-artifact">–</pre>
+          </div>
+        </div>
+        <div class="modal-actions run-details-actions">
+          <a id="run-details-log" class="ghost sm" target="_blank" rel="noreferrer">Open log</a>
+          <button id="run-details-close" class="ghost">Close</button>
         </div>
       </div>
     </div>

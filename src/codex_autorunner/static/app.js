@@ -5,10 +5,12 @@ import { initDashboard } from "./dashboard.js";
 import { initDocs } from "./docs.js";
 import { initLogs } from "./logs.js";
 import { initTerminal } from "./terminal.js";
+import { initRuns } from "./runs.js";
 import { loadState } from "./state.js";
 import { initGitHub } from "./github.js";
 import { initMobileCompact } from "./mobileCompact.js";
 import { subscribe } from "./bus.js";
+import { initRepoSettingsPanel } from "./settings.js";
 
 function initRepoShell() {
   // If this is a repo under a hub, show back button and repo name
@@ -34,6 +36,7 @@ function initRepoShell() {
 
   registerTab("dashboard", "Dashboard");
   registerTab("docs", "Docs");
+  registerTab("runs", "Runs");
   registerTab("logs", "Logs");
   registerTab("terminal", "Terminal");
 
@@ -44,6 +47,8 @@ function initRepoShell() {
       initDocs();
     } else if (tabId === "logs") {
       initLogs();
+    } else if (tabId === "runs") {
+      initRuns();
     }
     initializedTabs.add(tabId);
   };
@@ -69,6 +74,7 @@ function initRepoShell() {
     { once: true }
   );
   initDashboard();
+  initRepoSettingsPanel();
   initGitHub();
   initMobileCompact();
 
