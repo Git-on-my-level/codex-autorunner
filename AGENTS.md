@@ -35,7 +35,7 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 - Use the `gh` CLI for GitHub interactions whenever possible.
 
 ## Git commits
-- Use a longer timeout for `git commit` commands so pre-commit hooks can finish.
+- Use a 30 second (or longer) timeout for `git commit` commands so pre-commit hooks can finish.
 
 ## Releases
 - Release workflow details live in `docs/ops/release.md`.
