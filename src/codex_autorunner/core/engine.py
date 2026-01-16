@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import signal
-import subprocess
 import threading
 import time
 import traceback
@@ -26,6 +25,7 @@ from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
 from .config import ConfigError, HubConfig, RepoConfig, _is_loopback_host, load_config
 from .docs import DocsManager
+from .git_utils import GitError, run_git
 from .locks import (
     FileLock,
     FileLockBusy,
@@ -727,11 +727,34 @@ class Engine:
             self.config.doc_path("spec"),
             self.config.doc_path("summary"),
         ]
-        add_cmd = ["git", "add"] + [
-            str(p.relative_to(self.repo_root)) for p in paths if p.exists()
-        ]
-        subprocess.run(add_cmd, cwd=self.repo_root, check=False)
-        subprocess.run(["git", "commit", "-m", msg], cwd=self.repo_root, check=False)
+        add_paths = [str(p.relative_to(self.repo_root)) for p in paths if p.exists()]
+        if not add_paths:
+            return
+        try:
+            add_proc = run_git(["add", *add_paths], self.repo_root, check=False)
+            if add_proc.returncode != 0:
+                detail = (
+                    add_proc.stderr or add_proc.stdout or ""
+                ).strip() or f"exit {add_proc.returncode}"
+                self.log_line(run_id, f"git add failed: {detail}")
+                return
+        except GitError as exc:
+            self.log_line(run_id, f"git add failed: {exc}")
+            return
+        try:
+            commit_proc = run_git(
+                ["commit", "-m", msg],
+                self.repo_root,
+                check=False,
+                timeout_seconds=120,
+            )
+            if commit_proc.returncode != 0:
+                detail = (
+                    commit_proc.stderr or commit_proc.stdout or ""
+                ).strip() or f"exit {commit_proc.returncode}"
+                self.log_line(run_id, f"git commit failed: {detail}")
+        except GitError as exc:
+            self.log_line(run_id, f"git commit failed: {exc}")
 
     def _build_app_server_supervisor(
         self, env_builder: Any
@@ -1159,7 +1182,10 @@ def doctor(start_path: Path) -> DoctorReport:
         voice_enabled = bool(config.voice.get("enabled", True))
         if voice_enabled:
             missing_voice = missing_optional_dependencies(
-                (("httpx", "httpx"), ("multipart", "python-multipart"))
+                (
+                    ("httpx", "httpx"),
+                    (("multipart", "python_multipart"), "python-multipart"),
+                )
             )
             if missing_voice:
                 deps_list = ", ".join(missing_voice)

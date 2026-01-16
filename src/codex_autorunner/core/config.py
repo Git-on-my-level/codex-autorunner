@@ -932,7 +932,8 @@ def load_config(start: Path) -> Union[RepoConfig, HubConfig]:
         _validate_hub_config(merged)
         return _build_hub_config(config_path, merged)
     if mode == "repo":
-        _validate_repo_config(merged)
+        root = config_path.parent.parent.resolve()
+        _validate_repo_config(merged, root=root)
         return _build_repo_config(config_path, merged)
     raise ConfigError(f"Invalid mode '{mode}'; expected 'hub' or 'repo'")
 
@@ -1209,13 +1210,27 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
                     )
 
 
-def _validate_repo_config(cfg: Dict[str, Any]) -> None:
+def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_version(cfg)
     if cfg.get("mode") != "repo":
         raise ConfigError("Repo config must set mode: repo")
     docs = cfg.get("docs")
     if not isinstance(docs, dict):
         raise ConfigError("docs must be a mapping")
+    for key, value in docs.items():
+        if not isinstance(value, str) or not value:
+            raise ConfigError(f"docs.{key} must be a non-empty string path")
+        path = Path(value)
+        if path.is_absolute():
+            raise ConfigError(f"docs.{key} must be a relative path under repo root")
+        if ".." in path.parts:
+            raise ConfigError(f"docs.{key} must not contain '..' segments")
+        try:
+            (root / path).resolve().relative_to(root)
+        except ValueError as exc:
+            raise ConfigError(
+                f"docs.{key} must resolve under repo root ({root})"
+            ) from exc
     for key in ("todo", "progress", "opinions", "spec", "summary"):
         if not isinstance(docs.get(key), str) or not docs[key]:
             raise ConfigError(f"docs.{key} must be a non-empty string path")

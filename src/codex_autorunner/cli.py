@@ -3,6 +3,7 @@ import ipaddress
 import json
 import logging
 import os
+import shlex
 import subprocess
 from pathlib import Path
 from typing import NoReturn, Optional
@@ -14,6 +15,7 @@ import uvicorn
 from .bootstrap import seed_hub_files, seed_repo_files
 from .core.config import ConfigError, HubConfig, _normalize_base_path, load_config
 from .core.engine import Engine, LockError, clear_stale_lock, doctor
+from .core.git_utils import GitError, run_git
 from .core.hub import HubSupervisor
 from .core.logging_utils import log_event, setup_rotating_logger
 from .core.optional_dependencies import require_optional_dependencies
@@ -200,7 +202,15 @@ def init(
             git_required = False
         elif git_init:
             selected_mode = "repo"
-            subprocess.run(["git", "init"], cwd=target_root, check=False)
+            try:
+                proc = run_git(["init"], target_root, check=False)
+            except GitError as exc:
+                _raise_exit(f"git init failed: {exc}")
+            if proc.returncode != 0:
+                detail = (
+                    proc.stderr or proc.stdout or ""
+                ).strip() or f"exit {proc.returncode}"
+                _raise_exit(f"git init failed: {detail}")
         else:
             _raise_exit("No .git directory found; rerun with --git-init to create one")
 
@@ -590,9 +600,12 @@ def edit(
     if key not in ("todo", "progress", "opinions", "spec"):
         _raise_exit("Invalid target; choose todo, progress, opinions, or spec")
     path = config.doc_path(key)
-    editor = default_editor()
-    typer.echo(f"Opening {path} with {editor}")
-    subprocess.run([editor, str(path)])
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or default_editor()
+    editor_parts = shlex.split(editor)
+    if not editor_parts:
+        editor_parts = [editor]
+    typer.echo(f"Opening {path} with {' '.join(editor_parts)}")
+    subprocess.run([*editor_parts, str(path)])
 
 
 @app.command("ingest-spec")
