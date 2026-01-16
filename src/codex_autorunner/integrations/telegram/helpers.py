@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
+from ...core.git_utils import GitError, git_available, git_branch, git_is_clean, run_git
 from ...core.utils import (
     RepoNotFoundError,
     canonicalize_path,
@@ -1104,6 +1105,44 @@ def _repo_root(path: Path) -> Optional[Path]:
         return None
 
 
+def _git_operation(repo_root: Path) -> Optional[str]:
+    try:
+        proc = run_git(["rev-parse", "--absolute-git-dir"], repo_root, check=True)
+    except GitError:
+        return None
+    raw = (proc.stdout or "").strip()
+    if not raw:
+        return None
+    git_dir = Path(raw)
+    if not git_dir.exists():
+        return None
+    if (git_dir / "rebase-merge").exists() or (git_dir / "rebase-apply").exists():
+        return "rebase"
+    if (git_dir / "MERGE_HEAD").exists():
+        return "merge"
+    if (git_dir / "CHERRY_PICK_HEAD").exists():
+        return "cherry-pick"
+    if (git_dir / "REVERT_HEAD").exists():
+        return "revert"
+    if (git_dir / "BISECT_LOG").exists():
+        return "bisect"
+    return None
+
+
+def _format_git_status(workspace_path: Optional[str]) -> Optional[str]:
+    if not workspace_path:
+        return None
+    repo_root = _repo_root(Path(workspace_path))
+    if repo_root is None or not git_available(repo_root):
+        return "Git: (no repo)"
+    branch = git_branch(repo_root) or "detached"
+    state = "clean" if git_is_clean(repo_root) else "dirty"
+    operation = _git_operation(repo_root)
+    if operation:
+        return f"Git: {branch} {state} ({operation})"
+    return f"Git: {branch} {state}"
+
+
 def _paths_compatible(workspace_root: Path, resumed_root: Path) -> bool:
     if _path_within(workspace_root, resumed_root):
         return True
@@ -1761,6 +1800,9 @@ def _format_resume_summary(
     parts = [f"Resumed thread `{thread_id}`"]
     if workspace_path or model or effort:
         parts.append(f"Directory: {workspace_path or 'unbound'}")
+        git_status = _format_git_status(workspace_path)
+        if git_status:
+            parts.append(git_status)
         parts.append(f"Model: {model or 'default'}")
         parts.append(f"Effort: {effort or 'default'}")
     if user_preview:
