@@ -80,7 +80,7 @@ repo:
     # Close idle app-server handles after this many seconds; null/<=0 disables pruning.
     idle_ttl_seconds: 3600
     # Per-turn timeout for app-server runs (seconds); null/<=0 disables.
-    turn_timeout_seconds: 7200
+    turn_timeout_seconds: 28800
     # Per-request timeout (seconds); null/<=0 uses the client default.
     request_timeout: null
     # Prompt limits for app-server flows (doc chat, spec ingest, autorunner).
@@ -276,7 +276,7 @@ hub:
     # Close idle app-server handles after this many seconds; null/<=0 disables pruning.
     idle_ttl_seconds: 3600
     # Per-turn timeout for app-server runs (seconds); null/<=0 disables.
-    turn_timeout_seconds: 7200
+    turn_timeout_seconds: 28800
     # Per-request timeout (seconds); null/<=0 uses the client default.
     request_timeout: null
 

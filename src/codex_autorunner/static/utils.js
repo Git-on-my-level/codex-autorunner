@@ -10,6 +10,7 @@ const AUTH_TOKEN_KEY = "car_auth_token";
  * @property {string} [method]
  * @property {any} [body]
  * @property {Record<string, string>} [headers]
+ * @property {AbortSignal} [signal]
  */
 
 /**
@@ -698,4 +699,3 @@ export function ingestModal(message, options = {}) {
     }
   });
 }
-

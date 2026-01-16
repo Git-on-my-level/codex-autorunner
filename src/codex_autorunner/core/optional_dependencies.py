@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import importlib.util
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple, Union
 
 from .config import ConfigError
 
-OptionalDependency = Tuple[str, str]
+OptionalDependency = Tuple[Union[str, Sequence[str]], str]
 
 
 def missing_optional_dependencies(
     deps: Sequence[OptionalDependency],
 ) -> list[str]:
     missing: list[str] = []
-    for module_name, display_name in deps:
-        if importlib.util.find_spec(module_name) is None:
+    for module_names, display_name in deps:
+        candidates = (
+            [module_names] if isinstance(module_names, str) else list(module_names)
+        )
+        if not any(importlib.util.find_spec(name) is not None for name in candidates):
             missing.append(display_name)
     return missing
 

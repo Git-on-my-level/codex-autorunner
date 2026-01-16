@@ -1,12 +1,20 @@
+import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from codex_autorunner.bootstrap import write_repo_config
-from codex_autorunner.core.config import CONFIG_FILENAME, load_config
+from codex_autorunner.core.config import (
+    CONFIG_FILENAME,
+    DEFAULT_REPO_CONFIG,
+    ConfigError,
+    load_config,
+)
 
 
 def _write_yaml(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
@@ -55,3 +63,25 @@ def test_write_repo_config_includes_root_overrides(tmp_path: Path) -> None:
 
     assert config_path == repo_root / CONFIG_FILENAME
     assert data["server"]["port"] == 6000
+
+
+def test_repo_docs_reject_absolute_path(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
+    cfg["docs"]["todo"] = "/tmp/TODO.md"
+    _write_yaml(repo_root / CONFIG_FILENAME, cfg)
+
+    with pytest.raises(ConfigError):
+        load_config(repo_root)
+
+
+def test_repo_docs_reject_parent_segments(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
+    cfg["docs"]["summary"] = "../SUMMARY.md"
+    _write_yaml(repo_root / CONFIG_FILENAME, cfg)
+
+    with pytest.raises(ConfigError):
+        load_config(repo_root)

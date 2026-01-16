@@ -15,7 +15,9 @@
     "src/codex_autorunner/static/constants.js",
     "src/codex_autorunner/static/env.js",
     "src/codex_autorunner/static/bus.js",
-    "src/codex_autorunner/static/utils.js"
+    "src/codex_autorunner/static/utils.js",
+    "src/codex_autorunner/static/docs*.js",
+    "src/codex_autorunner/static/docChat*.js"
   ],
   "exclude": ["node_modules", ".venv", "build"]
 }

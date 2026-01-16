@@ -7,15 +7,20 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from .constants import (
+    PLACEHOLDER_TEXT,
     STREAM_PREVIEW_PREFIX,
     TELEGRAM_MAX_MESSAGE_LENGTH,
     THINKING_PREVIEW_MAX_LEN,
     THINKING_PREVIEW_MIN_EDIT_INTERVAL_SECONDS,
     TOKEN_USAGE_CACHE_LIMIT,
     TOKEN_USAGE_TURN_CACHE_LIMIT,
+    TURN_PROGRESS_MAX_LEN,
+    TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
+    TurnKey,
 )
 from .helpers import (
     _coerce_id,
+    _extract_command_text,
     _extract_files,
     _extract_first_bold_span,
     _extract_turn_thread_id,
@@ -156,6 +161,17 @@ class TelegramNotificationHandlers:
             if isinstance(method, str) and "outputDelta" in method:
                 await self._note_progress_output_delta(params)
                 return
+        progress = self._format_turn_progress(message, params)
+        if progress:
+            turn_id = self._extract_turn_id(message, params)
+            thread_id = _extract_turn_thread_id(params)
+            if turn_id:
+                await self._update_placeholder_progress(
+                    turn_id,
+                    progress,
+                    thread_id=thread_id,
+                )
+        return
 
     async def _update_placeholder_preview(
         self, turn_id: str, preview: str, *, thread_id: Optional[str] = None
@@ -179,10 +195,172 @@ class TelegramNotificationHandlers:
         self._turn_preview_text[turn_key] = normalized
         self._turn_preview_updated_at[turn_key] = now
         self._touch_cache_timestamp("turn_preview", turn_key)
-        if STREAM_PREVIEW_PREFIX:
-            message_text = f"{STREAM_PREVIEW_PREFIX} {normalized}"
-        else:
-            message_text = normalized
+        message_text = self._render_placeholder_message(turn_key)
+        if not message_text:
+            return
+        await self._edit_message_text(
+            ctx.chat_id,
+            ctx.placeholder_message_id,
+            message_text,
+        )
+
+    def _render_placeholder_message(self, turn_key: "TurnKey") -> Optional[str]:
+        progress = self._turn_progress_text.get(turn_key)
+        preview = self._turn_preview_text.get(turn_key)
+        lines = [PLACEHOLDER_TEXT]
+        if progress:
+            lines.append(progress)
+        if preview:
+            prefix = STREAM_PREVIEW_PREFIX.strip()
+            if prefix:
+                lines.append(f"{prefix} {preview}".strip())
+            else:
+                lines.append(f"Thinking: {preview}")
+        message_text = "\n".join(line for line in lines if line).strip()
+        if not message_text:
+            return None
+        if len(message_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            message_text = _truncate_text(message_text, TELEGRAM_MAX_MESSAGE_LENGTH)
+        return message_text
+
+    def _extract_turn_id(
+        self, message: dict[str, Any], params: dict[str, Any]
+    ) -> Optional[str]:
+        for key in ("turnId", "turn_id", "id"):
+            value = _coerce_id(params.get(key))
+            if value:
+                return value
+        for candidate in (params.get("turn"), params.get("item")):
+            if isinstance(candidate, dict):
+                for key in ("id", "turnId", "turn_id"):
+                    value = _coerce_id(candidate.get(key))
+                    if value:
+                        return value
+        for key in ("turnId", "turn_id", "id"):
+            value = _coerce_id(message.get(key))
+            if value:
+                return value
+        return None
+
+    def _format_turn_progress(
+        self, message: dict[str, Any], params: dict[str, Any]
+    ) -> Optional[str]:
+        method = message.get("method")
+        if not isinstance(method, str) or not method:
+            return None
+        method_lower = method.lower()
+        if "outputdelta" in method_lower:
+            return None
+        if method in (
+            "item/reasoning/summaryTextDelta",
+            "item/reasoning/summaryPartAdded",
+        ):
+            return None
+        item = params.get("item")
+        item = item if isinstance(item, dict) else {}
+        if method == "item/commandExecution/requestApproval":
+            command = _extract_command_text(item, params)
+            return f"Approval: {command}" if command else "Approval required"
+        if method == "item/fileChange/requestApproval":
+            files = _extract_files(params)
+            summary = self._format_file_list(files)
+            return f"Approval: {summary}" if summary else "Approval required"
+        if method == "item/completed":
+            item_type = item.get("type")
+            if item_type == "reasoning":
+                return None
+            if item_type == "commandExecution":
+                command = _extract_command_text(item, params)
+                exit_code = item.get("exitCode")
+                suffix = ""
+                if isinstance(exit_code, int) and exit_code != 0:
+                    suffix = f" (exit {exit_code})"
+                if command:
+                    return f"Command: {command}{suffix}"
+                return f"Command completed{suffix}"
+            if item_type == "fileChange":
+                files = _extract_files(item) or _extract_files(params)
+                summary = self._format_file_list(files)
+                return f"Files: {summary}" if summary else "Files updated"
+            if item_type == "tool":
+                tool = item.get("name") or item.get("tool") or item.get("id")
+                if isinstance(tool, str) and tool.strip():
+                    return f"Tool: {tool.strip()}"
+                return "Tool completed"
+            if item_type == "agentMessage":
+                text = item.get("text") or item.get("message")
+                if isinstance(text, str) and text.strip():
+                    normalized = " ".join(text.split())
+                    return f"Agent: {normalized}"
+                return "Agent message"
+            text = item.get("text") or item.get("message")
+            if isinstance(text, str) and text.strip():
+                normalized = " ".join(text.split())
+                return f"Update: {normalized}"
+            return f"{item_type} completed" if item_type else "Item completed"
+        if method == "turn/completed":
+            status = params.get("status")
+            if isinstance(status, str) and status.strip():
+                return f"Turn: {status.strip()}"
+            return "Turn completed"
+        if method == "error":
+            summary = self._format_error_summary(params)
+            return f"Error: {summary}" if summary else "Error"
+        return None
+
+    def _format_file_list(self, files: list[str], *, limit: int = 3) -> str:
+        cleaned = [
+            path.strip() for path in files if isinstance(path, str) and path.strip()
+        ]
+        if not cleaned:
+            return ""
+        if len(cleaned) <= limit:
+            return ", ".join(cleaned)
+        remaining = len(cleaned) - limit
+        return f"{', '.join(cleaned[:limit])} +{remaining} more"
+
+    def _format_error_summary(self, params: dict[str, Any]) -> str:
+        err = params.get("error") if isinstance(params, dict) else None
+        if isinstance(err, dict):
+            message = err.get("message")
+            details = err.get("additionalDetails") or err.get("details")
+            message_text = message.strip() if isinstance(message, str) else ""
+            details_text = details.strip() if isinstance(details, str) else ""
+            if message_text and details_text and message_text != details_text:
+                return f"{message_text} ({details_text})"
+            return message_text or details_text
+        if isinstance(err, str):
+            return err.strip()
+        raw_message = params.get("message") if isinstance(params, dict) else None
+        if isinstance(raw_message, str):
+            return raw_message.strip()
+        return ""
+
+    async def _update_placeholder_progress(
+        self, turn_id: str, text: str, *, thread_id: Optional[str] = None
+    ) -> None:
+        turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if turn_key is None:
+            return
+        ctx = self._turn_contexts.get(turn_key)
+        if ctx is None or ctx.placeholder_message_id is None:
+            return
+        normalized = " ".join(text.split()).strip()
+        if not normalized:
+            return
+        normalized = _truncate_text(normalized, TURN_PROGRESS_MAX_LEN)
+        if normalized == self._turn_progress_text.get(turn_key):
+            return
+        now = time.monotonic()
+        last_updated = self._turn_progress_updated_at.get(turn_key, 0.0)
+        if (now - last_updated) < TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS:
+            return
+        self._turn_progress_text[turn_key] = normalized
+        self._turn_progress_updated_at[turn_key] = now
+        self._touch_cache_timestamp("turn_progress", turn_key)
+        message_text = self._render_placeholder_message(turn_key)
+        if not message_text:
+            return
         await self._edit_message_text(
             ctx.chat_id,
             ctx.placeholder_message_id,
@@ -278,9 +456,7 @@ class TelegramNotificationHandlers:
         if tracker is None:
             return
         if method == "item/commandExecution/requestApproval":
-            summary = (
-                _extract_command_text(None, params) or "Command approval requested"
-            )
+            summary = _extract_command_text({}, params) or "Command approval requested"
         elif method == "item/fileChange/requestApproval":
             files = _extract_files(params)
             summary = ", ".join(files) if files else "File approval requested"
@@ -403,21 +579,6 @@ class TelegramNotificationHandlers:
             self._turn_progress_rendered[turn_key] = rendered
             self._turn_progress_updated_at[turn_key] = now
             self._touch_cache_timestamp("progress_trackers", turn_key)
-
-
-def _extract_command_text(
-    item: Optional[dict[str, Any]], params: dict[str, Any]
-) -> str:
-    command = None
-    if isinstance(item, dict):
-        command = item.get("command")
-    if command is None:
-        command = params.get("command")
-    if isinstance(command, list):
-        return " ".join(str(part) for part in command).strip()
-    if isinstance(command, str):
-        return command.strip()
-    return ""
 
 
 def _extract_error_message(params: dict[str, Any]) -> str:

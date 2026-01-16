@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import logging
 import time
 import uuid
@@ -257,7 +258,7 @@ class AuthTokenMiddleware:
                 scope
             )
 
-        if token != self.token:
+        if not token or not hmac.compare_digest(token, self.token):
             if scope.get("type") == "websocket":
                 return await self._reject_ws(scope, receive, send)
             return await self._reject_http(scope, receive, send)

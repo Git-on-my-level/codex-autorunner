@@ -261,7 +261,7 @@ def _build_app_context(
             feature="voice",
             deps=(
                 ("httpx", "httpx"),
-                ("multipart", "python-multipart"),
+                (("multipart", "python_multipart"), "python-multipart"),
             ),
             extra="voice",
         )
@@ -549,49 +549,57 @@ def _apply_hub_context(app: FastAPI, context: HubAppContext) -> None:
 def _app_lifespan(context: AppContext):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        tasks: list[asyncio.Task] = []
+
         async def _cleanup_loop():
-            while True:
-                await asyncio.sleep(600)  # Check every 10 mins
-                try:
-                    async with app.state.terminal_lock:
-                        prune_terminal_registry(
-                            app.state.engine.state_path,
-                            app.state.terminal_sessions,
-                            app.state.session_registry,
-                            app.state.repo_to_session,
-                            app.state.terminal_max_idle_seconds,
+            try:
+                while True:
+                    await asyncio.sleep(600)  # Check every 10 mins
+                    try:
+                        async with app.state.terminal_lock:
+                            prune_terminal_registry(
+                                app.state.engine.state_path,
+                                app.state.terminal_sessions,
+                                app.state.session_registry,
+                                app.state.repo_to_session,
+                                app.state.terminal_max_idle_seconds,
+                            )
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Terminal cleanup task failed",
+                            exc,
                         )
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.WARNING,
-                        "Terminal cleanup task failed",
-                        exc,
-                    )
+            except asyncio.CancelledError:
+                return
 
         async def _housekeeping_loop():
             config = app.state.config.housekeeping
             interval = max(config.interval_seconds, 1)
-            while True:
-                try:
-                    await asyncio.to_thread(
-                        run_housekeeping_once,
-                        config,
-                        app.state.engine.repo_root,
-                        logger=app.state.logger,
-                    )
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.WARNING,
-                        "Housekeeping task failed",
-                        exc,
-                    )
-                await asyncio.sleep(interval)
+            try:
+                while True:
+                    try:
+                        await asyncio.to_thread(
+                            run_housekeeping_once,
+                            config,
+                            app.state.engine.repo_root,
+                            logger=app.state.logger,
+                        )
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Housekeeping task failed",
+                            exc,
+                        )
+                    await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                return
 
-        asyncio.create_task(_cleanup_loop())
+        tasks.append(asyncio.create_task(_cleanup_loop()))
         if app.state.config.housekeeping.enabled:
-            asyncio.create_task(_housekeeping_loop())
+            tasks.append(asyncio.create_task(_housekeeping_loop()))
         app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
         app_server_prune_interval = getattr(
             app.state, "app_server_prune_interval", None
@@ -599,19 +607,22 @@ def _app_lifespan(context: AppContext):
         if app_server_supervisor is not None and app_server_prune_interval:
 
             async def _app_server_prune_loop():
-                while True:
-                    await asyncio.sleep(app_server_prune_interval)
-                    try:
-                        await app_server_supervisor.prune_idle()
-                    except Exception as exc:
-                        safe_log(
-                            app.state.logger,
-                            logging.WARNING,
-                            "App-server prune task failed",
-                            exc,
-                        )
+                try:
+                    while True:
+                        await asyncio.sleep(app_server_prune_interval)
+                        try:
+                            await app_server_supervisor.prune_idle()
+                        except Exception as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "App-server prune task failed",
+                                exc,
+                            )
+                except asyncio.CancelledError:
+                    return
 
-            asyncio.create_task(_app_server_prune_loop())
+            tasks.append(asyncio.create_task(_app_server_prune_loop()))
 
         if (
             context.tui_idle_seconds is not None
@@ -619,43 +630,54 @@ def _app_lifespan(context: AppContext):
         ):
 
             async def _tui_idle_loop():
-                while True:
-                    await asyncio.sleep(context.tui_idle_check_seconds)
-                    try:
-                        async with app.state.terminal_lock:
-                            terminal_sessions = app.state.terminal_sessions
-                            session_registry = app.state.session_registry
-                            for session_id, session in list(terminal_sessions.items()):
-                                if not session.pty.isalive():
-                                    continue
-                                if not session.should_notify_idle(
-                                    context.tui_idle_seconds
+                try:
+                    while True:
+                        await asyncio.sleep(context.tui_idle_check_seconds)
+                        try:
+                            async with app.state.terminal_lock:
+                                terminal_sessions = app.state.terminal_sessions
+                                session_registry = app.state.session_registry
+                                for session_id, session in list(
+                                    terminal_sessions.items()
                                 ):
-                                    continue
-                                record = session_registry.get(session_id)
-                                repo_path = record.repo_path if record else None
-                                notifier = getattr(app.state.engine, "notifier", None)
-                                if notifier:
-                                    asyncio.create_task(
-                                        notifier.notify_tui_idle_async(
-                                            session_id=session_id,
-                                            idle_seconds=context.tui_idle_seconds,
-                                            repo_path=repo_path,
-                                        )
+                                    if not session.pty.isalive():
+                                        continue
+                                    if not session.should_notify_idle(
+                                        context.tui_idle_seconds
+                                    ):
+                                        continue
+                                    record = session_registry.get(session_id)
+                                    repo_path = record.repo_path if record else None
+                                    notifier = getattr(
+                                        app.state.engine, "notifier", None
                                     )
-                    except Exception as exc:
-                        safe_log(
-                            app.state.logger,
-                            logging.WARNING,
-                            "TUI idle notification loop failed",
-                            exc,
-                        )
+                                    if notifier:
+                                        asyncio.create_task(
+                                            notifier.notify_tui_idle_async(
+                                                session_id=session_id,
+                                                idle_seconds=context.tui_idle_seconds,
+                                                repo_path=repo_path,
+                                            )
+                                        )
+                        except Exception as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "TUI idle notification loop failed",
+                                exc,
+                            )
+                except asyncio.CancelledError:
+                    return
 
-            asyncio.create_task(_tui_idle_loop())
+            tasks.append(asyncio.create_task(_tui_idle_loop()))
 
         try:
             yield
         finally:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             async with app.state.terminal_lock:
                 for session in app.state.terminal_sessions.values():
                     session.close()

@@ -32,3 +32,18 @@ def test_require_optional_dependencies_raises(monkeypatch) -> None:
             extra="voice",
         )
     assert "pip install codex-autorunner[voice]" in str(exc.value)
+
+
+def test_missing_optional_dependencies_accepts_alternatives(monkeypatch) -> None:
+    def fake_find_spec(name: str) -> object | None:
+        return object() if name == "alternate" else None
+
+    monkeypatch.setattr(
+        optional_dependencies.importlib.util,
+        "find_spec",
+        fake_find_spec,
+    )
+    missing = optional_dependencies.missing_optional_dependencies(
+        [(("missing", "alternate"), "Alt Dep")]
+    )
+    assert missing == []

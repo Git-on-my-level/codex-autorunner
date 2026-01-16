@@ -73,7 +73,16 @@ class TurnProgressTracker:
         )
         self.step += 1
         if len(self.actions) > 100:
+            overflow = len(self.actions) - 100
             self.actions = self.actions[-100:]
+            if self.last_output_index is not None:
+                self.last_output_index -= overflow
+                if self.last_output_index < 0:
+                    self.last_output_index = None
+            if self.last_thinking_index is not None:
+                self.last_thinking_index -= overflow
+                if self.last_thinking_index < 0:
+                    self.last_thinking_index = None
         if track_output:
             self.last_output_index = len(self.actions) - 1
         if track_thinking:

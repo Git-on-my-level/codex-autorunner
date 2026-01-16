@@ -106,7 +106,12 @@ def build_sessions_routes() -> APIRouter:
                 candidate = Path(normalized_repo_path)
                 if not candidate.is_absolute():
                     candidate = (repo_root / candidate).resolve()
-                normalized_repo_path = str(candidate)
+                try:
+                    candidate.relative_to(repo_root)
+                except ValueError:
+                    normalized_repo_path = ""
+                else:
+                    normalized_repo_path = str(candidate)
             session_id = repo_to_session.get(
                 normalized_repo_path
             ) or repo_to_session.get(repo_path)

@@ -37,3 +37,16 @@ def test_build_prompt_text_includes_prev_run_block() -> None:
     assert "PATH=TODO.md" in rendered
     assert "<PREV_RUN_OUTPUT>" in rendered
     assert "finished" in rendered
+
+
+def test_build_prompt_text_single_pass_replacement() -> None:
+    template = "TODO={{TODO}}\nSPEC={{SPEC}}"
+    rendered = build_prompt_text(
+        template=template,
+        docs={"todo": "Check {{SPEC}} details", "spec": "Spec contents"},
+        doc_paths={},
+        prev_run_output=None,
+    )
+
+    assert "Check {{SPEC}} details" in rendered
+    assert "SPEC=Spec contents" in rendered
