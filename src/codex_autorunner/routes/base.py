@@ -20,6 +20,7 @@ from ..web.pty_session import REPLAY_END, ActiveSession, PTYSession
 from ..web.schemas import StateResponse, VersionResponse
 from ..web.static_assets import index_response_headers, render_index_html
 from .shared import (
+    SSE_HEADERS,
     build_codex_terminal_cmd,
     log_stream,
     resolve_runner_status,
@@ -27,11 +28,6 @@ from .shared import (
 )
 
 ALT_SCREEN_ENTER = b"\x1b[?1049h"
-SSE_HEADERS = {
-    "Cache-Control": "no-cache",
-    "X-Accel-Buffering": "no",
-    "Connection": "keep-alive",
-}
 
 
 def build_base_routes(static_dir: Path) -> APIRouter:

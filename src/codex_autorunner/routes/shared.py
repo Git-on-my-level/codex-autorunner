@@ -17,6 +17,13 @@ BYPASS_FLAGS = {
     "--dangerously-bypass-approvals-and-sandbox",
 }
 
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+    "Content-Encoding": "identity",
+}
+
 
 def _extract_bypass_flag(args: list[str]) -> tuple[str, list[str]]:
     chosen = None

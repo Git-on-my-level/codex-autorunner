@@ -63,7 +63,10 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
             await handlers._handle_review_commit_callback(key, callback, parsed)
     elif isinstance(parsed, CancelCallback):
         if key:
-            await handlers._handle_selection_cancel(key, parsed, callback)
+            if parsed.kind == "interrupt":
+                await handlers._handle_interrupt_callback(callback)
+            else:
+                await handlers._handle_selection_cancel(key, parsed, callback)
     elif isinstance(parsed, CompactCallback):
         if key:
             await handlers._handle_compact_callback(key, callback, parsed)

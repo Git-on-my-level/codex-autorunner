@@ -45,6 +45,7 @@ from ..web.schemas import (
     SnapshotResponse,
     UsageSeriesResponse,
 )
+from .shared import SSE_HEADERS
 
 
 def build_docs_routes() -> APIRouter:
@@ -123,7 +124,9 @@ def build_docs_routes() -> APIRouter:
 
         if doc_req.stream:
             return StreamingResponse(
-                doc_chat.stream(doc_req), media_type="text/event-stream"
+                doc_chat.stream(doc_req),
+                media_type="text/event-stream",
+                headers=SSE_HEADERS,
             )
 
         try:

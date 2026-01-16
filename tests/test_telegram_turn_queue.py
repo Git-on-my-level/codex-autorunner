@@ -176,12 +176,14 @@ class _HandlerStub(TelegramCommandHandlers):
         thread_id: Optional[int],
         reply_to: Optional[int],
         text: str = PLACEHOLDER_TEXT,
+        reply_markup: Optional[dict[str, object]] = None,
     ) -> int:
         call = {
             "chat_id": chat_id,
             "thread_id": thread_id,
             "reply_to": reply_to,
             "text": text,
+            "reply_markup": reply_markup,
         }
         self._placeholder_calls.append(call)
         if reply_to is not None:
@@ -433,3 +435,41 @@ async def test_review_placeholder_sent_while_queued() -> None:
 
     placeholder_id = handler._placeholder_ids[2]
     assert (placeholder_id, PLACEHOLDER_TEXT) in handler._edit_calls
+
+
+@pytest.mark.anyio
+async def test_turn_cancel_releases_semaphore_on_race() -> None:
+    client = _ClientStub(turn_wait_events=[asyncio.Event()])
+    records = {"10:11": _record("thread-1")}
+    handler = _HandlerStub(
+        client=client,
+        max_parallel_turns=1,
+        records=records,
+    )
+    runtime = _RuntimeStub()
+    runtime.queued_turn_cancel = None
+    message = _message(message_id=1, thread_id=11)
+
+    await handler._turn_semaphore.acquire()
+    task = asyncio.create_task(
+        handler._await_turn_slot(
+            handler._turn_semaphore,
+            runtime,
+            message=message,
+            placeholder_id=101,
+            queued=True,
+        )
+    )
+    for _ in range(100):
+        if runtime.queued_turn_cancel is not None:
+            break
+        await asyncio.sleep(0)
+    assert runtime.queued_turn_cancel is not None
+
+    handler._turn_semaphore.release()
+    runtime.queued_turn_cancel.set()
+    result = await asyncio.wait_for(task, timeout=1.0)
+    assert result is False
+
+    await asyncio.wait_for(handler._turn_semaphore.acquire(), timeout=1.0)
+    handler._turn_semaphore.release()

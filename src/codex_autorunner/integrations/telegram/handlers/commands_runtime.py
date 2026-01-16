@@ -9,6 +9,7 @@ import re
 import secrets
 import shlex
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -701,6 +702,60 @@ class TelegramCommandHandlers:
             reply_to=message.message_id,
         )
 
+    def _interrupt_keyboard(self) -> dict[str, Any]:
+        return build_inline_keyboard(
+            [[InlineButton("Cancel", encode_cancel_callback("interrupt"))]]
+        )
+
+    async def _await_turn_slot(
+        self,
+        turn_semaphore: asyncio.Semaphore,
+        runtime: Any,
+        *,
+        message: TelegramMessage,
+        placeholder_id: Optional[int],
+        queued: bool,
+    ) -> bool:
+        cancel_event = asyncio.Event()
+        runtime.queued_turn_cancel = cancel_event
+        acquire_task = asyncio.create_task(turn_semaphore.acquire())
+        cancel_task: Optional[asyncio.Task[bool]] = None
+        try:
+            if acquire_task.done():
+                return True
+            cancel_task = asyncio.create_task(cancel_event.wait())
+            done, _ = await asyncio.wait(
+                {acquire_task, cancel_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancel_task in done and cancel_event.is_set():
+                if acquire_task.done():
+                    try:
+                        turn_semaphore.release()
+                    except ValueError:
+                        pass
+                if not acquire_task.done():
+                    acquire_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await acquire_task
+                if placeholder_id is not None:
+                    await self._edit_message_text(
+                        message.chat_id,
+                        placeholder_id,
+                        "Cancelled.",
+                    )
+                    await self._delete_message(message.chat_id, placeholder_id)
+                return False
+            if not acquire_task.done():
+                await acquire_task
+            return True
+        finally:
+            if cancel_task is not None and not cancel_task.done():
+                cancel_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await cancel_task
+            runtime.queued_turn_cancel = None
+
     async def _run_turn_and_collect_result(
         self,
         message: TelegramMessage,
@@ -951,9 +1006,25 @@ class TelegramCommandHandlers:
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                     text=placeholder_text,
+                    reply_markup=self._interrupt_keyboard(),
                 )
             queue_started_at = time.monotonic()
-            async with turn_semaphore:
+            acquired = await self._await_turn_slot(
+                turn_semaphore,
+                runtime,
+                message=message,
+                placeholder_id=placeholder_id,
+                queued=queued,
+            )
+            if not acquired:
+                runtime.interrupt_requested = False
+                return _TurnRunFailure(
+                    "Cancelled.",
+                    placeholder_id,
+                    transcript_message_id,
+                    transcript_text,
+                )
+            try:
                 queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
                 log_event(
                     self._logger,
@@ -1029,6 +1100,8 @@ class TelegramCommandHandlers:
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
+            finally:
+                turn_semaphore.release()
         except Exception as exc:
             if turn_handle is not None:
                 if turn_key is not None:
@@ -2282,18 +2355,51 @@ class TelegramCommandHandlers:
             )
 
     async def _handle_interrupt(self, message: TelegramMessage, runtime: Any) -> None:
+        await self._process_interrupt(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            runtime=runtime,
+            message_id=message.message_id,
+        )
+
+    async def _handle_interrupt_callback(self, callback: TelegramCallbackQuery) -> None:
+        if callback.chat_id is None or callback.message_id is None:
+            await self._answer_callback(callback, "Cancel unavailable")
+            return
+        runtime = self._router.runtime_for(
+            self._resolve_topic_key(callback.chat_id, callback.thread_id)
+        )
+        await self._answer_callback(callback, "Stopping...")
+        await self._process_interrupt(
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            reply_to=callback.message_id,
+            runtime=runtime,
+            message_id=callback.message_id,
+        )
+
+    async def _process_interrupt(
+        self,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+        runtime: Any,
+        message_id: Optional[int],
+    ) -> None:
         turn_id = runtime.current_turn_id
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = self._resolve_topic_key(chat_id, thread_id)
         if (
             turn_id
             and runtime.interrupt_requested
             and runtime.interrupt_turn_id == turn_id
         ):
             await self._send_message(
-                message.chat_id,
+                chat_id,
                 "Already stopping current turn.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
+                thread_id=thread_id,
+                reply_to=reply_to,
             )
             return
         pending_request_ids = [
@@ -2302,8 +2408,8 @@ class TelegramCommandHandlers:
             if (pending.topic_key == key)
             or (
                 pending.topic_key is None
-                and pending.chat_id == message.chat_id
-                and pending.thread_id == message.thread_id
+                and pending.chat_id == chat_id
+                and pending.thread_id == thread_id
             )
         ]
         for request_id in pending_request_ids:
@@ -2313,31 +2419,49 @@ class TelegramCommandHandlers:
             self._store.clear_pending_approval(request_id)
         if pending_request_ids:
             runtime.pending_request_id = None
+        queued_turn_cancelled = False
+        if (
+            runtime.queued_turn_cancel is not None
+            and not runtime.queued_turn_cancel.is_set()
+        ):
+            runtime.queued_turn_cancel.set()
+            queued_turn_cancelled = True
+        queued_cancelled = runtime.queue.cancel_pending()
         if not turn_id:
             pending_records = self._store.pending_approvals_for_key(key)
             if pending_records:
                 self._store.clear_pending_approvals_for_key(key)
                 runtime.pending_request_id = None
+            pending_count = len(pending_records) if pending_records else 0
+            pending_count += len(pending_request_ids)
+            if queued_turn_cancelled or queued_cancelled or pending_count:
+                parts = []
+                if queued_turn_cancelled:
+                    parts.append("Cancelled queued turn.")
+                if queued_cancelled:
+                    parts.append(f"Cancelled {queued_cancelled} queued job(s).")
+                if pending_count:
+                    parts.append(f"Cleared {pending_count} pending approval(s).")
                 await self._send_message(
-                    message.chat_id,
-                    f"Cleared {len(pending_records)} pending approval(s).",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
+                    chat_id,
+                    " ".join(parts),
+                    thread_id=thread_id,
+                    reply_to=reply_to,
                 )
                 return
             log_event(
                 self._logger,
                 logging.INFO,
                 "telegram.interrupt.none",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                message_id=message_id,
             )
             await self._send_message(
-                message.chat_id,
+                chat_id,
                 "No active turn to interrupt.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
+                thread_id=thread_id,
+                reply_to=reply_to,
             )
             return
         runtime.interrupt_requested = True
@@ -2345,36 +2469,38 @@ class TelegramCommandHandlers:
             self._logger,
             logging.INFO,
             "telegram.interrupt.requested",
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            message_id=message.message_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            message_id=message_id,
             turn_id=turn_id,
         )
         payload_text, parse_mode = self._prepare_outgoing_text(
             "Stopping current turn...",
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to,
         )
         response = await self._bot.send_message(
-            message.chat_id,
+            chat_id,
             payload_text,
-            message_thread_id=message.thread_id,
-            reply_to_message_id=message.message_id,
+            message_thread_id=thread_id,
+            reply_to_message_id=reply_to,
             parse_mode=parse_mode,
         )
-        message_id = response.get("message_id") if isinstance(response, dict) else None
+        response_message_id = (
+            response.get("message_id") if isinstance(response, dict) else None
+        )
         codex_thread_id = None
         if runtime.current_turn_key and runtime.current_turn_key[1] == turn_id:
             codex_thread_id = runtime.current_turn_key[0]
-        if isinstance(message_id, int):
-            runtime.interrupt_message_id = message_id
+        if isinstance(response_message_id, int):
+            runtime.interrupt_message_id = response_message_id
             runtime.interrupt_turn_id = turn_id
             self._spawn_task(
                 self._interrupt_timeout_check(
-                    self._resolve_topic_key(message.chat_id, message.thread_id),
+                    self._resolve_topic_key(chat_id, thread_id),
                     turn_id,
-                    message_id,
+                    response_message_id,
                 )
             )
         self._spawn_task(
@@ -2382,8 +2508,8 @@ class TelegramCommandHandlers:
                 turn_id=turn_id,
                 codex_thread_id=codex_thread_id,
                 runtime=runtime,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
+                chat_id=chat_id,
+                thread_id=thread_id,
             )
         )
 
@@ -3746,9 +3872,20 @@ class TelegramCommandHandlers:
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
                 text=placeholder_text,
+                reply_markup=self._interrupt_keyboard(),
             )
             queue_started_at = time.monotonic()
-            async with turn_semaphore:
+            acquired = await self._await_turn_slot(
+                turn_semaphore,
+                runtime,
+                message=message,
+                placeholder_id=placeholder_id,
+                queued=queued,
+            )
+            if not acquired:
+                runtime.interrupt_requested = False
+                return
+            try:
                 queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
                 log_event(
                     self._logger,
@@ -3810,6 +3947,8 @@ class TelegramCommandHandlers:
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
+            finally:
+                turn_semaphore.release()
         except Exception as exc:
             if turn_handle is not None:
                 if turn_key is not None:

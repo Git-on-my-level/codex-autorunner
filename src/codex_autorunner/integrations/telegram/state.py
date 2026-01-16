@@ -1078,6 +1078,33 @@ class TopicQueue:
     def pending(self) -> int:
         return self._queue.qsize()
 
+    def cancel_pending(self) -> int:
+        cancelled = 0
+        requeue_stop = False
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            try:
+                if item is _QUEUE_STOP:
+                    requeue_stop = True
+                    continue
+                work, future = cast(
+                    tuple[Callable[[], Awaitable[Any]], asyncio.Future[Any]], item
+                )
+                if not future.done():
+                    future.cancel()
+                    cancelled += 1
+            finally:
+                self._queue.task_done()
+        if requeue_stop:
+            try:
+                self._queue.put_nowait(_QUEUE_STOP)
+            except asyncio.QueueFull:
+                pass
+        return cancelled
+
     async def enqueue(self, work: Callable[[], Awaitable[T]]) -> T:
         if self._closed:
             raise RuntimeError("topic queue is closed")
@@ -1130,6 +1157,7 @@ class TopicRuntime:
     interrupt_requested: bool = False
     interrupt_message_id: Optional[int] = None
     interrupt_turn_id: Optional[str] = None
+    queued_turn_cancel: Optional[asyncio.Event] = None
 
 
 class TopicRouter:

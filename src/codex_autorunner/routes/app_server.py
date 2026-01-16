@@ -15,6 +15,7 @@ from ..web.schemas import (
     AppServerThreadResetResponse,
     AppServerThreadsResponse,
 )
+from .shared import SSE_HEADERS
 
 
 def build_app_server_routes() -> APIRouter:
@@ -32,6 +33,7 @@ def build_app_server_routes() -> APIRouter:
         return StreamingResponse(
             events.stream(thread_id, turn_id),
             media_type="text/event-stream",
+            headers=SSE_HEADERS,
         )
 
     @router.get("/api/app-server/threads", response_model=AppServerThreadsResponse)

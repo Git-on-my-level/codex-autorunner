@@ -140,6 +140,7 @@ class TelegramMessageTransport:
         thread_id: Optional[int],
         reply_to: Optional[int],
         text: str = PLACEHOLDER_TEXT,
+        reply_markup: Optional[dict[str, Any]] = None,
     ) -> Optional[int]:
         try:
             payload_text, parse_mode = self._prepare_outgoing_text(
@@ -154,6 +155,7 @@ class TelegramMessageTransport:
                 message_thread_id=thread_id,
                 reply_to_message_id=reply_to,
                 parse_mode=parse_mode,
+                reply_markup=reply_markup,
             )
         except Exception as exc:
             log_event(
