@@ -25,6 +25,8 @@ DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_IMAGE_PROMPT = "Describe the image."
+DEFAULT_MEDIA_BATCH_UPLOADS = True
+DEFAULT_MEDIA_BATCH_WINDOW_SECONDS = 1.0
 DEFAULT_SHELL_TIMEOUT_MS = 120_000
 DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
 
@@ -74,6 +76,8 @@ class TelegramBotMediaConfig:
     max_voice_bytes: int
     max_file_bytes: int
     image_prompt: str
+    batch_uploads: bool
+    batch_window_seconds: float
 
 
 @dataclass(frozen=True)
@@ -232,6 +236,14 @@ class TelegramBotConfig:
         ).strip()
         if not image_prompt:
             image_prompt = DEFAULT_MEDIA_IMAGE_PROMPT
+        media_batch_uploads = bool(
+            media_raw.get("batch_uploads", DEFAULT_MEDIA_BATCH_UPLOADS)
+        )
+        media_batch_window_seconds = float(
+            media_raw.get("batch_window_seconds", DEFAULT_MEDIA_BATCH_WINDOW_SECONDS)
+        )
+        if media_batch_window_seconds <= 0:
+            media_batch_window_seconds = DEFAULT_MEDIA_BATCH_WINDOW_SECONDS
         media = TelegramBotMediaConfig(
             enabled=media_enabled,
             images=media_images,
@@ -241,6 +253,8 @@ class TelegramBotConfig:
             max_voice_bytes=max_voice_bytes,
             max_file_bytes=max_file_bytes,
             image_prompt=image_prompt,
+            batch_uploads=media_batch_uploads,
+            batch_window_seconds=media_batch_window_seconds,
         )
 
         shell_raw_value = cfg.get("shell")

@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -18,6 +19,7 @@ from ..adapter import (
 from ..config import TelegramMediaCandidate
 
 COALESCE_WINDOW_SECONDS = 2.0
+MEDIA_BATCH_WINDOW_SECONDS = 1.0
 IMAGE_CONTENT_TYPES = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -28,6 +30,7 @@ IMAGE_CONTENT_TYPES = {
     "image/heif": ".heif",
 }
 IMAGE_EXTS = set(IMAGE_CONTENT_TYPES.values())
+MAX_BATCH_ITEMS = 10
 
 
 @dataclass
@@ -36,6 +39,15 @@ class _CoalescedBuffer:
     parts: list[str]
     topic_key: str
     task: Optional[asyncio.Task[None]] = None
+
+
+@dataclass
+class _MediaBatchBuffer:
+    topic_key: str
+    messages: list[TelegramMessage] = field(default_factory=list)
+    task: Optional[asyncio.Task[None]] = None
+    media_group_id: Optional[str] = None
+    created_at: float = 0.0
 
 
 def _message_text_candidate(message: TelegramMessage) -> tuple[str, str, Any]:
@@ -50,25 +62,39 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
     if message.is_edited:
         await handle_edited_message(handlers, message)
         return
+
     _raw_text, text_candidate, entities = _message_text_candidate(message)
     trimmed_text = text_candidate.strip()
     has_media = message_has_media(message)
     if not trimmed_text and not has_media:
         return
-    bypass = has_media
+
+    should_bypass = False
     if trimmed_text:
         if is_interrupt_alias(trimmed_text):
-            bypass = True
+            should_bypass = True
         elif trimmed_text.startswith("!") and not has_media:
-            bypass = True
+            should_bypass = True
         elif parse_command(
             text_candidate, entities=entities, bot_username=handlers._bot_username
         ):
-            bypass = True
-    if bypass:
+            should_bypass = True
+
+    if has_media and not should_bypass:
+        if message.voice:
+            should_bypass = True
+        elif handlers._config.media.batch_uploads and has_batchable_media(message):
+            if handlers._config.media.enabled:
+                await flush_coalesced_message(handlers, message)
+                await buffer_media_batch(handlers, message)
+                return
+            should_bypass = True
+
+    if should_bypass:
         await flush_coalesced_message(handlers, message)
         await handle_message_inner(handlers, message)
         return
+
     await buffer_coalesced_message(handlers, message, text_candidate)
 
 
@@ -388,6 +414,96 @@ def select_file_candidate(
             file_size=document.file_size,
         )
     return None
+
+
+def has_batchable_media(message: TelegramMessage) -> bool:
+    return bool(message.photos or message.document)
+
+
+def media_batch_key(handlers: Any, message: TelegramMessage) -> str:
+    topic_key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
+    user_id = message.from_user_id
+    if message.media_group_id:
+        return f"{topic_key}:user:{user_id}:mg:{message.media_group_id}"
+    return f"{topic_key}:user:{user_id}:burst"
+
+
+async def buffer_media_batch(handlers: Any, message: TelegramMessage) -> None:
+    if not has_batchable_media(message):
+        return
+    topic_key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
+    key = media_batch_key(handlers, message)
+    lock = handlers._media_batch_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        buffer = handlers._media_batch_buffers.get(key)
+        if buffer is not None and len(buffer.messages) >= MAX_BATCH_ITEMS:
+            if buffer.task and buffer.task is not asyncio.current_task():
+                buffer.task.cancel()
+            handlers._enqueue_topic_work(
+                buffer.topic_key,
+                lambda msgs=buffer.messages: handlers._handle_media_batch(msgs),
+            )
+            handlers._media_batch_buffers.pop(key, None)
+            buffer = None
+
+        if buffer is None:
+            buffer = _MediaBatchBuffer(
+                topic_key=topic_key,
+                messages=[message],
+                media_group_id=message.media_group_id,
+                created_at=time.monotonic(),
+            )
+            handlers._media_batch_buffers[key] = buffer
+        else:
+            buffer.messages.append(message)
+
+        handlers._touch_cache_timestamp("media_batch_buffers", key)
+        task = buffer.task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        window_seconds = handlers._config.media.batch_window_seconds
+        buffer.task = handlers._spawn_task(
+            flush_media_batch_after(handlers, key, window_seconds)
+        )
+
+
+async def flush_media_batch_after(
+    handlers: Any, key: str, window_seconds: float
+) -> None:
+    try:
+        await asyncio.sleep(window_seconds)
+    except asyncio.CancelledError:
+        return
+    try:
+        await flush_media_batch_key(handlers, key)
+    except Exception as exc:
+        log_event(
+            handlers._logger,
+            logging.WARNING,
+            "telegram.media_batch.flush_failed",
+            key=key,
+            exc=exc,
+        )
+
+
+async def flush_media_batch_key(handlers: Any, key: str) -> None:
+    lock = handlers._media_batch_locks.get(key)
+    if lock is None:
+        return
+    buffer = None
+    async with lock:
+        buffer = handlers._media_batch_buffers.pop(key, None)
+        if buffer is None:
+            return
+        task = buffer.task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        handlers._media_batch_locks.pop(key, None)
+    if buffer.messages:
+        handlers._enqueue_topic_work(
+            buffer.topic_key,
+            lambda: handlers._handle_media_batch(buffer.messages),
+        )
 
 
 async def handle_media_message(

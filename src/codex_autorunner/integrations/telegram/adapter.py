@@ -89,6 +89,7 @@ class TelegramMessage:
     document: Optional[TelegramDocument] = None
     audio: Optional[TelegramAudio] = None
     voice: Optional[TelegramVoice] = None
+    media_group_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -278,6 +279,9 @@ def _parse_message(
     document = _parse_document(payload.get("document"))
     audio = _parse_audio(payload.get("audio"))
     voice = _parse_voice(payload.get("voice"))
+    media_group_id = payload.get("media_group_id")
+    if media_group_id is not None and not isinstance(media_group_id, str):
+        media_group_id = None
     date = payload.get("date")
     if date is not None and not isinstance(date, int):
         date = None
@@ -299,6 +303,7 @@ def _parse_message(
         document=document,
         audio=audio,
         voice=voice,
+        media_group_id=media_group_id,
     )
 
 

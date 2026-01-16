@@ -59,7 +59,44 @@ def test_doc_chat_ui_stream_flow():
 
         const elements = new Map();
         const getEl = (id) => {{
-          if (!elements.has(id)) elements.set(id, new StubElement(id));
+          if (!elements.has(id)) {{
+            const el = new StubElement(id);
+            if (["doc-chat-events", "doc-chat-events-list", "doc-chat-events-count",
+                 "doc-chat-events-toggle", "doc-chat-history", "doc-chat-history-count",
+                 "doc-chat-input", "doc-chat-send", "doc-chat-cancel", "doc-chat-new-thread",
+                 "doc-chat-status", "doc-patch-body", "doc-patch-main", "doc-patch-summary",
+                 "doc-patch-meta", "doc-patch-apply", "doc-patch-preview", "doc-patch-discard",
+                 "doc-patch-reload", "doc-content", "doc-chat-hint", "doc-chat-voice",
+                 "doc-chat-voice-status"].includes(id)) {{
+              el.textContent = "";
+              el.value = "";
+              el.disabled = false;
+              el.innerHTML = "";
+              el.classList = {{
+                classes: new Set(),
+                add: (...cls) => cls.forEach((c) => el.classList.classes.add(c)),
+                remove: (...cls) => cls.forEach((c) => el.classList.classes.delete(c)),
+                toggle: (cls, force) => {{
+                  if (force === undefined) {{
+                    if (el.classList.classes.has(cls)) {{
+                      el.classList.classes.delete(cls);
+                      return false;
+                    }}
+                    el.classList.classes.add(cls);
+                    return true;
+                  }}
+                  if (force) {{
+                    el.classList.classes.add(cls);
+                  }} else {{
+                    el.classList.classes.delete(cls);
+                  }}
+                  return force;
+                }},
+                contains: (cls) => el.classList.classes.has(cls),
+              }};
+            }}
+            elements.set(id, el);
+          }}
           return elements.get(id);
         }};
 
@@ -170,8 +207,8 @@ def test_doc_chat_ui_stream_flow():
         assert.equal(state.streamText.trim(), "Done");
         assert.equal(textarea.value.trim(), "- [ ] streamed task");
         assert.equal(document.getElementById("doc-status").textContent, "Editing TODO");
-        const chatStream = document.getElementById("doc-chat-stream");
-        assert.ok(chatStream.children.length > 0);
+        const chatHistory = document.getElementById("doc-chat-history");
+        assert.ok(chatHistory.children.length > 0);
         assert.equal(state.history[0].response.trim(), "Done");
         """
     )

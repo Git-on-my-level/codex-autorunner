@@ -10,8 +10,11 @@ from codex_autorunner.integrations.telegram.adapter import (
 from codex_autorunner.integrations.telegram.handlers.commands import CommandSpec
 from codex_autorunner.integrations.telegram.handlers.messages import (
     _CoalescedBuffer,
+    _MediaBatchBuffer,
     build_coalesced_message,
     document_is_image,
+    has_batchable_media,
+    media_batch_key,
     message_has_media,
     select_file_candidate,
     select_image_candidate,
@@ -167,3 +170,62 @@ def test_should_not_bypass_topic_queue_without_allow_during_turn() -> None:
         entities=(TelegramMessageEntity("bot_command", 0, len("/new")),),
     )
     assert should_bypass_topic_queue(handlers, message) is False
+
+
+def test_has_batchable_media_with_photos() -> None:
+    message = _message(photos=(TelegramPhotoSize("p1", None, 10, 10, 100),))
+    assert has_batchable_media(message) is True
+
+
+def test_has_batchable_media_with_document_image() -> None:
+    message = _message(
+        document=TelegramDocument("d1", None, "photo.png", "image/png", 42)
+    )
+    assert has_batchable_media(message) is True
+
+
+def test_has_batchable_media_with_document_file() -> None:
+    message = _message(
+        document=TelegramDocument("d1", None, "report.txt", "text/plain", 42)
+    )
+    assert has_batchable_media(message) is True
+
+
+def test_has_batchable_media_without_media() -> None:
+    message = _message(text="hello")
+    assert has_batchable_media(message) is False
+
+
+def test_has_batchable_media_with_voice() -> None:
+    message = _message(voice=TelegramVoice("v1", None, 3, "audio/ogg", 100))
+    assert has_batchable_media(message) is False
+
+
+def test_media_batch_key_with_media_group() -> None:
+    handlers = types.SimpleNamespace(
+        _resolve_topic_key=lambda chat_id, thread_id: f"chat:{chat_id}:thread:{thread_id}",
+    )
+    message = _message(
+        media_group_id="mg123",
+        photos=(TelegramPhotoSize("p1", None, 10, 10, 100),),
+    )
+    key = media_batch_key(handlers, message)
+    assert key == "chat:3:thread:4:user:5:mg:mg123"
+
+
+def test_media_batch_key_without_media_group() -> None:
+    handlers = types.SimpleNamespace(
+        _resolve_topic_key=lambda chat_id, thread_id: f"chat:{chat_id}:thread:{thread_id}",
+    )
+    message = _message(
+        photos=(TelegramPhotoSize("p1", None, 10, 10, 100),),
+    )
+    key = media_batch_key(handlers, message)
+    assert key == "chat:3:thread:4:user:5:burst"
+
+
+def test_media_batch_buffer_defaults() -> None:
+    buffer = _MediaBatchBuffer(topic_key="k", messages=[])
+    assert buffer.task is None
+    assert buffer.media_group_id is None
+    assert buffer.created_at == 0.0

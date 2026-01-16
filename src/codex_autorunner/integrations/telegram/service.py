@@ -41,6 +41,7 @@ from .constants import (
     COALESCE_BUFFER_TTL_SECONDS,
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     DEFAULT_WORKSPACE_STATE_ROOT,
+    MEDIA_BATCH_BUFFER_TTL_SECONDS,
     MODEL_PENDING_TTL_SECONDS,
     OVERSIZE_WARNING_TTL_SECONDS,
     PENDING_APPROVAL_TTL_SECONDS,
@@ -164,6 +165,8 @@ class TelegramBotService(
         self._compact_pending: dict[str, CompactState] = {}
         self._coalesced_buffers: dict[str, _CoalescedBuffer] = {}
         self._coalesce_locks: dict[str, asyncio.Lock] = {}
+        self._media_batch_buffers: dict[str, message_handlers._MediaBatchBuffer] = {}
+        self._media_batch_locks: dict[str, asyncio.Lock] = {}
         self._outbox_inflight: set[str] = set()
         self._outbox_lock: Optional[asyncio.Lock] = None
         self._bot_username: Optional[str] = None
@@ -669,6 +672,9 @@ class TelegramBotService(
             elif cache_name == "coalesced_buffers":
                 self._coalesced_buffers.pop(key, None)
                 self._coalesce_locks.pop(key, None)
+            elif cache_name == "media_batch_buffers":
+                self._media_batch_buffers.pop(key, None)
+                self._media_batch_locks.pop(key, None)
             elif cache_name == "resume_options":
                 self._resume_options.pop(key, None)
             elif cache_name == "bind_options":
@@ -705,6 +711,9 @@ class TelegramBotService(
             )
             self._evict_expired_cache_entries(
                 "coalesced_buffers", COALESCE_BUFFER_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "media_batch_buffers", MEDIA_BATCH_BUFFER_TTL_SECONDS
             )
             self._evict_expired_cache_entries(
                 "resume_options", SELECTION_STATE_TTL_SECONDS

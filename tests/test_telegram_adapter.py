@@ -235,6 +235,35 @@ def test_parse_update_photo_caption() -> None:
     assert parsed.message.caption == "Check this"
     assert len(parsed.message.photos) == 2
     assert parsed.message.photos[0].file_id == "photo-small"
+    assert parsed.message.media_group_id is None
+
+
+def test_parse_update_media_group_id() -> None:
+    update = {
+        "update_id": 12,
+        "message": {
+            "message_id": 4,
+            "chat": {"id": 456},
+            "from": {"id": 999},
+            "photo": [
+                {
+                    "file_id": "photo-1",
+                    "file_unique_id": "unique-1",
+                    "width": 100,
+                    "height": 100,
+                }
+            ],
+            "caption": "First photo",
+            "media_group_id": "abc123",
+            "date": 1,
+            "is_topic_message": False,
+        },
+    }
+    parsed = parse_update(update)
+    assert parsed is not None
+    assert parsed.message is not None
+    assert parsed.message.media_group_id == "abc123"
+    assert len(parsed.message.photos) == 1
 
 
 def test_parse_update_edited_message() -> None:
