@@ -348,7 +348,6 @@ class TelegramBotConfig:
             metrics_mode = metrics_mode.lower()
         if metrics_mode not in METRICS_MODE_OPTIONS:
             metrics_mode = DEFAULT_METRICS_MODE
-
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
             command_reg_raw_value if isinstance(command_reg_raw_value, dict) else {}
