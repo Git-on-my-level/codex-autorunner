@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional
 
+from .utils import subprocess_env
+
 
 class GitError(Exception):
     """Raised when a git operation fails."""
@@ -41,6 +43,7 @@ def run_git(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=subprocess_env(),
         )
     except FileNotFoundError as exc:
         raise GitError("git binary not found", returncode=127) from exc
@@ -116,6 +119,7 @@ def git_ls_files(repo_root: Path) -> List[str]:
             ["git", "ls-files", "-z"],
             cwd=str(repo_root),
             capture_output=True,
+            env=subprocess_env(),
         )
     except FileNotFoundError:
         return []

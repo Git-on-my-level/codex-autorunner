@@ -185,6 +185,8 @@ class TelegramRuntimeHelpers:
     def _clear_thinking_preview(self, turn_key: TurnKey) -> None:
         self._turn_preview_text.pop(turn_key, None)
         self._turn_preview_updated_at.pop(turn_key, None)
+        self._turn_progress_text.pop(turn_key, None)
+        self._turn_progress_updated_at.pop(turn_key, None)
 
     def _build_debug_prefix(
         self,

@@ -221,6 +221,19 @@ class _HandlerStub(TelegramCommandHandlers):
         self._turn_preview_text.pop(turn_key, None)
         self._turn_preview_updated_at.pop(turn_key, None)
 
+    async def _start_turn_progress(
+        self,
+        _turn_key: tuple[str, str],
+        *,
+        ctx: object,
+        model: Optional[str],
+        label: str = "working",
+    ) -> None:
+        return None
+
+    def _clear_turn_progress(self, _turn_key: tuple[str, str]) -> None:
+        return None
+
     async def _send_message(self, *_args: object, **_kwargs: object) -> None:
         return None
 

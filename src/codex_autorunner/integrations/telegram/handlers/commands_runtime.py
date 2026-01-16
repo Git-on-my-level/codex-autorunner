@@ -1097,6 +1097,12 @@ class TelegramCommandHandlers:
                         transcript_message_id,
                         transcript_text,
                     )
+                await self._start_turn_progress(
+                    turn_key,
+                    ctx=ctx,
+                    model=record.model,
+                    label="working",
+                )
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
@@ -1163,6 +1169,7 @@ class TelegramCommandHandlers:
                 if turn_key is not None:
                     self._turn_contexts.pop(turn_key, None)
                     self._clear_thinking_preview(turn_key)
+                    self._clear_turn_progress(turn_key)
             runtime.current_turn_id = None
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
@@ -3949,6 +3956,12 @@ class TelegramCommandHandlers:
                     if placeholder_id is not None:
                         await self._delete_message(message.chat_id, placeholder_id)
                     return
+                await self._start_turn_progress(
+                    turn_key,
+                    ctx=ctx,
+                    model=record.model,
+                    label="working",
+                )
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
@@ -4002,6 +4015,7 @@ class TelegramCommandHandlers:
                 if turn_key is not None:
                     self._turn_contexts.pop(turn_key, None)
                     self._clear_thinking_preview(turn_key)
+                    self._clear_turn_progress(turn_key)
             runtime.current_turn_id = None
             runtime.current_turn_key = None
             runtime.interrupt_requested = False

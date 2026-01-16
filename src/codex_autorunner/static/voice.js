@@ -41,7 +41,7 @@ function supportsVoice() {
 }
 
 async function fetchVoiceConfig() {
-  const headers = {};
+  const headers = /** @type {Record<string, string>} */ ({});
   const token = getAuthToken();
   if (token) {
     headers.Authorization = `Bearer ${token}`;
@@ -77,6 +77,7 @@ function formatErrorMessage(err, fallback) {
 
 export async function initVoiceInput({
   button,
+  input: _input,
   statusEl,
   onTranscript,
   onError,
@@ -260,8 +261,9 @@ export async function initVoiceInput({
 
     // Set up audio level visualization
     try {
-      state.audioContext = new (window.AudioContext ||
-        window.webkitAudioContext)();
+      const AudioContextCtor =
+        window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
+      state.audioContext = new AudioContextCtor();
       const source = state.audioContext.createMediaStreamSource(stream);
       state.analyser = state.audioContext.createAnalyser();
       state.analyser.fftSize = 256;
@@ -425,7 +427,7 @@ export async function initVoiceInput({
     const ext = getExtensionForMime(blob.type);
     formData.append("file", blob, `voice.${ext}`);
     const url = resolvePath("/api/voice/transcribe");
-    const headers = {};
+    const headers = /** @type {Record<string, string>} */ ({});
     const token = getAuthToken();
     if (token) {
       headers.Authorization = `Bearer ${token}`;

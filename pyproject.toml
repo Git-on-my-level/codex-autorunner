@@ -67,6 +67,9 @@ codex_autorunner = ["static/*", "static/**/*"]
 [tool.typer]
 completions = true
 
+[tool.pytest.ini_options]
+cache_dir = ".codex-autorunner/pytest-cache"
+
 [tool.ruff]
 line-length = 88
 target-version = "py39"

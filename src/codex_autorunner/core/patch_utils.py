@@ -15,6 +15,8 @@ _APPLY_PATCH_UPDATE = "*** update file:"
 _APPLY_PATCH_ADD = "*** add file:"
 _APPLY_PATCH_DELETE = "*** delete file:"
 _PATCH_EMPTY_HUNK = "@@"
+_PATCH_TIMEOUT_SECONDS = 10
+_PATCH_STDOUT_LIMIT = 4000
 
 
 def _normalize_target_path(raw: str) -> str:
@@ -140,18 +142,35 @@ def infer_patch_strip(targets: Iterable[str]) -> int:
     return 0
 
 
+def _truncate_output(output: str) -> str:
+    if len(output) <= _PATCH_STDOUT_LIMIT:
+        return output
+    return f"{output[:_PATCH_STDOUT_LIMIT]}...(truncated)"
+
+
+def _run_patch(cmd: Sequence[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            list(cmd),
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=_PATCH_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise PatchError("patch command not found") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise PatchError("patch command timed out") from exc
+
+
 def apply_patch_file(repo_root: Path, patch_path: Path, targets: Sequence[str]) -> None:
     strip = infer_patch_strip(targets)
     cmd = ["patch", f"-p{strip}", "--batch", "--quiet", "-i", str(patch_path)]
-    proc = subprocess.run(
-        cmd,
-        cwd=str(repo_root),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    proc = _run_patch(cmd, cwd=repo_root)
     if proc.returncode != 0:
-        raise PatchError(proc.stdout.strip() or f"patch exited with {proc.returncode}")
+        detail = _truncate_output((proc.stdout or "").strip())
+        raise PatchError(detail or f"patch exited with {proc.returncode}")
 
 
 def preview_patch(
@@ -180,17 +199,10 @@ def preview_patch(
         patch_payload = patch_text if patch_text.endswith("\n") else patch_text + "\n"
         patch_file.write_text(patch_payload, encoding="utf-8")
         cmd = ["patch", f"-p{strip}", "--batch", "--quiet", "-i", str(patch_file)]
-        proc = subprocess.run(
-            cmd,
-            cwd=str(root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        proc = _run_patch(cmd, cwd=root)
         if proc.returncode != 0:
-            raise PatchError(
-                proc.stdout.strip() or f"patch exited with {proc.returncode}"
-            )
+            detail = _truncate_output((proc.stdout or "").strip())
+            raise PatchError(detail or f"patch exited with {proc.returncode}")
         results: dict[str, str] = {}
         for target in normalized_targets:
             dest = root / target

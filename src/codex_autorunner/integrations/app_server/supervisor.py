@@ -112,6 +112,7 @@ class WorkspaceAppServerSupervisor:
         async with self._lock:
             existing = self._handles.get(workspace_id)
             if existing is not None:
+                existing.last_used_at = time.monotonic()
                 return existing
             handles_to_close.extend(self._pop_idle_handles_locked())
             evicted = self._evict_lru_handle_locked()

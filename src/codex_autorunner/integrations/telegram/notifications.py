@@ -1,24 +1,33 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from .constants import (
+    PLACEHOLDER_TEXT,
     STREAM_PREVIEW_PREFIX,
     TELEGRAM_MAX_MESSAGE_LENGTH,
     THINKING_PREVIEW_MAX_LEN,
     THINKING_PREVIEW_MIN_EDIT_INTERVAL_SECONDS,
     TOKEN_USAGE_CACHE_LIMIT,
     TOKEN_USAGE_TURN_CACHE_LIMIT,
+    TURN_PROGRESS_MAX_LEN,
+    TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
+    TurnKey,
 )
 from .helpers import (
     _coerce_id,
+    _extract_command_text,
+    _extract_files,
     _extract_first_bold_span,
     _extract_turn_thread_id,
     _truncate_text,
+    is_interrupt_status,
 )
+from .progress_stream import TurnProgressTracker, render_progress_text
 
 
 class TelegramNotificationHandlers:
@@ -109,9 +118,14 @@ class TelegramNotificationHandlers:
             self._touch_cache_timestamp("reasoning_buffers", item_id)
             preview = _extract_first_bold_span(buffer)
             if preview:
-                await self._update_placeholder_preview(
-                    turn_id, preview, thread_id=thread_id
-                )
+                if self._config.progress_stream.enabled:
+                    await self._note_progress_thinking(
+                        turn_id, preview, thread_id=thread_id
+                    )
+                else:
+                    await self._update_placeholder_preview(
+                        turn_id, preview, thread_id=thread_id
+                    )
             return
         if method == "item/reasoning/summaryPartAdded":
             item_id = _coerce_id(params.get("itemId"))
@@ -124,12 +138,40 @@ class TelegramNotificationHandlers:
             return
         if method == "item/completed":
             item = params.get("item") if isinstance(params, dict) else None
-            if not isinstance(item, dict) or item.get("type") != "reasoning":
+            if isinstance(item, dict) and item.get("type") == "reasoning":
+                item_id = _coerce_id(item.get("id") or params.get("itemId"))
+                if item_id:
+                    self._reasoning_buffers.pop(item_id, None)
+            if self._config.progress_stream.enabled:
+                await self._note_progress_item_completed(params)
                 return
-            item_id = _coerce_id(item.get("id") or params.get("itemId"))
-            if item_id:
-                self._reasoning_buffers.pop(item_id, None)
-            return
+        if self._config.progress_stream.enabled:
+            if method in (
+                "item/commandExecution/requestApproval",
+                "item/fileChange/requestApproval",
+            ):
+                await self._note_progress_approval(method, params)
+                return
+            if method == "turn/completed":
+                await self._note_progress_turn_completed(params)
+                return
+            if method == "error":
+                await self._note_progress_error(params)
+                return
+            if isinstance(method, str) and "outputDelta" in method:
+                await self._note_progress_output_delta(params)
+                return
+        progress = self._format_turn_progress(message, params)
+        if progress:
+            turn_id = self._extract_turn_id(message, params)
+            thread_id = _extract_turn_thread_id(params)
+            if turn_id:
+                await self._update_placeholder_progress(
+                    turn_id,
+                    progress,
+                    thread_id=thread_id,
+                )
+        return
 
     async def _update_placeholder_preview(
         self, turn_id: str, preview: str, *, thread_id: Optional[str] = None
@@ -153,12 +195,389 @@ class TelegramNotificationHandlers:
         self._turn_preview_text[turn_key] = normalized
         self._turn_preview_updated_at[turn_key] = now
         self._touch_cache_timestamp("turn_preview", turn_key)
-        if STREAM_PREVIEW_PREFIX:
-            message_text = f"{STREAM_PREVIEW_PREFIX} {normalized}"
-        else:
-            message_text = normalized
+        message_text = self._render_placeholder_message(turn_key)
+        if not message_text:
+            return
         await self._edit_message_text(
             ctx.chat_id,
             ctx.placeholder_message_id,
             message_text,
         )
+
+    def _render_placeholder_message(self, turn_key: "TurnKey") -> Optional[str]:
+        progress = self._turn_progress_text.get(turn_key)
+        preview = self._turn_preview_text.get(turn_key)
+        lines = [PLACEHOLDER_TEXT]
+        if progress:
+            lines.append(progress)
+        if preview:
+            prefix = STREAM_PREVIEW_PREFIX.strip()
+            if prefix:
+                lines.append(f"{prefix} {preview}".strip())
+            else:
+                lines.append(f"Thinking: {preview}")
+        message_text = "\n".join(line for line in lines if line).strip()
+        if not message_text:
+            return None
+        if len(message_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            message_text = _truncate_text(message_text, TELEGRAM_MAX_MESSAGE_LENGTH)
+        return message_text
+
+    def _extract_turn_id(
+        self, message: dict[str, Any], params: dict[str, Any]
+    ) -> Optional[str]:
+        for key in ("turnId", "turn_id", "id"):
+            value = _coerce_id(params.get(key))
+            if value:
+                return value
+        for candidate in (params.get("turn"), params.get("item")):
+            if isinstance(candidate, dict):
+                for key in ("id", "turnId", "turn_id"):
+                    value = _coerce_id(candidate.get(key))
+                    if value:
+                        return value
+        for key in ("turnId", "turn_id", "id"):
+            value = _coerce_id(message.get(key))
+            if value:
+                return value
+        return None
+
+    def _format_turn_progress(
+        self, message: dict[str, Any], params: dict[str, Any]
+    ) -> Optional[str]:
+        method = message.get("method")
+        if not isinstance(method, str) or not method:
+            return None
+        method_lower = method.lower()
+        if "outputdelta" in method_lower:
+            return None
+        if method in (
+            "item/reasoning/summaryTextDelta",
+            "item/reasoning/summaryPartAdded",
+        ):
+            return None
+        item = params.get("item")
+        item = item if isinstance(item, dict) else {}
+        if method == "item/commandExecution/requestApproval":
+            command = _extract_command_text(item, params)
+            return f"Approval: {command}" if command else "Approval required"
+        if method == "item/fileChange/requestApproval":
+            files = _extract_files(params)
+            summary = self._format_file_list(files)
+            return f"Approval: {summary}" if summary else "Approval required"
+        if method == "item/completed":
+            item_type = item.get("type")
+            if item_type == "reasoning":
+                return None
+            if item_type == "commandExecution":
+                command = _extract_command_text(item, params)
+                exit_code = item.get("exitCode")
+                suffix = ""
+                if isinstance(exit_code, int) and exit_code != 0:
+                    suffix = f" (exit {exit_code})"
+                if command:
+                    return f"Command: {command}{suffix}"
+                return f"Command completed{suffix}"
+            if item_type == "fileChange":
+                files = _extract_files(item) or _extract_files(params)
+                summary = self._format_file_list(files)
+                return f"Files: {summary}" if summary else "Files updated"
+            if item_type == "tool":
+                tool = item.get("name") or item.get("tool") or item.get("id")
+                if isinstance(tool, str) and tool.strip():
+                    return f"Tool: {tool.strip()}"
+                return "Tool completed"
+            if item_type == "agentMessage":
+                text = item.get("text") or item.get("message")
+                if isinstance(text, str) and text.strip():
+                    normalized = " ".join(text.split())
+                    return f"Agent: {normalized}"
+                return "Agent message"
+            text = item.get("text") or item.get("message")
+            if isinstance(text, str) and text.strip():
+                normalized = " ".join(text.split())
+                return f"Update: {normalized}"
+            return f"{item_type} completed" if item_type else "Item completed"
+        if method == "turn/completed":
+            status = params.get("status")
+            if isinstance(status, str) and status.strip():
+                return f"Turn: {status.strip()}"
+            return "Turn completed"
+        if method == "error":
+            summary = self._format_error_summary(params)
+            return f"Error: {summary}" if summary else "Error"
+        return None
+
+    def _format_file_list(self, files: list[str], *, limit: int = 3) -> str:
+        cleaned = [
+            path.strip() for path in files if isinstance(path, str) and path.strip()
+        ]
+        if not cleaned:
+            return ""
+        if len(cleaned) <= limit:
+            return ", ".join(cleaned)
+        remaining = len(cleaned) - limit
+        return f"{', '.join(cleaned[:limit])} +{remaining} more"
+
+    def _format_error_summary(self, params: dict[str, Any]) -> str:
+        err = params.get("error") if isinstance(params, dict) else None
+        if isinstance(err, dict):
+            message = err.get("message")
+            details = err.get("additionalDetails") or err.get("details")
+            message_text = message.strip() if isinstance(message, str) else ""
+            details_text = details.strip() if isinstance(details, str) else ""
+            if message_text and details_text and message_text != details_text:
+                return f"{message_text} ({details_text})"
+            return message_text or details_text
+        if isinstance(err, str):
+            return err.strip()
+        raw_message = params.get("message") if isinstance(params, dict) else None
+        if isinstance(raw_message, str):
+            return raw_message.strip()
+        return ""
+
+    async def _update_placeholder_progress(
+        self, turn_id: str, text: str, *, thread_id: Optional[str] = None
+    ) -> None:
+        turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if turn_key is None:
+            return
+        ctx = self._turn_contexts.get(turn_key)
+        if ctx is None or ctx.placeholder_message_id is None:
+            return
+        normalized = " ".join(text.split()).strip()
+        if not normalized:
+            return
+        normalized = _truncate_text(normalized, TURN_PROGRESS_MAX_LEN)
+        if normalized == self._turn_progress_text.get(turn_key):
+            return
+        now = time.monotonic()
+        last_updated = self._turn_progress_updated_at.get(turn_key, 0.0)
+        if (now - last_updated) < TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS:
+            return
+        self._turn_progress_text[turn_key] = normalized
+        self._turn_progress_updated_at[turn_key] = now
+        self._touch_cache_timestamp("turn_progress", turn_key)
+        message_text = self._render_placeholder_message(turn_key)
+        if not message_text:
+            return
+        await self._edit_message_text(
+            ctx.chat_id,
+            ctx.placeholder_message_id,
+            message_text,
+        )
+
+    async def _start_turn_progress(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        ctx: Any,
+        model: Optional[str],
+        label: str = "working",
+    ) -> None:
+        if not self._config.progress_stream.enabled:
+            return
+        tracker = TurnProgressTracker(
+            started_at=time.monotonic(),
+            model=model or "default",
+            label=label,
+            max_actions=self._config.progress_stream.max_actions,
+            max_output_chars=self._config.progress_stream.max_output_chars,
+        )
+        self._turn_progress_trackers[turn_key] = tracker
+        self._turn_progress_rendered.pop(turn_key, None)
+        self._turn_progress_updated_at.pop(turn_key, None)
+        self._touch_cache_timestamp("progress_trackers", turn_key)
+        await self._emit_progress_edit(turn_key, ctx=ctx, force=True)
+
+    def _clear_turn_progress(self, turn_key: tuple[str, str]) -> None:
+        self._turn_progress_trackers.pop(turn_key, None)
+        self._turn_progress_rendered.pop(turn_key, None)
+        self._turn_progress_updated_at.pop(turn_key, None)
+        task = self._turn_progress_tasks.pop(turn_key, None)
+        if task and not task.done():
+            task.cancel()
+
+    async def _note_progress_thinking(
+        self, turn_id: str, preview: str, *, thread_id: Optional[str] = None
+    ) -> None:
+        turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if turn_key is None:
+            return
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return
+        tracker.note_thinking(preview)
+        await self._schedule_progress_edit(turn_key)
+
+    async def _note_progress_item_completed(self, params: dict[str, Any]) -> None:
+        item = params.get("item")
+        if not isinstance(item, dict):
+            return
+        turn_id = _coerce_id(params.get("turnId") or item.get("turnId"))
+        thread_id = _extract_turn_thread_id(params)
+        turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if turn_key is None:
+            return
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return
+        item_type = item.get("type")
+        if item_type == "reasoning":
+            return
+        if item_type == "commandExecution":
+            command = _extract_command_text(item, params)
+            if command:
+                tracker.note_command(command)
+        elif item_type == "fileChange":
+            files = _extract_files(item)
+            summary = ", ".join(files) if files else "Updated files"
+            tracker.note_file_change(summary)
+        elif item_type == "tool":
+            tool = item.get("name") or item.get("tool") or item.get("id") or "Tool call"
+            tracker.note_tool(str(tool))
+        elif item_type == "agentMessage":
+            text = item.get("text") or "Agent message"
+            tracker.add_action("agent", str(text), "done")
+        else:
+            text = item.get("text") or item.get("message") or "Item completed"
+            tracker.add_action("item", str(text), "done")
+        await self._schedule_progress_edit(turn_key)
+
+    async def _note_progress_approval(
+        self, method: str, params: dict[str, Any]
+    ) -> None:
+        turn_id = _coerce_id(params.get("turnId"))
+        thread_id = _extract_turn_thread_id(params)
+        turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if turn_key is None:
+            return
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return
+        if method == "item/commandExecution/requestApproval":
+            summary = (
+                _extract_command_text(params, params) or "Command approval requested"
+            )
+        elif method == "item/fileChange/requestApproval":
+            files = _extract_files(params)
+            summary = ", ".join(files) if files else "File approval requested"
+        else:
+            summary = "Approval requested"
+        tracker.note_approval(summary)
+        await self._schedule_progress_edit(turn_key)
+
+    async def _note_progress_output_delta(self, params: dict[str, Any]) -> None:
+        turn_id = _coerce_id(params.get("turnId"))
+        thread_id = _extract_turn_thread_id(params)
+        turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if turn_key is None:
+            return
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return
+        delta = params.get("delta") or params.get("text")
+        if not isinstance(delta, str):
+            return
+        tracker.note_output(delta)
+        await self._schedule_progress_edit(turn_key)
+
+    async def _note_progress_error(self, params: dict[str, Any]) -> None:
+        turn_id = _coerce_id(params.get("turnId"))
+        thread_id = _extract_turn_thread_id(params)
+        turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if turn_key is None:
+            return
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return
+        message = self._format_error_summary(params)
+        tracker.note_error(message or "App-server error")
+        await self._schedule_progress_edit(turn_key)
+
+    async def _note_progress_turn_completed(self, params: dict[str, Any]) -> None:
+        turn_id = _coerce_id(params.get("turnId"))
+        thread_id = _extract_turn_thread_id(params)
+        turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if turn_key is None:
+            return
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return
+        status = params.get("status")
+        if isinstance(status, str) and is_interrupt_status(status):
+            tracker.set_label("cancelled")
+        elif isinstance(status, str) and status and status != "completed":
+            tracker.set_label("failed")
+        else:
+            tracker.set_label("done")
+        tracker.finalized = True
+        await self._emit_progress_edit(turn_key, force=True)
+        self._clear_turn_progress(turn_key)
+
+    async def _schedule_progress_edit(self, turn_key: tuple[str, str]) -> None:
+        tracker = self._turn_progress_trackers.get(turn_key)
+        ctx = self._turn_contexts.get(turn_key)
+        if tracker is None or ctx is None or ctx.placeholder_message_id is None:
+            return
+        if tracker.finalized:
+            return
+        min_interval = self._config.progress_stream.min_edit_interval_seconds
+        now = time.monotonic()
+        last_updated = self._turn_progress_updated_at.get(turn_key, 0.0)
+        if (now - last_updated) >= min_interval:
+            await self._emit_progress_edit(turn_key, ctx=ctx, now=now)
+            return
+        if turn_key in self._turn_progress_tasks:
+            return
+        delay = max(min_interval - (now - last_updated), 0.0)
+        task = self._spawn_task(self._delayed_progress_edit(turn_key, delay))
+        self._turn_progress_tasks[turn_key] = task
+
+    async def _delayed_progress_edit(
+        self, turn_key: tuple[str, str], delay: float
+    ) -> None:
+        try:
+            await asyncio.sleep(delay)
+            await self._emit_progress_edit(turn_key)
+        finally:
+            self._turn_progress_tasks.pop(turn_key, None)
+
+    async def _emit_progress_edit(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        ctx: Optional[Any] = None,
+        now: Optional[float] = None,
+        force: bool = False,
+    ) -> None:
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return
+        if ctx is None:
+            ctx = self._turn_contexts.get(turn_key)
+        if ctx is None or ctx.placeholder_message_id is None:
+            return
+        if now is None:
+            now = time.monotonic()
+        rendered = render_progress_text(
+            tracker, max_length=TELEGRAM_MAX_MESSAGE_LENGTH, now=now
+        )
+        if not force and rendered == self._turn_progress_rendered.get(turn_key):
+            return
+        reply_markup = None
+        if tracker.label in {"working", "queued", "running"}:
+            try:
+                reply_markup = self._interrupt_keyboard()
+            except Exception:
+                reply_markup = None
+        ok = await self._edit_message_text(
+            ctx.chat_id,
+            ctx.placeholder_message_id,
+            rendered,
+            reply_markup=reply_markup,
+        )
+        if ok:
+            self._turn_progress_rendered[turn_key] = rendered
+            self._turn_progress_updated_at[turn_key] = now
+            self._touch_cache_timestamp("progress_trackers", turn_key)

@@ -1940,6 +1940,17 @@ def _format_approval_decision(decision: str) -> str:
     return f"Approval {decision}."
 
 
+def _extract_command_text(item: dict[str, Any], params: dict[str, Any]) -> str:
+    command = item.get("command") if isinstance(item, dict) else None
+    if command is None and isinstance(params, dict):
+        command = params.get("command")
+    if isinstance(command, list):
+        return " ".join(str(part) for part in command).strip()
+    if isinstance(command, str):
+        return command.strip()
+    return ""
+
+
 def _extract_files(params: dict[str, Any]) -> list[str]:
     files: list[str] = []
     for key in ("files", "fileChanges", "paths"):
