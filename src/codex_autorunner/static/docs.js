@@ -1148,14 +1148,19 @@ function renderChatHistory(state) {
 
     const response = document.createElement("div");
     response.className = "doc-chat-entry-response";
+    const isLatest = entry === state.history[0];
+    const runningText =
+      (isLatest && state.streamText) ||
+      entry.response ||
+      (isLatest && state.statusText) ||
+      "queued";
     const responseText =
       entry.error ||
-      entry.response ||
-      (entry.status === "running" ? "Waiting for response..." : "(no response)");
+      (entry.status === "running" ? runningText : entry.response || "(no response)");
     response.textContent = responseText;
     response.classList.toggle(
       "streaming",
-      entry.status === "running" && !!entry.response
+      entry.status === "running" && !!(state.streamText || entry.response)
     );
 
     wrapper.appendChild(header);
@@ -1609,6 +1614,9 @@ async function handleStreamEvent(event, rawData, state, entry) {
         : parsed.token || parsed.text || rawData || "";
     entry.response = (entry.response || "") + token;
     state.streamText = entry.response;
+    if (!state.statusText || state.statusText === "queued") {
+      state.statusText = "responding";
+    }
     renderChat();
     return;
   }
