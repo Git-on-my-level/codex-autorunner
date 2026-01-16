@@ -144,7 +144,7 @@ class TelegramNotificationHandlers:
                     self._reasoning_buffers.pop(item_id, None)
             if self._config.progress_stream.enabled:
                 await self._note_progress_item_completed(params)
-            return
+                return
         if self._config.progress_stream.enabled:
             if method in (
                 "item/commandExecution/requestApproval",
@@ -489,7 +489,7 @@ class TelegramNotificationHandlers:
         tracker = self._turn_progress_trackers.get(turn_key)
         if tracker is None:
             return
-        message = _extract_error_message(params)
+        message = self._format_error_summary(params)
         tracker.note_error(message or "App-server error")
         await self._schedule_progress_edit(turn_key)
 
@@ -579,22 +579,3 @@ class TelegramNotificationHandlers:
             self._turn_progress_rendered[turn_key] = rendered
             self._turn_progress_updated_at[turn_key] = now
             self._touch_cache_timestamp("progress_trackers", turn_key)
-
-
-def _extract_error_message(params: dict[str, Any]) -> str:
-    err = params.get("error")
-    if isinstance(err, dict):
-        message = err.get("message") if isinstance(err.get("message"), str) else ""
-        details = ""
-        if isinstance(err.get("additionalDetails"), str):
-            details = err["additionalDetails"]
-        elif isinstance(err.get("details"), str):
-            details = err["details"]
-        if message and details and message != details:
-            return f"{message} ({details})"
-        return message or details
-    if isinstance(err, str):
-        return err
-    if isinstance(params.get("message"), str):
-        return params["message"]
-    return ""

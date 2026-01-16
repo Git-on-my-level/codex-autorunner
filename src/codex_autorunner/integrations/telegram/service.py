@@ -156,12 +156,11 @@ class TelegramBotService(
         self._reasoning_buffers: dict[str, str] = {}
         self._turn_preview_text: dict[TurnKey, str] = {}
         self._turn_preview_updated_at: dict[TurnKey, float] = {}
-        self._turn_progress_trackers: dict[TurnKey, "TurnProgressTracker"] = {}
-        self._turn_progress_rendered: dict[TurnKey, str] = {}
-        self._turn_progress_updated_at: dict[TurnKey, float] = {}
-        self._turn_progress_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._turn_progress_text: dict[TurnKey, str] = {}
         self._turn_progress_updated_at: dict[TurnKey, float] = {}
+        self._turn_progress_trackers: dict[TurnKey, "TurnProgressTracker"] = {}
+        self._turn_progress_rendered: dict[TurnKey, str] = {}
+        self._turn_progress_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._resume_options: dict[str, SelectionState] = {}
@@ -676,6 +675,9 @@ class TelegramBotService(
             elif cache_name == "turn_preview":
                 self._turn_preview_text.pop(key, None)
                 self._turn_preview_updated_at.pop(key, None)
+            elif cache_name == "turn_progress":
+                self._turn_progress_text.pop(key, None)
+                self._turn_progress_updated_at.pop(key, None)
             elif cache_name == "progress_trackers":
                 self._turn_progress_trackers.pop(key, None)
                 self._turn_progress_rendered.pop(key, None)
@@ -683,9 +685,6 @@ class TelegramBotService(
                 task = self._turn_progress_tasks.pop(key, None)
                 if task and not task.done():
                     task.cancel()
-            elif cache_name == "turn_progress":
-                self._turn_progress_text.pop(key, None)
-                self._turn_progress_updated_at.pop(key, None)
             elif cache_name == "oversize_warnings":
                 self._oversize_warnings.discard(key)
             elif cache_name == "coalesced_buffers":
