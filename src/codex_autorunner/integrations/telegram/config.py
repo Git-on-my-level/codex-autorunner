@@ -335,7 +335,6 @@ class TelegramBotConfig:
             message_overflow = message_overflow.lower()
         if message_overflow not in MESSAGE_OVERFLOW_OPTIONS:
             message_overflow = DEFAULT_MESSAGE_OVERFLOW
-
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
             command_reg_raw_value if isinstance(command_reg_raw_value, dict) else {}
