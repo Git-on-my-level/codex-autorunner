@@ -91,15 +91,40 @@
   addStylesheet("static/styles.css");
   addStylesheet("static/vendor/xterm.css");
 
-  fetch("api/version", { cache: "no-store" })
-    .then((res) => (res.ok ? res.json() : null))
-    .then((data) => {
-      const assetVersion = data && data.asset_version;
-      if (assetVersion && assetVersion !== version) {
-        const next = new URL(window.location.href);
-        next.searchParams.set("v", assetVersion);
-        window.location.replace(next.toString());
-      }
-    })
-    .catch(() => {});
+  const isHubPage =
+    pathname === `${basePrefix || ""}/hub` ||
+    pathname.startsWith(`${basePrefix || ""}/hub/`);
+  const versionPath = repoId
+    ? `${window.__CAR_BASE_PATH || ""}/api/version`
+    : isHubPage
+    ? `${basePrefix || ""}/hub/version`
+    : `${basePrefix || ""}/api/version`;
+  const normalizedVersionPath = versionPath.startsWith("/")
+    ? versionPath
+    : `/${versionPath}`;
+
+  const checkVersion = () => {
+    fetch(normalizedVersionPath, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const assetVersion = data && data.asset_version;
+        if (assetVersion && assetVersion !== version) {
+          const next = new URL(window.location.href);
+          next.searchParams.set("v", assetVersion);
+          window.location.replace(next.toString());
+        }
+      })
+      .catch(() => {});
+  };
+
+  checkVersion();
+
+  // In development (localhost), poll for version changes to support hot reload of static assets.
+  if (
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1" ||
+    window.location.hostname.endsWith(".local")
+  ) {
+    setInterval(checkVersion, 2000);
+  }
 })();

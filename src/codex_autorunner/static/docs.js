@@ -3,6 +3,7 @@ import {
   flash,
   statusPill,
   confirmModal,
+  ingestModal,
   resolvePath,
   getAuthToken,
   isMobileViewport,
@@ -15,6 +16,7 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { initVoiceInput } from "./voice.js";
 import { renderTodoPreview } from "./todoPreview.js";
+import { saveToCache, loadFromCache, clearCache } from "./cache.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants & State
@@ -27,6 +29,7 @@ const PASTEABLE_DOCS = ["spec"];
 const CHAT_HISTORY_LIMIT = 8;
 const CHAT_EVENT_LIMIT = CONSTANTS.UI?.DOC_CHAT_EVENT_LIMIT || 12;
 const CHAT_EVENT_MAX = Math.max(60, CHAT_EVENT_LIMIT * 8);
+const CHAT_CACHE_KEY = "doc-chat-history";
 
 const docButtons = document.querySelectorAll(".chip[data-doc]");
 let docsCache = { todo: "", progress: "", opinions: "", spec: "", summary: "" };
@@ -61,12 +64,7 @@ let historyNavIndex = -1;
 
 const chatUI = {
   status: document.getElementById("doc-chat-status"),
-  response: document.getElementById("doc-chat-response"),
-  responseWrapper: document.getElementById("doc-chat-response-wrapper"),
-  eventsMain: document.getElementById("doc-chat-events"),
-  eventsList: document.getElementById("doc-chat-events-list"),
-  eventsCount: document.getElementById("doc-chat-events-count"),
-  eventsToggle: document.getElementById("doc-chat-events-toggle"),
+  stream: document.getElementById("doc-chat-stream"),
   patchMain: document.getElementById("doc-patch-main"),
   patchSummary: document.getElementById("doc-patch-summary"),
   patchMeta: document.getElementById("doc-patch-meta"),
@@ -75,13 +73,11 @@ const chatUI = {
   patchPreview: document.getElementById("doc-patch-preview"),
   patchDiscard: document.getElementById("doc-patch-discard"),
   patchReload: document.getElementById("doc-patch-reload"),
-  history: document.getElementById("doc-chat-history"),
-  historyDetails: document.getElementById("doc-chat-history-details"),
-  historyCount: document.getElementById("doc-chat-history-count"),
   error: document.getElementById("doc-chat-error"),
   input: document.getElementById("doc-chat-input"),
   send: document.getElementById("doc-chat-send"),
   cancel: document.getElementById("doc-chat-cancel"),
+  newThread: document.getElementById("doc-chat-new-thread"),
   voiceBtn: document.getElementById("doc-chat-voice"),
   voiceStatus: document.getElementById("doc-chat-voice-status"),
   hint: document.getElementById("doc-chat-hint"),
@@ -113,10 +109,6 @@ const docActionsUI = {
 };
 
 const specIngestUI = {
-  panel: document.getElementById("spec-ingest-followup"),
-  input: document.getElementById("spec-ingest-input"),
-  continueBtn: document.getElementById("spec-ingest-continue"),
-  cancelBtn: document.getElementById("spec-ingest-cancel"),
   patchMain: document.getElementById("spec-ingest-patch-main"),
   patchSummary: document.getElementById("spec-ingest-patch-summary"),
   patchBody: document.getElementById("spec-ingest-patch-body"),
@@ -137,8 +129,10 @@ const threadRegistryUI = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function createChatState() {
+  // Load persisted history from cache
+  const cachedHistory = loadFromCache(CHAT_CACHE_KEY);
   return {
-    history: [],
+    history: Array.isArray(cachedHistory) ? cachedHistory : [],
     status: "idle",
     statusText: "",
     error: "",
@@ -156,6 +150,19 @@ function createChatState() {
 
 function getChatState() {
   return chatState;
+}
+
+function persistChatHistory() {
+  // Only persist completed entries (not running ones)
+  const toPersist = chatState.history
+    .filter((e) => e.status !== "running")
+    .slice(0, CHAT_HISTORY_LIMIT);
+  saveToCache(CHAT_CACHE_KEY, toPersist);
+}
+
+function clearChatHistory() {
+  chatState.history = [];
+  clearCache(CHAT_CACHE_KEY);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -176,9 +183,10 @@ function parseChatPayload(payload) {
   }
   return {
     response:
+      payload.response ||
+      payload.message ||
       payload.agent_message ||
       payload.agentMessage ||
-      payload.message ||
       payload.content ||
       "",
     content: payload.content || "",
@@ -268,14 +276,6 @@ function normalizeDraftMap(raw) {
     if (normalized) drafts[kind] = normalized;
   });
   return drafts;
-}
-
-function truncateText(text, maxLen) {
-  if (!text) return "";
-  const normalized = text.replace(/\s+/g, " ").trim();
-  return normalized.length > maxLen
-    ? normalized.slice(0, maxLen) + "…"
-    : normalized;
 }
 
 function setDraft(kind, draft) {
@@ -370,8 +370,10 @@ function getDocFromUrl() {
 }
 
 function getDocChatTargets() {
-  if (!DOC_TYPES.includes(activeDoc)) return [];
-  return [activeDoc];
+  // Don't restrict targets by active tab - let the backend handle all docs.
+  // Restricting causes confusing errors when users mention docs by name
+  // but are viewing a different tab.
+  return [];
 }
 
 /**
@@ -614,19 +616,16 @@ function updateDocVisibility() {
   if (!docContent) return;
   const specHasPatch =
     activeDoc === "spec" && !!(specIngestState.patch || "").trim();
-  docContent.classList.toggle("hidden", specHasPatch);
+  const chatDraft = getDraft(activeDoc);
+  const chatHasPatch = !!(chatDraft && (chatDraft.patch || "").trim());
+  // Hide doc content when showing a diff
+  docContent.classList.toggle("hidden", specHasPatch || chatHasPatch);
 }
 
 function renderSpecIngestPatch() {
   if (!specIngestUI.patchMain) return;
   const isSpec = activeDoc === "spec";
   const hasPatch = !!(specIngestState.patch || "").trim();
-  if (specIngestUI.continueBtn)
-    specIngestUI.continueBtn.disabled = specIngestState.busy;
-  if (specIngestUI.cancelBtn) {
-    specIngestUI.cancelBtn.disabled = !specIngestState.busy;
-    specIngestUI.cancelBtn.classList.toggle("hidden", !specIngestState.busy);
-  }
   specIngestUI.patchMain.classList.toggle("hidden", !isSpec || !hasPatch);
   if (!isSpec || !hasPatch) {
     updateDocVisibility();
@@ -745,6 +744,19 @@ function extractErrorMessage(params) {
   }
   if (typeof err === "string") return err;
   if (typeof params.message === "string") return params.message;
+  return "";
+}
+
+function extractOutputDelta(payload) {
+  const message =
+    payload && typeof payload === "object" ? payload.message || payload : payload;
+  if (!message || typeof message !== "object") return "";
+  const method = String(message.method || "").toLowerCase();
+  if (!method.includes("outputdelta")) return "";
+  const params = message.params || {};
+  if (typeof params.delta === "string") return params.delta;
+  if (typeof params.text === "string") return params.text;
+  if (typeof params.output === "string") return params.output;
   return "";
 }
 
@@ -882,87 +894,228 @@ function applyAppServerEvent(state, payload) {
   if (itemId) state.eventItemIndex[itemId] = state.events.length - 1;
 }
 
-function renderChatEvents(state) {
+// Constants for unified chat stream
+const THINKING_PREVIEW_MAX_LEN = 120;
+
+// Extract a compact thinking preview from events (like Telegram)
+function getThinkingPreview(events) {
+  // Find the latest thinking event
+  for (let i = events.length - 1; i >= 0; i--) {
+    const evt = events[i];
+    if (evt.kind === "thinking" && evt.summary) {
+      // Normalize and truncate
+      let text = evt.summary.replace(/\s+/g, " ").trim();
+      if (text.length > THINKING_PREVIEW_MAX_LEN) {
+        text = text.slice(0, THINKING_PREVIEW_MAX_LEN) + "…";
+      }
+      return text;
+    }
+  }
+  return null;
+}
+
+// Get notable tool calls from events (commands, file changes)
+function getToolCalls(events) {
+  const tools = [];
+  for (const evt of events) {
+    if (evt.kind === "command" || evt.kind === "file") {
+      tools.push({
+        type: evt.kind,
+        name: evt.summary || evt.title,
+        detail: evt.detail,
+      });
+    }
+  }
+  return tools;
+}
+
+// Capture tool calls from state.events into entry for persistence
+function captureToolCalls(state, entry) {
+  const tools = getToolCalls(state.events);
+  if (tools.length > 0) {
+    entry.toolCalls = tools;
+  }
+  // Clear events after capturing to prevent accumulation across turns
+  state.events = [];
+}
+
+// Render tool call pills for the current turn
+function renderToolCallPills(tools) {
+  if (!tools.length) return null;
+  const container = document.createElement("div");
+  container.className = "chat-tool-calls";
+  // Show up to 5 tool calls
+  const visibleTools = tools.slice(-5);
+  for (const tool of visibleTools) {
+    const pill = document.createElement("span");
+    pill.className = `chat-tool-pill ${tool.type}`;
+    pill.textContent = tool.type === "command" ? `$ ${tool.name}` : `📄 ${tool.name}`;
+    if (tool.detail) pill.title = tool.detail;
+    container.appendChild(pill);
+  }
+  if (tools.length > 5) {
+    const more = document.createElement("span");
+    more.className = "chat-tool-pill muted";
+    more.textContent = `+${tools.length - 5} more`;
+    container.appendChild(more);
+  }
+  return container;
+}
+
+// Unified chat stream renderer
+function renderChatStream(state) {
+  if (!chatUI.stream) return;
   if (activeDoc === "snapshot") return;
-  if (!chatUI.eventsMain || !chatUI.eventsList || !chatUI.eventsCount) return;
-  const hasEvents = state.events.length > 0;
-  const isRunning = state.status === "running";
-  const showEvents = hasEvents || isRunning;
-  chatUI.eventsMain.classList.toggle("hidden", !showEvents);
-  chatUI.eventsCount.textContent = state.events.length;
-  if (!showEvents) return;
 
-  const limit = CHAT_EVENT_LIMIT;
-  const expanded = !!state.eventsExpanded;
-  const showCount = expanded
-    ? state.events.length
-    : Math.min(state.events.length, limit);
-  const visible = state.events.slice(-showCount);
+  chatUI.stream.innerHTML = "";
+  const count = state.history.length;
 
-  if (chatUI.eventsToggle) {
-    const hiddenCount = Math.max(0, state.events.length - showCount);
-    chatUI.eventsToggle.classList.toggle("hidden", hiddenCount === 0);
-    chatUI.eventsToggle.textContent = expanded
-      ? "Show recent"
-      : `Show more (${hiddenCount})`;
-  }
-
-  chatUI.eventsList.innerHTML = "";
-  if (state.eventError) {
-    const error = document.createElement("div");
-    error.className = "doc-chat-event error";
-    const title = document.createElement("div");
-    title.className = "doc-chat-event-title";
-    title.textContent = "Event stream error";
-    const summary = document.createElement("div");
-    summary.className = "doc-chat-event-summary";
-    summary.textContent = state.eventError;
-    error.appendChild(title);
-    error.appendChild(summary);
-    chatUI.eventsList.appendChild(error);
-  }
-  if (!hasEvents) {
+  if (count === 0) {
     const empty = document.createElement("div");
-    empty.className = "doc-chat-events-empty";
-    empty.textContent = isRunning ? "Waiting for updates..." : "No updates yet.";
-    chatUI.eventsList.appendChild(empty);
+    empty.className = "chat-empty";
+    empty.textContent = "No messages yet. Start a conversation about the work docs.";
+    chatUI.stream.appendChild(empty);
     return;
   }
 
-  visible.forEach((entry) => {
-    const wrapper = document.createElement("div");
-    wrapper.className = `doc-chat-event ${entry.kind || ""}`.trim();
+  // Render messages - newest at top (already in reverse chronological order)
+  state.history.slice(0, CHAT_HISTORY_LIMIT).forEach((entry, idx) => {
+    const isLatest = idx === 0;
+    const isRunning = entry.status === "running";
+    const msg = document.createElement("div");
+    msg.className = `chat-message ${entry.status}`;
 
-    const title = document.createElement("div");
-    title.className = "doc-chat-event-title";
-    title.textContent = entry.title || entry.method || "Update";
+    // User prompt bubble - compact layout with inline timestamp
+    const userBubble = document.createElement("div");
+    userBubble.className = "chat-bubble user";
 
-    const summary = document.createElement("div");
-    summary.className = "doc-chat-event-summary";
-    summary.textContent = entry.summary || "(no details)";
+    // Header row with timestamp and edit button
+    const headerRow = document.createElement("div");
+    headerRow.className = "chat-header";
 
-    wrapper.appendChild(title);
-    wrapper.appendChild(summary);
-
-    if (entry.detail) {
-      const detail = document.createElement("div");
-      detail.className = "doc-chat-event-detail";
-      detail.textContent = entry.detail;
-      wrapper.appendChild(detail);
-    }
-
-    const meta = document.createElement("div");
-    meta.className = "doc-chat-event-meta";
-    meta.textContent = entry.time
+    const stamp = document.createElement("span");
+    stamp.className = "chat-time";
+    stamp.textContent = entry.time
       ? new Date(entry.time).toLocaleTimeString([], {
           hour: "2-digit",
           minute: "2-digit",
         })
       : "";
-    wrapper.appendChild(meta);
+    headerRow.appendChild(stamp);
 
-    chatUI.eventsList.appendChild(wrapper);
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "chat-copy-btn";
+    copyBtn.title = "Edit this prompt";
+    copyBtn.innerHTML = "✎";
+    copyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      chatUI.input.value = entry.prompt;
+      autoResizeTextarea(chatUI.input);
+      chatUI.input.focus();
+      historyNavIndex = -1;
+      flash("Prompt restored to input");
+    });
+    headerRow.appendChild(copyBtn);
+
+    userBubble.appendChild(headerRow);
+
+    const promptText = document.createElement("div");
+    promptText.className = "chat-prompt";
+    promptText.textContent = entry.prompt || "(no prompt)";
+    userBubble.appendChild(promptText);
+
+    msg.appendChild(userBubble);
+
+    // Assistant response bubble
+    const assistantBubble = document.createElement("div");
+    assistantBubble.className = "chat-bubble assistant";
+
+    // For running entries, show thinking preview and tool calls
+    if (isRunning && isLatest) {
+      // Show thinking indicator with preview
+      const thinkingPreview = getThinkingPreview(state.events);
+      const toolCalls = getToolCalls(state.events);
+
+      if (thinkingPreview || toolCalls.length > 0 || state.statusText) {
+        // Thinking preview
+        if (thinkingPreview) {
+          const thinking = document.createElement("div");
+          thinking.className = "chat-thinking";
+          thinking.innerHTML = `<span class="thinking-indicator">⚡</span> ${escapeHtml(thinkingPreview)}`;
+          assistantBubble.appendChild(thinking);
+        } else if (state.statusText && state.statusText !== "queued") {
+          const status = document.createElement("div");
+          status.className = "chat-status-text";
+          status.innerHTML = `<span class="thinking-indicator">⚡</span> ${escapeHtml(state.statusText)}`;
+          assistantBubble.appendChild(status);
+        }
+
+        // Tool calls
+        if (toolCalls.length > 0) {
+          const toolsEl = renderToolCallPills(toolCalls);
+          if (toolsEl) assistantBubble.appendChild(toolsEl);
+        }
+
+        // Streaming response text if available
+        if (state.streamText || entry.response) {
+          const responseDiv = document.createElement("div");
+          responseDiv.className = "chat-response streaming";
+          responseDiv.textContent = state.streamText || entry.response;
+          assistantBubble.appendChild(responseDiv);
+        }
+      } else {
+        // Just show "Working..." if no preview available
+        const waiting = document.createElement("div");
+        waiting.className = "chat-waiting";
+        waiting.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span> Working...';
+        assistantBubble.appendChild(waiting);
+      }
+    } else {
+      // Completed entry - show compact action summary if available
+      if (entry.toolCalls && entry.toolCalls.length > 0) {
+        const toolsEl = renderToolCallPills(entry.toolCalls);
+        if (toolsEl) assistantBubble.appendChild(toolsEl);
+      }
+
+      // Show response
+      const responseDiv = document.createElement("div");
+      responseDiv.className = "chat-response";
+      
+      if (entry.error) {
+        responseDiv.className += " error";
+        responseDiv.textContent = entry.error;
+      } else if (entry.status === "interrupted") {
+        responseDiv.className += " interrupted";
+        responseDiv.textContent = entry.response || "Interrupted";
+      } else {
+        responseDiv.textContent = entry.response || "(no response)";
+      }
+      assistantBubble.appendChild(responseDiv);
+
+      // Show updated docs tags inline with response
+      if (entry.updated && entry.updated.length) {
+        const tagsDiv = document.createElement("div");
+        tagsDiv.className = "chat-tags";
+        entry.updated.forEach((doc) => {
+          const tag = document.createElement("span");
+          tag.className = "chat-tag";
+          tag.textContent = doc.toUpperCase();
+          tagsDiv.appendChild(tag);
+        });
+        assistantBubble.appendChild(tagsDiv);
+      }
+    }
+
+    msg.appendChild(assistantBubble);
+    chatUI.stream.appendChild(msg);
   });
+}
+
+// Helper to escape HTML in thinking preview
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 function renderChat() {
@@ -979,12 +1132,20 @@ function renderChat() {
     : state.status === "interrupted"
     ? "interrupted"
     : "idle";
-  statusPill(chatUI.status, pillState);
+  if (chatUI.status) {
+    statusPill(chatUI.status, pillState);
+  }
 
   // Update input state
-  chatUI.send.disabled = isRunning;
-  chatUI.input.disabled = isRunning;
-  chatUI.cancel.classList.toggle("hidden", !isRunning);
+  if (chatUI.send) {
+    chatUI.send.disabled = isRunning;
+  }
+  if (chatUI.input) {
+    chatUI.input.disabled = isRunning;
+  }
+  if (chatUI.cancel) {
+    chatUI.cancel.classList.toggle("hidden", !isRunning);
+  }
   if (chatUI.voiceBtn) {
     chatUI.voiceBtn.disabled =
       isRunning && !chatUI.voiceBtn.classList.contains("voice-retry");
@@ -996,18 +1157,24 @@ function renderChat() {
       );
     }
   }
+  if (chatUI.newThread) {
+    chatUI.newThread.disabled = isRunning;
+    chatUI.newThread.classList.toggle("disabled", isRunning);
+  }
 
   // Update hint text - show status inline when running
-  if (isRunning) {
-    const statusText = state.statusText || "processing";
-    chatUI.hint.textContent = statusText;
-    chatUI.hint.classList.add("loading");
-  } else {
-    const sendHint = isMobileViewport()
-      ? "Tap Send to send · Enter for newline"
-      : "Cmd+Enter / Ctrl+Enter to send · Enter for newline";
-    chatUI.hint.textContent = sendHint;
-    chatUI.hint.classList.remove("loading");
+  if (chatUI.hint) {
+    if (isRunning) {
+      const statusText = state.statusText || "processing";
+      chatUI.hint.textContent = statusText;
+      chatUI.hint.classList.add("loading");
+    } else {
+      const sendHint = isMobileViewport()
+        ? "Tap Send to send · Enter for newline"
+        : "Cmd+Enter / Ctrl+Enter to send · Enter for newline";
+      chatUI.hint.textContent = sendHint;
+      chatUI.hint.classList.remove("loading");
+    }
   }
 
   // Handle error display
@@ -1018,20 +1185,6 @@ function renderChat() {
     chatUI.error.textContent = "";
     chatUI.error.classList.add("hidden");
   }
-
-  // Compute response text - only show actual content, not placeholders
-  let responseText = "";
-  if (isRunning && state.streamText) {
-    responseText = state.streamText;
-  } else if (!isRunning && latest && (latest.response || latest.error)) {
-    responseText = latest.response || latest.error;
-  }
-
-  // Show response wrapper only when there's real content or an error
-  const showResponse = !!responseText || hasError;
-  chatUI.responseWrapper.classList.toggle("hidden", !showResponse);
-  chatUI.response.textContent = responseText;
-  chatUI.response.classList.toggle("streaming", isRunning && state.streamText);
 
   const draft = getDraft(activeDoc);
   const hasPatch = !!(draft && (draft.patch || "").trim());
@@ -1082,130 +1235,9 @@ function renderChat() {
   updateDocVisibility();
   updateDocControls(activeDoc);
 
-  renderChatEvents(state);
-  renderChatHistory(state);
+  renderChatStream(state);
 }
 
-function renderChatHistory(state) {
-  if (!chatUI.history) return;
-
-  const count = state.history.length;
-  chatUI.historyCount.textContent = count;
-
-  // Hide history details if empty
-  if (chatUI.historyDetails) {
-    chatUI.historyDetails.style.display = count === 0 ? "none" : "";
-  }
-
-  chatUI.history.innerHTML = "";
-  if (count === 0) return;
-
-  state.history.slice(0, CHAT_HISTORY_LIMIT).forEach((entry) => {
-    const wrapper = document.createElement("div");
-    wrapper.className = `doc-chat-entry ${entry.status}`;
-
-    // Prompt row with copy button
-    const promptRow = document.createElement("div");
-    promptRow.className = "prompt-row";
-
-    const prompt = document.createElement("div");
-    prompt.className = "prompt";
-    prompt.textContent = truncateText(entry.prompt, 60);
-    prompt.title = entry.prompt;
-
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "copy-prompt-btn";
-    copyBtn.title = "Copy to input";
-    copyBtn.innerHTML = "↑";
-    copyBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      chatUI.input.value = entry.prompt;
-      autoResizeTextarea(chatUI.input);
-      chatUI.input.focus();
-      historyNavIndex = -1;
-      flash("Prompt restored to input");
-    });
-
-    promptRow.appendChild(prompt);
-    promptRow.appendChild(copyBtn);
-
-    const response = document.createElement("div");
-    response.className = "response";
-    const preview =
-      entry.error ||
-      entry.response ||
-      (entry.updated && entry.updated.length
-        ? `Drafted: ${entry.updated.map((k) => k.toUpperCase()).join(", ")}`
-        : "(pending...)");
-    response.textContent = truncateText(preview, 80);
-    response.title = preview;
-
-    const detail = document.createElement("details");
-    detail.className = "doc-chat-entry-detail";
-    const summary = document.createElement("summary");
-    summary.textContent = "View details";
-    const body = document.createElement("div");
-    body.className = "doc-chat-entry-body";
-    if (entry.targets && entry.targets.length) {
-      const targets = document.createElement("div");
-      targets.className = "doc-chat-entry-tags";
-      targets.textContent = `Targets: ${entry.targets
-        .map((k) => k.toUpperCase())
-        .join(", ")}`;
-      body.appendChild(targets);
-    }
-    if (entry.updated && entry.updated.length) {
-      const updated = document.createElement("div");
-      updated.className = "doc-chat-entry-tags";
-      updated.textContent = `Drafts: ${entry.updated
-        .map((k) => k.toUpperCase())
-        .join(", ")}`;
-      body.appendChild(updated);
-    }
-    if (entry.response) {
-      const respBlock = document.createElement("pre");
-      respBlock.textContent = entry.response;
-      body.appendChild(respBlock);
-    }
-    const drafts = entry.drafts || {};
-    Object.entries(drafts).forEach(([kind, draft]) => {
-      if (!draft || !draft.patch) return;
-      const label = document.createElement("div");
-      label.className = "doc-chat-entry-draft-label";
-      label.textContent = `${kind.toUpperCase()} draft`;
-      body.appendChild(label);
-      const patchBlock = document.createElement("pre");
-      patchBlock.className = "doc-chat-entry-patch";
-      patchBlock.textContent = draft.patch;
-      body.appendChild(patchBlock);
-    });
-    detail.appendChild(summary);
-    detail.appendChild(body);
-
-    const meta = document.createElement("div");
-    meta.className = "meta";
-
-    const dot = document.createElement("span");
-    dot.className = "status-dot";
-
-    const stamp = document.createElement("span");
-    stamp.textContent = entry.time
-      ? new Date(entry.time).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : entry.status;
-
-    meta.appendChild(dot);
-    meta.appendChild(stamp);
-
-    wrapper.appendChild(promptRow);
-    wrapper.appendChild(response);
-    wrapper.appendChild(detail);
-    wrapper.appendChild(meta);
-    chatUI.history.appendChild(wrapper);
-  });
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Chat Actions & Error Handling
@@ -1246,6 +1278,31 @@ function cancelDocChat() {
   renderChat();
 }
 
+async function startNewDocChatThread() {
+  const state = getChatState();
+  if (state.status === "running") {
+    cancelDocChat();
+  }
+  try {
+    await api("/api/app-server/threads/reset", {
+      method: "POST",
+      body: { key: "doc_chat" },
+    });
+    clearChatHistory();
+    state.status = "idle";
+    state.statusText = "";
+    state.error = "";
+    state.streamText = "";
+    historyNavIndex = -1;
+    resetChatEvents(state);
+    chatUI.input.value = "";
+    renderChat();
+    flash("Started a new doc chat thread");
+  } catch (err) {
+    flash(err.message || "Failed to start a new doc chat thread", "error");
+  }
+}
+
 async function sendDocChat() {
   const message = (chatUI.input.value || "").trim();
   const state = getChatState();
@@ -1279,10 +1336,6 @@ async function sendDocChat() {
   state.controller = new AbortController();
 
   // Collapse history when starting new request for compact view
-  if (chatUI.historyDetails) {
-    chatUI.historyDetails.removeAttribute("open");
-  }
-
   renderChat();
   chatUI.input.value = "";
   chatUI.input.style.height = "auto"; // Reset textarea height
@@ -1290,6 +1343,7 @@ async function sendDocChat() {
 
   try {
     await performDocChatRequest(entry, state);
+    refreshAllDrafts().catch(() => {});
     if (entry.status === "interrupted") {
       state.status = "interrupted";
       state.error = "";
@@ -1311,6 +1365,7 @@ async function sendDocChat() {
   } finally {
     state.controller = null;
     if (state.status !== "running") {
+      persistChatHistory();
       renderChat();
     }
   }
@@ -1353,6 +1408,7 @@ async function performDocChatRequest(entry, state) {
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("text/event-stream")) {
     await readChatStream(res, state, entry);
+    captureToolCalls(state, entry);
     if (
       entry.status !== "error" &&
       entry.status !== "done" &&
@@ -1380,7 +1436,7 @@ async function startDocChatEventStream(payload) {
   state.eventTurnId = turnId;
   state.eventThreadId = threadId;
   state.eventController = new AbortController();
-  renderChatEvents(state);
+  renderChatStream(state);
 
   const endpoint = resolvePath(
     `/api/app-server/turns/${encodeURIComponent(turnId)}/events`
@@ -1407,7 +1463,7 @@ async function startDocChatEventStream(payload) {
   } catch (err) {
     if (err.name === "AbortError") return;
     state.eventError = err.message || "Failed to stream app-server events";
-    renderChatEvents(state);
+    renderChatStream(state);
   }
 }
 
@@ -1443,7 +1499,16 @@ async function handleAppServerStreamEvent(_event, rawData, state) {
   if (!rawData) return;
   const parsed = parseMaybeJson(rawData);
   applyAppServerEvent(state, parsed);
-  renderChatEvents(state);
+  const delta = extractOutputDelta(parsed);
+  if (delta) {
+    const entry = state.history[0];
+    if (entry && entry.status === "running") {
+      entry.response = (entry.response || "") + delta;
+      state.streamText = entry.response;
+      renderChat();
+    }
+  }
+  renderChatStream(state);
 }
 
 async function toggleDraftPreview(kind = activeDoc) {
@@ -1606,12 +1671,17 @@ async function handleStreamEvent(event, rawData, state, entry) {
         : parsed.token || parsed.text || rawData || "";
     entry.response = (entry.response || "") + token;
     state.streamText = entry.response;
+    if (!state.statusText || state.statusText === "queued") {
+      state.statusText = "responding";
+    }
     renderChat();
     return;
   }
   if (event === "update") {
     const payload = parseChatPayload(parsed);
-    entry.response = payload.response || entry.response;
+    if (payload.response) {
+      entry.response = payload.response;
+    }
     state.streamText = entry.response;
     const updated =
       (payload.updated && payload.updated.length
@@ -1757,9 +1827,6 @@ function setDoc(kind) {
   if (specIssueUI.row) {
     specIssueUI.row.classList.toggle("hidden", kind !== "spec");
   }
-  if (specIngestUI.panel) {
-    specIngestUI.panel.classList.toggle("hidden", kind !== "spec");
-  }
   
   // Toggle action button sets - snapshot has its own, others share standard
   if (docActionsUI.standard) {
@@ -1875,6 +1942,7 @@ async function importIssueToSpec() {
   } finally {
     specIssueUI.button.disabled = false;
     specIssueUI.button.classList.remove("loading");
+    persistChatHistory();
     renderChat();
   }
 }
@@ -2085,6 +2153,9 @@ function downloadThreadRegistryBackup() {
 }
 
 export function initDocs() {
+  if (!chatUI.send || !chatUI.input) {
+    console.warn("Doc chat UI elements missing; skipping doc chat init.");
+  }
   const urlDoc = getDocFromUrl();
   if (urlDoc) {
     activeDoc = urlDoc;
@@ -2104,23 +2175,6 @@ export function initDocs() {
   });
   document.getElementById("ingest-spec").addEventListener("click", ingestSpec);
   document.getElementById("clear-docs").addEventListener("click", clearDocs);
-  if (specIngestUI.continueBtn) {
-    specIngestUI.continueBtn.addEventListener("click", continueSpecIngest);
-  }
-  if (specIngestUI.cancelBtn) {
-    specIngestUI.cancelBtn.addEventListener("click", cancelSpecIngest);
-  }
-  if (specIngestUI.input) {
-    specIngestUI.input.addEventListener("input", () => {
-      autoResizeTextarea(specIngestUI.input);
-    });
-    specIngestUI.input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        continueSpecIngest();
-      }
-    });
-  }
   if (specIngestUI.patchApply)
     specIngestUI.patchApply.addEventListener("click", applySpecIngestPatch);
   if (specIngestUI.patchDiscard)
@@ -2162,26 +2216,26 @@ export function initDocs() {
     lastSendTapAt = now;
     sendDocChat();
   };
-  chatUI.send.addEventListener("pointerup", (e) => {
-    if (e.pointerType !== "touch") return;
-    if (e.cancelable) e.preventDefault();
-    suppressNextSendClick = true;
-    triggerSend();
-  });
-  chatUI.send.addEventListener("click", () => {
-    if (suppressNextSendClick) {
-      suppressNextSendClick = false;
-      return;
-    }
-    triggerSend();
-  });
-  chatUI.cancel.addEventListener("click", cancelDocChat);
-  if (chatUI.eventsToggle) {
-    chatUI.eventsToggle.addEventListener("click", () => {
-      const state = getChatState();
-      state.eventsExpanded = !state.eventsExpanded;
-      renderChat();
+  if (chatUI.send) {
+    chatUI.send.addEventListener("pointerup", (e) => {
+      if (e.pointerType !== "touch") return;
+      if (e.cancelable) e.preventDefault();
+      suppressNextSendClick = true;
+      triggerSend();
     });
+    chatUI.send.addEventListener("click", () => {
+      if (suppressNextSendClick) {
+        suppressNextSendClick = false;
+        return;
+      }
+      triggerSend();
+    });
+  }
+  if (chatUI.cancel) {
+    chatUI.cancel.addEventListener("click", cancelDocChat);
+  }
+  if (chatUI.newThread) {
+    chatUI.newThread.addEventListener("click", startNewDocChatThread);
   }
   if (chatUI.patchApply)
     chatUI.patchApply.addEventListener("click", () => applyPatch(activeDoc));
@@ -2253,72 +2307,76 @@ export function initDocs() {
 
   // Cmd+Enter or Ctrl+Enter sends, Enter adds newline on all devices.
   // Up/Down arrows navigate prompt history when input is empty
-  chatUI.input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.isComposing) {
-      const shouldSend = e.metaKey || e.ctrlKey;
-      if (shouldSend) {
-        e.preventDefault();
-        sendDocChat();
+  if (chatUI.input) {
+    chatUI.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing) {
+        const shouldSend = e.metaKey || e.ctrlKey;
+        if (shouldSend) {
+          e.preventDefault();
+          sendDocChat();
+        }
+        e.stopPropagation();
+        return;
       }
-      e.stopPropagation();
-      return;
-    }
 
-    // Up arrow: recall previous prompts from history
-    if (e.key === "ArrowUp") {
-      const state = getChatState();
-      const isEmpty = chatUI.input.value.trim() === "";
-      const atStart = chatUI.input.selectionStart === 0;
-      if ((isEmpty || atStart) && state.history.length > 0) {
-        e.preventDefault();
-        const maxIndex = state.history.length - 1;
-        if (historyNavIndex < maxIndex) {
-          historyNavIndex++;
-          chatUI.input.value = state.history[historyNavIndex].prompt || "";
+      // Up arrow: recall previous prompts from history
+      if (e.key === "ArrowUp") {
+        const state = getChatState();
+        const isEmpty = chatUI.input.value.trim() === "";
+        const atStart = chatUI.input.selectionStart === 0;
+        if ((isEmpty || atStart) && state.history.length > 0) {
+          e.preventDefault();
+          const maxIndex = state.history.length - 1;
+          if (historyNavIndex < maxIndex) {
+            historyNavIndex++;
+            chatUI.input.value = state.history[historyNavIndex].prompt || "";
+            autoResizeTextarea(chatUI.input);
+            // Move cursor to end
+            chatUI.input.setSelectionRange(
+              chatUI.input.value.length,
+              chatUI.input.value.length
+            );
+          }
+        }
+        return;
+      }
+
+      // Down arrow: navigate forward in history or clear
+      if (e.key === "ArrowDown") {
+        const state = getChatState();
+        const atEnd = chatUI.input.selectionStart === chatUI.input.value.length;
+        if (historyNavIndex >= 0 && atEnd) {
+          e.preventDefault();
+          historyNavIndex--;
+          if (historyNavIndex >= 0) {
+            chatUI.input.value = state.history[historyNavIndex].prompt || "";
+          } else {
+            chatUI.input.value = "";
+          }
           autoResizeTextarea(chatUI.input);
-          // Move cursor to end
           chatUI.input.setSelectionRange(
             chatUI.input.value.length,
             chatUI.input.value.length
           );
         }
+        return;
       }
-      return;
-    }
-
-    // Down arrow: navigate forward in history or clear
-    if (e.key === "ArrowDown") {
-      const state = getChatState();
-      const atEnd = chatUI.input.selectionStart === chatUI.input.value.length;
-      if (historyNavIndex >= 0 && atEnd) {
-        e.preventDefault();
-        historyNavIndex--;
-        if (historyNavIndex >= 0) {
-          chatUI.input.value = state.history[historyNavIndex].prompt || "";
-        } else {
-          chatUI.input.value = "";
-        }
-        autoResizeTextarea(chatUI.input);
-        chatUI.input.setSelectionRange(
-          chatUI.input.value.length,
-          chatUI.input.value.length
-        );
-      }
-      return;
-    }
-  });
+    });
+  }
 
   // Clear errors on input, auto-resize textarea, and reset history navigation
-  chatUI.input.addEventListener("input", () => {
-    const state = getChatState();
-    if (state.error) {
-      state.error = "";
-      renderChat();
-    }
-    // Reset history navigation when user types
-    historyNavIndex = -1;
-    autoResizeTextarea(chatUI.input);
-  });
+  if (chatUI.input) {
+    chatUI.input.addEventListener("input", () => {
+      const state = getChatState();
+      if (state.error) {
+        state.error = "";
+        renderChat();
+      }
+      // Reset history navigation when user types
+      historyNavIndex = -1;
+      autoResizeTextarea(chatUI.input);
+    });
+  }
 
   // Ctrl+S / Cmd+S saves the current doc
   document.addEventListener("keydown", (e) => {
@@ -2354,12 +2412,21 @@ async function ingestSpec() {
   const needsForce = ["todo", "progress", "opinions"].some(
     (k) => (docsCache[k] || "").trim().length > 0
   );
-  if (needsForce) {
-    const ok = await confirmModal(
-      "Overwrite TODO, PROGRESS, and OPINIONS from SPEC? Existing content will be replaced."
-    );
-    if (!ok) return;
-  }
+  
+  // Show ingest modal with optional refinement
+  const result = await ingestModal(
+    needsForce
+      ? "Overwrite TODO, PROGRESS, and OPINIONS from SPEC? Existing content will be replaced."
+      : "Ready to ingest SPEC into TODO, PROGRESS, and OPINIONS?",
+    {
+      showRefinement: true,
+      confirmText: "Ingest",
+      cancelText: "Cancel",
+    }
+  );
+  
+  if (!result.confirmed) return;
+  
   const button = document.getElementById("ingest-spec");
   button.disabled = true;
   button.classList.add("loading");
@@ -2367,9 +2434,13 @@ async function ingestSpec() {
   specIngestState.controller = new AbortController();
   renderSpecIngestPatch();
   try {
+    const body = { force: needsForce };
+    if (result.message) {
+      body.message = result.message;
+    }
     const data = await api("/api/ingest-spec", {
       method: "POST",
-      body: { force: needsForce },
+      body,
       signal: specIngestState.controller.signal,
     });
     const parsed = parseSpecIngestPayload(data);
@@ -2402,76 +2473,6 @@ async function ingestSpec() {
   }
 }
 
-async function interruptSpecIngest() {
-  try {
-    await api("/api/ingest-spec/interrupt", { method: "POST" });
-  } catch (err) {
-    flash(err.message || "Failed to interrupt spec ingest", "error");
-  }
-}
-
-function cancelSpecIngest() {
-  if (!specIngestState.busy) return;
-  interruptSpecIngest();
-  if (specIngestState.controller) specIngestState.controller.abort();
-  specIngestState.busy = false;
-  specIngestState.controller = null;
-  if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
-  flash("Spec ingest interrupted");
-  renderSpecIngestPatch();
-}
-
-async function continueSpecIngest() {
-  if (specIngestState.busy) return;
-  if (!specIngestUI.input) return;
-  const message = (specIngestUI.input.value || "").trim();
-  if (!message) {
-    flash("Enter a follow-up prompt to continue", "error");
-    return;
-  }
-  const needsForce = ["todo", "progress", "opinions"].some(
-    (k) => (docsCache[k] || "").trim().length > 0
-  );
-  specIngestState.busy = true;
-  if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = true;
-  specIngestState.controller = new AbortController();
-  renderSpecIngestPatch();
-  try {
-    const data = await api("/api/ingest-spec", {
-      method: "POST",
-      body: { force: needsForce, message },
-      signal: specIngestState.controller.signal,
-    });
-    const parsed = parseSpecIngestPayload(data);
-    if (parsed.error) throw new Error(parsed.error);
-    if (parsed.interrupted) {
-      specIngestState.patch = "";
-      specIngestState.agentMessage = parsed.agentMessage || "";
-      applySpecIngestDocs(parsed);
-      renderSpecIngestPatch();
-      flash("Spec ingest interrupted");
-      return;
-    }
-    specIngestState.patch = parsed.patch || "";
-    specIngestState.agentMessage = parsed.agentMessage || "";
-    applySpecIngestDocs(parsed);
-    renderSpecIngestPatch();
-    specIngestUI.input.value = "";
-    autoResizeTextarea(specIngestUI.input);
-    flash(parsed.patch ? "Spec ingest patch updated" : "Spec ingest updated docs");
-  } catch (err) {
-    if (err.name === "AbortError") {
-      return;
-    } else {
-      flash(err.message, "error");
-    }
-  } finally {
-    specIngestState.busy = false;
-    if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
-    specIngestState.controller = null;
-    renderSpecIngestPatch();
-  }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Spec Ingestion & Doc Clearing

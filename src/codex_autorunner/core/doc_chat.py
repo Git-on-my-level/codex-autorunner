@@ -416,6 +416,34 @@ class DocChatService:
                 }
         return bases
 
+    def _prepare_docs_for_run(
+        self, drafts: dict[str, DocChatDraftState]
+    ) -> tuple[dict[str, dict[str, str]], dict[str, str], dict[str, str]]:
+        config = self._repo_config()
+        docs = self._doc_bases(drafts)
+        backups: dict[str, str] = {}
+        working: dict[str, str] = {}
+        for kind in ALLOWED_DOC_KINDS:
+            path = config.doc_path(kind)
+            current = path.read_text(encoding="utf-8")
+            backups[kind] = current
+            desired = docs.get(kind, {}).get("content", current)
+            working[kind] = desired
+            if desired != current:
+                atomic_write(path, desired)
+        return docs, backups, working
+
+    def _restore_docs(self, backups: dict[str, str]) -> None:
+        config = self._repo_config()
+        for kind, content in backups.items():
+            path = config.doc_path(kind)
+            try:
+                current = path.read_text(encoding="utf-8")
+            except OSError:
+                current = ""
+            if current != content:
+                atomic_write(path, content)
+
     def _build_app_server_prompt(
         self, request: DocChatRequest, docs: dict[str, dict[str, str]]
     ) -> str:
@@ -531,29 +559,73 @@ class DocChatService:
         return text.strip()
 
     @classmethod
+    def _looks_like_patch(cls, text: str) -> bool:
+        if not text:
+            return False
+        markers = (
+            "*** Begin Patch",
+            "--- ",
+            "diff --git ",
+            "Index: ",
+        )
+        return any(marker in text for marker in markers)
+
+    @classmethod
+    def _extract_fenced_patch(cls, output: str) -> Optional[Tuple[str, str]]:
+        for match in re.finditer(
+            r"```[^\n]*\n(.*?)```", output, flags=re.DOTALL | re.IGNORECASE
+        ):
+            candidate = (match.group(1) or "").strip()
+            if not cls._looks_like_patch(candidate):
+                continue
+            before = output[: match.start()].strip()
+            after = output[match.end() :].strip()
+            message_text = "\n".join(part for part in [before, after] if part)
+            return message_text, candidate
+        return None
+
+    @staticmethod
+    def _strip_trailing_fence(text: str) -> str:
+        lines = text.strip().splitlines()
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    @classmethod
     def _split_patch_from_output(cls, output: str) -> Tuple[str, str]:
         if not output:
             return "", ""
         match = re.search(
-            r"<PATCH>(.*?)</PATCH>", output, flags=re.IGNORECASE | re.DOTALL
+            r"<(PATCH|APPLY_PATCH)>(.*?)</\1>",
+            output,
+            flags=re.IGNORECASE | re.DOTALL,
         )
         if match:
-            patch_text = cls._strip_code_fences(match.group(1))
+            patch_text = cls._strip_code_fences(match.group(2))
             before = output[: match.start()].strip()
             after = output[match.end() :].strip()
             message_text = "\n".join(part for part in [before, after] if part)
             return message_text, patch_text
+        fenced = cls._extract_fenced_patch(output)
+        if fenced:
+            message_text, patch_text = fenced
+            return message_text, patch_text
         lines = output.splitlines()
         start_idx = None
         for idx, line in enumerate(lines):
-            if line.startswith("--- ") or line.startswith("*** Begin Patch"):
+            if (
+                line.startswith("--- ")
+                or line.startswith("*** Begin Patch")
+                or line.startswith("diff --git ")
+                or line.startswith("Index: ")
+            ):
                 start_idx = idx
                 break
         if start_idx is None:
             return output.strip(), ""
         message_text = "\n".join(lines[:start_idx]).strip()
         patch_text = "\n".join(lines[start_idx:]).strip()
-        patch_text = cls._strip_code_fences(patch_text)
+        patch_text = cls._strip_trailing_fence(cls._strip_code_fences(patch_text))
         return message_text, patch_text
 
     def _load_drafts(self) -> dict[str, DocChatDraftState]:
@@ -662,12 +734,15 @@ class DocChatService:
         thread_id: Optional[str] = None
         targets_label = ",".join(request.targets or ()) or "auto"
         drafts = self._load_drafts()
-        docs = self._doc_bases(drafts)
+        docs: dict[str, dict[str, str]] = {}
+        backups: dict[str, str] = {}
+        working: dict[str, str] = {}
         self._log(
             chat_id,
             f'start targets={targets_label} path={doc_pointer} message="{message_for_log}"',
         )
         try:
+            docs, backups, working = self._prepare_docs_for_run(drafts)
             supervisor = self._ensure_app_server()
             client = await supervisor.get_client(self.engine.repo_root)
             key = self._thread_key()
@@ -700,8 +775,8 @@ class DocChatService:
             handle = await client.turn_start(
                 thread_id,
                 prompt,
-                approval_policy="never",
-                sandbox_policy="readOnly",
+                approval_policy="on-request",
+                sandbox_policy="dangerFullAccess",
             )
             turn_id = handle.turn_id
             thread_id = handle.thread_id
@@ -772,20 +847,62 @@ class DocChatService:
                 raise DocChatError(turn_result.errors[-1])
             output = "\n".join(turn_result.agent_messages).strip()
             message_text, patch_text_raw = self._split_patch_from_output(output)
-            if not patch_text_raw.strip():
-                raise DocChatError("App-server output missing a patch")
             agent_message = self._parse_agent_message(message_text or output)
-            try:
-                updated_drafts, updated_kinds, payloads = self._apply_patch_to_drafts(
-                    patch_text_raw=patch_text_raw,
-                    drafts=drafts,
-                    docs=docs,
+            response_text = message_text.strip() or output.strip() or agent_message
+            updated = dict(drafts)
+            updated_kinds: list[str] = []
+            payloads: dict[str, dict] = {}
+            created_at = now_iso()
+            allowed_kinds = request.targets or ALLOWED_DOC_KINDS
+            unexpected: list[str] = []
+            config = self._repo_config()
+            for kind in ALLOWED_DOC_KINDS:
+                path = config.doc_path(kind)
+                after = path.read_text(encoding="utf-8")
+                before = working.get(kind, backups.get(kind, ""))
+                if kind not in allowed_kinds:
+                    if after != before:
+                        unexpected.append(kind)
+                    continue
+                if after == before:
+                    continue
+                rel_path = str(path.relative_to(self.engine.repo_root))
+                patch_for_doc = self._build_patch(rel_path, before, after)
+                if not patch_for_doc.strip():
+                    continue
+                base_hash = self._hash_content(backups.get(kind, before))
+                existing = drafts.get(kind)
+                if existing and docs.get(kind, {}).get("source") == "draft":
+                    if existing.base_hash:
+                        base_hash = existing.base_hash
+                updated[kind] = DocChatDraftState(
+                    content=after,
+                    patch=patch_for_doc,
                     agent_message=agent_message,
-                    allowed_kinds=request.targets,
+                    created_at=created_at,
+                    base_hash=base_hash,
                 )
-            except PatchError as exc:
-                raise DocChatError(str(exc)) from exc
-            self._save_drafts(updated_drafts)
+                updated_kinds.append(kind)
+                payloads[kind] = updated[kind].to_dict()
+            if unexpected:
+                raise DocChatError(
+                    "Doc chat updated unexpected docs: " + ", ".join(unexpected)
+                )
+            if patch_text_raw.strip() and not payloads:
+                try:
+                    updated, updated_kinds, payloads = self._apply_patch_to_drafts(
+                        patch_text_raw=patch_text_raw,
+                        drafts=updated,
+                        docs=docs,
+                        agent_message=agent_message,
+                        allowed_kinds=request.targets,
+                    )
+                except PatchError as exc:
+                    raise DocChatError(str(exc)) from exc
+                if not payloads:
+                    raise DocChatError("Doc chat patch did not produce updates")
+            if payloads:
+                self._save_drafts(updated)
             duration_ms = int((time.time() - started_at) * 1000)
             self._log(
                 chat_id,
@@ -797,6 +914,7 @@ class DocChatService:
             return {
                 "status": "ok",
                 "agent_message": agent_message,
+                "message": response_text,
                 "updated": updated_kinds,
                 "drafts": payloads,
                 "thread_id": thread_id,
@@ -851,6 +969,9 @@ class DocChatService:
                 "thread_id": thread_id,
                 "turn_id": turn_id,
             }
+        finally:
+            if backups:
+                self._restore_docs(backups)
 
     async def execute(
         self,
@@ -889,6 +1010,7 @@ class DocChatService:
                     )
                     if turn_task in done:
                         yield format_sse("turn", turn_task.result())
+                        yield format_sse("status", {"status": "running"})
                     else:
                         turn_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):

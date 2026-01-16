@@ -335,16 +335,6 @@
               <button id="ingest-spec" class="ghost hidden" data-short="Ingest">Ingest SPEC → Docs</button>
               <button id="clear-docs" class="danger hidden" data-short="Clear">Clear TODO/PROGRESS/OPINIONS</button>
             </div>
-            <div id="spec-ingest-followup" class="spec-ingest-followup hidden">
-              <textarea
-                id="spec-ingest-input"
-                rows="1"
-                placeholder="Refine ingest (Ctrl+Enter to send)..."
-                spellcheck="false"
-              ></textarea>
-              <button id="spec-ingest-continue" class="ghost sm">Continue</button>
-              <button id="spec-ingest-cancel" class="danger sm hidden">Cancel</button>
-            </div>
             <div class="doc-actions hidden" id="doc-actions-snapshot">
               <button id="snapshot-generate" class="primary" data-short="Run">Run snapshot</button>
               <button id="snapshot-copy" class="ghost" data-short="Copy">Copy</button>
@@ -363,34 +353,23 @@
                   <div class="doc-chat-input-buttons compose-buttons">
                     <button id="doc-chat-voice" class="ghost sm voice-button" title="Hold to talk"></button>
                     <button id="doc-chat-send" class="primary sm" title="Send">↑</button>
-                    <button id="doc-chat-cancel" class="ghost sm hidden" title="Cancel">✕</button>
                   </div>
                 </div>
                 <div class="doc-chat-meta">
-                  <span class="muted small" id="doc-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for newline</span>
-                  <span class="muted small hidden voice-status" id="doc-chat-voice-status"></span>
-                  <span id="doc-chat-status" class="pill pill-idle">idle</span>
+                  <div class="doc-chat-meta-left">
+                    <span class="muted small" id="doc-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for newline</span>
+                    <span class="muted small hidden voice-status" id="doc-chat-voice-status"></span>
+                  </div>
+                  <div class="doc-chat-meta-right">
+                    <button id="doc-chat-cancel" class="ghost sm hidden doc-chat-cancel-inline" title="Cancel">✕</button>
+                    <button id="doc-chat-new-thread" class="ghost sm" title="Start a new chat thread">New thread</button>
+                    <span id="doc-chat-status" class="pill pill-idle">idle</span>
+                  </div>
                 </div>
               </div>
-              <div id="doc-chat-response-wrapper" class="doc-chat-response-wrapper hidden">
-                <div id="doc-chat-response" class="doc-chat-response"></div>
+              <div class="doc-chat-stream" id="doc-chat-stream">
                 <div id="doc-chat-error" class="doc-chat-error hidden"></div>
               </div>
-              <div id="doc-chat-events" class="doc-chat-events hidden">
-                <div class="doc-chat-events-header">
-                  <span>Live updates</span>
-                  <span class="doc-chat-events-count" id="doc-chat-events-count">0</span>
-                  <button id="doc-chat-events-toggle" class="ghost sm hidden">Show more</button>
-                </div>
-                <div class="doc-chat-events-list" id="doc-chat-events-list"></div>
-              </div>
-              <details class="doc-chat-history-details" id="doc-chat-history-details">
-                <summary class="doc-chat-history-toggle">
-                  <span>History</span>
-                  <span class="doc-chat-history-count" id="doc-chat-history-count">0</span>
-                </summary>
-                <div class="doc-chat-history" id="doc-chat-history"></div>
-              </details>
             </div>
           </div>
         </section>
@@ -556,6 +535,35 @@
         <div class="modal-actions">
           <button id="input-modal-cancel" class="ghost">Cancel</button>
           <button id="input-modal-ok" class="primary">OK</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Ingest Spec Modal -->
+    <div id="ingest-modal" class="modal-overlay" hidden>
+      <div
+        class="modal-dialog modal-ingest"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ingest-modal-title"
+        aria-describedby="ingest-modal-message"
+        tabindex="-1"
+      >
+        <span id="ingest-modal-title" class="sr-only">Ingest Spec</span>
+        <div id="ingest-modal-content">
+          <p id="ingest-modal-message">Ready to ingest SPEC into TODO, PROGRESS, and OPINIONS?</p>
+          <div id="ingest-modal-refinement" class="ingest-modal-refinement hidden">
+            <textarea
+              id="ingest-modal-input"
+              rows="3"
+              placeholder="Refine the ingest (optional)..."
+              spellcheck="false"
+            ></textarea>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="ingest-modal-cancel" class="ghost">Cancel</button>
+          <button id="ingest-modal-ok" class="primary">Ingest</button>
         </div>
       </div>
     </div>

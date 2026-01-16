@@ -26,11 +26,17 @@ def test_get_snapshot_when_missing(repo: Path) -> None:
 def test_post_snapshot_persists_and_loads(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from codex_autorunner.core import snapshot as snapshot_mod
+    from codex_autorunner.core.snapshot import SnapshotResult, SnapshotService
 
-    monkeypatch.setattr(
-        snapshot_mod, "_run_codex", lambda *a, **k: "# Snapshot\n\nHello\n"
-    )
+    async def mock_generate(self) -> SnapshotResult:
+        path = self.engine.repo_root / ".codex-autorunner" / "SNAPSHOT.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Snapshot\n\nHello\n", encoding="utf-8")
+        return SnapshotResult(
+            content="# Snapshot\n\nHello\n", truncated=False, state={"truncated": False}
+        )
+
+    monkeypatch.setattr(SnapshotService, "generate_snapshot", mock_generate)
 
     client = _client(repo)
     res = client.post("/api/snapshot", json={})
@@ -49,11 +55,12 @@ def test_post_snapshot_persists_and_loads(
 def test_post_snapshot_ignores_legacy_params(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from codex_autorunner.core import snapshot as snapshot_mod
+    from codex_autorunner.core.snapshot import SnapshotResult, SnapshotService
 
-    monkeypatch.setattr(
-        snapshot_mod, "_run_codex", lambda *a, **k: "# Snapshot\n\nHi\n"
-    )
+    async def mock_generate(self) -> SnapshotResult:
+        return SnapshotResult(content="# Snapshot\n\nHi\n", truncated=False, state={})
+
+    monkeypatch.setattr(SnapshotService, "generate_snapshot", mock_generate)
     client = _client(repo)
     res = client.post(
         "/api/snapshot", json={"mode": "nope", "max_chars": 1, "audience": "onboarding"}

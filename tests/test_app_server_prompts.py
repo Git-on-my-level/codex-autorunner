@@ -40,8 +40,8 @@ def test_doc_chat_prompt_limits_and_instructions(repo: Path) -> None:
         targets=("todo",),
     )
     assert len(prompt) <= limits.max_chars
-    assert "Do NOT write files" in prompt
-    assert "<PATCH>" in prompt and "</PATCH>" in prompt
+    assert "edit the files directly" in prompt
+    assert "<PATCH>" not in prompt
     assert TRUNCATION_MARKER in prompt
     assert ".codex-autorunner/TODO.md" in prompt
 
@@ -56,7 +56,7 @@ def test_spec_ingest_prompt_limits_and_instructions(repo: Path) -> None:
     message = "E" * (limits.message_max_chars + 500)
     prompt = build_spec_ingest_prompt(config, message=message)
     assert len(prompt) <= limits.max_chars
-    assert "Do NOT write files" in prompt
+    assert "Edit the TODO, PROGRESS, and OPINIONS files directly" in prompt
     assert "TODO/PROGRESS/OPINIONS" in prompt
     assert TRUNCATION_MARKER in prompt
     assert ".codex-autorunner/SPEC.md" in prompt

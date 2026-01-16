@@ -19,7 +19,9 @@ need_cmd() {
 }
 
 PYTHON_BIN="python"
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+if [ -f ".venv/bin/python" ]; then
+  PYTHON_BIN=".venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"
 fi
 need_cmd "$PYTHON_BIN"

@@ -17,12 +17,9 @@ DOC_CHAT_APP_SERVER_TEMPLATE = """You are Codex, an autonomous coding assistant 
 
 Instructions:
 - Use the base doc content below. Drafts (if present) are the authoritative base.
-- Do NOT write files. Return a unified diff patch that updates any of the work docs listed.
-- Output format:
-Agent: <short summary>
-<PATCH>
-... unified diff ...
-</PATCH>
+- You may inspect the repo and update the work docs listed when needed.
+- If you update docs, edit the files directly. If no changes are needed, do not edit files.
+- Respond with a short summary of what you did or found.
 
 Work docs (paths):
 - TODO: {todo_path}
@@ -50,17 +47,48 @@ OPINIONS path: {opinions_path}
 
 Instructions:
 - Read the SPEC and existing docs from disk.
-- Do NOT write files. Return a unified diff patch that updates only TODO/PROGRESS/OPINIONS.
-- Output format:
-Agent: <short summary>
-<PATCH>
-... unified diff ...
-</PATCH>
+- Edit the TODO, PROGRESS, and OPINIONS files directly to reflect the SPEC.
+- Do NOT output a patch block. Just edit the files.
+- Output a short summary prefixed with "Agent: " explaining what you did.
 
 User request:
 {message}
 
 {spec_excerpt_block}
+"""
+
+
+SNAPSHOT_APP_SERVER_TEMPLATE = """You are Codex generating a compact Markdown repo snapshot meant to be pasted into another LLM chat.
+
+Snapshot path: {snapshot_path}
+
+Instructions:
+- Analyze the provided context and the repository.
+- Write the snapshot content directly to the snapshot path.
+- Keep the file concise and high-signal.
+
+Required output format (keep headings exactly):
+# Repo Snapshot
+
+## What this repo is
+- 3–6 bullets.
+
+## Architecture overview
+- Components and responsibilities.
+- Data/control flow (high level).
+- How things actually work
+
+## Key files and modules
+- Bullet list of important paths with 1-line notes.
+
+## Extension points and sharp edges
+- Config/state/concurrency hazards, limits, sharp edges.
+
+Inputs:
+{seed_context}
+
+{changes_block}
+{previous_snapshot_block}
 """
 
 
@@ -245,6 +273,31 @@ def build_spec_ingest_prompt(
     )
 
 
+def build_app_server_snapshot_prompt(
+    config: Config,
+    *,
+    seed_context: str,
+    previous_snapshot: Optional[str] = None,
+    changes: Optional[str] = None,
+) -> str:
+    snapshot_path = config.doc_path("snapshot")
+    previous_block = ""
+    if previous_snapshot:
+        previous_block = (
+            f"<PREVIOUS_SNAPSHOT>\n{previous_snapshot.strip()}\n</PREVIOUS_SNAPSHOT>"
+        )
+    changes_block = ""
+    if changes:
+        changes_block = f"<CHANGES_SINCE_LAST_SNAPSHOT>\n{changes.strip()}\n</CHANGES_SINCE_LAST_SNAPSHOT>"
+
+    return SNAPSHOT_APP_SERVER_TEMPLATE.format(
+        snapshot_path=snapshot_path,
+        seed_context=seed_context,
+        changes_block=changes_block,
+        previous_snapshot_block=previous_block,
+    )
+
+
 def build_autorunner_prompt(
     config: Config,
     *,
@@ -306,9 +359,11 @@ __all__ = [
     "APP_SERVER_PROMPT_BUILDERS",
     "DOC_CHAT_APP_SERVER_TEMPLATE",
     "SPEC_INGEST_APP_SERVER_TEMPLATE",
+    "SNAPSHOT_APP_SERVER_TEMPLATE",
     "TRUNCATION_MARKER",
     "build_autorunner_prompt",
     "build_doc_chat_prompt",
     "build_spec_ingest_prompt",
+    "build_app_server_snapshot_prompt",
     "truncate_text",
 ]

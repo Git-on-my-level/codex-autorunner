@@ -1,6 +1,12 @@
 {
   "name": "codex-autorunner-ui",
   "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.15.0"
+  },
   "scripts": {
     "lint:js": "eslint \"src/codex_autorunner/static/**/*.js\"",
     "typecheck": "tsc -p tsconfig.json"

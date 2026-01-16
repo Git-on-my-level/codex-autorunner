@@ -94,6 +94,7 @@ from ..helpers import (
     _extract_thread_preview_parts,
     _find_thread_entry,
     _format_feature_flags,
+    _format_git_status,
     _format_help_text,
     _format_mcp_list,
     _format_missing_thread_label,
@@ -2286,6 +2287,7 @@ class TelegramCommandHandlers:
                 [
                     f"Started new thread {thread_id}.",
                     f"Directory: {record.workspace_path or 'unbound'}",
+                    _format_git_status(record.workspace_path) or "Git: (no repo)",
                     f"Model: {record.model or 'default'}",
                     f"Effort: {record.effort or 'default'}",
                 ]

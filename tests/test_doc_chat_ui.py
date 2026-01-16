@@ -170,9 +170,9 @@ def test_doc_chat_ui_stream_flow():
         assert.equal(state.streamText.trim(), "Done");
         assert.equal(textarea.value.trim(), "- [ ] streamed task");
         assert.equal(document.getElementById("doc-status").textContent, "Editing TODO");
-        assert.ok(
-          (document.getElementById("doc-chat-response").textContent || "").includes("Done")
-        );
+        const chatStream = document.getElementById("doc-chat-stream");
+        assert.ok(chatStream.children.length > 0);
+        assert.equal(state.history[0].response.trim(), "Done");
         """
     )
 
