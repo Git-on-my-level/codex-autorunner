@@ -332,7 +332,12 @@ def test_chunk_message_empty() -> None:
 
 @pytest.mark.anyio
 async def test_send_message_chunks_long_text() -> None:
-    client = TelegramBotClient("test-token")
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 123}})
+
+    transport = httpx.MockTransport(handler)
+    http_client = httpx.AsyncClient(transport=transport)
+    client = TelegramBotClient("test-token", client=http_client)
     calls: list[dict[str, object]] = []
 
     async def fake_request(self, method: str, payload: dict[str, object]) -> object:

@@ -1,6 +1,9 @@
 import types
 
+import pytest
+
 from codex_autorunner.integrations.telegram.adapter import (
+    TelegramAudio,
     TelegramDocument,
     TelegramMessage,
     TelegramMessageEntity,
@@ -199,6 +202,68 @@ def test_has_batchable_media_without_media() -> None:
 def test_has_batchable_media_with_voice() -> None:
     message = _message(voice=TelegramVoice("v1", None, 3, "audio/ogg", 100))
     assert has_batchable_media(message) is False
+
+
+def test_audio_message_has_media() -> None:
+    message = _message(
+        audio=TelegramAudio("a1", None, 180, "song.mp3", "audio/mpeg", 200)
+    )
+    assert message_has_media(message) is True
+
+
+@pytest.mark.anyio
+async def test_audio_message_bypasses_coalescing_like_voice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock
+
+    import codex_autorunner.integrations.telegram.handlers.messages as msg_module
+
+    audio_message = _message(
+        audio=TelegramAudio("a1", None, 180, "song.mp3", "audio/mpeg", 200)
+    )
+
+    handlers = MagicMock()
+    handlers._bot_username = "CodexBot"
+    handlers._config.media.batch_uploads = True
+    handlers._config.media.enabled = True
+
+    # Mock module-level functions that are awaited
+    mock_flush = MagicMock()
+
+    async def async_flush(*args, **kwargs):
+        mock_flush(*args, **kwargs)
+
+    monkeypatch.setattr(msg_module, "flush_coalesced_message", async_flush)
+
+    mock_handle_inner = MagicMock()
+
+    async def async_handle_inner(*args, **kwargs):
+        mock_handle_inner(*args, **kwargs)
+
+    monkeypatch.setattr(msg_module, "handle_message_inner", async_handle_inner)
+
+    mock_buffer = MagicMock()
+
+    async def async_buffer(*args, **kwargs):
+        mock_buffer(*args, **kwargs)
+
+    monkeypatch.setattr(msg_module, "buffer_coalesced_message", async_buffer)
+
+    mock_buffer_media = MagicMock()
+
+    async def async_buffer_media(*args, **kwargs):
+        mock_buffer_media(*args, **kwargs)
+
+    monkeypatch.setattr(msg_module, "buffer_media_batch", async_buffer_media)
+
+    await msg_module.handle_message(handlers, audio_message)
+
+    # Audio should bypass, so it flushes and calls inner directly
+    mock_flush.assert_called_once_with(handlers, audio_message)
+    mock_handle_inner.assert_called_once_with(handlers, audio_message)
+    mock_buffer.assert_not_called()
+    mock_buffer_media.assert_not_called()
 
 
 def test_media_batch_key_with_media_group() -> None:
