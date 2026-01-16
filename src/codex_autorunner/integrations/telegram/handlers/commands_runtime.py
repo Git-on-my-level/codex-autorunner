@@ -1097,6 +1097,12 @@ class TelegramCommandHandlers:
                         transcript_message_id,
                         transcript_text,
                     )
+                await self._start_turn_progress(
+                    turn_key,
+                    ctx=ctx,
+                    model=record.model,
+                    label="working",
+                )
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
@@ -1163,6 +1169,7 @@ class TelegramCommandHandlers:
                 if turn_key is not None:
                     self._turn_contexts.pop(turn_key, None)
                     self._clear_thinking_preview(turn_key)
+                    self._clear_turn_progress(turn_key)
             runtime.current_turn_id = None
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
@@ -1680,6 +1687,256 @@ class TelegramCommandHandlers:
             message,
             runtime,
             text_override=prompt_text,
+            record=record,
+        )
+
+    async def _handle_media_batch(self, messages: Sequence[TelegramMessage]) -> None:
+        if not messages:
+            return
+        if not self._config.media.enabled:
+            first_msg = messages[0]
+            await self._send_message(
+                first_msg.chat_id,
+                "Media handling is disabled.",
+                thread_id=first_msg.thread_id,
+                reply_to=first_msg.message_id,
+            )
+            return
+        first_msg = messages[0]
+        topic_key = self._resolve_topic_key(first_msg.chat_id, first_msg.thread_id)
+        record = self._router.get_topic(topic_key)
+        if record is None or not record.workspace_path:
+            await self._send_message(
+                first_msg.chat_id,
+                self._with_conversation_id(
+                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    chat_id=first_msg.chat_id,
+                    thread_id=first_msg.thread_id,
+                ),
+                thread_id=first_msg.thread_id,
+                reply_to=first_msg.message_id,
+            )
+            return
+        runtime = self._router.runtime_for(topic_key)
+
+        sorted_messages = sorted(messages, key=lambda m: m.message_id)
+        saved_image_paths: list[Path] = []
+        saved_file_info: list[tuple[str, str, int]] = []
+        failed_count = 0
+
+        for msg in sorted_messages:
+            image_candidate = message_handlers.select_image_candidate(msg)
+            if image_candidate:
+                if not self._config.media.images:
+                    await self._send_message(
+                        msg.chat_id,
+                        "Image handling is disabled.",
+                        thread_id=msg.thread_id,
+                        reply_to=msg.message_id,
+                    )
+                    failed_count += 1
+                    continue
+                try:
+                    data, file_path, file_size = await self._download_telegram_file(
+                        image_candidate.file_id
+                    )
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.media_batch.image.download_failed",
+                        chat_id=msg.chat_id,
+                        thread_id=msg.thread_id,
+                        message_id=msg.message_id,
+                        exc=exc,
+                    )
+                    failed_count += 1
+                    continue
+                max_bytes = self._config.media.max_image_bytes
+                if file_size and file_size > max_bytes:
+                    await self._send_message(
+                        msg.chat_id,
+                        f"Image too large (max {max_bytes} bytes).",
+                        thread_id=msg.thread_id,
+                        reply_to=msg.message_id,
+                    )
+                    failed_count += 1
+                    continue
+                if len(data) > max_bytes:
+                    await self._send_message(
+                        msg.chat_id,
+                        f"Image too large (max {max_bytes} bytes).",
+                        thread_id=msg.thread_id,
+                        reply_to=msg.message_id,
+                    )
+                    failed_count += 1
+                    continue
+                try:
+                    image_path = self._save_image_file(
+                        record.workspace_path, data, file_path, image_candidate
+                    )
+                    saved_image_paths.append(image_path)
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.media_batch.image.save_failed",
+                        chat_id=msg.chat_id,
+                        thread_id=msg.thread_id,
+                        message_id=msg.message_id,
+                        exc=exc,
+                    )
+                    failed_count += 1
+                    continue
+
+            file_candidate = message_handlers.select_file_candidate(msg)
+            if file_candidate:
+                if not self._config.media.files:
+                    await self._send_message(
+                        msg.chat_id,
+                        "File handling is disabled.",
+                        thread_id=msg.thread_id,
+                        reply_to=msg.message_id,
+                    )
+                    failed_count += 1
+                    continue
+                try:
+                    data, file_path, file_size = await self._download_telegram_file(
+                        file_candidate.file_id
+                    )
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.media_batch.file.download_failed",
+                        chat_id=msg.chat_id,
+                        thread_id=msg.thread_id,
+                        message_id=msg.message_id,
+                        exc=exc,
+                    )
+                    failed_count += 1
+                    continue
+                max_bytes = self._config.media.max_file_bytes
+                if file_size is not None and file_size > max_bytes:
+                    await self._send_message(
+                        msg.chat_id,
+                        f"File too large (max {max_bytes} bytes).",
+                        thread_id=msg.thread_id,
+                        reply_to=msg.message_id,
+                    )
+                    failed_count += 1
+                    continue
+                if len(data) > max_bytes:
+                    await self._send_message(
+                        msg.chat_id,
+                        f"File too large (max {max_bytes} bytes).",
+                        thread_id=msg.thread_id,
+                        reply_to=msg.message_id,
+                    )
+                    failed_count += 1
+                    continue
+                try:
+                    file_path_local = self._save_inbox_file(
+                        record.workspace_path,
+                        topic_key,
+                        data,
+                        candidate=file_candidate,
+                        file_path=file_path,
+                    )
+                    original_name = (
+                        file_candidate.file_name
+                        or (Path(file_path).name if file_path else None)
+                        or "unknown"
+                    )
+                    saved_file_info.append(
+                        (
+                            original_name,
+                            str(file_path_local),
+                            file_size or len(data),
+                        )
+                    )
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.media_batch.file.save_failed",
+                        chat_id=msg.chat_id,
+                        thread_id=msg.thread_id,
+                        message_id=msg.message_id,
+                        exc=exc,
+                    )
+                    failed_count += 1
+                    continue
+
+        if not saved_image_paths and not saved_file_info:
+            await self._send_message(
+                first_msg.chat_id,
+                "Failed to process any media in the batch.",
+                thread_id=first_msg.thread_id,
+                reply_to=first_msg.message_id,
+            )
+            return
+
+        captions = [
+            m.caption or "" for m in sorted_messages if m.caption and m.caption.strip()
+        ]
+        prompt_parts = []
+        if captions:
+            if len(captions) == 1:
+                prompt_parts.append(captions[0].strip())
+            else:
+                prompt_parts.append("\n".join(f"- {c.strip()}" for c in captions))
+        else:
+            if saved_image_paths:
+                prompt_parts.append(self._config.media.image_prompt)
+            else:
+                prompt_parts.append("Media received.")
+        if saved_file_info:
+            file_summary = ["\nFiles:"]
+            for name, path, size in saved_file_info:
+                file_summary.append(f"- {name} ({size} bytes) -> {path}")
+            prompt_parts.append("\n".join(file_summary))
+        if failed_count > 0:
+            prompt_parts.append(f"\nFailed to process {failed_count} item(s).")
+
+        inbox_dir = self._files_inbox_dir(record.workspace_path, topic_key)
+        outbox_dir = self._files_outbox_pending_dir(record.workspace_path, topic_key)
+        topic_dir = self._files_topic_dir(record.workspace_path, topic_key)
+        hint = wrap_injected_context(
+            FILES_HINT_TEMPLATE.format(
+                inbox=str(inbox_dir),
+                outbox=str(outbox_dir),
+                topic_key=topic_key,
+                topic_dir=str(topic_dir),
+                max_bytes=self._config.media.max_file_bytes,
+            )
+        )
+        prompt_parts.append(hint)
+        combined_prompt = "\n\n".join(prompt_parts)
+
+        input_items: list[dict[str, Any]] = [{"type": "text", "text": combined_prompt}]
+        for image_path in saved_image_paths:
+            input_items.append({"type": "localImage", "path": str(image_path)})
+
+        last_message = sorted_messages[-1]
+        reply_to_id = last_message.message_id
+
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.media_batch.ready",
+            chat_id=first_msg.chat_id,
+            thread_id=first_msg.thread_id,
+            image_count=len(saved_image_paths),
+            file_count=len(saved_file_info),
+            failed_count=failed_count,
+            reply_to_message_id=reply_to_id,
+        )
+        await self._handle_normal_message(
+            last_message,
+            runtime,
+            text_override=combined_prompt,
+            input_items=input_items,
             record=record,
         )
 
@@ -3697,6 +3954,12 @@ class TelegramCommandHandlers:
                     if placeholder_id is not None:
                         await self._delete_message(message.chat_id, placeholder_id)
                     return
+                await self._start_turn_progress(
+                    turn_key,
+                    ctx=ctx,
+                    model=record.model,
+                    label="working",
+                )
                 result = await turn_handle.wait()
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
@@ -3750,6 +4013,7 @@ class TelegramCommandHandlers:
                 if turn_key is not None:
                     self._turn_contexts.pop(turn_key, None)
                     self._clear_thinking_preview(turn_key)
+                    self._clear_turn_progress(turn_key)
             runtime.current_turn_id = None
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
