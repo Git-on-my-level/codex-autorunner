@@ -229,7 +229,6 @@ class TelegramMessageTransport:
             return False
         updated = f"{PLACEHOLDER_TEXT}\n\n{metrics}"
         edited = await self._edit_message_text(chat_id, message_id, updated)
-        await self._delete_message(chat_id, message_id)
         return edited
 
     async def _send_message(
