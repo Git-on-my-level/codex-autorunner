@@ -170,15 +170,14 @@ async function loadArtifact(runId, kind, targetEl) {
   if (!targetEl) return;
   targetEl.textContent = "Loading…";
   try {
-    const res = await fetch(`/api/runs/${runId}/${kind}`);
-    if (!res.ok) {
-      targetEl.textContent = "Not available.";
-      return;
-    }
-    const text = await res.text();
+    const text = await api(`/api/runs/${runId}/${kind}`);
     targetEl.textContent = text || "Not available.";
   } catch (err) {
-    targetEl.textContent = "Unable to load.";
+    const message = err instanceof Error ? err.message : "";
+    targetEl.textContent =
+      message.includes("401") || message.includes("403") || message.includes("404")
+        ? "Not available."
+        : "Unable to load.";
   }
 }
 
