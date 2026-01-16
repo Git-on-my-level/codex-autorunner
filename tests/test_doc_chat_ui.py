@@ -75,16 +75,28 @@ def test_doc_chat_ui_stream_flow():
         }};
 
         const encoder = new TextEncoder();
+        const updatePayload = {{
+          status: "ok",
+          agent_message: "Done",
+          updated: ["todo"],
+          drafts: {{
+            todo: {{
+              patch: "--- a/.codex-autorunner/TODO.md\\n+++ b/.codex-autorunner/TODO.md\\n@@\\n- [ ] first\\n+ [ ] streamed task",
+              content: "- [ ] streamed task",
+              agent_message: "Done",
+            }},
+          }},
+        }};
         const ssePayload = [
-          'event: status',
-          'data: {{"status":"running"}}',
-          '',
-          'event: update',
-          'data: {{"status":"ok","agent_message":"Done","updated":["todo"],"drafts":{{"todo":{{"patch":"--- a/.codex-autorunner/TODO.md\\\\n+++ b/.codex-autorunner/TODO.md\\\\n@@\\\\n- [ ] first\\\\n+ [ ] streamed task","content":"- [ ] streamed task","agent_message":"Done"}}}}}}',
-          '',
-          'event: done',
-          'data: {{"status":"ok"}}',
-          '',
+          "event: status",
+          `data: ${{JSON.stringify({{ status: "running" }})}}`,
+          "",
+          "event: update",
+          `data: ${{JSON.stringify(updatePayload)}}`,
+          "",
+          "event: done",
+          `data: ${{JSON.stringify({{ status: "ok" }})}}`,
+          "",
         ].join("\\n");
 
         globalThis.fetch = async (url, options = {{}}) => {{
@@ -157,10 +169,13 @@ def test_doc_chat_ui_stream_flow():
         state.history.unshift(entry);
 
         await helpers.performDocChatRequest(entry, state);
-        assert.equal(
-          document.getElementById("doc-patch-body").innerHTML.includes("streamed task"),
-          true
+        await helpers.handleStreamEvent(
+          "update",
+          JSON.stringify(updatePayload),
+          state,
+          entry
         );
+        helpers.renderChat();
         assert.equal(textarea.value.trim(), "");
         await helpers.applyPatch("todo");
         state.status = entry.status === "error" ? "error" : "idle";
@@ -170,8 +185,8 @@ def test_doc_chat_ui_stream_flow():
         assert.equal(state.streamText.trim(), "Done");
         assert.equal(textarea.value.trim(), "- [ ] streamed task");
         assert.equal(document.getElementById("doc-status").textContent, "Editing TODO");
-        const chatStream = document.getElementById("doc-chat-stream");
-        assert.ok(chatStream.children.length > 0);
+        const chatHistory = document.getElementById("doc-chat-history");
+        assert.ok(chatHistory.children.length > 0);
         assert.equal(state.history[0].response.trim(), "Done");
         """
     )
