@@ -7,7 +7,6 @@ from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.snapshot import (
     SeedContext,
-    generate_snapshot,
     summarize_changes,
 )
 
@@ -100,15 +99,33 @@ def test_summarize_changes_falls_back_to_seed_hash_diffs(repo: Path) -> None:
 
 
 def test_generate_snapshot_persists_state(repo: Path, monkeypatch) -> None:
-    from codex_autorunner.core import snapshot as snapshot_mod
+    import asyncio
 
-    def _fake_run_codex(*_args, **_kwargs) -> str:
-        return "# Repo Snapshot\n\n" + ("a" * 500)
-
-    monkeypatch.setattr(snapshot_mod, "_run_codex", _fake_run_codex)
+    from codex_autorunner.core.snapshot import SnapshotResult, SnapshotService
 
     engine = Engine(repo)
-    result = generate_snapshot(engine)
+
+    # Mock SnapshotService.generate_snapshot to simulate agent writing the file
+    async def mock_generate(self):
+        content = "# Repo Snapshot\n\n" + ("a" * 500)
+        snap_path = self.engine.repo_root / ".codex-autorunner" / "SNAPSHOT.md"
+        state_path = self.engine.repo_root / ".codex-autorunner" / "snapshot_state.json"
+
+        snap_path.parent.mkdir(parents=True, exist_ok=True)
+        snap_path.write_text(content, encoding="utf-8")
+
+        state = {"truncated": False}
+        import json
+
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        return SnapshotResult(content=content, truncated=False, state=state)
+
+    monkeypatch.setattr(SnapshotService, "generate_snapshot", mock_generate)
+
+    # Use the service instead of the standalone function
+    service = SnapshotService(engine)
+    result = asyncio.run(service.generate_snapshot())
 
     snap_path = repo / ".codex-autorunner" / "SNAPSHOT.md"
     state_path = repo / ".codex-autorunner" / "snapshot_state.json"

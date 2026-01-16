@@ -34,6 +34,7 @@ from ..core.hub import HubSupervisor
 from ..core.logging_utils import safe_log, setup_rotating_logger
 from ..core.optional_dependencies import require_optional_dependencies
 from ..core.request_context import get_request_id
+from ..core.snapshot import SnapshotService
 from ..core.state import load_state, persist_session_registry
 from ..core.usage import (
     UsageError,
@@ -85,6 +86,7 @@ class AppContext:
     manager: RunnerManager
     doc_chat: DocChatService
     spec_ingest: SpecIngestService
+    snapshot_service: SnapshotService
     app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
     app_server_prune_interval: Optional[float]
     app_server_threads: AppServerThreadRegistry
@@ -375,6 +377,11 @@ def _build_app_context(
         app_server_threads=app_server_threads,
         app_server_events=app_server_events,
     )
+    snapshot_service = SnapshotService(
+        engine,
+        app_server_supervisor=app_server_supervisor,
+        app_server_threads=app_server_threads,
+    )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:
         voice_service = None
@@ -426,6 +433,7 @@ def _build_app_context(
         manager=manager,
         doc_chat=doc_chat,
         spec_ingest=spec_ingest,
+        snapshot_service=snapshot_service,
         app_server_supervisor=app_server_supervisor,
         app_server_prune_interval=app_server_prune_interval,
         app_server_threads=app_server_threads,
@@ -457,6 +465,7 @@ def _apply_app_context(app: FastAPI, context: AppContext) -> None:
     app.state.manager = context.manager
     app.state.doc_chat = context.doc_chat
     app.state.spec_ingest = context.spec_ingest
+    app.state.snapshot_service = context.snapshot_service
     app.state.app_server_supervisor = context.app_server_supervisor
     app.state.app_server_prune_interval = context.app_server_prune_interval
     app.state.app_server_threads = context.app_server_threads

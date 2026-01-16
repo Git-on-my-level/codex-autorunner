@@ -3,6 +3,7 @@ import {
   flash,
   statusPill,
   confirmModal,
+  ingestModal,
   resolvePath,
   getAuthToken,
   isMobileViewport,
@@ -15,6 +16,7 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { initVoiceInput } from "./voice.js";
 import { renderTodoPreview } from "./todoPreview.js";
+import { saveToCache, loadFromCache, clearCache } from "./cache.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants & State
@@ -27,6 +29,7 @@ const PASTEABLE_DOCS = ["spec"];
 const CHAT_HISTORY_LIMIT = 8;
 const CHAT_EVENT_LIMIT = CONSTANTS.UI?.DOC_CHAT_EVENT_LIMIT || 12;
 const CHAT_EVENT_MAX = Math.max(60, CHAT_EVENT_LIMIT * 8);
+const CHAT_CACHE_KEY = "doc-chat-history";
 
 const docButtons = document.querySelectorAll(".chip[data-doc]");
 let docsCache = { todo: "", progress: "", opinions: "", spec: "", summary: "" };
@@ -106,10 +109,6 @@ const docActionsUI = {
 };
 
 const specIngestUI = {
-  panel: document.getElementById("spec-ingest-followup"),
-  input: document.getElementById("spec-ingest-input"),
-  continueBtn: document.getElementById("spec-ingest-continue"),
-  cancelBtn: document.getElementById("spec-ingest-cancel"),
   patchMain: document.getElementById("spec-ingest-patch-main"),
   patchSummary: document.getElementById("spec-ingest-patch-summary"),
   patchBody: document.getElementById("spec-ingest-patch-body"),
@@ -130,8 +129,10 @@ const threadRegistryUI = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function createChatState() {
+  // Load persisted history from cache
+  const cachedHistory = loadFromCache(CHAT_CACHE_KEY);
   return {
-    history: [],
+    history: Array.isArray(cachedHistory) ? cachedHistory : [],
     status: "idle",
     statusText: "",
     error: "",
@@ -149,6 +150,19 @@ function createChatState() {
 
 function getChatState() {
   return chatState;
+}
+
+function persistChatHistory() {
+  // Only persist completed entries (not running ones)
+  const toPersist = chatState.history
+    .filter((e) => e.status !== "running")
+    .slice(0, CHAT_HISTORY_LIMIT);
+  saveToCache(CHAT_CACHE_KEY, toPersist);
+}
+
+function clearChatHistory() {
+  chatState.history = [];
+  clearCache(CHAT_CACHE_KEY);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -356,8 +370,10 @@ function getDocFromUrl() {
 }
 
 function getDocChatTargets() {
-  if (!DOC_TYPES.includes(activeDoc)) return [];
-  return [activeDoc];
+  // Don't restrict targets by active tab - let the backend handle all docs.
+  // Restricting causes confusing errors when users mention docs by name
+  // but are viewing a different tab.
+  return [];
 }
 
 /**
@@ -600,19 +616,16 @@ function updateDocVisibility() {
   if (!docContent) return;
   const specHasPatch =
     activeDoc === "spec" && !!(specIngestState.patch || "").trim();
-  docContent.classList.toggle("hidden", specHasPatch);
+  const chatDraft = getDraft(activeDoc);
+  const chatHasPatch = !!(chatDraft && (chatDraft.patch || "").trim());
+  // Hide doc content when showing a diff
+  docContent.classList.toggle("hidden", specHasPatch || chatHasPatch);
 }
 
 function renderSpecIngestPatch() {
   if (!specIngestUI.patchMain) return;
   const isSpec = activeDoc === "spec";
   const hasPatch = !!(specIngestState.patch || "").trim();
-  if (specIngestUI.continueBtn)
-    specIngestUI.continueBtn.disabled = specIngestState.busy;
-  if (specIngestUI.cancelBtn) {
-    specIngestUI.cancelBtn.disabled = !specIngestState.busy;
-    specIngestUI.cancelBtn.classList.toggle("hidden", !specIngestState.busy);
-  }
   specIngestUI.patchMain.classList.toggle("hidden", !isSpec || !hasPatch);
   if (!isSpec || !hasPatch) {
     updateDocVisibility();
@@ -916,6 +929,16 @@ function getToolCalls(events) {
   return tools;
 }
 
+// Capture tool calls from state.events into entry for persistence
+function captureToolCalls(state, entry) {
+  const tools = getToolCalls(state.events);
+  if (tools.length > 0) {
+    entry.toolCalls = tools;
+  }
+  // Clear events after capturing to prevent accumulation across turns
+  state.events = [];
+}
+
 // Render tool call pills for the current turn
 function renderToolCallPills(tools) {
   if (!tools.length) return null;
@@ -962,19 +985,14 @@ function renderChatStream(state) {
     const msg = document.createElement("div");
     msg.className = `chat-message ${entry.status}`;
 
-    // User prompt bubble
+    // User prompt bubble - compact layout with inline timestamp
     const userBubble = document.createElement("div");
     userBubble.className = "chat-bubble user";
-    
-    const promptText = document.createElement("div");
-    promptText.className = "chat-prompt";
-    promptText.textContent = entry.prompt || "(no prompt)";
-    userBubble.appendChild(promptText);
 
-    // Timestamp and copy button row
-    const userMeta = document.createElement("div");
-    userMeta.className = "chat-meta";
-    
+    // Header row with timestamp and edit button
+    const headerRow = document.createElement("div");
+    headerRow.className = "chat-header";
+
     const stamp = document.createElement("span");
     stamp.className = "chat-time";
     stamp.textContent = entry.time
@@ -983,7 +1001,7 @@ function renderChatStream(state) {
           minute: "2-digit",
         })
       : "";
-    userMeta.appendChild(stamp);
+    headerRow.appendChild(stamp);
 
     const copyBtn = document.createElement("button");
     copyBtn.className = "chat-copy-btn";
@@ -997,9 +1015,15 @@ function renderChatStream(state) {
       historyNavIndex = -1;
       flash("Prompt restored to input");
     });
-    userMeta.appendChild(copyBtn);
-    
-    userBubble.appendChild(userMeta);
+    headerRow.appendChild(copyBtn);
+
+    userBubble.appendChild(headerRow);
+
+    const promptText = document.createElement("div");
+    promptText.className = "chat-prompt";
+    promptText.textContent = entry.prompt || "(no prompt)";
+    userBubble.appendChild(promptText);
+
     msg.appendChild(userBubble);
 
     // Assistant response bubble
@@ -1047,7 +1071,13 @@ function renderChatStream(state) {
         assistantBubble.appendChild(waiting);
       }
     } else {
-      // Completed entry - show response
+      // Completed entry - show compact action summary if available
+      if (entry.toolCalls && entry.toolCalls.length > 0) {
+        const toolsEl = renderToolCallPills(entry.toolCalls);
+        if (toolsEl) assistantBubble.appendChild(toolsEl);
+      }
+
+      // Show response
       const responseDiv = document.createElement("div");
       responseDiv.className = "chat-response";
       
@@ -1062,7 +1092,7 @@ function renderChatStream(state) {
       }
       assistantBubble.appendChild(responseDiv);
 
-      // Show updated docs tags
+      // Show updated docs tags inline with response
       if (entry.updated && entry.updated.length) {
         const tagsDiv = document.createElement("div");
         tagsDiv.className = "chat-tags";
@@ -1258,7 +1288,7 @@ async function startNewDocChatThread() {
       method: "POST",
       body: { key: "doc_chat" },
     });
-    state.history = [];
+    clearChatHistory();
     state.status = "idle";
     state.statusText = "";
     state.error = "";
@@ -1335,6 +1365,7 @@ async function sendDocChat() {
   } finally {
     state.controller = null;
     if (state.status !== "running") {
+      persistChatHistory();
       renderChat();
     }
   }
@@ -1377,6 +1408,7 @@ async function performDocChatRequest(entry, state) {
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("text/event-stream")) {
     await readChatStream(res, state, entry);
+    captureToolCalls(state, entry);
     if (
       entry.status !== "error" &&
       entry.status !== "done" &&
@@ -1795,9 +1827,6 @@ function setDoc(kind) {
   if (specIssueUI.row) {
     specIssueUI.row.classList.toggle("hidden", kind !== "spec");
   }
-  if (specIngestUI.panel) {
-    specIngestUI.panel.classList.toggle("hidden", kind !== "spec");
-  }
   
   // Toggle action button sets - snapshot has its own, others share standard
   if (docActionsUI.standard) {
@@ -1913,6 +1942,7 @@ async function importIssueToSpec() {
   } finally {
     specIssueUI.button.disabled = false;
     specIssueUI.button.classList.remove("loading");
+    persistChatHistory();
     renderChat();
   }
 }
@@ -2145,23 +2175,6 @@ export function initDocs() {
   });
   document.getElementById("ingest-spec").addEventListener("click", ingestSpec);
   document.getElementById("clear-docs").addEventListener("click", clearDocs);
-  if (specIngestUI.continueBtn) {
-    specIngestUI.continueBtn.addEventListener("click", continueSpecIngest);
-  }
-  if (specIngestUI.cancelBtn) {
-    specIngestUI.cancelBtn.addEventListener("click", cancelSpecIngest);
-  }
-  if (specIngestUI.input) {
-    specIngestUI.input.addEventListener("input", () => {
-      autoResizeTextarea(specIngestUI.input);
-    });
-    specIngestUI.input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        continueSpecIngest();
-      }
-    });
-  }
   if (specIngestUI.patchApply)
     specIngestUI.patchApply.addEventListener("click", applySpecIngestPatch);
   if (specIngestUI.patchDiscard)
@@ -2399,12 +2412,21 @@ async function ingestSpec() {
   const needsForce = ["todo", "progress", "opinions"].some(
     (k) => (docsCache[k] || "").trim().length > 0
   );
-  if (needsForce) {
-    const ok = await confirmModal(
-      "Overwrite TODO, PROGRESS, and OPINIONS from SPEC? Existing content will be replaced."
-    );
-    if (!ok) return;
-  }
+  
+  // Show ingest modal with optional refinement
+  const result = await ingestModal(
+    needsForce
+      ? "Overwrite TODO, PROGRESS, and OPINIONS from SPEC? Existing content will be replaced."
+      : "Ready to ingest SPEC into TODO, PROGRESS, and OPINIONS?",
+    {
+      showRefinement: true,
+      confirmText: "Ingest",
+      cancelText: "Cancel",
+    }
+  );
+  
+  if (!result.confirmed) return;
+  
   const button = document.getElementById("ingest-spec");
   button.disabled = true;
   button.classList.add("loading");
@@ -2412,9 +2434,13 @@ async function ingestSpec() {
   specIngestState.controller = new AbortController();
   renderSpecIngestPatch();
   try {
+    const body = { force: needsForce };
+    if (result.message) {
+      body.message = result.message;
+    }
     const data = await api("/api/ingest-spec", {
       method: "POST",
-      body: { force: needsForce },
+      body,
       signal: specIngestState.controller.signal,
     });
     const parsed = parseSpecIngestPayload(data);
@@ -2447,76 +2473,6 @@ async function ingestSpec() {
   }
 }
 
-async function interruptSpecIngest() {
-  try {
-    await api("/api/ingest-spec/interrupt", { method: "POST" });
-  } catch (err) {
-    flash(err.message || "Failed to interrupt spec ingest", "error");
-  }
-}
-
-function cancelSpecIngest() {
-  if (!specIngestState.busy) return;
-  interruptSpecIngest();
-  if (specIngestState.controller) specIngestState.controller.abort();
-  specIngestState.busy = false;
-  specIngestState.controller = null;
-  if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
-  flash("Spec ingest interrupted");
-  renderSpecIngestPatch();
-}
-
-async function continueSpecIngest() {
-  if (specIngestState.busy) return;
-  if (!specIngestUI.input) return;
-  const message = (specIngestUI.input.value || "").trim();
-  if (!message) {
-    flash("Enter a follow-up prompt to continue", "error");
-    return;
-  }
-  const needsForce = ["todo", "progress", "opinions"].some(
-    (k) => (docsCache[k] || "").trim().length > 0
-  );
-  specIngestState.busy = true;
-  if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = true;
-  specIngestState.controller = new AbortController();
-  renderSpecIngestPatch();
-  try {
-    const data = await api("/api/ingest-spec", {
-      method: "POST",
-      body: { force: needsForce, message },
-      signal: specIngestState.controller.signal,
-    });
-    const parsed = parseSpecIngestPayload(data);
-    if (parsed.error) throw new Error(parsed.error);
-    if (parsed.interrupted) {
-      specIngestState.patch = "";
-      specIngestState.agentMessage = parsed.agentMessage || "";
-      applySpecIngestDocs(parsed);
-      renderSpecIngestPatch();
-      flash("Spec ingest interrupted");
-      return;
-    }
-    specIngestState.patch = parsed.patch || "";
-    specIngestState.agentMessage = parsed.agentMessage || "";
-    applySpecIngestDocs(parsed);
-    renderSpecIngestPatch();
-    specIngestUI.input.value = "";
-    autoResizeTextarea(specIngestUI.input);
-    flash(parsed.patch ? "Spec ingest patch updated" : "Spec ingest updated docs");
-  } catch (err) {
-    if (err.name === "AbortError") {
-      return;
-    } else {
-      flash(err.message, "error");
-    }
-  } finally {
-    specIngestState.busy = false;
-    if (specIngestUI.continueBtn) specIngestUI.continueBtn.disabled = false;
-    specIngestState.controller = null;
-    renderSpecIngestPatch();
-  }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Spec Ingestion & Doc Clearing

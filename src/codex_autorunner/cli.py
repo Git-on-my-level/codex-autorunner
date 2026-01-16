@@ -17,7 +17,7 @@ from .core.engine import Engine, LockError, clear_stale_lock, doctor
 from .core.hub import HubSupervisor
 from .core.logging_utils import log_event, setup_rotating_logger
 from .core.optional_dependencies import require_optional_dependencies
-from .core.snapshot import SnapshotError, generate_snapshot
+from .core.snapshot import SnapshotError
 from .core.state import RunnerState, load_state, now_iso, save_state, state_lock
 from .core.usage import (
     UsageError,
@@ -701,10 +701,46 @@ def snapshot(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
 ):
     """Generate or update `.codex-autorunner/SNAPSHOT.md`."""
-    engine = _require_repo_config(repo)
     try:
-        generate_snapshot(engine)
-    except SnapshotError as exc:
+        engine = _require_repo_config(repo)
+        config = engine.config
+        if not config.app_server.command:
+            raise SnapshotError("app_server.command must be configured")
+
+        async def _run_snapshot() -> None:
+            logger = logging.getLogger("codex_autorunner.cli.app_server")
+
+            def _env_builder(
+                workspace_root: Path, _workspace_id: str, state_dir: Path
+            ) -> dict[str, str]:
+                state_dir.mkdir(parents=True, exist_ok=True)
+                return build_app_server_env(
+                    config.app_server.command,
+                    workspace_root,
+                    state_dir,
+                    logger=logger,
+                    event_prefix="cli",
+                )
+
+            supervisor = WorkspaceAppServerSupervisor(
+                config.app_server.command,
+                state_root=config.app_server.state_root,
+                env_builder=_env_builder,
+                logger=logger,
+                max_handles=config.app_server.max_handles,
+                idle_ttl_seconds=config.app_server.idle_ttl_seconds,
+                request_timeout=config.app_server.request_timeout,
+            )
+            from .core.snapshot import SnapshotService
+
+            service = SnapshotService(engine, app_server_supervisor=supervisor)
+            try:
+                await service.generate_snapshot()
+            finally:
+                await supervisor.close_all()
+
+        asyncio.run(_run_snapshot())
+    except (ConfigError, SnapshotError) as exc:
         _raise_exit(str(exc), cause=exc)
     typer.echo("Snapshot written to .codex-autorunner/SNAPSHOT.md")
 

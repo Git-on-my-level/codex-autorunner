@@ -601,3 +601,101 @@ export function inputModal(message, options = {}) {
     inputEl.select();
   });
 }
+
+/**
+ * Show a custom ingest modal dialog with optional refinement input.
+ * Works consistently across desktop and mobile.
+ * @param {string} message - The prompt message to display
+ * @param {Object} [options] - Optional configuration
+ * @param {boolean} [options.showRefinement=false] - Whether to show the refinement textarea
+ * @param {string} [options.placeholder=""] - Placeholder for refinement textarea
+ * @param {string} [options.defaultValue=""] - Default value for refinement textarea
+ * @param {string} [options.confirmText="Ingest"] - Text for the confirm button
+ * @param {string} [options.cancelText="Cancel"] - Text for the cancel button
+ * @returns {Promise<{confirmed: boolean, message: string}>} - Resolves to {confirmed, message}
+ */
+export function ingestModal(message, options = {}) {
+  const {
+    showRefinement = false,
+    placeholder = "Refine the ingest (optional)...",
+    defaultValue = "",
+    confirmText = "Ingest",
+    cancelText = "Cancel",
+  } = options;
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("ingest-modal");
+    const messageEl = document.getElementById("ingest-modal-message");
+    const refinementEl = document.getElementById("ingest-modal-refinement");
+    const inputEl = /** @type {HTMLTextAreaElement} */ (
+      document.getElementById("ingest-modal-input")
+    );
+    const okBtn = /** @type {HTMLButtonElement} */ (
+      document.getElementById("ingest-modal-ok")
+    );
+    const cancelBtn = /** @type {HTMLButtonElement} */ (
+      document.getElementById("ingest-modal-cancel")
+    );
+
+    const triggerEl = document.activeElement;
+    messageEl.textContent = message;
+    refinementEl.classList.toggle("hidden", !showRefinement);
+    if (showRefinement) {
+      inputEl.placeholder = placeholder;
+      inputEl.value = defaultValue;
+    }
+    okBtn.textContent = confirmText;
+    cancelBtn.textContent = cancelText;
+    let closeModal = null;
+    let settled = false;
+
+    const finalize = (result) => {
+      if (settled) return;
+      settled = true;
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      if (closeModal) {
+        const close = closeModal;
+        closeModal = null;
+        close();
+      }
+      resolve(result);
+    };
+
+    const onOk = () => {
+      const value = showRefinement ? inputEl.value.trim() : "";
+      finalize({ confirmed: true, message: value });
+    };
+
+    const onCancel = () => {
+      finalize({ confirmed: false, message: "" });
+    };
+
+    closeModal = openModal(overlay, {
+      initialFocus: showRefinement ? inputEl : okBtn,
+      returnFocusTo: triggerEl,
+      onRequestClose: () => finalize({ confirmed: false, message: "" }),
+      onKeydown: (event) => {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          if (showRefinement && document.activeElement === inputEl) {
+            event.preventDefault();
+            onOk();
+          }
+        } else if (event.key === "Enter" && !showRefinement) {
+          if (document.activeElement === okBtn) {
+            event.preventDefault();
+            onOk();
+          }
+        }
+      },
+    });
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+
+    // Focus the appropriate element
+    if (showRefinement) {
+      inputEl.focus();
+    }
+  });
+}
+

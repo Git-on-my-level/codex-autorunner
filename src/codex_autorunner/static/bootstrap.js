@@ -103,15 +103,28 @@
     ? versionPath
     : `/${versionPath}`;
 
-  fetch(normalizedVersionPath, { cache: "no-store" })
-    .then((res) => (res.ok ? res.json() : null))
-    .then((data) => {
-      const assetVersion = data && data.asset_version;
-      if (assetVersion && assetVersion !== version) {
-        const next = new URL(window.location.href);
-        next.searchParams.set("v", assetVersion);
-        window.location.replace(next.toString());
-      }
-    })
-    .catch(() => {});
+  const checkVersion = () => {
+    fetch(normalizedVersionPath, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const assetVersion = data && data.asset_version;
+        if (assetVersion && assetVersion !== version) {
+          const next = new URL(window.location.href);
+          next.searchParams.set("v", assetVersion);
+          window.location.replace(next.toString());
+        }
+      })
+      .catch(() => {});
+  };
+
+  checkVersion();
+
+  // In development (localhost), poll for version changes to support hot reload of static assets.
+  if (
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1" ||
+    window.location.hostname.endsWith(".local")
+  ) {
+    setInterval(checkVersion, 2000);
+  }
 })();

@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import difflib
 import re
 import threading
 from contextlib import asynccontextmanager, contextmanager
@@ -327,6 +328,27 @@ class SpecIngestService:
                 }
             )
 
+    def _build_patch(self, rel_path: str, before: str, after: str) -> str:
+        diff = difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=f"a/{rel_path}",
+            tofile=f"b/{rel_path}",
+            lineterm="",
+        )
+        return "\n".join(diff)
+
+    def _restore_docs(self, backups: Dict[str, str]) -> None:
+        config = self.engine.config
+        for key, content in backups.items():
+            path = config.doc_path(key)
+            try:
+                current = path.read_text(encoding="utf-8")
+            except OSError:
+                current = ""
+            if current != content:
+                atomic_write(path, content)
+
     async def _execute_app_server(
         self,
         *,
@@ -342,6 +364,12 @@ class SpecIngestService:
             message=message or "Ingest SPEC into TODO/PROGRESS/OPINIONS.",
             spec_path=spec_target,
         )
+
+        # Backup docs
+        backups = {}
+        for key in ("todo", "progress", "opinions"):
+            backups[key] = self.engine.docs.read_doc(key)
+
         supervisor = self._ensure_app_server()
         client = await supervisor.get_client(self.engine.repo_root)
         key = "spec_ingest"
@@ -362,11 +390,12 @@ class SpecIngestService:
             if not isinstance(thread_id, str) or not thread_id:
                 raise SpecIngestError("App-server did not return a thread id")
             self._app_server_threads.set_thread_id(key, thread_id)
+
         handle = await client.turn_start(
             thread_id,
             prompt,
             approval_policy="never",
-            sandbox_policy="readOnly",
+            sandbox_policy="dangerFullAccess",  # Allowed for doc edits per user request
         )
         active = self._register_active_turn(client, handle.turn_id, handle.thread_id)
         if self._app_server_events is not None:
@@ -376,9 +405,11 @@ class SpecIngestService:
                 )
             except Exception:
                 pass
+
         turn_task = asyncio.create_task(handle.wait(timeout=None))
         timeout_task = asyncio.create_task(asyncio.sleep(SPEC_INGEST_TIMEOUT_SECONDS))
         interrupt_task = asyncio.create_task(active.interrupt_event.wait())
+
         try:
             tasks = {turn_task, timeout_task, interrupt_task}
             done, _pending = await asyncio.wait(
@@ -409,36 +440,60 @@ class SpecIngestService:
             interrupt_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await interrupt_task
+
         if active.interrupted:
+            # Restore docs if interrupted
+            self._restore_docs(backups)
             return self._assemble_response(
                 {},
                 status="interrupted",
                 agent_message="Spec ingest interrupted",
             )
+
         if result.errors:
+            # Restore docs on error
+            self._restore_docs(backups)
             raise SpecIngestError(result.errors[-1])
+
         output = "\n".join(result.agent_messages).strip()
-        message_text, patch_text_raw = SpecIngestPatchParser.split_patch(output)
-        if not patch_text_raw.strip():
-            raise SpecIngestError("App-server output missing a patch")
-        agent_message = SpecIngestPatchParser.parse_agent_message(
-            message_text or output
-        )
+        agent_message = SpecIngestPatchParser.parse_agent_message(output)
+
+        # Compute patch from file changes
+        patches = []
+        docs_preview = {}
         targets = self._allowed_targets()
-        try:
-            patch_text, raw_targets = normalize_patch_text(patch_text_raw)
-            ensure_patch_targets_allowed(raw_targets, targets.values())
-            preview = preview_patch(self.engine.repo_root, patch_text, raw_targets)
-        except PatchError as exc:
-            raise SpecIngestError(str(exc)) from exc
+
+        for key in ("todo", "progress", "opinions"):
+            path = self.engine.config.doc_path(key)
+            try:
+                after = path.read_text(encoding="utf-8")
+            except OSError:
+                after = ""
+            before = backups.get(key, "")
+            docs_preview[key] = after
+
+            if after == before:
+                continue
+
+            rel_path = targets[key]
+            patch = self._build_patch(rel_path, before, after)
+            if patch.strip():
+                patches.append(patch)
+
+        # Always restore docs to state before ingest (user must apply patch)
+        self._restore_docs(backups)
+
+        patch_text = "\n".join(patches)
+        if not patch_text.strip():
+            raise SpecIngestError(
+                "App-server did not make any changes to TODO/PROGRESS/OPINIONS"
+            )
+
         self.patch_path.write_text(patch_text, encoding="utf-8")
         self.last_agent_message = agent_message
-        docs = {
-            key: preview.get(path, self.engine.docs.read_doc(key))
-            for key, path in targets.items()
-        }
+
         return self._assemble_response(
-            docs, patch=patch_text, agent_message=agent_message
+            docs_preview, patch=patch_text, agent_message=agent_message
         )
 
     async def execute(
@@ -467,6 +522,7 @@ class SpecIngestPatchParser:
 
     @staticmethod
     def strip_code_fences(text: str) -> str:
+        # Kept for backward compatibility if needed, but likely unused in new flow
         lines = text.strip().splitlines()
         if (
             len(lines) >= 2
@@ -478,6 +534,7 @@ class SpecIngestPatchParser:
 
     @classmethod
     def split_patch(cls, output: str) -> tuple[str, str]:
+        # Kept for backward compatibility if needed, but likely unused in new flow
         if not output:
             return "", ""
         match = re.search(

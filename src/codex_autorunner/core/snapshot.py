@@ -1,14 +1,20 @@
+import asyncio
 import dataclasses
 import hashlib
 import json
 import os
 import re
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from ..codex_cli import apply_codex_options, supports_reasoning
+from ..integrations.app_server.client import CodexAppServerError
+from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+from .app_server_prompts import build_app_server_snapshot_prompt
+from .app_server_threads import (
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
 from .config import RepoConfig
 from .engine import Engine
 from .git_utils import (
@@ -19,7 +25,6 @@ from .git_utils import (
     git_ls_files,
     git_status_porcelain,
 )
-from .prompts import SNAPSHOT_PROMPT as _SNAPSHOT_PROMPT
 from .utils import atomic_write, read_json
 
 
@@ -421,92 +426,6 @@ def summarize_changes(
     return "No changes detected (best-effort).\n"
 
 
-def build_snapshot_prompt(
-    *,
-    seed_context: str,
-    previous_snapshot: Optional[str] = None,
-    changes: Optional[str] = None,
-) -> str:
-    base = _SNAPSHOT_PROMPT.format(seed_context=seed_context.strip())
-    previous = (previous_snapshot or "").strip()
-    change_text = (changes or "").strip()
-
-    # Single default behavior:
-    # - If a previous snapshot is available, update it incrementally using the change
-    #   summary as a hint.
-    # - Otherwise, generate a fresh snapshot.
-    if previous:
-        return (
-            f"{base}\n\n"
-            "<PREVIOUS_SNAPSHOT>\n"
-            f"{previous}\n"
-            "</PREVIOUS_SNAPSHOT>\n\n"
-            "<CHANGES_SINCE_LAST_SNAPSHOT>\n"
-            f"{change_text}\n"
-            "</CHANGES_SINCE_LAST_SNAPSHOT>\n\n"
-            "Update instructions:\n"
-            "- Preserve the same headings and overall structure.\n"
-            "- Update only what changed; keep unchanged sections concise.\n"
-            "- If uncertain, say so explicitly (do not guess).\n"
-        )
-    return (
-        f"{base}\n\n"
-        "Instructions:\n"
-        "- Generate a fresh snapshot from the seed context.\n"
-        "- Preserve the required headings and overall structure.\n"
-        "- If uncertain, say so explicitly (do not guess).\n"
-    )
-
-
-def _inject_model_arg(args: List[str], model: str) -> List[str]:
-    if not model:
-        return list(args)
-    if "--model" in args:
-        return list(args)
-    out = list(args)
-    try:
-        idx = out.index("exec")
-    except ValueError:
-        return ["--model", model] + out
-    return out[:idx] + ["--model", model] + out[idx:]
-
-
-def _run_codex(engine: Engine, prompt: str, *, prefer_large_model: bool) -> str:
-    config = _repo_config(engine)
-    args = list(config.codex_args)
-    model = config.codex_model
-    if prefer_large_model:
-        model = (((config.raw or {}).get("codex") or {}).get("models") or {}).get(
-            "large"
-        )
-    if model:
-        args = _inject_model_arg(args, model)
-    reasoning_supported = supports_reasoning(config.codex_binary)
-    args = apply_codex_options(
-        args,
-        model=None,
-        reasoning=config.codex_reasoning,
-        supports_reasoning=reasoning_supported,
-    )
-    cmd = [config.codex_binary] + args + [prompt]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(engine.repo_root),
-        )
-    except FileNotFoundError as exc:
-        raise SnapshotError(f"Codex binary not found: {config.codex_binary}") from exc
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        stdout_tail = (result.stdout or "").strip()[-400:]
-        raise SnapshotError(
-            f"Codex snapshot failed (code {result.returncode}). {stderr or stdout_tail}"
-        )
-    return (result.stdout or "").strip()
-
-
 def load_snapshot(engine: Engine) -> Optional[str]:
     config = _repo_config(engine)
     path = config.doc_path("snapshot")
@@ -527,50 +446,135 @@ class SnapshotResult:
     state: dict
 
 
+class SnapshotService:
+    def __init__(
+        self,
+        engine: Engine,
+        *,
+        app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
+        app_server_threads: Optional[AppServerThreadRegistry] = None,
+    ) -> None:
+        self.engine = engine
+        self._app_server_supervisor = app_server_supervisor
+        self._app_server_threads = app_server_threads or AppServerThreadRegistry(
+            default_app_server_threads_path(self.engine.repo_root)
+        )
+        self._lock: Optional[asyncio.Lock] = None
+
+    def _ensure_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            try:
+                self._lock = asyncio.Lock()
+            except RuntimeError:
+                asyncio.set_event_loop(asyncio.new_event_loop())
+                self._lock = asyncio.Lock()
+        return self._lock
+
+    def _ensure_app_server(self) -> WorkspaceAppServerSupervisor:
+        if self._app_server_supervisor is None:
+            raise SnapshotError("App-server backend is not configured")
+        return self._app_server_supervisor
+
+    async def generate_snapshot(
+        self,
+    ) -> SnapshotResult:
+        lock = self._ensure_lock()
+        if lock.locked():
+            raise SnapshotError("Snapshot generation already running")
+        async with lock:
+            config = _repo_config(self.engine)
+            previous_snapshot = await asyncio.to_thread(load_snapshot, self.engine)
+            previous_state = await asyncio.to_thread(load_snapshot_state, self.engine)
+
+            seed = await asyncio.to_thread(collect_seed_context, self.engine)
+            changes = None
+            if previous_snapshot:
+                changes = await asyncio.to_thread(
+                    summarize_changes,
+                    self.engine,
+                    previous_state=previous_state,
+                    current_seed=seed,
+                )
+
+            prompt = build_app_server_snapshot_prompt(
+                config,
+                seed_context=seed.text,
+                previous_snapshot=previous_snapshot,
+                changes=changes,
+            )
+            prompt_hash = _sha256_text(prompt)
+
+            supervisor = self._ensure_app_server()
+            client = await supervisor.get_client(self.engine.repo_root)
+            key = "snapshot"
+            thread_id = self._app_server_threads.get_thread_id(key)
+            if thread_id:
+                try:
+                    result = await client.thread_resume(thread_id)
+                    resumed = result.get("id")
+                    if isinstance(resumed, str) and resumed:
+                        thread_id = resumed
+                        self._app_server_threads.set_thread_id(key, thread_id)
+                except CodexAppServerError:
+                    self._app_server_threads.reset_thread(key)
+                    thread_id = None
+            if not thread_id:
+                thread = await client.thread_start(str(self.engine.repo_root))
+                thread_id = thread.get("id")
+                if not isinstance(thread_id, str) or not thread_id:
+                    raise SnapshotError("App-server did not return a thread id")
+                self._app_server_threads.set_thread_id(key, thread_id)
+
+            handle = await client.turn_start(
+                thread_id,
+                prompt,
+                approval_policy="never",
+                sandbox_policy="dangerFullAccess",
+            )
+
+            # Wait for completion (no streaming/interrupts for now)
+            try:
+                await handle.wait(timeout=300)  # 5 mins timeout
+            except asyncio.TimeoutError as err:
+                raise SnapshotError("Snapshot generation timed out") from err
+
+            # Read the result from disk
+            path = config.doc_path("snapshot")
+            if not path.exists():
+                raise SnapshotError("Agent failed to write snapshot file")
+
+            final = path.read_text(encoding="utf-8")
+            final = redact_text(final).strip() + "\n"
+            truncated = False
+
+            state = {
+                "generated_at": _now_iso(),
+                "truncated": truncated,
+                "head_sha": seed.head_sha,
+                "branch": seed.branch,
+                "seed_hash": seed.seed_hash,
+                "prompt_hash": prompt_hash,
+                "seed_bytes_read": seed.bytes_read,
+                "seed_file_hashes": seed.file_hashes,
+            }
+
+            atomic_write(
+                config.doc_path("snapshot"),
+                final if final.endswith("\n") else final + "\n",
+            )
+            atomic_write(
+                config.doc_path("snapshot_state"),
+                json.dumps(state, indent=2, sort_keys=True) + "\n",
+            )
+            return SnapshotResult(content=final, truncated=truncated, state=state)
+
+
+# Keep the original function signature for backward compatibility if needed,
+# but it will likely break if used in sync context without loop.
+# We will update callers to use SnapshotService.
 def generate_snapshot(
     engine: Engine,
     *,
     prefer_large_model: bool = True,
 ) -> SnapshotResult:
-    config = _repo_config(engine)
-    previous_snapshot = load_snapshot(engine)
-    previous_state = load_snapshot_state(engine)
-
-    seed = collect_seed_context(engine)
-    changes = None
-    if previous_snapshot:
-        changes = summarize_changes(
-            engine, previous_state=previous_state, current_seed=seed
-        )
-
-    prompt = build_snapshot_prompt(
-        seed_context=seed.text,
-        previous_snapshot=previous_snapshot,
-        changes=changes,
-    )
-    prompt_hash = _sha256_text(prompt)
-
-    model_out = _run_codex(engine, prompt, prefer_large_model=prefer_large_model)
-    model_out = redact_text(model_out).strip() + "\n"
-    final = model_out
-    truncated = False
-
-    state = {
-        "generated_at": _now_iso(),
-        "truncated": truncated,
-        "head_sha": seed.head_sha,
-        "branch": seed.branch,
-        "seed_hash": seed.seed_hash,
-        "prompt_hash": prompt_hash,
-        "seed_bytes_read": seed.bytes_read,
-        "seed_file_hashes": seed.file_hashes,
-    }
-
-    atomic_write(
-        config.doc_path("snapshot"), final if final.endswith("\n") else final + "\n"
-    )
-    atomic_write(
-        config.doc_path("snapshot_state"),
-        json.dumps(state, indent=2, sort_keys=True) + "\n",
-    )
-    return SnapshotResult(content=final, truncated=truncated, state=state)
+    raise NotImplementedError("Use SnapshotService.generate_snapshot() instead")

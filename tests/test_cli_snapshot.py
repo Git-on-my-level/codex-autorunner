@@ -14,19 +14,22 @@ runner = CliRunner()
 def test_snapshot_invokes_generate_snapshot(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from codex_autorunner.core.snapshot import SnapshotService
+
+    # Update config to have app_server.command
+    config_path = repo / "codex-autorunner.yml"
+    if config_path.exists():
+        content = config_path.read_text()
+        if "app_server:" not in content:
+            with config_path.open("a") as f:
+                f.write("\napp_server:\n  command: ['echo', 'hello']\n")
+
     calls = []
 
-    def fake_generate_snapshot(engine):
-        calls.append(engine)
-        return type(
-            "R",
-            (),
-            {"state": {}, "truncated": False},
-        )()
+    async def mock_generate(self):
+        calls.append(self)
 
-    monkeypatch.setattr(
-        "codex_autorunner.cli.generate_snapshot", fake_generate_snapshot
-    )
+    monkeypatch.setattr(SnapshotService, "generate_snapshot", mock_generate)
 
     result = runner.invoke(app, ["snapshot", "--repo", str(repo)])
     assert result.exit_code == 0, result.stdout

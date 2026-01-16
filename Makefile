@@ -73,6 +73,11 @@ check:
 
 format:
 	$(PYTHON) -m black src tests
+	$(PYTHON) -m ruff check --fix src tests
+	@if [ -d node_modules ]; then \
+		echo "Fixing JS files (eslint)..."; \
+		./node_modules/.bin/eslint --fix "src/codex_autorunner/static/**/*.js" || true; \
+	fi
 
 deadcode-baseline:
 	$(PYTHON) scripts/deadcode.py --update-baseline

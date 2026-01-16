@@ -2,7 +2,6 @@
 Document management routes: read/write docs and chat functionality.
 """
 
-import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +17,6 @@ from ..core.doc_chat import (
 )
 from ..core.snapshot import (
     SnapshotError,
-    generate_snapshot,
     load_snapshot,
     load_snapshot_state,
 )
@@ -87,12 +85,9 @@ def build_docs_routes() -> APIRouter:
     ):
         # Snapshot generation has a single default behavior now; we accept an
         # optional JSON object for backwards compatibility, but ignore any fields.
-        engine = request.app.state.engine
+        snapshot_service = request.app.state.snapshot_service
         try:
-            result = await asyncio.to_thread(
-                generate_snapshot,
-                engine,
-            )
+            result = await snapshot_service.generate_snapshot()
         except SnapshotError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
