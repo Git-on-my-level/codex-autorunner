@@ -13,24 +13,35 @@ def split_markdown_message(
     *,
     max_len: int = TELEGRAM_MAX_MESSAGE_LENGTH,
     render: Optional[RenderFn] = None,
+    include_indicator: bool = True,
 ) -> list[str]:
     if not text:
         return []
     if max_len <= 0:
         raise ValueError("max_len must be positive")
     render = render or _format_telegram_html
-    remaining = text
-    open_fence: Optional[str] = None
-    chunks: list[str] = []
-    while remaining:
-        rendered, consumed, open_fence = _split_once(
-            remaining,
+    if not include_indicator:
+        return _split_markdown_message_chunks(
+            text,
             max_len=max_len,
-            open_fence=open_fence,
             render=render,
+            total_chunks=1,
         )
-        chunks.append(rendered)
-        remaining = remaining[consumed:]
+    total_estimate = 1
+    chunks: list[str] = []
+    for _ in range(5):
+        chunks = _split_markdown_message_chunks(
+            text,
+            max_len=max_len,
+            render=render,
+            total_chunks=total_estimate,
+        )
+        actual_total = len(chunks)
+        if actual_total <= 1:
+            return chunks
+        if actual_total == total_estimate:
+            return chunks
+        total_estimate = actual_total
     return chunks
 
 
@@ -57,6 +68,7 @@ def _split_once(
     max_len: int,
     open_fence: Optional[str],
     render: RenderFn,
+    indicator: str,
 ) -> tuple[str, int, Optional[str]]:
     reopen = _reopen_fence(open_fence)
     limit = min(len(text), max_len)
@@ -66,7 +78,7 @@ def _split_once(
             content = text[: max(1, min(len(text), limit))]
         end_state = _scan_fence_state(content, open_fence=open_fence)
         suffix = _close_fence_suffix(content) if end_state is not None else ""
-        raw_chunk = f"{reopen}{content}{suffix}"
+        raw_chunk = f"{reopen}{content}{suffix}{indicator}"
         rendered = render(raw_chunk)
         if len(rendered) <= max_len or limit <= 1:
             return rendered, len(content), end_state
@@ -106,6 +118,10 @@ def _trim_text(
 def _slice_to_boundary(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
+    para_cut = text.rfind("\n\n", 0, limit + 1)
+    if para_cut != -1:
+        if para_cut + 2 <= limit:
+            return text[: para_cut + 2]
     cut = text.rfind("\n", 0, limit + 1)
     if cut == -1:
         cut = text.rfind(" ", 0, limit + 1)
@@ -144,3 +160,35 @@ def _reopen_fence(info: Optional[str]) -> str:
     if info is None:
         return ""
     return f"```{info}\n"
+
+
+def _split_markdown_message_chunks(
+    text: str,
+    *,
+    max_len: int,
+    render: RenderFn,
+    total_chunks: int,
+) -> list[str]:
+    remaining = text
+    open_fence: Optional[str] = None
+    chunks: list[str] = []
+    chunk_index = 1
+    while remaining:
+        indicator = (
+            _continued_indicator(chunk_index, total_chunks) if total_chunks > 1 else ""
+        )
+        rendered, consumed, open_fence = _split_once(
+            remaining,
+            max_len=max_len,
+            open_fence=open_fence,
+            render=render,
+            indicator=indicator,
+        )
+        chunks.append(rendered)
+        remaining = remaining[consumed:]
+        chunk_index += 1
+    return chunks
+
+
+def _continued_indicator(index: int, total: int) -> str:
+    return f"\n\ncontinued ({index}/{total})"

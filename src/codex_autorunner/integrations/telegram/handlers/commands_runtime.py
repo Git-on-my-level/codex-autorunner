@@ -672,24 +672,38 @@ class TelegramCommandHandlers:
         )
         if isinstance(outcome, _TurnRunFailure):
             return
+        metrics = self._format_turn_metrics_text(
+            outcome.token_usage, outcome.elapsed_seconds
+        )
+        metrics_mode = self._metrics_mode()
+        response_text = outcome.response
+        if metrics and metrics_mode == "append_to_response":
+            response_text = f"{response_text}\n\n{metrics}"
         response_sent = await self._deliver_turn_response(
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             reply_to=message.message_id,
             placeholder_id=outcome.placeholder_id,
-            response=outcome.response,
+            response=response_text,
         )
-        await self._send_turn_metrics(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            elapsed_seconds=outcome.elapsed_seconds,
-            token_usage=outcome.token_usage,
-        )
+        placeholder_handled = False
+        if metrics and metrics_mode == "separate":
+            await self._send_turn_metrics(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                elapsed_seconds=outcome.elapsed_seconds,
+                token_usage=outcome.token_usage,
+            )
+        elif metrics and metrics_mode == "append_to_progress" and response_sent:
+            placeholder_handled = await self._append_metrics_to_placeholder(
+                message.chat_id, outcome.placeholder_id, metrics
+            )
         if outcome.turn_id:
             self._token_usage_by_turn.pop(outcome.turn_id, None)
         if response_sent:
-            await self._delete_message(message.chat_id, outcome.placeholder_id)
+            if not placeholder_handled:
+                await self._delete_message(message.chat_id, outcome.placeholder_id)
             await self._finalize_voice_transcript(
                 message.chat_id,
                 outcome.transcript_message_id,
@@ -4074,28 +4088,40 @@ class TelegramCommandHandlers:
             agent_message_count=len(result.agent_messages),
             error_count=len(result.errors),
         )
+        turn_id = turn_handle.turn_id if turn_handle else None
+        token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
+        if token_usage is None and thread_id:
+            token_usage = self._token_usage_by_thread.get(thread_id)
+        metrics = self._format_turn_metrics_text(token_usage, turn_elapsed_seconds)
+        metrics_mode = self._metrics_mode()
+        response_text = response
+        if metrics and metrics_mode == "append_to_response":
+            response_text = f"{response_text}\n\n{metrics}"
         response_sent = await self._deliver_turn_response(
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             reply_to=message.message_id,
             placeholder_id=placeholder_id,
-            response=response,
+            response=response_text,
         )
-        turn_id = turn_handle.turn_id if turn_handle else None
-        token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
-        if token_usage is None and thread_id:
-            token_usage = self._token_usage_by_thread.get(thread_id)
-        await self._send_turn_metrics(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            elapsed_seconds=turn_elapsed_seconds,
-            token_usage=token_usage,
-        )
+        placeholder_handled = False
+        if metrics and metrics_mode == "separate":
+            await self._send_turn_metrics(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                elapsed_seconds=turn_elapsed_seconds,
+                token_usage=token_usage,
+            )
+        elif metrics and metrics_mode == "append_to_progress" and response_sent:
+            placeholder_handled = await self._append_metrics_to_placeholder(
+                message.chat_id, placeholder_id, metrics
+            )
         if turn_id:
             self._token_usage_by_turn.pop(turn_id, None)
         if response_sent:
-            await self._delete_message(message.chat_id, placeholder_id)
+            if not placeholder_handled:
+                await self._delete_message(message.chat_id, placeholder_id)
         await self._flush_outbox_files(
             record,
             chat_id=message.chat_id,

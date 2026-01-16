@@ -190,6 +190,16 @@ class TelegramMessageTransport:
             placeholder_id=placeholder_id,
         )
 
+    def _format_turn_metrics_text(
+        self,
+        token_usage: Optional[dict[str, Any]],
+        elapsed_seconds: Optional[float],
+    ) -> Optional[str]:
+        return _format_turn_metrics(token_usage, elapsed_seconds)
+
+    def _metrics_mode(self) -> str:
+        return getattr(self._config, "metrics_mode", "separate")
+
     async def _send_turn_metrics(
         self,
         *,
@@ -199,7 +209,7 @@ class TelegramMessageTransport:
         elapsed_seconds: Optional[float],
         token_usage: Optional[dict[str, Any]],
     ) -> bool:
-        metrics = _format_turn_metrics(token_usage, elapsed_seconds)
+        metrics = self._format_turn_metrics_text(token_usage, elapsed_seconds)
         if not metrics:
             return False
         return await self._send_message_with_outbox(
@@ -208,6 +218,18 @@ class TelegramMessageTransport:
             thread_id=thread_id,
             reply_to=reply_to,
         )
+
+    async def _append_metrics_to_placeholder(
+        self,
+        chat_id: int,
+        message_id: Optional[int],
+        metrics: str,
+    ) -> bool:
+        if message_id is None:
+            return False
+        updated = f"{PLACEHOLDER_TEXT}\n\n{metrics}"
+        edited = await self._edit_message_text(chat_id, message_id, updated)
+        return edited
 
     async def _send_message(
         self,
@@ -236,10 +258,23 @@ class TelegramMessageTransport:
             rendered, used_mode = self._render_message(text)
             if used_mode and len(rendered) > TELEGRAM_MAX_MESSAGE_LENGTH:
                 overflow_mode = getattr(self._config, "message_overflow", "document")
-                if overflow_mode == "split" and used_mode == "HTML":
+                if overflow_mode == "split" and used_mode in (
+                    "HTML",
+                    "Markdown",
+                    "MarkdownV2",
+                ):
+                    if used_mode == "HTML":
+                        split_renderer = _format_telegram_html
+                    else:
+
+                        def _render_markdown(value: str, mode: str = used_mode) -> str:
+                            return _format_telegram_markdown(value, mode)
+
+                        split_renderer = _render_markdown
                     chunks = split_markdown_message(
                         text,
                         max_len=TELEGRAM_MAX_MESSAGE_LENGTH,
+                        render=split_renderer,
                     )
                     for idx, chunk in enumerate(chunks):
                         await self._bot.send_message(

@@ -14,6 +14,7 @@ from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
     _RuntimeStub,
 )
+from codex_autorunner.integrations.telegram.helpers import _format_turn_metrics
 from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
 
 
@@ -199,6 +200,24 @@ class _HandlerStub(TelegramCommandHandlers):
         self, _chat_id: int, message_id: int, text: str
     ) -> bool:
         self._edit_calls.append((message_id, text))
+        return True
+
+    def _format_turn_metrics_text(
+        self,
+        token_usage: Optional[dict[str, object]],
+        elapsed_seconds: Optional[float],
+    ) -> Optional[str]:
+        return _format_turn_metrics(token_usage, elapsed_seconds)
+
+    def _metrics_mode(self) -> str:
+        return "separate"
+
+    async def _send_turn_metrics(self, *_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def _append_metrics_to_placeholder(
+        self, *_args: object, **_kwargs: object
+    ) -> bool:
         return True
 
     def _turn_key(
