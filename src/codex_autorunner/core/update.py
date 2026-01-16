@@ -94,6 +94,20 @@ def _is_valid_git_repo(path: Path) -> bool:
     return result.returncode == 0
 
 
+def _has_valid_head(path: Path) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0 and bool((result.stdout or "").strip())
+
+
 def _read_update_status() -> Optional[dict[str, object]]:
     path = _update_status_path()
     if not path.exists():
@@ -253,7 +267,7 @@ def _resolve_local_repo_root(
     if repo_root is not None:
         return repo_root
 
-    if (update_cache_dir / ".git").exists():
+    if (update_cache_dir / ".git").exists() and _has_valid_head(update_cache_dir):
         return update_cache_dir
 
     return _find_git_root_from_install_metadata()
