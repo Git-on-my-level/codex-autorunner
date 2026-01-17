@@ -291,7 +291,10 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 session_id = str(uuid.uuid4())
                 resume_mode = mode == "resume"
                 if agent == "opencode":
-                    cmd = build_opencode_terminal_cmd(model)
+                    cmd = build_opencode_terminal_cmd(
+                        engine.config.agent_binary("opencode"),
+                        model,
+                    )
                 else:
                     cmd = build_codex_terminal_cmd(
                         engine,

@@ -153,6 +153,7 @@ class TelegramBotConfig:
     poll_allowed_updates: list[str]
     message_overflow: str
     metrics_mode: str
+    agent_binaries: dict[str, str]
 
     @classmethod
     def from_raw(
@@ -160,6 +161,7 @@ class TelegramBotConfig:
         raw: Optional[dict[str, Any]],
         *,
         root: Path,
+        agent_binaries: Optional[dict[str, str]] = None,
         env: Optional[dict[str, str]] = None,
     ) -> "TelegramBotConfig":
         env = env or dict(os.environ)
@@ -348,6 +350,7 @@ class TelegramBotConfig:
             metrics_mode = metrics_mode.lower()
         if metrics_mode not in METRICS_MODE_OPTIONS:
             metrics_mode = DEFAULT_METRICS_MODE
+        agent_binaries = dict(agent_binaries or {})
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
             command_reg_raw_value if isinstance(command_reg_raw_value, dict) else {}
@@ -430,6 +433,7 @@ class TelegramBotConfig:
             poll_allowed_updates=poll_allowed_updates,
             message_overflow=message_overflow,
             metrics_mode=metrics_mode,
+            agent_binaries=agent_binaries,
         )
 
     def validate(self) -> None:

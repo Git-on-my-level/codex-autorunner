@@ -383,7 +383,8 @@ class TelegramCommandHandlers:
         return agent == "codex"
 
     def _opencode_available(self) -> bool:
-        return shutil.which("opencode") is not None
+        binary = self._config.agent_binaries.get("opencode", "opencode")
+        return shutil.which(binary) is not None
 
     async def _verify_active_thread(
         self, message: TelegramMessage, record: "TelegramTopicRecord"
