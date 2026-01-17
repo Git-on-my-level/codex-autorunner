@@ -41,6 +41,7 @@ class ProgressAction:
 @dataclass
 class TurnProgressTracker:
     started_at: float
+    agent: str
     model: str
     label: str
     max_actions: int
@@ -144,7 +145,7 @@ def render_progress_text(
     if now is None:
         now = time.monotonic()
     elapsed = format_elapsed(now - tracker.started_at)
-    parts = [tracker.label, tracker.model, elapsed]
+    parts = [tracker.label, f"agent {tracker.agent}", tracker.model, elapsed]
     if tracker.step:
         parts.append(f"step {tracker.step}")
     if tracker.context_usage_percent is not None:

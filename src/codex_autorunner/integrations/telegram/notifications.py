@@ -199,6 +199,7 @@ class TelegramNotificationHandlers:
         turn_key: tuple[str, str],
         *,
         ctx: Any,
+        agent: str,
         model: Optional[str],
         label: str = "working",
     ) -> None:
@@ -206,6 +207,7 @@ class TelegramNotificationHandlers:
             return
         tracker = TurnProgressTracker(
             started_at=time.monotonic(),
+            agent=agent,
             model=model or "default",
             label=label,
             max_actions=self._config.progress_stream.max_actions,

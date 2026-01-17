@@ -245,6 +245,7 @@ class _HandlerStub(TelegramCommandHandlers):
         _turn_key: tuple[str, str],
         *,
         ctx: object,
+        agent: str,
         model: Optional[str],
         label: str = "working",
     ) -> None:
