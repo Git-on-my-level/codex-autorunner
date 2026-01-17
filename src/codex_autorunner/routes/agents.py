@@ -16,6 +16,26 @@ from ..agents.types import ModelCatalog
 from .shared import SSE_HEADERS
 
 
+def _available_agents(request: Request) -> tuple[list[dict[str, str]], str]:
+    agents: list[dict[str, str]] = []
+    default_agent: Optional[str] = None
+
+    if getattr(request.app.state, "app_server_supervisor", None) is not None:
+        agents.append({"id": "codex", "name": "Codex"})
+        default_agent = "codex"
+
+    if getattr(request.app.state, "opencode_supervisor", None) is not None:
+        agents.append({"id": "opencode", "name": "OpenCode"})
+        if default_agent is None:
+            default_agent = "opencode"
+
+    if not agents:
+        agents = [{"id": "codex", "name": "Codex"}]
+        default_agent = "codex"
+
+    return agents, default_agent or "codex"
+
+
 def _serialize_model_catalog(catalog: ModelCatalog) -> dict[str, Any]:
     return {
         "default_model": catalog.default_model,
@@ -105,14 +125,9 @@ def build_agents_routes() -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/agents")
-    def list_agents() -> dict[str, Any]:
-        return {
-            "agents": [
-                {"id": "codex", "name": "Codex"},
-                {"id": "opencode", "name": "OpenCode"},
-            ],
-            "default": "codex",
-        }
+    def list_agents(request: Request) -> dict[str, Any]:
+        agents, default_agent = _available_agents(request)
+        return {"agents": agents, "default": default_agent}
 
     @router.get("/api/agents/{agent}/models")
     async def list_agent_models(agent: str, request: Request):
