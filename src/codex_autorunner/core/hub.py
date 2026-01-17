@@ -15,6 +15,7 @@ from .engine import Engine
 from .git_utils import (
     GitError,
     git_available,
+    git_default_branch,
     git_is_clean,
     git_upstream_status,
     run_git,
@@ -59,6 +60,7 @@ class RepoSnapshot:
     worktree_of: Optional[str]
     branch: Optional[str]
     exists_on_disk: bool
+    is_clean: Optional[bool]
     initialized: bool
     init_error: Optional[str]
     status: RepoStatus
@@ -84,6 +86,7 @@ class RepoSnapshot:
             "worktree_of": self.worktree_of,
             "branch": self.branch,
             "exists_on_disk": self.exists_on_disk,
+            "is_clean": self.is_clean,
             "initialized": self.initialized,
             "init_error": self.init_error,
             "status": self.status.value,
@@ -143,6 +146,7 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                 worktree_of=entry.get("worktree_of"),
                 branch=entry.get("branch"),
                 exists_on_disk=bool(entry.get("exists_on_disk", False)),
+                is_clean=entry.get("is_clean"),
                 initialized=bool(entry.get("initialized", False)),
                 init_error=entry.get("init_error"),
                 status=RepoStatus(entry.get("status", RepoStatus.UNINITIALIZED.value)),
@@ -290,6 +294,65 @@ class HubSupervisor:
         if not repo_path.exists():
             raise ValueError(f"Repo {repo_id} missing on disk")
         seed_repo_files(repo_path, force=False, git_required=False)
+        return self._snapshot_for_repo(repo_id)
+
+    def sync_main(self, repo_id: str) -> RepoSnapshot:
+        self._invalidate_list_cache()
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        repo = manifest.get(repo_id)
+        if not repo:
+            raise ValueError(f"Repo {repo_id} not found in manifest")
+        repo_root = (self.hub_config.root / repo.path).resolve()
+        if not repo_root.exists():
+            raise ValueError(f"Repo {repo_id} missing on disk")
+        if not git_available(repo_root):
+            raise ValueError(f"Repo {repo_id} is not a git repository")
+        if not git_is_clean(repo_root):
+            raise ValueError("Repo has uncommitted changes; commit or stash first")
+
+        try:
+            proc = run_git(
+                ["fetch", "--prune", "origin"],
+                repo_root,
+                check=False,
+                timeout_seconds=120,
+            )
+        except GitError as exc:
+            raise ValueError(f"git fetch failed: {exc}") from exc
+        if proc.returncode != 0:
+            raise ValueError(f"git fetch failed: {_git_failure_detail(proc)}")
+
+        default_branch = git_default_branch(repo_root)
+        if not default_branch:
+            raise ValueError("Unable to resolve origin default branch")
+
+        try:
+            proc = run_git(["checkout", default_branch], repo_root, check=False)
+        except GitError as exc:
+            raise ValueError(f"git checkout failed: {exc}") from exc
+        if proc.returncode != 0:
+            try:
+                proc = run_git(
+                    ["checkout", "-B", default_branch, f"origin/{default_branch}"],
+                    repo_root,
+                    check=False,
+                )
+            except GitError as exc:
+                raise ValueError(f"git checkout failed: {exc}") from exc
+            if proc.returncode != 0:
+                raise ValueError(f"git checkout failed: {_git_failure_detail(proc)}")
+
+        try:
+            proc = run_git(
+                ["pull", "--ff-only", "origin", default_branch],
+                repo_root,
+                check=False,
+                timeout_seconds=120,
+            )
+        except GitError as exc:
+            raise ValueError(f"git pull failed: {exc}") from exc
+        if proc.returncode != 0:
+            raise ValueError(f"git pull failed: {_git_failure_detail(proc)}")
         return self._snapshot_for_repo(repo_id)
 
     def create_repo(
@@ -720,6 +783,10 @@ class HubSupervisor:
         if record.initialized and state_path.exists():
             runner_state = load_state(state_path)
 
+        is_clean: Optional[bool] = None
+        if record.exists_on_disk and git_available(repo_path):
+            is_clean = git_is_clean(repo_path)
+
         status = self._derive_status(record, lock_status, runner_state)
         last_run_id = runner_state.last_run_id if runner_state else None
         return RepoSnapshot(
@@ -732,6 +799,7 @@ class HubSupervisor:
             worktree_of=record.repo.worktree_of,
             branch=record.repo.branch,
             exists_on_disk=record.exists_on_disk,
+            is_clean=is_clean,
             initialized=record.initialized,
             init_error=record.init_error,
             status=status,

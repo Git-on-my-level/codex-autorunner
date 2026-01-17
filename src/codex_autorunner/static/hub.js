@@ -757,6 +757,18 @@ function buildActions(repo) {
   }
   if (!missing && kind === "base") {
     actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
+    const clean = repo.is_clean;
+    const syncDisabled = clean !== true;
+    const syncTitle = syncDisabled
+      ? "Working tree must be clean to sync main"
+      : "Switch to main and pull latest";
+    actions.push({
+      key: "sync_main",
+      label: "Sync main",
+      kind: "ghost",
+      title: syncTitle,
+      disabled: syncDisabled,
+    });
   }
   if (!missing && kind === "worktree") {
     actions.push({
@@ -925,7 +937,9 @@ function renderRepos(repos) {
             escapeHtml(action.key)
           }" data-repo="${escapeHtml(repo.id)}"${
             action.title ? ` title="${escapeHtml(action.title)}"` : ""
-          }>${escapeHtml(action.label)}</button>`
+          }${action.disabled ? " disabled" : ""}>${escapeHtml(
+            action.label
+          )}</button>`
       )
       .join("");
 
@@ -1211,6 +1225,7 @@ async function handleRepoAction(repoId, action) {
   try {
     const pathMap = {
       init: `/hub/repos/${repoId}/init`,
+      sync_main: `/hub/repos/${repoId}/sync-main`,
     };
     if (action === "new_worktree") {
       const branch = await inputModal("New worktree branch name:", {

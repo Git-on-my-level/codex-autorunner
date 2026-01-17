@@ -208,3 +208,27 @@ def git_upstream_status(repo_root: Path) -> Optional[dict]:
                 ahead = 0
                 behind = 0
     return {"has_upstream": True, "ahead": ahead, "behind": behind}
+
+
+def git_default_branch(repo_root: Path) -> Optional[str]:
+    """Resolve the default branch name for origin, or None if unavailable."""
+    try:
+        proc = run_git(["symbolic-ref", "refs/remotes/origin/HEAD"], repo_root)
+    except GitError:
+        proc = None
+    if proc and proc.returncode == 0:
+        raw = (proc.stdout or "").strip()
+        if raw:
+            return raw.split("/")[-1]
+    try:
+        proc = run_git(["rev-parse", "--abbrev-ref", "origin/HEAD"], repo_root)
+    except GitError:
+        return None
+    if proc.returncode != 0:
+        return None
+    raw = (proc.stdout or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("origin/"):
+        return raw.split("/", 1)[1]
+    return raw
