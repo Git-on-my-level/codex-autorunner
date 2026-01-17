@@ -200,6 +200,7 @@ Call `review/start`. This runs a review “like a turn” and streams output via
 ### Common forms
 
 * `/review` → uncommitted changes, inline
+* `/review pr [branch]` → review current branch against base (default `main`)
 * `/review base main` → diff vs base branch
 * `/review commit <sha>` → review commit
 * `/review detached` → run review in a new thread
@@ -952,7 +953,7 @@ Because CLI uses interactive popups, Telegram must encode selections in args. Us
 
 * `/model` or `/model list`
 * `/model set <model> [effort] [--persist]`
-* `/review [uncommitted|base <branch>|commit <sha>|custom <instructions>] [--detached]`
+* `/review [uncommitted|pr [branch]|base <branch>|commit <sha>|custom <instructions>] [--detached]`
 * `/approvals [preset <read-only|auto|full-access>|set <approvalPolicy> <sandboxPreset>] [--persist]`
 * `/experimental [list|set <featureKey> <on|off>]`
 * `/resume [list|<threadId>]`
@@ -1314,7 +1315,7 @@ If you want the selection to affect future sessions globally, call:
 
 Then you will receive normal turn/item streaming notifications (same as a `turn/start` turn). Your Telegram layer should reuse its existing streaming-to-message rendering.
 
-#### B) `/review base main`
+#### B) `/review pr [branch]`
 
 ```json
 {
@@ -1328,11 +1329,25 @@ Then you will receive normal turn/item streaming notifications (same as a `turn/
 }
 ```
 
-#### C) `/review commit 9fceb02`
+#### C) `/review base main`
 
 ```json
 {
   "id": 403,
+  "method":"review/start",
+  "params":{
+    "threadId":"thr_abc",
+    "target":{"type":"baseBranch","branch":"main"},
+    "delivery":"inline"
+  }
+}
+```
+
+#### D) `/review commit 9fceb02`
+
+```json
+{
+  "id": 404,
   "method":"review/start",
   "params":{
     "threadId":"thr_abc",
@@ -1342,11 +1357,11 @@ Then you will receive normal turn/item streaming notifications (same as a `turn/
 }
 ```
 
-#### D) `/review custom <instructions>`
+#### E) `/review custom <instructions>`
 
 ```json
 {
-  "id": 404,
+  "id": 405,
   "method":"review/start",
   "params":{
     "threadId":"thr_abc",
@@ -1356,7 +1371,7 @@ Then you will receive normal turn/item streaming notifications (same as a `turn/
 }
 ```
 
-#### E) Detached reviews (optional)
+#### F) Detached reviews (optional)
 
 If you pass `delivery:"detached"`, the app-server will fork a new review thread, emit a `thread/started` for it, and return `reviewThreadId` as that new thread id. You can still surface the output to the user in Telegram without switching the chat’s “active thread”.
 

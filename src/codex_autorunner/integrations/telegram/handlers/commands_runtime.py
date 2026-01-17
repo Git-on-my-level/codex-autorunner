@@ -4329,6 +4329,10 @@ class TelegramCommandHandlers:
                     )
                     return
                 target = {"type": "baseBranch", "branch": argv[1]}
+            elif keyword == "pr":
+                argv = self._parse_command_args(raw_args)
+                branch = argv[1] if len(argv) > 1 else "main"
+                target = {"type": "baseBranch", "branch": branch}
             elif keyword == "commit":
                 argv = self._parse_command_args(raw_args)
                 if len(argv) < 2:
