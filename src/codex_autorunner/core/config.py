@@ -306,6 +306,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     },
 }
 
+REPO_INHERIT_KEYS = set(DEFAULT_REPO_CONFIG.keys()) - {"mode", "version", "docs"}
+
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
     "mode": "hub",
@@ -757,6 +759,33 @@ def resolve_config_data(
     if overrides:
         merged = _merge_defaults(merged, overrides)
     return merged
+
+
+def resolve_repo_config_data(
+    repo_root: Path, hub_overrides: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    base = DEFAULT_REPO_CONFIG
+    if hub_overrides:
+        base = _merge_defaults(base, hub_overrides)
+    merged = _merge_defaults(base, load_root_defaults(repo_root, "repo"))
+    return merged
+
+
+def repo_overrides_from_hub(hub_data: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: hub_data[key] for key in REPO_INHERIT_KEYS if key in hub_data}
+
+
+def find_nearest_hub_config_path(start: Path) -> Optional[Path]:
+    start = start.resolve()
+    search_dir = start if start.is_dir() else start.parent
+    for current in [search_dir] + list(search_dir.parents):
+        candidate = current / CONFIG_FILENAME
+        if not candidate.exists():
+            continue
+        data = _load_yaml_dict(candidate)
+        if data.get("mode") == "hub":
+            return candidate
+    return None
 
 
 def _normalize_base_path(path: Optional[str]) -> str:

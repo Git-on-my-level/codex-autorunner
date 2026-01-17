@@ -65,6 +65,28 @@ def test_write_repo_config_includes_root_overrides(tmp_path: Path) -> None:
     assert data["server"]["port"] == 6000
 
 
+def test_write_repo_config_inherits_hub_defaults(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    hub_config_dir = hub_root / ".codex-autorunner"
+    hub_config_dir.mkdir(parents=True, exist_ok=True)
+    _write_yaml(
+        hub_config_dir / "config.yml",
+        {
+            "mode": "hub",
+            "agents": {"opencode": {"binary": "/opt/opencode"}},
+        },
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    config_path = write_repo_config(repo_root, force=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    assert data["agents"]["opencode"]["binary"] == "/opt/opencode"
+
+
 def test_repo_docs_reject_absolute_path(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()

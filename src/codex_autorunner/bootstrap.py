@@ -3,7 +3,15 @@ from pathlib import Path
 import yaml
 
 from .core.about_car import ensure_about_car_file_for_repo
-from .core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG, resolve_config_data
+from .core.config import (
+    CONFIG_FILENAME,
+    DEFAULT_HUB_CONFIG,
+    find_nearest_hub_config_path,
+    load_config_data,
+    repo_overrides_from_hub,
+    resolve_config_data,
+    resolve_repo_config_data,
+)
 from .core.utils import atomic_write
 from .manifest import load_manifest
 
@@ -54,9 +62,14 @@ def write_repo_config(repo_root: Path, force: bool = False) -> Path:
     if config_path.exists() and not force:
         return config_path
     config_path.parent.mkdir(parents=True, exist_ok=True)
+    hub_config_path = find_nearest_hub_config_path(repo_root.parent)
+    hub_overrides = None
+    if hub_config_path is not None:
+        hub_data = load_config_data(hub_config_path)
+        hub_overrides = repo_overrides_from_hub(hub_data)
     with config_path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(
-            resolve_config_data(repo_root, "repo"),
+            resolve_repo_config_data(repo_root, hub_overrides=hub_overrides),
             f,
             sort_keys=False,
         )
