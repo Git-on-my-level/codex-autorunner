@@ -283,6 +283,8 @@ class TelegramCommandHandlers:
         def apply(record: "TelegramTopicRecord") -> None:
             record.agent = desired
             record.active_thread_id = None
+            record.thread_ids.clear()
+            record.thread_summaries.clear()
             record.pending_compact_seed = None
             record.pending_compact_seed_thread_id = None
             if not self._agent_supports_effort(desired):
