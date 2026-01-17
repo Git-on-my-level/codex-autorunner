@@ -253,10 +253,10 @@ class AuthTokenMiddleware:
             return await self.app(scope, receive, send)
 
         token = self._extract_header_token(scope)
-        if scope.get("type") == "websocket" and token is None:
-            token = self._extract_ws_protocol_token(scope) or self._extract_query_token(
-                scope
-            )
+        if token is None:
+            if scope.get("type") == "websocket":
+                token = self._extract_ws_protocol_token(scope)
+            token = token or self._extract_query_token(scope)
 
         if not token or not hmac.compare_digest(token, self.token):
             if scope.get("type") == "websocket":

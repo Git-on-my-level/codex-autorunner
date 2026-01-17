@@ -355,7 +355,12 @@ function openRunDetails(run) {
     runStatus(run) || "–"
   }`;
   if (ui.modalLog) {
-    ui.modalLog.href = `/api/logs?run_id=${run.run_id}`;
+    const params = new URLSearchParams({ run_id: String(run.run_id), raw: "1" });
+    const token = getAuthToken();
+    if (token) {
+      params.set("token", token);
+    }
+    ui.modalLog.href = resolvePath(`/api/logs?${params.toString()}`);
   }
   renderTokenBreakdown(run);
   renderCompletedTodos(run);
