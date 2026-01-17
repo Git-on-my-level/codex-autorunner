@@ -69,6 +69,7 @@ class TokenEvent:
     totals: TokenTotals
     delta: TokenTotals
     rate_limits: Optional[Dict[str, Any]]
+    agent: str
 
 
 @dataclasses.dataclass
@@ -94,6 +95,207 @@ def _coerce_totals(payload: Optional[Dict[str, Any]]) -> TokenTotals:
         reasoning_output_tokens=int(payload.get("reasoning_output_tokens", 0) or 0),
         total_tokens=int(payload.get("total_tokens", 0) or 0),
     )
+
+
+CODEX_AGENT_ID = "codex"
+OPENCODE_AGENT_ID = "opencode"
+
+_OPENCODE_USAGE_KEYS = {
+    "input_tokens": [
+        "prompt_tokens",
+        "promptTokens",
+        "input_tokens",
+        "inputTokens",
+    ],
+    "cached_input_tokens": [
+        "cached_input_tokens",
+        "cachedInputTokens",
+        "cache_read_input_tokens",
+        "cacheReadInputTokens",
+        "cachedTokens",
+    ],
+    "output_tokens": [
+        "completion_tokens",
+        "completionTokens",
+        "output_tokens",
+        "outputTokens",
+    ],
+    "reasoning_output_tokens": [
+        "reasoning_tokens",
+        "reasoningTokens",
+        "reasoning_output_tokens",
+        "reasoningOutputTokens",
+    ],
+    "total_tokens": [
+        "total_tokens",
+        "totalTokens",
+        "total",
+    ],
+}
+
+
+def _coerce_opencode_int(value: Any) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return 0
+
+
+def _coerce_opencode_field(payload: Dict[str, Any], keys: List[str]) -> int:
+    for key in keys:
+        if key in payload and payload.get(key) is not None:
+            return _coerce_opencode_int(payload.get(key))
+    return 0
+
+
+def _coerce_opencode_totals(payload: Optional[Dict[str, Any]]) -> TokenTotals:
+    payload = payload or {}
+    input_tokens = _coerce_opencode_field(payload, _OPENCODE_USAGE_KEYS["input_tokens"])
+    cached_tokens = _coerce_opencode_field(
+        payload, _OPENCODE_USAGE_KEYS["cached_input_tokens"]
+    )
+    output_tokens = _coerce_opencode_field(
+        payload, _OPENCODE_USAGE_KEYS["output_tokens"]
+    )
+    reasoning_tokens = _coerce_opencode_field(
+        payload, _OPENCODE_USAGE_KEYS["reasoning_output_tokens"]
+    )
+    total_tokens = _coerce_opencode_field(payload, _OPENCODE_USAGE_KEYS["total_tokens"])
+    if not total_tokens:
+        total_tokens = input_tokens + cached_tokens + output_tokens + reasoning_tokens
+    return TokenTotals(
+        input_tokens=input_tokens,
+        cached_input_tokens=cached_tokens,
+        output_tokens=output_tokens,
+        reasoning_output_tokens=reasoning_tokens,
+        total_tokens=total_tokens,
+    )
+
+
+def _looks_like_opencode_usage(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for keys in _OPENCODE_USAGE_KEYS.values():
+        for key in keys:
+            if key in payload:
+                return True
+    return False
+
+
+def _extract_opencode_usage_payload(
+    payload: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    for key in (
+        "usage",
+        "token_usage",
+        "tokenUsage",
+        "usage_stats",
+        "usageStats",
+        "stats",
+    ):
+        usage = payload.get(key)
+        if _looks_like_opencode_usage(usage):
+            return cast(Dict[str, Any], usage)
+    response = payload.get("response")
+    if isinstance(response, dict):
+        usage = response.get("usage")
+        if _looks_like_opencode_usage(usage):
+            return cast(Dict[str, Any], usage)
+    return None
+
+
+def _extract_opencode_entries(
+    payload: Dict[str, Any],
+) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    entries: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    detail_found = False
+    for list_key in ("messages", "events", "turns", "responses", "steps"):
+        items = payload.get(list_key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            usage = _extract_opencode_usage_payload(item)
+            if usage:
+                entries.append((item, usage))
+                detail_found = True
+    if detail_found:
+        return entries
+    usage = _extract_opencode_usage_payload(payload)
+    if usage:
+        entries.append((payload, usage))
+    return entries
+
+
+def _parse_opencode_timestamp(value: Any, fallback: datetime) -> datetime:
+    if value is None:
+        return fallback
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        if ts > 1e12:
+            ts /= 1000.0
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    if isinstance(value, str):
+        try:
+            return _parse_timestamp(value)
+        except UsageError:
+            pass
+        if value.isdigit():
+            return _parse_opencode_timestamp(int(value), fallback)
+    return fallback
+
+
+def _extract_opencode_timestamp(
+    container: Dict[str, Any], fallback: datetime
+) -> datetime:
+    for key in (
+        "timestamp",
+        "created_at",
+        "createdAt",
+        "time",
+        "started_at",
+        "completed_at",
+        "ts",
+    ):
+        if key in container:
+            return _parse_opencode_timestamp(container.get(key), fallback)
+    return fallback
+
+
+def _format_opencode_model(
+    model: Optional[str], provider: Optional[str]
+) -> Optional[str]:
+    if model and provider and provider not in model:
+        return f"{provider}:{model}"
+    return model or provider
+
+
+def _extract_opencode_model(
+    container: Dict[str, Any],
+    fallback_model: Optional[str],
+    fallback_provider: Optional[str],
+) -> Optional[str]:
+    model = (
+        container.get("model")
+        or container.get("model_name")
+        or container.get("modelName")
+        or fallback_model
+    )
+    provider = (
+        container.get("provider")
+        or container.get("model_provider")
+        or container.get("modelProvider")
+        or fallback_provider
+    )
+    return _format_opencode_model(model, provider)
+
+
+def _iter_opencode_session_files(repo_root: Path) -> Iterable[Path]:
+    sessions_dir = repo_root / ".opencode" / "sessions"
+    if not sessions_dir.exists():
+        return []
+    return sorted(sessions_dir.glob("**/*.json"))
 
 
 def _iter_session_files(codex_home: Path) -> Iterable[Path]:
@@ -163,6 +365,7 @@ def iter_token_events(
                         totals=last_totals or TokenTotals(),
                         delta=TokenTotals(),
                         rate_limits=rate_limits,
+                        agent=CODEX_AGENT_ID,
                     )
                 continue
 
@@ -191,7 +394,74 @@ def iter_token_events(
                 totals=totals,
                 delta=delta,
                 rate_limits=payload.get("rate_limits"),
+                agent=CODEX_AGENT_ID,
             )
+
+
+def iter_opencode_events(
+    repo_roots: Iterable[Path],
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> Iterable[TokenEvent]:
+    """
+    Yield token usage events from OpenCode session JSON files in repos.
+    Events are ordered by repo root and file path; per-file ordering matches entry order.
+    """
+    for repo_root in sorted({path.resolve() for path in repo_roots}):
+        for session_path in _iter_opencode_session_files(repo_root):
+            try:
+                payload = json.loads(session_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            try:
+                mtime = datetime.fromtimestamp(
+                    session_path.stat().st_mtime, tz=timezone.utc
+                )
+            except Exception:
+                mtime = datetime.now(timezone.utc)
+
+            top_model = payload.get("model") if isinstance(payload, dict) else None
+            top_provider = (
+                payload.get("provider") if isinstance(payload, dict) else None
+            )
+            entries = (
+                _extract_opencode_entries(payload) if isinstance(payload, dict) else []
+            )
+            if not entries:
+                continue
+
+            totals = TokenTotals()
+            for container, usage in entries:
+                delta = _coerce_opencode_totals(usage)
+                if not any(
+                    (
+                        delta.input_tokens,
+                        delta.cached_input_tokens,
+                        delta.output_tokens,
+                        delta.reasoning_output_tokens,
+                        delta.total_tokens,
+                    )
+                ):
+                    continue
+                totals.add(delta)
+                timestamp = _extract_opencode_timestamp(container, mtime)
+                if since and timestamp < since:
+                    continue
+                if until and timestamp > until:
+                    continue
+                model = _extract_opencode_model(container, top_model, top_provider)
+                yield TokenEvent(
+                    timestamp=timestamp,
+                    session_path=session_path,
+                    cwd=repo_root,
+                    model=model,
+                    totals=copy.deepcopy(totals),
+                    delta=delta,
+                    rate_limits=None,
+                    agent=OPENCODE_AGENT_ID,
+                )
 
 
 def summarize_repo_usage(
@@ -212,6 +482,9 @@ def summarize_repo_usage(
             events += 1
             if event.rate_limits:
                 latest_rate_limits = event.rate_limits
+    for event in iter_opencode_events([repo_root], since=since, until=until):
+        totals.add(event.delta)
+        events += 1
     return UsageSummary(
         totals=totals, events=events, latest_rate_limits=latest_rate_limits
     )
@@ -252,7 +525,63 @@ def summarize_hub_usage(
         if event.rate_limits:
             summary.latest_rate_limits = event.rate_limits
 
+    for event in iter_opencode_events(
+        [path for _, path in repo_map], since=since, until=until
+    ):
+        repo_id = _match_repo(event.cwd)
+        if repo_id is None:
+            continue
+        summary = per_repo[repo_id]
+        summary.totals.add(event.delta)
+        summary.events += 1
+
     return per_repo, unmatched
+
+
+def summarize_opencode_repo_usage(
+    repo_root: Path,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> UsageSummary:
+    totals = TokenTotals()
+    events = 0
+    for event in iter_opencode_events([repo_root], since=since, until=until):
+        totals.add(event.delta)
+        events += 1
+    return UsageSummary(totals=totals, events=events, latest_rate_limits=None)
+
+
+def summarize_opencode_hub_usage(
+    repo_map: List[Tuple[str, Path]],
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> Dict[str, UsageSummary]:
+    repo_map = [(repo_id, path.resolve()) for repo_id, path in repo_map]
+    per_repo: Dict[str, UsageSummary] = {
+        repo_id: UsageSummary(TokenTotals(), 0, None) for repo_id, _ in repo_map
+    }
+
+    def _match_repo(cwd: Optional[Path]) -> Optional[str]:
+        if not cwd:
+            return None
+        for repo_id, repo_path in repo_map:
+            if cwd == repo_path or repo_path in cwd.parents:
+                return repo_id
+        return None
+
+    for event in iter_opencode_events(
+        [path for _, path in repo_map], since=since, until=until
+    ):
+        repo_id = _match_repo(event.cwd)
+        if repo_id is None:
+            continue
+        summary = per_repo[repo_id]
+        summary.totals.add(event.delta)
+        summary.events += 1
+
+    return per_repo
 
 
 def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
@@ -1155,6 +1484,271 @@ class UsageSeriesCache:
 _USAGE_SERIES_CACHES: Dict[str, UsageSeriesCache] = {}
 
 
+def _build_series_entries(
+    buckets: List[str],
+    series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]],
+) -> List[Dict[str, Any]]:
+    series: List[Dict[str, Any]] = []
+    for (key, model, token_type), values in series_map.items():
+        series_values = [int(values.get(bucket, 0)) for bucket in buckets]
+        series.append(
+            {
+                "key": key,
+                "model": model,
+                "token_type": token_type,
+                "total": sum(series_values),
+                "values": series_values,
+            }
+        )
+    series.sort(key=lambda item: int(item["total"]), reverse=True)
+    return series
+
+
+def _bucket_labels_for_events(
+    timestamps: List[datetime],
+    *,
+    bucket: str,
+    since: Optional[datetime],
+    until: Optional[datetime],
+) -> List[str]:
+    if since and until:
+        start = _bucket_start(since, bucket)
+        end = _bucket_start(until, bucket)
+        return [_bucket_label(dt, bucket) for dt in _iter_buckets(start, end, bucket)]
+    if not timestamps:
+        return []
+    start = _bucket_start(min(timestamps), bucket)
+    end = _bucket_start(max(timestamps), bucket)
+    return [_bucket_label(dt, bucket) for dt in _iter_buckets(start, end, bucket)]
+
+
+def _sort_bucket_labels(labels: Iterable[str], bucket: str) -> List[str]:
+    def _sort_key(label: str) -> datetime:
+        parsed = _parse_bucket_label(label, bucket)
+        return parsed or datetime.min.replace(tzinfo=timezone.utc)
+
+    return sorted(set(labels), key=_sort_key)
+
+
+def _merge_usage_series(
+    base: Dict[str, object],
+    extra: Dict[str, object],
+    *,
+    bucket: str,
+) -> Dict[str, object]:
+    base_buckets = cast(List[str], base.get("buckets", []))
+    extra_buckets = cast(List[str], extra.get("buckets", []))
+    buckets = _sort_bucket_labels(base_buckets + extra_buckets, bucket)
+
+    def _series_to_map(
+        series: List[Dict[str, Any]], buckets_ref: List[str]
+    ) -> Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]]:
+        series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]] = {}
+        for entry in series:
+            raw_key = entry.get("key")
+            if raw_key is None:
+                continue
+            key = (
+                str(raw_key),
+                cast(Optional[str], entry.get("model")),
+                cast(Optional[str], entry.get("token_type")),
+            )
+            values = cast(List[int], entry.get("values", []))
+            bucket_map = {label: int(val) for label, val in zip(buckets_ref, values)}
+            series_map[key] = bucket_map
+        return series_map
+
+    base_map = _series_to_map(
+        cast(List[Dict[str, Any]], base.get("series", [])), base_buckets
+    )
+    extra_map = _series_to_map(
+        cast(List[Dict[str, Any]], extra.get("series", [])), extra_buckets
+    )
+
+    merged_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]] = {}
+    for series_map in (base_map, extra_map):
+        for key, values in series_map.items():
+            bucket_values = merged_map.setdefault(key, {})
+            for label, value in values.items():
+                bucket_values[label] = bucket_values.get(label, 0) + int(value)
+
+    return {
+        "bucket": bucket,
+        "segment": base.get("segment", extra.get("segment")),
+        "buckets": buckets,
+        "series": _build_series_entries(buckets, merged_map),
+    }
+
+
+def _build_series_from_events(
+    events: Iterable[TokenEvent],
+    *,
+    bucket: str,
+    segment: str,
+    since: Optional[datetime],
+    until: Optional[datetime],
+) -> Dict[str, object]:
+    allowed_buckets = {"hour", "day", "week"}
+    allowed_segments = {"none", "model", "token_type", "model_token", "agent"}
+    if bucket not in allowed_buckets:
+        raise UsageError(f"Unsupported bucket: {bucket}")
+    if segment not in allowed_segments:
+        raise UsageError(f"Unsupported segment: {segment}")
+
+    token_fields = [
+        ("input", "input_tokens"),
+        ("cached", "cached_input_tokens"),
+        ("output", "output_tokens"),
+        ("reasoning", "reasoning_output_tokens"),
+    ]
+    series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]] = {}
+    timestamps: List[datetime] = []
+
+    for event in events:
+        bucket_label = _bucket_label(_bucket_start(event.timestamp, bucket), bucket)
+        timestamps.append(event.timestamp)
+        if segment == "none":
+            series_key: Tuple[str, Optional[str], Optional[str]] = ("total", None, None)
+            series_map.setdefault(series_key, {})
+            series_map[series_key][bucket_label] = series_map[series_key].get(
+                bucket_label, 0
+            ) + int(event.delta.total_tokens)
+            continue
+
+        if segment == "agent":
+            series_key = (event.agent, None, None)
+            series_map.setdefault(series_key, {})
+            series_map[series_key][bucket_label] = series_map[series_key].get(
+                bucket_label, 0
+            ) + int(event.delta.total_tokens)
+            continue
+
+        if segment == "model":
+            model = event.model or "unknown"
+            series_key = (model, model, None)
+            series_map.setdefault(series_key, {})
+            series_map[series_key][bucket_label] = series_map[series_key].get(
+                bucket_label, 0
+            ) + int(event.delta.total_tokens)
+            continue
+
+        if segment == "token_type":
+            for label, field in token_fields:
+                value = getattr(event.delta, field)
+                if not value:
+                    continue
+                series_key = (label, None, label)
+                series_map.setdefault(series_key, {})
+                series_map[series_key][bucket_label] = series_map[series_key].get(
+                    bucket_label, 0
+                ) + int(value)
+            continue
+
+        model = event.model or "unknown"
+        for label, field in token_fields:
+            value = getattr(event.delta, field)
+            if not value:
+                continue
+            series_key = (f"{model}:{label}", model, label)
+            series_map.setdefault(series_key, {})
+            series_map[series_key][bucket_label] = series_map[series_key].get(
+                bucket_label, 0
+            ) + int(value)
+
+    buckets = _bucket_labels_for_events(
+        timestamps, bucket=bucket, since=since, until=until
+    )
+    return {
+        "bucket": bucket,
+        "segment": segment,
+        "buckets": buckets,
+        "series": _build_series_entries(buckets, series_map),
+    }
+
+
+def _build_repo_opencode_series(
+    repo_root: Path,
+    *,
+    since: Optional[datetime],
+    until: Optional[datetime],
+    bucket: str,
+    segment: str,
+) -> Dict[str, object]:
+    events = list(iter_opencode_events([repo_root], since=since, until=until))
+    return _build_series_from_events(
+        events, bucket=bucket, segment=segment, since=since, until=until
+    )
+
+
+def _build_hub_opencode_series(
+    repo_map: List[Tuple[str, Path]],
+    *,
+    since: Optional[datetime],
+    until: Optional[datetime],
+    bucket: str,
+    segment: str,
+) -> Dict[str, object]:
+    allowed_buckets = {"hour", "day", "week"}
+    allowed_segments = {"none", "repo", "agent"}
+    if bucket not in allowed_buckets:
+        raise UsageError(f"Unsupported bucket: {bucket}")
+    if segment not in allowed_segments:
+        raise UsageError(f"Unsupported segment: {segment}")
+
+    repo_map = [(repo_id, path.resolve()) for repo_id, path in repo_map]
+
+    def _match_repo(cwd: Optional[Path]) -> Optional[str]:
+        if not cwd:
+            return None
+        for repo_id, repo_path in repo_map:
+            if cwd == repo_path or repo_path in cwd.parents:
+                return repo_id
+        return None
+
+    series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]] = {}
+    timestamps: List[datetime] = []
+    events = iter_opencode_events(
+        [path for _, path in repo_map], since=since, until=until
+    )
+    for event in events:
+        repo_id = _match_repo(event.cwd)
+        if repo_id is None:
+            continue
+        bucket_label = _bucket_label(_bucket_start(event.timestamp, bucket), bucket)
+        timestamps.append(event.timestamp)
+        if segment == "none":
+            key = ("total", None, None)
+            series_map.setdefault(key, {})
+            series_map[key][bucket_label] = series_map[key].get(bucket_label, 0) + int(
+                event.delta.total_tokens
+            )
+            continue
+
+        if segment == "agent":
+            key = (event.agent, None, None)
+            series_map.setdefault(key, {})
+            series_map[key][bucket_label] = series_map[key].get(bucket_label, 0) + int(
+                event.delta.total_tokens
+            )
+            continue
+
+        repo_key: Tuple[str, Optional[str], Optional[str]] = (repo_id, repo_id, None)
+        series_map.setdefault(repo_key, {})
+        series_map[repo_key][bucket_label] = series_map[repo_key].get(
+            bucket_label, 0
+        ) + int(event.delta.total_tokens)
+
+    buckets = _bucket_labels_for_events(
+        timestamps, bucket=bucket, since=since, until=until
+    )
+    return {
+        "bucket": bucket,
+        "segment": segment,
+        "buckets": buckets,
+        "series": _build_series_entries(buckets, series_map),
+    }
+
+
 def get_usage_series_cache(codex_home: Path) -> UsageSeriesCache:
     cache_path = _default_usage_series_cache_path(codex_home)
     key = str(cache_path)
@@ -1176,9 +1770,27 @@ def get_repo_usage_series_cached(
 ) -> Tuple[Dict[str, object], str]:
     codex_root = (codex_home or default_codex_home()).expanduser()
     cache = get_usage_series_cache(codex_root)
-    return cache.get_repo_series(
+    if segment == "agent":
+        codex_series, status = cache.get_repo_series(
+            repo_root, since=since, until=until, bucket=bucket, segment="none"
+        )
+        opencode_series = _build_repo_opencode_series(
+            repo_root, since=since, until=until, bucket=bucket, segment="agent"
+        )
+        codex_series["segment"] = "agent"
+        codex_series["series"] = [
+            {**entry, "key": CODEX_AGENT_ID}
+            for entry in cast(List[Dict[str, Any]], codex_series.get("series", []))
+        ]
+        return _merge_usage_series(codex_series, opencode_series, bucket=bucket), status
+
+    codex_series, status = cache.get_repo_series(
         repo_root, since=since, until=until, bucket=bucket, segment=segment
     )
+    opencode_series = _build_repo_opencode_series(
+        repo_root, since=since, until=until, bucket=bucket, segment=segment
+    )
+    return _merge_usage_series(codex_series, opencode_series, bucket=bucket), status
 
 
 def get_repo_usage_summary_cached(
@@ -1190,7 +1802,18 @@ def get_repo_usage_summary_cached(
 ) -> Tuple[UsageSummary, str]:
     codex_root = (codex_home or default_codex_home()).expanduser()
     cache = get_usage_series_cache(codex_root)
-    return cache.get_repo_summary(repo_root, since=since, until=until)
+    summary, status = cache.get_repo_summary(repo_root, since=since, until=until)
+    opencode_summary = summarize_opencode_repo_usage(
+        repo_root, since=since, until=until
+    )
+    merged = UsageSummary(
+        totals=TokenTotals(),
+        events=summary.events + opencode_summary.events,
+        latest_rate_limits=summary.latest_rate_limits,
+    )
+    merged.totals.add(summary.totals)
+    merged.totals.add(opencode_summary.totals)
+    return merged, status
 
 
 def get_hub_usage_series_cached(
@@ -1204,9 +1827,27 @@ def get_hub_usage_series_cached(
 ) -> Tuple[Dict[str, object], str]:
     codex_root = (codex_home or default_codex_home()).expanduser()
     cache = get_usage_series_cache(codex_root)
-    return cache.get_hub_series(
+    if segment == "agent":
+        codex_series, status = cache.get_hub_series(
+            repo_map, since=since, until=until, bucket=bucket, segment="none"
+        )
+        opencode_series = _build_hub_opencode_series(
+            repo_map, since=since, until=until, bucket=bucket, segment="agent"
+        )
+        codex_series["segment"] = "agent"
+        codex_series["series"] = [
+            {**entry, "key": CODEX_AGENT_ID}
+            for entry in cast(List[Dict[str, Any]], codex_series.get("series", []))
+        ]
+        return _merge_usage_series(codex_series, opencode_series, bucket=bucket), status
+
+    codex_series, status = cache.get_hub_series(
         repo_map, since=since, until=until, bucket=bucket, segment=segment
     )
+    opencode_series = _build_hub_opencode_series(
+        repo_map, since=since, until=until, bucket=bucket, segment=segment
+    )
+    return _merge_usage_series(codex_series, opencode_series, bucket=bucket), status
 
 
 def get_hub_usage_summary_cached(
@@ -1218,4 +1859,22 @@ def get_hub_usage_summary_cached(
 ) -> Tuple[Dict[str, UsageSummary], UsageSummary, str]:
     codex_root = (codex_home or default_codex_home()).expanduser()
     cache = get_usage_series_cache(codex_root)
-    return cache.get_hub_summary(repo_map, since=since, until=until)
+    per_repo, unmatched, status = cache.get_hub_summary(
+        repo_map, since=since, until=until
+    )
+    opencode_per_repo = summarize_opencode_hub_usage(repo_map, since=since, until=until)
+    merged_per_repo: Dict[str, UsageSummary] = {}
+    for repo_id, summary in per_repo.items():
+        extra = opencode_per_repo.get(repo_id)
+        if extra:
+            merged = UsageSummary(
+                totals=TokenTotals(),
+                events=summary.events + extra.events,
+                latest_rate_limits=summary.latest_rate_limits,
+            )
+            merged.totals.add(summary.totals)
+            merged.totals.add(extra.totals)
+            merged_per_repo[repo_id] = merged
+        else:
+            merged_per_repo[repo_id] = summary
+    return merged_per_repo, unmatched, status
