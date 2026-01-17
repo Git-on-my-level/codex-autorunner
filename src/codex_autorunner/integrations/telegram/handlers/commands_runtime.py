@@ -403,7 +403,7 @@ class TelegramCommandHandlers:
         return agent == "codex"
 
     def _agent_supports_resume(self, agent: str) -> bool:
-        return agent == "codex"
+        return agent in ("codex", "opencode")
 
     def _opencode_available(self) -> bool:
         raw_command = getenv("CAR_OPENCODE_COMMAND")
@@ -2901,7 +2901,7 @@ class TelegramCommandHandlers:
             if not self._agent_supports_resume(agent):
                 await self._send_message(
                     message.chat_id,
-                    "Resume is only supported for the codex agent. Use /agent codex to switch.",
+                    "Resume is only supported for the codex and opencode agents. Use /agent codex or /agent opencode to switch.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )

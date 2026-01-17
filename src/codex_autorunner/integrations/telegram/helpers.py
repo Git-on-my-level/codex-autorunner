@@ -840,7 +840,7 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/review detached ...")
     lines.append("")
     lines.append("Other:")
-    lines.append("Note: /resume is only supported for the codex agent.")
+    lines.append("Note: /resume is supported for the codex and opencode agents.")
     lines.append(
         "!<cmd> - run a bash command in the bound workspace (non-interactive; long-running commands time out)"
     )
