@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, AsyncIterator, Optional
 
 import httpx
@@ -77,17 +78,16 @@ class OpenCodeClient:
         agent: Optional[str] = None,
         model: Optional[dict[str, str]] = None,
         variant: Optional[str] = None,
-        environment: Optional[dict[str, Any]] = None,
     ) -> Any:
-        payload: dict[str, Any] = {"message": message}
+        payload: dict[str, Any] = {
+            "parts": [{"type": "text", "text": message}],
+        }
         if agent:
             payload["agent"] = agent
         if model:
             payload["model"] = model
         if variant:
             payload["variant"] = variant
-        if environment:
-            payload["environment"] = environment
         return await self._request(
             "POST", f"/session/{session_id}/message", json=payload
         )
@@ -97,13 +97,14 @@ class OpenCodeClient:
         session_id: str,
         *,
         command: str,
-        arguments: Optional[list[str]] = None,
+        arguments: Optional[str] = None,
         model: Optional[str] = None,
         agent: Optional[str] = None,
     ) -> Any:
-        payload: dict[str, Any] = {"command": command}
-        if arguments:
-            payload["arguments"] = arguments
+        payload: dict[str, Any] = {
+            "command": command,
+            "arguments": arguments or "",
+        }
         if model:
             payload["model"] = model
         if agent:
@@ -133,16 +134,19 @@ class OpenCodeClient:
     async def respond_permission(
         self,
         *,
-        session_id: str,
-        permission_id: str,
-        response: str,
+        request_id: str,
+        reply: str,
+        message: Optional[str] = None,
     ) -> Any:
-        payload = {
-            "sessionID": session_id,
-            "permissionID": permission_id,
-            "response": response,
-        }
-        return await self._request("POST", "/permission/respond", json=payload)
+        payload: dict[str, Any] = {"reply": reply}
+        if message:
+            payload["message"] = message
+        return await self._request(
+            "POST", f"/permission/{request_id}/reply", json=payload
+        )
+
+    async def abort(self, session_id: str) -> Any:
+        return await self._request("POST", f"/session/{session_id}/abort")
 
     async def stream_events(
         self, *, directory: Optional[str] = None
@@ -150,8 +154,20 @@ class OpenCodeClient:
         params = self._dir_params(directory)
         async with self._client.stream("GET", "/event", params=params) as response:
             response.raise_for_status()
-            async for event in parse_sse_lines(response.aiter_lines()):
-                yield event
+            async for sse in parse_sse_lines(response.aiter_lines()):
+                event_type = sse.event
+                try:
+                    payload = json.loads(sse.data) if sse.data else None
+                    if isinstance(payload, dict) and "type" in payload:
+                        event_type = str(payload["type"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                yield SSEEvent(
+                    event=event_type,
+                    data=sse.data,
+                    id=sse.id,
+                    retry=sse.retry,
+                )
 
 
 __all__ = ["OpenCodeClient"]

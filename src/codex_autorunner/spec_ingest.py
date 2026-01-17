@@ -676,6 +676,16 @@ class SpecIngestService:
             value = payload.get(key)
             if isinstance(value, str) and value:
                 return value
+        properties = payload.get("properties")
+        if isinstance(properties, dict):
+            value = properties.get("sessionID")
+            if isinstance(value, str) and value:
+                return value
+            part = properties.get("part")
+            if isinstance(part, dict):
+                value = part.get("sessionID")
+                if isinstance(value, str) and value:
+                    return value
         session = payload.get("session")
         if isinstance(session, dict):
             return self._extract_opencode_session_id(session)
@@ -695,20 +705,16 @@ class SpecIngestService:
             if event_session_id and event_session_id != session_id:
                 continue
             if event.event == "permission.asked":
-                permission = (
-                    payload.get("permission") if isinstance(payload, dict) else {}
+                properties = (
+                    payload.get("properties") if isinstance(payload, dict) else {}
                 )
-                permission_id = None
-                if isinstance(permission, dict):
-                    permission_id = permission.get("id") or permission.get(
-                        "permissionID"
-                    )
-                if isinstance(permission_id, str) and permission_id:
+                request_id = None
+                if isinstance(properties, dict):
+                    request_id = properties.get("id") or properties.get("requestID")
+                if isinstance(request_id, str) and request_id:
                     try:
                         await client.respond_permission(
-                            session_id=session_id,
-                            permission_id=permission_id,
-                            response="reject",
+                            request_id=request_id, reply="reject"
                         )
                     except Exception:
                         pass

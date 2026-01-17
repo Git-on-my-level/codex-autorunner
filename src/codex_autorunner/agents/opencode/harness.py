@@ -39,6 +39,16 @@ def _extract_session_id(payload: Any) -> Optional[str]:
         value = payload.get(key)
         if isinstance(value, str) and value:
             return value
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        value = properties.get("sessionID")
+        if isinstance(value, str) and value:
+            return value
+        part = properties.get("part")
+        if isinstance(part, dict):
+            value = part.get("sessionID")
+            if isinstance(value, str) and value:
+                return value
     session = payload.get("session")
     if isinstance(session, dict):
         return _extract_session_id(session)
@@ -62,9 +72,19 @@ class OpenCodeHarness(AgentHarness):
         models: list[ModelSpec] = []
         default_model = ""
         if isinstance(payload, dict):
-            raw_default = payload.get("defaultModel") or payload.get("default_model")
-            if isinstance(raw_default, str):
-                default_model = raw_default
+            raw_default = payload.get("default")
+            if isinstance(raw_default, dict):
+                for provider in providers:
+                    provider_id = provider.get("id") or provider.get("providerID")
+                    if (
+                        isinstance(provider_id, str)
+                        and provider_id
+                        and provider_id in raw_default
+                    ):
+                        default_model_id = raw_default[provider_id]
+                        if isinstance(default_model_id, str) and default_model_id:
+                            default_model = f"{provider_id}/{default_model_id}"
+                            break
         for provider in providers:
             provider_id = provider.get("id") or provider.get("providerID")
             if not isinstance(provider_id, str) or not provider_id:
@@ -178,7 +198,7 @@ class OpenCodeHarness(AgentHarness):
         sandbox_policy: Optional[Any],
     ) -> TurnRef:
         client = await self._supervisor.get_client(workspace_root)
-        arguments = [prompt] if prompt else None
+        arguments = prompt if prompt else ""
         await client.send_command(
             conversation_id,
             command="review",
@@ -191,7 +211,11 @@ class OpenCodeHarness(AgentHarness):
     async def interrupt(
         self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
     ) -> None:
-        return None
+        client = await self._supervisor.get_client(workspace_root)
+        try:
+            await client.abort(conversation_id)
+        except Exception:
+            pass
 
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str

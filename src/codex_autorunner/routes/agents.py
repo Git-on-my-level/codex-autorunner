@@ -48,9 +48,19 @@ def _build_opencode_model_catalog(payload: Any) -> ModelCatalog:
     models: list[ModelSpec] = []
     default_model = ""
     if isinstance(payload, dict):
-        raw_default = payload.get("defaultModel") or payload.get("default_model")
-        if isinstance(raw_default, str):
-            default_model = raw_default
+        raw_default = payload.get("default")
+        if isinstance(raw_default, dict):
+            for provider in providers:
+                provider_id = provider.get("id") or provider.get("providerID")
+                if (
+                    isinstance(provider_id, str)
+                    and provider_id
+                    and provider_id in raw_default
+                ):
+                    default_model_id = raw_default[provider_id]
+                    if isinstance(default_model_id, str) and default_model_id:
+                        default_model = f"{provider_id}/{default_model_id}"
+                        break
     for provider in providers:
         provider_id = provider.get("id") or provider.get("providerID")
         if not isinstance(provider_id, str) or not provider_id:
