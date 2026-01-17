@@ -16,6 +16,7 @@ from ..agents.opencode.supervisor import OpenCodeSupervisor
 from ..integrations.app_server.client import CodexAppServerError
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from .app_server_events import AppServerEventBuffer
+from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_doc_chat_prompt
 from .app_server_threads import (
     DOC_CHAT_KEY,
@@ -409,6 +410,9 @@ class DocChatService:
         with self.engine.log_path.open("a", encoding="utf-8") as f:
             f.write(line)
 
+    def _log_event_line(self, chat_id: str, line: str) -> None:
+        self._log(chat_id, f"stdout: {line}" if line else "stdout: ")
+
     def _log_output(
         self, chat_id: str, text: Optional[str], label: str = "stdout"
     ) -> None:
@@ -452,11 +456,14 @@ class DocChatService:
         thread_id: str,
         turn_id: str,
         *,
+        log_context: Optional[dict[str, Any]] = None,
         on_turn_start: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> None:
         if self._app_server_events is not None:
             try:
-                await self._app_server_events.register_turn(thread_id, turn_id)
+                await self._app_server_events.register_turn(
+                    thread_id, turn_id, context=log_context
+                )
             except Exception:
                 pass
         if on_turn_start is None:
@@ -875,6 +882,12 @@ class DocChatService:
             await self._handle_turn_start(
                 thread_id,
                 turn_id,
+                log_context={
+                    "emit": lambda line, _chat=chat_id: self._log_event_line(
+                        _chat, line
+                    ),
+                    "formatter": AppServerEventFormatter(),
+                },
                 on_turn_start=on_turn_start,
             )
             turn_task = asyncio.create_task(handle.wait(timeout=None))
@@ -1059,6 +1072,7 @@ class DocChatService:
             await self._handle_turn_start(
                 thread_id,
                 turn_id,
+                log_context=None,
                 on_turn_start=on_turn_start,
             )
             output_task = asyncio.create_task(
