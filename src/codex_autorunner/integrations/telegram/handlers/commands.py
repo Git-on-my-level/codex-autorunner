@@ -36,6 +36,11 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             "run a code review",
             handlers._handle_review,
         ),
+        "agent": CommandSpec(
+            "agent",
+            "show or set the active agent",
+            handlers._handle_agent,
+        ),
         "model": CommandSpec(
             "model",
             "list or set the model",

@@ -8,6 +8,7 @@ import math
 import re
 import secrets
 import shlex
+import shutil
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -47,6 +48,7 @@ from ..constants import (
     BIND_PICKER_PROMPT,
     COMMAND_DISABLED_TEMPLATE,
     COMPACT_SUMMARY_PROMPT,
+    DEFAULT_AGENT,
     DEFAULT_MCP_LIST_LIMIT,
     DEFAULT_MODEL_LIST_LIMIT,
     DEFAULT_PAGE_SIZE,
@@ -70,6 +72,7 @@ from ..constants import (
     THREAD_LIST_PAGE_LIMIT,
     UPDATE_PICKER_PROMPT,
     UPDATE_TARGET_OPTIONS,
+    VALID_AGENT_VALUES,
     VALID_REASONING_EFFORTS,
     WHISPER_TRANSCRIPT_DISCLAIMER,
     TurnKey,
@@ -132,7 +135,13 @@ from ..helpers import (
     find_github_links,
     is_interrupt_status,
 )
-from ..state import APPROVAL_MODE_YOLO, PendingVoiceRecord, parse_topic_key, topic_key
+from ..state import (
+    APPROVAL_MODE_YOLO,
+    PendingVoiceRecord,
+    normalize_agent,
+    parse_topic_key,
+    topic_key,
+)
 from ..types import (
     CompactState,
     ModelPickerState,
@@ -223,6 +232,75 @@ class TelegramCommandHandlers:
             reply_to=message.message_id,
         )
 
+    async def _handle_agent(
+        self, message: TelegramMessage, args: str, _runtime: Any
+    ) -> None:
+        record = self._router.ensure_topic(message.chat_id, message.thread_id)
+        current = self._effective_agent(record)
+        argv = self._parse_command_args(args)
+        if not argv:
+            availability = (
+                "available" if self._opencode_available() else "missing binary"
+            )
+            await self._send_message(
+                message.chat_id,
+                "\n".join(
+                    [
+                        f"Current agent: {current}",
+                        f"OpenCode: {availability}",
+                    ]
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        desired = normalize_agent(argv[0])
+        if not desired:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /agent codex|opencode",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if desired == "opencode" and not self._opencode_available():
+            await self._send_message(
+                message.chat_id,
+                "OpenCode binary not found. Install opencode or switch to /agent codex.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if desired == current:
+            await self._send_message(
+                message.chat_id,
+                f"Agent already set to {current}.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        def apply(record: "TelegramTopicRecord") -> None:
+            record.agent = desired
+            record.active_thread_id = None
+            record.thread_ids.clear()
+            record.thread_summaries.clear()
+            record.pending_compact_seed = None
+            record.pending_compact_seed_thread_id = None
+            if not self._agent_supports_effort(desired):
+                record.effort = None
+
+        self._router.update_topic(message.chat_id, message.thread_id, apply)
+        note = ""
+        if not self._agent_supports_resume(desired):
+            note = " (resume not supported)"
+        await self._send_message(
+            message.chat_id,
+            f"Agent set to {desired}{note}.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
     async def _handle_command(
         self,
         command: TelegramCommand,
@@ -293,9 +371,26 @@ class TelegramCommandHandlers:
             sandbox_policy = record.sandbox_policy
         return approval_policy, sandbox_policy
 
+    def _effective_agent(self, record: Optional["TelegramTopicRecord"]) -> str:
+        if record and record.agent in VALID_AGENT_VALUES:
+            return record.agent
+        return DEFAULT_AGENT
+
+    def _agent_supports_effort(self, agent: str) -> bool:
+        return agent == "codex"
+
+    def _agent_supports_resume(self, agent: str) -> bool:
+        return agent == "codex"
+
+    def _opencode_available(self) -> bool:
+        return shutil.which("opencode") is not None
+
     async def _verify_active_thread(
         self, message: TelegramMessage, record: "TelegramTopicRecord"
     ) -> Optional["TelegramTopicRecord"]:
+        agent = self._effective_agent(record)
+        if not self._agent_supports_resume(agent):
+            return record
         thread_id = record.active_thread_id
         if not thread_id:
             return record
@@ -465,6 +560,10 @@ class TelegramCommandHandlers:
                 record.workspace_id = self._workspace_id_for_path(record.workspace_path)
             if info.get("rollout_path"):
                 record.rollout_path = info["rollout_path"]
+            if info.get("agent") and (overwrite_defaults or record.agent is None):
+                normalized_agent = normalize_agent(info.get("agent"))
+                if normalized_agent:
+                    record.agent = normalized_agent
             if info.get("model") and (overwrite_defaults or record.model is None):
                 record.model = info["model"]
             if info.get("effort") and (overwrite_defaults or record.effort is None):
@@ -530,7 +629,8 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return None
-        thread = await client.thread_start(record.workspace_path or "")
+        agent = self._effective_agent(record)
+        thread = await client.thread_start(record.workspace_path or "", agent=agent)
         if not await self._require_thread_workspace(
             message, record.workspace_path, thread, action="thread_start"
         ):
@@ -539,7 +639,7 @@ class TelegramCommandHandlers:
         if not thread_id:
             await self._send_message(
                 message.chat_id,
-                "Failed to start a new Codex thread.",
+                "Failed to start a new thread.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -921,7 +1021,8 @@ class TelegramCommandHandlers:
                         transcript_message_id,
                         transcript_text,
                     )
-                thread = await client.thread_start(workspace_path)
+                agent = self._effective_agent(record)
+                thread = await client.thread_start(workspace_path, agent=agent)
                 if not await self._require_thread_workspace(
                     message, workspace_path, thread, action="thread_start"
                 ):
@@ -933,7 +1034,7 @@ class TelegramCommandHandlers:
                     )
                 thread_id = _extract_thread_id(thread)
                 if not thread_id:
-                    failure_message = "Failed to start a new Codex thread."
+                    failure_message = "Failed to start a new thread."
                     if send_failure_response:
                         await self._send_message(
                             message.chat_id,
@@ -989,10 +1090,14 @@ class TelegramCommandHandlers:
                 else:
                     input_items = [{"type": "text", "text": pending_seed}] + input_items
             approval_policy, sandbox_policy = self._effective_policies(record)
+            agent = self._effective_agent(record)
+            supports_effort = self._agent_supports_effort(agent)
             turn_kwargs: dict[str, Any] = {}
+            if agent:
+                turn_kwargs["agent"] = agent
             if record.model:
                 turn_kwargs["model"] = record.model
-            if record.effort:
+            if record.effort and supports_effort:
                 turn_kwargs["effort"] = record.effort
             if record.summary:
                 turn_kwargs["summary"] = record.summary
@@ -1004,6 +1109,7 @@ class TelegramCommandHandlers:
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 codex_thread_id=thread_id,
+                agent=agent,
                 approval_mode=record.approval_mode,
                 approval_policy=approval_policy,
                 sandbox_policy=sandbox_policy,
@@ -2662,7 +2768,8 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        thread = await client.thread_start(record.workspace_path)
+        agent = self._effective_agent(record)
+        thread = await client.thread_start(record.workspace_path, agent=agent)
         if not await self._require_thread_workspace(
             message, record.workspace_path, thread, action="thread_start"
         ):
@@ -2671,7 +2778,7 @@ class TelegramCommandHandlers:
         if not thread_id:
             await self._send_message(
                 message.chat_id,
-                "Failed to start a new Codex thread.",
+                "Failed to start a new thread.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2679,14 +2786,18 @@ class TelegramCommandHandlers:
         self._apply_thread_result(
             message.chat_id, message.thread_id, thread, active_thread_id=thread_id
         )
+        effort_label = (
+            record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
+        )
         await self._send_message(
             message.chat_id,
             "\n".join(
                 [
                     f"Started new thread {thread_id}.",
                     f"Directory: {record.workspace_path or 'unbound'}",
+                    f"Agent: {agent}",
                     f"Model: {record.model or 'default'}",
-                    f"Effort: {record.effort or 'default'}",
+                    f"Effort: {effort_label}",
                 ]
             ),
             thread_id=message.thread_id,
@@ -2727,6 +2838,16 @@ class TelegramCommandHandlers:
                 await self._resume_thread_by_id(key, trimmed)
                 return
         record = self._router.get_topic(key)
+        if record is not None:
+            agent = self._effective_agent(record)
+            if not self._agent_supports_resume(agent):
+                await self._send_message(
+                    message.chat_id,
+                    "Resume is only supported for the codex agent. Use /agent codex to switch.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
@@ -3252,13 +3373,19 @@ class TelegramCommandHandlers:
         if runtime is None:
             runtime = self._router.runtime_for(key)
         approval_policy, sandbox_policy = self._effective_policies(record)
+        agent = self._effective_agent(record)
+        effort_label = (
+            record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
+        )
         lines = [
             f"Workspace: {record.workspace_path or 'unbound'}",
             f"Workspace ID: {record.workspace_id or 'unknown'}",
             f"Active thread: {record.active_thread_id or 'none'}",
             f"Active turn: {runtime.current_turn_id or 'none'}",
+            f"Agent: {agent}",
+            f"Resume: {'supported' if self._agent_supports_resume(agent) else 'unsupported'}",
             f"Model: {record.model or 'default'}",
-            f"Effort: {record.effort or 'default'}",
+            f"Effort: {effort_label}",
             f"Approval mode: {record.approval_mode}",
             f"Approval policy: {approval_policy or 'default'}",
             f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
@@ -3688,6 +3815,13 @@ class TelegramCommandHandlers:
         self._model_options.pop(key, None)
         self._model_pending.pop(key, None)
         record = self._router.get_topic(key)
+        agent = self._effective_agent(record)
+        supports_effort = self._agent_supports_effort(agent)
+        list_params = {
+            "cursor": None,
+            "limit": DEFAULT_MODEL_LIST_LIMIT,
+            "agent": agent,
+        }
         client = await self._client_for_workspace(
             record.workspace_path if record else None
         )
@@ -3704,7 +3838,7 @@ class TelegramCommandHandlers:
             try:
                 result = await client.request(
                     "model/list",
-                    {"cursor": None, "limit": DEFAULT_MODEL_LIST_LIMIT},
+                    list_params,
                 )
             except Exception as exc:
                 log_event(
@@ -3726,7 +3860,7 @@ class TelegramCommandHandlers:
                     reply_to=message.message_id,
                 )
                 return
-            options = _coerce_model_options(result)
+            options = _coerce_model_options(result, include_efforts=supports_effort)
             if not options:
                 await self._send_message(
                     message.chat_id,
@@ -3748,7 +3882,15 @@ class TelegramCommandHandlers:
                 self._model_options.pop(key, None)
                 await self._send_message(
                     message.chat_id,
-                    _format_model_list(result),
+                    _format_model_list(
+                        result,
+                        include_efforts=supports_effort,
+                        set_hint=(
+                            "Use /model <provider/model> to set."
+                            if not supports_effort
+                            else None
+                        ),
+                    ),
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -3765,7 +3907,7 @@ class TelegramCommandHandlers:
             try:
                 result = await client.request(
                     "model/list",
-                    {"cursor": None, "limit": DEFAULT_MODEL_LIST_LIMIT},
+                    list_params,
                 )
             except Exception as exc:
                 log_event(
@@ -3789,7 +3931,15 @@ class TelegramCommandHandlers:
                 return
             await self._send_message(
                 message.chat_id,
-                _format_model_list(result),
+                _format_model_list(
+                    result,
+                    include_efforts=supports_effort,
+                    set_hint=(
+                        "Use /model <provider/model> to set."
+                        if not supports_effort
+                        else None
+                    ),
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3813,6 +3963,22 @@ class TelegramCommandHandlers:
         else:
             model = argv[0]
             effort = argv[1] if len(argv) > 1 else None
+        if effort and not supports_effort:
+            await self._send_message(
+                message.chat_id,
+                "Reasoning effort is only supported for the codex agent.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if not supports_effort and "/" not in model:
+            await self._send_message(
+                message.chat_id,
+                "OpenCode models must be in provider/model format (e.g., openai/gpt-4o).",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if effort and effort not in VALID_REASONING_EFFORTS:
             await self._send_message(
                 message.chat_id,
@@ -3828,9 +3994,10 @@ class TelegramCommandHandlers:
                 record,
                 model,
                 effort=effort,
+                clear_effort=not supports_effort,
             ),
         )
-        effort_note = f" (effort={effort})" if effort else ""
+        effort_note = f" (effort={effort})" if effort and supports_effort else ""
         await self._send_message(
             message.chat_id,
             f"Model set to {model}{effort_note}. Will apply on the next turn.",
@@ -3857,6 +4024,7 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
+        agent = self._effective_agent(record)
         log_event(
             self._logger,
             logging.INFO,
@@ -3866,16 +4034,20 @@ class TelegramCommandHandlers:
             codex_thread_id=thread_id,
             delivery=delivery,
             target=target.get("type"),
+            agent=agent,
         )
         approval_policy, sandbox_policy = self._effective_policies(record)
+        supports_effort = self._agent_supports_effort(agent)
         review_kwargs: dict[str, Any] = {}
         if approval_policy:
             review_kwargs["approval_policy"] = approval_policy
         if sandbox_policy:
             review_kwargs["sandbox_policy"] = sandbox_policy
+        if agent:
+            review_kwargs["agent"] = agent
         if record.model:
             review_kwargs["model"] = record.model
-        if record.effort:
+        if record.effort and supports_effort:
             review_kwargs["effort"] = record.effort
         if record.summary:
             review_kwargs["summary"] = record.summary
@@ -4891,7 +5063,8 @@ class TelegramCommandHandlers:
             workspace_path=record.workspace_path,
         )
         try:
-            thread = await client.thread_start(record.workspace_path)
+            agent = self._effective_agent(record)
+            thread = await client.thread_start(record.workspace_path, agent=agent)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -4901,14 +5074,14 @@ class TelegramCommandHandlers:
                 thread_id=message.thread_id,
                 exc=exc,
             )
-            return False, "Failed to start a new Codex thread."
+            return False, "Failed to start a new thread."
         if not await self._require_thread_workspace(
             message, record.workspace_path, thread, action="thread_start"
         ):
-            return False, "Failed to start a new Codex thread."
+            return False, "Failed to start a new thread."
         new_thread_id = _extract_thread_id(thread)
         if not new_thread_id:
-            return False, "Failed to start a new Codex thread."
+            return False, "Failed to start a new thread."
         log_event(
             self._logger,
             logging.INFO,
