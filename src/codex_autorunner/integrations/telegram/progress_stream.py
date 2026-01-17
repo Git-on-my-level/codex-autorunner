@@ -141,11 +141,23 @@ def render_progress_text(
     if tracker.step:
         parts.append(f"step {tracker.step}")
     header = " · ".join(parts)
+    thinking_action = None
+    if tracker.last_thinking_index is not None:
+        if 0 <= tracker.last_thinking_index < len(tracker.actions):
+            thinking_action = tracker.actions[tracker.last_thinking_index]
     actions = tracker.actions[-tracker.max_actions :] if tracker.max_actions > 0 else []
+    if thinking_action is not None:
+        actions = [action for action in actions if action is not thinking_action]
+        actions.append(thinking_action)
+        if tracker.max_actions <= 0:
+            actions = [thinking_action]
+        elif len(actions) > tracker.max_actions:
+            actions = actions[-tracker.max_actions :]
     lines = [header]
     for action in actions:
         icon = STATUS_ICONS.get(action.status, STATUS_ICONS["running"])
-        lines.append(f"{icon} {action.label}: {action.text}")
+        label = "thinking summary" if action is thinking_action else action.label
+        lines.append(f"{icon} {label}: {action.text}")
     message = "\n".join(lines)
     if len(message) <= max_length:
         return message
