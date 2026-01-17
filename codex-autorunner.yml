@@ -39,6 +39,20 @@ repo:
       small: gpt-5.1-codex-mini
       large: null
 
+  agents:
+    # Agent binaries/commands (add new agents here; do not hardcode).
+    codex:
+      binary: codex
+    opencode:
+      binary: opencode
+      serve_command:
+        - opencode
+        - serve
+        - --hostname
+        - 127.0.0.1
+        - --port
+        - "0"
+
   prompt:
     # Max characters of previous run output to include.
     prev_run_max_chars: 6000
@@ -244,6 +258,20 @@ hub:
 
   terminal:
     idle_timeout_seconds: 43200
+
+  agents:
+    # Agent binaries/commands (add new agents here; do not hardcode).
+    codex:
+      binary: codex
+    opencode:
+      binary: opencode
+      serve_command:
+        - opencode
+        - serve
+        - --hostname
+        - 127.0.0.1
+        - --port
+        - "0"
 
   hub:
     # Hub repo discovery root.

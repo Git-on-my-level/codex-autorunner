@@ -257,12 +257,13 @@ def _parse_command(raw: Optional[str]) -> list[str]:
 def _build_opencode_supervisor(
     config: AppServerConfig,
     *,
+    opencode_command: Optional[list[str]],
     logger: logging.Logger,
 ) -> tuple[Optional[OpenCodeSupervisor], Optional[float]]:
     raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
     command = _parse_command(raw_command) if raw_command else []
     if not command:
-        command = ["opencode", "serve", "--hostname", "127.0.0.1", "--port", "0"]
+        command = list(opencode_command or [])
     if not command:
         return None, None
     username = os.environ.get("OPENCODE_SERVER_USERNAME")
@@ -405,6 +406,7 @@ def _build_app_context(
     )
     opencode_supervisor, opencode_prune_interval = _build_opencode_supervisor(
         config.app_server,
+        opencode_command=config.agent_serve_command("opencode"),
         logger=logger,
     )
     doc_chat = DocChatService(
