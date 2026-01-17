@@ -28,6 +28,7 @@ from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
 from ..web.static_assets import missing_static_assets, resolve_static_dir
 from .about_car import ensure_about_car_file
+from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
 from .config import ConfigError, HubConfig, RepoConfig, _is_loopback_host, load_config
@@ -110,6 +111,7 @@ class Engine:
         )
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
+        self._app_server_event_formatter = AppServerEventFormatter()
         self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
@@ -620,6 +622,7 @@ class Engine:
     def _start_run_telemetry(self, run_id: int) -> None:
         with self._run_telemetry_lock:
             self._run_telemetry = RunTelemetry(run_id=run_id)
+        self._app_server_event_formatter.reset()
 
     def _update_run_telemetry(self, run_id: int, **updates: Any) -> None:
         with self._run_telemetry_lock:
@@ -648,12 +651,6 @@ class Engine:
         if not isinstance(message, dict):
             return
         method = message.get("method")
-        if method not in (
-            "thread/tokenUsage/updated",
-            "turn/plan/updated",
-            "turn/diff/updated",
-        ):
-            return
         params_raw = message.get("params")
         params = params_raw if isinstance(params_raw, dict) else {}
         thread_id = (
@@ -662,6 +659,7 @@ class Engine:
             or _extract_thread_id(message)
         )
         turn_id = _extract_turn_id(params) or _extract_turn_id(message)
+        run_id: Optional[int] = None
         with self._run_telemetry_lock:
             telemetry = self._run_telemetry
             if telemetry is None:
@@ -674,6 +672,7 @@ class Engine:
                 telemetry.thread_id = thread_id
             if telemetry.turn_id is None and turn_id:
                 telemetry.turn_id = turn_id
+            run_id = telemetry.run_id
             if method == "thread/tokenUsage/updated":
                 token_usage = (
                     params.get("token_usage") or params.get("tokenUsage") or {}
@@ -682,10 +681,8 @@ class Engine:
                     total = token_usage.get("total") or token_usage.get("totals")
                     if isinstance(total, dict):
                         telemetry.token_total = total
-                return
             if method == "turn/plan/updated":
                 telemetry.plan = params.get("plan") if "plan" in params else params
-                return
             if method == "turn/diff/updated":
                 diff = (
                     params.get("diff")
@@ -694,7 +691,10 @@ class Engine:
                     or params.get("value")
                 )
                 telemetry.diff = diff if diff is not None else params
-                return
+        if run_id is None:
+            return
+        for line in self._app_server_event_formatter.format_event(message):
+            self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
 
     def _load_run_index(self) -> dict[str, dict]:
         if not self.run_index_path.exists():
