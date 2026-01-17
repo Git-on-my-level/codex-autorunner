@@ -5,7 +5,6 @@ import hashlib
 import json
 import logging
 import math
-import os
 import re
 import secrets
 import shlex
@@ -13,6 +12,7 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
+from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
@@ -383,6 +383,9 @@ class TelegramCommandHandlers:
         return agent == "codex"
 
     def _opencode_available(self) -> bool:
+        raw_command = getenv("CAR_OPENCODE_COMMAND")
+        if resolve_opencode_binary(raw_command):
+            return True
         binary = self._config.agent_binaries.get("opencode")
         if not binary:
             return False
