@@ -225,7 +225,7 @@ class DocChatService:
         except asyncio.TimeoutError:
             self._log(
                 chat_id,
-                "result=error " 'detail="interrupt_timeout" backend=app_server',
+                'result=error detail="interrupt_timeout" backend=app_server',
             )
         except CodexAppServerError as exc:
             self._log(
@@ -250,7 +250,7 @@ class DocChatService:
         except asyncio.TimeoutError:
             self._log(
                 chat_id,
-                "result=error " 'detail="abort_timeout" backend=opencode',
+                'result=error detail="abort_timeout" backend=opencode',
             )
         except Exception as exc:
             self._log(
@@ -1029,7 +1029,7 @@ class DocChatService:
                 session = await client.create_session(
                     directory=str(self.engine.repo_root)
                 )
-                thread_id = session.get("id") if isinstance(session, dict) else None
+                thread_id = self._extract_opencode_session_id(session)
                 if not isinstance(thread_id, str) or not thread_id:
                     raise DocChatError("OpenCode did not return a session id")
                 self._app_server_threads.set_thread_id(key, thread_id)
@@ -1093,21 +1093,6 @@ class DocChatService:
                 interrupt_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await interrupt_task
-            if active.interrupted:
-                duration_ms = int((time.time() - started_at) * 1000)
-                self._log(
-                    chat_id,
-                    "result=interrupted "
-                    f"targets={targets_label} path={doc_pointer} "
-                    f"duration_ms={duration_ms} "
-                    f'message="{message_for_log}" backend=opencode',
-                )
-                return {
-                    "status": "interrupted",
-                    "detail": "Doc chat interrupted",
-                    "thread_id": thread_id,
-                    "turn_id": turn_id,
-                }
             return self._finalize_doc_chat_output(
                 output=output,
                 drafts=drafts,
@@ -1253,7 +1238,6 @@ class DocChatService:
                     delta = delta.get("text")
                 if isinstance(delta, str) and delta:
                     text_parts.append(delta)
-                    continue
                 if isinstance(part, dict) and part.get("type") == "text":
                     text = part.get("text")
                     if isinstance(text, str) and text:

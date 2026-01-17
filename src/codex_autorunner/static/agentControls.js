@@ -6,10 +6,15 @@ const STORAGE_KEYS = {
   reasoning: (agent) => `car.agent.${agent}.reasoning`,
 };
 
+const FALLBACK_AGENTS = [
+  { id: "codex", name: "Codex" },
+  { id: "opencode", name: "OpenCode" },
+];
+
 const controls = [];
 let agentsLoaded = false;
 let agentsLoadPromise = null;
-let agentList = [];
+let agentList = [...FALLBACK_AGENTS]; // Initialize with fallback
 let defaultAgent = "codex";
 const modelCatalogs = new Map();
 const modelCatalogPromises = new Map();
@@ -62,34 +67,38 @@ function setSelectedReasoning(agent, reasoning) {
   safeSetStorage(STORAGE_KEYS.reasoning(agent), reasoning);
 }
 
+function ensureFallbackAgents() {
+  if (!agentList.length) {
+    agentList = [...FALLBACK_AGENTS];
+  }
+  if (!agentList.some((agent) => agent.id === defaultAgent)) {
+    defaultAgent = agentList[0]?.id || "codex";
+  }
+}
+
 async function loadAgents() {
   if (agentsLoaded) return;
   if (agentsLoadPromise) {
     await agentsLoadPromise;
     return;
   }
-  agentsLoadPromise = api("/api/agents", { method: "GET" })
-    .then((data) => {
-      agentList = Array.isArray(data?.agents) ? data.agents : [];
-      defaultAgent = data?.default || defaultAgent;
-      if (!agentList.some((agent) => agent.id === defaultAgent)) {
-        defaultAgent = agentList[0]?.id || "codex";
+  agentsLoadPromise = (async () => {
+    try {
+      const data = await api("/api/agents", { method: "GET" });
+      const agents = Array.isArray(data?.agents) ? data.agents : [];
+      // Only use API response if it contains valid agents
+      if (agents.length > 0 && agents.every((a) => a && typeof a.id === "string")) {
+        agentList = agents;
+        defaultAgent = data?.default || defaultAgent;
       }
+    } catch (err) {
+      console.warn("Failed to load agent list, using fallback", err);
+    } finally {
+      ensureFallbackAgents();
       agentsLoaded = true;
-    })
-    .catch((err) => {
-      console.warn("Failed to load agent list", err);
-      agentsLoaded = true;
-      agentList = agentList.length
-        ? agentList
-        : [
-            { id: "codex", name: "Codex" },
-            { id: "opencode", name: "OpenCode" },
-          ];
-    })
-    .finally(() => {
       agentsLoadPromise = null;
-    });
+    }
+  })();
   await agentsLoadPromise;
 }
 
@@ -234,18 +243,33 @@ function resolveSelectedReasoning(agent, model) {
 }
 
 async function refreshControls() {
-  await loadAgents();
+  try {
+    await loadAgents();
+  } catch (err) {
+    console.warn("Failed to load agents during refresh", err);
+    ensureFallbackAgents();
+  }
+
   const selectedAgent = getSelectedAgent();
+
+  // Always update agent options first (uses in-memory agentList)
+  controls.forEach((control) => {
+    ensureAgentOptions(control.agentSelect);
+  });
+
+  // Then try to load model catalog
   let catalog = modelCatalogs.get(selectedAgent);
   if (!catalog) {
     try {
       catalog = await loadModelCatalog(selectedAgent);
     } catch (err) {
+      console.warn(`Failed to load model catalog for ${selectedAgent}`, err);
       catalog = null;
     }
   }
+
+  // Update model and reasoning options
   controls.forEach((control) => {
-    ensureAgentOptions(control.agentSelect);
     ensureModelOptions(control.modelSelect, catalog);
     if (catalog) {
       const selectedModelId = resolveSelectedModel(selectedAgent, catalog);
@@ -310,6 +334,12 @@ export function initAgentControls(config = {}) {
   }
   const control = { agentSelect, modelSelect, reasoningSelect };
   controls.push(control);
+
+  // Immediately populate agent options from in-memory list (synchronous)
+  ensureAgentOptions(agentSelect);
+  ensureModelOptions(modelSelect, null);
+  ensureReasoningOptions(reasoningSelect, null);
+
   if (agentSelect) {
     agentSelect.addEventListener("change", (event) => {
       const target = /** @type {HTMLSelectElement} */ (event.target);
@@ -328,7 +358,11 @@ export function initAgentControls(config = {}) {
       handleReasoningChange(target.value);
     });
   }
-  refreshControls();
+
+  // Async refresh to load from API (will update if API returns different data)
+  refreshControls().catch((err) => {
+    console.warn("Failed to refresh agent controls", err);
+  });
 }
 
 export async function ensureAgentCatalog() {

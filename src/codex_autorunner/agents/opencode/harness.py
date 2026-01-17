@@ -233,12 +233,14 @@ class OpenCodeHarness(AgentHarness):
             except json.JSONDecodeError:
                 parsed = {"raw": payload}
             session_id = _extract_session_id(parsed)
+            if event.event == "session.idle" and session_id == conversation_id:
+                break
             if session_id and session_id != conversation_id:
+                continue
+            if not session_id:
                 continue
             wrapped = {"message": {"method": event.event, "params": parsed}}
             yield format_sse("app-server", wrapped)
-            if event.event == "session.idle" and session_id == conversation_id:
-                break
 
 
 __all__ = ["OpenCodeHarness"]

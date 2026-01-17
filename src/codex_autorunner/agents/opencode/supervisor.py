@@ -141,7 +141,6 @@ class OpenCodeSupervisor:
             if handle.started and handle.process and handle.process.returncode is None:
                 return
             await self._start_process(handle)
-            handle.started = True
 
     async def _start_process(self, handle: OpenCodeHandle) -> None:
         env = dict(os.environ)
@@ -165,7 +164,9 @@ class OpenCodeSupervisor:
                 auth=self._auth,
                 timeout=self._request_timeout,
             )
+            handle.started = True
         except Exception:
+            handle.started = False
             process.terminate()
             try:
                 await asyncio.wait_for(process.wait(), timeout=5)

@@ -549,7 +549,7 @@ class SpecIngestService:
                 thread_id = None
         if not thread_id:
             session = await client.create_session(directory=str(self.engine.repo_root))
-            thread_id = session.get("id") if isinstance(session, dict) else None
+            thread_id = self._extract_opencode_session_id(session)
             if not isinstance(thread_id, str) or not thread_id:
                 raise SpecIngestError("OpenCode did not return a session id")
             self._app_server_threads.set_thread_id(key, thread_id)
@@ -733,7 +733,6 @@ class SpecIngestService:
                     delta = delta.get("text")
                 if isinstance(delta, str) and delta:
                     text_parts.append(delta)
-                    continue
                 if isinstance(part, dict) and part.get("type") == "text":
                     text = part.get("text")
                     if isinstance(text, str) and text:
