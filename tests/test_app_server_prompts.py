@@ -58,6 +58,7 @@ def test_spec_ingest_prompt_limits_and_instructions(repo: Path) -> None:
     assert len(prompt) <= limits.max_chars
     assert "Edit the TODO, PROGRESS, and OPINIONS files directly" in prompt
     assert "TODO/PROGRESS/OPINIONS" in prompt
+    assert "- [ ]" in prompt
     assert TRUNCATION_MARKER in prompt
     assert ".codex-autorunner/SPEC.md" in prompt
 

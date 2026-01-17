@@ -48,6 +48,9 @@ OPINIONS path: {opinions_path}
 Instructions:
 - Read the SPEC and existing docs from disk.
 - Edit the TODO, PROGRESS, and OPINIONS files directly to reflect the SPEC.
+- The TODO must be a Markdown checklist. Every task MUST be a checkbox line:
+  - Use `- [ ] <task>` for open items and `- [x] <task>` for completed items.
+  - Do NOT use plain bullets like `- task` or paragraphs for tasks.
 - Do NOT output a patch block. Just edit the files.
 - Output a short summary prefixed with "Agent: " explaining what you did.
 

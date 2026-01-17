@@ -19,6 +19,7 @@ from .core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
+from .core.docs import validate_todo_markdown
 from .core.engine import Engine
 from .core.locks import FileLock, FileLockBusy, FileLockError
 from .core.patch_utils import (
@@ -518,6 +519,12 @@ class SpecIngestService:
             if patch.strip():
                 patches.append(patch)
 
+        todo_errors = validate_todo_markdown(docs_preview.get("todo", ""))
+        if todo_errors:
+            # Restore docs before failing.
+            self._restore_docs(backups)
+            raise SpecIngestError("Invalid TODO format: " + "; ".join(todo_errors))
+
         # Always restore docs to state before ingest (user must apply patch)
         self._restore_docs(backups)
 
@@ -642,6 +649,11 @@ class SpecIngestService:
             if patch.strip():
                 patches.append(patch)
 
+        todo_errors = validate_todo_markdown(docs_preview.get("todo", ""))
+        if todo_errors:
+            self._restore_docs(backups)
+            raise SpecIngestError("Invalid TODO format: " + "; ".join(todo_errors))
+
         self._restore_docs(backups)
 
         patch_text = "\n".join(patches)
@@ -706,7 +718,7 @@ class SpecIngestService:
     def _extract_opencode_session_id(self, payload: Any) -> Optional[str]:
         if not isinstance(payload, dict):
             return None
-        for key in ("sessionID", "sessionId", "session_id"):
+        for key in ("sessionID", "sessionId", "session_id", "id"):
             value = payload.get(key)
             if isinstance(value, str) and value:
                 return value

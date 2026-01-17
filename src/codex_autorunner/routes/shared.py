@@ -25,6 +25,20 @@ SSE_HEADERS = {
 }
 
 
+async def _interruptible_sleep(
+    seconds: float, shutdown_event: Optional[asyncio.Event]
+) -> bool:
+    """Sleep that can be interrupted by shutdown_event. Returns True if interrupted."""
+    if shutdown_event is None:
+        await asyncio.sleep(seconds)
+        return False
+    try:
+        await asyncio.wait_for(shutdown_event.wait(), timeout=seconds)
+        return True  # Event was set
+    except asyncio.TimeoutError:
+        return False  # Normal timeout, continue
+
+
 def _extract_bypass_flag(args: list[str]) -> tuple[str, list[str]]:
     chosen = None
     for arg in args:
@@ -121,7 +135,8 @@ async def log_stream(
                 if now - last_emit_at >= heartbeat_interval:
                     yield ": ping\n\n"
                     last_emit_at = now
-                await asyncio.sleep(0.5)
+                if await _interruptible_sleep(0.5, shutdown_event):
+                    return
 
 
 async def state_stream(
@@ -179,4 +194,5 @@ async def state_stream(
             if now - last_emit_at >= heartbeat_interval:
                 yield ": ping\n\n"
                 last_emit_at = now
-        await asyncio.sleep(1.0)
+        if await _interruptible_sleep(1.0, shutdown_event):
+            return

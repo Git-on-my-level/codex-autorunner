@@ -25,6 +25,7 @@ from .app_server_threads import (
     default_app_server_threads_path,
 )
 from .config import RepoConfig
+from .docs import validate_todo_markdown
 from .engine import Engine, timestamp
 from .locks import FileLock, FileLockBusy, FileLockError
 from .patch_utils import (
@@ -1178,7 +1179,7 @@ class DocChatService:
     def _extract_opencode_session_id(self, payload: Any) -> Optional[str]:
         if not isinstance(payload, dict):
             return None
-        for key in ("sessionID", "sessionId", "session_id"):
+        for key in ("sessionID", "sessionId", "session_id", "id"):
             value = payload.get(key)
             if isinstance(value, str) and value:
                 return value
@@ -1320,6 +1321,13 @@ class DocChatService:
                 raise DocChatError(str(exc)) from exc
             if not payloads:
                 raise DocChatError("Doc chat patch did not produce updates")
+        if "todo" in payloads:
+            todo_content = payloads["todo"].get("content", "")
+            if not isinstance(todo_content, str):
+                raise DocChatError("Invalid TODO draft content")
+            todo_errors = validate_todo_markdown(todo_content)
+            if todo_errors:
+                raise DocChatError("Invalid TODO format: " + "; ".join(todo_errors))
         if payloads:
             self._save_drafts(updated)
         duration_ms = int((time.time() - started_at) * 1000)

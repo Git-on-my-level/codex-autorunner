@@ -58,6 +58,9 @@ echo "Linting Python (ruff)..."
 echo "Linting injected context hints..."
 "$PYTHON_BIN" scripts/check_injected_context.py
 
+echo "Checking work docs..."
+"$PYTHON_BIN" scripts/check_docs.py
+
 echo "Type check (mypy)..."
 "$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server
 
