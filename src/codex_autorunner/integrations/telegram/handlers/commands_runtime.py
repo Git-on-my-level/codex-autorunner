@@ -426,6 +426,45 @@ class TelegramCommandHandlers:
             return None
         return {"providerID": provider_id, "modelID": model_id}
 
+    async def _opencode_missing_env(
+        self,
+        client: Any,
+        workspace_root: Path,
+        model_payload: Optional[dict[str, str]],
+    ) -> list[str]:
+        if not model_payload:
+            return []
+        provider_id = model_payload.get("providerID")
+        if not provider_id:
+            return []
+        try:
+            payload = await client.providers(directory=str(workspace_root))
+        except Exception:
+            return []
+        providers: list[dict[str, Any]] = []
+        if isinstance(payload, dict):
+            raw_providers = payload.get("providers")
+            if isinstance(raw_providers, list):
+                providers = [
+                    entry for entry in raw_providers if isinstance(entry, dict)
+                ]
+        elif isinstance(payload, list):
+            providers = [entry for entry in payload if isinstance(entry, dict)]
+        for provider in providers:
+            pid = provider.get("id") or provider.get("providerID")
+            if pid != provider_id:
+                continue
+            env_keys = provider.get("env")
+            if not isinstance(env_keys, list):
+                return []
+            missing = [
+                key
+                for key in env_keys
+                if isinstance(key, str) and key and not getenv(key)
+            ]
+            return missing
+        return []
+
     def _extract_opencode_turn_id(self, session_id: str, payload: Any) -> str:
         if isinstance(payload, dict):
             for key in ("id", "messageId", "message_id", "turn_id", "turnId"):
@@ -1356,6 +1395,34 @@ class TelegramCommandHandlers:
                             PLACEHOLDER_TEXT,
                         )
                     model_payload = self._split_opencode_model(record.model)
+                    missing_env = await self._opencode_missing_env(
+                        opencode_client,
+                        workspace_root,
+                        model_payload,
+                    )
+                    if missing_env:
+                        provider_id = (
+                            model_payload.get("providerID") if model_payload else None
+                        )
+                        failure_message = (
+                            "OpenCode provider "
+                            f"{provider_id or 'selected'} requires env vars: "
+                            f"{', '.join(missing_env)}. "
+                            "Set them or switch models."
+                        )
+                        if send_failure_response:
+                            await self._send_message(
+                                message.chat_id,
+                                failure_message,
+                                thread_id=message.thread_id,
+                                reply_to=message.message_id,
+                            )
+                        return _TurnRunFailure(
+                            failure_message,
+                            placeholder_id,
+                            transcript_message_id,
+                            transcript_text,
+                        )
                     result = await opencode_client.send_message(
                         thread_id,
                         message=prompt_text,
