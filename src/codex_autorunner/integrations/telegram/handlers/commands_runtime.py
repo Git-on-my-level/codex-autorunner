@@ -52,6 +52,7 @@ from ..constants import (
     COMMAND_DISABLED_TEMPLATE,
     COMPACT_SUMMARY_PROMPT,
     DEFAULT_AGENT,
+    DEFAULT_AGENT_MODELS,
     DEFAULT_MCP_LIST_LIMIT,
     DEFAULT_MODEL_LIST_LIMIT,
     DEFAULT_PAGE_SIZE,
@@ -250,6 +251,7 @@ class TelegramCommandHandlers:
             record.pending_compact_seed_thread_id = None
             if not self._agent_supports_effort(desired):
                 record.effort = None
+            record.model = DEFAULT_AGENT_MODELS.get(desired)
 
         self._router.update_topic(chat_id, thread_id, apply)
         if not self._agent_supports_resume(desired):

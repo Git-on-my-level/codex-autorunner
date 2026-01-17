@@ -101,6 +101,10 @@ COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
 MAX_MENTION_BYTES = 200_000
 VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 VALID_AGENT_VALUES = {"codex", "opencode"}
+DEFAULT_AGENT_MODELS = {
+    "codex": "gpt-5.2-codex",
+    "opencode": "zai-coding-plan/glm-4.7",
+}
 CONTEXT_BASELINE_TOKENS = 12000
 APPROVAL_POLICY_VALUES = {"untrusted", "on-failure", "on-request", "never"}
 APPROVAL_PRESETS = {
