@@ -71,10 +71,12 @@ export async function startNewDocChatThread() {
   if (state.status === "running") {
     cancelDocChat();
   }
+  const agent = getSelectedAgent();
+  const key = agent === "opencode" ? "doc_chat.opencode" : "doc_chat";
   try {
     await api("/api/app-server/threads/reset", {
       method: "POST",
-      body: { key: "doc_chat" },
+      body: { key },
     });
     state.history = [];
     state.status = "idle";
