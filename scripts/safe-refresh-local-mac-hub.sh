@@ -527,7 +527,7 @@ _reload_telegram() {
       _write_telegram_plist "${hub_root}"
     fi
     _ensure_telegram_plist_uses_current_venv
-    PLIST_PATH="${TELEGRAM_PLIST_PATH}" _ensure_plist_has_opencode_env
+    PLIST_PATH="${TELEGRAM_PLIST_PATH}" _ensure_plist_has_opencode_path
     telegram_domain="gui/$(id -u)/${TELEGRAM_LABEL}"
     launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
     launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
