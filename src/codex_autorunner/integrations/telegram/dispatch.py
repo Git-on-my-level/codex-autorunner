@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
 from ...core.logging_utils import log_event
-from .adapter import TelegramUpdate, allowlist_allows
+from .adapter import (
+    ApprovalCallback,
+    CancelCallback,
+    TelegramUpdate,
+    allowlist_allows,
+    parse_callback_data,
+)
 
 
 @dataclass(frozen=True)
@@ -84,13 +90,18 @@ async def _dispatch_callback(
     callback = update.callback
     if callback is None:
         return
+    parsed = parse_callback_data(callback.data)
+    should_bypass_queue = isinstance(parsed, ApprovalCallback) or (
+        isinstance(parsed, CancelCallback) and parsed.kind == "interrupt"
+    )
     if context.topic_key:
-        handlers._enqueue_topic_work(
-            context.topic_key,
-            lambda: handlers._handle_callback(callback),
-            force_queue=True,
-        )
-        return
+        if not should_bypass_queue:
+            handlers._enqueue_topic_work(
+                context.topic_key,
+                lambda: handlers._handle_callback(callback),
+                force_queue=True,
+            )
+            return
     await handlers._handle_callback(callback)
 
 
