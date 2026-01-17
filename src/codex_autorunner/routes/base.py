@@ -102,6 +102,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         raw: bool = False,
     ):
         engine = request.app.state.engine
+
         def _build_response(
             text: str, *, run_id: Optional[int] = None, tail: Optional[int] = None
         ):
