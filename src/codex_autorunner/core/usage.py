@@ -1803,8 +1803,6 @@ def get_repo_usage_summary_cached(
     codex_root = (codex_home or default_codex_home()).expanduser()
     cache = get_usage_series_cache(codex_root)
     summary, status = cache.get_repo_summary(repo_root, since=since, until=until)
-    if since or until:
-        return summary, status
     opencode_summary = summarize_opencode_repo_usage(
         repo_root, since=since, until=until
     )
@@ -1864,8 +1862,6 @@ def get_hub_usage_summary_cached(
     per_repo, unmatched, status = cache.get_hub_summary(
         repo_map, since=since, until=until
     )
-    if since or until:
-        return per_repo, unmatched, status
     opencode_per_repo = summarize_opencode_hub_usage(repo_map, since=since, until=until)
     merged_per_repo: Dict[str, UsageSummary] = {}
     for repo_id, summary in per_repo.items():
