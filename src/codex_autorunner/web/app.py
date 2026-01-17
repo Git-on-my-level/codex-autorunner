@@ -741,9 +741,22 @@ def _app_lifespan(context: AppContext):
 
             tasks.append(asyncio.create_task(_tui_idle_loop()))
 
+        # Shutdown event for graceful SSE/WebSocket termination during reload
+        app.state.shutdown_event = asyncio.Event()
+        app.state.active_websockets: set = set()
+
         try:
             yield
         finally:
+            # Signal SSE streams to stop and close WebSocket connections
+            app.state.shutdown_event.set()
+            for ws in list(app.state.active_websockets):
+                try:
+                    await ws.close(code=1012)  # 1012 = Service Restart
+                except Exception:
+                    pass
+            app.state.active_websockets.clear()
+
             for task in tasks:
                 task.cancel()
             if tasks:

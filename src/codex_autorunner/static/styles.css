@@ -4703,19 +4703,20 @@ button.loading::after {
   
   .doc-actions {
     display: flex;
-    flex-wrap: nowrap;
-    gap: 6px;
-    margin-top: 6px;
-    align-items: center;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+    align-items: stretch;
   }
   
   .doc-actions button {
-    flex: 0 0 auto;
-    min-height: 36px;
-    padding: 8px 6px;
-    font-size: 10px;
+    flex: 1 1 calc(33.333% - 6px);
+    min-height: 44px;
+    padding: 10px 8px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 8px;
+    justify-content: center;
   }
 
   /* Use short labels on mobile */
@@ -4725,7 +4726,10 @@ button.loading::after {
 
   .doc-actions button[data-short]::after {
     content: attr(data-short);
-    font-size: 10px;
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
 
   /* Chat panel - mobile meta/response sizing */
@@ -5223,12 +5227,13 @@ button.loading::after {
   }
 
   .doc-actions button {
-    min-height: 32px;
-    padding: 6px 4px;
+    flex: 1 1 calc(50% - 4px);
+    min-height: 40px;
+    padding: 8px 6px;
   }
 
   .doc-actions button[data-short]::after {
-    font-size: 9px;
+    font-size: 11px;
   }
 
   .doc-chat-panel {
@@ -5721,12 +5726,14 @@ button.loading::after {
 
   .doc-actions {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
+    flex-wrap: nowrap;
+    gap: 6px;
   }
 
   .doc-actions button {
-    flex: 0 0 auto;
+    flex: 1 1 auto;
+    min-height: 36px;
+    padding: 6px 10px;
   }
 
   .doc-actions button[data-short] {
@@ -5734,7 +5741,10 @@ button.loading::after {
   }
 
   .doc-actions button[data-short]::after {
-    font-size: 9px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
   }
 
   /* Patch panel in landscape */

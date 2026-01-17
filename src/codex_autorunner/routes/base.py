@@ -77,8 +77,14 @@ def build_base_routes(static_dir: Path) -> APIRouter:
     async def stream_state_endpoint(request: Request):
         engine = request.app.state.engine
         manager = request.app.state.manager
+        shutdown_event = getattr(request.app.state, "shutdown_event", None)
         return StreamingResponse(
-            state_stream(engine, manager, logger=request.app.state.logger),
+            state_stream(
+                engine,
+                manager,
+                logger=request.app.state.logger,
+                shutdown_event=shutdown_event,
+            ),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
@@ -104,8 +110,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
     @router.get("/api/logs/stream")
     async def stream_logs_endpoint(request: Request):
         engine = request.app.state.engine
+        shutdown_event = getattr(request.app.state, "shutdown_event", None)
         return StreamingResponse(
-            log_stream(engine.log_path),
+            log_stream(engine.log_path, shutdown_event=shutdown_event),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
@@ -136,6 +143,10 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         if app is None:
             await ws.close()
             return
+        # Track websocket for graceful shutdown during reload
+        active_websockets = getattr(app.state, "active_websockets", None)
+        if active_websockets is not None:
+            active_websockets.add(ws)
         logger = app.state.logger
         engine = app.state.engine
         terminal_sessions: dict[str, ActiveSession] = app.state.terminal_sessions
@@ -511,5 +522,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             await ws.close()
         except Exception:
             safe_log(logger, logging.WARNING, "Terminal websocket close failed")
+        finally:
+            # Unregister websocket from active set
+            if active_websockets is not None:
+                active_websockets.discard(ws)
 
     return router

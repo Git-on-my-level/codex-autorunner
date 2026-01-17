@@ -97,7 +97,11 @@ def resolve_runner_status(engine, state) -> tuple[str, Optional[int], bool]:
     return status, runner_pid, running
 
 
-async def log_stream(log_path: Path, heartbeat_interval: float = 15.0):
+async def log_stream(
+    log_path: Path,
+    heartbeat_interval: float = 15.0,
+    shutdown_event: Optional[asyncio.Event] = None,
+):
     """SSE stream generator for log file tailing."""
     if not log_path.exists():
         yield "data: log file not found\n\n"
@@ -106,6 +110,8 @@ async def log_stream(log_path: Path, heartbeat_interval: float = 15.0):
     with log_path.open("r", encoding="utf-8") as f:
         f.seek(0, 2)
         while True:
+            if shutdown_event is not None and shutdown_event.is_set():
+                return
             line = f.readline()
             if line:
                 yield f"data: {line.rstrip()}\n\n"
@@ -118,7 +124,13 @@ async def log_stream(log_path: Path, heartbeat_interval: float = 15.0):
                 await asyncio.sleep(0.5)
 
 
-async def state_stream(engine, manager, logger=None, heartbeat_interval: float = 15.0):
+async def state_stream(
+    engine,
+    manager,
+    logger=None,
+    heartbeat_interval: float = 15.0,
+    shutdown_event: Optional[asyncio.Event] = None,
+):
     """SSE stream generator for state updates."""
     last_payload = None
     last_error_log_at = 0.0
@@ -128,6 +140,8 @@ async def state_stream(engine, manager, logger=None, heartbeat_interval: float =
         engine.config.codex_args, "--model"
     )
     while True:
+        if shutdown_event is not None and shutdown_event.is_set():
+            return
         emitted = False
         try:
             state = await asyncio.to_thread(load_state, engine.state_path)
