@@ -2384,6 +2384,208 @@ button.icon-btn {
   background: var(--muted);
 }
 
+/* Doc chat stream sections */
+.doc-chat-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.doc-chat-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-chat-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.doc-chat-events,
+.doc-chat-history {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.doc-chat-events.hidden {
+  display: none;
+}
+
+.doc-chat-events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.doc-chat-event {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 6px 8px;
+  display: grid;
+  gap: 2px;
+  font-size: 10px;
+}
+
+.doc-chat-event-title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.doc-chat-event-summary {
+  color: var(--text);
+  opacity: 0.85;
+}
+
+.doc-chat-event-detail,
+.doc-chat-event-meta {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.doc-chat-event.thinking {
+  border-color: rgba(108, 245, 216, 0.3);
+  background: rgba(108, 245, 216, 0.08);
+}
+
+.doc-chat-event.command {
+  border-color: rgba(255, 166, 77, 0.35);
+}
+
+.doc-chat-event.file {
+  border-color: rgba(241, 250, 140, 0.35);
+}
+
+.doc-chat-event.error {
+  border-color: rgba(255, 85, 102, 0.35);
+  background: rgba(255, 85, 102, 0.08);
+}
+
+.doc-chat-events-empty,
+.doc-chat-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 10px 8px;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.doc-chat-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.doc-chat-entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.doc-chat-entry-header .prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.doc-chat-entry-header .prompt {
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.copy-prompt-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 0;
+}
+
+.copy-prompt-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.doc-chat-entry-header .meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.doc-chat-entry-header .status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.doc-chat-entry.running .status-dot {
+  background: var(--accent);
+}
+
+.doc-chat-entry.error .status-dot {
+  background: var(--error);
+}
+
+.doc-chat-entry.interrupted .status-dot {
+  background: var(--accent-2);
+}
+
+.doc-chat-entry-response {
+  color: var(--text);
+  white-space: pre-wrap;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.doc-chat-entry-response.streaming {
+  color: var(--accent);
+}
+
+.doc-chat-entry-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 9px;
+  color: var(--muted);
+}
+
 /* Empty state */
 .chat-empty {
   text-align: center;

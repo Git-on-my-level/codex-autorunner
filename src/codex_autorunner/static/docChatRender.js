@@ -87,8 +87,7 @@ export function renderChat() {
   }
 
   const activeDoc = getActiveDoc();
-  const draft =
-    getDraft(activeDoc) || (latest?.drafts ? latest.drafts[activeDoc] : null);
+  const draft = getDraft(activeDoc);
   const hasPatch = !!(draft && (draft.patch || "").trim());
   const previewing = hasPatch && isDraftPreview(activeDoc);
   if (chatUI.patchMain) {
