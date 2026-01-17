@@ -66,7 +66,10 @@ hooks:
 	git config core.hooksPath .githooks
 
 test:
-	$(PYTHON) -m pytest
+	$(PYTHON) -m pytest -m "not integration"
+
+test-integration:
+	$(PYTHON) -m pytest -m integration
 
 check:
 	./scripts/check.sh

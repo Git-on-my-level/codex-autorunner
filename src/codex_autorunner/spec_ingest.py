@@ -662,6 +662,7 @@ class SpecIngestService:
         return {"providerID": provider_id, "modelID": model_id}
 
     def _extract_opencode_turn_id(self, session_id: str, payload: Any) -> str:
+        # Fallback: placeholder for tracking since events filter by session_id only
         if isinstance(payload, dict):
             for key in ("id", "messageId", "message_id", "turn_id", "turnId"):
                 value = payload.get(key)

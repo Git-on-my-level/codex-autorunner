@@ -68,7 +68,7 @@ echo "Type check (tsc)..."
 "$TSC_BIN" -p tsconfig.json
 
 echo "Running tests (pytest)..."
-"$PYTHON_BIN" -m pytest
+"$PYTHON_BIN" -m pytest -m "not integration"
 
 echo "Dead-code check (heuristic)..."
 "$PYTHON_BIN" scripts/deadcode.py --check

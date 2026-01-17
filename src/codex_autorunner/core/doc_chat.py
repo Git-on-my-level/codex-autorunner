@@ -235,6 +235,31 @@ class DocChatService:
                 "backend=app_server",
             )
 
+    async def _abort_opencode(self, active: ActiveDocChatTurn, thread_id: str) -> None:
+        if active.interrupt_sent:
+            return
+        active.interrupt_sent = True
+        chat_id = self._chat_id()
+        try:
+            if not hasattr(active.client, "abort"):
+                return
+            await asyncio.wait_for(
+                active.client.abort(thread_id),
+                timeout=DOC_CHAT_INTERRUPT_GRACE_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            self._log(
+                chat_id,
+                "result=error " 'detail="abort_timeout" backend=opencode',
+            )
+        except Exception as exc:
+            self._log(
+                chat_id,
+                "result=error "
+                f'detail="abort_failed:{self._compact_message(str(exc))}" '
+                "backend=opencode",
+            )
+
     async def interrupt(self, _kind: Optional[str] = None) -> Dict[str, str]:
         active = self._get_active_turn()
         if active is None:
@@ -1038,21 +1063,27 @@ class DocChatService:
                     raise asyncio.TimeoutError()
                 if interrupt_task in done:
                     active.interrupted = True
-                    output_task.cancel()
-                    duration_ms = int((time.time() - started_at) * 1000)
-                    self._log(
-                        chat_id,
-                        "result=interrupted "
-                        f"targets={targets_label} path={doc_pointer} "
-                        f"duration_ms={duration_ms} "
-                        f'message="{message_for_log}" backend=opencode',
+                    active.interrupt_event.set()
+                    await self._abort_opencode(active, thread_id)
+                    done, _pending = await asyncio.wait(
+                        {output_task}, timeout=DOC_CHAT_INTERRUPT_GRACE_SECONDS
                     )
-                    return {
-                        "status": "interrupted",
-                        "detail": "Doc chat interrupted",
-                        "thread_id": thread_id,
-                        "turn_id": turn_id,
-                    }
+                    if not done:
+                        output_task.add_done_callback(lambda task: task.exception())
+                        duration_ms = int((time.time() - started_at) * 1000)
+                        self._log(
+                            chat_id,
+                            "result=interrupted "
+                            f"targets={targets_label} path={doc_pointer} "
+                            f"duration_ms={duration_ms} "
+                            f'message="{message_for_log}" backend=opencode',
+                        )
+                        return {
+                            "status": "interrupted",
+                            "detail": "Doc chat interrupted",
+                            "thread_id": thread_id,
+                            "turn_id": turn_id,
+                        }
                 output = await output_task
             finally:
                 self._clear_active_turn(turn_id)
@@ -1151,6 +1182,7 @@ class DocChatService:
         return {"providerID": provider_id, "modelID": model_id}
 
     def _extract_opencode_turn_id(self, session_id: str, payload: Any) -> str:
+        # Fallback: placeholder for tracking since events filter by session_id only
         if isinstance(payload, dict):
             for key in ("id", "messageId", "message_id", "turn_id", "turnId"):
                 value = payload.get(key)

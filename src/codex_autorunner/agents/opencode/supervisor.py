@@ -153,15 +153,26 @@ class OpenCodeSupervisor:
             env=env,
         )
         handle.process = process
-        base_url = await self._read_base_url(process)
-        if not base_url:
-            raise OpenCodeSupervisorError("OpenCode server failed to report base URL")
-        handle.base_url = base_url
-        handle.client = OpenCodeClient(
-            base_url,
-            auth=self._auth,
-            timeout=self._request_timeout,
-        )
+        try:
+            base_url = await self._read_base_url(process)
+            if not base_url:
+                raise OpenCodeSupervisorError(
+                    "OpenCode server failed to report base URL"
+                )
+            handle.base_url = base_url
+            handle.client = OpenCodeClient(
+                base_url,
+                auth=self._auth,
+                timeout=self._request_timeout,
+            )
+        except Exception:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+            raise
 
     async def _read_base_url(
         self, process: asyncio.subprocess.Process, timeout: float = 20.0

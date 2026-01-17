@@ -69,6 +69,11 @@ completions = true
 
 [tool.pytest.ini_options]
 cache_dir = ".codex-autorunner/pytest-cache"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: marks tests as integration tests that require external dependencies (deselect with '-m \"not integration\"')"
+]
 
 [tool.ruff]
 line-length = 88

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
@@ -9,6 +10,8 @@ from ...core.app_server_events import format_sse
 from ..base import AgentHarness
 from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef
 from .supervisor import OpenCodeSupervisor
+
+_logger = logging.getLogger(__name__)
 
 
 def _split_model_id(model: Optional[str]) -> Optional[dict[str, str]]:
@@ -214,8 +217,10 @@ class OpenCodeHarness(AgentHarness):
         client = await self._supervisor.get_client(workspace_root)
         try:
             await client.abort(conversation_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug(
+                "Failed to abort OpenCode session %s: %s", conversation_id, exc
+            )
 
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
