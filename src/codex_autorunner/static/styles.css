@@ -343,8 +343,10 @@ main {
 /* Cards grid */
 .cards {
   display: grid;
-  grid-template-columns: 1fr 220px;
-  gap: 8px;
+  grid-template-columns: 1fr minmax(200px, 280px);
+  gap: 10px;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .card {
@@ -352,6 +354,8 @@ main {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   padding: 10px;
+  overflow: hidden;
+  min-width: 0; /* Allow cards to shrink below content size */
 }
 
 /* ===== Compact Per-Repo Usage Card ===== */
@@ -1169,6 +1173,8 @@ a.hub-pr-pill:hover {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  overflow: hidden;
+  min-width: 0;
 }
 
 .grid-two .muted {
@@ -1183,6 +1189,9 @@ a.hub-pr-pill:hover {
   font-weight: 600;
   margin: 1px 0 0;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-all;
 }
 
 .muted {
@@ -1224,6 +1233,7 @@ a.hub-pr-pill:hover {
   gap: 4px;
   margin-top: 8px;
   flex-wrap: wrap;
+  max-width: 100%;
 }
 
 /* Buttons */
@@ -2345,6 +2355,16 @@ button.icon-btn {
   border-radius: var(--radius);
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+}
+
+/* Hide chat stream when it only contains the hidden error element */
+.doc-chat-stream:has(> .doc-chat-error.hidden:only-child) {
+  display: none;
+}
+
+/* Also hide when completely empty */
+.doc-chat-stream:empty {
+  display: none;
 }
 
 .doc-chat-stream::-webkit-scrollbar {
@@ -3576,56 +3596,90 @@ button.loading::after {
 }
 
 /* ===== RESPONSIVE ===== */
-  @media (max-width: 900px) {
-    .cards {
-      grid-template-columns: 1fr;
-    }
-    
-    .grid-two {
-      grid-template-columns: repeat(2, 1fr);
-    }
-
-    .hub-hero {
-      flex-direction: row;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .hub-hero-text {
-      flex: 1;
-      flex-direction: row;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .hub-hero-actions {
-      justify-content: flex-end;
-    }
-
-    .hub-stats {
-      flex-wrap: wrap;
-    }
-
-    .hub-stat {
-      min-width: 80px;
-    }
-
-    /* Compact repo cards on tablet */
-    .hub-repo-row {
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-
-    .hub-repo-center {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 2px;
-    }
-
-    .hub-repo-open-indicator {
-      display: none;
-    }
+@media (max-width: 900px) {
+  .cards {
+    grid-template-columns: 1fr;
+    gap: 8px;
   }
+  
+  .grid-two {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .hub-hero {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .hub-hero-text {
+    flex: 1;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .hub-hero-actions {
+    justify-content: flex-end;
+  }
+
+  .hub-stats {
+    flex-wrap: wrap;
+  }
+
+  .hub-stat {
+    min-width: 80px;
+  }
+
+  /* Compact repo cards on tablet */
+  .hub-repo-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .hub-repo-center {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .hub-repo-open-indicator {
+    display: none;
+  }
+  
+  /* Better action buttons layout on tablet */
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  
+  .actions button {
+    flex: 1 1 auto;
+    min-width: 70px;
+  }
+  
+  /* Cards get better spacing on tablet */
+  .card {
+    padding: 12px;
+  }
+  
+  /* Status card header more compact */
+  .card-header {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  
+  .card-header-left {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  
+  /* Runner config on one line */
+  .runner-config {
+    flex-wrap: wrap;
+  }
+}
 
 /* Mobile: 640px and below */
 @media (max-width: 640px) {
@@ -3823,6 +3877,31 @@ button.loading::after {
     font-size: 8px;
     padding-top: 3px;
   }
+  
+  /* Usage chart more compact on mobile */
+  .usage-chart {
+    padding: 4px;
+    margin-bottom: 4px;
+  }
+  
+  .usage-chart-canvas {
+    height: 70px;
+  }
+  
+  /* Usage rates visual more compact on mobile */
+  .usage-rates-visual {
+    gap: 3px;
+    margin-bottom: 3px;
+  }
+  
+  .usage-rate-row {
+    gap: 4px;
+  }
+  
+  .usage-rate-label {
+    font-size: 9px;
+    min-width: 55px;
+  }
 
   /* Modal on mobile */
   .modal-create-repo {
@@ -3987,53 +4066,99 @@ button.loading::after {
   }
   
   .grid-two {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 6px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
   }
   
   .grid-two > div {
-    padding: 8px;
+    padding: 6px 8px;
+  }
+  
+  .grid-two .muted {
+    font-size: 8px;
   }
   
   .metric {
-    font-size: 14px;
+    font-size: 12px;
+    font-weight: 600;
+    word-break: break-all;
   }
   
   /* Larger action buttons - min 44px touch targets */
   .actions {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
     gap: 6px;
     margin-top: 12px;
   }
   
   .actions button {
-    flex: 1 1 auto;
-    min-width: 60px;
+    min-width: 0;
     min-height: 44px;
-    padding: 12px 8px;
-    font-size: 11px;
+    padding: 10px 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
   }
   
   .actions button:active {
     transform: scale(0.95);
     opacity: 0.8;
   }
-
-  .actions {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  
+  /* Primary action buttons get full width on first row */
+  .actions button.primary {
+    grid-column: span 1;
   }
-
-  .actions button {
-    min-width: 0;
+  
+  /* Icon buttons should be smaller */
+  .actions button.icon-btn {
+    grid-column: span 1;
+    min-width: 44px;
   }
   
   .card {
     padding: 10px;
+    overflow: hidden;
   }
   
   .card-header {
     padding-bottom: 8px;
     margin-bottom: 10px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  
+  .card-header-left {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  
+  /* Dashboard panel mobile improvements */
+  #dashboard .cards {
+    padding: 0;
+    gap: 6px;
+  }
+  
+  /* Runner config compact on mobile */
+  .runner-config {
+    margin-top: 8px;
+    padding-top: 8px;
+    gap: 6px;
+  }
+  
+  .runner-config-label {
+    font-size: 9px;
+  }
+  
+  .runner-config-value {
+    font-size: 11px;
+  }
+  
+  /* Runner PID info more compact */
+  #runner-pid {
+    margin-top: 8px;
+    font-size: 9px;
   }
   
   /* Compact inline toolbar for mobile - flex row */
@@ -4058,6 +4183,41 @@ button.loading::after {
   
   .inline-toolbar label:has(input[type="number"]) {
     display: none; /* Hide Run/Tail labels on mobile, show just inputs */
+  }
+  
+  /* Runs toolbar - hide label text, show only controls */
+  .runs-toolbar {
+    gap: 6px;
+  }
+  
+  .runs-toolbar label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0; /* Hide label text */
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  
+  .runs-toolbar label::before {
+    content: none; /* Remove any pseudo-element labels */
+  }
+  
+  .runs-toolbar select,
+  .runs-toolbar input[type="text"] {
+    font-size: 11px;
+    min-height: 36px;
+    padding: 6px 8px;
+    width: 100%;
+    min-width: 0;
+  }
+  
+  .runs-toolbar input[type="text"] {
+    flex: 1;
+  }
+  
+  .runs-toolbar input[type="text"]::placeholder {
+    font-size: 10px;
   }
   
   .inline-toolbar input[type="number"] {
@@ -4587,13 +4747,43 @@ button.loading::after {
 
   .doc-chat-meta {
     font-size: 9px;
+    gap: 4px;
+  }
+  
+  /* Hide hint text on mobile - too cluttered */
+  #doc-chat-hint {
+    display: none;
+  }
+  
+  /* Hide voice status text on mobile when not actively recording */
+  .doc-chat-meta .voice-status:not(.recording) {
+    display: none;
+  }
+  
+  /* Keep only essential controls in meta row on mobile */
+  .doc-chat-meta-left {
+    flex: 0 0 auto;
+  }
+  
+  .doc-chat-meta-right {
+    flex: 1 1 auto;
+    justify-content: flex-end;
   }
 
-  /* Unified chat stream mobile */
+  /* Unified chat stream mobile - hide when empty */
   .doc-chat-stream {
     max-height: 200px;
     padding: 6px;
     gap: 10px;
+  }
+  
+  .doc-chat-stream:empty {
+    display: none;
+  }
+  
+  /* When chat stream only has the error div but it's hidden, collapse */
+  .doc-chat-stream:has(> .doc-chat-error.hidden:only-child) {
+    display: none;
   }
 
   .chat-message:not(:last-child) {
@@ -4938,16 +5128,31 @@ button.loading::after {
   }
   
   .metric {
-    font-size: 13px;
-  }
-  
-  .actions button {
-    font-size: 10px;
-    min-height: 42px;
+    font-size: 11px;
   }
   
   .grid-two {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 3px;
+  }
+  
+  .grid-two > div {
+    padding: 5px 6px;
+  }
+  
+  .grid-two .muted {
+    font-size: 7px;
+  }
+  
+  .actions {
+    grid-template-columns: repeat(2, 1fr);
     gap: 4px;
+  }
+  
+  .actions button {
+    font-size: 9px;
+    min-height: 40px;
+    padding: 8px 4px;
   }
 
   /* Ultra-compact logs toolbar */
@@ -5029,6 +5234,29 @@ button.loading::after {
   .doc-chat-panel {
     padding: 4px;
   }
+  
+  /* Runs toolbar ultra-compact on small screens */
+  .runs-toolbar {
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  
+  .runs-toolbar select,
+  .runs-toolbar input[type="text"] {
+    font-size: 10px;
+    min-height: 32px;
+    padding: 4px 6px;
+  }
+  
+  /* Doc chat meta - even more compact */
+  .doc-chat-meta {
+    gap: 3px;
+  }
+  
+  .doc-chat-meta-right button {
+    padding: 4px 6px;
+    font-size: 8px;
+  }
 
 
   /* Patch panel for ultra-small screens */
@@ -5086,6 +5314,162 @@ button.loading::after {
   .diff-empty-marker {
     font-size: 8px;
     padding: 0 2px;
+  }
+}
+
+/* Very narrow phones (iPhone SE, compact devices) */
+@media (max-width: 360px) {
+  .cards {
+    gap: 4px;
+  }
+  
+  .card {
+    padding: 8px;
+  }
+  
+  .card-header {
+    margin-bottom: 6px;
+    padding-bottom: 6px;
+    gap: 4px;
+  }
+  
+  .grid-two {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 2px;
+  }
+  
+  .grid-two > div {
+    padding: 4px 5px;
+  }
+  
+  .grid-two .muted {
+    font-size: 7px;
+    letter-spacing: 0;
+  }
+  
+  .metric {
+    font-size: 10px;
+  }
+  
+  .actions {
+    gap: 3px;
+  }
+  
+  .actions button {
+    font-size: 8px;
+    min-height: 38px;
+    padding: 6px 2px;
+    letter-spacing: 0;
+  }
+  
+  .runner-config {
+    gap: 4px;
+  }
+  
+  .runner-config-label {
+    font-size: 8px;
+  }
+  
+  .runner-config-value {
+    font-size: 10px;
+  }
+  
+  .usage-header {
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  
+  .usage-total-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+  }
+  
+  .usage-events-badge {
+    font-size: 8px;
+    padding: 1px 3px;
+  }
+  
+  .usage-stat-val {
+    font-size: 9px;
+  }
+  
+  .usage-stat-lbl {
+    font-size: 6px;
+  }
+  
+  .usage-chart-canvas {
+    height: 60px;
+  }
+  
+  .usage-rate-label {
+    font-size: 8px;
+    min-width: 50px;
+  }
+  
+  .todo-preview .checklist li {
+    font-size: 10px;
+    padding: 3px 4px;
+    gap: 4px;
+  }
+  
+  .checklist .box {
+    width: 10px;
+    height: 10px;
+  }
+  
+  .github-card .github-row {
+    grid-template-columns: 40px 1fr;
+    gap: 4px;
+    font-size: 10px;
+  }
+  
+  .github-card .github-link,
+  .github-card .github-mono {
+    font-size: 10px;
+  }
+  
+  .github-card .muted {
+    font-size: 9px;
+  }
+  
+  #runner-pid {
+    font-size: 8px;
+  }
+  
+  /* Runs toolbar - stack vertically on very narrow screens */
+  .runs-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+  
+  .runs-toolbar label {
+    width: 100%;
+  }
+  
+  .runs-toolbar select,
+  .runs-toolbar input[type="text"] {
+    font-size: 11px;
+    min-height: 36px;
+  }
+  
+  .runs-toolbar button {
+    width: 100%;
+  }
+  
+  /* Doc chat meta - minimal on very narrow screens */
+  .doc-chat-meta {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  
+  .doc-chat-meta-left {
+    display: none;
+  }
+  
+  #doc-chat-new-thread {
+    font-size: 8px;
+    padding: 3px 5px;
   }
 }
 

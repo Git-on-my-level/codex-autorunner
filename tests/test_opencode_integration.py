@@ -1,8 +1,9 @@
 import asyncio
 import json
 import os
+import shutil
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 import pytest
 
@@ -14,16 +15,33 @@ from codex_autorunner.agents.opencode.supervisor import (
     OpenCodeSupervisorError,
 )
 
-OPENCODE_BIN = os.environ.get("OPENCODE_BIN", "/Users/dazheng/.opencode/bin/opencode")
+
+def get_opencode_bin() -> Optional[str]:
+    """Get the OpenCode binary path from environment or PATH."""
+    opencode_bin = os.environ.get("OPENCODE_BIN")
+    if opencode_bin:
+        return opencode_bin
+    return shutil.which("opencode")
 
 
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture(autouse=True)
+def skip_if_no_opencode():
+    """Skip all tests in this file if OpenCode is not available."""
+    if get_opencode_bin() is None:
+        pytest.skip(
+            "OpenCode binary not found. Set OPENCODE_BIN environment variable to run these tests."
+        )
+
+
 @pytest.fixture()
 async def supervisor(tmp_path: Path) -> AsyncGenerator[OpenCodeSupervisor, None]:
     """Create an OpenCode supervisor instance."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    opencode_bin = get_opencode_bin()
+    assert opencode_bin is not None
+    command = [opencode_bin, "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(
         command,
         request_timeout=30.0,
@@ -107,7 +125,7 @@ async def test_supervisor_max_handles_eviction(
 @pytest.mark.asyncio
 async def test_client_providers(workspace: Path) -> None:
     """Test that client can fetch providers."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
 
     try:
@@ -123,7 +141,7 @@ async def test_client_providers(workspace: Path) -> None:
 @pytest.mark.asyncio
 async def test_client_create_and_list_sessions(workspace: Path) -> None:
     """Test that client can create and list sessions."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
 
     try:
@@ -151,7 +169,7 @@ async def test_client_create_and_list_sessions(workspace: Path) -> None:
 @pytest.mark.asyncio
 async def test_client_send_message(workspace: Path) -> None:
     """Test that client can send a message to a session."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
 
     try:
@@ -176,7 +194,7 @@ async def test_client_send_message(workspace: Path) -> None:
 @pytest.mark.asyncio
 async def test_client_stream_events(workspace: Path) -> None:
     """Test that client can stream events."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
 
     try:
@@ -225,7 +243,7 @@ async def test_client_stream_events(workspace: Path) -> None:
 @pytest.mark.asyncio
 async def test_harness_model_catalog(workspace: Path) -> None:
     """Test that harness can fetch model catalog."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
     harness = OpenCodeHarness(supervisor)
 
@@ -242,7 +260,7 @@ async def test_harness_model_catalog(workspace: Path) -> None:
 @pytest.mark.asyncio
 async def test_harness_conversation_lifecycle(workspace: Path) -> None:
     """Test that harness can manage conversations."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
     harness = OpenCodeHarness(supervisor)
 
@@ -266,7 +284,7 @@ async def test_harness_conversation_lifecycle(workspace: Path) -> None:
 @pytest.mark.asyncio
 async def test_harness_start_turn(workspace: Path) -> None:
     """Test that harness can start a turn."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
     harness = OpenCodeHarness(supervisor)
 
@@ -293,7 +311,7 @@ async def test_harness_start_turn(workspace: Path) -> None:
 @pytest.mark.asyncio
 async def test_harness_start_review(workspace: Path) -> None:
     """Test that harness can start a review."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(command, request_timeout=120.0)
     harness = OpenCodeHarness(supervisor)
 
@@ -323,7 +341,7 @@ async def test_harness_start_review(workspace: Path) -> None:
 @pytest.mark.asyncio
 async def test_harness_interrupt(workspace: Path) -> None:
     """Test that harness can interrupt a turn."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
     harness = OpenCodeHarness(supervisor)
 
@@ -351,7 +369,7 @@ async def test_harness_interrupt(workspace: Path) -> None:
 @pytest.mark.asyncio
 async def test_harness_stream_turn_events(workspace: Path) -> None:
     """Test that harness can stream turn events."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(command, request_timeout=30.0)
     harness = OpenCodeHarness(supervisor)
 
@@ -422,7 +440,7 @@ async def test_sse_event_parsing() -> None:
 @pytest.mark.asyncio
 async def test_prune_idle_handles(workspace: Path, tmp_path: Path) -> None:
     """Test that supervisor prunes idle handles."""
-    command = [OPENCODE_BIN, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+    command = [get_opencode_bin(), "serve", "--hostname", "127.0.0.1", "--port", "0"]
     supervisor = OpenCodeSupervisor(
         command,
         request_timeout=30.0,

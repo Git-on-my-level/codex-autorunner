@@ -144,6 +144,15 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         repo_to_session: dict[str, str] = app.state.repo_to_session
         repo_path = str(engine.repo_root)
         state_path = engine.state_path
+        agent = (ws.query_params.get("agent") or "codex").strip().lower()
+        model = (ws.query_params.get("model") or "").strip() or None
+        reasoning = (ws.query_params.get("reasoning") or "").strip() or None
+        session_id = None
+        active_session: Optional[ActiveSession] = None
+        seen_update_interval = 5.0
+
+        def _session_key(repo: str, agent: str) -> str:
+            return f"{repo}:{agent}"
 
         client_session_id = ws.query_params.get("session_id")
         close_session_id = ws.query_params.get("close_session_id")
@@ -190,8 +199,15 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     terminal_sessions.pop(client_session_id, None)
                     session_registry.pop(client_session_id, None)
                     repo_to_session = {
-                        repo: sid
-                        for repo, sid in repo_to_session.items()
+                        _session_key(repo, ag): sid
+                        for repo, ag, sid in [
+                            (
+                                k.split(":", 1)[0],
+                                k.split(":", 1)[1] if ":" in k else "",
+                                v,
+                            )
+                            for k, v in repo_to_session.items()
+                        ]
                         if sid != client_session_id
                     }
                     app.state.repo_to_session = repo_to_session
@@ -201,7 +217,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     session_id = client_session_id
 
             if not active_session:
-                mapped_session_id = repo_to_session.get(repo_path)
+                mapped_session_id = repo_to_session.get(_session_key(repo_path, agent))
                 if mapped_session_id:
                     mapped_session = terminal_sessions.get(mapped_session_id)
                     if mapped_session and mapped_session.pty.isalive():
@@ -212,7 +228,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                             mapped_session.close()
                         terminal_sessions.pop(mapped_session_id, None)
                         session_registry.pop(mapped_session_id, None)
-                        repo_to_session.pop(repo_path, None)
+                        repo_to_session.pop(_session_key(repo_path, agent), None)
                         _mark_dirty()
                 if attach_only:
                     await ws.send_text(
@@ -239,8 +255,15 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         terminal_sessions.pop(close_session_id, None)
                         session_registry.pop(close_session_id, None)
                         repo_to_session = {
-                            repo: sid
-                            for repo, sid in repo_to_session.items()
+                            _session_key(repo, ag): sid
+                            for repo, ag, sid in [
+                                (
+                                    k.split(":", 1)[0],
+                                    k.split(":", 1)[1] if ":" in k else "",
+                                    v,
+                                )
+                                for k, v in repo_to_session.items()
+                            ]
                             if sid != close_session_id
                         }
                         app.state.repo_to_session = repo_to_session
@@ -267,8 +290,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         created_at=now_iso(),
                         last_seen_at=now_iso(),
                         status="active",
+                        agent=agent,
                     )
-                    repo_to_session[repo_path] = session_id
+                    repo_to_session[_session_key(repo_path, agent)] = session_id
                     _mark_dirty()
                 except FileNotFoundError:
                     binary = cmd[0] if cmd else "codex"
@@ -289,10 +313,15 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         created_at=now_iso(),
                         last_seen_at=now_iso(),
                         status="active",
+                        agent=agent,
                     )
                     _mark_dirty()
-                if session_id and repo_to_session.get(repo_path) != session_id:
-                    repo_to_session[repo_path] = session_id
+                if (
+                    session_id
+                    and repo_to_session.get(_session_key(repo_path, agent))
+                    != session_id
+                ):
+                    repo_to_session[_session_key(repo_path, agent)] = session_id
                     _mark_dirty()
                 _maybe_persist_sessions(force=True)
 
@@ -459,8 +488,15 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         terminal_sessions.pop(session_id, None)
                         session_registry.pop(session_id, None)
                         repo_to_session = {
-                            repo: sid
-                            for repo, sid in repo_to_session.items()
+                            _session_key(repo, ag): sid
+                            for repo, ag, sid in [
+                                (
+                                    k.split(":", 1)[0],
+                                    k.split(":", 1)[1] if ":" in k else "",
+                                    v,
+                                )
+                                for k, v in repo_to_session.items()
+                            ]
                             if sid != session_id
                         }
                         app.state.repo_to_session = repo_to_session

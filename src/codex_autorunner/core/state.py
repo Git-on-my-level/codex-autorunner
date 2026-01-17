@@ -53,6 +53,7 @@ class SessionRecord:
     created_at: str
     last_seen_at: Optional[str]
     status: str
+    agent: str = "codex"
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> Optional["SessionRecord"]:
@@ -68,11 +69,15 @@ class SessionRecord:
         status = payload.get("status")
         if not isinstance(status, str) or not status:
             status = "active"
+        agent = payload.get("agent", "codex")
+        if not isinstance(agent, str):
+            agent = "codex"
         return cls(
             repo_path=repo_path,
             created_at=created_at,
             last_seen_at=last_seen_at,
             status=status,
+            agent=agent,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -81,6 +86,7 @@ class SessionRecord:
             "created_at": self.created_at,
             "last_seen_at": self.last_seen_at,
             "status": self.status,
+            "agent": self.agent,
         }
 
 

@@ -233,6 +233,24 @@ class SpecIngestService:
         except CodexAppServerError:
             pass
 
+    async def _abort_opencode(
+        self, active: ActiveSpecIngestTurn, thread_id: str
+    ) -> None:
+        if active.interrupt_sent:
+            return
+        active.interrupt_sent = True
+        try:
+            if not hasattr(active.client, "abort"):
+                return
+            await asyncio.wait_for(
+                active.client.abort(thread_id),
+                timeout=SPEC_INGEST_INTERRUPT_GRACE_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            pass
+        except Exception:
+            pass
+
     async def interrupt(self) -> Dict[str, str]:
         active = self._get_active_turn()
         if active is None:
@@ -578,12 +596,12 @@ class SpecIngestService:
                 raise SpecIngestError("Spec ingest agent timed out")
             if interrupt_task in done:
                 active.interrupted = True
-                output_task.cancel()
-                return self._assemble_response(
-                    {},
-                    status="interrupted",
-                    agent_message="Spec ingest interrupted",
+                await self._abort_opencode(active, thread_id)
+                done, _pending = await asyncio.wait(
+                    {output_task}, timeout=SPEC_INGEST_INTERRUPT_GRACE_SECONDS
                 )
+                if not done:
+                    output_task.add_done_callback(lambda task: task.exception())
             output = await output_task
         finally:
             self._clear_active_turn(turn_id)
@@ -595,6 +613,7 @@ class SpecIngestService:
                 await interrupt_task
 
         if active.interrupted:
+            self._restore_docs(backups)
             return self._assemble_response(
                 {},
                 status="interrupted",
@@ -602,24 +621,38 @@ class SpecIngestService:
             )
 
         agent_message = SpecIngestPatchParser.parse_agent_message(output)
-        patch_message, patch_text_raw = SpecIngestPatchParser.split_patch(output)
-        if patch_text_raw and patch_message:
-            agent_message = SpecIngestPatchParser.parse_agent_message(patch_message)
-        if not patch_text_raw.strip():
-            raise SpecIngestError("OpenCode did not produce a SPEC ingest patch")
+        patches = []
+        docs_preview = {}
         targets = self._allowed_targets()
-        try:
-            patch_text, raw_targets = normalize_patch_text(patch_text_raw)
-            ensure_patch_targets_allowed(raw_targets, targets.values())
-            preview = preview_patch(self.engine.repo_root, patch_text, raw_targets)
-        except PatchError as exc:
-            raise SpecIngestError(str(exc)) from exc
-        docs_preview = {
-            key: preview.get(path, backups.get(key, ""))
-            for key, path in targets.items()
-        }
+
+        for key in ("todo", "progress", "opinions"):
+            path = self.engine.config.doc_path(key)
+            try:
+                after = path.read_text(encoding="utf-8")
+            except OSError:
+                after = ""
+            before = backups.get(key, "")
+            docs_preview[key] = after
+
+            if after == before:
+                continue
+
+            rel_path = targets[key]
+            patch = self._build_patch(rel_path, before, after)
+            if patch.strip():
+                patches.append(patch)
+
+        self._restore_docs(backups)
+
+        patch_text = "\n".join(patches)
+        if not patch_text.strip():
+            raise SpecIngestError(
+                "OpenCode did not make any changes to TODO/PROGRESS/OPINIONS"
+            )
+
         self.patch_path.write_text(patch_text, encoding="utf-8")
         self.last_agent_message = agent_message
+
         return self._assemble_response(
             docs_preview, patch=patch_text, agent_message=agent_message
         )
