@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import shlex
+import shutil
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -254,6 +255,18 @@ def _parse_command(raw: Optional[str]) -> list[str]:
         return []
 
 
+def _command_available(command: list[str]) -> bool:
+    if not command:
+        return False
+    entry = str(command[0]).strip()
+    if not entry:
+        return False
+    if os.path.sep in entry or (os.path.altsep and os.path.altsep in entry):
+        path = Path(entry)
+        return path.is_file() and os.access(path, os.X_OK)
+    return shutil.which(entry) is not None
+
+
 def _build_opencode_supervisor(
     config: AppServerConfig,
     *,
@@ -263,7 +276,12 @@ def _build_opencode_supervisor(
     command = _parse_command(raw_command) if raw_command else []
     if not command:
         command = ["opencode", "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    if not command:
+    if not command or not _command_available(command):
+        safe_log(
+            logger,
+            logging.INFO,
+            "OpenCode command unavailable; skipping opencode supervisor.",
+        )
         return None, None
     username = os.environ.get("OPENCODE_SERVER_USERNAME")
     password = os.environ.get("OPENCODE_SERVER_PASSWORD")
