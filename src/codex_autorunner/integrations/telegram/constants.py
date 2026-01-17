@@ -52,6 +52,7 @@ RESUME_PICKER_PROMPT = (
     "Select a thread to resume (buttons below or reply with number/id)."
 )
 BIND_PICKER_PROMPT = "Select a repo to bind (buttons below or reply with number/id)."
+AGENT_PICKER_PROMPT = "Select an agent (buttons below)."
 MODEL_PICKER_PROMPT = "Select a model (buttons below)."
 EFFORT_PICKER_PROMPT = "Select a reasoning effort for {model}."
 UPDATE_PICKER_PROMPT = "Select update target (buttons below)."
