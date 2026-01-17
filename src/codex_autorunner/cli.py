@@ -948,6 +948,8 @@ def telegram_start(
     telegram_cfg = TelegramBotConfig.from_raw(
         config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
         root=config.root,
+        agent_binaries=getattr(config, "agents", None)
+        and {name: agent.binary for name, agent in config.agents.items()},
     )
     if not telegram_cfg.enabled:
         _raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
@@ -1007,6 +1009,8 @@ def telegram_health(
     telegram_cfg = TelegramBotConfig.from_raw(
         config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
         root=config.root,
+        agent_binaries=getattr(config, "agents", None)
+        and {name: agent.binary for name, agent in config.agents.items()},
     )
     if not telegram_cfg.enabled:
         _raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")

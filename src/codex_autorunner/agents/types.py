@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+# When adding agents, update core/config.py agents defaults + validation (config-driven).
 AgentId = Literal["codex", "opencode"]
 
 

@@ -57,6 +57,15 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "large": None,
         },
     },
+    # Agent binaries/commands live here so adding new agents is config-driven.
+    "agents": {
+        "codex": {
+            "binary": "codex",
+        },
+        "opencode": {
+            "binary": "opencode",
+        },
+    },
     "prompt": {
         "prev_run_max_chars": 6000,
         "template": ".codex-autorunner/prompt.txt",
@@ -296,6 +305,14 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
     "mode": "hub",
+    "agents": {
+        "codex": {
+            "binary": "codex",
+        },
+        "opencode": {
+            "binary": "opencode",
+        },
+    },
     "terminal": {
         "idle_timeout_seconds": TWELVE_HOUR_SECONDS,
     },
@@ -565,6 +582,12 @@ class AppServerConfig:
     prompts: AppServerPromptsConfig
 
 
+@dataclasses.dataclass(frozen=True)
+class AgentConfig:
+    binary: str
+    serve_command: Optional[List[str]]
+
+
 @dataclasses.dataclass
 class RepoConfig:
     raw: Dict[str, Any]
@@ -577,6 +600,7 @@ class RepoConfig:
     codex_terminal_args: List[str]
     codex_model: Optional[str]
     codex_reasoning: Optional[str]
+    agents: Dict[str, AgentConfig]
     prompt_prev_run_max_chars: int
     prompt_template: Optional[Path]
     runner_sleep_seconds: int
@@ -603,6 +627,18 @@ class RepoConfig:
     def doc_path(self, key: str) -> Path:
         return self.root / self.docs[key]
 
+    def agent_binary(self, agent_id: str) -> str:
+        agent = self.agents.get(agent_id)
+        if agent and agent.binary:
+            return agent.binary
+        raise ConfigError(f"agents.{agent_id}.binary is required")
+
+    def agent_serve_command(self, agent_id: str) -> Optional[List[str]]:
+        agent = self.agents.get(agent_id)
+        if agent:
+            return list(agent.serve_command) if agent.serve_command else None
+        return None
+
 
 @dataclasses.dataclass
 class HubConfig:
@@ -610,6 +646,7 @@ class HubConfig:
     root: Path
     version: int
     mode: str
+    agents: Dict[str, AgentConfig]
     repos_root: Path
     worktrees_root: Path
     manifest_path: Path
@@ -630,6 +667,18 @@ class HubConfig:
     server_log: LogConfig
     static_assets: StaticAssetsConfig
     housekeeping: HousekeepingConfig
+
+    def agent_binary(self, agent_id: str) -> str:
+        agent = self.agents.get(agent_id)
+        if agent and agent.binary:
+            return agent.binary
+        raise ConfigError(f"agents.{agent_id}.binary is required")
+
+    def agent_serve_command(self, agent_id: str) -> Optional[List[str]]:
+        agent = self.agents.get(agent_id)
+        if agent:
+            return list(agent.serve_command) if agent.serve_command else None
+        return None
 
 
 # Alias used by existing code paths that only support repo mode
@@ -837,6 +886,29 @@ def _parse_app_server_config(
     )
 
 
+def _parse_agents_config(
+    cfg: Dict[str, Any], defaults: Dict[str, Any]
+) -> Dict[str, AgentConfig]:
+    raw_agents = cfg.get("agents")
+    if not isinstance(raw_agents, dict):
+        raw_agents = defaults.get("agents", {})
+    agents: Dict[str, AgentConfig] = {}
+    for agent_id, agent_cfg in raw_agents.items():
+        if not isinstance(agent_cfg, dict):
+            continue
+        binary = agent_cfg.get("binary")
+        if not isinstance(binary, str) or not binary.strip():
+            continue
+        serve_command = None
+        if "serve_command" in agent_cfg:
+            serve_command = _parse_command(agent_cfg.get("serve_command"))
+        agents[str(agent_id)] = AgentConfig(
+            binary=str(binary),
+            serve_command=serve_command if serve_command else None,
+        )
+    return agents
+
+
 def _parse_static_assets_config(
     cfg: Optional[Dict[str, Any]],
     root: Path,
@@ -987,6 +1059,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         codex_terminal_args=list(term_args) if isinstance(term_args, list) else [],
         codex_model=cfg["codex"].get("model"),
         codex_reasoning=cfg["codex"].get("reasoning"),
+        agents=_parse_agents_config(cfg, DEFAULT_REPO_CONFIG),
         prompt_prev_run_max_chars=int(cfg["prompt"]["prev_run_max_chars"]),
         prompt_template=template,
         runner_sleep_seconds=int(cfg["runner"]["sleep_seconds"]),
@@ -1057,6 +1130,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         root=root,
         version=int(cfg["version"]),
         mode="hub",
+        agents=_parse_agents_config(cfg, DEFAULT_HUB_CONFIG),
         repos_root=(root / hub_cfg["repos_root"]).resolve(),
         worktrees_root=(root / hub_cfg["worktrees_root"]).resolve(),
         manifest_path=root / hub_cfg["manifest"],
@@ -1210,6 +1284,24 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
                     )
 
 
+def _validate_agents_config(cfg: Dict[str, Any]) -> None:
+    agents_cfg = cfg.get("agents")
+    if agents_cfg is None:
+        return
+    if not isinstance(agents_cfg, dict):
+        raise ConfigError("agents section must be a mapping if provided")
+    for agent_id, agent_cfg in agents_cfg.items():
+        if not isinstance(agent_cfg, dict):
+            raise ConfigError(f"agents.{agent_id} must be a mapping")
+        binary = agent_cfg.get("binary")
+        if not isinstance(binary, str) or not binary.strip():
+            raise ConfigError(f"agents.{agent_id}.binary is required")
+        if "serve_command" in agent_cfg and not isinstance(
+            agent_cfg.get("serve_command"), (list, str)
+        ):
+            raise ConfigError(f"agents.{agent_id}.serve_command must be a list or str")
+
+
 def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_version(cfg)
     if cfg.get("mode") != "repo":
@@ -1234,6 +1326,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     for key in ("todo", "progress", "opinions", "spec", "summary"):
         if not isinstance(docs.get(key), str) or not docs[key]:
             raise ConfigError(f"docs.{key} must be a non-empty string path")
+    _validate_agents_config(cfg)
     codex = cfg.get("codex")
     if not isinstance(codex, dict):
         raise ConfigError("codex section must be a mapping")
@@ -1454,6 +1547,7 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
     _validate_version(cfg)
     if cfg.get("mode") != "hub":
         raise ConfigError("Hub config must set mode: hub")
+    _validate_agents_config(cfg)
     hub_cfg = cfg.get("hub")
     if not isinstance(hub_cfg, dict):
         raise ConfigError("hub section must be a mapping")

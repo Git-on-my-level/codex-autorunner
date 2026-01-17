@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import shlex
+import shutil
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -254,16 +255,47 @@ def _parse_command(raw: Optional[str]) -> list[str]:
         return []
 
 
+def _command_available(command: list[str], *, workspace_root: Path) -> bool:
+    if not command:
+        return False
+    entry = str(command[0]).strip()
+    if not entry:
+        return False
+    if os.path.sep in entry or (os.path.altsep and os.path.altsep in entry):
+        path = Path(entry)
+        if not path.is_absolute():
+            path = workspace_root / path
+        return path.is_file() and os.access(path, os.X_OK)
+    return shutil.which(entry) is not None
+
+
 def _build_opencode_supervisor(
     config: AppServerConfig,
     *,
+    workspace_root: Path,
+    opencode_binary: Optional[str],
+    opencode_command: Optional[list[str]],
     logger: logging.Logger,
 ) -> tuple[Optional[OpenCodeSupervisor], Optional[float]]:
     raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
     command = _parse_command(raw_command) if raw_command else []
     if not command:
-        command = ["opencode", "serve", "--hostname", "127.0.0.1", "--port", "0"]
-    if not command:
+        command = list(opencode_command or [])
+    if not command and opencode_binary:
+        command = [
+            opencode_binary,
+            "serve",
+            "--hostname",
+            "127.0.0.1",
+            "--port",
+            "0",
+        ]
+    if not command or not _command_available(command, workspace_root=workspace_root):
+        safe_log(
+            logger,
+            logging.INFO,
+            "OpenCode command unavailable; skipping opencode supervisor.",
+        )
         return None, None
     username = os.environ.get("OPENCODE_SERVER_USERNAME")
     password = os.environ.get("OPENCODE_SERVER_PASSWORD")
@@ -403,8 +435,16 @@ def _build_app_context(
     app_server_threads = AppServerThreadRegistry(
         default_app_server_threads_path(engine.repo_root)
     )
+    opencode_command = config.agent_serve_command("opencode")
+    try:
+        opencode_binary = config.agent_binary("opencode")
+    except ConfigError:
+        opencode_binary = None
     opencode_supervisor, opencode_prune_interval = _build_opencode_supervisor(
         config.app_server,
+        workspace_root=engine.repo_root,
+        opencode_binary=opencode_binary,
+        opencode_command=opencode_command,
         logger=logger,
     )
     doc_chat = DocChatService(
