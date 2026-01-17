@@ -512,6 +512,30 @@ def _format_tui_token_usage(token_usage: Optional[dict[str, Any]]) -> Optional[s
     return " ".join(parts)
 
 
+def _extract_context_usage_percent(
+    token_usage: Optional[dict[str, Any]],
+) -> Optional[int]:
+    if not isinstance(token_usage, dict):
+        return None
+    usage = None
+    last = token_usage.get("last")
+    total = token_usage.get("total")
+    if isinstance(last, dict):
+        usage = last
+    elif isinstance(total, dict):
+        usage = total
+    if usage is None:
+        return None
+    total_tokens = usage.get("totalTokens")
+    context_window = token_usage.get("modelContextWindow")
+    if not isinstance(total_tokens, int) or not isinstance(context_window, int):
+        return None
+    if context_window <= 0:
+        return None
+    percent_used = round(total_tokens / context_window * 100)
+    return min(max(percent_used, 0), 100)
+
+
 def _format_turn_metrics(
     token_usage: Optional[dict[str, Any]],
     elapsed_seconds: Optional[float],

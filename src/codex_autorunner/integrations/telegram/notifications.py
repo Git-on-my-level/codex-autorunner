@@ -16,6 +16,7 @@ from .constants import (
 )
 from .helpers import (
     _coerce_id,
+    _extract_context_usage_percent,
     _extract_files,
     _extract_first_bold_span,
     _extract_turn_thread_id,
@@ -99,6 +100,10 @@ class TelegramNotificationHandlers:
                 self._token_usage_by_turn.move_to_end(turn_id)
                 while len(self._token_usage_by_turn) > TOKEN_USAGE_TURN_CACHE_LIMIT:
                     self._token_usage_by_turn.popitem(last=False)
+            if self._config.progress_stream.enabled:
+                await self._note_progress_context_usage(
+                    token_usage, turn_id=turn_id, thread_id=thread_id
+                )
             return
         if method == "item/reasoning/summaryTextDelta":
             item_id = _coerce_id(params.get("itemId"))
@@ -230,6 +235,29 @@ class TelegramNotificationHandlers:
         if tracker is None:
             return
         tracker.note_thinking(preview)
+        await self._schedule_progress_edit(turn_key)
+
+    async def _note_progress_context_usage(
+        self,
+        token_usage: dict[str, Any],
+        *,
+        turn_id: Optional[str],
+        thread_id: Optional[str],
+    ) -> None:
+        percent = _extract_context_usage_percent(token_usage)
+        if percent is None:
+            return
+        turn_key = None
+        if turn_id:
+            turn_key = self._resolve_turn_key(turn_id, thread_id=thread_id)
+        if turn_key is None and len(self._turn_contexts) == 1:
+            turn_key = next(iter(self._turn_contexts.keys()))
+        if turn_key is None:
+            return
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return
+        tracker.set_context_usage_percent(percent)
         await self._schedule_progress_edit(turn_key)
 
     async def _note_progress_item_completed(self, params: dict[str, Any]) -> None:

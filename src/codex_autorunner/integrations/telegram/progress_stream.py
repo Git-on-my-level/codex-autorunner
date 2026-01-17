@@ -49,11 +49,18 @@ class TurnProgressTracker:
     step: int = 0
     last_output_index: Optional[int] = None
     last_thinking_index: Optional[int] = None
+    context_usage_percent: Optional[int] = None
     finalized: bool = False
 
     def set_label(self, label: str) -> None:
         if label:
             self.label = label
+
+    def set_context_usage_percent(self, percent: Optional[int]) -> None:
+        if percent is None:
+            self.context_usage_percent = None
+            return
+        self.context_usage_percent = min(max(int(percent), 0), 100)
 
     def add_action(
         self,
@@ -140,6 +147,8 @@ def render_progress_text(
     parts = [tracker.label, tracker.model, elapsed]
     if tracker.step:
         parts.append(f"step {tracker.step}")
+    if tracker.context_usage_percent is not None:
+        parts.append(f"ctx {tracker.context_usage_percent}%")
     header = " · ".join(parts)
     thinking_action = None
     if tracker.last_thinking_index is not None:
