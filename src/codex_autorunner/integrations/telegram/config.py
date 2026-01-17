@@ -24,7 +24,10 @@ DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_FILE_BYTES = 10 * 1024 * 1024
-DEFAULT_MEDIA_IMAGE_PROMPT = "Describe the image."
+DEFAULT_MEDIA_IMAGE_PROMPT = (
+    "The user sent an image with no caption. Use it to continue the "
+    "conversation; if no clear task, describe the image and ask what they want."
+)
 DEFAULT_MEDIA_BATCH_UPLOADS = True
 DEFAULT_MEDIA_BATCH_WINDOW_SECONDS = 1.0
 DEFAULT_SHELL_TIMEOUT_MS = 120_000

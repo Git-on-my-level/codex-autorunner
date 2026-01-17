@@ -165,7 +165,11 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "max_image_bytes": 10_000_000,
             "max_voice_bytes": 10_000_000,
             "max_file_bytes": 10_000_000,
-            "image_prompt": "Describe the image.",
+            "image_prompt": (
+                "The user sent an image with no caption. Use it to continue the "
+                "conversation; if no clear task, describe the image and ask what "
+                "they want."
+            ),
         },
         "shell": {
             "enabled": True,
@@ -347,7 +351,11 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "max_image_bytes": 10_000_000,
             "max_voice_bytes": 10_000_000,
             "max_file_bytes": 10_000_000,
-            "image_prompt": "Describe the image.",
+            "image_prompt": (
+                "The user sent an image with no caption. Use it to continue the "
+                "conversation; if no clear task, describe the image and ask what "
+                "they want."
+            ),
         },
         "shell": {
             "enabled": False,
