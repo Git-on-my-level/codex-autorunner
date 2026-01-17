@@ -5984,7 +5984,20 @@ button.loading::after {
 
 /* ===== Run Details Modal ===== */
 .run-details-modal {
-  width: min(960px, 92vw);
+  width: min(1120px, 94vw);
+  max-width: 1120px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-details-modal .modal-body {
+  overflow: auto;
+  min-height: 0;
+}
+
+.run-details-modal .modal-actions {
+  margin-top: auto;
 }
 
 .run-details-grid {
@@ -6011,7 +6024,7 @@ button.loading::after {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 10px;
-  max-height: 240px;
+  max-height: 320px;
   overflow: auto;
   font-size: 11px;
   color: var(--text);
@@ -6019,6 +6032,20 @@ button.loading::after {
 
 .run-details-actions {
   align-items: center;
+}
+
+@media (max-width: 720px) {
+  #run-details-modal.modal-overlay {
+    padding: 0;
+  }
+
+  .run-details-modal {
+    width: 100vw;
+    height: 100vh;
+    max-width: 100vw;
+    max-height: 100vh;
+    border-radius: 0;
+  }
 }
 
 @media (max-width: 900px) {

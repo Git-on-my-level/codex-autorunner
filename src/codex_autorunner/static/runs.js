@@ -1,4 +1,4 @@
-import { api, flash, openModal } from "./utils.js";
+import { api, flash, getAuthToken, openModal, resolvePath } from "./utils.js";
 
 let initialized = false;
 let runsState = {
@@ -23,6 +23,7 @@ const ui = {
   modalTokens: document.getElementById("run-details-tokens"),
   modalPlan: document.getElementById("run-details-plan"),
   modalDiff: document.getElementById("run-details-diff"),
+  modalOutput: document.getElementById("run-details-output"),
   modalLog: document.getElementById("run-details-log"),
 };
 
@@ -171,10 +172,123 @@ async function loadArtifact(runId, kind, targetEl) {
   targetEl.textContent = "Loading…";
   try {
     const text = await api(`/api/runs/${runId}/${kind}`);
-    targetEl.textContent = text || "Not available.";
+    if (typeof text === "string") {
+      targetEl.textContent = text || "Not available.";
+    } else if (text !== null && text !== undefined) {
+      targetEl.textContent = JSON.stringify(text, null, 2);
+    } else {
+      targetEl.textContent = "Not available.";
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : "";
     targetEl.textContent =
+      message.includes("401") || message.includes("403") || message.includes("404")
+        ? "Not available."
+        : "Unable to load.";
+  }
+}
+
+function formatPlan(plan) {
+  if (Array.isArray(plan)) {
+    const lines = plan
+      .map((item, index) => {
+        if (item && typeof item === "object") {
+          const step = item.step || item.task || item.title || "";
+          const status = item.status || item.state || "";
+          const label = `${index + 1}. ${step || "Step"}`;
+          return status ? `${label} [${status}]` : label;
+        }
+        return `${index + 1}. ${item}`;
+      })
+      .filter(Boolean);
+    return lines.join("\n");
+  }
+  if (plan && typeof plan === "object") {
+    if (Array.isArray(plan.steps)) {
+      return formatPlan(plan.steps);
+    }
+    if (Array.isArray(plan.plan)) {
+      return formatPlan(plan.plan);
+    }
+    return JSON.stringify(plan, null, 2);
+  }
+  if (typeof plan === "string") return plan;
+  return "";
+}
+
+async function loadPlan(runId) {
+  if (!ui.modalPlan) return;
+  ui.modalPlan.textContent = "Loading…";
+  try {
+    const planRaw = await fetchArtifactText(`/api/runs/${runId}/plan`);
+    let planData = planRaw;
+    try {
+      planData = JSON.parse(planRaw);
+    } catch (_err) {
+      planData = planRaw;
+    }
+    const formatted = formatPlan(planData);
+    ui.modalPlan.textContent = formatted || "Not available.";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    ui.modalPlan.textContent =
+      message.includes("401") || message.includes("403") || message.includes("404")
+        ? "Not available."
+        : "Unable to load.";
+  }
+}
+
+async function fetchArtifactText(path) {
+  const target = resolvePath(path);
+  const headers = {};
+  const token = getAuthToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const res = await fetch(target, { headers });
+  if (!res.ok) {
+    const message = await res.text();
+    const error = message?.trim() || `Request failed with ${res.status}`;
+    throw new Error(error);
+  }
+  return res.text();
+}
+
+function stripLogPrefix(line) {
+  return line
+    .replace(/^\[[^\]]*]\s*/, "")
+    .replace(/^run=\d+\s*/, "")
+    .replace(/^(stdout|stderr):\s*/i, "")
+    .replace(/^doc-chat id=[a-f0-9]+ stdout:\s*/i, "")
+    .trimEnd();
+}
+
+function extractFinalOutput(logText) {
+  if (!logText) return "";
+  const lines = logText.split("\n");
+  const outputs = [];
+  lines.forEach((line) => {
+    const stripped = stripLogPrefix(line).trimStart();
+    if (!stripped) return;
+    if (/^Agent:\s*/i.test(stripped)) {
+      outputs.push(stripped.replace(/^Agent:\s*/i, ""));
+    }
+  });
+  if (!outputs.length) return "";
+  return outputs.join("\n").trim();
+}
+
+async function loadFinalOutput(runId) {
+  if (!ui.modalOutput) return;
+  ui.modalOutput.textContent = "Loading…";
+  try {
+    const payload = await api(`/api/logs?run_id=${runId}`);
+    const logText = typeof payload?.log === "string" ? payload.log : "";
+    const output = extractFinalOutput(logText);
+    ui.modalOutput.textContent = output || "Not available.";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    ui.modalOutput.textContent =
       message.includes("401") || message.includes("403") || message.includes("404")
         ? "Not available."
         : "Unable to load.";
@@ -245,8 +359,9 @@ function openRunDetails(run) {
   }
   renderTokenBreakdown(run);
   renderCompletedTodos(run);
-  if (ui.modalPlan) loadArtifact(run.run_id, "plan", ui.modalPlan);
+  if (ui.modalPlan) loadPlan(run.run_id);
   if (ui.modalDiff) loadArtifact(run.run_id, "diff", ui.modalDiff);
+  if (ui.modalOutput) loadFinalOutput(run.run_id);
   const triggerEl = document.activeElement;
   closeDetailsModal = openModal(ui.modal, {
     initialFocus: ui.modalClose || ui.modal,
