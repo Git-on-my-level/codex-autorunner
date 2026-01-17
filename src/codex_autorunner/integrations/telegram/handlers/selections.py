@@ -196,6 +196,24 @@ class TelegramSelectionHandlers:
             await self._answer_callback(callback, "Selection expired")
             return
         self._model_options.pop(key, None)
+        if not option.efforts:
+            chat_id, thread_id = _split_topic_key(key)
+            self._router.update_topic(
+                chat_id,
+                thread_id,
+                lambda record: _set_model_overrides(
+                    record,
+                    option.model_id,
+                    clear_effort=True,
+                ),
+            )
+            await self._answer_callback(callback, "Model set")
+            await self._finalize_selection(
+                key,
+                callback,
+                f"Model set to {option.model_id}. Will apply on the next turn.",
+            )
+            return
         self._model_pending[key] = option
         self._touch_cache_timestamp("model_pending", key)
         if option.default_effort:

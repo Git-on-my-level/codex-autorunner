@@ -17,6 +17,7 @@ TOPIC_ROOT = "root"
 APPROVAL_MODE_YOLO = "yolo"
 APPROVAL_MODE_SAFE = "safe"
 APPROVAL_MODES = {APPROVAL_MODE_YOLO, APPROVAL_MODE_SAFE}
+AGENT_VALUES = {"codex", "opencode"}
 STALE_SCOPED_TOPIC_DAYS = 30
 MAX_SCOPED_TOPICS_PER_BASE = 5
 
@@ -30,6 +31,18 @@ def normalize_approval_mode(
     if key in APPROVAL_MODES:
         return key
     return default
+
+
+def normalize_agent(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    compact = "".join(ch for ch in normalized if ch.isalnum())
+    if normalized in AGENT_VALUES:
+        return normalized
+    if compact in AGENT_VALUES:
+        return compact
+    return None
 
 
 def _encode_scope(scope: str) -> str:
@@ -159,6 +172,7 @@ class TelegramTopicRecord:
     pending_compact_seed: Optional[str] = None
     pending_compact_seed_thread_id: Optional[str] = None
     last_update_id: Optional[int] = None
+    agent: Optional[str] = None
     model: Optional[str] = None
     effort: Optional[str] = None
     summary: Optional[str] = None
@@ -221,6 +235,7 @@ class TelegramTopicRecord:
         last_update_id = payload.get("last_update_id") or payload.get("lastUpdateId")
         if not isinstance(last_update_id, int) or isinstance(last_update_id, bool):
             last_update_id = None
+        agent = normalize_agent(payload.get("agent"))
         model = payload.get("model")
         if not isinstance(model, str):
             model = None
@@ -262,6 +277,7 @@ class TelegramTopicRecord:
             pending_compact_seed=pending_compact_seed,
             pending_compact_seed_thread_id=pending_compact_seed_thread_id,
             last_update_id=last_update_id,
+            agent=agent,
             model=model,
             effort=effort,
             summary=summary,
@@ -286,6 +302,7 @@ class TelegramTopicRecord:
             "pending_compact_seed": self.pending_compact_seed,
             "pending_compact_seed_thread_id": self.pending_compact_seed_thread_id,
             "last_update_id": self.last_update_id,
+            "agent": self.agent,
             "model": self.model,
             "effort": self.effort,
             "summary": self.summary,

@@ -72,6 +72,15 @@ def _extract_thread_info(payload: Any) -> dict[str, Any]:
         )
     if rollout_path is None and isinstance(payload.get("path"), str):
         rollout_path = payload.get("path")
+    agent = None
+    if isinstance(payload.get("agent"), str):
+        agent = payload.get("agent")
+    if (
+        agent is None
+        and isinstance(thread, dict)
+        and isinstance(thread.get("agent"), str)
+    ):
+        agent = thread.get("agent")
     model = None
     for key in ("model", "modelId"):
         value = payload.get(key)
@@ -108,6 +117,7 @@ def _extract_thread_info(payload: Any) -> dict[str, Any]:
         "thread_id": _extract_thread_id(payload),
         "workspace_path": workspace_path,
         "rollout_path": rollout_path,
+        "agent": agent,
         "model": model,
         "effort": effort,
         "summary": summary,
@@ -588,7 +598,9 @@ def _coerce_model_entries(result: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _coerce_model_options(result: Any) -> list[ModelOption]:
+def _coerce_model_options(
+    result: Any, *, include_efforts: bool = True
+) -> list[ModelOption]:
     entries = _coerce_model_entries(result)
     options: list[ModelOption] = []
     for entry in entries:
@@ -599,27 +611,29 @@ def _coerce_model_options(result: Any) -> list[ModelOption]:
         label = model
         if isinstance(display_name, str) and display_name and display_name != model:
             label = f"{model} ({display_name})"
-        default_effort = entry.get("defaultReasoningEffort")
-        if not isinstance(default_effort, str):
-            default_effort = None
-        efforts_raw = entry.get("supportedReasoningEfforts")
+        default_effort = None
         efforts: list[str] = []
-        if isinstance(efforts_raw, list):
-            for effort in efforts_raw:
-                if isinstance(effort, dict):
-                    value = effort.get("reasoningEffort")
-                    if isinstance(value, str):
-                        efforts.append(value)
-                elif isinstance(effort, str):
-                    efforts.append(effort)
-        if default_effort and default_effort not in efforts:
-            efforts.append(default_effort)
-        efforts = [effort for effort in efforts if effort]
-        if not efforts:
-            efforts = sorted(VALID_REASONING_EFFORTS)
-        efforts = list(dict.fromkeys(efforts))
-        if default_effort:
-            label = f"{label} (default {default_effort})"
+        if include_efforts:
+            default_effort = entry.get("defaultReasoningEffort")
+            if not isinstance(default_effort, str):
+                default_effort = None
+            efforts_raw = entry.get("supportedReasoningEfforts")
+            if isinstance(efforts_raw, list):
+                for effort in efforts_raw:
+                    if isinstance(effort, dict):
+                        value = effort.get("reasoningEffort")
+                        if isinstance(value, str):
+                            efforts.append(value)
+                    elif isinstance(effort, str):
+                        efforts.append(effort)
+            if default_effort and default_effort not in efforts:
+                efforts.append(default_effort)
+            efforts = [effort for effort in efforts if effort]
+            if not efforts:
+                efforts = sorted(VALID_REASONING_EFFORTS)
+            efforts = list(dict.fromkeys(efforts))
+            if default_effort:
+                label = f"{label} (default {default_effort})"
         options.append(
             ModelOption(
                 model_id=model,
@@ -631,7 +645,12 @@ def _coerce_model_options(result: Any) -> list[ModelOption]:
     return options
 
 
-def _format_model_list(result: Any) -> str:
+def _format_model_list(
+    result: Any,
+    *,
+    include_efforts: bool = True,
+    set_hint: Optional[str] = None,
+) -> str:
     entries = _coerce_model_entries(result)
     if not entries:
         return "No models found."
@@ -642,25 +661,29 @@ def _format_model_list(result: Any) -> str:
         label = str(model)
         if isinstance(display_name, str) and display_name and display_name != model:
             label = f"{model} ({display_name})"
-        efforts = entry.get("supportedReasoningEfforts")
-        effort_values: list[str] = []
-        if isinstance(efforts, list):
-            for effort in efforts:
-                if isinstance(effort, dict):
-                    value = effort.get("reasoningEffort")
-                    if isinstance(value, str):
-                        effort_values.append(value)
-                elif isinstance(effort, str):
-                    effort_values.append(effort)
-        if effort_values:
-            label = f"{label} [effort: {', '.join(effort_values)}]"
-        default_effort = entry.get("defaultReasoningEffort")
-        if isinstance(default_effort, str):
-            label = f"{label} (default {default_effort})"
+        if include_efforts:
+            efforts = entry.get("supportedReasoningEfforts")
+            effort_values: list[str] = []
+            if isinstance(efforts, list):
+                for effort in efforts:
+                    if isinstance(effort, dict):
+                        value = effort.get("reasoningEffort")
+                        if isinstance(value, str):
+                            effort_values.append(value)
+                    elif isinstance(effort, str):
+                        effort_values.append(effort)
+            if effort_values:
+                label = f"{label} [effort: {', '.join(effort_values)}]"
+            default_effort = entry.get("defaultReasoningEffort")
+            if isinstance(default_effort, str):
+                label = f"{label} (default {default_effort})"
         lines.append(label)
     if len(entries) > DEFAULT_MODEL_LIST_LIMIT:
         lines.append(f"...and {len(entries) - DEFAULT_MODEL_LIST_LIMIT} more.")
-    lines.append("Use /model <id> [effort] to set.")
+    if set_hint is None:
+        set_hint = "Use /model <id> [effort] to set." if include_efforts else None
+    if set_hint:
+        lines.append(set_hint)
     return "\n".join(lines)
 
 
@@ -759,6 +782,7 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         "new",
         "resume",
         "review",
+        "agent",
         "model",
         "approvals",
         "status",
@@ -791,6 +815,7 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/review detached ...")
     lines.append("")
     lines.append("Other:")
+    lines.append("Note: /resume is only supported for the codex agent.")
     lines.append(
         "!<cmd> - run a bash command in the bound workspace (non-interactive; long-running commands time out)"
     )
