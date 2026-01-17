@@ -13,6 +13,7 @@ import {
 } from "./state.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
+import { initAgentControls } from "./agentControls.js";
 
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 let pendingSummaryOpen = false;
@@ -699,6 +700,18 @@ function openSummaryDoc() {
 export function initDashboard() {
   initSettings();
   initUsageChartControls();
+  const agentSelect = document.getElementById("dashboard-agent-select");
+  const modelSelect = document.getElementById("dashboard-model-select");
+  const reasoningSelect = document.getElementById("dashboard-reasoning-select");
+  initAgentControls({ agentSelect, modelSelect, reasoningSelect });
+
+  const buildRunOverrides = () => {
+    const overrides = {};
+    if (agentSelect) overrides.agent = agentSelect.value;
+    if (modelSelect) overrides.model = modelSelect.value;
+    if (reasoningSelect) overrides.reasoning = reasoningSelect.value;
+    return overrides;
+  };
   subscribe("state:update", renderState);
   subscribe("docs:updated", handleDocsEvent);
   subscribe("docs:loaded", handleDocsEvent);
@@ -711,8 +724,8 @@ export function initDashboard() {
       openSummaryDoc();
     }
   });
-  bindAction("start-run", () => startRun(false));
-  bindAction("start-once", () => startRun(true));
+  bindAction("start-run", () => startRun(false, buildRunOverrides()));
+  bindAction("start-once", () => startRun(true, buildRunOverrides()));
   bindAction("stop-run", stopRun);
   bindAction("resume-run", resumeRun);
   bindAction("kill-run", killRun);

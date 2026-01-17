@@ -26,6 +26,7 @@ FEATURE_KEYS = DOC_CHAT_KEYS | {
     "spec_ingest",
     "spec_ingest.opencode",
     "autorunner",
+    "autorunner.opencode",
 }
 
 
@@ -91,6 +92,7 @@ class AppServerThreadRegistry:
             },
             "spec_ingest": threads.get("spec_ingest"),
             "autorunner": threads.get("autorunner"),
+            "autorunner_opencode": threads.get("autorunner.opencode"),
         }
         notice = self.corruption_notice()
         if notice:

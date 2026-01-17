@@ -61,8 +61,22 @@ async function runAction(path, body, successMessage) {
   await loadState({ notify: false });
 }
 
-export function startRun(once = false) {
-  return runAction("/api/run/start", { once }, once ? "Started one-off run" : "Runner starting");
+export function startRun(once = false, overrides = {}) {
+  const body = { once };
+  if (overrides && Object.prototype.hasOwnProperty.call(overrides, "agent")) {
+    body.agent = overrides.agent;
+  }
+  if (overrides && Object.prototype.hasOwnProperty.call(overrides, "model")) {
+    body.model = overrides.model;
+  }
+  if (overrides && Object.prototype.hasOwnProperty.call(overrides, "reasoning")) {
+    body.reasoning = overrides.reasoning;
+  }
+  return runAction(
+    "/api/run/start",
+    body,
+    once ? "Started one-off run" : "Runner starting"
+  );
 }
 
 export function stopRun() {

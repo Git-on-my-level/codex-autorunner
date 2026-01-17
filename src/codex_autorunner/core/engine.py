@@ -4,6 +4,7 @@ import dataclasses
 import json
 import logging
 import os
+import shutil
 import signal
 import threading
 import time
@@ -16,6 +17,7 @@ from typing import IO, Any, Iterator, Optional
 
 import yaml
 
+from ..agents.opencode.supervisor import OpenCodeSupervisor, OpenCodeSupervisorError
 from ..integrations.app_server.client import (
     CodexAppServerError,
     _extract_thread_id,
@@ -47,6 +49,7 @@ from .utils import (
     atomic_write,
     ensure_executable,
     find_repo_root,
+    resolve_opencode_binary,
 )
 
 
@@ -77,6 +80,15 @@ class RunTelemetry:
     diff: Optional[Any] = None
 
 
+@dataclasses.dataclass
+class ActiveOpencodeRun:
+    session_id: str
+    turn_id: str
+    client: Any
+    interrupted: bool
+    interrupt_event: asyncio.Event
+
+
 class Engine:
     def __init__(self, repo_root: Path):
         config = load_config(repo_root)
@@ -98,6 +110,7 @@ class Engine:
         )
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
+        self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
         self._last_run_interrupted = False
@@ -258,16 +271,32 @@ class Engine:
             todo_before = self.docs.read_doc("todo")
         except Exception:
             todo_before = ""
+        state = load_state(self.state_path)
+        selected_agent = (state.autorunner_agent_override or "codex").strip().lower()
         self._update_state("running", run_id, None, started=True)
         self._last_run_interrupted = False
         self._start_run_telemetry(run_id)
         with self._run_log_context(run_id):
             self._write_run_marker(run_id, "start")
-            exit_code = await self._run_codex_app_server_async(
-                prompt,
-                run_id,
-                external_stop_flag=external_stop_flag,
-            )
+            if selected_agent == "opencode":
+                exit_code = await self._run_opencode_app_server_async(
+                    prompt,
+                    run_id,
+                    model=state.autorunner_model_override,
+                    reasoning=state.autorunner_effort_override,
+                    external_stop_flag=external_stop_flag,
+                )
+            else:
+                if selected_agent != "codex":
+                    self.log_line(
+                        run_id,
+                        f"info: unknown agent '{selected_agent}', defaulting to codex",
+                    )
+                exit_code = await self._run_codex_app_server_async(
+                    prompt,
+                    run_id,
+                    external_stop_flag=external_stop_flag,
+                )
             self._write_run_marker(run_id, "end", exit_code=exit_code)
 
         try:
@@ -1154,6 +1183,91 @@ class Engine:
                 "app-server supervisor close failed: %s", exc
             )
 
+    def _command_available(self, command: list[str]) -> bool:
+        if not command:
+            return False
+        entry = str(command[0]).strip()
+        if not entry:
+            return False
+        if os.path.sep in entry or (os.path.altsep and os.path.altsep in entry):
+            path = Path(entry)
+            if not path.is_absolute():
+                path = self.repo_root / path
+            return path.is_file() and os.access(path, os.X_OK)
+        return shutil.which(entry) is not None
+
+    def _build_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
+        config = self.config.app_server
+        opencode_command = self.config.agent_serve_command("opencode")
+        opencode_binary = None
+        try:
+            opencode_binary = self.config.agent_binary("opencode")
+        except ConfigError:
+            opencode_binary = None
+
+        command = list(opencode_command or [])
+        if not command and opencode_binary:
+            command = [
+                opencode_binary,
+                "serve",
+                "--hostname",
+                "127.0.0.1",
+                "--port",
+                "0",
+            ]
+
+        resolved_source = None
+        if opencode_command:
+            resolved_source = opencode_command[0]
+        elif opencode_binary:
+            resolved_source = opencode_binary
+        resolved_binary = resolve_opencode_binary(resolved_source)
+        if command:
+            if resolved_binary:
+                command[0] = resolved_binary
+        elif resolved_binary:
+            command = [
+                resolved_binary,
+                "serve",
+                "--hostname",
+                "127.0.0.1",
+                "--port",
+                "0",
+            ]
+
+        if not command or not self._command_available(command):
+            self._app_server_logger.info(
+                "OpenCode command unavailable; skipping opencode supervisor."
+            )
+            return None
+
+        username = os.environ.get("OPENCODE_SERVER_USERNAME")
+        password = os.environ.get("OPENCODE_SERVER_PASSWORD")
+        return OpenCodeSupervisor(
+            command,
+            logger=self._app_server_logger,
+            request_timeout=config.request_timeout,
+            max_handles=config.max_handles,
+            idle_ttl_seconds=config.idle_ttl_seconds,
+            username=username if username and password else None,
+            password=password if username and password else None,
+        )
+
+    def _ensure_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
+        if self._opencode_supervisor is None:
+            self._opencode_supervisor = self._build_opencode_supervisor()
+        return self._opencode_supervisor
+
+    async def _close_opencode_supervisor(self) -> None:
+        if self._opencode_supervisor is None:
+            return
+        supervisor = self._opencode_supervisor
+        self._opencode_supervisor = None
+        try:
+            await supervisor.close_all()
+        except Exception as exc:
+            self._app_server_logger.warning("opencode supervisor close failed: %s", exc)
+
     async def _wait_for_stop(
         self, external_stop_flag: Optional[threading.Event]
     ) -> None:
@@ -1231,6 +1345,226 @@ class Engine:
                 timeout_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await timeout_task
+
+    def _split_opencode_model(self, model: Optional[str]) -> Optional[dict[str, str]]:
+        if not model or "/" not in model:
+            return None
+        provider_id, model_id = model.split("/", 1)
+        provider_id = provider_id.strip()
+        model_id = model_id.strip()
+        if not provider_id or not model_id:
+            return None
+        return {"providerID": provider_id, "modelID": model_id}
+
+    def _extract_opencode_turn_id(self, session_id: str, payload: Any) -> str:
+        if isinstance(payload, dict):
+            for key in ("id", "messageId", "message_id", "turn_id", "turnId"):
+                value = payload.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        return f"{session_id}:{int(time.time() * 1000)}"
+
+    def _extract_opencode_session_id(self, payload: Any) -> Optional[str]:
+        if not isinstance(payload, dict):
+            return None
+        for key in ("sessionID", "sessionId", "session_id", "id"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        properties = payload.get("properties")
+        if isinstance(properties, dict):
+            value = properties.get("sessionID")
+            if isinstance(value, str) and value:
+                return value
+            part = properties.get("part")
+            if isinstance(part, dict):
+                value = part.get("sessionID")
+                if isinstance(value, str) and value:
+                    return value
+        session = payload.get("session")
+        if isinstance(session, dict):
+            return self._extract_opencode_session_id(session)
+        return None
+
+    async def _abort_opencode(self, client: Any, session_id: str, run_id: int) -> None:
+        try:
+            await client.abort(session_id)
+        except Exception as exc:
+            self.log_line(run_id, f"error: opencode abort failed: {exc}")
+
+    async def _collect_opencode_output(
+        self,
+        client: Any,
+        session_id: str,
+        active: ActiveOpencodeRun,
+    ) -> str:
+        text_parts: list[str] = []
+        async for event in client.stream_events(directory=str(self.repo_root)):
+            raw = event.data or ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            event_session_id = self._extract_opencode_session_id(payload)
+            if event_session_id and event_session_id != session_id:
+                continue
+            if event.event == "permission.asked":
+                properties = (
+                    payload.get("properties") if isinstance(payload, dict) else {}
+                )
+                request_id = None
+                if isinstance(properties, dict):
+                    request_id = properties.get("id") or properties.get("requestID")
+                if isinstance(request_id, str) and request_id:
+                    try:
+                        await client.respond_permission(
+                            request_id=request_id, reply="reject"
+                        )
+                    except Exception:
+                        pass
+            if event.event == "message.part.updated":
+                properties = (
+                    payload.get("properties") if isinstance(payload, dict) else None
+                )
+                if isinstance(properties, dict):
+                    part = properties.get("part")
+                    delta = properties.get("delta")
+                else:
+                    part = payload.get("part")
+                    delta = payload.get("delta")
+                if isinstance(delta, dict):
+                    delta = delta.get("text")
+                if isinstance(delta, str) and delta:
+                    text_parts.append(delta)
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text")
+                    if isinstance(text, str) and text:
+                        text_parts.append(text)
+            if event.event == "session.idle" and event_session_id == session_id:
+                break
+            if active.interrupt_event.is_set():
+                break
+        return "".join(text_parts).strip()
+
+    async def _run_opencode_app_server_async(
+        self,
+        prompt: str,
+        run_id: int,
+        *,
+        model: Optional[str],
+        reasoning: Optional[str],
+        external_stop_flag: Optional[threading.Event] = None,
+    ) -> int:
+        supervisor = self._ensure_opencode_supervisor()
+        if supervisor is None:
+            self.log_line(
+                run_id, "error: opencode backend is not configured in this repo"
+            )
+            return 1
+        try:
+            client = await supervisor.get_client(self.repo_root)
+        except OpenCodeSupervisorError as exc:
+            self.log_line(run_id, f"error: opencode backend unavailable: {exc}")
+            return 1
+
+        key = "autorunner.opencode"
+        thread_id = self._app_server_threads.get_thread_id(key)
+        if thread_id:
+            try:
+                await client.get_session(thread_id)
+            except Exception:
+                self._app_server_threads.reset_thread(key)
+                thread_id = None
+        if not thread_id:
+            session = await client.create_session(directory=str(self.repo_root))
+            thread_id = self._extract_opencode_session_id(session)
+            if not isinstance(thread_id, str) or not thread_id:
+                self.log_line(run_id, "error: opencode did not return a session id")
+                return 1
+            self._app_server_threads.set_thread_id(key, thread_id)
+
+        model_payload = self._split_opencode_model(model)
+        result = await client.send_message(
+            thread_id,
+            message=prompt,
+            model=model_payload,
+            variant=reasoning,
+        )
+        turn_id = self._extract_opencode_turn_id(thread_id, result)
+        self._update_run_telemetry(run_id, thread_id=thread_id, turn_id=turn_id)
+        app_server_meta = self._build_app_server_meta(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            thread_info=None,
+            model=model,
+            reasoning_effort=reasoning,
+        )
+        app_server_meta["agent"] = "opencode"
+        self._merge_run_index_entry(run_id, {"app_server": app_server_meta})
+
+        active = ActiveOpencodeRun(
+            session_id=thread_id,
+            turn_id=turn_id,
+            client=client,
+            interrupted=False,
+            interrupt_event=asyncio.Event(),
+        )
+        output_task = asyncio.create_task(
+            self._collect_opencode_output(client, thread_id, active)
+        )
+        stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
+        timeout_task = None
+        turn_timeout = self.config.app_server.turn_timeout_seconds
+        if turn_timeout:
+            timeout_task = asyncio.create_task(asyncio.sleep(turn_timeout))
+        timed_out = False
+        try:
+            tasks = {output_task, stop_task}
+            if timeout_task is not None:
+                tasks.add(timeout_task)
+            done, _pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            timed_out = timeout_task is not None and timeout_task in done
+            stopped = stop_task in done
+            if timed_out:
+                self.log_line(
+                    run_id, "error: opencode turn timed out; aborting session"
+                )
+                active.interrupt_event.set()
+            if stopped:
+                active.interrupted = True
+                active.interrupt_event.set()
+                self.log_line(run_id, "info: stop requested; aborting opencode")
+            if timed_out or stopped:
+                await self._abort_opencode(client, thread_id, run_id)
+                done, _pending = await asyncio.wait(
+                    {output_task}, timeout=AUTORUNNER_INTERRUPT_GRACE_SECONDS
+                )
+                if not done:
+                    output_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await output_task
+                    if timed_out:
+                        return 1
+                    self._last_run_interrupted = active.interrupted
+                    return 0
+            output = await output_task
+        finally:
+            stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+            if timeout_task is not None:
+                timeout_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await timeout_task
+
+        if output:
+            self._log_app_server_output(run_id, [output])
+        self._last_run_interrupted = active.interrupted
+        if timed_out:
+            return 1
+        return 0
 
     async def _run_loop_async(
         self,
@@ -1322,6 +1656,7 @@ class Engine:
                 pass
         finally:
             await self._close_app_server_supervisor()
+            await self._close_opencode_supervisor()
         # IMPORTANT: lock ownership is managed by the caller (CLI/Hub/Server runner).
         # Engine.run_loop must never unconditionally mutate the lock file.
 
@@ -1367,6 +1702,7 @@ class Engine:
                 last_exit_code=exit_code,
                 last_run_started_at=last_run_started_at,
                 last_run_finished_at=last_run_finished_at,
+                autorunner_agent_override=current.autorunner_agent_override,
                 autorunner_model_override=current.autorunner_model_override,
                 autorunner_effort_override=current.autorunner_effort_override,
                 autorunner_approval_policy=current.autorunner_approval_policy,

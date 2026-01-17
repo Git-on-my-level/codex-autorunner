@@ -535,6 +535,7 @@ def kill(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")):
             last_exit_code=137,
             last_run_started_at=state.last_run_started_at,
             last_run_finished_at=now_iso(),
+            autorunner_agent_override=state.autorunner_agent_override,
             autorunner_model_override=state.autorunner_model_override,
             autorunner_effort_override=state.autorunner_effort_override,
             autorunner_approval_policy=state.autorunner_approval_policy,

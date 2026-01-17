@@ -15,6 +15,9 @@ class Payload(BaseModel):
 
 class RunControlRequest(Payload):
     once: bool = False
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
 
 
 class HubCreateRepoRequest(Payload):
