@@ -43,6 +43,7 @@ from ..adapter import (
 )
 from ..config import TelegramMediaCandidate
 from ..constants import (
+    AGENT_PICKER_PROMPT,
     APPROVAL_POLICY_VALUES,
     APPROVAL_PRESETS,
     BIND_PICKER_PROMPT,
@@ -232,26 +233,59 @@ class TelegramCommandHandlers:
             reply_to=message.message_id,
         )
 
+    def _apply_agent_change(
+        self,
+        chat_id: int,
+        thread_id: Optional[int],
+        desired: str,
+    ) -> str:
+        def apply(record: "TelegramTopicRecord") -> None:
+            record.agent = desired
+            record.active_thread_id = None
+            record.thread_ids.clear()
+            record.thread_summaries.clear()
+            record.pending_compact_seed = None
+            record.pending_compact_seed_thread_id = None
+            if not self._agent_supports_effort(desired):
+                record.effort = None
+
+        self._router.update_topic(chat_id, thread_id, apply)
+        if not self._agent_supports_resume(desired):
+            return " (resume not supported)"
+        return ""
+
     async def _handle_agent(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
         record = self._router.ensure_topic(message.chat_id, message.thread_id)
         current = self._effective_agent(record)
+        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        self._agent_options.pop(key, None)
         argv = self._parse_command_args(args)
         if not argv:
-            availability = (
-                "available" if self._opencode_available() else "missing binary"
-            )
+            availability = "available"
+            if not self._opencode_available():
+                availability = "missing binary"
+            items = []
+            for agent in ("codex", "opencode"):
+                if agent not in VALID_AGENT_VALUES:
+                    continue
+                label = agent
+                if agent == current:
+                    label = f"{label} (current)"
+                if agent == "opencode" and availability != "available":
+                    label = f"{label} ({availability})"
+                items.append((agent, label))
+            state = SelectionState(items=items)
+            keyboard = self._build_agent_keyboard(state)
+            self._agent_options[key] = state
+            self._touch_cache_timestamp("agent_options", key)
             await self._send_message(
                 message.chat_id,
-                "\n".join(
-                    [
-                        f"Current agent: {current}",
-                        f"OpenCode: {availability}",
-                    ]
-                ),
+                self._selection_prompt(AGENT_PICKER_PROMPT, state),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
+                reply_markup=keyboard,
             )
             return
         desired = normalize_agent(argv[0])
@@ -279,21 +313,7 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-
-        def apply(record: "TelegramTopicRecord") -> None:
-            record.agent = desired
-            record.active_thread_id = None
-            record.thread_ids.clear()
-            record.thread_summaries.clear()
-            record.pending_compact_seed = None
-            record.pending_compact_seed_thread_id = None
-            if not self._agent_supports_effort(desired):
-                record.effort = None
-
-        self._router.update_topic(message.chat_id, message.thread_id, apply)
-        note = ""
-        if not self._agent_supports_resume(desired):
-            note = " (resume not supported)"
+        note = self._apply_agent_change(message.chat_id, message.thread_id, desired)
         await self._send_message(
             message.chat_id,
             f"Agent set to {desired}{note}.",
@@ -324,6 +344,7 @@ class TelegramCommandHandlers:
         if spec is None:
             self._resume_options.pop(key, None)
             self._bind_options.pop(key, None)
+            self._agent_options.pop(key, None)
             self._model_options.pop(key, None)
             self._model_pending.pop(key, None)
             if name in ("list", "ls"):

@@ -140,6 +140,7 @@ class TelegramBotService(
         )
         self._model_options: dict[str, ModelPickerState] = {}
         self._model_pending: dict[str, ModelOption] = {}
+        self._agent_options: dict[str, SelectionState] = {}
         self._voice_config = voice_config
         self._voice_service = voice_service
         self._housekeeping_config = housekeeping_config
@@ -695,6 +696,8 @@ class TelegramBotService(
                 self._resume_options.pop(key, None)
             elif cache_name == "bind_options":
                 self._bind_options.pop(key, None)
+            elif cache_name == "agent_options":
+                self._agent_options.pop(key, None)
             elif cache_name == "update_options":
                 self._update_options.pop(key, None)
             elif cache_name == "update_confirm_options":
@@ -739,6 +742,9 @@ class TelegramBotService(
             )
             self._evict_expired_cache_entries(
                 "bind_options", SELECTION_STATE_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "agent_options", SELECTION_STATE_TTL_SECONDS
             )
             self._evict_expired_cache_entries(
                 "update_options", SELECTION_STATE_TTL_SECONDS

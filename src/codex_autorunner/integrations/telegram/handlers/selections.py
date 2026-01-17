@@ -4,6 +4,7 @@ from typing import Any, Callable, Optional, cast
 
 from ....core.update import _normalize_update_target
 from ..adapter import (
+    AgentCallback,
     CancelCallback,
     EffortCallback,
     ModelCallback,
@@ -14,6 +15,7 @@ from ..adapter import (
     TelegramMessage,
     UpdateCallback,
     UpdateConfirmCallback,
+    build_agent_keyboard,
     build_bind_keyboard,
     build_effort_keyboard,
     build_model_keyboard,
@@ -23,6 +25,7 @@ from ..adapter import (
     encode_page_callback,
 )
 from ..constants import (
+    AGENT_PICKER_PROMPT,
     BIND_PICKER_PROMPT,
     DEFAULT_PAGE_SIZE,
     EFFORT_PICKER_PROMPT,
@@ -102,6 +105,42 @@ class TelegramSelectionHandlers:
             lambda: self._bind_topic_by_repo_id(key, repo_id),
         )
         return True
+
+    async def _handle_agent_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: AgentCallback,
+    ) -> None:
+        state = self._agent_options.get(key)
+        if not state or not _selection_contains(state.items, parsed.agent):
+            await self._answer_callback(callback, "Selection expired")
+            return
+        self._agent_options.pop(key, None)
+        record = self._router.ensure_topic(callback.chat_id, callback.thread_id)
+        current = self._effective_agent(record)
+        desired = parsed.agent
+        if desired == "opencode" and not self._opencode_available():
+            await self._answer_callback(callback, "OpenCode missing")
+            await self._finalize_selection(
+                key,
+                callback,
+                "OpenCode binary not found. Install opencode or switch to /agent codex.",
+            )
+            return
+        if desired == current:
+            await self._answer_callback(callback, "Agent already set")
+            await self._finalize_selection(
+                key, callback, f"Agent already set to {current}."
+            )
+            return
+        note = self._apply_agent_change(callback.chat_id, callback.thread_id, desired)
+        await self._answer_callback(callback, "Agent set")
+        await self._finalize_selection(
+            key,
+            callback,
+            f"Agent set to {desired}{note}.",
+        )
 
     async def _handle_pending_review_commit(
         self,
@@ -407,6 +446,18 @@ class TelegramSelectionHandlers:
         options = list(state.items)
         return build_update_keyboard(options, include_cancel=True)
 
+    def _build_agent_keyboard(self, state: SelectionState) -> dict[str, Any]:
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        options = [
+            (item_id, f"{idx}) {label}")
+            for idx, (item_id, label) in enumerate(page_items, 1)
+        ]
+        return build_agent_keyboard(
+            options,
+            page_button=self._page_button("agent", state),
+            include_cancel=True,
+        )
+
     def _build_model_keyboard(self, state: ModelPickerState) -> dict[str, Any]:
         page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
         options = [
@@ -493,6 +544,9 @@ class TelegramSelectionHandlers:
         elif parsed.kind == "bind":
             self._bind_options.pop(key, None)
             text = "Bind selection cancelled."
+        elif parsed.kind == "agent":
+            self._agent_options.pop(key, None)
+            text = "Agent selection cancelled."
         elif parsed.kind == "model":
             self._model_options.pop(key, None)
             self._model_pending.pop(key, None)
@@ -531,6 +585,10 @@ class TelegramSelectionHandlers:
             state = self._bind_options.get(key)
             prompt_base = BIND_PICKER_PROMPT
             build_keyboard = self._build_bind_keyboard
+        elif parsed.kind == "agent":
+            state = self._agent_options.get(key)
+            prompt_base = AGENT_PICKER_PROMPT
+            build_keyboard = self._build_agent_keyboard
         elif parsed.kind == "model":
             state = self._model_options.get(key)
             prompt_base = MODEL_PICKER_PROMPT
