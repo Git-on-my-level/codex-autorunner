@@ -5993,6 +5993,7 @@ button.loading::after {
 
 .run-details-modal .modal-body {
   overflow: auto;
+  min-height: 0;
 }
 
 .run-details-modal .modal-actions {
