@@ -4310,10 +4310,12 @@ class TelegramCommandHandlers:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         raw_args = args.strip()
         delivery = "inline"
-        token, remainder = _consume_raw_token(raw_args)
-        if token and token.lower() in ("detached", "--detached"):
-            delivery = "detached"
-            raw_args = remainder
+        if raw_args:
+            detached_pattern = r"(^|\s)(--detached|detached)(?=\s|$)"
+            if re.search(detached_pattern, raw_args, flags=re.IGNORECASE):
+                delivery = "detached"
+                raw_args = re.sub(detached_pattern, " ", raw_args, flags=re.IGNORECASE)
+                raw_args = raw_args.strip()
         token, remainder = _consume_raw_token(raw_args)
         target: dict[str, Any] = {"type": "uncommittedChanges"}
         if token:
@@ -4329,6 +4331,10 @@ class TelegramCommandHandlers:
                     )
                     return
                 target = {"type": "baseBranch", "branch": argv[1]}
+            elif keyword == "pr":
+                argv = self._parse_command_args(raw_args)
+                branch = argv[1] if len(argv) > 1 else "main"
+                target = {"type": "baseBranch", "branch": branch}
             elif keyword == "commit":
                 argv = self._parse_command_args(raw_args)
                 if len(argv) < 2:

@@ -834,6 +834,7 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("")
         lines.append("Review:")
         lines.append("/review")
+        lines.append("/review pr [branch]")
         lines.append("/review commit <sha> (or /review commit to pick)")
         lines.append("/review custom <instructions> (or /review custom to prompt)")
         lines.append("/review detached ...")
