@@ -25,7 +25,9 @@ from ..core.config import (
     HubConfig,
     _is_loopback_host,
     _normalize_base_path,
-    load_config,
+    derive_repo_config,
+    load_hub_config,
+    load_repo_config,
 )
 from ..core.doc_chat import DocChatService
 from ..core.engine import Engine, LockError
@@ -325,17 +327,21 @@ def _build_opencode_supervisor(
 
 
 def _build_app_context(
-    repo_root: Optional[Path], base_path: Optional[str]
+    repo_root: Optional[Path],
+    base_path: Optional[str],
+    hub_config: Optional[HubConfig] = None,
 ) -> AppContext:
-    config = load_config(repo_root or Path.cwd())
-    if isinstance(config, HubConfig):
-        raise ConfigError("create_app requires repo mode configuration")
+    target_root = (repo_root or Path.cwd()).resolve()
+    if hub_config is None:
+        config = load_repo_config(target_root)
+    else:
+        config = derive_repo_config(hub_config, target_root)
     normalized_base = (
         _normalize_base_path(base_path)
         if base_path is not None
         else config.server_base_path
     )
-    engine = Engine(config.root)
+    engine = Engine(config.root, config=config)
     manager = RunnerManager(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
     voice_missing_reason: Optional[str] = None
@@ -605,9 +611,7 @@ def _apply_app_context(app: FastAPI, context: AppContext) -> None:
 def _build_hub_context(
     hub_root: Optional[Path], base_path: Optional[str]
 ) -> HubAppContext:
-    config = load_config(hub_root or Path.cwd())
-    if not isinstance(config, HubConfig):
-        raise ConfigError("Hub app requires hub mode configuration")
+    config = load_hub_config(hub_root or Path.cwd())
     normalized_base = (
         _normalize_base_path(base_path)
         if base_path is not None
@@ -874,8 +878,9 @@ def create_app(
     repo_root: Optional[Path] = None,
     base_path: Optional[str] = None,
     server_overrides: Optional[ServerOverrides] = None,
+    hub_config: Optional[HubConfig] = None,
 ) -> ASGIApp:
-    context = _build_app_context(repo_root, base_path)
+    context = _build_app_context(repo_root, base_path, hub_config=hub_config)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
     _apply_app_context(app, context)
     app.add_middleware(GZipMiddleware, minimum_size=500)
@@ -980,6 +985,7 @@ def create_hub_app(
                 repo_path,
                 base_path="",
                 server_overrides=repo_server_overrides,
+                hub_config=context.config,
             )
         except ConfigError as exc:
             mount_errors[prefix] = str(exc)

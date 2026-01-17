@@ -102,16 +102,17 @@ If you set a base path, prefix all checks with it.
 
 ## Quick start
 1) Install (editable): `pip install -e .`
-2) Initialize (per repo): `codex-autorunner init --git-init` (or `car init --git-init` if you prefer short). This creates `.codex-autorunner/config.yml`, state/log files, and the docs under `.codex-autorunner/`.
+2) Initialize (hub + repo): `codex-autorunner init --git-init` (or `car init --git-init` if you prefer short). This creates the hub config at `.codex-autorunner/config.yml`, plus state/log files and the docs under `.codex-autorunner/`.
 3) Run once: `codex-autorunner once` / `car once`
 4) Continuous loop: `codex-autorunner run` / `car run`
 5) If stuck: `codex-autorunner kill` then `codex-autorunner resume` (or the `car` equivalents)
 6) Check status/logs: `codex-autorunner status`, `codex-autorunner log --tail 200` (or `car ...`)
 
 ## Configuration
-- Root defaults live in `codex-autorunner.yml` (committed). These defaults are used when CAR generates `.codex-autorunner/config.yml`.
+- Root defaults live in `codex-autorunner.yml` (committed).
 - Local overrides live in `codex-autorunner.override.yml` (gitignored). Use it for machine-specific tweaks; keep secrets in env vars.
-- Repo config lives at `.codex-autorunner/config.yml` (generated). Edit it for repo-specific changes.
+- Hub config lives at `.codex-autorunner/config.yml` (generated). It includes `repo_defaults` for all repos.
+- Repo overrides are optional; add `.codex-autorunner/repo.override.yml` to override hub defaults for a specific repo.
 
 ## Interfaces
 
@@ -121,9 +122,9 @@ bot is optimized for interactive back-and-forth, mirroring the Codex TUI
 experience inside Telegram with user-in-the-loop approvals.
 
 ### Web UI (control plane)
-1) Ensure the repo is initialized (`codex-autorunner init`) so `.codex-autorunner/config.yml` exists.
+1) Ensure the hub is initialized (`codex-autorunner init`) so `.codex-autorunner/config.yml` exists.
 2) Start the API/UI backend: `codex-autorunner serve` (or `car serve`) — defaults to `127.0.0.1:4173`; override via `server.host`/`server.port` in `.codex-autorunner/config.yml`.
-3) Open `http://127.0.0.1:4173` to use the UI, or call the FastAPI endpoints under `/api/*`.
+3) Open `http://127.0.0.1:4173` for the hub UI; repo UIs live under `/repos/<repo_id>/`. FastAPI endpoints are under `/api/*` (repo) and `/hub/*` (hub).
    - The Terminal tab launches the configured Codex binary inside a PTY via websocket; it uses `codex.terminal_args` (defaults empty, so it runs `codex` bare unless you override). xterm.js assets are vendored under `static/vendor`.
    - If you need to serve under a proxy prefix (e.g., `/car`), set `server.base_path` in `.codex-autorunner/config.yml` or pass `--base-path` to `car serve/hub serve`; all HTTP/WS endpoints will be reachable under that prefix. Proxy must forward that prefix (e.g., Caddy `handle /car/* { reverse_proxy ... }` with a 404 fallback for everything else).
    - Chat composer shortcuts: desktop uses Cmd+Enter (or Ctrl+Enter) to send and Shift+Enter for newline; mobile uses Enter to send and Shift+Enter for newline.

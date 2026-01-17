@@ -91,14 +91,9 @@
   addStylesheet("static/styles.css");
   addStylesheet("static/vendor/xterm.css");
 
-  const isHubPage =
-    pathname === `${basePrefix || ""}/hub` ||
-    pathname.startsWith(`${basePrefix || ""}/hub/`);
   const versionPath = repoId
-    ? `${window.__CAR_BASE_PATH || ""}/api/version`
-    : isHubPage
-    ? `${basePrefix || ""}/hub/version`
-    : `${basePrefix || ""}/api/version`;
+    ? `${basePrefix || ""}/repos/${repoId}/api/version`
+    : `${basePrefix || ""}/hub/version`;
   const normalizedVersionPath = versionPath.startsWith("/")
     ? versionPath
     : `/${versionPath}`;

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.prompt import build_final_summary_prompt, build_prompt_text
 
@@ -9,6 +9,7 @@ def test_prompt_calls_out_work_doc_paths(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".git").mkdir()
+    seed_hub_files(repo, force=True)
     seed_repo_files(repo, git_required=False)
 
     engine = Engine(repo)

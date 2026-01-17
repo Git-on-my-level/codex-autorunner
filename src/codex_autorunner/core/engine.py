@@ -31,7 +31,14 @@ from .about_car import ensure_about_car_file
 from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
-from .config import ConfigError, HubConfig, RepoConfig, _is_loopback_host, load_config
+from .config import (
+    ConfigError,
+    RepoConfig,
+    _is_loopback_host,
+    derive_repo_config,
+    load_hub_config,
+    load_repo_config,
+)
 from .docs import DocsManager, parse_todos
 from .git_utils import GitError, run_git
 from .locks import (
@@ -46,6 +53,7 @@ from .optional_dependencies import missing_optional_dependencies
 from .prompt import build_final_summary_prompt
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
+    RepoNotFoundError,
     atomic_write,
     ensure_executable,
     find_repo_root,
@@ -91,11 +99,16 @@ class ActiveOpencodeRun:
 
 
 class Engine:
-    def __init__(self, repo_root: Path):
-        config = load_config(repo_root)
-        if not isinstance(config, RepoConfig):
-            raise ConfigError("Engine requires repo mode configuration")
-        self.config: RepoConfig = config
+    def __init__(
+        self,
+        repo_root: Path,
+        *,
+        config: Optional[RepoConfig] = None,
+        hub_path: Optional[Path] = None,
+    ):
+        if config is None:
+            config = load_repo_config(repo_root, hub_path=hub_path)
+        self.config = config
         self.repo_root = self.config.root
         self.docs = DocsManager(self.config)
         self.notifier = NotificationManager(self.config)
@@ -1842,14 +1855,21 @@ def _manifest_has_worktrees(manifest_path: Path) -> bool:
 
 
 def doctor(start_path: Path) -> DoctorReport:
-    config = load_config(start_path)
+    hub_config = load_hub_config(start_path)
+    repo_config: Optional[RepoConfig] = None
+    try:
+        repo_root = find_repo_root(start_path)
+        repo_config = derive_repo_config(hub_config, repo_root)
+    except RepoNotFoundError:
+        repo_config = None
     checks: list[DoctorCheck] = []
+    config = repo_config or hub_config
     root = config.root
 
-    if isinstance(config, RepoConfig):
+    if repo_config is not None:
         missing = []
         for key in ("todo", "progress", "opinions"):
-            path = config.doc_path(key)
+            path = repo_config.doc_path(key)
             if not path.exists():
                 missing.append(path)
         if missing:
@@ -1869,23 +1889,23 @@ def doctor(start_path: Path) -> DoctorReport:
                 "Required doc files are present.",
             )
 
-        if ensure_executable(config.codex_binary):
+        if ensure_executable(repo_config.codex_binary):
             _append_check(
                 checks,
                 "codex.binary",
                 "ok",
-                f"Codex binary resolved: {config.codex_binary}",
+                f"Codex binary resolved: {repo_config.codex_binary}",
             )
         else:
             _append_check(
                 checks,
                 "codex.binary",
                 "error",
-                f"Codex binary not found in PATH: {config.codex_binary}",
+                f"Codex binary not found in PATH: {repo_config.codex_binary}",
                 "Install Codex or set codex.binary to a full path.",
             )
 
-        voice_enabled = bool(config.voice.get("enabled", True))
+        voice_enabled = bool(repo_config.voice.get("enabled", True))
         if voice_enabled:
             missing_voice = missing_optional_dependencies(
                 (
@@ -1981,86 +2001,85 @@ def doctor(start_path: Path) -> DoctorReport:
         if static_context is not None:
             static_context.close()
 
-    if isinstance(config, HubConfig):
-        if config.manifest_path.exists():
-            version = _parse_manifest_version(config.manifest_path)
-            if version is None:
-                _append_check(
-                    checks,
-                    "hub.manifest.version",
-                    "error",
-                    f"Failed to read manifest version from {config.manifest_path}.",
-                    "Fix the manifest YAML or regenerate it with `car hub scan`.",
-                )
-            elif version != MANIFEST_VERSION:
-                _append_check(
-                    checks,
-                    "hub.manifest.version",
-                    "error",
-                    f"Hub manifest version {version} unsupported (expected {MANIFEST_VERSION}).",
-                    "Regenerate the manifest (delete it and run `car hub scan`).",
-                )
-            else:
-                _append_check(
-                    checks,
-                    "hub.manifest.version",
-                    "ok",
-                    f"Hub manifest version {version} is supported.",
-                )
-        else:
+    if hub_config.manifest_path.exists():
+        version = _parse_manifest_version(hub_config.manifest_path)
+        if version is None:
             _append_check(
                 checks,
-                "hub.manifest.exists",
-                "warning",
-                f"Hub manifest missing at {config.manifest_path}.",
-                "Run `car hub scan` or `car hub create` to generate it.",
-            )
-
-        if not config.repos_root.exists():
-            _append_check(
-                checks,
-                "hub.repos_root",
+                "hub.manifest.version",
                 "error",
-                f"Hub repos_root does not exist: {config.repos_root}",
-                "Create the directory or update hub.repos_root in config.",
+                f"Failed to read manifest version from {hub_config.manifest_path}.",
+                "Fix the manifest YAML or regenerate it with `car hub scan`.",
             )
-        elif not config.repos_root.is_dir():
+        elif version != MANIFEST_VERSION:
             _append_check(
                 checks,
-                "hub.repos_root",
+                "hub.manifest.version",
                 "error",
-                f"Hub repos_root is not a directory: {config.repos_root}",
-                "Point hub.repos_root at a directory.",
+                f"Hub manifest version {version} unsupported (expected {MANIFEST_VERSION}).",
+                "Regenerate the manifest (delete it and run `car hub scan`).",
             )
         else:
             _append_check(
                 checks,
-                "hub.repos_root",
+                "hub.manifest.version",
                 "ok",
-                f"Hub repos_root exists: {config.repos_root}",
+                f"Hub manifest version {version} is supported.",
             )
-
-        manifest_has_worktrees = (
-            config.manifest_path.exists()
-            and _manifest_has_worktrees(config.manifest_path)
+    else:
+        _append_check(
+            checks,
+            "hub.manifest.exists",
+            "warning",
+            f"Hub manifest missing at {hub_config.manifest_path}.",
+            "Run `car hub scan` or `car hub create` to generate it.",
         )
-        worktrees_enabled = config.worktrees_root.exists() or manifest_has_worktrees
-        if worktrees_enabled:
-            if ensure_executable("git"):
-                _append_check(
-                    checks,
-                    "hub.git",
-                    "ok",
-                    "git is available for hub worktrees.",
-                )
-            else:
-                _append_check(
-                    checks,
-                    "hub.git",
-                    "error",
-                    "git is not available but hub worktrees are enabled.",
-                    "Install git or disable worktrees.",
-                )
+
+    if not hub_config.repos_root.exists():
+        _append_check(
+            checks,
+            "hub.repos_root",
+            "error",
+            f"Hub repos_root does not exist: {hub_config.repos_root}",
+            "Create the directory or update hub.repos_root in config.",
+        )
+    elif not hub_config.repos_root.is_dir():
+        _append_check(
+            checks,
+            "hub.repos_root",
+            "error",
+            f"Hub repos_root is not a directory: {hub_config.repos_root}",
+            "Point hub.repos_root at a directory.",
+        )
+    else:
+        _append_check(
+            checks,
+            "hub.repos_root",
+            "ok",
+            f"Hub repos_root exists: {hub_config.repos_root}",
+        )
+
+    manifest_has_worktrees = (
+        hub_config.manifest_path.exists()
+        and _manifest_has_worktrees(hub_config.manifest_path)
+    )
+    worktrees_enabled = hub_config.worktrees_root.exists() or manifest_has_worktrees
+    if worktrees_enabled:
+        if ensure_executable("git"):
+            _append_check(
+                checks,
+                "hub.git",
+                "ok",
+                "git is available for hub worktrees.",
+            )
+        else:
+            _append_check(
+                checks,
+                "hub.git",
+                "error",
+                "git is not available but hub worktrees are enabled.",
+                "Install git or disable worktrees.",
+            )
 
     telegram_cfg = None
     if isinstance(config.raw, dict):

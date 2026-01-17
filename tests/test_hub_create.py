@@ -9,7 +9,7 @@ from codex_autorunner.cli import app
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
-    load_config,
+    load_hub_config,
 )
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor
@@ -52,7 +52,7 @@ def test_hub_create_repo_cli(tmp_path: Path):
 
     repo_dir = hub_root / "workspace" / "demo"
     assert (repo_dir / ".git").exists()
-    assert (repo_dir / ".codex-autorunner" / "config.yml").exists()
+    assert (repo_dir / ".codex-autorunner" / "state.json").exists()
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     assert manifest["repos"][0]["id"] == "demo"
@@ -65,7 +65,7 @@ def test_hub_create_repo_rejects_outside_repos_root(tmp_path: Path):
     cfg["hub"]["repos_root"] = "workspace"
     _write_config(hub_root / CONFIG_FILENAME, cfg)
 
-    supervisor = HubSupervisor(load_config(hub_root))  # type: ignore[arg-type]
+    supervisor = HubSupervisor(load_hub_config(hub_root))
     with pytest.raises(ValueError):
         supervisor.create_repo("bad", repo_path=Path(".."))
 
@@ -98,7 +98,7 @@ def test_hub_clone_repo_cli(tmp_path: Path):
 
     repo_dir = hub_root / "workspace" / "cloned"
     assert (repo_dir / ".git").exists()
-    assert (repo_dir / ".codex-autorunner" / "config.yml").exists()
+    assert (repo_dir / ".codex-autorunner" / "state.json").exists()
 
 
 def test_hub_clone_repo_cli_failure_message(tmp_path: Path):

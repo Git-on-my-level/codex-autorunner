@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.server import create_app
 from codex_autorunner.web import static_assets
 
@@ -115,6 +115,7 @@ def test_materialize_static_assets_prunes_old_entries(
 
 
 def test_create_app_serves_cached_static_assets(tmp_path: Path, monkeypatch) -> None:
+    seed_hub_files(tmp_path, force=True)
     seed_repo_files(tmp_path, force=True, git_required=False)
     source_dir = tmp_path / "source_static"
     _write_required_assets(source_dir)
@@ -129,6 +130,7 @@ def test_create_app_serves_cached_static_assets(tmp_path: Path, monkeypatch) -> 
 
 
 def test_static_assets_cached_and_compressed(tmp_path: Path, monkeypatch) -> None:
+    seed_hub_files(tmp_path, force=True)
     seed_repo_files(tmp_path, force=True, git_required=False)
     source_dir = tmp_path / "source_static"
     _write_required_assets(source_dir)

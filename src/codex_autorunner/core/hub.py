@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
 from ..manifest import Manifest, load_manifest, save_manifest
-from .config import HubConfig, load_config
+from .config import HubConfig, load_hub_config
 from .engine import Engine
 from .git_utils import (
     GitError,
@@ -216,9 +216,7 @@ class HubSupervisor:
 
     @classmethod
     def from_path(cls, path: Path) -> "HubSupervisor":
-        config = load_config(path)
-        if not isinstance(config, HubConfig):
-            raise ValueError("HubSupervisor requires hub mode configuration")
+        config = load_hub_config(path)
         return cls(config)
 
     def scan(self) -> List[RepoSnapshot]:
@@ -723,10 +721,10 @@ class HubSupervisor:
         if not repo:
             raise ValueError(f"Repo {repo_id} not found in manifest")
         repo_root = (self.hub_config.root / repo.path).resolve()
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
-        if not allow_uninitialized and not config_path.exists():
+        state_path = repo_root / ".codex-autorunner" / "state.json"
+        if not allow_uninitialized and not state_path.exists():
             raise ValueError(f"Repo {repo_id} is not initialized")
-        if not config_path.exists():
+        if not state_path.exists():
             return None
         runner = RepoRunner(repo_id, repo_root, spawn_fn=self._spawn_fn)
         self._runners[repo_id] = runner
@@ -739,7 +737,7 @@ class HubSupervisor:
         records: List[DiscoveryRecord] = []
         for entry in manifest.repos:
             repo_path = (self.hub_config.root / entry.path).resolve()
-            initialized = (repo_path / ".codex-autorunner" / "config.yml").exists()
+            initialized = (repo_path / ".codex-autorunner" / "state.json").exists()
             records.append(
                 DiscoveryRecord(
                     repo=entry,

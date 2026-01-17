@@ -20,7 +20,7 @@ def test_init_from_subdir_walks_to_repo_root(tmp_path: Path):
     assert config_path.exists()
     assert not (nested / ".codex-autorunner").exists()
     contents = config_path.read_text(encoding="utf-8")
-    assert "mode: repo" in contents
+    assert "mode: hub" in contents
 
 
 def test_init_allows_child_git_repos_without_parent(tmp_path: Path):

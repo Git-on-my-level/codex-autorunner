@@ -1,15 +1,13 @@
 import asyncio
 import difflib
-import json
 import os
 from pathlib import Path
 from typing import Optional
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
 
-from codex_autorunner.core.config import DEFAULT_CONFIG
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.doc_chat import (
     DocChatConflictError,
     DocChatDraftState,
@@ -23,18 +21,12 @@ from codex_autorunner.integrations.app_server.client import TurnResult
 from codex_autorunner.server import create_app
 
 
-def _write_default_config(repo_root: Path) -> None:
-    data = json.loads(json.dumps(DEFAULT_CONFIG))
-    config_path = repo_root / ".codex-autorunner" / "config.yml"
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(yaml.safe_dump(data), encoding="utf-8")
-
-
 def _seed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".git").mkdir()
-    _write_default_config(repo)
+    seed_hub_files(repo, force=True)
+    seed_repo_files(repo, force=True, git_required=False)
     work = repo / ".codex-autorunner"
     work.mkdir(exist_ok=True)
     (work / "TODO.md").write_text(

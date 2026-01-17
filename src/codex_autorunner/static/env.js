@@ -1,23 +1,5 @@
 const hasWindow = typeof window !== "undefined" && typeof window.location !== "undefined";
 const pathname = hasWindow ? window.location.pathname || "/" : "/";
-const AUTH_TOKEN_KEY = "car_auth_token";
-
-function getAuthToken() {
-  let token = null;
-  try {
-    token = sessionStorage.getItem(AUTH_TOKEN_KEY);
-  } catch (_err) {
-    token = null;
-  }
-  if (token) {
-    return token;
-  }
-  if (hasWindow && window.__CAR_AUTH_TOKEN) {
-    return window.__CAR_AUTH_TOKEN;
-  }
-  return null;
-}
-
 function normalizeBase(base) {
   if (!base || base === "/") return "";
   let normalized = base.startsWith("/") ? base : `/${base}`;
@@ -71,29 +53,3 @@ const basePath =
 export const REPO_ID = repoId;
 export const BASE_PATH = basePath;
 export const HUB_BASE = basePrefix || "/";
-
-let mode = repoId ? "repo" : "unknown";
-const hubEndpoint = `${basePrefix || ""}/hub/repos`;
-
-export async function detectContext() {
-  if (mode !== "unknown") {
-    return { mode, repoId: REPO_ID };
-  }
-  if (!hasWindow || typeof fetch !== "function") {
-    mode = "repo";
-    return { mode, repoId: REPO_ID };
-  }
-  try {
-    /** @type {Record<string, string>} */
-    const headers = {};
-    const token = getAuthToken();
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    const res = await fetch(hubEndpoint, { headers });
-    mode = res.ok ? "hub" : "repo";
-  } catch (err) {
-    mode = "repo";
-  }
-  return { mode, repoId: REPO_ID };
-}

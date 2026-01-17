@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.snapshot import (
     SeedContext,
@@ -27,6 +27,7 @@ def git_repo(tmp_path: Path) -> Path:
     _run(["git", "init"], repo_root)
     _run(["git", "config", "user.email", "test@example.com"], repo_root)
     _run(["git", "config", "user.name", "Test User"], repo_root)
+    seed_hub_files(repo_root, force=True)
     seed_repo_files(repo_root, git_required=True)
     (repo_root / "README.md").write_text("hello\n", encoding="utf-8")
     _run(["git", "add", "README.md"], repo_root)

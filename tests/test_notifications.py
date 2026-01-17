@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codex_autorunner.core.config import _build_repo_config, resolve_config_data
+import yaml
+
+from codex_autorunner.core.config import CONFIG_FILENAME, load_repo_config
 from codex_autorunner.core.notifications import NotificationManager
 
 
@@ -27,10 +29,20 @@ class _DummyClient:
 
 
 def _make_config(tmp_path: Path, overrides: dict) -> object:
-    config_path = tmp_path / ".codex-autorunner" / "config.yml"
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    config_path = hub_root / CONFIG_FILENAME
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg = resolve_config_data(tmp_path, "repo", overrides=overrides)
-    return _build_repo_config(config_path, cfg)
+    config_path.write_text(
+        yaml.safe_dump(
+            {"mode": "hub", "repo_defaults": overrides},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    return load_repo_config(repo_root, hub_path=hub_root)
 
 
 def test_notifications_send_with_thread_map(tmp_path: Path, monkeypatch) -> None:

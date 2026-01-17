@@ -13,7 +13,13 @@ import typer
 import uvicorn
 
 from .bootstrap import seed_hub_files, seed_repo_files
-from .core.config import ConfigError, HubConfig, _normalize_base_path, load_config
+from .core.config import (
+    ConfigError,
+    HubConfig,
+    _normalize_base_path,
+    find_nearest_hub_config_path,
+    load_hub_config,
+)
 from .core.engine import Engine, LockError, clear_stale_lock, doctor
 from .core.git_utils import GitError, run_git
 from .core.hub import HubSupervisor
@@ -39,7 +45,7 @@ from .integrations.telegram.service import (
     TelegramBotService,
 )
 from .manifest import load_manifest
-from .server import create_app, create_hub_app
+from .server import create_hub_app
 from .spec_ingest import SpecIngestError, SpecIngestService, clear_work_docs
 from .voice import VoiceConfig
 
@@ -55,24 +61,22 @@ def _raise_exit(message: str, *, cause: Optional[BaseException] = None) -> NoRet
     raise typer.Exit(code=1)
 
 
-def _require_repo_config(repo: Optional[Path]) -> Engine:
+def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> Engine:
     try:
-        config = load_config(repo or Path.cwd())
+        repo_root = find_repo_root(repo or Path.cwd())
+    except RepoNotFoundError as exc:
+        _raise_exit("No .git directory found for repo commands.", cause=exc)
+    try:
+        return Engine(repo_root, hub_path=hub)
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
-    if config.mode != "repo":
-        _raise_exit("This command must be run in repo mode (config.mode=repo).")
-    return Engine(config.root)
 
 
 def _require_hub_config(path: Optional[Path]) -> HubConfig:
     try:
-        config = load_config(path or Path.cwd())
+        return load_hub_config(path or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
-    if not isinstance(config, HubConfig):
-        _raise_exit("This command requires hub mode (config.mode=hub).")
-    return config
 
 
 def _build_server_url(config, path: str) -> str:
@@ -217,19 +221,26 @@ def init(
     ca_dir = target_root / ".codex-autorunner"
     ca_dir.mkdir(parents=True, exist_ok=True)
 
+    hub_config_path = find_nearest_hub_config_path(target_root)
     if selected_mode == "hub":
         seed_hub_files(target_root, force=force)
         typer.echo(f"Initialized hub at {ca_dir}")
     else:
         seed_repo_files(target_root, force=force, git_required=git_required)
         typer.echo(f"Initialized repo at {ca_dir}")
+        if hub_config_path is None:
+            seed_hub_files(target_root, force=force)
+            typer.echo(f"Initialized hub at {ca_dir}")
     typer.echo("Init complete")
 
 
 @app.command()
-def status(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")):
+def status(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
     """Show autorunner status."""
-    engine = _require_repo_config(repo)
+    engine = _require_repo_config(repo, hub)
     state = load_state(engine.state_path)
     outstanding, _ = engine.docs.todos()
     repo_key = str(engine.repo_root)
@@ -266,10 +277,11 @@ def status(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")
 @app.command()
 def sessions(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
 ):
     """List active terminal sessions."""
-    engine = _require_repo_config(repo)
+    engine = _require_repo_config(repo, hub)
     config = engine.config
     url = _build_server_url(config, "/api/sessions")
     auth_token = _resolve_auth_token(config.server_auth_token_env)
@@ -322,12 +334,13 @@ def sessions(
 @app.command("stop-session")
 def stop_session(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     session_id: Optional[str] = typer.Option(
         None, "--session", help="Session id to stop"
     ),
 ):
     """Stop a terminal session by id or repo path."""
-    engine = _require_repo_config(repo)
+    engine = _require_repo_config(repo, hub)
     config = engine.config
     payload: dict[str, str] = {}
     if session_id:
@@ -374,6 +387,7 @@ def usage(
     repo: Optional[Path] = typer.Option(
         None, "--repo", help="Repo or hub path; defaults to CWD"
     ),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     codex_home: Optional[Path] = typer.Option(
         None, "--codex-home", help="Override CODEX_HOME (defaults to env or ~/.codex)"
     ),
@@ -389,11 +403,6 @@ def usage(
 ):
     """Show Codex/OpenCode token usage for a repo or hub by reading local session logs."""
     try:
-        config = load_config(repo or Path.cwd())
-    except ConfigError as exc:
-        _raise_exit(str(exc), cause=exc)
-
-    try:
         since_dt = parse_iso_datetime(since)
         until_dt = parse_iso_datetime(until)
     except UsageError as exc:
@@ -401,7 +410,19 @@ def usage(
 
     codex_root = (codex_home or default_codex_home()).expanduser()
 
-    if isinstance(config, HubConfig):
+    repo_root: Optional[Path] = None
+    try:
+        repo_root = find_repo_root(repo or Path.cwd())
+    except RepoNotFoundError:
+        repo_root = None
+
+    if repo_root and (repo_root / ".codex-autorunner" / "state.json").exists():
+        engine = _require_repo_config(repo, hub)
+    else:
+        try:
+            config = load_hub_config(hub or repo or Path.cwd())
+        except ConfigError as exc:
+            _raise_exit(str(exc), cause=exc)
         manifest = load_manifest(config.manifest_path, config.root)
         repo_map = [(entry.id, (config.root / entry.path)) for entry in manifest.repos]
         per_repo, unmatched = summarize_hub_usage(
@@ -441,7 +462,6 @@ def usage(
             )
         return
 
-    engine = _require_repo_config(repo)
     summary = summarize_repo_usage(
         engine.repo_root,
         codex_root,
@@ -481,12 +501,13 @@ def usage(
 @app.command()
 def run(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     force: bool = typer.Option(False, "--force", help="Ignore existing lock"),
 ):
     """Run the autorunner loop."""
     engine: Optional[Engine] = None
     try:
-        engine = _require_repo_config(repo)
+        engine = _require_repo_config(repo, hub)
         engine.clear_stop_request()
         engine.acquire_lock(force=force)
         engine.run_loop()
@@ -503,12 +524,13 @@ def run(
 @app.command()
 def once(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     force: bool = typer.Option(False, "--force", help="Ignore existing lock"),
 ):
     """Execute a single Codex run."""
     engine: Optional[Engine] = None
     try:
-        engine = _require_repo_config(repo)
+        engine = _require_repo_config(repo, hub)
         engine.clear_stop_request()
         engine.acquire_lock(force=force)
         engine.run_once()
@@ -523,9 +545,12 @@ def once(
 
 
 @app.command()
-def kill(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")):
+def kill(
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
     """Force-kill a running autorunner and clear stale lock/state."""
-    engine = _require_repo_config(repo)
+    engine = _require_repo_config(repo, hub)
     pid = engine.kill_running_process()
     with state_lock(engine.state_path):
         state = load_state(engine.state_path)
@@ -556,13 +581,14 @@ def kill(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")):
 @app.command()
 def resume(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     once: bool = typer.Option(False, "--once", help="Resume with a single run"),
     force: bool = typer.Option(False, "--force", help="Override active lock"),
 ):
     """Resume a stopped/errored autorunner, clearing stale locks if needed."""
     engine: Optional[Engine] = None
     try:
-        engine = _require_repo_config(repo)
+        engine = _require_repo_config(repo, hub)
         engine.clear_stop_request()
         clear_stale_lock(engine.lock_path)
         engine.acquire_lock(force=force)
@@ -580,11 +606,12 @@ def resume(
 @app.command()
 def log(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     run_id: Optional[int] = typer.Option(None, "--run", help="Show a specific run"),
     tail: Optional[int] = typer.Option(None, "--tail", help="Tail last N lines"),
 ):
     """Show autorunner log output."""
-    engine = _require_repo_config(repo)
+    engine = _require_repo_config(repo, hub)
     if not engine.log_path.exists():
         _raise_exit("Log file not found; run init")
 
@@ -614,9 +641,10 @@ def log(
 def edit(
     target: str = typer.Argument(..., help="todo|progress|opinions|spec"),
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
 ):
     """Open one of the docs in $EDITOR."""
-    engine = _require_repo_config(repo)
+    engine = _require_repo_config(repo, hub)
     config = engine.config
     key = target.lower()
     if key not in ("todo", "progress", "opinions", "spec"):
@@ -633,6 +661,7 @@ def edit(
 @app.command("ingest-spec")
 def ingest_spec_cmd(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     spec: Optional[Path] = typer.Option(
         None, "--spec", help="Path to SPEC (defaults to configured docs.spec)"
     ),
@@ -642,7 +671,7 @@ def ingest_spec_cmd(
 ):
     """Generate TODO/PROGRESS/OPINIONS from SPEC using Codex."""
     try:
-        engine = _require_repo_config(repo)
+        engine = _require_repo_config(repo, hub)
         config = engine.config
         if not config.app_server.command:
             raise SpecIngestError("app_server.command must be configured")
@@ -691,6 +720,7 @@ def ingest_spec_cmd(
 @app.command("clear-docs")
 def clear_docs_cmd(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
 ):
     """Clear TODO/PROGRESS/OPINIONS to empty templates."""
@@ -698,7 +728,7 @@ def clear_docs_cmd(
         confirm = input("Clear TODO/PROGRESS/OPINIONS? Type CLEAR to confirm: ").strip()
         if confirm.upper() != "CLEAR":
             _raise_exit("Aborted.")
-    engine = _require_repo_config(repo)
+    engine = _require_repo_config(repo, hub)
     try:
         clear_work_docs(engine)
     except ConfigError as exc:
@@ -734,10 +764,11 @@ def doctor_cmd(
 @app.command()
 def snapshot(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
 ):
     """Generate or update `.codex-autorunner/SNAPSHOT.md`."""
     try:
-        engine = _require_repo_config(repo)
+        engine = _require_repo_config(repo, hub)
         config = engine.config
         if not config.app_server.command:
             raise SnapshotError("app_server.command must be configured")
@@ -782,55 +813,33 @@ def snapshot(
 
 @app.command()
 def serve(
-    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
     host: Optional[str] = typer.Option(None, "--host", help="Host to bind"),
     port: Optional[int] = typer.Option(None, "--port", help="Port to bind"),
     base_path: Optional[str] = typer.Option(
         None, "--base-path", help="Base path for the server"
     ),
 ):
-    """Start the web server and UI API."""
+    """Start the hub web server and UI API."""
     try:
-        config = load_config(repo or Path.cwd())
+        config = load_hub_config(path or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
-    if isinstance(config, HubConfig):
-        bind_host = host or config.server_host
-        bind_port = port or config.server_port
-        normalized_base = (
-            _normalize_base_path(base_path)
-            if base_path is not None
-            else config.server_base_path
-        )
-        _enforce_bind_auth(bind_host, config.server_auth_token_env)
-        typer.echo(
-            f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}"
-        )
-        uvicorn.run(
-            create_hub_app(config.root, base_path=normalized_base),
-            host=bind_host,
-            port=bind_port,
-            root_path="",
-            access_log=config.server_access_log,
-        )
-        return
-    engine = _require_repo_config(repo)
+    bind_host = host or config.server_host
+    bind_port = port or config.server_port
     normalized_base = (
         _normalize_base_path(base_path)
         if base_path is not None
-        else engine.config.server_base_path
+        else config.server_base_path
     )
-    app_instance = create_app(engine.repo_root, base_path=normalized_base)
-    bind_host = host or engine.config.server_host
-    bind_port = port or engine.config.server_port
-    _enforce_bind_auth(bind_host, engine.config.server_auth_token_env)
-    typer.echo(f"Serving repo on http://{bind_host}:{bind_port}{normalized_base or ''}")
+    _enforce_bind_auth(bind_host, config.server_auth_token_env)
+    typer.echo(f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}")
     uvicorn.run(
-        app_instance,
+        create_hub_app(config.root, base_path=normalized_base),
         host=bind_host,
         port=bind_port,
         root_path="",
-        access_log=engine.config.server_access_log,
+        access_log=config.server_access_log,
     )
 
 
@@ -943,7 +952,7 @@ def telegram_start(
         extra="telegram",
     )
     try:
-        config = load_config(path or Path.cwd())
+        config = load_hub_config(path or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
     telegram_cfg = TelegramBotConfig.from_raw(
@@ -964,21 +973,19 @@ def telegram_start(
         logging.INFO,
         "telegram.bot.starting",
         root=str(config.root),
-        mode=("hub" if isinstance(config, HubConfig) else "repo"),
+        mode="hub",
     )
-    voice_raw = config.raw.get("voice") if isinstance(config.raw, dict) else None
+    voice_raw = config.repo_defaults.get("voice") if config.repo_defaults else None
     voice_config = VoiceConfig.from_raw(voice_raw, env=os.environ)
-    update_repo_url = config.update_repo_url if isinstance(config, HubConfig) else None
-    update_repo_ref = config.update_repo_ref if isinstance(config, HubConfig) else None
+    update_repo_url = config.update_repo_url
+    update_repo_ref = config.update_repo_ref
 
     async def _run() -> None:
         service = TelegramBotService(
             telegram_cfg,
             logger=logger,
-            hub_root=config.root if isinstance(config, HubConfig) else None,
-            manifest_path=(
-                config.manifest_path if isinstance(config, HubConfig) else None
-            ),
+            hub_root=config.root,
+            manifest_path=config.manifest_path,
             voice_config=voice_config,
             housekeeping_config=config.housekeeping,
             update_repo_url=update_repo_url,
@@ -1004,7 +1011,7 @@ def telegram_health(
         extra="telegram",
     )
     try:
-        config = load_config(path or Path.cwd())
+        config = load_hub_config(path or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
     telegram_cfg = TelegramBotConfig.from_raw(

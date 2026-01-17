@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, Optional
 
-from .config import ROOT_CONFIG_FILENAME, ROOT_OVERRIDE_FILENAME, Config
+from .config import (
+    REPO_OVERRIDE_FILENAME,
+    ROOT_CONFIG_FILENAME,
+    ROOT_OVERRIDE_FILENAME,
+    Config,
+    find_nearest_hub_config_path,
+)
 
 ABOUT_CAR_BASENAME = "ABOUT_CAR.md"
 ABOUT_CAR_REL_PATH = Path(".codex-autorunner") / ABOUT_CAR_BASENAME
@@ -27,9 +33,15 @@ def build_about_car_markdown(
     opinions_path: Path,
     spec_path: Path,
     summary_path: Path,
-    config_path: Optional[Path] = None,
+    hub_config_path: Optional[Path] = None,
+    repo_override_path: Optional[Path] = None,
 ) -> str:
-    config_path = config_path or (repo_root / ".codex-autorunner" / "config.yml")
+    hub_config_path = (
+        hub_config_path
+        or find_nearest_hub_config_path(repo_root)
+        or (repo_root / ".codex-autorunner" / "config.yml")
+    )
+    repo_override_path = repo_override_path or (repo_root / REPO_OVERRIDE_FILENAME)
     root_config_path = repo_root / ROOT_CONFIG_FILENAME
     root_override_path = repo_root / ROOT_OVERRIDE_FILENAME
     todo_disp = _display_path(repo_root, todo_path)
@@ -37,7 +49,8 @@ def build_about_car_markdown(
     opinions_disp = _display_path(repo_root, opinions_path)
     spec_disp = _display_path(repo_root, spec_path)
     summary_disp = _display_path(repo_root, summary_path)
-    config_disp = _display_path(repo_root, config_path)
+    hub_config_disp = _display_path(repo_root, hub_config_path)
+    repo_override_disp = _display_path(repo_root, repo_override_path)
     root_config_disp = _display_path(repo_root, root_config_path)
     root_override_disp = _display_path(repo_root, root_override_path)
 
@@ -64,8 +77,9 @@ def build_about_car_markdown(
         "- Treat `.codex-autorunner/` as intentional project structure even though it is hidden/gitignored.\n\n"
         "## How CAR works (short)\n"
         "- `car run/once` repeatedly runs Codex non-interactively, feeding it the work docs (and the prior run tail).\n"
-        "- `car serve` starts a local web UI. The **Terminal** tab launches the configured `codex` binary in a PTY.\n"
-        f"- Repo config lives at `{config_disp}` (doc paths, codex args, server host/port).\n"
+        "- `car serve` starts the hub web UI. The **Terminal** tab launches the configured `codex` binary in a PTY.\n"
+        f"- Hub config lives at `{hub_config_disp}` (generated).\n"
+        f"- Repo overrides (optional) live at `{repo_override_disp}`.\n"
         f"- Root defaults live at `{root_config_disp}` with optional `{root_override_disp}` overrides.\n"
     )
 
@@ -92,7 +106,6 @@ def ensure_about_car_file_for_repo(
         opinions_path=doc_paths["opinions"],
         spec_path=doc_paths["spec"],
         summary_path=doc_paths["summary"],
-        config_path=repo_root / ".codex-autorunner" / "config.yml",
     )
     if content and not content.endswith("\n"):
         content += "\n"
