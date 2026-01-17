@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from ...core.logging_utils import log_event
+from ...core.utils import subprocess_env
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import OpenCodeClient
 
@@ -153,7 +154,7 @@ class OpenCodeSupervisor:
             await self._start_process(handle)
 
     async def _start_process(self, handle: OpenCodeHandle) -> None:
-        env = dict(os.environ)
+        env = self._build_opencode_env(handle.workspace_root)
         process = await asyncio.create_subprocess_exec(
             *self._command,
             cwd=handle.workspace_root,
@@ -185,6 +186,53 @@ class OpenCodeSupervisor:
                 process.kill()
                 await process.wait()
             raise
+
+    def _build_opencode_env(self, workspace_root: Path) -> dict[str, str]:
+        env = subprocess_env()
+        inferred_home = self._infer_home_from_workspace(workspace_root)
+        if inferred_home is None:
+            return env
+        inferred_auth = inferred_home / ".local" / "share" / "opencode" / "auth.json"
+        if not inferred_auth.exists():
+            return env
+        env_auth = self._opencode_auth_path_for_env(env)
+        if env_auth is not None and env_auth.exists():
+            return env
+        env["HOME"] = str(inferred_home)
+        env["XDG_DATA_HOME"] = str(inferred_home / ".local" / "share")
+        log_event(
+            self._logger,
+            logging.INFO,
+            "opencode.env.inferred",
+            workspace_root=str(workspace_root),
+            inferred_home=str(inferred_home),
+            auth_path=str(inferred_auth),
+        )
+        return env
+
+    def _infer_home_from_workspace(self, workspace_root: Path) -> Optional[Path]:
+        resolved = workspace_root.resolve()
+        parts = resolved.parts
+        if (
+            len(parts) >= 3
+            and parts[0] == os.path.sep
+            and parts[1]
+            in (
+                "Users",
+                "home",
+            )
+        ):
+            return Path(parts[0]) / parts[1] / parts[2]
+        return None
+
+    def _opencode_auth_path_for_env(self, env: dict[str, str]) -> Optional[Path]:
+        data_home = env.get("XDG_DATA_HOME")
+        if not data_home:
+            home = env.get("HOME")
+            if not home:
+                return None
+            data_home = str(Path(home) / ".local" / "share")
+        return Path(data_home) / "opencode" / "auth.json"
 
     def _start_stdout_drain(self, handle: OpenCodeHandle) -> None:
         """
