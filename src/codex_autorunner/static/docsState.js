@@ -49,6 +49,7 @@ export function createChatState() {
     eventController: null,
     eventTurnId: null,
     eventThreadId: null,
+    eventAgent: null,
     eventItemIndex: {},
     eventError: "",
   };
@@ -126,6 +127,7 @@ export function resetChatEvents(state, { preserve = false } = {}) {
   state.eventController = null;
   state.eventTurnId = null;
   state.eventThreadId = null;
+  state.eventAgent = null;
   state.eventItemIndex = {};
   state.eventError = "";
   if (!preserve) {

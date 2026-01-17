@@ -12,12 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Optional, Tuple
 
+from ..agents.opencode.supervisor import OpenCodeSupervisor
 from ..integrations.app_server.client import CodexAppServerError
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from .app_server_events import AppServerEventBuffer
 from .app_server_prompts import build_doc_chat_prompt
 from .app_server_threads import (
     DOC_CHAT_KEY,
+    DOC_CHAT_OPENCODE_KEY,
     DOC_CHAT_PREFIX,
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -47,6 +49,9 @@ class DocChatRequest:
     stream: bool = False
     targets: Optional[tuple[str, ...]] = None
     context_doc: Optional[str] = None
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
 
 
 @dataclass
@@ -149,6 +154,7 @@ class DocChatService:
         app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
         app_server_threads: Optional[AppServerThreadRegistry] = None,
         app_server_events: Optional[AppServerEventBuffer] = None,
+        opencode_supervisor: Optional[OpenCodeSupervisor] = None,
     ):
         self.engine = engine
         self._recent_summary_cache: Optional[str] = None
@@ -161,6 +167,7 @@ class DocChatService:
             default_app_server_threads_path(self.engine.repo_root)
         )
         self._app_server_events = app_server_events
+        self._opencode_supervisor = opencode_supervisor
         self._lock: Optional[asyncio.Lock] = None
         self._thread_lock = threading.Lock()
         self._active_turn: Optional[ActiveDocChatTurn] = None
@@ -207,6 +214,8 @@ class DocChatService:
         active.interrupt_sent = True
         chat_id = self._chat_id()
         try:
+            if not hasattr(active.client, "turn_interrupt"):
+                return
             await asyncio.wait_for(
                 active.client.turn_interrupt(
                     active.turn_id, thread_id=active.thread_id
@@ -255,6 +264,9 @@ class DocChatService:
             or payload.get("contextDoc")
             or payload.get("viewing")
         )
+        raw_agent = payload.get("agent")
+        raw_model = payload.get("model")
+        raw_reasoning = payload.get("reasoning")
         context_doc: Optional[str] = None
         if isinstance(raw_context, str) and raw_context.strip():
             try:
@@ -294,6 +306,11 @@ class DocChatService:
             stream=stream,
             targets=targets,
             context_doc=context_doc,
+            agent=str(raw_agent).strip() if isinstance(raw_agent, str) else None,
+            model=str(raw_model).strip() if isinstance(raw_model, str) else None,
+            reasoning=(
+                str(raw_reasoning).strip() if isinstance(raw_reasoning, str) else None
+            ),
         )
 
     def repo_blocked_reason(self) -> Optional[str]:
@@ -481,10 +498,19 @@ class DocChatService:
             raise DocChatError("App-server backend is not configured")
         return self._app_server_supervisor
 
-    def _thread_key(self) -> str:
+    def _ensure_opencode(self) -> OpenCodeSupervisor:
+        if self._opencode_supervisor is None:
+            raise DocChatError("OpenCode backend is not configured")
+        return self._opencode_supervisor
+
+    def _thread_key(self, agent: Optional[str]) -> str:
+        if (agent or "").strip().lower() == "opencode":
+            return DOC_CHAT_OPENCODE_KEY
         return DOC_CHAT_KEY
 
-    def _legacy_thread_id(self) -> Optional[str]:
+    def _legacy_thread_id(self, agent: Optional[str]) -> Optional[str]:
+        if (agent or "").strip().lower() == "opencode":
+            return None
         try:
             threads = self._app_server_threads.load()
         except Exception:
@@ -766,10 +792,10 @@ class DocChatService:
             docs, backups, working = self._prepare_docs_for_run(drafts)
             supervisor = self._ensure_app_server()
             client = await supervisor.get_client(self.engine.repo_root)
-            key = self._thread_key()
+            key = self._thread_key(request.agent)
             thread_id = self._app_server_threads.get_thread_id(key)
             if not thread_id:
-                legacy = self._legacy_thread_id()
+                legacy = self._legacy_thread_id(request.agent)
                 if legacy:
                     thread_id = legacy
                     try:
@@ -793,11 +819,17 @@ class DocChatService:
                     raise DocChatError("App-server did not return a thread id")
                 self._app_server_threads.set_thread_id(key, thread_id)
             prompt = self._build_app_server_prompt(request, docs)
+            turn_kwargs: dict[str, Any] = {}
+            if request.model:
+                turn_kwargs["model"] = request.model
+            if request.reasoning:
+                turn_kwargs["effort"] = request.reasoning
             handle = await client.turn_start(
                 thread_id,
                 prompt,
                 approval_policy="on-request",
                 sandbox_policy="dangerFullAccess",
+                **turn_kwargs,
             )
             turn_id = handle.turn_id
             thread_id = handle.thread_id
@@ -867,80 +899,21 @@ class DocChatService:
             if turn_result.errors:
                 raise DocChatError(turn_result.errors[-1])
             output = "\n".join(turn_result.agent_messages).strip()
-            message_text, patch_text_raw = self._split_patch_from_output(output)
-            agent_message = self._parse_agent_message(message_text or output)
-            response_text = message_text.strip() or output.strip() or agent_message
-            updated = dict(drafts)
-            updated_kinds: list[str] = []
-            payloads: dict[str, dict] = {}
-            created_at = now_iso()
-            allowed_kinds = ALLOWED_DOC_KINDS
-            unexpected: list[str] = []
-            config = self._repo_config()
-            for kind in ALLOWED_DOC_KINDS:
-                path = config.doc_path(kind)
-                after = path.read_text(encoding="utf-8")
-                before = working.get(kind, backups.get(kind, ""))
-                if kind not in allowed_kinds:
-                    if after != before:
-                        unexpected.append(kind)
-                    continue
-                if after == before:
-                    continue
-                rel_path = str(path.relative_to(self.engine.repo_root))
-                patch_for_doc = self._build_patch(rel_path, before, after)
-                if not patch_for_doc.strip():
-                    continue
-                base_hash = self._hash_content(backups.get(kind, before))
-                existing = drafts.get(kind)
-                if existing and docs.get(kind, {}).get("source") == "draft":
-                    if existing.base_hash:
-                        base_hash = existing.base_hash
-                updated[kind] = DocChatDraftState(
-                    content=after,
-                    patch=patch_for_doc,
-                    agent_message=agent_message,
-                    created_at=created_at,
-                    base_hash=base_hash,
-                )
-                updated_kinds.append(kind)
-                payloads[kind] = updated[kind].to_dict()
-            if unexpected:
-                raise DocChatError(
-                    "Doc chat updated unexpected docs: " + ", ".join(unexpected)
-                )
-            if patch_text_raw.strip() and not payloads:
-                try:
-                    updated, updated_kinds, payloads = self._apply_patch_to_drafts(
-                        patch_text_raw=patch_text_raw,
-                        drafts=updated,
-                        docs=docs,
-                        agent_message=agent_message,
-                        allowed_kinds=allowed_kinds,
-                    )
-                except PatchError as exc:
-                    raise DocChatError(str(exc)) from exc
-                if not payloads:
-                    raise DocChatError("Doc chat patch did not produce updates")
-            if payloads:
-                self._save_drafts(updated)
-            duration_ms = int((time.time() - started_at) * 1000)
-            self._log(
-                chat_id,
-                "result=success "
-                f"targets={targets_label} path={doc_pointer} "
-                f"duration_ms={duration_ms} "
-                f'message="{message_for_log}" backend=app_server',
+            return self._finalize_doc_chat_output(
+                output=output,
+                drafts=drafts,
+                docs=docs,
+                backups=backups,
+                working=working,
+                started_at=started_at,
+                chat_id=chat_id,
+                targets_label=targets_label,
+                doc_pointer=doc_pointer,
+                message_for_log=message_for_log,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                backend="app_server",
             )
-            return {
-                "status": "ok",
-                "agent_message": agent_message,
-                "message": response_text,
-                "updated": updated_kinds,
-                "drafts": payloads,
-                "thread_id": thread_id,
-                "turn_id": turn_id,
-            }
         except asyncio.TimeoutError:
             duration_ms = int((time.time() - started_at) * 1000)
             self._log(
@@ -994,12 +967,367 @@ class DocChatService:
             if backups:
                 self._restore_docs(backups)
 
+    async def _execute_opencode(
+        self,
+        request: DocChatRequest,
+        *,
+        on_turn_start: Optional[Callable[[str, str], Awaitable[None]]] = None,
+    ) -> dict:
+        chat_id = self._chat_id()
+        started_at = time.time()
+        doc_pointer = self._doc_pointer(request.targets)
+        message_for_log = self._compact_message(request.message)
+        turn_id: Optional[str] = None
+        thread_id: Optional[str] = None
+        targets_label = ",".join(request.targets or ()) or "auto"
+        drafts = self._load_drafts()
+        docs: dict[str, dict[str, str]] = {}
+        backups: dict[str, str] = {}
+        working: dict[str, str] = {}
+        self._log(
+            chat_id,
+            f'start targets={targets_label} path={doc_pointer} message="{message_for_log}"',
+        )
+        try:
+            docs, backups, working = self._prepare_docs_for_run(drafts)
+            supervisor = self._ensure_opencode()
+            client = await supervisor.get_client(self.engine.repo_root)
+            key = self._thread_key(request.agent)
+            thread_id = self._app_server_threads.get_thread_id(key)
+            if thread_id:
+                try:
+                    await client.get_session(thread_id)
+                except Exception:
+                    self._app_server_threads.reset_thread(key)
+                    thread_id = None
+            if not thread_id:
+                session = await client.create_session(
+                    directory=str(self.engine.repo_root)
+                )
+                thread_id = session.get("id") if isinstance(session, dict) else None
+                if not isinstance(thread_id, str) or not thread_id:
+                    raise DocChatError("OpenCode did not return a session id")
+                self._app_server_threads.set_thread_id(key, thread_id)
+            prompt = self._build_app_server_prompt(request, docs)
+            model_payload = self._split_opencode_model(request.model)
+            result = await client.send_message(
+                thread_id,
+                message=prompt,
+                model=model_payload,
+                variant=request.reasoning,
+            )
+            turn_id = self._extract_opencode_turn_id(thread_id, result)
+            active = self._register_active_turn(client, turn_id, thread_id)
+            await self._handle_turn_start(
+                thread_id,
+                turn_id,
+                on_turn_start=on_turn_start,
+            )
+            output_task = asyncio.create_task(
+                self._collect_opencode_output(client, thread_id, active)
+            )
+            timeout_task = asyncio.create_task(asyncio.sleep(DOC_CHAT_TIMEOUT_SECONDS))
+            interrupt_task = asyncio.create_task(active.interrupt_event.wait())
+            try:
+                tasks = {output_task, timeout_task, interrupt_task}
+                done, _pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+                if timeout_task in done:
+                    output_task.add_done_callback(lambda task: task.exception())
+                    raise asyncio.TimeoutError()
+                if interrupt_task in done:
+                    active.interrupted = True
+                    output_task.cancel()
+                    duration_ms = int((time.time() - started_at) * 1000)
+                    self._log(
+                        chat_id,
+                        "result=interrupted "
+                        f"targets={targets_label} path={doc_pointer} "
+                        f"duration_ms={duration_ms} "
+                        f'message="{message_for_log}" backend=opencode',
+                    )
+                    return {
+                        "status": "interrupted",
+                        "detail": "Doc chat interrupted",
+                        "thread_id": thread_id,
+                        "turn_id": turn_id,
+                    }
+                output = await output_task
+            finally:
+                self._clear_active_turn(turn_id)
+                timeout_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await timeout_task
+                interrupt_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await interrupt_task
+            if active.interrupted:
+                duration_ms = int((time.time() - started_at) * 1000)
+                self._log(
+                    chat_id,
+                    "result=interrupted "
+                    f"targets={targets_label} path={doc_pointer} "
+                    f"duration_ms={duration_ms} "
+                    f'message="{message_for_log}" backend=opencode',
+                )
+                return {
+                    "status": "interrupted",
+                    "detail": "Doc chat interrupted",
+                    "thread_id": thread_id,
+                    "turn_id": turn_id,
+                }
+            return self._finalize_doc_chat_output(
+                output=output,
+                drafts=drafts,
+                docs=docs,
+                backups=backups,
+                working=working,
+                started_at=started_at,
+                chat_id=chat_id,
+                targets_label=targets_label,
+                doc_pointer=doc_pointer,
+                message_for_log=message_for_log,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                backend="opencode",
+            )
+        except asyncio.TimeoutError:
+            duration_ms = int((time.time() - started_at) * 1000)
+            self._log(
+                chat_id,
+                "result=error "
+                f"targets={targets_label} path={doc_pointer} duration_ms={duration_ms} "
+                f'message="{message_for_log}" detail="timeout" backend=opencode',
+            )
+            return {
+                "status": "error",
+                "detail": "Doc chat agent timed out",
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+            }
+        except DocChatError as exc:
+            duration_ms = int((time.time() - started_at) * 1000)
+            detail = self._compact_message(str(exc))
+            self._log(
+                chat_id,
+                "result=error "
+                f"targets={targets_label} path={doc_pointer} duration_ms={duration_ms} "
+                f'message="{message_for_log}" detail="{detail}" backend=opencode',
+            )
+            return {
+                "status": "error",
+                "detail": str(exc),
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+            }
+        except Exception as exc:
+            duration_ms = int((time.time() - started_at) * 1000)
+            detail = self._compact_message(str(exc))
+            self._log(
+                chat_id,
+                "result=error "
+                f"targets={targets_label} path={doc_pointer} duration_ms={duration_ms} "
+                f'message="{message_for_log}" detail="{detail}" backend=opencode',
+            )
+            return {
+                "status": "error",
+                "detail": "Doc chat failed",
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+            }
+        finally:
+            if backups:
+                self._restore_docs(backups)
+
+    def _split_opencode_model(self, model: Optional[str]) -> Optional[dict[str, str]]:
+        if not model or "/" not in model:
+            return None
+        provider_id, model_id = model.split("/", 1)
+        provider_id = provider_id.strip()
+        model_id = model_id.strip()
+        if not provider_id or not model_id:
+            return None
+        return {"providerID": provider_id, "modelID": model_id}
+
+    def _extract_opencode_turn_id(self, session_id: str, payload: Any) -> str:
+        if isinstance(payload, dict):
+            for key in ("id", "messageId", "message_id", "turn_id", "turnId"):
+                value = payload.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        return f"{session_id}:{int(time.time() * 1000)}"
+
+    def _extract_opencode_session_id(self, payload: Any) -> Optional[str]:
+        if not isinstance(payload, dict):
+            return None
+        for key in ("sessionID", "sessionId", "session_id"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        session = payload.get("session")
+        if isinstance(session, dict):
+            return self._extract_opencode_session_id(session)
+        return None
+
+    async def _collect_opencode_output(
+        self, client: Any, session_id: str, active: ActiveDocChatTurn
+    ) -> str:
+        text_parts: list[str] = []
+        async for event in client.stream_events(directory=str(self.engine.repo_root)):
+            raw = event.data or ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            event_session_id = self._extract_opencode_session_id(payload)
+            if event_session_id and event_session_id != session_id:
+                continue
+            if event.event == "permission.asked":
+                permission = (
+                    payload.get("permission") if isinstance(payload, dict) else {}
+                )
+                permission_id = None
+                if isinstance(permission, dict):
+                    permission_id = permission.get("id") or permission.get(
+                        "permissionID"
+                    )
+                if isinstance(permission_id, str) and permission_id:
+                    try:
+                        await client.respond_permission(
+                            session_id=session_id,
+                            permission_id=permission_id,
+                            response="reject",
+                        )
+                    except Exception:
+                        pass
+            if event.event == "message.part.updated":
+                properties = (
+                    payload.get("properties") if isinstance(payload, dict) else None
+                )
+                if isinstance(properties, dict):
+                    part = properties.get("part")
+                    delta = properties.get("delta")
+                else:
+                    part = payload.get("part")
+                    delta = payload.get("delta")
+                if isinstance(delta, dict):
+                    delta = delta.get("text")
+                if isinstance(delta, str) and delta:
+                    text_parts.append(delta)
+                    continue
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text")
+                    if isinstance(text, str) and text:
+                        text_parts.append(text)
+            if event.event == "session.idle" and event_session_id == session_id:
+                break
+            if active.interrupted:
+                break
+        return "".join(text_parts).strip()
+
+    def _finalize_doc_chat_output(
+        self,
+        *,
+        output: str,
+        drafts: dict[str, DocChatDraftState],
+        docs: dict[str, dict[str, str]],
+        backups: dict[str, str],
+        working: dict[str, str],
+        started_at: float,
+        chat_id: str,
+        targets_label: str,
+        doc_pointer: str,
+        message_for_log: str,
+        thread_id: Optional[str],
+        turn_id: Optional[str],
+        backend: str,
+    ) -> dict:
+        message_text, patch_text_raw = self._split_patch_from_output(output)
+        agent_message = self._parse_agent_message(message_text or output)
+        response_text = message_text.strip() or output.strip() or agent_message
+        updated = dict(drafts)
+        updated_kinds: list[str] = []
+        payloads: dict[str, dict] = {}
+        created_at = now_iso()
+        allowed_kinds = ALLOWED_DOC_KINDS
+        unexpected: list[str] = []
+        config = self._repo_config()
+        for kind in ALLOWED_DOC_KINDS:
+            path = config.doc_path(kind)
+            after = path.read_text(encoding="utf-8")
+            before = working.get(kind, backups.get(kind, ""))
+            if kind not in allowed_kinds:
+                if after != before:
+                    unexpected.append(kind)
+                continue
+            if after == before:
+                continue
+            rel_path = str(path.relative_to(self.engine.repo_root))
+            patch_for_doc = self._build_patch(rel_path, before, after)
+            if not patch_for_doc.strip():
+                continue
+            base_hash = self._hash_content(backups.get(kind, before))
+            existing = drafts.get(kind)
+            if existing and docs.get(kind, {}).get("source") == "draft":
+                if existing.base_hash:
+                    base_hash = existing.base_hash
+            updated[kind] = DocChatDraftState(
+                content=after,
+                patch=patch_for_doc,
+                agent_message=agent_message,
+                created_at=created_at,
+                base_hash=base_hash,
+            )
+            updated_kinds.append(kind)
+            payloads[kind] = updated[kind].to_dict()
+        if unexpected:
+            raise DocChatError(
+                "Doc chat updated unexpected docs: " + ", ".join(unexpected)
+            )
+        if patch_text_raw.strip() and not payloads:
+            try:
+                updated, updated_kinds, payloads = self._apply_patch_to_drafts(
+                    patch_text_raw=patch_text_raw,
+                    drafts=updated,
+                    docs=docs,
+                    agent_message=agent_message,
+                    allowed_kinds=allowed_kinds,
+                )
+            except PatchError as exc:
+                raise DocChatError(str(exc)) from exc
+            if not payloads:
+                raise DocChatError("Doc chat patch did not produce updates")
+        if payloads:
+            self._save_drafts(updated)
+        duration_ms = int((time.time() - started_at) * 1000)
+        self._log(
+            chat_id,
+            "result=success "
+            f"targets={targets_label} path={doc_pointer} "
+            f"duration_ms={duration_ms} "
+            f'message="{message_for_log}" backend={backend}',
+        )
+        return {
+            "status": "ok",
+            "agent_message": agent_message,
+            "message": response_text,
+            "updated": updated_kinds,
+            "drafts": payloads,
+            "thread_id": thread_id,
+            "turn_id": turn_id,
+        }
+
     async def execute(
         self,
         request: DocChatRequest,
         *,
         on_turn_start: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> dict:
+        if (request.agent or "").strip().lower() == "opencode":
+            if on_turn_start is None:
+                return await self._execute_opencode(request)
+            return await self._execute_opencode(request, on_turn_start=on_turn_start)
         if on_turn_start is None:
             return await self._execute_app_server(request)
         return await self._execute_app_server(request, on_turn_start=on_turn_start)
@@ -1017,6 +1345,12 @@ class DocChatService:
                             "turn_id": turn_id,
                             "targets": list(request.targets or ()),
                         }
+                        if request.agent:
+                            payload["agent"] = request.agent
+                        if request.model:
+                            payload["model"] = request.model
+                        if request.reasoning:
+                            payload["reasoning"] = request.reasoning
                         if turn_queue.full():
                             return
                         await turn_queue.put(payload)

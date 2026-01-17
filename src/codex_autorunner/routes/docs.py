@@ -232,14 +232,25 @@ def build_docs_routes() -> APIRouter:
         force = False
         spec_override: Optional[Path] = None
         message: Optional[str] = None
+        agent: Optional[str] = None
+        model: Optional[str] = None
+        reasoning: Optional[str] = None
         if payload:
             force = payload.force
             if payload.spec_path:
                 spec_override = Path(str(payload.spec_path))
             message = payload.message
+            agent = payload.agent
+            model = payload.model
+            reasoning = payload.reasoning
         try:
             docs = await spec_ingest.execute(
-                force=force, spec_path=spec_override, message=message
+                force=force,
+                spec_path=spec_override,
+                message=message,
+                agent=agent,
+                model=model,
+                reasoning=reasoning,
             )
         except SpecIngestError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -13,7 +13,7 @@ from .config import (
 TRUNCATION_MARKER = "...[truncated]"
 
 
-DOC_CHAT_APP_SERVER_TEMPLATE = """You are Codex, an autonomous coding assistant helping maintain the work docs for this repository.
+DOC_CHAT_APP_SERVER_TEMPLATE = """You are an autonomous coding assistant helping maintain the work docs for this repository.
 
 Instructions:
 - Use the base doc content below. Drafts (if present) are the authoritative base.
@@ -38,7 +38,7 @@ User request:
 """
 
 
-SPEC_INGEST_APP_SERVER_TEMPLATE = """You are Codex preparing work docs (TODO/PROGRESS/OPINIONS) from the SPEC.
+SPEC_INGEST_APP_SERVER_TEMPLATE = """You are preparing work docs (TODO/PROGRESS/OPINIONS) from the SPEC.
 
 SPEC path: {spec_path}
 TODO path: {todo_path}
@@ -58,7 +58,7 @@ User request:
 """
 
 
-SNAPSHOT_APP_SERVER_TEMPLATE = """You are Codex generating a compact Markdown repo snapshot meant to be pasted into another LLM chat.
+SNAPSHOT_APP_SERVER_TEMPLATE = """You are generating a compact Markdown repo snapshot meant to be pasted into another LLM chat.
 
 Snapshot path: {snapshot_path}
 
@@ -92,7 +92,7 @@ Inputs:
 """
 
 
-AUTORUNNER_APP_SERVER_TEMPLATE = """You are Codex, an autonomous coding assistant operating on a git repository.
+AUTORUNNER_APP_SERVER_TEMPLATE = """You are an autonomous coding assistant operating on a git repository.
 
 Work docs (read from disk as needed):
 - TODO: {todo_path}

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from ..codex_cli import extract_flag_value
+from ..codex_cli import apply_codex_options, extract_flag_value, supports_reasoning
 from ..core.locks import process_alive, read_lock_info
 from ..core.state import load_state
 
@@ -35,7 +35,13 @@ def _extract_bypass_flag(args: list[str]) -> tuple[str, list[str]]:
     return chosen or "--yolo", filtered
 
 
-def build_codex_terminal_cmd(engine, *, resume_mode: bool) -> list[str]:
+def build_codex_terminal_cmd(
+    engine,
+    *,
+    resume_mode: bool,
+    model: Optional[str] = None,
+    reasoning: Optional[str] = None,
+) -> list[str]:
     """
     Build the subprocess argv for launching the Codex interactive CLI inside a PTY.
     """
@@ -43,18 +49,36 @@ def build_codex_terminal_cmd(engine, *, resume_mode: bool) -> list[str]:
         list(engine.config.codex_terminal_args)
     )
     if resume_mode:
-        return [
+        cmd = [
             engine.config.codex_binary,
             bypass_flag,
             "resume",
             *terminal_args,
         ]
+        return apply_codex_options(
+            cmd,
+            model=model,
+            reasoning=reasoning,
+            supports_reasoning=supports_reasoning(engine.config.codex_binary),
+        )
 
     cmd = [
         engine.config.codex_binary,
         bypass_flag,
         *terminal_args,
     ]
+    return apply_codex_options(
+        cmd,
+        model=model,
+        reasoning=reasoning,
+        supports_reasoning=supports_reasoning(engine.config.codex_binary),
+    )
+
+
+def build_opencode_terminal_cmd(model: Optional[str] = None) -> list[str]:
+    cmd = ["opencode"]
+    if model:
+        cmd.extend(["--model", model])
     return cmd
 
 

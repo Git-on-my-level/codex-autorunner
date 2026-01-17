@@ -15,8 +15,18 @@ APP_SERVER_THREADS_NOTICE_SUFFIX = ".corrupt.json"
 DOC_CHAT_KINDS = ("todo", "progress", "opinions", "spec", "summary")
 DOC_CHAT_PREFIX = "doc_chat."
 DOC_CHAT_KEY = "doc_chat"
+DOC_CHAT_OPENCODE_KEY = "doc_chat.opencode"
+DOC_CHAT_OPENCODE_PREFIX = "doc_chat.opencode."
 DOC_CHAT_KEYS = {DOC_CHAT_KEY} | {f"{DOC_CHAT_PREFIX}{kind}" for kind in DOC_CHAT_KINDS}
-FEATURE_KEYS = DOC_CHAT_KEYS | {"spec_ingest", "autorunner"}
+DOC_CHAT_KEYS = DOC_CHAT_KEYS | {
+    DOC_CHAT_OPENCODE_KEY,
+    *(f"{DOC_CHAT_OPENCODE_PREFIX}{kind}" for kind in DOC_CHAT_KINDS),
+}
+FEATURE_KEYS = DOC_CHAT_KEYS | {
+    "spec_ingest",
+    "spec_ingest.opencode",
+    "autorunner",
+}
 
 
 def default_app_server_threads_path(repo_root: Path) -> Path:

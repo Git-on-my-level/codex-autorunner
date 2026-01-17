@@ -48,6 +48,7 @@ import {
 } from "./docsSpecIngest.js";
 import { initDocVoice } from "./docsVoice.js";
 import { loadSnapshot, runSnapshot } from "./docsSnapshot.js";
+import { initAgentControls } from "./agentControls.js";
 import {
   downloadThreadRegistryBackup,
   loadThreadRegistryStatus,
@@ -218,6 +219,11 @@ export function initDocs() {
   }
 
   initDocVoice();
+  initAgentControls({
+    agentSelect: chatUI.agentSelect,
+    modelSelect: chatUI.modelSelect,
+    reasoningSelect: chatUI.reasoningSelect,
+  });
   loadThreadRegistryStatus();
   refreshAllDrafts();
   reloadSpecIngestPatch(true);

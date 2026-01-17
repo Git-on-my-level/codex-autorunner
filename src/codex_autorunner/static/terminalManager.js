@@ -1,4 +1,10 @@
 import { api, flash, buildWsUrl, getAuthToken, isMobileViewport } from "./utils.js";
+import {
+  getSelectedAgent,
+  getSelectedModel,
+  getSelectedReasoning,
+  initAgentControls,
+} from "./agentControls.js";
 
 function base64UrlEncode(value) {
   if (!value) return null;
@@ -293,6 +299,9 @@ export class TerminalManager {
     this.disconnectBtn = document.getElementById("terminal-disconnect");
     this.resumeBtn = document.getElementById("terminal-resume");
     this.jumpBottomBtn = document.getElementById("terminal-jump-bottom");
+    this.agentSelect = document.getElementById("terminal-agent-select");
+    this.modelSelect = document.getElementById("terminal-model-select");
+    this.reasoningSelect = document.getElementById("terminal-reasoning-select");
 
     if (!this.statusEl || !this.connectBtn || !this.disconnectBtn || !this.resumeBtn) {
       return;
@@ -322,6 +331,11 @@ export class TerminalManager {
     this._initMobileControls();
     this._initTerminalVoice();
     this._initTextInputPanel();
+    initAgentControls({
+      agentSelect: this.agentSelect,
+      modelSelect: this.modelSelect,
+      reasoningSelect: this.reasoningSelect,
+    });
 
     subscribe("state:update", (state) => {
       if (
@@ -2121,6 +2135,14 @@ export class TerminalManager {
     const queryParams = new URLSearchParams();
     if (mode) queryParams.append("mode", mode);
     if (this.terminalDebug) queryParams.append("terminal_debug", "1");
+    if (!isAttach) {
+      const selectedAgent = getSelectedAgent();
+      const selectedModel = getSelectedModel(selectedAgent);
+      const selectedReasoning = getSelectedReasoning(selectedAgent);
+      if (selectedAgent) queryParams.append("agent", selectedAgent);
+      if (selectedModel) queryParams.append("model", selectedModel);
+      if (selectedReasoning) queryParams.append("reasoning", selectedReasoning);
+    }
 
     const savedSessionId = this._getSavedSessionId();
     this._logTerminalDebug("connect", {

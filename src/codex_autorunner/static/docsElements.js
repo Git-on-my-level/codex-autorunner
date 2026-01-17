@@ -72,6 +72,15 @@ export const chatUI = {
   hint: /** @type {HTMLElement|null} */ (
     document.getElementById("doc-chat-hint")
   ),
+  agentSelect: /** @type {HTMLSelectElement|null} */ (
+    document.getElementById("doc-agent-select")
+  ),
+  modelSelect: /** @type {HTMLSelectElement|null} */ (
+    document.getElementById("doc-model-select")
+  ),
+  reasoningSelect: /** @type {HTMLSelectElement|null} */ (
+    document.getElementById("doc-reasoning-select")
+  ),
 };
 
 export const specIssueUI = {

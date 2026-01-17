@@ -19,6 +19,11 @@ import { renderChat } from "./docChatRender.js";
 import { performDocChatRequest } from "./docChatStream.js";
 import { applyDocUpdateFromChat } from "./docsDocUpdates.js";
 import { autoResizeTextarea, getDocTextarea, syncDocEditor } from "./docsUi.js";
+import {
+  getSelectedAgent,
+  getSelectedModel,
+  getSelectedReasoning,
+} from "./agentControls.js";
 
 function markChatError(state, entry, message) {
   entry.status = "error";
@@ -107,6 +112,9 @@ export async function sendDocChat() {
     id: `${Date.now()}`,
     prompt: message,
     viewing,
+    agent: getSelectedAgent(),
+    model: getSelectedModel(),
+    reasoning: getSelectedReasoning(),
     response: "",
     status: "running",
     time: Date.now(),

@@ -22,6 +22,7 @@ from ..web.static_assets import index_response_headers, render_index_html
 from .shared import (
     SSE_HEADERS,
     build_codex_terminal_cmd,
+    build_opencode_terminal_cmd,
     log_stream,
     resolve_runner_status,
     state_stream,
@@ -150,6 +151,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         attach_only = mode == "attach"
         terminal_debug_param = (ws.query_params.get("terminal_debug") or "").strip()
         terminal_debug = terminal_debug_param.lower() in {"1", "true", "yes", "on"}
+        agent = (ws.query_params.get("agent") or "codex").strip().lower()
+        model = (ws.query_params.get("model") or "").strip() or None
+        reasoning = (ws.query_params.get("reasoning") or "").strip() or None
         session_id = None
         active_session: Optional[ActiveSession] = None
         seen_update_interval = 5.0
@@ -243,7 +247,15 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         _mark_dirty()
                 session_id = str(uuid.uuid4())
                 resume_mode = mode == "resume"
-                cmd = build_codex_terminal_cmd(engine, resume_mode=resume_mode)
+                if agent == "opencode":
+                    cmd = build_opencode_terminal_cmd(model)
+                else:
+                    cmd = build_codex_terminal_cmd(
+                        engine,
+                        resume_mode=resume_mode,
+                        model=model,
+                        reasoning=reasoning,
+                    )
                 try:
                     pty = PTYSession(cmd, cwd=str(engine.repo_root))
                     active_session = ActiveSession(
@@ -259,11 +271,12 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     repo_to_session[repo_path] = session_id
                     _mark_dirty()
                 except FileNotFoundError:
+                    binary = cmd[0] if cmd else "codex"
                     await ws.send_text(
                         json.dumps(
                             {
                                 "type": "error",
-                                "message": f"Codex binary not found: {engine.config.codex_binary}",
+                                "message": f"Agent binary not found: {binary}",
                             }
                         )
                     )

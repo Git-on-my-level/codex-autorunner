@@ -342,6 +342,20 @@
             </div>
             <div class="doc-chat-panel compose-panel">
               <div class="doc-chat-compose">
+                <div class="agent-controls doc-agent-controls">
+                  <label>
+                    Agent
+                    <select id="doc-agent-select"></select>
+                  </label>
+                  <label>
+                    Model
+                    <select id="doc-model-select"></select>
+                  </label>
+                  <label>
+                    Reasoning
+                    <select id="doc-reasoning-select"></select>
+                  </label>
+                </div>
                 <div class="doc-chat-input-row compose-row">
                   <textarea
                     id="doc-chat-input"
@@ -455,6 +469,20 @@
             <button id="terminal-connect" class="primary sm">New</button>
             <button id="terminal-resume" class="ghost sm">Resume</button>
             <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
+            <div class="agent-controls terminal-agent-controls">
+              <label>
+                Agent
+                <select id="terminal-agent-select"></select>
+              </label>
+              <label>
+                Model
+                <select id="terminal-model-select"></select>
+              </label>
+              <label>
+                Reasoning
+                <select id="terminal-reasoning-select"></select>
+              </label>
+            </div>
             <button
               id="terminal-text-input-toggle"
               class="ghost sm"
@@ -471,7 +499,7 @@
           </div>
           <div id="terminal-container" class="terminal-container">
             <div class="terminal-overlay" id="terminal-overlay">
-              <p class="muted">Press New or Resume to launch Codex TUI</p>
+              <p class="muted">Press New or Resume to launch the agent TUI</p>
             </div>
             <button id="terminal-jump-bottom" class="terminal-jump-btn hidden" title="Jump to latest">
               ↓ Latest

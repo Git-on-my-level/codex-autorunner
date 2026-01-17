@@ -4,6 +4,11 @@ import { parseSpecIngestPayload } from "./docsParse.js";
 import { getActiveDoc, docsState } from "./docsState.js";
 import { specIngestUI } from "./docsElements.js";
 import { renderDiffHtml, updateDocVisibility, autoResizeTextarea } from "./docsUi.js";
+import {
+  getSelectedAgent,
+  getSelectedModel,
+  getSelectedReasoning,
+} from "./agentControls.js";
 
 export function renderSpecIngestPatch() {
   if (!specIngestUI.patchMain) return;
@@ -67,7 +72,12 @@ export async function ingestSpec() {
   try {
     const data = await api("/api/ingest-spec", {
       method: "POST",
-      body: { force: needsForce },
+      body: {
+        force: needsForce,
+        agent: getSelectedAgent(),
+        model: getSelectedModel(),
+        reasoning: getSelectedReasoning(),
+      },
       signal: docsState.specIngestState.controller.signal,
     });
     const parsed = parseSpecIngestPayload(data);
@@ -130,7 +140,13 @@ export async function continueSpecIngest() {
   try {
     const data = await api("/api/ingest-spec", {
       method: "POST",
-      body: { force: needsForce, message },
+      body: {
+        force: needsForce,
+        message,
+        agent: getSelectedAgent(),
+        model: getSelectedModel(),
+        reasoning: getSelectedReasoning(),
+      },
       signal: docsState.specIngestState.controller.signal,
     });
     const parsed = parseSpecIngestPayload(data);

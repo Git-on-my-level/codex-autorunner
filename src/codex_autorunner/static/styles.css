@@ -1935,6 +1935,44 @@ button.icon-btn {
   gap: 2px;
 }
 
+.agent-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.agent-controls select {
+  min-height: 26px;
+  padding: 4px 6px;
+  font-size: 11px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+}
+
+.agent-controls select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.doc-agent-controls {
+  margin-bottom: 4px;
+}
+
+.terminal-agent-controls {
+  margin-left: 4px;
+}
+
 .voice-button {
   border: 1px solid var(--border);
   background: var(--panel);

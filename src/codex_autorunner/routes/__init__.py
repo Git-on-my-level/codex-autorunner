@@ -3,6 +3,7 @@ Modular API routes for the codex-autorunner server.
 
 This package splits the monolithic api_routes.py into focused modules:
 - base: Index, state streaming, and general endpoints
+- agents: Agent harness models and event streaming
 - app_server: App-server thread registry endpoints
 - docs: Document management (read/write) and chat
 - github: GitHub integration endpoints
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
+from .agents import build_agents_routes
 from .app_server import build_app_server_routes
 from .base import build_base_routes
 from .docs import build_docs_routes
@@ -45,6 +47,7 @@ def build_repo_router(static_dir: Path) -> APIRouter:
 
     # Include all route modules
     router.include_router(build_base_routes(static_dir))
+    router.include_router(build_agents_routes())
     router.include_router(build_app_server_routes())
     router.include_router(build_docs_routes())
     router.include_router(build_github_routes())

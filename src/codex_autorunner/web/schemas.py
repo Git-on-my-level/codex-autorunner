@@ -64,6 +64,9 @@ class DocChatPayload(Payload):
     stream: bool = False
     targets: Optional[List[str]] = None
     target: Optional[str] = None
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
     context_doc: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("context_doc", "contextDoc", "viewing"),
@@ -74,6 +77,9 @@ class IngestSpecRequest(Payload):
     force: bool = False
     spec_path: Optional[str] = None
     message: Optional[str] = None
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
 
 
 class AppServerThreadResetRequest(Payload):

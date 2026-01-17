@@ -14,6 +14,11 @@ import {
 import { applyDraftUpdates } from "./docsDrafts.js";
 import { renderChat, updatePatchPreviewFromDraft } from "./docChatRender.js";
 import { applyAppServerEvent, extractOutputDelta, renderChatEvents } from "./docChatEvents.js";
+import {
+  getSelectedAgent,
+  getSelectedModel,
+  getSelectedReasoning,
+} from "./agentControls.js";
 
 export async function performDocChatRequest(entry, state) {
   const endpoint = resolvePath("/api/docs/chat");
@@ -25,6 +30,15 @@ export async function performDocChatRequest(entry, state) {
     headers.Authorization = `Bearer ${token}`;
   }
   const payload = { message: entry.prompt, stream: true };
+  payload.agent = entry.agent || getSelectedAgent();
+  const selectedModel = entry.model || getSelectedModel(payload.agent);
+  const selectedReasoning = entry.reasoning || getSelectedReasoning(payload.agent);
+  if (selectedModel) {
+    payload.model = selectedModel;
+  }
+  if (selectedReasoning) {
+    payload.reasoning = selectedReasoning;
+  }
   if (entry.viewing) {
     payload.context_doc = entry.viewing;
   }
@@ -68,6 +82,7 @@ export async function performDocChatRequest(entry, state) {
 export async function startDocChatEventStream(payload) {
   const threadId = payload?.thread_id || payload?.threadId;
   const turnId = payload?.turn_id || payload?.turnId;
+  const agent = payload?.agent || getSelectedAgent();
   if (!threadId || !turnId) return;
   const state = getChatState();
   if (state.eventTurnId === turnId && state.eventThreadId === threadId) {
@@ -76,11 +91,12 @@ export async function startDocChatEventStream(payload) {
   resetChatEvents(state);
   state.eventTurnId = turnId;
   state.eventThreadId = threadId;
+  state.eventAgent = agent;
   state.eventController = new AbortController();
   renderChatEvents(state);
 
   const endpoint = resolvePath(
-    `/api/app-server/turns/${encodeURIComponent(turnId)}/events`
+    `/api/agents/${encodeURIComponent(agent)}/turns/${encodeURIComponent(turnId)}/events`
   );
   const url = `${endpoint}?thread_id=${encodeURIComponent(threadId)}`;
   const headers = /** @type {Record<string, string>} */ ({});
