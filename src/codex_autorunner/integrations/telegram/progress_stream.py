@@ -164,14 +164,14 @@ def render_progress_text(
             actions = actions[-tracker.max_actions :]
     lines = [header]
     for action in actions:
-        icon = STATUS_ICONS.get(action.status, STATUS_ICONS["running"])
         if action is thinking_action:
             if len(lines) > 1 and lines[-1] != "":
                 lines.append("")
-            label = "🧠 **Thinking summary**"
+            icon = "🧠"
+            lines.append(f"{icon} {action.text}")
         else:
-            label = action.label
-        lines.append(f"{icon} {label}: {action.text}")
+            icon = STATUS_ICONS.get(action.status, STATUS_ICONS["running"])
+            lines.append(f"{icon} {action.label}: {action.text}")
     message = "\n".join(lines)
     if len(message) <= max_length:
         return message
