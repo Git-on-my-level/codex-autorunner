@@ -1492,6 +1492,16 @@ def create_hub_app(
         _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
+    @app.post("/hub/repos/{repo_id}/sync-main")
+    async def sync_repo_main(repo_id: str):
+        safe_log(app.state.logger, logging.INFO, f"Hub sync main {repo_id}")
+        try:
+            snapshot = await asyncio.to_thread(context.supervisor.sync_main, repo_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _refresh_mounts([snapshot])
+        return _add_mount_info(snapshot.to_dict(context.config.root))
+
     @app.get("/", include_in_schema=False)
     def hub_index():
         index_path = context.static_dir / "index.html"
