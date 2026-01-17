@@ -36,6 +36,7 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 
 ## Git commits
 - Use a 30 second (or longer) timeout for `git commit` commands so pre-commit hooks can finish.
+- Avoid `--no-verify` and always err on the side of fixing things; if you must use it, ask the user first; if the fix is simple and non-harmful, make the fix and include it in your changes.
 
 ## Releases
 - Release workflow details live in `docs/ops/release.md`.
