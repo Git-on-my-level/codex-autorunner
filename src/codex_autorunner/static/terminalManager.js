@@ -403,15 +403,18 @@ export class TerminalManager {
   _renderStatus() {
     if (!this.statusEl) return;
     const sessionId = this.currentSessionId;
+    const isConnected = this.statusBase === "Connected";
+    this.statusEl.classList.toggle("connected", isConnected);
     if (!sessionId) {
       this.statusEl.textContent = this.statusBase;
+      this.statusEl.title = "";
       return;
     }
+    const shortId = sessionId.substring(0, 8);
     const repoLabel = this._getRepoLabel();
-    const suffix = repoLabel
-      ? ` (session ${sessionId} · repo ${repoLabel})`
-      : ` (session ${sessionId})`;
+    const suffix = repoLabel ? ` ${shortId} · ${repoLabel}` : ` ${shortId}`;
     this.statusEl.textContent = `${this.statusBase}${suffix}`;
+    this.statusEl.title = `Session: ${sessionId}`;
   }
 
   _getRepoLabel() {

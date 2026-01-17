@@ -1935,42 +1935,181 @@ button.icon-btn {
   gap: 2px;
 }
 
-.agent-controls {
+/* Shared agent controls styling (docs + terminal) */
+.doc-agent-controls {
   display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
   flex-wrap: wrap;
+}
+
+.doc-agent-controls select {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 140px;
+}
+
+.doc-agent-controls select:hover {
+  border-color: var(--accent);
+}
+
+.doc-agent-controls select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(108, 245, 216, 0.15);
+}
+
+.doc-agent-controls select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== TERMINAL TOOLBAR ===== */
+.terminal-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+}
+
+.terminal-toolbar-row {
+  display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.agent-controls label {
+.terminal-toolbar-main {
+  flex-wrap: nowrap;
+}
+
+.terminal-status {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.terminal-status.connected {
+  color: var(--accent);
+}
+
+.terminal-actions {
   display: flex;
-  align-items: center;
   gap: 6px;
-  font-size: 10px;
-  color: var(--muted);
+  flex-shrink: 0;
 }
 
-.agent-controls select {
-  min-height: 26px;
-  padding: 4px 6px;
-  font-size: 11px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-}
-
-.agent-controls select:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.doc-agent-controls {
-  margin-bottom: 4px;
+.terminal-toolbar-config {
+  flex-wrap: nowrap;
 }
 
 .terminal-agent-controls {
-  margin-left: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.terminal-agent-controls select {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 180px;
+}
+
+.terminal-agent-controls select:hover {
+  border-color: var(--accent);
+}
+
+.terminal-agent-controls select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(108, 245, 216, 0.15);
+}
+
+.terminal-agent-controls select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.terminal-toolbar-extras {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.terminal-text-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 4px 8px !important;
+}
+
+.terminal-text-toggle svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.terminal-text-toggle-label {
+  display: none;
+}
+
+.terminal-text-toggle[aria-expanded="true"] {
+  background: rgba(108, 245, 216, 0.12);
+  border-color: rgba(108, 245, 216, 0.3);
+  color: var(--accent);
+}
+
+.terminal-toolbar .terminal-voice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.terminal-toolbar .terminal-voice .voice-button {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+
+.terminal-toolbar .terminal-voice .voice-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.terminal-toolbar .voice-status {
+  white-space: nowrap;
+  font-size: 10px;
 }
 
 .voice-button {
@@ -3074,11 +3213,6 @@ label {
 }
 
 /* ===== TERMINAL TEXT INPUT (optional panel) ===== */
-#terminal-text-input-toggle[aria-expanded="true"] {
-  background: rgba(108, 245, 216, 0.12);
-  border-color: rgba(108, 245, 216, 0.3);
-  color: var(--accent);
-}
 
 #terminal.composer-sticky .terminal-text-input {
   position: sticky;
@@ -4040,18 +4174,58 @@ button.loading::after {
     min-height: 0;
   }
 
-  #terminal .inline-toolbar {
-    flex-wrap: wrap;
+  /* Terminal toolbar mobile - clean two-row layout */
+  #terminal .terminal-toolbar {
+    padding: 6px 8px;
+    gap: 6px;
+    margin: 0 -4px 4px;
+    border-radius: 0;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  #terminal .terminal-toolbar-row {
     gap: 6px;
   }
 
-  #terminal-status {
-    flex: 1 0 100%;
+  #terminal .terminal-status {
+    font-size: 11px;
   }
 
-  #terminal .inline-toolbar button {
-    min-height: 36px;
-    padding: 8px 10px;
+  #terminal .terminal-actions {
+    gap: 4px;
+  }
+
+  #terminal .terminal-actions button {
+    min-height: 32px;
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+
+  #terminal .terminal-agent-controls {
+    gap: 4px;
+  }
+
+  #terminal .terminal-agent-controls select {
+    min-height: 32px;
+    padding: 4px 6px;
+    font-size: 11px;
+    max-width: none;
+  }
+
+  #terminal .terminal-toolbar-extras {
+    gap: 4px;
+  }
+
+  #terminal .terminal-text-toggle {
+    min-height: 32px;
+    min-width: 32px;
+    padding: 6px !important;
+  }
+
+  #terminal .terminal-toolbar .terminal-voice {
+    display: none;
   }
 
   #terminal.text-input-open .terminal-container {
@@ -4227,7 +4401,8 @@ button.loading::after {
   }
   
   /* Hide terminal voice from toolbar on mobile - it's in the mobile controls */
-  .inline-toolbar .terminal-voice {
+  .inline-toolbar .terminal-voice,
+  .terminal-toolbar .terminal-voice {
     display: none;
   }
   
@@ -4396,6 +4571,18 @@ button.loading::after {
   /* Chat panel - mobile meta/response sizing */
   .doc-chat-compose {
     gap: 2px;
+  }
+
+  .doc-agent-controls {
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+
+  .doc-agent-controls select {
+    min-height: 30px;
+    padding: 4px 6px;
+    font-size: 11px;
+    max-width: none;
   }
 
   .doc-chat-meta {

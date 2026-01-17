@@ -40,6 +40,11 @@ def inject_flag(
         except ValueError:
             continue
     if insert_at is None:
+        # `args` is sometimes a full argv that includes the binary at index 0,
+        # e.g. ["codex", "--yolo", ...]. In that case, never prepend flags before
+        # the binary or we'll turn argv[0] into e.g. "--model" and crash at spawn.
+        if args_list and not args_list[0].startswith("-"):
+            return [args_list[0], flag, value] + args_list[1:]
         return [flag, value] + args_list
     return args_list[:insert_at] + [flag, value] + args_list[insert_at:]
 

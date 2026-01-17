@@ -342,19 +342,10 @@
             </div>
             <div class="doc-chat-panel compose-panel">
               <div class="doc-chat-compose">
-                <div class="agent-controls doc-agent-controls">
-                  <label>
-                    Agent
-                    <select id="doc-agent-select"></select>
-                  </label>
-                  <label>
-                    Model
-                    <select id="doc-model-select"></select>
-                  </label>
-                  <label>
-                    Reasoning
-                    <select id="doc-reasoning-select"></select>
-                  </label>
+                <div class="doc-agent-controls">
+                  <select id="doc-agent-select" title="Agent"></select>
+                  <select id="doc-model-select" title="Model"></select>
+                  <select id="doc-reasoning-select" title="Reasoning"></select>
                 </div>
                 <div class="doc-chat-input-row compose-row">
                   <textarea
@@ -464,37 +455,38 @@
         </section>
 
         <section id="terminal" class="panel">
-          <div class="inline-toolbar">
-            <span id="terminal-status" class="muted">Disconnected</span>
-            <button id="terminal-connect" class="primary sm">New</button>
-            <button id="terminal-resume" class="ghost sm">Resume</button>
-            <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
-            <div class="agent-controls terminal-agent-controls">
-              <label>
-                Agent
-                <select id="terminal-agent-select"></select>
-              </label>
-              <label>
-                Model
-                <select id="terminal-model-select"></select>
-              </label>
-              <label>
-                Reasoning
-                <select id="terminal-reasoning-select"></select>
-              </label>
+          <div class="terminal-toolbar">
+            <div class="terminal-toolbar-row terminal-toolbar-main">
+              <span id="terminal-status" class="terminal-status muted">Disconnected</span>
+              <div class="terminal-actions">
+                <button id="terminal-connect" class="primary sm">New</button>
+                <button id="terminal-resume" class="ghost sm">Resume</button>
+                <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
+              </div>
             </div>
-            <button
-              id="terminal-text-input-toggle"
-              class="ghost sm"
-              type="button"
-              aria-controls="terminal-text-input"
-              aria-expanded="false"
-            >
-              Text input
-            </button>
-            <div class="terminal-voice">
-              <button id="terminal-voice" class="ghost sm voice-button" title="Hold to talk"></button>
-              <span class="muted small hidden voice-status" id="terminal-voice-status"></span>
+            <div class="terminal-toolbar-row terminal-toolbar-config">
+              <div class="terminal-agent-controls">
+                <select id="terminal-agent-select" title="Agent"></select>
+                <select id="terminal-model-select" title="Model"></select>
+                <select id="terminal-reasoning-select" title="Reasoning"></select>
+              </div>
+              <div class="terminal-toolbar-extras">
+                <button
+                  id="terminal-text-input-toggle"
+                  class="ghost sm terminal-text-toggle"
+                  type="button"
+                  aria-controls="terminal-text-input"
+                  aria-expanded="false"
+                  title="Text input"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="7" y1="8" x2="13" y2="8"/><line x1="7" y1="16" x2="15" y2="16"/></svg>
+                  <span class="terminal-text-toggle-label">Text</span>
+                </button>
+                <div class="terminal-voice">
+                  <button id="terminal-voice" class="ghost sm voice-button" title="Hold to talk"></button>
+                  <span class="muted small hidden voice-status" id="terminal-voice-status"></span>
+                </div>
+              </div>
             </div>
           </div>
           <div id="terminal-container" class="terminal-container">
