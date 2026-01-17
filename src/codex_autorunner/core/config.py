@@ -64,14 +64,6 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         },
         "opencode": {
             "binary": "opencode",
-            "serve_command": [
-                "opencode",
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ],
         },
     },
     "prompt": {
@@ -319,14 +311,6 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         },
         "opencode": {
             "binary": "opencode",
-            "serve_command": [
-                "opencode",
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ],
         },
     },
     "terminal": {

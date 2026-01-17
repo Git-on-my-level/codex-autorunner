@@ -8,7 +8,6 @@ const STORAGE_KEYS = {
 
 const FALLBACK_AGENTS = [
   { id: "codex", name: "Codex" },
-  { id: "opencode", name: "OpenCode" },
 ];
 
 const controls = [];

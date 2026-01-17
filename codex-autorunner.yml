@@ -45,13 +45,14 @@ repo:
       binary: codex
     opencode:
       binary: opencode
-      serve_command:
-        - opencode
-        - serve
-        - --hostname
-        - 127.0.0.1
-        - --port
-        - "0"
+      # Optional: override the default serve command derived from binary.
+      # serve_command:
+      #   - /absolute/path/to/opencode
+      #   - serve
+      #   - --hostname
+      #   - 127.0.0.1
+      #   - --port
+      #   - "0"
 
   prompt:
     # Max characters of previous run output to include.
@@ -265,13 +266,14 @@ hub:
       binary: codex
     opencode:
       binary: opencode
-      serve_command:
-        - opencode
-        - serve
-        - --hostname
-        - 127.0.0.1
-        - --port
-        - "0"
+      # Optional: override the default serve command derived from binary.
+      # serve_command:
+      #   - /absolute/path/to/opencode
+      #   - serve
+      #   - --hostname
+      #   - 127.0.0.1
+      #   - --port
+      #   - "0"
 
   hub:
     # Hub repo discovery root.
