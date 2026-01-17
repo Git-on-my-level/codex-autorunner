@@ -232,8 +232,15 @@ def status(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")
     engine = _require_repo_config(repo)
     state = load_state(engine.state_path)
     outstanding, _ = engine.docs.todos()
-    session_id = state.repo_to_session.get(str(engine.repo_root))
+    repo_key = str(engine.repo_root)
+    session_id = state.repo_to_session.get(repo_key) or state.repo_to_session.get(
+        f"{repo_key}:codex"
+    )
+    opencode_session_id = state.repo_to_session.get(f"{repo_key}:opencode")
     session_record = state.sessions.get(session_id) if session_id else None
+    opencode_record = (
+        state.sessions.get(opencode_session_id) if opencode_session_id else None
+    )
     typer.echo(f"Repo: {engine.repo_root}")
     typer.echo(f"Status: {state.status}")
     typer.echo(f"Last run id: {state.last_run_id}")
@@ -241,13 +248,18 @@ def status(repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path")
     typer.echo(f"Last start: {state.last_run_started_at}")
     typer.echo(f"Last finish: {state.last_run_finished_at}")
     typer.echo(f"Runner pid: {state.runner_pid}")
+    if not session_id and not opencode_session_id:
+        typer.echo("Terminal session: none")
     if session_id:
         detail = ""
         if session_record:
             detail = f" (status={session_record.status}, last_seen={session_record.last_seen_at})"
-        typer.echo(f"Terminal session: {session_id}{detail}")
-    else:
-        typer.echo("Terminal session: none")
+        typer.echo(f"Terminal session (codex): {session_id}{detail}")
+    if opencode_session_id and opencode_session_id != session_id:
+        detail = ""
+        if opencode_record:
+            detail = f" (status={opencode_record.status}, last_seen={opencode_record.last_seen_at})"
+        typer.echo(f"Terminal session (opencode): {opencode_session_id}{detail}")
     typer.echo(f"Outstanding TODO items: {len(outstanding)}")
 
 
@@ -340,7 +352,11 @@ def stop_session(
         if not target_id:
             repo_lookup = payload.get("repo_path")
             if repo_lookup:
-                target_id = state.repo_to_session.get(repo_lookup)
+                target_id = (
+                    state.repo_to_session.get(repo_lookup)
+                    or state.repo_to_session.get(f"{repo_lookup}:codex")
+                    or state.repo_to_session.get(f"{repo_lookup}:opencode")
+                )
         if not target_id:
             _raise_exit("Session not found (server unavailable)")
         state.sessions.pop(target_id, None)

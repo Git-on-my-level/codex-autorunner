@@ -450,6 +450,22 @@ def _build_app_context(
     initial_state = load_state(engine.state_path)
     session_registry = dict(initial_state.sessions)
     repo_to_session = dict(initial_state.repo_to_session)
+    # Normalize persisted keys from older/newer versions:
+    # - Prefer bare repo keys for the default "codex" agent.
+    # - Preserve `repo:agent` keys for non-default agents (e.g. opencode).
+    normalized_repo_to_session: dict[str, str] = {}
+    for raw_key, session_id in repo_to_session.items():
+        key = str(raw_key)
+        if ":" in key:
+            repo, agent = key.split(":", 1)
+            agent_norm = agent.strip().lower()
+            if not agent_norm or agent_norm == "codex":
+                key = repo
+            else:
+                key = f"{repo}:{agent_norm}"
+        # Keep the first mapping we see to avoid surprising overrides.
+        normalized_repo_to_session.setdefault(key, session_id)
+    repo_to_session = normalized_repo_to_session
     terminal_sessions: dict = {}
     if session_registry or repo_to_session:
         prune_terminal_registry(

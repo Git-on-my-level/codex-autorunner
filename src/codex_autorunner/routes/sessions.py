@@ -26,6 +26,24 @@ def _relative_repo_path(repo_path: str, repo_root: Path) -> str:
         return path.name
 
 
+def _relative_repo_key(repo_key: str, repo_root: Path) -> str:
+    """
+    Format repo_to_session keys for display in API responses.
+
+    Keys are either:
+    - `<repo_path>` for the default codex agent (backwards compatible)
+    - `<repo_path>:<agent>` for non-default agents (e.g. opencode)
+    """
+    if ":" not in repo_key:
+        return _relative_repo_path(repo_key, repo_root)
+    repo_path, agent = repo_key.split(":", 1)
+    rel = _relative_repo_path(repo_path, repo_root)
+    agent = agent.strip().lower()
+    if not agent or agent == "codex":
+        return rel
+    return f"{rel}:{agent}"
+
+
 def _allow_abs_paths(request: Request, include_abs_paths: bool) -> bool:
     if not include_abs_paths:
         return False
@@ -71,8 +89,8 @@ def build_sessions_routes() -> APIRouter:
             for session_id, record in session_registry.items()
         ]
         repo_to_session_payload = {
-            _relative_repo_path(repo_path, repo_root): session_id
-            for repo_path, session_id in repo_to_session.items()
+            _relative_repo_key(repo_key, repo_root): session_id
+            for repo_key, session_id in repo_to_session.items()
         }
         payload = {
             "sessions": sessions,
@@ -112,9 +130,17 @@ def build_sessions_routes() -> APIRouter:
                     normalized_repo_path = ""
                 else:
                     normalized_repo_path = str(candidate)
-            session_id = repo_to_session.get(
-                normalized_repo_path
-            ) or repo_to_session.get(repo_path)
+            candidates: list[str] = []
+            if normalized_repo_path:
+                candidates.extend(
+                    [normalized_repo_path, f"{normalized_repo_path}:opencode"]
+                )
+            candidates.extend([repo_path, f"{repo_path}:opencode"])
+            for key in candidates:
+                mapped = repo_to_session.get(key)
+                if mapped:
+                    session_id = mapped
+                    break
         if not isinstance(session_id, str) or not session_id:
             raise HTTPException(status_code=404, detail="Session not found")
         if session_id not in session_registry and session_id not in terminal_sessions:

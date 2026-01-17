@@ -163,7 +163,14 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         seen_update_interval = 5.0
 
         def _session_key(repo: str, agent: str) -> str:
-            return f"{repo}:{agent}"
+            normalized = (agent or "").strip().lower()
+            # Backwards-compatible keying:
+            # - Codex sessions continue to use the bare repo path key so existing
+            #   CLI/API callers that only know `repo_path` keep working.
+            # - Other agents (e.g. OpenCode) use a scoped `repo:agent` key.
+            if not normalized or normalized == "codex":
+                return repo
+            return f"{repo}:{normalized}"
 
         client_session_id = ws.query_params.get("session_id")
         close_session_id = ws.query_params.get("close_session_id")
@@ -208,7 +215,11 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         for repo, ag, sid in [
                             (
                                 k.split(":", 1)[0],
-                                k.split(":", 1)[1] if ":" in k else "",
+                                (
+                                    (k.split(":", 1)[1] or "codex")
+                                    if ":" in k
+                                    else "codex"
+                                ),
                                 v,
                             )
                             for k, v in repo_to_session.items()
@@ -264,7 +275,11 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                             for repo, ag, sid in [
                                 (
                                     k.split(":", 1)[0],
-                                    k.split(":", 1)[1] if ":" in k else "",
+                                    (
+                                        (k.split(":", 1)[1] or "codex")
+                                        if ":" in k
+                                        else "codex"
+                                    ),
                                     v,
                                 )
                                 for k, v in repo_to_session.items()
@@ -497,7 +512,11 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                             for repo, ag, sid in [
                                 (
                                     k.split(":", 1)[0],
-                                    k.split(":", 1)[1] if ":" in k else "",
+                                    (
+                                        (k.split(":", 1)[1] or "codex")
+                                        if ":" in k
+                                        else "codex"
+                                    ),
                                     v,
                                 )
                                 for k, v in repo_to_session.items()

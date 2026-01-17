@@ -28,6 +28,7 @@ class OpenCodeHandle:
     client: Optional[OpenCodeClient]
     base_url: Optional[str]
     start_lock: asyncio.Lock
+    stdout_task: Optional[asyncio.Task[None]] = None
     started: bool = False
     last_used_at: float = 0.0
 
@@ -94,6 +95,14 @@ class OpenCodeSupervisor:
             if handle.client is not None:
                 await handle.client.close()
         finally:
+            stdout_task = handle.stdout_task
+            handle.stdout_task = None
+            if stdout_task is not None and not stdout_task.done():
+                stdout_task.cancel()
+                try:
+                    await stdout_task
+                except asyncio.CancelledError:
+                    pass
             if handle.process and handle.process.returncode is None:
                 handle.process.terminate()
                 try:
@@ -124,6 +133,7 @@ class OpenCodeSupervisor:
                 client=None,
                 base_url=None,
                 start_lock=asyncio.Lock(),
+                stdout_task=None,
                 last_used_at=time.monotonic(),
             )
             self._handles[workspace_id] = handle
@@ -164,6 +174,7 @@ class OpenCodeSupervisor:
                 auth=self._auth,
                 timeout=self._request_timeout,
             )
+            self._start_stdout_drain(handle)
             handle.started = True
         except Exception:
             handle.started = False
@@ -174,6 +185,45 @@ class OpenCodeSupervisor:
                 process.kill()
                 await process.wait()
             raise
+
+    def _start_stdout_drain(self, handle: OpenCodeHandle) -> None:
+        """
+        Ensure we continuously drain the subprocess stdout pipe.
+
+        OpenCode often logs after startup; if stdout is piped but never drained,
+        the OS pipe buffer can fill and stall the child process.
+        """
+        process = handle.process
+        if process is None or process.stdout is None:
+            return
+        existing = handle.stdout_task
+        if existing is not None and not existing.done():
+            return
+        handle.stdout_task = asyncio.create_task(self._drain_stdout(handle))
+
+    async def _drain_stdout(self, handle: OpenCodeHandle) -> None:
+        process = handle.process
+        if process is None or process.stdout is None:
+            return
+        stream = process.stdout
+        debug_logs = self._logger.isEnabledFor(logging.DEBUG)
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            if not debug_logs:
+                continue
+            decoded = line.decode("utf-8", errors="ignore").rstrip()
+            if not decoded:
+                continue
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "opencode.stdout",
+                workspace_id=handle.workspace_id,
+                workspace_root=str(handle.workspace_root),
+                line=decoded[:2000],
+            )
 
     async def _read_base_url(
         self, process: asyncio.subprocess.Process, timeout: float = 20.0
