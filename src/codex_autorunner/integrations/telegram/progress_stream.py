@@ -165,7 +165,12 @@ def render_progress_text(
     lines = [header]
     for action in actions:
         icon = STATUS_ICONS.get(action.status, STATUS_ICONS["running"])
-        label = "thinking summary" if action is thinking_action else action.label
+        if action is thinking_action:
+            if len(lines) > 1 and lines[-1] != "":
+                lines.append("")
+            label = "🧠 **Thinking summary**"
+        else:
+            label = action.label
         lines.append(f"{icon} {label}: {action.text}")
     message = "\n".join(lines)
     if len(message) <= max_length:
