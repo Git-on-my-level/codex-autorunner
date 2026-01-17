@@ -387,7 +387,7 @@ def usage(
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
 ):
-    """Show Codex token usage for a repo or hub by reading CODEX_HOME session logs."""
+    """Show Codex/OpenCode token usage for a repo or hub by reading local session logs."""
     try:
         config = load_config(repo or Path.cwd())
     except ConfigError as exc:
