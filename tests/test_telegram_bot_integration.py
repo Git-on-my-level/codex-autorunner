@@ -14,6 +14,8 @@ from codex_autorunner.integrations.telegram.service import TelegramBotService
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
 
+pytestmark = pytest.mark.integration
+
 
 def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]

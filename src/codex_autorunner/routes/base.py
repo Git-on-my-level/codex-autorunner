@@ -171,12 +171,6 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         attach_only = mode == "attach"
         terminal_debug_param = (ws.query_params.get("terminal_debug") or "").strip()
         terminal_debug = terminal_debug_param.lower() in {"1", "true", "yes", "on"}
-        agent = (ws.query_params.get("agent") or "codex").strip().lower()
-        model = (ws.query_params.get("model") or "").strip() or None
-        reasoning = (ws.query_params.get("reasoning") or "").strip() or None
-        session_id = None
-        active_session: Optional[ActiveSession] = None
-        seen_update_interval = 5.0
 
         def _mark_dirty() -> None:
             app.state.session_state_dirty = True

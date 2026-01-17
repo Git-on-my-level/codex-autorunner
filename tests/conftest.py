@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 120
+
 
 def pytest_configure() -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -20,6 +22,22 @@ def pytest_configure() -> None:
     src_path = str(src_dir)
     if sys.path[:1] != [src_path] and src_path not in sys.path:
         sys.path.insert(0, src_path)
+
+
+def pytest_collection_modifyitems(
+    session: pytest.Session, config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """
+    Apply a default per-test timeout to non-integration tests.
+
+    This relies on `pytest-timeout` when installed; if it isn't installed, the
+    marker is inert but still documents the intent.
+    """
+    _ = session, config
+    for item in items:
+        if item.get_closest_marker("integration") is not None:
+            continue
+        item.add_marker(pytest.mark.timeout(DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS))
 
 
 @pytest.fixture()
