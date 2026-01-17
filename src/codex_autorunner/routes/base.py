@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 
 from ..codex_cli import extract_flag_value
 from ..core.logging_utils import safe_log
@@ -91,21 +96,36 @@ def build_base_routes(static_dir: Path) -> APIRouter:
 
     @router.get("/api/logs")
     def get_logs(
-        request: Request, run_id: Optional[int] = None, tail: Optional[int] = None
+        request: Request,
+        run_id: Optional[int] = None,
+        tail: Optional[int] = None,
+        raw: bool = False,
     ):
         engine = request.app.state.engine
+        def _build_response(
+            text: str, *, run_id: Optional[int] = None, tail: Optional[int] = None
+        ):
+            if raw:
+                return PlainTextResponse(text or "")
+            payload = {"log": text or ""}
+            if run_id is not None:
+                payload["run_id"] = run_id
+            if tail is not None:
+                payload["tail"] = tail
+            return JSONResponse(payload)
+
         if run_id is not None:
             block = engine.read_run_block(run_id)
             if not block:
                 raise HTTPException(status_code=404, detail="run not found")
-            return JSONResponse({"run_id": run_id, "log": block})
+            return _build_response(block, run_id=run_id)
         if tail is not None:
-            return JSONResponse({"tail": tail, "log": engine.tail_log(tail)})
+            return _build_response(engine.tail_log(tail), tail=tail)
         state = load_state(engine.state_path)
         if state.last_run_id is None:
-            return JSONResponse({"log": ""})
+            return _build_response("")
         block = engine.read_run_block(state.last_run_id) or ""
-        return JSONResponse({"run_id": state.last_run_id, "log": block})
+        return _build_response(block, run_id=state.last_run_id)
 
     @router.get("/api/logs/stream")
     async def stream_logs_endpoint(request: Request):

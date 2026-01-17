@@ -383,6 +383,10 @@
 
         <section id="logs" class="panel">
           <div class="inline-toolbar">
+            <label class="chip" data-short="Sum">
+              <input id="log-show-summary" type="checkbox" checked />
+              <span>Summary</span>
+            </label>
             <label>Run <input id="log-run-id" type="number" min="1" placeholder="latest" /></label>
             <label>Tail <input id="log-tail" type="number" min="10" value="200" /></label>
             <button id="load-logs" class="primary sm">Load</button>

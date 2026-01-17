@@ -8,6 +8,7 @@ const logTailInput = document.getElementById("log-tail");
 const toggleLogStreamButton = document.getElementById("toggle-log-stream");
 const showTimestampToggle = document.getElementById("log-show-timestamp");
 const showRunToggle = document.getElementById("log-show-run");
+const showSummaryToggle = document.getElementById("log-show-summary");
 const jumpBottomButton = document.getElementById("log-jump-bottom");
 const loadOlderButton = document.getElementById("log-load-older");
 let stopLogStream = null;
@@ -165,6 +166,10 @@ function classifyLine(line, context = {}) {
   return { type: "output", priority: 4 };
 }
 
+function isSummaryMode() {
+  return !showSummaryToggle || showSummaryToggle.checked;
+}
+
 function processLine(line) {
   let next = line;
   // Normalize run markers that include "chat"
@@ -265,6 +270,14 @@ function startPromptBlock(output, label) {
   renderState.promptBlockDetails.appendChild(renderState.promptBlockContent);
   renderState.promptLineCount = 0;
   output.appendChild(renderState.promptBlockDetails);
+}
+
+function appendRawLine(line, output) {
+  const isBlank = line.trim() === "";
+  const div = document.createElement("div");
+  div.textContent = line;
+  div.className = isBlank ? "log-line log-blank" : "log-line log-raw";
+  output.appendChild(div);
 }
 
 function appendRenderedLine(line, output) {
@@ -374,11 +387,17 @@ function applyLogUrlState() {
   const params = getUrlParams();
   const runId = params.get("run");
   const tail = params.get("tail");
+  const summary = params.get("summary");
   if (runId !== null && logRunIdInput) {
     logRunIdInput.value = runId;
   }
   if (tail !== null && logTailInput) {
     logTailInput.value = tail;
+  }
+  if (summary !== null && showSummaryToggle) {
+    showSummaryToggle.checked = !(
+      summary === "0" || summary.toLowerCase() === "false"
+    );
   }
   if (runId) {
     isViewingTail = false;
@@ -391,6 +410,7 @@ function syncLogUrlState() {
   updateUrlParams({
     run: runId || null,
     tail: runId ? null : tail || null,
+    summary: showSummaryToggle?.checked ? null : "0",
   });
 }
 
@@ -417,6 +437,22 @@ function renderLogWindow({ startIndex = null, followTail = true } = {}) {
     endIndex,
     windowStart + CONSTANTS.UI.MAX_LOG_LINES_IN_DOM
   );
+
+  if (!isSummaryMode()) {
+    output.innerHTML = "";
+    delete output.dataset.isPlaceholder;
+    for (let i = windowStart; i < windowEnd; i += 1) {
+      appendRawLine(rawLogLines[i], output);
+    }
+    renderedStartIndex = windowStart;
+    renderedEndIndex = windowEnd;
+    isViewingTail = followTail && windowEnd === endIndex;
+    updateLoadOlderButton();
+    if (isViewingTail) {
+      scrollLogsToBottom(true);
+    }
+    return;
+  }
 
   output.innerHTML = "";
   delete output.dataset.isPlaceholder;
@@ -468,7 +504,11 @@ function appendLogLine(line) {
     return;
   }
 
-  appendRenderedLine(line, output);
+  if (!isSummaryMode()) {
+    appendRawLine(line, output);
+  } else {
+    appendRenderedLine(line, output);
+  }
   renderedEndIndex = rawLogLines.length;
   if (output.childElementCount > CONSTANTS.UI.MAX_LOG_LINES_IN_DOM) {
     output.firstElementChild.remove();
@@ -638,6 +678,12 @@ export function initLogs() {
 
   showTimestampToggle.addEventListener("change", renderLogs);
   showRunToggle.addEventListener("change", renderLogs);
+  if (showSummaryToggle) {
+    showSummaryToggle.addEventListener("change", () => {
+      syncLogUrlState();
+      renderLogs();
+    });
+  }
 
   // Jump to bottom button
   if (jumpBottomButton) {
