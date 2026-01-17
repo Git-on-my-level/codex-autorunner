@@ -8,10 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from fastapi import (
-    FastAPI,
-    HTTPException,
-)
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware

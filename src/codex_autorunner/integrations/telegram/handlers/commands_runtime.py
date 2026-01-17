@@ -9,7 +9,6 @@ import os
 import re
 import secrets
 import shlex
-import shutil
 import time
 from contextlib import suppress
 from dataclasses import dataclass
