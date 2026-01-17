@@ -986,14 +986,35 @@ if [[ "${health_ok}" == "true" ]]; then
   write_status "ok" "Update completed successfully."
 else
   _rollback "Health check failed; rolling back to ${current_target}..."
-  if _check_hub_health && _check_telegram_health; then
+  rollback_hub_ok=true
+  rollback_telegram_ok=true
+  if ! _check_hub_health; then
+    rollback_hub_ok=false
+  fi
+  if ! _check_telegram_health; then
+    rollback_telegram_ok=false
+  fi
+  if [[ "${rollback_hub_ok}" == "true" && "${rollback_telegram_ok}" == "true" ]]; then
     echo "Rollback OK; service restored." >&2
     write_status "rollback" "Update failed; rollback succeeded."
   else
-    echo "Rollback failed; service still unhealthy. Check logs and launchctl state:" >&2
+    failed_checks=()
+    if [[ "${rollback_hub_ok}" != "true" ]]; then
+      failed_checks+=(hub)
+    fi
+    if [[ "${rollback_telegram_ok}" != "true" ]]; then
+      failed_checks+=(telegram)
+    fi
+    if (( ${#failed_checks[@]} > 0 )); then
+      failed_summary="Health check failed after rollback (${failed_checks[*]})."
+    else
+      failed_summary="Health check failed after rollback."
+    fi
+    echo "${failed_summary} Verify service health and logs:" >&2
     echo "  tail -n 200 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log" >&2
     echo "  launchctl print ${domain}" >&2
-    write_status "error" "Update failed and rollback did not recover the service."
+    write_status "rollback" \
+      "Update failed; rollback completed, but post-rollback health checks failed. Verify service health."
     exit 2
   fi
   exit 1
