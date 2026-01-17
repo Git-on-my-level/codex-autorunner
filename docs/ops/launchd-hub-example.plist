@@ -8,7 +8,7 @@
   <array>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <string>/Users/you/.local/pipx/venvs/codex-autorunner.current/bin/codex-autorunner hub serve --host 127.0.0.1 --port 4173 --path /Users/you/car-workspace</string>
+    <string>CAR_OPENCODE_COMMAND='/Users/you/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 0'; PATH=/Users/you/.opencode/bin:$PATH; /Users/you/.local/pipx/venvs/codex-autorunner.current/bin/codex-autorunner hub serve --host 127.0.0.1 --port 4173 --path /Users/you/car-workspace</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/you/car-workspace</string>

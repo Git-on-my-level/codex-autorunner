@@ -39,6 +39,7 @@ from ..core.optional_dependencies import require_optional_dependencies
 from ..core.request_context import get_request_id
 from ..core.snapshot import SnapshotService
 from ..core.state import load_state, persist_session_registry
+from ..core.utils import resolve_opencode_binary
 from ..core.usage import (
     UsageError,
     default_codex_home,
@@ -290,6 +291,25 @@ def _build_opencode_supervisor(
             "--port",
             "0",
         ]
+    resolved_source = raw_command
+    if not resolved_source and opencode_command:
+        resolved_source = opencode_command[0] if opencode_command else None
+    if not resolved_source and opencode_binary:
+        resolved_source = opencode_binary
+    resolved_binary = resolve_opencode_binary(resolved_source)
+    if command:
+        if resolved_binary:
+            command[0] = resolved_binary
+    else:
+        if resolved_binary:
+            command = [
+                resolved_binary,
+                "serve",
+                "--hostname",
+                "127.0.0.1",
+                "--port",
+                "0",
+            ]
     if not command or not _command_available(command, workspace_root=workspace_root):
         safe_log(
             logger,

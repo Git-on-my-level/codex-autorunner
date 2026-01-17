@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import shutil
 from pathlib import Path
 from typing import Dict, Optional, Sequence, cast
@@ -106,3 +107,30 @@ def ensure_executable(binary: str) -> bool:
 
 def default_editor() -> str:
     return os.environ.get("EDITOR") or "vi"
+
+
+def resolve_opencode_binary(raw_command: Optional[str] = None) -> Optional[str]:
+    """
+    Resolve the OpenCode binary for minimal PATH environments.
+    """
+    if raw_command:
+        try:
+            parts = [part for part in shlex.split(raw_command) if part]
+        except ValueError:
+            parts = []
+        if parts:
+            resolved = resolve_executable(parts[0])
+            if resolved:
+                return resolved
+            candidate = Path(parts[0]).expanduser()
+            if candidate.is_file() and os.access(str(candidate), os.X_OK):
+                return str(candidate)
+
+    resolved = resolve_executable("opencode")
+    if resolved:
+        return resolved
+
+    fallback = Path.home() / ".opencode" / "bin" / "opencode"
+    if fallback.is_file() and os.access(str(fallback), os.X_OK):
+        return str(fallback)
+    return None

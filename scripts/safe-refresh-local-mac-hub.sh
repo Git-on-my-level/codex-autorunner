@@ -31,6 +31,11 @@ set -euo pipefail
 #   HEALTH_CONNECT_TIMEOUT_SECONDS connection timeout for each health request (default: 2)
 #   HEALTH_REQUEST_TIMEOUT_SECONDS total timeout for each health request (default: 5)
 #   KEEP_OLD_VENVS         how many old next-* venvs to keep (default: 3)
+#   NVM_BIN                Node bin path to prepend (default: ~/.nvm/versions/node/v22.12.0/bin)
+#   LOCAL_BIN              Local bin path to prepend (default: ~/.local/bin)
+#   PY39_BIN               Python bin path to prepend (default: ~/Library/Python/3.9/bin)
+#   OPENCODE_BIN           OpenCode bin path to prepend (default: ~/.opencode/bin)
+#   OPENCODE_COMMAND        OpenCode serve command (default: ~/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 0)
 
 LABEL="${LABEL:-com.codex.autorunner}"
 PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/${LABEL}.plist}"
@@ -60,6 +65,11 @@ HEALTH_STATIC_PATH="${HEALTH_STATIC_PATH:-}"
 HEALTH_CHECK_STATIC="${HEALTH_CHECK_STATIC:-auto}"
 HEALTH_CHECK_TELEGRAM="${HEALTH_CHECK_TELEGRAM:-auto}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
+NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
+LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
+PY39_BIN="${PY39_BIN:-$HOME/Library/Python/3.9/bin}"
+OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
+OPENCODE_COMMAND="${OPENCODE_COMMAND:-$OPENCODE_BIN/opencode serve --hostname 127.0.0.1 --port 0}"
 
 current_target=""
 swap_completed=false
@@ -426,6 +436,52 @@ plist_path.write_text(new_text)
 PY
 }
 
+_ensure_plist_has_opencode_env() {
+  if [[ ! -f "${PLIST_PATH}" ]]; then
+    return 0
+  fi
+
+  "${HELPER_PYTHON}" - <<PY
+from __future__ import annotations
+
+import plistlib
+from pathlib import Path
+
+plist_path = Path("${PLIST_PATH}")
+opencode_bin = "${OPENCODE_BIN}"
+opencode_cmd = "${OPENCODE_COMMAND}"
+
+with plist_path.open("rb") as handle:
+    plist = plistlib.load(handle)
+
+program_args = plist.get("ProgramArguments")
+if not isinstance(program_args, list) or len(program_args) < 3:
+    raise SystemExit("LaunchAgent plist missing ProgramArguments list.")
+
+cmd = program_args[2]
+if not isinstance(cmd, str):
+    raise SystemExit("LaunchAgent plist ProgramArguments[2] is not a string.")
+
+updated = False
+if "CAR_OPENCODE_COMMAND=" not in cmd:
+    cmd = f"CAR_OPENCODE_COMMAND='{opencode_cmd}'; {cmd}"
+    updated = True
+
+if opencode_bin and opencode_bin not in cmd:
+    if "PATH=" in cmd:
+        cmd = cmd.replace("PATH=", f"PATH={opencode_bin}:", 1)
+    else:
+        cmd = f"PATH={opencode_bin}:$PATH; {cmd}"
+    updated = True
+
+if updated:
+    program_args[2] = cmd
+    plist["ProgramArguments"] = program_args
+    with plist_path.open("wb") as handle:
+        plistlib.dump(plist, handle)
+PY
+}
+
 _service_pid() {
   launchctl print "${domain}" 2>/dev/null | awk '/pid =/ {print $3; exit}'
 }
@@ -452,6 +508,7 @@ _wait_pid_exit() {
 _reload() {
   local pid
   pid="$(_service_pid)"
+  _ensure_plist_has_opencode_env
   launchctl unload -w "${PLIST_PATH}" >/dev/null 2>&1 || true
   if [[ -n "${pid}" && "${pid}" != "0" ]]; then
     if ! _wait_pid_exit "${pid}"; then
@@ -476,6 +533,7 @@ _reload_telegram() {
       _write_telegram_plist "${hub_root}"
     fi
     _ensure_telegram_plist_uses_current_venv
+    PLIST_PATH="${TELEGRAM_PLIST_PATH}" _ensure_plist_has_opencode_env
     telegram_domain="gui/$(id -u)/${TELEGRAM_LABEL}"
     launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
     launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
@@ -607,7 +665,7 @@ _write_telegram_plist() {
   <array>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <string>${CURRENT_VENV_LINK}/bin/codex-autorunner telegram start --path ${root}</string>
+    <string>CAR_OPENCODE_COMMAND='${OPENCODE_COMMAND}'; PATH=${OPENCODE_BIN}:${NVM_BIN}:${LOCAL_BIN}:${PY39_BIN}:\$PATH; ${CURRENT_VENV_LINK}/bin/codex-autorunner telegram start --path ${root}</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${root}</string>

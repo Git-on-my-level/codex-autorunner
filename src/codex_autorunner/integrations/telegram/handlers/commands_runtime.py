@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import secrets
 import shlex
@@ -21,7 +22,7 @@ from ....core.injected_context import wrap_injected_context
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import _normalize_update_target, _spawn_update_process
-from ....core.utils import canonicalize_path
+from ....core.utils import canonicalize_path, resolve_opencode_binary
 from ....integrations.github.service import GitHubService
 from ....manifest import load_manifest
 from ...app_server.client import (
@@ -383,8 +384,13 @@ class TelegramCommandHandlers:
         return agent == "codex"
 
     def _opencode_available(self) -> bool:
-        binary = self._config.agent_binaries.get("opencode", "opencode")
-        return shutil.which(binary) is not None
+        raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
+        if resolve_opencode_binary(raw_command):
+            return True
+        binary = self._config.agent_binaries.get("opencode")
+        if binary:
+            return resolve_opencode_binary(binary) is not None
+        return resolve_opencode_binary() is not None
 
     async def _verify_active_thread(
         self, message: TelegramMessage, record: "TelegramTopicRecord"

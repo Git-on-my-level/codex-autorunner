@@ -11,6 +11,7 @@ from typing import Optional
 from ..codex_cli import apply_codex_options, extract_flag_value, supports_reasoning
 from ..core.locks import process_alive, read_lock_info
 from ..core.state import load_state
+from ..core.utils import resolve_opencode_binary
 
 BYPASS_FLAGS = {
     "--yolo",
@@ -90,7 +91,8 @@ def build_codex_terminal_cmd(
 
 
 def build_opencode_terminal_cmd(binary: str, model: Optional[str] = None) -> list[str]:
-    cmd = [binary]
+    resolved = resolve_opencode_binary(binary)
+    cmd = [resolved or binary or "opencode"]
     if model:
         cmd.extend(["--model", model])
     return cmd

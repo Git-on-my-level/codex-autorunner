@@ -16,6 +16,11 @@ set -euo pipefail
 #   TELEGRAM_LABEL         launchd label for telegram bot (default: ${LABEL}.telegram)
 #   TELEGRAM_PLIST_PATH    telegram plist path (default: ~/Library/LaunchAgents/${TELEGRAM_LABEL}.plist)
 #   TELEGRAM_LOG           telegram stdout/stderr log path (default: ${WORKSPACE}/.codex-autorunner/codex-autorunner-telegram.log)
+#   NVM_BIN                Node bin path to prepend (default: ~/.nvm/versions/node/v22.12.0/bin)
+#   LOCAL_BIN              Local bin path to prepend (default: ~/.local/bin)
+#   PY39_BIN               Python bin path to prepend (default: ~/Library/Python/3.9/bin)
+#   OPENCODE_BIN           OpenCode bin path to prepend (default: ~/.opencode/bin)
+#   OPENCODE_COMMAND        OpenCode serve command (default: ~/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 0)
 
 WORKSPACE="${WORKSPACE:-$HOME/car-workspace}"
 HOST="${HOST:-127.0.0.1}"
@@ -26,6 +31,11 @@ ENABLE_TELEGRAM_BOT="${ENABLE_TELEGRAM_BOT:-auto}"
 TELEGRAM_LABEL="${TELEGRAM_LABEL:-${LABEL}.telegram}"
 TELEGRAM_PLIST_PATH="${TELEGRAM_PLIST_PATH:-$HOME/Library/LaunchAgents/${TELEGRAM_LABEL}.plist}"
 TELEGRAM_LOG="${TELEGRAM_LOG:-${WORKSPACE}/.codex-autorunner/codex-autorunner-telegram.log}"
+NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
+LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
+PY39_BIN="${PY39_BIN:-$HOME/Library/Python/3.9/bin}"
+OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
+OPENCODE_COMMAND="${OPENCODE_COMMAND:-$OPENCODE_BIN/opencode serve --hostname 127.0.0.1 --port 0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
@@ -171,7 +181,7 @@ cat > "${PLIST_PATH}" <<EOF
   <array>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <string>${CURRENT_VENV_LINK}/bin/codex-autorunner hub serve --host ${HOST} --port ${PORT} --path ${WORKSPACE}</string>
+    <string>CAR_OPENCODE_COMMAND='${OPENCODE_COMMAND}'; PATH=${OPENCODE_BIN}:${NVM_BIN}:${LOCAL_BIN}:${PY39_BIN}:\$PATH; ${CURRENT_VENV_LINK}/bin/codex-autorunner hub serve --host ${HOST} --port ${PORT} --path ${WORKSPACE}</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${WORKSPACE}</string>
@@ -226,7 +236,7 @@ if telegram_enabled; then
   <array>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <string>${CURRENT_VENV_LINK}/bin/codex-autorunner telegram start --path ${WORKSPACE}</string>
+    <string>CAR_OPENCODE_COMMAND='${OPENCODE_COMMAND}'; PATH=${OPENCODE_BIN}:${NVM_BIN}:${LOCAL_BIN}:${PY39_BIN}:\$PATH; ${CURRENT_VENV_LINK}/bin/codex-autorunner telegram start --path ${WORKSPACE}</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${WORKSPACE}</string>
