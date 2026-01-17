@@ -1406,7 +1406,7 @@ class Engine:
             except json.JSONDecodeError:
                 payload = {}
             event_session_id = self._extract_opencode_session_id(payload)
-            if event_session_id and event_session_id != session_id:
+            if not event_session_id or event_session_id != session_id:
                 continue
             if event.event == "permission.asked":
                 properties = (
