@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
+from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
 from ...manifest import load_manifest
@@ -75,6 +76,8 @@ from .runtime import TelegramRuntimeHelpers
 from .state import (
     TelegramStateStore,
     TopicRouter,
+    parse_topic_key,
+    topic_key,
 )
 from .transport import TelegramMessageTransport
 from .types import (
@@ -942,7 +945,28 @@ class TelegramBotService(
         self, key: str, work: Any, *, force_queue: bool = False
     ) -> None:
         runtime = self._router.runtime_for(key)
+        wrapped = self._wrap_topic_work(key, work)
         if force_queue or self._config.concurrency.per_topic_queue:
-            self._spawn_task(runtime.queue.enqueue(work))
+            self._spawn_task(runtime.queue.enqueue(wrapped))
         else:
-            self._spawn_task(work())
+            self._spawn_task(wrapped())
+
+    def _wrap_topic_work(self, key: str, work: Any) -> Any:
+        conversation_id = None
+        try:
+            chat_id, thread_id, _scope = parse_topic_key(key)
+            conversation_id = topic_key(chat_id, thread_id)
+        except Exception:
+            conversation_id = None
+
+        if not conversation_id:
+            return work
+
+        async def wrapped() -> Any:
+            token = set_conversation_id(conversation_id)
+            try:
+                return await work()
+            finally:
+                reset_conversation_id(token)
+
+        return wrapped

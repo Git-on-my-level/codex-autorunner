@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, OrderedDict
 
 from .config import LogConfig
-from .request_context import get_request_id
+from .request_context import get_conversation_id, get_request_id
 
 _MAX_CACHED_LOGGERS = 64
 _LOGGER_CACHE: "OrderedDict[str, logging.Logger]" = collections.OrderedDict()
@@ -102,6 +102,10 @@ def log_event(
         request_id = get_request_id()
         if request_id:
             fields["request_id"] = request_id
+    if "conversation_id" not in fields:
+        conversation_id = get_conversation_id()
+        if conversation_id:
+            fields["conversation_id"] = conversation_id
     if fields:
         payload.update(_sanitize_fields(fields))
     if exc is not None:

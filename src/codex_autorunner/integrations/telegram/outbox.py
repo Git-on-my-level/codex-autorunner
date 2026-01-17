@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable, Optional
+from contextlib import contextmanager
+from typing import Any, Awaitable, Callable, Optional
 
 from ...core.logging_utils import log_event
+from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
 from .constants import (
     OUTBOX_IMMEDIATE_RETRY_DELAYS,
     OUTBOX_MAX_ATTEMPTS,
     OUTBOX_RETRY_INTERVAL_SECONDS,
 )
-from .state import OutboxRecord, TelegramStateStore
+from .state import OutboxRecord, TelegramStateStore, topic_key
 
 SendMessageFn = Callable[..., Awaitable[None]]
 EditMessageFn = Callable[..., Awaitable[bool]]
@@ -93,25 +95,26 @@ class TelegramOutboxManager:
 
     async def _flush(self, records: list[OutboxRecord]) -> None:
         for record in records:
-            if record.attempts >= OUTBOX_MAX_ATTEMPTS:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.outbox.gave_up",
-                    record_id=record.record_id,
-                    chat_id=record.chat_id,
-                    thread_id=record.thread_id,
-                    attempts=record.attempts,
-                )
-                self._store.delete_outbox(record.record_id)
-                if record.placeholder_message_id is not None:
-                    await self._edit_message_text(
-                        record.chat_id,
-                        record.placeholder_message_id,
-                        "Delivery failed after retries. Please resend.",
+            with self._conversation_context(record.chat_id, record.thread_id):
+                if record.attempts >= OUTBOX_MAX_ATTEMPTS:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.outbox.gave_up",
+                        record_id=record.record_id,
+                        chat_id=record.chat_id,
+                        thread_id=record.thread_id,
+                        attempts=record.attempts,
                     )
-                continue
-            await self._attempt_send(record)
+                    self._store.delete_outbox(record.record_id)
+                    if record.placeholder_message_id is not None:
+                        await self._edit_message_text(
+                            record.chat_id,
+                            record.placeholder_message_id,
+                            "Delivery failed after retries. Please resend.",
+                        )
+                    continue
+                await self._attempt_send(record)
 
     async def _attempt_send(self, record: OutboxRecord) -> bool:
         current = self._store.get_outbox(record.record_id)
@@ -120,43 +123,46 @@ class TelegramOutboxManager:
         record = current
         if not await self._mark_inflight(record.record_id):
             return False
-        try:
-            await self._send_message(
-                record.chat_id,
-                record.text,
-                thread_id=record.thread_id,
-                reply_to=record.reply_to_message_id,
-            )
-        except Exception as exc:
-            record.attempts += 1
-            record.last_error = str(exc)[:500]
-            record.last_attempt_at = now_iso()
-            self._store.update_outbox(record)
+        with self._conversation_context(record.chat_id, record.thread_id):
+            try:
+                await self._send_message(
+                    record.chat_id,
+                    record.text,
+                    thread_id=record.thread_id,
+                    reply_to=record.reply_to_message_id,
+                )
+            except Exception as exc:
+                record.attempts += 1
+                record.last_error = str(exc)[:500]
+                record.last_attempt_at = now_iso()
+                self._store.update_outbox(record)
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.outbox.send_failed",
+                    record_id=record.record_id,
+                    chat_id=record.chat_id,
+                    thread_id=record.thread_id,
+                    attempts=record.attempts,
+                    exc=exc,
+                )
+                return False
+            finally:
+                await self._clear_inflight(record.record_id)
+            self._store.delete_outbox(record.record_id)
+            if record.placeholder_message_id is not None:
+                await self._delete_message(
+                    record.chat_id, record.placeholder_message_id
+                )
             log_event(
                 self._logger,
-                logging.WARNING,
-                "telegram.outbox.send_failed",
+                logging.INFO,
+                "telegram.outbox.delivered",
                 record_id=record.record_id,
                 chat_id=record.chat_id,
                 thread_id=record.thread_id,
-                attempts=record.attempts,
-                exc=exc,
             )
-            return False
-        finally:
-            await self._clear_inflight(record.record_id)
-        self._store.delete_outbox(record.record_id)
-        if record.placeholder_message_id is not None:
-            await self._delete_message(record.chat_id, record.placeholder_message_id)
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.outbox.delivered",
-            record_id=record.record_id,
-            chat_id=record.chat_id,
-            thread_id=record.thread_id,
-        )
-        return True
+            return True
 
     async def _mark_inflight(self, record_id: str) -> bool:
         if self._lock is None:
@@ -172,3 +178,18 @@ class TelegramOutboxManager:
             return
         async with self._lock:
             self._inflight.discard(record_id)
+
+    @contextmanager
+    def _conversation_context(self, chat_id: int, thread_id: Optional[int]) -> Any:
+        token = None
+        try:
+            conversation_id = topic_key(chat_id, thread_id)
+        except Exception:
+            conversation_id = None
+        if conversation_id:
+            token = set_conversation_id(conversation_id)
+        try:
+            yield
+        finally:
+            if token is not None:
+                reset_conversation_id(token)

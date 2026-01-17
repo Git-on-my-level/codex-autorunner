@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
 from ...core.logging_utils import log_event
+from ...core.request_context import reset_conversation_id, set_conversation_id
 from .adapter import (
     ApprovalCallback,
     CancelCallback,
@@ -12,6 +13,7 @@ from .adapter import (
     allowlist_allows,
     parse_callback_data,
 )
+from .state import topic_key
 
 
 @dataclass(frozen=True)
@@ -132,42 +134,52 @@ _ROUTES: tuple[tuple[str, DispatchRoute], ...] = (
 
 async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
     context = _build_context(handlers, update)
-    log_event(
-        handlers._logger,
-        logging.INFO,
-        "telegram.update.received",
-        update_id=update.update_id,
-        chat_id=context.chat_id,
-        user_id=context.user_id,
-        thread_id=context.thread_id,
-        message_id=context.message_id,
-        is_topic=context.is_topic,
-        is_edited=context.is_edited,
-        has_message=bool(update.message),
-        has_callback=bool(update.callback),
-    )
-    if (
-        update.update_id is not None
-        and context.topic_key
-        and not handlers._should_process_update(context.topic_key, update.update_id)
-    ):
+    conversation_id = None
+    if context.chat_id is not None:
+        try:
+            conversation_id = topic_key(context.chat_id, context.thread_id)
+        except Exception:
+            conversation_id = None
+    token = set_conversation_id(conversation_id)
+    try:
         log_event(
             handlers._logger,
             logging.INFO,
-            "telegram.update.duplicate",
+            "telegram.update.received",
             update_id=update.update_id,
             chat_id=context.chat_id,
+            user_id=context.user_id,
             thread_id=context.thread_id,
             message_id=context.message_id,
+            is_topic=context.is_topic,
+            is_edited=context.is_edited,
+            has_message=bool(update.message),
+            has_callback=bool(update.callback),
         )
-        return
-    if not allowlist_allows(update, handlers._allowlist):
-        _log_denied(handlers, update)
-        return
-    for name, route in _ROUTES:
-        if name == "callback" and update.callback:
-            await route(handlers, update, context)
+        if (
+            update.update_id is not None
+            and context.topic_key
+            and not handlers._should_process_update(context.topic_key, update.update_id)
+        ):
+            log_event(
+                handlers._logger,
+                logging.INFO,
+                "telegram.update.duplicate",
+                update_id=update.update_id,
+                chat_id=context.chat_id,
+                thread_id=context.thread_id,
+                message_id=context.message_id,
+            )
             return
-        if name == "message" and update.message:
-            await route(handlers, update, context)
+        if not allowlist_allows(update, handlers._allowlist):
+            _log_denied(handlers, update)
             return
+        for name, route in _ROUTES:
+            if name == "callback" and update.callback:
+                await route(handlers, update, context)
+                return
+            if name == "message" and update.message:
+                await route(handlers, update, context)
+                return
+    finally:
+        reset_conversation_id(token)
