@@ -1022,6 +1022,16 @@ def load_config_data(config_path: Path) -> Dict[str, Any]:
         raise ConfigError(f"Config file must be a mapping: {config_path}")
     mode = data.get("mode", "repo")
     root = config_path.parent.parent.resolve()
+    if mode == "repo":
+        hub_overrides = None
+        hub_config_path = find_nearest_hub_config_path(root.parent)
+        if hub_config_path is not None:
+            hub_data = load_config_data(hub_config_path)
+            hub_overrides = repo_overrides_from_hub(hub_data)
+        merged = resolve_repo_config_data(root, hub_overrides=hub_overrides)
+        if data:
+            merged = _merge_defaults(merged, data)
+        return merged
     return resolve_config_data(root, mode, data)
 
 

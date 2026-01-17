@@ -87,6 +87,29 @@ def test_write_repo_config_inherits_hub_defaults(tmp_path: Path) -> None:
     assert data["agents"]["opencode"]["binary"] == "/opt/opencode"
 
 
+def test_load_config_inherits_hub_defaults(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    hub_config_dir = hub_root / ".codex-autorunner"
+    hub_config_dir.mkdir(parents=True, exist_ok=True)
+    _write_yaml(
+        hub_config_dir / "config.yml",
+        {
+            "mode": "hub",
+            "agents": {"opencode": {"binary": "/opt/opencode"}},
+        },
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    repo_config_dir = repo_root / ".codex-autorunner"
+    repo_config_dir.mkdir(parents=True, exist_ok=True)
+    _write_yaml(repo_config_dir / "config.yml", {"mode": "repo"})
+
+    config = load_config(repo_root)
+    assert config.agent_binary("opencode") == "/opt/opencode"
+
+
 def test_repo_docs_reject_absolute_path(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
