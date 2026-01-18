@@ -353,6 +353,14 @@ async def collect_opencode_output_from_events(
         if pending:
             text_parts.extend(pending)
 
+    def _flush_all_pending_text() -> None:
+        if not pending_text:
+            return
+        for pending in list(pending_text.values()):
+            if pending:
+                text_parts.extend(pending)
+        pending_text.clear()
+
     async for event in events:
         if should_stop is not None and should_stop():
             break
@@ -448,6 +456,8 @@ async def collect_opencode_output_from_events(
             if message_result.error and not error:
                 error = message_result.error
         if event.event == "session.idle":
+            if not text_parts and pending_text:
+                _flush_all_pending_text()
             break
 
     return OpenCodeTurnOutput(text="".join(text_parts).strip(), error=error)
