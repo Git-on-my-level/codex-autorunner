@@ -1,21 +1,12 @@
 import { TerminalManager } from "./terminalManager.js";
-
-// Singleton instance of the terminal manager
 let terminalManager = null;
-
 export function getTerminalManager() {
-  return terminalManager;
+    return terminalManager;
 }
-
-/**
- * Initialize the terminal panel.
- * Creates a TerminalManager instance and initializes all terminal functionality.
- */
 export function initTerminal() {
-  if (terminalManager) {
-    // Already initialized
-    return;
-  }
-  terminalManager = new TerminalManager();
-  terminalManager.init();
+    if (terminalManager) {
+        return;
+    }
+    terminalManager = new TerminalManager();
+    terminalManager.init();
 }

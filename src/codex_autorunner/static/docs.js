@@ -5,18 +5,16 @@ import { getChatState } from "./docsState.js";
 import { handleStreamEvent, performDocChatRequest, applyChatResult } from "./docChatStream.js";
 import { renderChat } from "./docChatRender.js";
 import { setDoc } from "./docsCrud.js";
-
 export { initDocs };
-
 export const __docChatTest = {
-  applyChatResult,
-  applyDocUpdateFromChat,
-  applyPatch,
-  reloadPatch,
-  discardPatch,
-  getChatState,
-  handleStreamEvent,
-  performDocChatRequest,
-  renderChat,
-  setDoc,
+    applyChatResult,
+    applyDocUpdateFromChat,
+    applyPatch,
+    reloadPatch,
+    discardPatch,
+    getChatState,
+    handleStreamEvent,
+    performDocChatRequest,
+    renderChat,
+    setDoc,
 };
