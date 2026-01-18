@@ -285,6 +285,7 @@ async def collect_opencode_output_from_events(
     last_full_text = ""
     error: Optional[str] = None
     message_roles: dict[str, str] = {}
+    message_roles_seen = False
     pending_text: dict[str, list[str]] = {}
 
     def _message_id_from_info(info: Any) -> Optional[str]:
@@ -306,6 +307,7 @@ async def collect_opencode_output_from_events(
         return None
 
     def _register_message_role(payload: Any) -> tuple[Optional[str], Optional[str]]:
+        nonlocal message_roles_seen
         if not isinstance(payload, dict):
             return None, None
         info = payload.get("info")
@@ -317,13 +319,15 @@ async def collect_opencode_output_from_events(
         msg_id = _message_id_from_info(info)
         if isinstance(role, str) and msg_id:
             message_roles[msg_id] = role
+            message_roles_seen = True
         return msg_id, role if isinstance(role, str) else None
 
     def _append_text_for_message(message_id: Optional[str], text: str) -> None:
         if not text:
             return
         if message_id is None:
-            text_parts.append(text)
+            if not message_roles_seen:
+                text_parts.append(text)
             return
         role = message_roles.get(message_id)
         if role == "user":
