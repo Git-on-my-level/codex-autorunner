@@ -4,7 +4,15 @@ from typing import List, Optional, Tuple
 
 from .bootstrap import seed_repo_files
 from .core.config import HubConfig
-from .manifest import Manifest, ManifestRepo, load_manifest, save_manifest
+from .manifest import (
+    Manifest,
+    ManifestRepo,
+    ensure_unique_repo_id,
+    is_safe_repo_id,
+    load_manifest,
+    sanitize_repo_id,
+    save_manifest,
+)
 
 
 @dataclasses.dataclass
@@ -25,6 +33,27 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
     manifest = load_manifest(hub_config.manifest_path, hub_config.root)
     records: List[DiscoveryRecord] = []
     seen_ids: set[str] = set()
+
+    def _normalize_manifest_ids() -> None:
+        reserved_ids = {repo.id for repo in manifest.repos}
+        id_map: dict[str, str] = {}
+        for repo in manifest.repos:
+            display_name = repo.display_name or repo.id
+            if not repo.display_name:
+                repo.display_name = display_name
+            if is_safe_repo_id(repo.id):
+                continue
+            reserved_ids.discard(repo.id)
+            safe_id = ensure_unique_repo_id(
+                sanitize_repo_id(display_name), reserved_ids
+            )
+            reserved_ids.add(safe_id)
+            id_map[repo.id] = safe_id
+            repo.id = safe_id
+        if id_map:
+            for repo in manifest.repos:
+                if repo.worktree_of in id_map:
+                    repo.worktree_of = id_map[repo.worktree_of]
 
     def _record_repo(repo_entry: ManifestRepo, *, added: bool) -> None:
         repo_path = (hub_config.root / repo_entry.path).resolve()
@@ -58,8 +87,10 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
             if not (child / ".git").exists():
                 continue
 
-            repo_id = child.name
-            existing_entry = manifest.get(repo_id)
+            display_name = child.name
+            existing_entry = manifest.get_by_path(hub_config.root, child)
+            if not existing_entry:
+                existing_entry = manifest.get(display_name)
             added = False
             if not existing_entry:
                 # Best-effort grouping inference for worktrees created outside of CAR:
@@ -73,15 +104,19 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
                 existing_entry = manifest.ensure_repo(
                     hub_config.root,
                     child,
-                    repo_id=repo_id,
+                    repo_id=display_name,
+                    display_name=display_name,
                     kind=kind,
                     worktree_of=worktree_of,
                     branch=branch,
                 )
                 added = True
+            if existing_entry.display_name is None:
+                existing_entry.display_name = display_name
             repo_entry = existing_entry
             _record_repo(repo_entry, added=added)
 
+    _normalize_manifest_ids()
     _scan_root(hub_config.repos_root, kind="base")
     _scan_root(hub_config.worktrees_root, kind="worktree")
 
@@ -114,7 +149,11 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
                 else:
                     repo_id = f"{repo_id_base}-root-{suffix}"
             root_entry = manifest.ensure_repo(
-                hub_config.root, hub_config.root, repo_id=repo_id, kind="base"
+                hub_config.root,
+                hub_config.root,
+                repo_id=repo_id,
+                display_name=hub_config.root.name or repo_id,
+                kind="base",
             )
             _record_repo(root_entry, added=True)
 
