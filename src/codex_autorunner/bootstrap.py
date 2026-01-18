@@ -6,6 +6,8 @@ from .core.about_car import ensure_about_car_file_for_repo
 from .core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
+    REPO_OVERRIDE_FILENAME,
+    ConfigError,
     resolve_hub_config_data,
 )
 from .core.utils import atomic_write
@@ -56,6 +58,26 @@ def _seed_doc(path: Path, force: bool, content: str) -> None:
 def write_hub_config(hub_root: Path, force: bool = False) -> Path:
     config_path = hub_root / CONFIG_FILENAME
     if config_path.exists() and not force:
+        try:
+            data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            raise ConfigError(
+                f"Invalid YAML in existing hub config {config_path}: {exc}. "
+                "Back up the file or delete it, or rerun with --force to overwrite."
+            ) from exc
+        if not isinstance(data, dict):
+            raise ConfigError(
+                f"Existing hub config {config_path} must be a mapping. "
+                "Back up the file or delete it, or rerun with --force to overwrite."
+            )
+        mode = data.get("mode")
+        if mode != "hub":
+            raise ConfigError(
+                f"Existing config at {config_path} is not a hub config "
+                f"(mode: {mode!r}). Move repo overrides into "
+                f"{hub_root / REPO_OVERRIDE_FILENAME} or back up and delete the file, "
+                "then rerun. Use --force to overwrite it."
+            )
         return config_path
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8") as f:

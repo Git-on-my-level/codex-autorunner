@@ -222,15 +222,18 @@ def init(
     ca_dir.mkdir(parents=True, exist_ok=True)
 
     hub_config_path = find_nearest_hub_config_path(target_root)
-    if selected_mode == "hub":
-        seed_hub_files(target_root, force=force)
-        typer.echo(f"Initialized hub at {ca_dir}")
-    else:
-        seed_repo_files(target_root, force=force, git_required=git_required)
-        typer.echo(f"Initialized repo at {ca_dir}")
-        if hub_config_path is None:
+    try:
+        if selected_mode == "hub":
             seed_hub_files(target_root, force=force)
             typer.echo(f"Initialized hub at {ca_dir}")
+        else:
+            seed_repo_files(target_root, force=force, git_required=git_required)
+            typer.echo(f"Initialized repo at {ca_dir}")
+            if hub_config_path is None:
+                seed_hub_files(target_root, force=force)
+                typer.echo(f"Initialized hub at {ca_dir}")
+    except ConfigError as exc:
+        _raise_exit(str(exc), cause=exc)
     typer.echo("Init complete")
 
 
