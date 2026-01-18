@@ -66,6 +66,33 @@ def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
     assert manifest_data["repos"][0]["kind"] == "base"
 
 
+def test_discovery_includes_hub_root_repo(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    (hub_root / ".git").mkdir(parents=True, exist_ok=True)
+    seed_repo_files(hub_root, force=False, git_required=False)
+
+    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config["hub"]["repos_root"] = "."
+    config_path = hub_root / CONFIG_FILENAME
+    _write_config(config_path, config)
+
+    hub_config = load_hub_config(hub_root)
+    _, records = discover_and_init(hub_config)
+
+    record = next(r for r in records if r.absolute_path == hub_root.resolve())
+    assert record.added_to_manifest is True
+    assert record.initialized is True
+    assert record.repo.path.as_posix() == "."
+    assert record.repo.id == "hub"
+
+    manifest_data = yaml.safe_load(
+        (hub_root / ".codex-autorunner" / "manifest.yml").read_text()
+    )
+    root_entry = next(r for r in manifest_data["repos"] if r["path"] == ".")
+    assert root_entry["id"] == "hub"
+
+
 def test_load_repo_config_uses_nearest_hub_config(tmp_path: Path):
     hub_root = tmp_path / "hub"
     _write_config(hub_root / CONFIG_FILENAME, DEFAULT_HUB_CONFIG)

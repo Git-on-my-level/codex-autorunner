@@ -1074,8 +1074,11 @@ def _resolve_hub_path_for_repo(repo_root: Path, hub_path: Optional[Path]) -> Pat
     return _resolve_hub_config_path(repo_root)
 
 
-def derive_repo_config(hub: HubConfig, repo_root: Path) -> RepoConfig:
-    load_dotenv_for_root(repo_root)
+def derive_repo_config(
+    hub: HubConfig, repo_root: Path, *, load_env: bool = True
+) -> RepoConfig:
+    if load_env:
+        load_dotenv_for_root(repo_root)
     merged = derive_repo_config_data(hub.raw, repo_root)
     merged["mode"] = "repo"
     merged["version"] = CONFIG_VERSION

@@ -335,7 +335,7 @@ def _build_app_context(
     if hub_config is None:
         config = load_repo_config(target_root)
     else:
-        config = derive_repo_config(hub_config, target_root)
+        config = derive_repo_config(hub_config, target_root, load_env=False)
     normalized_base = (
         _normalize_base_path(base_path)
         if base_path is not None
