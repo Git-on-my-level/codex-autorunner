@@ -70,6 +70,18 @@ def test_hub_create_repo_rejects_outside_repos_root(tmp_path: Path):
         supervisor.create_repo("bad", repo_path=Path(".."))
 
 
+def test_hub_create_repo_rejects_duplicate_id(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["hub"]["repos_root"] = "workspace"
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor.create_repo("demo")
+    with pytest.raises(ValueError, match="Repo id demo already exists"):
+        supervisor.create_repo("demo", repo_path=Path("other"))
+
+
 def test_hub_clone_repo_cli(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -99,6 +111,25 @@ def test_hub_clone_repo_cli(tmp_path: Path):
     repo_dir = hub_root / "workspace" / "cloned"
     assert (repo_dir / ".git").exists()
     assert (repo_dir / ".codex-autorunner" / "state.json").exists()
+
+
+def test_hub_clone_repo_rejects_duplicate_id(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["hub"]["repos_root"] = "workspace"
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+    source_repo = tmp_path / "source"
+    _init_git_repo(source_repo)
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor.create_repo("demo")
+    with pytest.raises(ValueError, match="Repo id demo already exists"):
+        supervisor.clone_repo(
+            git_url=str(source_repo),
+            repo_id="demo",
+            repo_path=Path("other"),
+        )
 
 
 def test_hub_clone_repo_cli_failure_message(tmp_path: Path):
