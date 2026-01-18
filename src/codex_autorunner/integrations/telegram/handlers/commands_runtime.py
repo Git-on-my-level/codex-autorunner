@@ -1436,6 +1436,13 @@ class TelegramCommandHandlers:
                                 transcript_message_id,
                                 transcript_text,
                             )
+                        await self._start_turn_progress(
+                            turn_key,
+                            ctx=ctx,
+                            agent="opencode",
+                            model=record.model,
+                            label="working",
+                        )
                         approval_policy, _sandbox_policy = self._effective_policies(
                             record
                         )
@@ -1477,6 +1484,45 @@ class TelegramCommandHandlers:
                                 asyncio.create_task(_abort_opencode())
                             return runtime.interrupt_requested
 
+                        async def _handle_opencode_part(
+                            part_type: str,
+                            part: dict[str, Any],
+                            delta_text: Optional[str],
+                        ) -> None:
+                            if turn_key is None:
+                                return
+                            tracker = self._turn_progress_trackers.get(turn_key)
+                            if tracker is None:
+                                return
+                            if part_type == "reasoning":
+                                text = delta_text
+                                if not text:
+                                    raw_text = part.get("text")
+                                    text = raw_text if isinstance(raw_text, str) else ""
+                                if text:
+                                    tracker.note_thinking(text)
+                            elif part_type == "tool":
+                                tool = part.get("tool") or part.get("callID") or "tool"
+                                status = None
+                                state = part.get("state")
+                                if isinstance(state, dict):
+                                    status = state.get("status")
+                                label = (
+                                    f"{tool} ({status})"
+                                    if isinstance(status, str) and status
+                                    else str(tool)
+                                )
+                                tracker.note_tool(label)
+                            elif part_type == "patch":
+                                files = part.get("files")
+                                if isinstance(files, list) and files:
+                                    tracker.note_file_change(
+                                        ", ".join(str(file) for file in files)
+                                    )
+                                else:
+                                    tracker.note_file_change("Patch")
+                            await self._schedule_progress_edit(turn_key)
+
                         output_task = asyncio.create_task(
                             collect_opencode_output(
                                 opencode_client,
@@ -1489,6 +1535,7 @@ class TelegramCommandHandlers:
                                     else None
                                 ),
                                 should_stop=_should_stop,
+                                part_handler=_handle_opencode_part,
                             )
                         )
                         prompt_task = asyncio.create_task(

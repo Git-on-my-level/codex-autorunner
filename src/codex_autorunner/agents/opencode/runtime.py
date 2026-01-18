@@ -11,6 +11,7 @@ from .events import SSEEvent
 
 PermissionDecision = str
 PermissionHandler = Callable[[str, dict[str, Any]], Awaitable[PermissionDecision]]
+PartHandler = Callable[[str, dict[str, Any], Optional[str]], Awaitable[None]]
 
 PERMISSION_ALLOW = "allow"
 PERMISSION_DENY = "deny"
@@ -277,6 +278,7 @@ async def collect_opencode_output_from_events(
     permission_handler: Optional[PermissionHandler] = None,
     should_stop: Optional[Callable[[], bool]] = None,
     respond_permission: Optional[Callable[[str, str], Awaitable[None]]] = None,
+    part_handler: Optional[PartHandler] = None,
 ) -> OpenCodeTurnOutput:
     text_parts: list[str] = []
     part_lengths: dict[str, int] = {}
@@ -330,14 +332,26 @@ async def collect_opencode_output_from_events(
             else:
                 part = payload.get("part")
                 delta = payload.get("delta")
+            part_dict = part if isinstance(part, dict) else None
+            part_type = part_dict.get("type") if part_dict else None
+            part_ignored = bool(part_dict.get("ignored")) if part_dict else False
             if isinstance(delta, dict):
-                delta = delta.get("text")
-            if isinstance(delta, str) and delta:
-                text_parts.append(delta)
-            elif isinstance(part, dict) and part.get("type") == "text":
-                text = part.get("text")
+                delta_text = delta.get("text")
+            elif isinstance(delta, str):
+                delta_text = delta
+            else:
+                delta_text = None
+            if isinstance(delta_text, str) and delta_text:
+                if part_type in (None, "text") and not part_ignored:
+                    text_parts.append(delta_text)
+                elif part_handler and part_dict and part_type:
+                    await part_handler(part_type, part_dict, delta_text)
+            elif (
+                isinstance(part_dict, dict) and part_type == "text" and not part_ignored
+            ):
+                text = part_dict.get("text")
                 if isinstance(text, str) and text:
-                    part_id = part.get("id") or part.get("partId")
+                    part_id = part_dict.get("id") or part_dict.get("partId")
                     if isinstance(part_id, str) and part_id:
                         last_len = part_lengths.get(part_id, 0)
                         if len(text) > last_len:
@@ -349,6 +363,8 @@ async def collect_opencode_output_from_events(
                         elif text != last_full_text:
                             text_parts.append(text)
                         last_full_text = text
+            elif part_handler and part_dict and part_type:
+                await part_handler(part_type, part_dict, None)
         if event.event in ("message.completed", "message.updated"):
             message_result = parse_message_response(payload)
             if message_result.text and not text_parts:
@@ -369,6 +385,7 @@ async def collect_opencode_output(
     permission_policy: str = PERMISSION_ALLOW,
     permission_handler: Optional[PermissionHandler] = None,
     should_stop: Optional[Callable[[], bool]] = None,
+    part_handler: Optional[PartHandler] = None,
 ) -> OpenCodeTurnOutput:
     async def _respond(request_id: str, reply: str) -> None:
         await client.respond_permission(request_id=request_id, reply=reply)
@@ -380,6 +397,7 @@ async def collect_opencode_output(
         permission_handler=permission_handler,
         should_stop=should_stop,
         respond_permission=_respond,
+        part_handler=part_handler,
     )
 
 
@@ -398,5 +416,6 @@ __all__ = [
     "map_approval_policy_to_permission",
     "opencode_missing_env",
     "parse_message_response",
+    "PartHandler",
     "split_model_id",
 ]
