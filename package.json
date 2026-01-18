@@ -9,8 +9,8 @@
   },
   "scripts": {
     "lint:js": "eslint \"src/codex_autorunner/static/**/*.js\"",
-    "lint:ts": "eslint \"src/codex_autorunner/static/**/*.ts\"",
-    "lint": "eslint \"src/codex_autorunner/static/**/*.{js,ts}\"",
+    "lint:ts": "eslint \"src/codex_autorunner/static_src/**/*.ts\"",
+    "lint": "eslint \"src/codex_autorunner/static/**/*.js\" \"src/codex_autorunner/static_src/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.json"
   },

@@ -27,8 +27,8 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": [
-    "src/codex_autorunner/static/types.d.ts",
-    "src/codex_autorunner/static/**/*.ts"
+    "src/codex_autorunner/static_src/types.d.ts",
+    "src/codex_autorunner/static_src/**/*.ts"
   ],
   "exclude": ["node_modules", ".venv", "build", "src/codex_autorunner/static/vendor/**"]
 }

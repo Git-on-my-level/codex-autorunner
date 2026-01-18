@@ -188,7 +188,7 @@ def build_github_routes() -> APIRouter:
         if payload.mode is not None:
             raise HTTPException(
                 status_code=400,
-                detail="Repo mode does not support worktrees; create a hub worktree repo instead.",
+                detail="Hub-only install: create a hub worktree repo instead of passing mode.",
             )
         draft = payload.draft
         title = payload.title

@@ -28,10 +28,10 @@ module.exports = [
   },
   ...tseslint.configs.recommended.map((config) => ({
     ...config,
-    files: ["src/codex_autorunner/static/**/*.ts"],
+    files: ["src/codex_autorunner/static_src/**/*.ts"],
   })),
   {
-    files: ["src/codex_autorunner/static/**/*.ts"],
+    files: ["src/codex_autorunner/static_src/**/*.ts"],
     languageOptions: {
       ecmaVersion: 2021,
       sourceType: "module",

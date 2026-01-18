@@ -32,7 +32,7 @@ if [ -x "./node_modules/.bin/eslint" ]; then
 elif command -v eslint >/dev/null 2>&1; then
   ESLINT_BIN="eslint"
 else
-  echo "Missing required command: eslint. Install dev deps via 'npm install'." >&2
+  echo "Missing required command: eslint. Install dev deps via 'pnpm install'." >&2
   exit 1
 fi
 if [ -x "./node_modules/.bin/tsc" ]; then
@@ -40,7 +40,7 @@ if [ -x "./node_modules/.bin/tsc" ]; then
 elif command -v tsc >/dev/null 2>&1; then
   TSC_BIN="tsc"
 else
-  echo "Missing required command: tsc. Install dev deps via 'npm install'." >&2
+  echo "Missing required command: tsc. Install dev deps via 'pnpm install'." >&2
   exit 1
 fi
 
@@ -68,14 +68,14 @@ echo "Type check (mypy)..."
 "$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server
 
 echo "Linting JS/TS (eslint)..."
-"$ESLINT_BIN" "src/codex_autorunner/static/**/*.{js,ts}"
+"$ESLINT_BIN" "src/codex_autorunner/static/**/*.js" "src/codex_autorunner/static_src/**/*.ts"
 
 echo "Type check (tsc)..."
 "$TSC_BIN" -p tsconfig.json
 
 echo "Checking static build outputs are committed..."
 if ! git diff --exit-code -- src/codex_autorunner/static >/dev/null 2>&1; then
-  echo "Static assets are out of date. Run 'npm run build' and commit outputs." >&2
+  echo "Static assets are out of date. Run 'pnpm run build' and commit outputs." >&2
   git diff --stat -- src/codex_autorunner/static >&2
   exit 1
 fi

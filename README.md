@@ -61,7 +61,7 @@ pip install -e .
 - Local dev alternative: `pip install -e .[extra]`
 
 ## Dev setup
-- `make setup` creates `.venv`, installs `.[dev]`, runs `npm install`, and sets `core.hooksPath` to `.githooks`.
+- `make setup` creates `.venv`, installs `.[dev]`, runs `pnpm install`, and sets `core.hooksPath` to `.githooks`.
 
 ### Opinionated setup (macOS headless hub at `~/car-workspace`)
 - One-shot setup (user scope): `scripts/install-local-mac-hub.sh`. It pipx-installs this repo, creates/initializes `~/car-workspace` as a hub, writes a launchd agent plist, and loads it. Defaults: host `127.0.0.1`, port `4173`, label `com.codex.autorunner`. Override via env (`WORKSPACE`, `HOST`, `PORT`, `LABEL`, `PLIST_PATH`, `PACKAGE_SRC`). For remote access, prefer a VPN like Tailscale and keep the hub bound to loopback; if you bind to a non-loopback host, the script configures `server.auth_token_env` + a token in `.codex-autorunner/.env`.

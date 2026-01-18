@@ -63,7 +63,15 @@ where = ["src"]
 include-package-data = true
 
 [tool.setuptools.package-data]
-codex_autorunner = ["static/*", "static/**/*"]
+codex_autorunner = [
+  "static/*.js",
+  "static/*.css",
+  "static/*.html",
+  "static/vendor/**",
+]
+
+[tool.setuptools.exclude-package-data]
+codex_autorunner = ["static_src/*", "static_src/**/*"]
 
 [tool.typer]
 completions = true

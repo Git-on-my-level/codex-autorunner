@@ -186,7 +186,7 @@ class DocChatService:
 
     def _repo_config(self) -> RepoConfig:
         if not isinstance(self.engine.config, RepoConfig):
-            raise DocChatError("Doc chat requires repo mode config")
+            raise DocChatError("Doc chat requires a repo workspace config")
         return self.engine.config
 
     def _get_active_turn(self) -> Optional[ActiveDocChatTurn]:

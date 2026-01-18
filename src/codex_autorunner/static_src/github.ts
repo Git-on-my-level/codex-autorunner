@@ -114,7 +114,7 @@ async function loadGitHubStatus(): Promise<void> {
     }
 
     if (syncBtn) {
-      // Repo mode: PR sync always operates on current working tree/branch.
+      // Hub install: PR sync always operates on the current worktree/branch.
       (syncBtn as unknown as { mode?: string }).mode = "current";
     }
   } catch (err) {

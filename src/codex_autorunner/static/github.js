@@ -117,7 +117,7 @@ async function loadGitHubStatus() {
             };
         }
         if (syncBtn) {
-            // Repo mode: PR sync always operates on current working tree/branch.
+            // Hub install: PR sync always operates on the current worktree/branch.
             syncBtn.mode = "current";
         }
     }

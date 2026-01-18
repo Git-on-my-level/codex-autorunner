@@ -46,19 +46,18 @@ setup: venv-dev npm-install hooks
 
 npm-install: node_modules/.installed
 
-node_modules/.installed: package.json $(wildcard package-lock.json) $(wildcard pnpm-lock.yaml)
-	@if [ -f pnpm-lock.yaml ]; then \
-		echo "Detected pnpm-lock.yaml, using pnpm..."; \
+node_modules/.installed: package.json pnpm-lock.yaml
+	@if command -v pnpm >/dev/null 2>&1; then \
+		echo "Using pnpm..."; \
 		pnpm install; \
-	elif [ -f package-lock.json ]; then \
-		echo "Detected package-lock.json, using npm..."; \
-		npm ci; \
-	elif command -v pnpm >/dev/null 2>&1; then \
-		echo "pnpm detected, using pnpm..."; \
+	elif command -v corepack >/dev/null 2>&1; then \
+		echo "pnpm not found; using corepack to install pnpm..."; \
+		corepack enable; \
+		corepack prepare pnpm@9.15.4 --activate; \
 		pnpm install; \
 	else \
-		echo "Falling back to npm..."; \
-		npm install; \
+		echo "Missing pnpm. Install it or enable corepack (Node >=16)." >&2; \
+		exit 1; \
 	fi
 	@touch node_modules/.installed
 
@@ -79,7 +78,7 @@ format:
 	$(PYTHON) -m ruff check --fix src tests
 	@if [ -d node_modules ]; then \
 		echo "Fixing JS files (eslint)..."; \
-		./node_modules/.bin/eslint --fix "src/codex_autorunner/static/**/*.js" || true; \
+		./node_modules/.bin/eslint --fix "src/codex_autorunner/static/**/*.js" "src/codex_autorunner/static_src/**/*.ts" || true; \
 	fi
 
 deadcode-baseline:

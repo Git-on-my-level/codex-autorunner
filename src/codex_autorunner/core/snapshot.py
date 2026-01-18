@@ -34,7 +34,7 @@ class SnapshotError(Exception):
 
 def _repo_config(engine: Engine) -> RepoConfig:
     if not isinstance(engine.config, RepoConfig):
-        raise SnapshotError("Snapshot generation requires repo mode config")
+        raise SnapshotError("Snapshot generation requires a repo workspace config")
     return engine.config
 
 
