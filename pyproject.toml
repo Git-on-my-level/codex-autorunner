@@ -32,7 +32,7 @@ Issues = "https://github.com/Git-on-my-level/codex-autorunner/issues"
 
 [project.optional-dependencies]
 dev = [
-  "black>=23.0",
+  "black==25.11.0",
   "mypy>=1.10",
   "pytest>=7.0",
   "pytest-timeout>=2.0",
