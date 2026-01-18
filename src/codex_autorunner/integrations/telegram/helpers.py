@@ -822,8 +822,6 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         "feedback",
         "logout",
         "interrupt",
-        "quit",
-        "exit",
         "help",
     ]
     lines = ["Commands:"]

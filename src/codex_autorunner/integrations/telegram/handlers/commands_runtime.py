@@ -6859,13 +6859,3 @@ class TelegramCommandHandlers:
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
-
-    async def _handle_quit(
-        self, message: TelegramMessage, _args: str, _runtime: Any
-    ) -> None:
-        await self._send_message(
-            message.chat_id,
-            "This command is not applicable in Telegram. Use /new to start fresh or /resume to switch threads.",
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )

@@ -149,18 +149,6 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             ),
             allow_during_turn=True,
         ),
-        "quit": CommandSpec(
-            "quit",
-            "end the session (Telegram-local)",
-            handlers._handle_quit,
-            allow_during_turn=True,
-        ),
-        "exit": CommandSpec(
-            "exit",
-            "end the session (Telegram-local)",
-            handlers._handle_quit,
-            allow_during_turn=True,
-        ),
         "help": CommandSpec(
             "help",
             "show this help message",

@@ -105,7 +105,6 @@ Recommended commands to support (matching Codex CLI docs):
 * `/skills`
 * `/logout`
 * `/feedback`
-* `/quit`, `/exit` (Telegram-local; see §2.15)
 
 ### 2.1 Task-in-progress restrictions (match CLI behavior)
 
@@ -115,7 +114,7 @@ If `activeTurnId` is set (turn started but not completed), reject these commands
 
 Allowed during an active turn:
 
-* `/diff`, `/mention`, `/skills`, `/status`, `/mcp`, `/feedback`, `/quit`, `/exit`
+* `/diff`, `/mention`, `/skills`, `/status`, `/mcp`, `/feedback`
 
 Return:
 
@@ -727,20 +726,6 @@ Response contains a tracking `threadId` for the report.
 
 ---
 
-## 2.16 `/quit` and `/exit` (Telegram-local)
-
-In Codex CLI, these exit the UI. For Telegram, choose one:
-
-Option A (recommended): respond:
-
-> “This command is not applicable in Telegram. Use /new to start fresh or /resume to switch threads.”
-
-Option B: unbind the current Telegram topic from its `threadId` (CAR-local “detach”), without deleting anything.
-
-Do not attempt to kill the Codex app-server process unless your architecture explicitly supports that.
-
----
-
 ## 3) Approval request handling (required for correctness)
 
 If approvals are enabled, the server may issue **requests to the client** during a turn. CAR must respond, or the turn will stall.
@@ -915,7 +900,6 @@ These are the CLI’s built-in slash command strings (kebab-case; you should sup
 * `/status` — show session config and token usage
 * `/mcp` — list configured MCP tools
 * `/logout` — log out
-* `/quit`, `/exit` — exit Codex (not meaningful in Telegram; see notes)
 * `/feedback` — send logs/feedback
 * `/rollout` — print rollout path (debug/unstable in CLI; but thread metadata contains a path)
 * `/ps` — list background terminals (CLI-only; see notes)
@@ -1748,14 +1732,6 @@ In CLI it inserts `@` to mention a file in the composer. In Telegram, users can 
 
 * no-op, or
 * “Reply with the file path you want to reference.”
-
-### 5.4 `/quit` and `/exit`
-
-These are meaningful in an interactive terminal. In Telegram, you can:
-
-* unbind the chat from the current thread (forget mapping), or
-* archive the thread with `thread/archive`, or
-* just respond: “Not applicable in Telegram.”
 
 ---
 
