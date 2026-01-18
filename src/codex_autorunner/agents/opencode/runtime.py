@@ -284,6 +284,65 @@ async def collect_opencode_output_from_events(
     part_lengths: dict[str, int] = {}
     last_full_text = ""
     error: Optional[str] = None
+    message_roles: dict[str, str] = {}
+    pending_text: dict[str, list[str]] = {}
+
+    def _message_id_from_info(info: Any) -> Optional[str]:
+        if not isinstance(info, dict):
+            return None
+        for key in ("id", "messageID", "messageId", "message_id"):
+            value = info.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def _message_id_from_part(part: Any) -> Optional[str]:
+        if not isinstance(part, dict):
+            return None
+        for key in ("messageID", "messageId", "message_id"):
+            value = part.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def _register_message_role(payload: Any) -> tuple[Optional[str], Optional[str]]:
+        if not isinstance(payload, dict):
+            return None, None
+        info = payload.get("info")
+        if not isinstance(info, dict):
+            properties = payload.get("properties")
+            if isinstance(properties, dict):
+                info = properties.get("info")
+        role = info.get("role") if isinstance(info, dict) else None
+        msg_id = _message_id_from_info(info)
+        if isinstance(role, str) and msg_id:
+            message_roles[msg_id] = role
+        return msg_id, role if isinstance(role, str) else None
+
+    def _append_text_for_message(message_id: Optional[str], text: str) -> None:
+        if not text:
+            return
+        if message_id is None:
+            text_parts.append(text)
+            return
+        role = message_roles.get(message_id)
+        if role == "user":
+            return
+        if role == "assistant":
+            text_parts.append(text)
+            return
+        pending_text.setdefault(message_id, []).append(text)
+
+    def _flush_pending_text(message_id: Optional[str]) -> None:
+        if not message_id:
+            return
+        role = message_roles.get(message_id)
+        if role != "assistant":
+            pending_text.pop(message_id, None)
+            return
+        pending = pending_text.pop(message_id, [])
+        if pending:
+            text_parts.extend(pending)
 
     async for event in events:
         if should_stop is not None and should_stop():
@@ -322,6 +381,10 @@ async def collect_opencode_output_from_events(
         if event.event == "session.error":
             error = _extract_error_text(payload) or "OpenCode session error"
             break
+        if event.event in ("message.updated", "message.completed"):
+            msg_id, role = _register_message_role(payload)
+            if role == "assistant":
+                _flush_pending_text(msg_id)
         if event.event == "message.part.updated":
             properties = (
                 payload.get("properties") if isinstance(payload, dict) else None
@@ -335,6 +398,7 @@ async def collect_opencode_output_from_events(
             part_dict = part if isinstance(part, dict) else None
             part_type = part_dict.get("type") if part_dict else None
             part_ignored = bool(part_dict.get("ignored")) if part_dict else False
+            part_message_id = _message_id_from_part(part_dict)
             if isinstance(delta, dict):
                 delta_text = delta.get("text")
             elif isinstance(delta, str):
@@ -343,7 +407,7 @@ async def collect_opencode_output_from_events(
                 delta_text = None
             if isinstance(delta_text, str) and delta_text:
                 if part_type in (None, "text") and not part_ignored:
-                    text_parts.append(delta_text)
+                    _append_text_for_message(part_message_id, delta_text)
                 elif part_handler and part_dict and part_type:
                     await part_handler(part_type, part_dict, delta_text)
             elif (
@@ -355,20 +419,23 @@ async def collect_opencode_output_from_events(
                     if isinstance(part_id, str) and part_id:
                         last_len = part_lengths.get(part_id, 0)
                         if len(text) > last_len:
-                            text_parts.append(text[last_len:])
+                            _append_text_for_message(part_message_id, text[last_len:])
                             part_lengths[part_id] = len(text)
                     else:
                         if last_full_text and text.startswith(last_full_text):
-                            text_parts.append(text[len(last_full_text) :])
+                            _append_text_for_message(
+                                part_message_id, text[len(last_full_text) :]
+                            )
                         elif text != last_full_text:
-                            text_parts.append(text)
+                            _append_text_for_message(part_message_id, text)
                         last_full_text = text
             elif part_handler and part_dict and part_type:
                 await part_handler(part_type, part_dict, None)
         if event.event in ("message.completed", "message.updated"):
             message_result = parse_message_response(payload)
-            if message_result.text and not text_parts:
-                text_parts.append(message_result.text)
+            msg_id, role = _register_message_role(payload)
+            if message_result.text and not text_parts and role != "user":
+                _append_text_for_message(msg_id, message_result.text)
             if message_result.error and not error:
                 error = message_result.error
         if event.event == "session.idle":

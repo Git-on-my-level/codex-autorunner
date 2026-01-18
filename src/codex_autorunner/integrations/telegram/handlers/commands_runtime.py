@@ -1484,6 +1484,8 @@ class TelegramCommandHandlers:
                                 asyncio.create_task(_abort_opencode())
                             return runtime.interrupt_requested
 
+                        reasoning_buffers: dict[str, str] = {}
+
                         async def _handle_opencode_part(
                             part_type: str,
                             part: dict[str, Any],
@@ -1495,32 +1497,84 @@ class TelegramCommandHandlers:
                             if tracker is None:
                                 return
                             if part_type == "reasoning":
-                                text = delta_text
-                                if not text:
+                                part_id = (
+                                    part.get("id") or part.get("partId") or "reasoning"
+                                )
+                                buffer = reasoning_buffers.get(part_id, "")
+                                if delta_text:
+                                    buffer = f"{buffer}{delta_text}"
+                                else:
                                     raw_text = part.get("text")
-                                    text = raw_text if isinstance(raw_text, str) else ""
-                                if text:
-                                    tracker.note_thinking(text)
+                                    if isinstance(raw_text, str) and raw_text:
+                                        buffer = raw_text
+                                if buffer:
+                                    reasoning_buffers[part_id] = buffer
+                                    preview = _compact_preview(buffer, limit=240)
+                                    tracker.note_thinking(preview)
                             elif part_type == "tool":
-                                tool = part.get("tool") or part.get("callID") or "tool"
+                                tool_id = part.get("callID") or part.get("id")
+                                tool_name = (
+                                    part.get("tool") or part.get("name") or "tool"
+                                )
                                 status = None
                                 state = part.get("state")
                                 if isinstance(state, dict):
                                     status = state.get("status")
                                 label = (
-                                    f"{tool} ({status})"
+                                    f"{tool_name} ({status})"
                                     if isinstance(status, str) and status
-                                    else str(tool)
+                                    else str(tool_name)
                                 )
-                                tracker.note_tool(label)
+                                mapped_status = "update"
+                                if isinstance(status, str):
+                                    status_lower = status.lower()
+                                    if status_lower in ("completed", "done", "success"):
+                                        mapped_status = "done"
+                                    elif status_lower in ("error", "failed", "fail"):
+                                        mapped_status = "fail"
+                                    elif status_lower in ("pending", "running"):
+                                        mapped_status = "running"
+                                if not tracker.update_action_by_item_id(
+                                    tool_id, label, mapped_status, label="tool"
+                                ):
+                                    tracker.add_action(
+                                        "tool",
+                                        label,
+                                        mapped_status,
+                                        item_id=tool_id,
+                                    )
                             elif part_type == "patch":
+                                patch_id = part.get("id") or part.get("hash")
                                 files = part.get("files")
                                 if isinstance(files, list) and files:
-                                    tracker.note_file_change(
-                                        ", ".join(str(file) for file in files)
-                                    )
+                                    summary = ", ".join(str(file) for file in files)
+                                    if not tracker.update_action_by_item_id(
+                                        patch_id, summary, "done", label="files"
+                                    ):
+                                        tracker.add_action(
+                                            "files",
+                                            summary,
+                                            "done",
+                                            item_id=patch_id,
+                                        )
                                 else:
-                                    tracker.note_file_change("Patch")
+                                    if not tracker.update_action_by_item_id(
+                                        patch_id, "Patch", "done", label="files"
+                                    ):
+                                        tracker.add_action(
+                                            "files",
+                                            "Patch",
+                                            "done",
+                                            item_id=patch_id,
+                                        )
+                            elif part_type == "agent":
+                                agent_name = part.get("name") or "agent"
+                                tracker.add_action("agent", str(agent_name), "done")
+                            elif part_type == "step-start":
+                                tracker.add_action("step", "started", "update")
+                            elif part_type == "step-finish":
+                                reason = part.get("reason") or "finished"
+                                tracker.add_action("step", str(reason), "done")
                             await self._schedule_progress_edit(turn_key)
 
                         output_task = asyncio.create_task(

@@ -106,6 +106,24 @@ class TurnProgressTracker:
         action.text = normalized
         action.status = status
 
+    def update_action_by_item_id(
+        self,
+        item_id: Optional[str],
+        text: str,
+        status: str,
+        *,
+        label: Optional[str] = None,
+    ) -> bool:
+        if not item_id:
+            return False
+        for index, action in enumerate(self.actions):
+            if action.item_id == item_id:
+                if label:
+                    action.label = label
+                self.update_action(index, text, status)
+                return True
+        return False
+
     def note_thinking(self, text: str) -> None:
         if self.last_thinking_index is None:
             self.add_action("thinking", text, "update", track_thinking=True)
