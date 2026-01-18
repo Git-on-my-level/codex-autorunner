@@ -930,8 +930,9 @@ class TelegramBotClient:
         logger: Optional[logging.Logger] = None,
         client: Optional[httpx.AsyncClient] = None,
     ) -> None:
-        self._base_url = f"https://api.telegram.org/bot{bot_token}"
-        self._file_base_url = f"https://api.telegram.org/file/bot{bot_token}"
+        self._bot_token = bot_token
+        self._base_url = "https://api.telegram.org"
+        self._file_base_url = "https://api.telegram.org"
         self._logger = logger or logging.getLogger(__name__)
         if client is None:
             self._client = httpx.AsyncClient(timeout=timeout_seconds)
@@ -1142,15 +1143,43 @@ class TelegramBotClient:
         result = await self._request("setMyCommands", payload)
         return bool(result) if isinstance(result, bool) else False
 
-    async def download_file(self, file_path: str) -> bytes:
-        url = f"{self._file_base_url}/{file_path}"
+    async def download_file(self, file_path: str, max_size_bytes: int = 50 * 1024 * 1024) -> bytes:
+        url = f"{self._file_base_url}/bot{self._bot_token}/{file_path}"
         log_event(
             self._logger, logging.INFO, "telegram.file.download", file_path=file_path
         )
         try:
             response = await self._client.get(url)
             response.raise_for_status()
+            content_length = response.headers.get("content-length")
+            if content_length:
+                try:
+                    file_size = int(content_length)
+                    if file_size > max_size_bytes:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.file.too_large",
+                            file_path=file_path,
+                            size=file_size,
+                            max_size=max_size_bytes,
+                        )
+                        raise TelegramAPIError(f"File too large: {file_size} bytes (max {max_size_bytes})")
+                except ValueError:
+                    pass
+            if len(response.content) > max_size_bytes:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.file.too_large",
+                    file_path=file_path,
+                    size=len(response.content),
+                    max_size=max_size_bytes,
+                )
+                raise TelegramAPIError(f"File too large: {len(response.content)} bytes (max {max_size_bytes})")
             return response.content
+        except TelegramAPIError:
+            raise
         except Exception as exc:
             log_event(
                 self._logger,
@@ -1274,7 +1303,7 @@ class TelegramBotClient:
         return result if isinstance(result, dict) else {}
 
     async def _request(self, method: str, payload: dict[str, Any]) -> Any:
-        url = f"{self._base_url}/{method}"
+        url = f"{self._base_url}/bot{self._bot_token}/{method}"
 
         async def send() -> httpx.Response:
             return await self._client.post(url, json=payload)
@@ -1284,7 +1313,7 @@ class TelegramBotClient:
     async def _request_multipart(
         self, method: str, data: dict[str, Any], files: dict[str, Any]
     ) -> Any:
-        url = f"{self._base_url}/{method}"
+        url = f"{self._base_url}/bot{self._bot_token}/{method}"
 
         async def send() -> httpx.Response:
             return await self._client.post(url, data=data, files=files)

@@ -89,6 +89,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 manager,
                 logger=request.app.state.logger,
                 shutdown_event=shutdown_event,
+                max_seconds=60.0,
             ),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
@@ -133,7 +134,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         engine = request.app.state.engine
         shutdown_event = getattr(request.app.state, "shutdown_event", None)
         return StreamingResponse(
-            log_stream(engine.log_path, shutdown_event=shutdown_event),
+            log_stream(engine.log_path, shutdown_event=shutdown_event, max_seconds=60.0),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
@@ -183,6 +184,13 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         session_id = None
         active_session: Optional[ActiveSession] = None
         seen_update_interval = 5.0
+
+        ws_input_bytes_total = 0
+        ws_input_message_count = 0
+        ws_rate_limit_window_start = time.monotonic()
+        MAX_BYTES_PER_CONNECTION = 10 * 1024 * 1024
+        MAX_MESSAGES_PER_WINDOW = 1000
+        RATE_LIMIT_WINDOW_SECONDS = 60.0
 
         def _session_key(repo: str, agent: str) -> str:
             normalized = (agent or "").strip().lower()
@@ -368,7 +376,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 ):
                     repo_to_session[_session_key(repo_path, agent)] = session_id
                     _mark_dirty()
-                _maybe_persist_sessions(force=True)
+                await _maybe_persist_sessions(force=True)
 
         if attach_only and active_session:
             active_session.refresh_alt_screen_state()
@@ -404,11 +412,12 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         if active_session:
                             exit_code = active_session.pty.exit_code()
                             if session_id:
-                                record = session_registry.get(session_id)
-                                if record:
-                                    record.status = "closed"
-                                    record.last_seen_at = now_iso()
-                                    _mark_dirty()
+                                async with terminal_lock:
+                                    record = session_registry.get(session_id)
+                                    if record:
+                                        record.status = "closed"
+                                        record.last_seen_at = now_iso()
+                                _mark_dirty()
                             notifier = getattr(engine, "notifier", None)
                             if notifier:
                                 asyncio.create_task(
@@ -430,22 +439,36 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         break
                     await ws.send_bytes(data)
                     if session_id:
-                        _touch_session(session_id)
+                        await _touch_session(session_id)
             except Exception:
                 safe_log(logger, logging.WARNING, "Terminal PTY to WS bridge failed")
 
         async def ws_to_pty():
+            nonlocal ws_input_bytes_total, ws_input_message_count, ws_rate_limit_window_start
             try:
                 while True:
                     msg = await ws.receive()
                     if msg["type"] == "websocket.disconnect":
                         break
                     if msg.get("bytes") is not None:
+                        ws_input_message_count += 1
+                        ws_input_bytes_total += len(msg["bytes"])
+                        if (
+                            ws_input_bytes_total > MAX_BYTES_PER_CONNECTION
+                            or ws_input_message_count > MAX_MESSAGES_PER_WINDOW
+                        ):
+                            await ws.close(code=1008, reason="Rate limit exceeded")
+                            return
+                        now = time.monotonic()
+                        if now - ws_rate_limit_window_start > RATE_LIMIT_WINDOW_SECONDS:
+                            ws_input_bytes_total = 0
+                            ws_input_message_count = 0
+                            ws_rate_limit_window_start = now
                         # Queue input so PTY writes never block the event loop.
                         active_session.write_input(msg["bytes"])
                         active_session.mark_input_activity()
                         if session_id:
-                            _touch_session(session_id)
+                            await _touch_session(session_id)
                         continue
                     text = msg.get("text")
                     if not text:
@@ -497,6 +520,19 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                                 )
                             )
                             continue
+                        ws_input_message_count += 1
+                        ws_input_bytes_total += len(encoded)
+                        if (
+                            ws_input_bytes_total > MAX_BYTES_PER_CONNECTION
+                            or ws_input_message_count > MAX_MESSAGES_PER_WINDOW
+                        ):
+                            await ws.close(code=1008, reason="Rate limit exceeded")
+                            return
+                        now = time.monotonic()
+                        if now - ws_rate_limit_window_start > RATE_LIMIT_WINDOW_SECONDS:
+                            ws_input_bytes_total = 0
+                            ws_input_message_count = 0
+                            ws_rate_limit_window_start = now
                         if active_session.mark_input_id_seen(input_id):
                             active_session.write_input(encoded)
                             active_session.mark_input_activity()
@@ -504,11 +540,19 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                             json.dumps({"type": "ack", "id": input_id, "ok": True})
                         )
                         if session_id:
-                            _touch_session(session_id)
+                            await _touch_session(session_id)
                     elif payload.get("type") == "ping":
+                        ws_input_message_count += 1
+                        if ws_input_message_count > MAX_MESSAGES_PER_WINDOW:
+                            await ws.close(code=1008, reason="Rate limit exceeded")
+                            return
+                        now = time.monotonic()
+                        if now - ws_rate_limit_window_start > RATE_LIMIT_WINDOW_SECONDS:
+                            ws_input_message_count = 0
+                            ws_rate_limit_window_start = now
                         await ws.send_text(json.dumps({"type": "pong"}))
                         if session_id:
-                            _touch_session(session_id)
+                            await _touch_session(session_id)
             except WebSocketDisconnect:
                 pass
             except Exception:
@@ -516,14 +560,22 @@ def build_base_routes(static_dir: Path) -> APIRouter:
 
         forward_task = asyncio.create_task(pty_to_ws())
         input_task = asyncio.create_task(ws_to_pty())
-        done, pending = await asyncio.wait(
-            [forward_task, input_task], return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in done:
+        try:
+            done, pending = await asyncio.wait(
+                [forward_task, input_task], return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                try:
+                    task.result()
+                except Exception:
+                    safe_log(logger, logging.WARNING, "Terminal websocket task failed")
+        finally:
+            forward_task.cancel()
+            input_task.cancel()
             try:
-                task.result()
+                await asyncio.gather(forward_task, input_task, return_exceptions=False)
             except Exception:
-                safe_log(logger, logging.WARNING, "Terminal websocket task failed")
+                pass
 
         if active_session:
             active_session.remove_subscriber(queue)
@@ -551,11 +603,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         app.state.repo_to_session = repo_to_session
                         _mark_dirty()
             if session_id:
-                _touch_session(session_id)
-            _maybe_persist_sessions(force=True)
+                await _touch_session(session_id)
+            await _maybe_persist_sessions(force=True)
 
-        forward_task.cancel()
-        input_task.cancel()
         try:
             await ws.close()
         except Exception:

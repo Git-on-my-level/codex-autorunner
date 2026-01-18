@@ -43,10 +43,12 @@ class HubJobManager:
         logger: logging.Logger,
         max_jobs: int = 200,
         max_age_seconds: int = 3600,
+        max_concurrent_jobs: int = 10,
     ) -> None:
         self._logger = logger
         self._max_jobs = max(10, max_jobs)
         self._max_age_seconds = max(300, max_age_seconds)
+        self._max_concurrent_jobs = max(1, max_concurrent_jobs)
         self._jobs: Dict[str, HubJob] = {}
         self._order: Deque[str] = deque()
         try:
@@ -62,6 +64,12 @@ class HubJobManager:
         *,
         request_id: Optional[str] = None,
     ) -> HubJob:
+        async with self._lock:
+            running_count = sum(
+                1 for job in self._jobs.values() if job.status == "running"
+            )
+            if running_count >= self._max_concurrent_jobs:
+                raise Exception(f"Too many concurrent jobs: {running_count} (max {self._max_concurrent_jobs})")
         job_id = uuid.uuid4().hex
         job = HubJob(job_id=job_id, kind=kind, status="queued", created_at=now_iso())
         async with self._lock:

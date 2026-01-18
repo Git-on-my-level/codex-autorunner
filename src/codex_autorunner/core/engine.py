@@ -131,6 +131,7 @@ class Engine:
         self._app_server_threads = AppServerThreadRegistry(
             default_app_server_threads_path(self.repo_root)
         )
+        self._app_server_threads_lock = threading.Lock()
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         self._app_server_event_formatter = AppServerEventFormatter()
@@ -1053,31 +1054,32 @@ class Engine:
             sandbox_policy = "dangerFullAccess"
         try:
             client = await supervisor.get_client(self.repo_root)
-            thread_id = self._app_server_threads.get_thread_id("autorunner")
-            thread_info: Optional[dict[str, Any]] = None
-            if thread_id:
-                try:
-                    resume_result = await client.thread_resume(thread_id)
-                    resumed = resume_result.get("id")
-                    if isinstance(resumed, str) and resumed:
-                        thread_id = resumed
-                        self._app_server_threads.set_thread_id("autorunner", thread_id)
-                    if isinstance(resume_result, dict):
-                        thread_info = resume_result
-                except CodexAppServerError:
-                    self._app_server_threads.reset_thread("autorunner")
-                    thread_id = None
-            if not thread_id:
-                thread = await client.thread_start(str(self.repo_root))
-                thread_id = thread.get("id")
-                if not isinstance(thread_id, str) or not thread_id:
-                    self.log_line(
-                        run_id, "error: app-server did not return a thread id"
-                    )
-                    return 1
-                self._app_server_threads.set_thread_id("autorunner", thread_id)
-                if isinstance(thread, dict):
-                    thread_info = thread
+            with self._app_server_threads_lock:
+                thread_id = self._app_server_threads.get_thread_id("autorunner")
+                thread_info: Optional[dict[str, Any]] = None
+                if thread_id:
+                    try:
+                        resume_result = await client.thread_resume(thread_id)
+                        resumed = resume_result.get("id")
+                        if isinstance(resumed, str) and resumed:
+                            thread_id = resumed
+                            self._app_server_threads.set_thread_id("autorunner", thread_id)
+                        if isinstance(resume_result, dict):
+                            thread_info = resume_result
+                    except CodexAppServerError:
+                        self._app_server_threads.reset_thread("autorunner")
+                        thread_id = None
+                if not thread_id:
+                    thread = await client.thread_start(str(self.repo_root))
+                    thread_id = thread.get("id")
+                    if not isinstance(thread_id, str) or not thread_id:
+                        self.log_line(
+                            run_id, "error: app-server did not return a thread id"
+                        )
+                        return 1
+                    self._app_server_threads.set_thread_id("autorunner", thread_id)
+                    if isinstance(thread, dict):
+                        thread_info = thread
             if thread_id:
                 self._update_run_telemetry(run_id, thread_id=thread_id)
             turn_kwargs: dict[str, Any] = {}
@@ -1413,21 +1415,22 @@ class Engine:
             self.log_line(run_id, f"error: opencode backend unavailable: {exc}")
             return 1
 
-        key = "autorunner.opencode"
-        thread_id = self._app_server_threads.get_thread_id(key)
-        if thread_id:
-            try:
-                await client.get_session(thread_id)
-            except Exception:
-                self._app_server_threads.reset_thread(key)
-                thread_id = None
-        if not thread_id:
-            session = await client.create_session(directory=str(self.repo_root))
-            thread_id = extract_session_id(session, allow_fallback_id=True)
-            if not isinstance(thread_id, str) or not thread_id:
-                self.log_line(run_id, "error: opencode did not return a session id")
-                return 1
-            self._app_server_threads.set_thread_id(key, thread_id)
+        with self._app_server_threads_lock:
+            key = "autorunner.opencode"
+            thread_id = self._app_server_threads.get_thread_id(key)
+            if thread_id:
+                try:
+                    await client.get_session(thread_id)
+                except Exception:
+                    self._app_server_threads.reset_thread(key)
+                    thread_id = None
+            if not thread_id:
+                session = await client.create_session(directory=str(self.repo_root))
+                thread_id = extract_session_id(session, allow_fallback_id=True)
+                if not isinstance(thread_id, str) or not thread_id:
+                    self.log_line(run_id, "error: opencode did not return a session id")
+                    return 1
+                self._app_server_threads.set_thread_id(key, thread_id)
 
         model_payload = split_model_id(model)
         missing_env = await opencode_missing_env(
