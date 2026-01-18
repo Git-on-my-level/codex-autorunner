@@ -542,8 +542,8 @@ def _extract_context_usage_percent(
         return None
     if context_window <= 0:
         return None
-    percent_used = round(total_tokens / context_window * 100)
-    return min(max(percent_used, 0), 100)
+    percent_remaining = round((context_window - total_tokens) / context_window * 100)
+    return min(max(percent_remaining, 0), 100)
 
 
 def _format_turn_metrics(
