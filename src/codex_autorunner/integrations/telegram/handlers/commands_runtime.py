@@ -3493,17 +3493,50 @@ class TelegramCommandHandlers:
             )
         local_thread_ids: list[str] = []
         local_previews: dict[str, str] = {}
+        local_thread_topics: dict[str, set[str]] = {}
+        store_state = None
         if show_unscoped:
             store_state = self._store.load()
-            local_thread_ids, local_previews, _topic_keys = _local_workspace_threads(
+            (
+                local_thread_ids,
+                local_previews,
+                local_thread_topics,
+            ) = _local_workspace_threads(
                 store_state, record.workspace_path, current_key=key
             )
             for thread_id in record.thread_ids:
+                local_thread_topics.setdefault(thread_id, set()).add(key)
                 if thread_id not in local_thread_ids:
                     local_thread_ids.append(thread_id)
                 cached_preview = _thread_summary_preview(record, thread_id)
                 if cached_preview:
                     local_previews.setdefault(thread_id, cached_preview)
+            allowed_thread_ids: set[str] = set()
+            for thread_id in local_thread_ids:
+                if thread_id in record.thread_ids:
+                    allowed_thread_ids.add(thread_id)
+                    continue
+                for topic_key in local_thread_topics.get(thread_id, set()):
+                    topic_record = (
+                        store_state.topics.get(topic_key) if store_state else None
+                    )
+                    if topic_record and topic_record.agent == "opencode":
+                        allowed_thread_ids.add(thread_id)
+                        break
+            if allowed_thread_ids:
+                local_thread_ids = [
+                    thread_id
+                    for thread_id in local_thread_ids
+                    if thread_id in allowed_thread_ids
+                ]
+                local_previews = {
+                    thread_id: preview
+                    for thread_id, preview in local_previews.items()
+                    if thread_id in allowed_thread_ids
+                }
+            else:
+                local_thread_ids = []
+                local_previews = {}
         else:
             for thread_id in record.thread_ids:
                 local_thread_ids.append(thread_id)
