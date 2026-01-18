@@ -203,6 +203,14 @@ function setTemporaryNote(note, message) {
     note.textContent = message;
     return previous;
 }
+function markPrFlowClick(action) {
+    const card = $("github-card");
+    if (card) {
+        card.dataset.prFlowLastAction = action;
+        card.dataset.prFlowLastClick = new Date().toISOString();
+    }
+    console.debug(`[github] pr flow ${action} click`);
+}
 function restoreTemporaryNote(note, previous, message) {
     if (!note)
         return;
@@ -271,6 +279,7 @@ function prFlowPayload() {
 async function startPrFlow() {
     const els = prFlowEls();
     const note = $("github-note");
+    markPrFlowClick("start");
     setTemporaryNote(note, "PR flow: click received.");
     const payload = prFlowPayload();
     if (!payload) {
@@ -299,6 +308,7 @@ async function startPrFlow() {
 async function stopPrFlow() {
     const els = prFlowEls();
     const note = $("github-note");
+    markPrFlowClick("stop");
     setTemporaryNote(note, "PR flow: click received.");
     const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
     const prevDisabled = setButtonsDisabled(buttons, true);
@@ -321,6 +331,7 @@ async function stopPrFlow() {
 async function resumePrFlow() {
     const els = prFlowEls();
     const note = $("github-note");
+    markPrFlowClick("resume");
     setTemporaryNote(note, "PR flow: click received.");
     const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
     const prevDisabled = setButtonsDisabled(buttons, true);
@@ -343,6 +354,7 @@ async function resumePrFlow() {
 async function collectPrFlow() {
     const els = prFlowEls();
     const note = $("github-note");
+    markPrFlowClick("collect");
     setTemporaryNote(note, "PR flow: click received.");
     const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
     const prevDisabled = setButtonsDisabled(buttons, true);

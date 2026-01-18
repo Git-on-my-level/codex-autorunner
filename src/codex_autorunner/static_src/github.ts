@@ -219,6 +219,15 @@ function setTemporaryNote(note: HTMLElement | null, message: string): string {
   return previous;
 }
 
+function markPrFlowClick(action: string): void {
+  const card = $("github-card");
+  if (card) {
+    card.dataset.prFlowLastAction = action;
+    card.dataset.prFlowLastClick = new Date().toISOString();
+  }
+  console.debug(`[github] pr flow ${action} click`);
+}
+
 function restoreTemporaryNote(note: HTMLElement | null, previous: string, message: string): void {
   if (!note) return;
   if ((note.textContent || "") === message) {
@@ -278,6 +287,7 @@ function prFlowPayload(): Record<string, unknown> | null {
 async function startPrFlow(): Promise<void> {
   const els = prFlowEls();
   const note = $("github-note") as HTMLElement | null;
+  markPrFlowClick("start");
   setTemporaryNote(note, "PR flow: click received.");
   const payload = prFlowPayload();
   if (!payload) {
@@ -305,6 +315,7 @@ async function startPrFlow(): Promise<void> {
 async function stopPrFlow(): Promise<void> {
   const els = prFlowEls();
   const note = $("github-note") as HTMLElement | null;
+  markPrFlowClick("stop");
   setTemporaryNote(note, "PR flow: click received.");
   const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
   const prevDisabled = setButtonsDisabled(buttons, true);
@@ -326,6 +337,7 @@ async function stopPrFlow(): Promise<void> {
 async function resumePrFlow(): Promise<void> {
   const els = prFlowEls();
   const note = $("github-note") as HTMLElement | null;
+  markPrFlowClick("resume");
   setTemporaryNote(note, "PR flow: click received.");
   const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
   const prevDisabled = setButtonsDisabled(buttons, true);
@@ -347,6 +359,7 @@ async function resumePrFlow(): Promise<void> {
 async function collectPrFlow(): Promise<void> {
   const els = prFlowEls();
   const note = $("github-note") as HTMLElement | null;
+  markPrFlowClick("collect");
   setTemporaryNote(note, "PR flow: click received.");
   const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
   const prevDisabled = setButtonsDisabled(buttons, true);
