@@ -1103,18 +1103,19 @@ def create_hub_app(
         mount_errors.pop(prefix, None)
         return True
 
-    async def _refresh_mounts(snapshots):
+    async def _refresh_mounts(snapshots, *, full_refresh: bool = True):
         desired = {
             snap.id for snap in snapshots if snap.initialized and snap.exists_on_disk
         }
         mount_lock = await _get_mount_lock()
         async with mount_lock:
-            for prefix in list(mounted_repos):
-                if prefix not in desired:
-                    await _unmount_repo_locked(prefix)
-            for prefix in list(mount_errors):
-                if prefix not in desired:
-                    mount_errors.pop(prefix, None)
+            if full_refresh:
+                for prefix in list(mounted_repos):
+                    if prefix not in desired:
+                        await _unmount_repo_locked(prefix)
+                for prefix in list(mount_errors):
+                    if prefix not in desired:
+                        mount_errors.pop(prefix, None)
             for snap in snapshots:
                 if snap.id not in desired:
                     continue
@@ -1399,7 +1400,7 @@ def create_hub_app(
                 )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot], full_refresh=False)
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/jobs/repos", response_model=HubJobResponse)
@@ -1429,7 +1430,7 @@ def create_hub_app(
                     git_init=git_init,
                     force=force,
                 )
-            await _refresh_mounts([snapshot])
+            await _refresh_mounts([snapshot], full_refresh=False)
             return _add_mount_info(snapshot.to_dict(context.config.root))
 
         job = await context.job_manager.submit(
@@ -1522,7 +1523,7 @@ def create_hub_app(
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot], full_refresh=False)
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/jobs/worktrees/create", response_model=HubJobResponse)
@@ -1535,7 +1536,7 @@ def create_hub_app(
                 force=payload.force,
                 start_point=str(payload.start_point) if payload.start_point else None,
             )
-            await _refresh_mounts([snapshot])
+            await _refresh_mounts([snapshot], full_refresh=False)
             return _add_mount_info(snapshot.to_dict(context.config.root))
 
         job = await context.job_manager.submit(
@@ -1603,7 +1604,7 @@ def create_hub_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot], full_refresh=False)
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/stop")
@@ -1631,7 +1632,7 @@ def create_hub_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot], full_refresh=False)
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/kill")
@@ -1650,7 +1651,7 @@ def create_hub_app(
             snapshot = await asyncio.to_thread(context.supervisor.init_repo, repo_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot], full_refresh=False)
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/sync-main")
@@ -1660,7 +1661,7 @@ def create_hub_app(
             snapshot = await asyncio.to_thread(context.supervisor.sync_main, repo_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot], full_refresh=False)
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.get("/", include_in_schema=False)
