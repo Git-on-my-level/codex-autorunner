@@ -235,9 +235,12 @@ def parse_issue_input(issue: str) -> Tuple[Optional[str], int]:
     Returns (repo_slug_or_none, issue_number).
     Accepts:
       - "123"
+      - "#123"
       - "https://github.com/org/repo/issues/123"
     """
     raw = (issue or "").strip()
+    if raw.startswith("#"):
+        raw = raw[1:].strip()
     if not raw:
         raise GitHubError("issue is required", status_code=400)
     if raw.isdigit():
@@ -256,9 +259,12 @@ def parse_pr_input(pr: str) -> Tuple[Optional[str], int]:
     Returns (repo_slug_or_none, pr_number).
     Accepts:
       - "123"
+      - "#123"
       - "https://github.com/org/repo/pull/123"
     """
     raw = (pr or "").strip()
+    if raw.startswith("#"):
+        raw = raw[1:].strip()
     if not raw:
         raise GitHubError("pr is required", status_code=400)
     if raw.isdigit():

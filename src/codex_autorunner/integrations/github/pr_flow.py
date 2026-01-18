@@ -35,12 +35,13 @@ DEFAULT_PR_FLOW_CONFIG: dict[str, Any] = {
         "include_codex": True,
         "include_github": True,
         "include_checks": True,
+        "severity_threshold": "minor",
     },
     "chatops": {
         "enabled": False,
         "poll_interval_seconds": 60,
         "allow_users": [],
-        "allow_associations": ["OWNER", "MEMBER", "COLLABORATOR"],
+        "allow_associations": [],
         "ignore_bots": True,
     },
 }
@@ -125,6 +126,7 @@ def _default_state() -> dict[str, Any]:
         "max_wallclock_seconds": None,
         "review_summary": None,
         "review_bundle_path": None,
+        "review_snapshot_index": 0,
         "workflow_log_path": None,
         "final_report_path": None,
         "last_error": None,
@@ -204,7 +206,13 @@ class PrFlowManager:
 
     def status(self) -> dict[str, Any]:
         state = self._load_state()
-        state["running"] = bool(self._thread and self._thread.is_alive())
+        is_running = bool(self._thread and self._thread.is_alive())
+        state["running"] = is_running
+        if state.get("status") == "running" and not is_running:
+            state["status"] = "stopped"
+            state["last_error"] = "Recovered from restart"
+            state["updated_at"] = now_iso()
+            self._save_state(state)
         return state
 
     def start(self, *, payload: dict[str, Any]) -> dict[str, Any]:
@@ -214,17 +222,19 @@ class PrFlowManager:
             if not self._config.get("enabled", True):
                 raise PrFlowError("PR flow disabled by config", status_code=409)
             self._acquire_lock()
+            thread_started = False
             try:
                 state = self._initialize_state(payload=payload)
-            except Exception:
-                self._release_lock()
-                raise
-            self._stop_event.clear()
-            self._thread = threading.Thread(
-                target=self._run_flow, args=(state["id"],), daemon=True
-            )
-            self._thread.start()
-            return state
+                self._stop_event.clear()
+                self._thread = threading.Thread(
+                    target=self._run_flow, args=(state["id"],), daemon=True
+                )
+                self._thread.start()
+                thread_started = True
+                return state
+            finally:
+                if not thread_started:
+                    self._release_lock()
 
     def stop(self) -> dict[str, Any]:
         self._stop_event.set()
@@ -243,22 +253,28 @@ class PrFlowManager:
             if self._thread and self._thread.is_alive():
                 raise PrFlowError("PR flow already running", status_code=409)
             self._acquire_lock()
-            self._stop_event.clear()
-            state["status"] = "running"
-            state["updated_at"] = now_iso()
-            state["last_error"] = None
-            self._save_state(state)
-            self._thread = threading.Thread(
-                target=self._run_flow, args=(state["id"],), daemon=True
-            )
-            self._thread.start()
-            return state
+            thread_started = False
+            try:
+                self._stop_event.clear()
+                state["status"] = "running"
+                state["updated_at"] = now_iso()
+                state["last_error"] = None
+                self._save_state(state)
+                self._thread = threading.Thread(
+                    target=self._run_flow, args=(state["id"],), daemon=True
+                )
+                self._thread.start()
+                thread_started = True
+                return state
+            finally:
+                if not thread_started:
+                    self._release_lock()
 
     def collect_reviews(self) -> dict[str, Any]:
         state = self._load_state()
         if not state.get("worktree_path"):
             raise PrFlowError("PR flow has no active worktree")
-        summary, bundle_path = self._collect_reviews(state)
+        summary, bundle_path, _review_data = self._collect_reviews(state)
         state["review_summary"] = _format_review_summary(summary)
         state["review_bundle_path"] = bundle_path
         state["updated_at"] = now_iso()
@@ -505,6 +521,8 @@ class PrFlowManager:
         self, gh: GitHubService, pr_ref: str
     ) -> tuple[int, Optional[str], Optional[str], Optional[str]]:
         raw = (pr_ref or "").strip()
+        if raw.startswith("#"):
+            raw = raw[1:].strip()
         if raw.isdigit():
             number = int(raw)
         else:
@@ -729,7 +747,7 @@ class PrFlowManager:
             state["cycle"] = cycle
             state["updated_at"] = now_iso()
             self._save_state(state)
-            summary, bundle_path = self._collect_reviews(state)
+            summary, bundle_path, review_data = self._collect_reviews(state)
             state["review_summary"] = _format_review_summary(summary)
             state["review_bundle_path"] = bundle_path
             state["updated_at"] = now_iso()
@@ -743,13 +761,13 @@ class PrFlowManager:
             if cycle >= int(max_cycles):
                 self._log_line(state, "Max review cycles reached.")
                 return
-            self._apply_review_to_todo(state, bundle_path, summary)
+            self._apply_review_to_todo(state, bundle_path, summary, review_data)
             self._run_implementation(state)
             self._sync_pr(state)
 
     def _collect_reviews(
         self, state: dict[str, Any]
-    ) -> tuple[PrFlowReviewSummary, Optional[str]]:
+    ) -> tuple[PrFlowReviewSummary, Optional[str], dict[str, Any]]:
         worktree_root = self._require_worktree_root(state)
         engine = self._load_engine(worktree_root)
         gh = GitHubService(worktree_root, raw_config=engine.config.raw)
@@ -772,13 +790,29 @@ class PrFlowManager:
         summary, lines = self._format_review_bundle(
             state, threads=threads, checks=checks, codex_review=codex_review
         )
+        review_snapshot_index = int(state.get("review_snapshot_index") or 0) + 1
+        state["review_snapshot_index"] = review_snapshot_index
+        state["updated_at"] = now_iso()
+        self._save_state(state)
         workflow_dir = self._workflow_dir(state)
         workflow_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"review_bundle_cycle_{int(state.get('cycle') or 1)}.md"
+        filename = f"review_bundle_snapshot_{review_snapshot_index}.md"
         bundle_path = workflow_dir / filename
         atomic_write(bundle_path, "\n".join(lines).rstrip() + "\n")
         self._log_line(state, f"Review bundle written: {bundle_path}")
-        return summary, bundle_path.as_posix()
+        worktree_context_dir = worktree_root / ".codex-autorunner" / "contexts"
+        worktree_context_dir.mkdir(parents=True, exist_ok=True)
+        worktree_bundle_path = worktree_context_dir / f"pr_{filename}"
+        atomic_write(worktree_bundle_path, "\n".join(lines).rstrip() + "\n")
+        self._log_line(
+            state, f"Review bundle written to worktree: {worktree_bundle_path}"
+        )
+        review_data = {
+            "threads": threads,
+            "checks": checks,
+            "codex_review": codex_review,
+        }
+        return summary, worktree_bundle_path.as_posix(), review_data
 
     def _format_review_bundle(
         self,
@@ -888,11 +922,88 @@ class PrFlowManager:
         state: dict[str, Any],
         bundle_path: Optional[str],
         summary: PrFlowReviewSummary,
+        review_data: dict[str, Any],
     ) -> None:
         worktree_root = self._require_worktree_root(state)
         engine = self._load_engine(worktree_root)
         todo_path = engine.config.doc_path("todo")
         existing = todo_path.read_text(encoding="utf-8") if todo_path.exists() else ""
+
+        severity_threshold = self._config.get("review", {}).get(
+            "severity_threshold", "minor"
+        )
+
+        items: list[str] = []
+
+        threads = review_data.get("threads", [])
+        for thread in threads:
+            if not isinstance(thread, dict):
+                continue
+            if thread.get("isResolved"):
+                continue
+            comments = thread.get("comments")
+            if not isinstance(comments, list):
+                continue
+            for comment in comments:
+                if not isinstance(comment, dict):
+                    continue
+                body = comment.get("body") or ""
+                severity = _classify_review_text(body)
+
+                if severity_threshold == "major" and severity == "minor":
+                    continue
+
+                author = comment.get("author") or {}
+                author_name = (
+                    author.get("login")
+                    if isinstance(author, dict)
+                    else str(author or "unknown")
+                )
+                location = comment.get("path") or "(unknown file)"
+                line = comment.get("line")
+                if isinstance(line, int):
+                    location = f"{location}:{line}"
+                snippet = _safe_text(body, 100)
+                items.append(
+                    f"- [ ] Address review: {location} {snippet} ({author_name})"
+                )
+
+        checks = review_data.get("checks", [])
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            name = check.get("name") or "check"
+            conclusion = check.get("conclusion") or "unknown"
+
+            if conclusion not in (
+                "failure",
+                "cancelled",
+                "timed_out",
+                "action_required",
+            ):
+                continue
+
+            severity = "major"
+            if severity_threshold == "major" and severity == "minor":
+                continue
+
+            details_url = check.get("details_url") or ""
+            url_suffix = f" {details_url}" if details_url else ""
+            items.append(f"- [ ] Fix failing check: {name} ({conclusion}){url_suffix}")
+
+        codex_review = review_data.get("codex_review")
+        if codex_review:
+            for raw_line in codex_review.splitlines():
+                text = raw_line.strip()
+                if not text:
+                    continue
+                severity = _classify_review_text(text)
+
+                if severity_threshold == "major" and severity == "minor":
+                    continue
+
+                items.append(f"- [ ] Address Codex review: {text}")
+
         header = f"## Review Feedback Cycle {state.get('cycle')}"
         note = f"- Summary: {summary.total} issues ({summary.major} major, {summary.minor} minor)"
         bundle_line = (
@@ -900,7 +1011,11 @@ class PrFlowManager:
             if bundle_path
             else "- Review bundle: (missing)"
         )
-        block = "\n".join([header, note, bundle_line, ""])
+        lines = [header, note, bundle_line]
+        if items:
+            lines.extend(items)
+
+        block = "\n".join(lines) + "\n"
         new_text = f"{block}{existing}" if existing else block
         atomic_write(todo_path, new_text)
         self._log_line(state, "Appended review feedback to TODO.")

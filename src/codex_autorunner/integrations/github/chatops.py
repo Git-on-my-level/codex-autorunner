@@ -15,7 +15,7 @@ from .pr_flow import PrFlowError, PrFlowManager
 from .service import GitHubService
 
 COMMANDS = {"implement", "fix", "status", "stop", "resume"}
-ISSUE_URL_RE = re.compile(r"/issues/(?P<num>\\d+)")
+ISSUE_URL_RE = re.compile(r"/issues/(?P<num>\d+)")
 
 
 def _chatops_state_path(repo_root: Path) -> Path:
@@ -188,14 +188,14 @@ class GitHubChatOpsPoller:
             if isinstance(login, str) and login.endswith("[bot]"):
                 return False
         allow_users = cfg.get("allow_users") or []
-        if allow_users and login not in allow_users:
-            return False
         allow_assoc = cfg.get("allow_associations") or []
+        allowed = False
+        if allow_users:
+            allowed = allowed or (login in allow_users)
         if allow_assoc:
             assoc = str(comment.get("author_association") or "").upper()
-            if assoc not in {str(a).upper() for a in allow_assoc}:
-                return False
-        return True
+            allowed = allowed or (assoc in {str(a).upper() for a in allow_assoc})
+        return allowed
 
     async def _handle_command(
         self,

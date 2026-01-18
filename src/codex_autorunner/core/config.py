@@ -113,7 +113,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 "enabled": False,
                 "poll_interval_seconds": 60,
                 "allow_users": [],
-                "allow_associations": ["OWNER", "MEMBER", "COLLABORATOR"],
+                "allow_associations": [],
                 "ignore_bots": True,
             },
         },
@@ -1634,6 +1634,13 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                     raise ConfigError(
                         "github.pr_flow.chatops.ignore_bots must be boolean"
                     )
+                if chatops_cfg.get("enabled", False):
+                    allow_users = chatops_cfg.get("allow_users") or []
+                    allow_assoc = chatops_cfg.get("allow_associations") or []
+                    if not allow_users and not allow_assoc:
+                        raise ConfigError(
+                            "github.pr_flow.chatops.enabled requires at least one of allow_users or allow_associations to be non-empty"
+                        )
     server = cfg.get("server")
     if not isinstance(server, dict):
         raise ConfigError("server section must be a mapping")
