@@ -17,6 +17,43 @@ PERMISSION_ALLOW = "allow"
 PERMISSION_DENY = "deny"
 PERMISSION_ASK = "ask"
 
+_OPENCODE_USAGE_TOTAL_KEYS = ("totalTokens", "total_tokens", "total")
+_OPENCODE_USAGE_INPUT_KEYS = (
+    "inputTokens",
+    "input_tokens",
+    "promptTokens",
+    "prompt_tokens",
+)
+_OPENCODE_USAGE_CACHED_KEYS = (
+    "cachedTokens",
+    "cached_tokens",
+    "cachedInputTokens",
+    "cached_input_tokens",
+)
+_OPENCODE_USAGE_OUTPUT_KEYS = (
+    "outputTokens",
+    "output_tokens",
+    "completionTokens",
+    "completion_tokens",
+)
+_OPENCODE_USAGE_REASONING_KEYS = (
+    "reasoningTokens",
+    "reasoning_tokens",
+    "reasoningOutputTokens",
+    "reasoning_output_tokens",
+)
+_OPENCODE_CONTEXT_WINDOW_KEYS = (
+    "modelContextWindow",
+    "contextWindow",
+    "context_window",
+    "contextWindowSize",
+    "context_window_size",
+    "contextLength",
+    "context_length",
+    "maxTokens",
+    "max_tokens",
+)
+
 
 @dataclass(frozen=True)
 class OpenCodeMessageResult:
@@ -178,6 +215,95 @@ def map_approval_policy_to_permission(
     return default
 
 
+def _coerce_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _extract_usage_field(
+    payload: dict[str, Any], keys: tuple[str, ...]
+) -> Optional[int]:
+    for key in keys:
+        if key in payload:
+            value = _coerce_int(payload.get(key))
+            if value is not None:
+                return value
+    return None
+
+
+def _extract_usage_payload(payload: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+    containers = [payload]
+    info = payload.get("info")
+    if isinstance(info, dict):
+        containers.append(info)
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        containers.append(properties)
+        prop_info = properties.get("info")
+        if isinstance(prop_info, dict):
+            containers.append(prop_info)
+    response = payload.get("response")
+    if isinstance(response, dict):
+        containers.append(response)
+    for container in containers:
+        for key in (
+            "usage",
+            "token_usage",
+            "tokenUsage",
+            "usage_stats",
+            "usageStats",
+            "stats",
+        ):
+            usage = container.get(key)
+            if isinstance(usage, dict):
+                return usage
+    return None
+
+
+def _extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
+    total = _extract_usage_field(usage, _OPENCODE_USAGE_TOTAL_KEYS)
+    if total is not None:
+        return total
+    input_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_INPUT_KEYS) or 0
+    cached_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_CACHED_KEYS) or 0
+    output_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_OUTPUT_KEYS) or 0
+    reasoning_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_REASONING_KEYS) or 0
+    if input_tokens or cached_tokens or output_tokens or reasoning_tokens:
+        return input_tokens + cached_tokens + output_tokens + reasoning_tokens
+    return None
+
+
+def _extract_context_window(
+    payload: Any, usage: Optional[dict[str, Any]]
+) -> Optional[int]:
+    containers: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        containers.append(payload)
+        info = payload.get("info")
+        if isinstance(info, dict):
+            containers.append(info)
+        properties = payload.get("properties")
+        if isinstance(properties, dict):
+            containers.append(properties)
+            prop_info = properties.get("info")
+            if isinstance(prop_info, dict):
+                containers.append(prop_info)
+    if isinstance(usage, dict):
+        containers.insert(0, usage)
+    for container in containers:
+        for key in _OPENCODE_CONTEXT_WINDOW_KEYS:
+            value = _coerce_int(container.get(key))
+            if value is not None and value > 0:
+                return value
+    return None
+
+
 async def opencode_missing_env(
     client: Any,
     workspace_root: str,
@@ -288,6 +414,8 @@ async def collect_opencode_output_from_events(
     message_roles_seen = False
     last_role_seen: Optional[str] = None
     pending_text: dict[str, list[str]] = {}
+    last_usage_total: Optional[int] = None
+    last_context_window: Optional[int] = None
 
     def _message_id_from_info(info: Any) -> Optional[str]:
         if not isinstance(info, dict):
@@ -457,6 +585,24 @@ async def collect_opencode_output_from_events(
                 _append_text_for_message(msg_id, message_result.text)
             if message_result.error and not error:
                 error = message_result.error
+            if part_handler is not None:
+                usage = _extract_usage_payload(payload)
+                if usage is not None:
+                    total_tokens = _extract_total_tokens(usage)
+                    context_window = _extract_context_window(payload, usage)
+                    if (
+                        total_tokens != last_usage_total
+                        or context_window != last_context_window
+                    ):
+                        last_usage_total = total_tokens
+                        last_context_window = context_window
+                        usage_snapshot: dict[str, Any] = {}
+                        if total_tokens is not None:
+                            usage_snapshot["totalTokens"] = total_tokens
+                        if context_window is not None:
+                            usage_snapshot["modelContextWindow"] = context_window
+                        if usage_snapshot:
+                            await part_handler("usage", usage_snapshot, None)
         if event.event == "session.idle":
             if not text_parts and pending_text:
                 _flush_all_pending_text()

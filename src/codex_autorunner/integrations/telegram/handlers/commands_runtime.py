@@ -291,6 +291,26 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
     return None
 
 
+def _coerce_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _build_opencode_token_usage(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    total_tokens = _coerce_int(payload.get("totalTokens"))
+    context_window = _coerce_int(payload.get("modelContextWindow"))
+    if total_tokens is None:
+        return None
+    token_usage: dict[str, Any] = {"last": {"totalTokens": total_tokens}}
+    if context_window is not None and context_window > 0:
+        token_usage["modelContextWindow"] = context_window
+    return token_usage
+
+
 def _format_httpx_exception(exc: Exception) -> Optional[str]:
     if isinstance(exc, httpx.HTTPStatusError):
         try:
@@ -1575,6 +1595,18 @@ class TelegramCommandHandlers:
                             elif part_type == "step-finish":
                                 reason = part.get("reason") or "finished"
                                 tracker.add_action("step", str(reason), "done")
+                            elif part_type == "usage":
+                                token_usage = (
+                                    _build_opencode_token_usage(part)
+                                    if isinstance(part, dict)
+                                    else None
+                                )
+                                if token_usage:
+                                    await self._note_progress_context_usage(
+                                        token_usage,
+                                        turn_id=turn_id,
+                                        thread_id=thread_id,
+                                    )
                             await self._schedule_progress_edit(turn_key)
 
                         output_task = asyncio.create_task(
