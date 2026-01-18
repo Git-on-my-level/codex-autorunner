@@ -1,4 +1,5 @@
 import json
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -183,6 +184,49 @@ def test_hub_scan_starts_repo_lifespan(tmp_path: Path):
         fastapi_app = _unwrap_fastapi_app(sub_app)
         assert fastapi_app is not None
         assert hasattr(fastapi_app.state, "shutdown_event")
+
+
+def test_hub_scan_unmounts_repo_and_exits_lifespan(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    with TestClient(app) as client:
+        sub_app = _get_mounted_app(app, "/repos/demo")
+        assert sub_app is not None
+        fastapi_app = _unwrap_fastapi_app(sub_app)
+        assert fastapi_app is not None
+        shutdown_event = fastapi_app.state.shutdown_event
+        assert shutdown_event.is_set() is False
+
+        shutil.rmtree(repo_dir)
+
+        resp = client.post("/hub/repos/scan")
+        assert resp.status_code == 200
+        assert shutdown_event.is_set() is True
+        assert _get_mounted_app(app, "/repos/demo") is None
+
+
+def test_hub_create_repo_keeps_existing_mounts(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+    repo_dir = hub_root / "alpha"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    with TestClient(app) as client:
+        assert _get_mounted_app(app, "/repos/alpha") is not None
+
+        resp = client.post("/hub/repos", json={"id": "beta"})
+        assert resp.status_code == 200
+        assert _get_mounted_app(app, "/repos/alpha") is not None
+        assert _get_mounted_app(app, "/repos/beta") is not None
 
 
 def test_hub_init_endpoint_mounts_repo(tmp_path: Path):
