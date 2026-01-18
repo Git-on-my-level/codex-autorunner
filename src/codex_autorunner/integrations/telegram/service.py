@@ -249,6 +249,7 @@ class TelegramBotService(
         self._turn_progress_rendered: dict[TurnKey, str] = {}
         self._turn_progress_updated_at: dict[TurnKey, float] = {}
         self._turn_progress_tasks: dict[TurnKey, asyncio.Task[None]] = {}
+        self._turn_progress_heartbeat_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._resume_options: dict[str, SelectionState] = {}
@@ -772,6 +773,9 @@ class TelegramBotService(
                 task = self._turn_progress_tasks.pop(key, None)
                 if task and not task.done():
                     task.cancel()
+                heartbeat_task = self._turn_progress_heartbeat_tasks.pop(key, None)
+                if heartbeat_task and not heartbeat_task.done():
+                    heartbeat_task.cancel()
             elif cache_name == "oversize_warnings":
                 self._oversize_warnings.discard(key)
             elif cache_name == "coalesced_buffers":

@@ -400,6 +400,7 @@ async def collect_opencode_output_from_events(
     events: AsyncIterator[SSEEvent],
     *,
     session_id: str,
+    progress_session_ids: Optional[set[str]] = None,
     permission_policy: str = PERMISSION_ALLOW,
     permission_handler: Optional[PermissionHandler] = None,
     should_stop: Optional[Callable[[], bool]] = None,
@@ -498,8 +499,14 @@ async def collect_opencode_output_from_events(
         except json.JSONDecodeError:
             payload = {}
         event_session_id = extract_session_id(payload)
-        if not event_session_id or event_session_id != session_id:
+        if not event_session_id:
             continue
+        if progress_session_ids is None:
+            if event_session_id != session_id:
+                continue
+        elif event_session_id not in progress_session_ids:
+            continue
+        is_primary_session = event_session_id == session_id
         if event.event == "permission.asked":
             request_id, props = _extract_permission_request(payload)
             if request_id and respond_permission is not None:
@@ -524,12 +531,15 @@ async def collect_opencode_output_from_events(
                 except Exception:
                     pass
         if event.event == "session.error":
-            error = _extract_error_text(payload) or "OpenCode session error"
-            break
+            if is_primary_session:
+                error = _extract_error_text(payload) or "OpenCode session error"
+                break
+            continue
         if event.event in ("message.updated", "message.completed"):
-            msg_id, role = _register_message_role(payload)
-            if role == "assistant":
-                _flush_pending_text(msg_id)
+            if is_primary_session:
+                msg_id, role = _register_message_role(payload)
+                if role == "assistant":
+                    _flush_pending_text(msg_id)
         if event.event == "message.part.updated":
             properties = (
                 payload.get("properties") if isinstance(payload, dict) else None
@@ -541,6 +551,10 @@ async def collect_opencode_output_from_events(
                 part = payload.get("part")
                 delta = payload.get("delta")
             part_dict = part if isinstance(part, dict) else None
+            part_with_session = None
+            if isinstance(part_dict, dict):
+                part_with_session = dict(part_dict)
+                part_with_session["sessionID"] = event_session_id
             part_type = part_dict.get("type") if part_dict else None
             part_ignored = bool(part_dict.get("ignored")) if part_dict else False
             part_message_id = _message_id_from_part(part_dict)
@@ -552,14 +566,18 @@ async def collect_opencode_output_from_events(
                 delta_text = None
             if isinstance(delta_text, str) and delta_text:
                 if part_type == "text" and not part_ignored:
+                    if not is_primary_session:
+                        continue
                     _append_text_for_message(part_message_id, delta_text)
-                elif part_type == "reasoning":
-                    pass
                 elif part_handler and part_dict and part_type:
-                    await part_handler(part_type, part_dict, delta_text)
+                    await part_handler(
+                        part_type, part_with_session or part_dict, delta_text
+                    )
             elif (
                 isinstance(part_dict, dict) and part_type == "text" and not part_ignored
             ):
+                if not is_primary_session:
+                    continue
                 text = part_dict.get("text")
                 if isinstance(text, str) and text:
                     part_id = part_dict.get("id") or part_dict.get("partId")
@@ -577,14 +595,17 @@ async def collect_opencode_output_from_events(
                             _append_text_for_message(part_message_id, text)
                         last_full_text = text
             elif part_handler and part_dict and part_type:
-                await part_handler(part_type, part_dict, None)
+                await part_handler(part_type, part_with_session or part_dict, None)
         if event.event in ("message.completed", "message.updated"):
             message_result = parse_message_response(payload)
-            msg_id, role = _register_message_role(payload)
-            if message_result.text and not text_parts and role != "user":
-                _append_text_for_message(msg_id, message_result.text)
-            if message_result.error and not error:
-                error = message_result.error
+            msg_id = None
+            role = None
+            if is_primary_session:
+                msg_id, role = _register_message_role(payload)
+                if message_result.text and not text_parts and role != "user":
+                    _append_text_for_message(msg_id, message_result.text)
+                if message_result.error and not error:
+                    error = message_result.error
             if part_handler is not None:
                 usage = _extract_usage_payload(payload)
                 if usage is not None:
@@ -604,6 +625,8 @@ async def collect_opencode_output_from_events(
                         if usage_snapshot:
                             await part_handler("usage", usage_snapshot, None)
         if event.event == "session.idle":
+            if not is_primary_session:
+                continue
             if not text_parts and pending_text:
                 _flush_all_pending_text()
             break
@@ -616,6 +639,7 @@ async def collect_opencode_output(
     *,
     session_id: str,
     workspace_path: str,
+    progress_session_ids: Optional[set[str]] = None,
     permission_policy: str = PERMISSION_ALLOW,
     permission_handler: Optional[PermissionHandler] = None,
     should_stop: Optional[Callable[[], bool]] = None,
@@ -627,6 +651,7 @@ async def collect_opencode_output(
     return await collect_opencode_output_from_events(
         client.stream_events(directory=workspace_path),
         session_id=session_id,
+        progress_session_ids=progress_session_ids,
         permission_policy=permission_policy,
         permission_handler=permission_handler,
         should_stop=should_stop,

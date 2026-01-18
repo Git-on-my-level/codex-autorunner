@@ -1505,6 +1505,8 @@ class TelegramCommandHandlers:
                             return runtime.interrupt_requested
 
                         reasoning_buffers: dict[str, str] = {}
+                        watched_session_ids = {thread_id}
+                        subagent_labels: dict[str, str] = {}
 
                         async def _handle_opencode_part(
                             part_type: str,
@@ -1516,11 +1518,22 @@ class TelegramCommandHandlers:
                             tracker = self._turn_progress_trackers.get(turn_key)
                             if tracker is None:
                                 return
+                            session_id = None
+                            for key in ("sessionID", "sessionId", "session_id"):
+                                value = part.get(key)
+                                if isinstance(value, str) and value:
+                                    session_id = value
+                                    break
+                            if not session_id:
+                                session_id = thread_id
+                            is_primary_session = session_id == thread_id
+                            subagent_label = subagent_labels.get(session_id)
                             if part_type == "reasoning":
                                 part_id = (
                                     part.get("id") or part.get("partId") or "reasoning"
                                 )
-                                buffer = reasoning_buffers.get(part_id, "")
+                                buffer_key = f"{session_id}:{part_id}"
+                                buffer = reasoning_buffers.get(buffer_key, "")
                                 if delta_text:
                                     buffer = f"{buffer}{delta_text}"
                                 else:
@@ -1528,9 +1541,29 @@ class TelegramCommandHandlers:
                                     if isinstance(raw_text, str) and raw_text:
                                         buffer = raw_text
                                 if buffer:
-                                    reasoning_buffers[part_id] = buffer
+                                    reasoning_buffers[buffer_key] = buffer
                                     preview = _compact_preview(buffer, limit=240)
-                                    tracker.note_thinking(preview)
+                                    if is_primary_session:
+                                        tracker.note_thinking(preview)
+                                    else:
+                                        if not subagent_label:
+                                            subagent_label = "@subagent"
+                                            subagent_labels.setdefault(
+                                                session_id, subagent_label
+                                            )
+                                        label_text = f"thinking: {preview}"
+                                        if not tracker.update_action_by_item_id(
+                                            buffer_key,
+                                            label_text,
+                                            "update",
+                                            label=subagent_label,
+                                        ):
+                                            tracker.add_action(
+                                                subagent_label,
+                                                label_text,
+                                                "update",
+                                                item_id=buffer_key,
+                                            )
                             elif part_type == "tool":
                                 tool_id = part.get("callID") or part.get("id")
                                 tool_name = (
@@ -1545,6 +1578,69 @@ class TelegramCommandHandlers:
                                     if isinstance(status, str) and status
                                     else str(tool_name)
                                 )
+                                if (
+                                    is_primary_session
+                                    and isinstance(tool_name, str)
+                                    and tool_name == "task"
+                                    and isinstance(state, dict)
+                                ):
+                                    metadata = state.get("metadata")
+                                    if isinstance(metadata, dict):
+                                        child_session_id = metadata.get(
+                                            "sessionId"
+                                        ) or metadata.get("sessionID")
+                                        if (
+                                            isinstance(child_session_id, str)
+                                            and child_session_id
+                                        ):
+                                            watched_session_ids.add(child_session_id)
+                                            child_label = None
+                                            input_payload = state.get("input")
+                                            if isinstance(input_payload, dict):
+                                                child_label = input_payload.get(
+                                                    "subagent_type"
+                                                ) or input_payload.get("subagentType")
+                                            if (
+                                                isinstance(child_label, str)
+                                                and child_label.strip()
+                                            ):
+                                                child_label = child_label.strip()
+                                                if not child_label.startswith("@"):
+                                                    child_label = f"@{child_label}"
+                                                subagent_labels.setdefault(
+                                                    child_session_id, child_label
+                                                )
+                                            else:
+                                                subagent_labels.setdefault(
+                                                    child_session_id, "@subagent"
+                                                )
+                                    detail_parts: list[str] = []
+                                    title = state.get("title")
+                                    if isinstance(title, str) and title.strip():
+                                        detail_parts.append(title.strip())
+                                    input_payload = state.get("input")
+                                    if isinstance(input_payload, dict):
+                                        description = input_payload.get("description")
+                                        if (
+                                            isinstance(description, str)
+                                            and description.strip()
+                                        ):
+                                            detail_parts.append(description.strip())
+                                    summary = None
+                                    if isinstance(metadata, dict):
+                                        summary = metadata.get("summary")
+                                    if isinstance(summary, str) and summary.strip():
+                                        detail_parts.append(summary.strip())
+                                    if detail_parts:
+                                        seen: set[str] = set()
+                                        unique_parts = [
+                                            part_text
+                                            for part_text in detail_parts
+                                            if part_text not in seen
+                                            and not seen.add(part_text)
+                                        ]
+                                        detail_text = " / ".join(unique_parts)
+                                        label = f"{label} - {_compact_preview(detail_text, limit=160)}"
                                 mapped_status = "update"
                                 if isinstance(status, str):
                                     status_lower = status.lower()
@@ -1554,38 +1650,70 @@ class TelegramCommandHandlers:
                                         mapped_status = "fail"
                                     elif status_lower in ("pending", "running"):
                                         mapped_status = "running"
-                                if not tracker.update_action_by_item_id(
-                                    tool_id, label, mapped_status, label="tool"
-                                ):
-                                    tracker.add_action(
-                                        "tool",
+                                scoped_tool_id = (
+                                    f"{session_id}:{tool_id}"
+                                    if isinstance(tool_id, str) and tool_id
+                                    else None
+                                )
+                                if is_primary_session:
+                                    if not tracker.update_action_by_item_id(
+                                        scoped_tool_id,
                                         label,
                                         mapped_status,
-                                        item_id=tool_id,
-                                    )
+                                        label="tool",
+                                    ):
+                                        tracker.add_action(
+                                            "tool",
+                                            label,
+                                            mapped_status,
+                                            item_id=scoped_tool_id,
+                                        )
+                                else:
+                                    if not subagent_label:
+                                        subagent_label = "@subagent"
+                                        subagent_labels.setdefault(
+                                            session_id, subagent_label
+                                        )
+                                    if not tracker.update_action_by_item_id(
+                                        scoped_tool_id,
+                                        label,
+                                        mapped_status,
+                                        label=subagent_label,
+                                    ):
+                                        tracker.add_action(
+                                            subagent_label,
+                                            label,
+                                            mapped_status,
+                                            item_id=scoped_tool_id,
+                                        )
                             elif part_type == "patch":
                                 patch_id = part.get("id") or part.get("hash")
                                 files = part.get("files")
+                                scoped_patch_id = (
+                                    f"{session_id}:{patch_id}"
+                                    if isinstance(patch_id, str) and patch_id
+                                    else None
+                                )
                                 if isinstance(files, list) and files:
                                     summary = ", ".join(str(file) for file in files)
                                     if not tracker.update_action_by_item_id(
-                                        patch_id, summary, "done", label="files"
+                                        scoped_patch_id, summary, "done", label="files"
                                     ):
                                         tracker.add_action(
                                             "files",
                                             summary,
                                             "done",
-                                            item_id=patch_id,
+                                            item_id=scoped_patch_id,
                                         )
                                 else:
                                     if not tracker.update_action_by_item_id(
-                                        patch_id, "Patch", "done", label="files"
+                                        scoped_patch_id, "Patch", "done", label="files"
                                     ):
                                         tracker.add_action(
                                             "files",
                                             "Patch",
                                             "done",
-                                            item_id=patch_id,
+                                            item_id=scoped_patch_id,
                                         )
                             elif part_type == "agent":
                                 agent_name = part.get("name") or "agent"
@@ -1614,6 +1742,7 @@ class TelegramCommandHandlers:
                                 opencode_client,
                                 session_id=thread_id,
                                 workspace_path=str(workspace_root),
+                                progress_session_ids=watched_session_ids,
                                 permission_policy=permission_policy,
                                 permission_handler=(
                                     _permission_handler

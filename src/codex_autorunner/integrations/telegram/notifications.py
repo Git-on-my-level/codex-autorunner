@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from .constants import (
+    PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
     STREAM_PREVIEW_PREFIX,
     TELEGRAM_MAX_MESSAGE_LENGTH,
     THINKING_PREVIEW_MAX_LEN,
@@ -218,6 +219,12 @@ class TelegramNotificationHandlers:
         self._turn_progress_updated_at.pop(turn_key, None)
         self._touch_cache_timestamp("progress_trackers", turn_key)
         await self._emit_progress_edit(turn_key, ctx=ctx, force=True)
+        heartbeat_task = self._turn_progress_heartbeat_tasks.get(turn_key)
+        if heartbeat_task and not heartbeat_task.done():
+            heartbeat_task.cancel()
+        self._turn_progress_heartbeat_tasks[turn_key] = self._spawn_task(
+            self._turn_progress_heartbeat(turn_key)
+        )
 
     def _clear_turn_progress(self, turn_key: tuple[str, str]) -> None:
         self._turn_progress_trackers.pop(turn_key, None)
@@ -226,6 +233,9 @@ class TelegramNotificationHandlers:
         task = self._turn_progress_tasks.pop(turn_key, None)
         if task and not task.done():
             task.cancel()
+        heartbeat_task = self._turn_progress_heartbeat_tasks.pop(turn_key, None)
+        if heartbeat_task and not heartbeat_task.done():
+            heartbeat_task.cancel()
 
     async def _note_progress_thinking(
         self, turn_id: str, preview: str, *, thread_id: Optional[str] = None
@@ -394,6 +404,23 @@ class TelegramNotificationHandlers:
             await self._emit_progress_edit(turn_key)
         finally:
             self._turn_progress_tasks.pop(turn_key, None)
+
+    async def _turn_progress_heartbeat(self, turn_key: tuple[str, str]) -> None:
+        try:
+            while True:
+                await asyncio.sleep(PROGRESS_HEARTBEAT_INTERVAL_SECONDS)
+                tracker = self._turn_progress_trackers.get(turn_key)
+                if tracker is None or tracker.finalized:
+                    return
+                ctx = self._turn_contexts.get(turn_key)
+                if ctx is None or ctx.placeholder_message_id is None:
+                    continue
+                now = time.monotonic()
+                last_updated = self._turn_progress_updated_at.get(turn_key, 0.0)
+                if (now - last_updated) >= PROGRESS_HEARTBEAT_INTERVAL_SECONDS:
+                    await self._emit_progress_edit(turn_key, ctx=ctx, now=now)
+        finally:
+            self._turn_progress_heartbeat_tasks.pop(turn_key, None)
 
     async def _emit_progress_edit(
         self,
