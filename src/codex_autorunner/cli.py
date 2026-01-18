@@ -11,9 +11,11 @@ from typing import NoReturn, Optional
 import httpx
 import typer
 import uvicorn
+import yaml
 
 from .bootstrap import seed_hub_files, seed_repo_files
 from .core.config import (
+    CONFIG_FILENAME,
     ConfigError,
     HubConfig,
     _normalize_base_path,
@@ -84,6 +86,50 @@ def _build_server_url(config, path: str) -> str:
     if base_path.endswith("/") and path.startswith("/"):
         base_path = base_path[:-1]
     return f"http://{config.server_host}:{config.server_port}{base_path}{path}"
+
+
+def _resolve_hub_config_path_for_cli(
+    repo_root: Path, hub: Optional[Path]
+) -> Optional[Path]:
+    if hub:
+        candidate = hub
+        if candidate.is_dir():
+            candidate = candidate / CONFIG_FILENAME
+        return candidate if candidate.exists() else None
+    return find_nearest_hub_config_path(repo_root)
+
+
+def _resolve_repo_api_path(repo_root: Path, hub: Optional[Path], path: str) -> str:
+    if not path.startswith("/"):
+        path = f"/{path}"
+    hub_config_path = _resolve_hub_config_path_for_cli(repo_root, hub)
+    if hub_config_path is None:
+        return path
+    hub_root = hub_config_path.parent.parent.resolve()
+    manifest_rel: Optional[str] = None
+    try:
+        raw = yaml.safe_load(hub_config_path.read_text(encoding="utf-8")) or {}
+        if isinstance(raw, dict):
+            hub_cfg = raw.get("hub")
+            if isinstance(hub_cfg, dict):
+                manifest_value = hub_cfg.get("manifest")
+                if isinstance(manifest_value, str) and manifest_value.strip():
+                    manifest_rel = manifest_value.strip()
+    except Exception:
+        manifest_rel = None
+    manifest_path = hub_root / (manifest_rel or ".codex-autorunner/manifest.yml")
+    if not manifest_path.exists():
+        return path
+    try:
+        manifest = load_manifest(manifest_path, hub_root)
+    except Exception:
+        return path
+    repo_root = repo_root.resolve()
+    for entry in manifest.repos:
+        candidate = (hub_root / entry.path).resolve()
+        if candidate == repo_root:
+            return f"/repos/{entry.id}{path}"
+    return path
 
 
 def _resolve_auth_token(env_name: str) -> Optional[str]:
@@ -286,7 +332,8 @@ def sessions(
     """List active terminal sessions."""
     engine = _require_repo_config(repo, hub)
     config = engine.config
-    url = _build_server_url(config, "/api/sessions")
+    path = _resolve_repo_api_path(engine.repo_root, hub, "/api/sessions")
+    url = _build_server_url(config, path)
     auth_token = _resolve_auth_token(config.server_auth_token_env)
     if auth_token:
         url = f"{url}?include_abs_paths=1"
@@ -351,7 +398,8 @@ def stop_session(
     else:
         payload["repo_path"] = str(engine.repo_root)
 
-    url = _build_server_url(config, "/api/sessions/stop")
+    path = _resolve_repo_api_path(engine.repo_root, hub, "/api/sessions/stop")
+    url = _build_server_url(config, path)
     try:
         response = _request_json(
             "POST", url, payload, token_env=config.server_auth_token_env
