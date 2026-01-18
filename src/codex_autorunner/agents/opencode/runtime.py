@@ -43,11 +43,17 @@ def build_turn_id(session_id: str) -> str:
     return f"{session_id}:{int(time.time() * 1000)}"
 
 
-def extract_session_id(payload: Any) -> Optional[str]:
+def extract_session_id(
+    payload: Any, *, allow_fallback_id: bool = False
+) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
     for key in ("sessionID", "sessionId", "session_id"):
         value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    if allow_fallback_id:
+        value = payload.get("id")
         if isinstance(value, str) and value:
             return value
     properties = payload.get("properties")
@@ -62,7 +68,7 @@ def extract_session_id(payload: Any) -> Optional[str]:
                 return value
     session = payload.get("session")
     if isinstance(session, dict):
-        return extract_session_id(session)
+        return extract_session_id(session, allow_fallback_id=allow_fallback_id)
     return None
 
 

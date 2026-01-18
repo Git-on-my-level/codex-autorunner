@@ -1063,7 +1063,7 @@ class DocChatService:
                 session = await client.create_session(
                     directory=str(self.engine.repo_root)
                 )
-                thread_id = extract_session_id(session)
+                thread_id = extract_session_id(session, allow_fallback_id=True)
                 if not isinstance(thread_id, str) or not thread_id:
                     raise DocChatError("OpenCode did not return a session id")
                 self._app_server_threads.set_thread_id(key, thread_id)

@@ -1391,7 +1391,7 @@ class Engine:
                 thread_id = None
         if not thread_id:
             session = await client.create_session(directory=str(self.repo_root))
-            thread_id = extract_session_id(session)
+            thread_id = extract_session_id(session, allow_fallback_id=True)
             if not isinstance(thread_id, str) or not thread_id:
                 self.log_line(run_id, "error: opencode did not return a session id")
                 return 1

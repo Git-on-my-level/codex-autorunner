@@ -1149,7 +1149,7 @@ class TelegramCommandHandlers:
                     session = await opencode_client.create_session(
                         directory=str(workspace_root)
                     )
-                    thread_id = extract_session_id(session)
+                    thread_id = extract_session_id(session, allow_fallback_id=True)
                     if not thread_id:
                         failure_message = "Failed to start a new OpenCode thread."
                         if send_failure_response:
@@ -1465,9 +1465,6 @@ class TelegramCommandHandlers:
                             rollout_path=record.rollout_path,
                         ),
                     )
-                runtime.current_turn_id = None
-                runtime.current_turn_key = None
-                runtime.interrupt_requested = False
                 return _TurnRunResult(
                     record=record,
                     thread_id=thread_id,
@@ -1503,6 +1500,15 @@ class TelegramCommandHandlers:
                     transcript_message_id,
                     transcript_text,
                 )
+            finally:
+                if turn_key is not None:
+                    self._turn_contexts.pop(turn_key, None)
+                    self._clear_thinking_preview(turn_key)
+                    self._clear_turn_progress(turn_key)
+                if runtime.current_turn_key == turn_key:
+                    runtime.current_turn_id = None
+                    runtime.current_turn_key = None
+                runtime.interrupt_requested = False
         client = await self._client_for_workspace(record.workspace_path)
         if client is None:
             failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
@@ -3322,7 +3328,7 @@ class TelegramCommandHandlers:
                     reply_to=message.message_id,
                 )
                 return
-            session_id = extract_session_id(session)
+            session_id = extract_session_id(session, allow_fallback_id=True)
             if not session_id:
                 await self._send_message(
                     message.chat_id,
