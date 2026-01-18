@@ -123,6 +123,7 @@ class Engine:
         self.state_path = self.repo_root / ".codex-autorunner" / "state.json"
         self.log_path = self.config.log.path
         self.run_index_path = self.repo_root / ".codex-autorunner" / "run_index.json"
+        self._run_index_lock = threading.Lock()
         self.lock_path = self.repo_root / ".codex-autorunner" / "lock"
         self.stop_path = self.repo_root / ".codex-autorunner" / "stop"
         self._active_global_handler: Optional[RotatingFileHandler] = None
@@ -718,24 +719,26 @@ class Engine:
             self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
 
     def _load_run_index(self) -> dict[str, dict]:
-        if not self.run_index_path.exists():
+        with self._run_index_lock:
+            if not self.run_index_path.exists():
+                return {}
+            try:
+                raw = self.run_index_path.read_text(encoding="utf-8")
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
             return {}
-        try:
-            raw = self.run_index_path.read_text(encoding="utf-8")
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            return {}
-        return {}
 
     def _save_run_index(self, index: dict[str, dict]) -> None:
-        try:
-            self.run_index_path.parent.mkdir(parents=True, exist_ok=True)
-            payload = json.dumps(index, ensure_ascii=True, indent=2)
-            atomic_write(self.run_index_path, f"{payload}\n")
-        except Exception:
-            pass
+        with self._run_index_lock:
+            try:
+                self.run_index_path.parent.mkdir(parents=True, exist_ok=True)
+                payload = json.dumps(index, ensure_ascii=True, indent=2)
+                atomic_write(self.run_index_path, f"{payload}\n")
+            except Exception:
+                pass
 
     def _merge_run_index_entry(self, run_id: int, updates: dict[str, Any]) -> None:
         index = self._load_run_index()
@@ -1472,7 +1475,38 @@ class Engine:
         timed_out = False
         try:
             try:
-                await prompt_task
+                prompt_response = await prompt_task
+                prompt_info = (
+                    prompt_response.get("info")
+                    if isinstance(prompt_response, dict)
+                    else {}
+                )
+                tokens = (
+                    prompt_info.get("tokens") if isinstance(prompt_info, dict) else {}
+                )
+                if isinstance(tokens, dict):
+                    input_tokens = int(tokens.get("input", 0) or 0)
+                    cached_read = (
+                        int(tokens.get("cache", {}).get("read", 0) or 0)
+                        if isinstance(tokens.get("cache"), dict)
+                        else 0
+                    )
+                    output_tokens = int(tokens.get("output", 0) or 0)
+                    reasoning_tokens = int(tokens.get("reasoning", 0) or 0)
+                    total_tokens = (
+                        input_tokens + cached_read + output_tokens + reasoning_tokens
+                    )
+                    token_total = {
+                        "total": total_tokens,
+                        "input_tokens": input_tokens,
+                        "prompt_tokens": input_tokens,
+                        "cached_input_tokens": cached_read,
+                        "output_tokens": output_tokens,
+                        "completion_tokens": output_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                        "reasoning_output_tokens": reasoning_tokens,
+                    }
+                    self._update_run_telemetry(run_id, token_total=token_total)
             except Exception as exc:
                 active.interrupt_event.set()
                 output_task.cancel()
