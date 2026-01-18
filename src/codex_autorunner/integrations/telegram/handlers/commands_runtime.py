@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import httpx
 
+from ....agents.opencode.client import OpenCodeProtocolError
 from ....agents.opencode.harness import OpenCodeHarness
 from ....agents.opencode.runtime import (
     PERMISSION_ALLOW,
@@ -263,6 +264,13 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
         if detail:
             return f"OpenCode backend unavailable ({detail})."
         return "OpenCode backend unavailable."
+    if isinstance(exc, OpenCodeProtocolError):
+        detail = str(exc).strip()
+        if detail:
+            return f"OpenCode protocol error: {detail}"
+        return "OpenCode protocol error."
+    if isinstance(exc, json.JSONDecodeError):
+        return "OpenCode returned invalid JSON."
     if isinstance(exc, httpx.HTTPStatusError):
         detail = None
         try:

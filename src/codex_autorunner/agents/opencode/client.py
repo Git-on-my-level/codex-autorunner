@@ -12,6 +12,21 @@ from .events import SSEEvent, parse_sse_lines
 _MAX_INVALID_JSON_PREVIEW_BYTES = 512
 
 
+class OpenCodeProtocolError(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        content_type: Optional[str] = None,
+        body_preview: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.content_type = content_type
+        self.body_preview = body_preview
+
+
 class OpenCodeClient:
     def __init__(
         self,
@@ -52,7 +67,7 @@ class OpenCodeClient:
             return None
         try:
             return json.loads(raw)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             self._log_invalid_json(
                 method,
                 path,
@@ -61,7 +76,29 @@ class OpenCodeClient:
                 expect_json=expect_json,
             )
             if expect_json:
-                raise
+                preview = (
+                    raw[:_MAX_INVALID_JSON_PREVIEW_BYTES]
+                    .decode("utf-8", errors="replace")
+                    .strip()
+                )
+                content_type = response.headers.get("content-type")
+                hint = ""
+                if content_type and "text/html" in content_type.lower():
+                    hint = (
+                        " Response looks like HTML; the OpenCode server may have "
+                        "proxied the request instead of handling an API route."
+                    )
+                elif preview.startswith("<"):
+                    hint = (
+                        " Response looks like HTML; check that the OpenCode API "
+                        "endpoint is correct."
+                    )
+                raise OpenCodeProtocolError(
+                    f"OpenCode returned invalid JSON.{hint}",
+                    status_code=response.status_code,
+                    content_type=content_type,
+                    body_preview=preview or None,
+                ) from exc
         return None
 
     def _log_invalid_json(
@@ -163,12 +200,22 @@ class OpenCodeClient:
             payload["model"] = model
         if variant:
             payload["variant"] = variant
-        return await self._request(
-            "POST",
-            f"/session/{session_id}/prompt",
-            json_body=payload,
-            expect_json=False,
-        )
+        try:
+            return await self._request(
+                "POST",
+                f"/session/{session_id}/message",
+                json_body=payload,
+                expect_json=True,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (404, 405):
+                return await self._request(
+                    "POST",
+                    f"/session/{session_id}/prompt_async",
+                    json_body=payload,
+                    expect_json=False,
+                )
+            raise
 
     async def send_command(
         self,
@@ -259,4 +306,4 @@ class OpenCodeClient:
                 )
 
 
-__all__ = ["OpenCodeClient"]
+__all__ = ["OpenCodeClient", "OpenCodeProtocolError"]

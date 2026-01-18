@@ -50,10 +50,13 @@ def _default_path_prefixes() -> list[str]:
     launchd and other non-interactive runners often have a minimal PATH that
     excludes Homebrew/MacPorts locations.
     """
+    home = Path.home()
     candidates = [
         "/opt/homebrew/bin",  # Apple Silicon Homebrew
         "/usr/local/bin",  # Intel Homebrew + common user installs
         "/opt/local/bin",  # MacPorts
+        str(home / ".opencode" / "bin"),  # OpenCode default install
+        str(home / ".local" / "bin"),  # Common user-local installs
     ]
     return [p for p in candidates if os.path.isdir(p)]
 
