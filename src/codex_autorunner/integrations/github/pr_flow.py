@@ -284,7 +284,7 @@ class PrFlowManager:
 
     def start(self, *, payload: dict[str, Any]) -> dict[str, Any]:
         with self._thread_lock:
-            state = self._load_state()
+            state = self.status()
             if state.get("status") in ("running", "stopping"):
                 raise PrFlowError("PR flow already running", status_code=409)
             if self._thread and self._thread.is_alive():
