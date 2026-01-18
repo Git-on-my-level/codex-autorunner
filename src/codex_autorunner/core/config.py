@@ -56,6 +56,13 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "snapshot": ".codex-autorunner/SNAPSHOT.md",
         "snapshot_state": ".codex-autorunner/snapshot_state.json",
     },
+    "review": {
+        "enabled": True,
+        "agent": "opencode",
+        "model": "zai-coding-plan/glm-4.7",
+        "reasoning": None,
+        "max_wallclock_seconds": None,
+    },
     "codex": {
         "binary": "codex",
         "args": ["--yolo", "exec", "--sandbox", "danger-full-access"],
@@ -334,6 +341,16 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 "max_total_bytes": 100_000_000,
                 "max_age_days": 30,
             },
+            {
+                "name": "review_runs",
+                "kind": "directory",
+                "path": ".codex-autorunner/review/runs",
+                "glob": "*",
+                "recursive": True,
+                "max_files": 100,
+                "max_total_bytes": 500_000_000,
+                "max_age_days": 30,
+            },
         ],
     },
 }
@@ -349,6 +366,7 @@ REPO_DEFAULT_KEYS = {
     "voice",
     "log",
     "server_log",
+    "review",
 }
 DEFAULT_REPO_DEFAULTS = {
     key: json.loads(json.dumps(DEFAULT_REPO_CONFIG[key])) for key in REPO_DEFAULT_KEYS

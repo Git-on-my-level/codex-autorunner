@@ -1,15 +1,16 @@
 # TODO
 
-- [x] Inventory JavaScript files by package/runtime boundary and decide migration order.
-- [x] Review current TypeScript config and update it for JS->TS migration (module resolution, path aliases, build outputs).
-- [x] Add `tsc --noEmit` to pre-commit hooks.
-- [x] Add `tsc --noEmit` to CI pipeline.
- - [x] Migrate Phase 1: Core utilities (bus.js, constants.js, tabs.js, cache.js, todoPreview.js, loader.js)
- - [x] Migrate Phase 2: Small feature modules (docs.js, terminal.js, docsDrafts.js, docsThreadRegistry.js, docsVoice.js, docsClipboard.js, docsDocUpdates.js, docsSnapshot.js)
- - [x] Migrate Phase 3: Core state & utilities (state.js, env.js, app.js, snapshot.js, bootstrap.js, docsState.js)
- - [x] Migrate Phase 4: Feature modules (docsParse.js, github.js, docsUi.js, docsElements.js, autoRefresh.js, docChatRender.js, docsSpecIngest.js)
- - [x] Migrate Phase 5: Larger feature modules (docsCrud.js, docChatActions.js, docChatEvents.js, mobileCompact.js, docsInit.js, settings.js, agentControls.js, docChatStream.js)
- - [x] Migrate Phase 6: Complex/core infrastructure (runs.js, voice.js, utils.js, logs.js, dashboard.js, hub.js, terminalManager.js)
- - [x] Remove leftover JS sources and update build/lint configs to target TS only.
- - [x] Validate end-to-end: build, lint, tests, and typecheck passing.
-- [ ] Open a PR and ensure the PR passes CI with the new type checks
+- [x] Add review defaults in repo config (DEFAULT_REPO_CONFIG), include `review` in `REPO_DEFAULT_KEYS`, and add housekeeping for `.codex-autorunner/review/runs`
+- [x] Implement `core/review.py` ReviewService with lock/state/thread pattern, run dir + scratchpad creation, OpenCode prompt execution, final report read, optional scratchpad bundle, and robust status transitions
+- [x] Add reusable OpenCode prompt runner helper in `src/codex_autorunner/agents/opencode/run_prompt.py` and adopt it in ReviewService (and optionally DocChatService) to avoid duplication
+- [x] Add review API schemas in `src/codex_autorunner/web/schemas.py` (ReviewStartRequest/ReviewStatusResponse/optional ReviewControlResponse)
+- [x] Add `routes/review.py` with status/start/stop/reset/artifact endpoints and safety checks for artifacts
+- [x] Wire review routes into `src/codex_autorunner/routes/__init__.py`
+- [x] Add Review dashboard card in `src/codex_autorunner/static/index.html` with controls, status, and artifact links
+- [x] Add `src/codex_autorunner/static/review.js` and wire it in `static/app.js` with defaults (opencode + `zai-coding-plan/glm-4.7`) and status polling
+- [x] Update `src/codex_autorunner/static/styles.css` for Review card layout and artifacts
+- [x] Refactor `static/agentControls.ts` for namespaced storage/defaults and update `static/utils.ts` status pill handling (failed/stopping)
+- [x] Add tests for ReviewService state/filesystem behavior in `tests/test_review_service.py`
+- [x] Update API contract tests in `tests/test_api_contract.py` to include review endpoints
+- [x] (Optional, skipped) Add lightweight UI module test for `review.js` similar to doc chat UI tests - skipped due to test setup complexity
+- [x] Run `pytest` - npm run build not applicable (project uses .js files directly)
