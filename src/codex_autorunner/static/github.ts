@@ -190,6 +190,42 @@ function setArtifactLink(el: HTMLAnchorElement | null, kind: string, hasValue: b
   });
 }
 
+function setButtonBusy(btn: HTMLButtonElement | null, busy: boolean): void {
+  if (!btn) return;
+  btn.disabled = busy;
+  btn.classList.toggle("loading", busy);
+}
+
+function setButtonsDisabled(buttons: Array<HTMLButtonElement | null>, disabled: boolean): boolean[] {
+  const previous = buttons.map((btn) => (btn ? btn.disabled : true));
+  buttons.forEach((btn) => {
+    if (btn) btn.disabled = disabled;
+  });
+  return previous;
+}
+
+function restoreButtonsDisabled(buttons: Array<HTMLButtonElement | null>, previous: boolean[]): void {
+  buttons.forEach((btn, idx) => {
+    if (!btn) return;
+    btn.disabled = previous[idx] ?? btn.disabled;
+    btn.classList.remove("loading");
+  });
+}
+
+function setTemporaryNote(note: HTMLElement | null, message: string): string {
+  if (!note) return "";
+  const previous = note.textContent || "";
+  note.textContent = message;
+  return previous;
+}
+
+function restoreTemporaryNote(note: HTMLElement | null, previous: string, message: string): void {
+  if (!note) return;
+  if ((note.textContent || "") === message) {
+    note.textContent = previous;
+  }
+}
+
 async function loadPrFlowStatus(): Promise<void> {
   const els = prFlowEls();
   if (!els.statusPill) return;
@@ -240,48 +276,88 @@ function prFlowPayload(): Record<string, unknown> | null {
 }
 
 async function startPrFlow(): Promise<void> {
+  const els = prFlowEls();
   const payload = prFlowPayload();
   if (!payload) {
     flash("Provide an issue or PR reference", "error");
     return;
   }
+  const note = $("github-note") as HTMLElement | null;
+  const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
+  const prevDisabled = setButtonsDisabled(buttons, true);
+  setButtonBusy(els.startBtn, true);
+  const message = "Starting PR flow...";
+  const prevNote = setTemporaryNote(note, message);
   try {
     await api("/api/github/pr_flow/start", { method: "POST", body: payload });
     flash("PR flow started");
-    await loadPrFlowStatus();
   } catch (err) {
     flash((err as Error).message || "PR flow start failed", "error");
+  } finally {
+    restoreButtonsDisabled(buttons, prevDisabled);
+    restoreTemporaryNote(note, prevNote, message);
   }
+  await loadPrFlowStatus();
 }
 
 async function stopPrFlow(): Promise<void> {
+  const els = prFlowEls();
+  const note = $("github-note") as HTMLElement | null;
+  const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
+  const prevDisabled = setButtonsDisabled(buttons, true);
+  setButtonBusy(els.stopBtn, true);
+  const message = "Stopping PR flow...";
+  const prevNote = setTemporaryNote(note, message);
   try {
     await api("/api/github/pr_flow/stop", { method: "POST", body: {} });
     flash("PR flow stopping");
-    await loadPrFlowStatus();
   } catch (err) {
     flash((err as Error).message || "PR flow stop failed", "error");
+  } finally {
+    restoreButtonsDisabled(buttons, prevDisabled);
+    restoreTemporaryNote(note, prevNote, message);
   }
+  await loadPrFlowStatus();
 }
 
 async function resumePrFlow(): Promise<void> {
+  const els = prFlowEls();
+  const note = $("github-note") as HTMLElement | null;
+  const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
+  const prevDisabled = setButtonsDisabled(buttons, true);
+  setButtonBusy(els.resumeBtn, true);
+  const message = "Resuming PR flow...";
+  const prevNote = setTemporaryNote(note, message);
   try {
     await api("/api/github/pr_flow/resume", { method: "POST", body: {} });
     flash("PR flow resumed");
-    await loadPrFlowStatus();
   } catch (err) {
     flash((err as Error).message || "PR flow resume failed", "error");
+  } finally {
+    restoreButtonsDisabled(buttons, prevDisabled);
+    restoreTemporaryNote(note, prevNote, message);
   }
+  await loadPrFlowStatus();
 }
 
 async function collectPrFlow(): Promise<void> {
+  const els = prFlowEls();
+  const note = $("github-note") as HTMLElement | null;
+  const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
+  const prevDisabled = setButtonsDisabled(buttons, true);
+  setButtonBusy(els.collectBtn, true);
+  const message = "Collecting PR reviews...";
+  const prevNote = setTemporaryNote(note, message);
   try {
     await api("/api/github/pr_flow/collect", { method: "POST", body: {} });
     flash("Review bundle updated");
-    await loadPrFlowStatus();
   } catch (err) {
     flash((err as Error).message || "Review collection failed", "error");
+  } finally {
+    restoreButtonsDisabled(buttons, prevDisabled);
+    restoreTemporaryNote(note, prevNote, message);
   }
+  await loadPrFlowStatus();
 }
 
 async function syncPr(): Promise<void> {
@@ -291,6 +367,8 @@ async function syncPr(): Promise<void> {
 
   syncBtn.disabled = true;
   syncBtn.classList.add("loading");
+  const message = "Syncing PR...";
+  const prevNote = setTemporaryNote(note, message);
   try {
     const res = await api("/api/github/pr/sync", {
       method: "POST",
@@ -305,6 +383,7 @@ async function syncPr(): Promise<void> {
   } finally {
     syncBtn.disabled = false;
     syncBtn.classList.remove("loading");
+    restoreTemporaryNote(note, prevNote, message);
   }
 }
 
