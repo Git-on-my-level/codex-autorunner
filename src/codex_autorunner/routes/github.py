@@ -4,12 +4,21 @@ GitHub integration routes.
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 
+from ..integrations.github.pr_flow import PrFlowError, PrFlowManager
 from ..integrations.github.service import GitHubError, GitHubService
-from ..web.schemas import GithubContextRequest, GithubIssueRequest, GithubPrSyncRequest
+from ..web.schemas import (
+    GithubContextRequest,
+    GithubIssueRequest,
+    GithubPrFlowActionRequest,
+    GithubPrFlowStartRequest,
+    GithubPrSyncRequest,
+)
 
 _GITHUB_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _GITHUB_CACHE_LOCK = asyncio.Lock()
@@ -72,6 +81,22 @@ def _github(request) -> GitHubService:
     """Get a GitHubService instance from the request."""
     engine = request.app.state.engine
     return GitHubService(engine.repo_root, raw_config=engine.config.raw)
+
+
+def _pr_flow(request: Request) -> PrFlowManager:
+    manager = getattr(request.app.state, "pr_flow_manager", None)
+    if manager is None:
+        engine = request.app.state.engine
+        manager = PrFlowManager(
+            engine.repo_root,
+            app_server_supervisor=getattr(
+                request.app.state, "app_server_supervisor", None
+            ),
+            opencode_supervisor=getattr(request.app.state, "opencode_supervisor", None),
+            logger=getattr(request.app.state, "logger", None),
+        )
+        request.app.state.pr_flow_manager = manager
+    return manager
 
 
 def build_github_routes() -> APIRouter:
@@ -193,5 +218,97 @@ def build_github_routes() -> APIRouter:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @router.get("/api/github/pr_flow/status")
+    async def github_pr_flow_status(request: Request):
+        try:
+            return {"status": "ok", "flow": _pr_flow(request).status()}
+        except PrFlowError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @router.post("/api/github/pr_flow/start")
+    async def github_pr_flow_start(request: Request, payload: GithubPrFlowStartRequest):
+        try:
+            state = await asyncio.to_thread(
+                _pr_flow(request).start, payload=payload.model_dump()
+            )
+            return {"status": "ok", "flow": state}
+        except PrFlowError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @router.post("/api/github/pr_flow/stop")
+    async def github_pr_flow_stop(
+        request: Request, _payload: GithubPrFlowActionRequest
+    ):
+        try:
+            state = await asyncio.to_thread(_pr_flow(request).stop)
+            return {"status": "ok", "flow": state}
+        except PrFlowError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @router.post("/api/github/pr_flow/resume")
+    async def github_pr_flow_resume(
+        request: Request, _payload: GithubPrFlowActionRequest
+    ):
+        try:
+            state = await asyncio.to_thread(_pr_flow(request).resume)
+            return {"status": "ok", "flow": state}
+        except PrFlowError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @router.post("/api/github/pr_flow/collect")
+    async def github_pr_flow_collect(
+        request: Request, _payload: GithubPrFlowActionRequest
+    ):
+        try:
+            state = await asyncio.to_thread(_pr_flow(request).collect_reviews)
+            return {"status": "ok", "flow": state}
+        except PrFlowError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @router.get("/api/github/pr_flow/artifact")
+    async def github_pr_flow_artifact(
+        request: Request,
+        kind: str = Query(..., description="review_bundle|workflow_log|final_report"),
+    ):
+        flow = _pr_flow(request).status()
+        mapping = {
+            "review_bundle": flow.get("review_bundle_path"),
+            "workflow_log": flow.get("workflow_log_path"),
+            "final_report": flow.get("final_report_path"),
+        }
+        raw_path = mapping.get(kind)
+        if not raw_path:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        target = Path(raw_path).expanduser().resolve()
+        allowed_roots = [request.app.state.engine.repo_root.resolve()]
+        worktree_path = flow.get("worktree_path")
+        if isinstance(worktree_path, str) and worktree_path:
+            allowed_roots.append(Path(worktree_path).expanduser().resolve())
+        allowed = False
+        for root in allowed_roots:
+            try:
+                target.relative_to(root)
+                if ".codex-autorunner" in target.parts:
+                    allowed = True
+                    break
+            except ValueError:
+                continue
+        if not allowed or not target.exists():
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        media_type = "text/plain"
+        if target.suffix == ".md":
+            media_type = "text/markdown"
+        return FileResponse(target, media_type=media_type, filename=target.name)
 
     return router

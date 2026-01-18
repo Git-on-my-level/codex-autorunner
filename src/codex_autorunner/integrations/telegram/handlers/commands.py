@@ -36,6 +36,11 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             "run a code review",
             handlers._handle_review,
         ),
+        "pr": CommandSpec(
+            "pr",
+            "run the GitHub PR flow",
+            handlers._handle_pr,
+        ),
         "agent": CommandSpec(
             "agent",
             "show or set the active agent",

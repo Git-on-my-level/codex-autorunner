@@ -1422,6 +1422,56 @@ button.icon-btn {
   margin-top: 10px;
 }
 
+.github-card .github-flow {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 8px;
+}
+
+.github-card .github-flow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.github-card .github-flow-grid {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 6px 10px;
+  align-items: center;
+}
+
+.github-card .github-flow-grid input,
+.github-card .github-flow-grid select {
+  width: 100%;
+}
+
+.github-card .github-flow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.github-card .github-flow-status {
+  display: grid;
+  gap: 6px;
+}
+
+.github-card .github-flow-row {
+  display: grid;
+  grid-template-columns: 50px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.github-card .github-flow-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 /* Docs nav */
 .doc-nav {
   display: flex;
@@ -5632,6 +5682,17 @@ button.loading::after {
   
   .github-card .github-link,
   .github-card .github-mono {
+    font-size: 10px;
+  }
+
+  .github-card .github-flow-grid {
+    grid-template-columns: 80px 1fr;
+    gap: 4px 6px;
+  }
+
+  .github-card .github-flow-row {
+    grid-template-columns: 40px 1fr;
+    gap: 4px;
     font-size: 10px;
   }
   

@@ -50,6 +50,8 @@ from ..housekeeping import run_housekeeping_once
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+from ..integrations.github.chatops import GitHubChatOpsPoller
+from ..integrations.github.pr_flow import PrFlowManager
 from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
@@ -787,6 +789,24 @@ def _app_lifespan(context: AppContext):
 
             tasks.append(asyncio.create_task(_opencode_prune_loop()))
 
+        pr_flow_manager = getattr(app.state, "pr_flow_manager", None)
+        if pr_flow_manager is None:
+            pr_flow_manager = PrFlowManager(
+                app.state.engine.repo_root,
+                app_server_supervisor=getattr(app.state, "app_server_supervisor", None),
+                opencode_supervisor=getattr(app.state, "opencode_supervisor", None),
+                logger=getattr(app.state, "logger", None),
+            )
+            app.state.pr_flow_manager = pr_flow_manager
+        chatops = GitHubChatOpsPoller(
+            app.state.engine.repo_root,
+            pr_flow_manager,
+            logger=getattr(app.state, "logger", None),
+        )
+        app.state.pr_flow_chatops = chatops
+        if pr_flow_manager.chatops_config().get("enabled", False):
+            tasks.append(asyncio.create_task(chatops.run()))
+
         if (
             context.tui_idle_seconds is not None
             and context.tui_idle_check_seconds is not None
@@ -854,6 +874,12 @@ def _app_lifespan(context: AppContext):
                 task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
+            chatops = getattr(app.state, "pr_flow_chatops", None)
+            if chatops is not None:
+                try:
+                    await chatops.stop()
+                except Exception:
+                    pass
             async with app.state.terminal_lock:
                 for session in app.state.terminal_sessions.values():
                     session.close()
@@ -1373,11 +1399,12 @@ def create_hub_app(
         base_repo_id = payload.base_repo_id
         branch = payload.branch
         force = payload.force
+        start_point = payload.start_point
         safe_log(
             app.state.logger,
             logging.INFO,
-            "Hub create worktree base=%s branch=%s force=%s"
-            % (base_repo_id, branch, force),
+            "Hub create worktree base=%s branch=%s force=%s start_point=%s"
+            % (base_repo_id, branch, force, start_point),
         )
         try:
             snapshot = await asyncio.to_thread(
@@ -1385,6 +1412,7 @@ def create_hub_app(
                 base_repo_id=str(base_repo_id),
                 branch=str(branch),
                 force=force,
+                start_point=str(start_point) if start_point else None,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1398,6 +1426,7 @@ def create_hub_app(
                 base_repo_id=str(payload.base_repo_id),
                 branch=str(payload.branch),
                 force=payload.force,
+                start_point=str(payload.start_point) if payload.start_point else None,
             )
             _refresh_mounts([snapshot])
             return _add_mount_info(snapshot.to_dict(context.config.root))

@@ -35,6 +35,7 @@ from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import _normalize_update_target, _spawn_update_process
 from ....core.utils import canonicalize_path, resolve_opencode_binary
+from ....integrations.github.pr_flow import PrFlowError, PrFlowManager
 from ....integrations.github.service import GitHubService
 from ....manifest import load_manifest
 from ...app_server.client import (
@@ -5035,6 +5036,258 @@ class TelegramCommandHandlers:
             thread_id=thread_id,
             target=target,
             delivery=delivery,
+        )
+
+    def _pr_flow_manager_for_record(
+        self, record: "TelegramTopicRecord"
+    ) -> Optional[PrFlowManager]:
+        if not record.workspace_path:
+            return None
+        return PrFlowManager(
+            Path(record.workspace_path),
+            app_server_supervisor=self._app_server_supervisor,
+            opencode_supervisor=self._opencode_supervisor,
+            logger=self._logger,
+            hub_root=self._hub_root,
+        )
+
+    def _parse_pr_flags(self, argv: list[str]) -> tuple[Optional[str], dict[str, Any]]:
+        ref: Optional[str] = None
+        flags: dict[str, Any] = {}
+        idx = 0
+        while idx < len(argv):
+            token = argv[idx]
+            if token.startswith("--"):
+                if token == "--draft":
+                    flags["draft"] = True
+                    idx += 1
+                    continue
+                if token == "--ready":
+                    flags["draft"] = False
+                    idx += 1
+                    continue
+                if token == "--base" and idx + 1 < len(argv):
+                    flags["base_branch"] = argv[idx + 1]
+                    idx += 2
+                    continue
+                if token == "--until" and idx + 1 < len(argv):
+                    until = argv[idx + 1].strip().lower()
+                    if until in ("minor", "minor_only"):
+                        flags["stop_condition"] = "minor_only"
+                    elif until in ("clean", "no_issues"):
+                        flags["stop_condition"] = "no_issues"
+                    idx += 2
+                    continue
+                if token in ("--max-cycles", "--max_cycles") and idx + 1 < len(argv):
+                    try:
+                        flags["max_cycles"] = int(argv[idx + 1])
+                    except ValueError:
+                        pass
+                    idx += 2
+                    continue
+                if token in ("--max-runs", "--max_runs") and idx + 1 < len(argv):
+                    try:
+                        flags["max_implementation_runs"] = int(argv[idx + 1])
+                    except ValueError:
+                        pass
+                    idx += 2
+                    continue
+                if token in ("--timeout", "--timeout-seconds") and idx + 1 < len(argv):
+                    try:
+                        flags["max_wallclock_seconds"] = int(argv[idx + 1])
+                    except ValueError:
+                        pass
+                    idx += 2
+                    continue
+                idx += 1
+                continue
+            if ref is None:
+                ref = token
+            idx += 1
+        return ref, flags
+
+    def _format_pr_flow_status(self, flow: dict[str, Any]) -> str:
+        status = flow.get("status") or "unknown"
+        step = flow.get("step") or "unknown"
+        cycle = flow.get("cycle") or 0
+        pr_url = flow.get("pr_url") or ""
+        lines = [f"PR flow: {status} (step: {step}, cycle: {cycle})"]
+        if pr_url:
+            lines.append(f"PR: {pr_url}")
+        return "\n".join(lines)
+
+    async def _handle_pr(
+        self, message: TelegramMessage, args: str, runtime: Any
+    ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        manager = self._pr_flow_manager_for_record(record)
+        if manager is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        argv = self._parse_command_args(args)
+        if not argv:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /pr start <issueRef> | /pr fix <prRef> | /pr status | /pr stop | /pr resume | /pr collect",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        command = argv[0].lower()
+        if command == "status":
+            flow = await asyncio.to_thread(manager.status)
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if command == "stop":
+            flow = await asyncio.to_thread(manager.stop)
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if command == "resume":
+            try:
+                flow = await asyncio.to_thread(manager.resume)
+            except PrFlowError as exc:
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {exc}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if command == "collect":
+            try:
+                flow = await asyncio.to_thread(manager.collect_reviews)
+            except PrFlowError as exc:
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {exc}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if command in ("start", "implement"):
+            ref, flags = self._parse_pr_flags(argv[1:])
+            if not ref:
+                gh = GitHubService(Path(record.workspace_path))
+                issues = await asyncio.to_thread(gh.list_open_issues, limit=5)
+                if issues:
+                    lines = ["Open issues:"]
+                    for issue in issues:
+                        num = issue.get("number")
+                        title = issue.get("title") or ""
+                        lines.append(f"- #{num} {title}".strip())
+                    lines.append("Use /pr start <issueRef> to begin.")
+                    await self._send_message(
+                        message.chat_id,
+                        "\n".join(lines),
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                await self._send_message(
+                    message.chat_id,
+                    "Usage: /pr start <issueRef>",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            payload = {"mode": "issue", "issue": ref, **flags}
+            try:
+                flow = await asyncio.to_thread(manager.start, payload=payload)
+            except PrFlowError as exc:
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {exc}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if command in ("fix", "pr"):
+            ref, flags = self._parse_pr_flags(argv[1:])
+            if not ref:
+                gh = GitHubService(Path(record.workspace_path))
+                prs = await asyncio.to_thread(gh.list_open_prs, limit=5)
+                if prs:
+                    lines = ["Open PRs:"]
+                    for pr in prs:
+                        num = pr.get("number")
+                        title = pr.get("title") or ""
+                        lines.append(f"- #{num} {title}".strip())
+                    lines.append("Use /pr fix <prRef> to begin.")
+                    await self._send_message(
+                        message.chat_id,
+                        "\n".join(lines),
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                await self._send_message(
+                    message.chat_id,
+                    "Usage: /pr fix <prRef>",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            payload = {"mode": "pr", "pr": ref, **flags}
+            try:
+                flow = await asyncio.to_thread(manager.start, payload=payload)
+            except PrFlowError as exc:
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {exc}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            "Unknown /pr command. Use /pr start|fix|status|stop|resume|collect.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
         )
 
     async def _prompt_review_commit_picker(

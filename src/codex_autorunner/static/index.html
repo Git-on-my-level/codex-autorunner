@@ -254,6 +254,73 @@
               <div class="actions github-actions">
                 <button id="github-sync-pr" class="primary sm">Sync PR</button>
               </div>
+              <div class="github-flow">
+                <div class="github-flow-header">
+                  <span class="muted">PR Flow</span>
+                  <span id="pr-flow-status" class="pill pill-idle">–</span>
+                </div>
+                <div class="github-flow-grid">
+                  <label class="muted" for="pr-flow-mode">Mode</label>
+                  <select id="pr-flow-mode">
+                    <option value="issue">Implement Issue → PR</option>
+                    <option value="pr">Fix Existing PR</option>
+                  </select>
+                  <label class="muted" for="pr-flow-ref">Issue / PR</label>
+                  <input
+                    id="pr-flow-ref"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="#123 or https://github.com/org/repo/issues/123"
+                  />
+                  <label class="muted" for="pr-flow-base">Base</label>
+                  <input
+                    id="pr-flow-base"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="default"
+                  />
+                  <label class="muted" for="pr-flow-until">Until</label>
+                  <select id="pr-flow-until">
+                    <option value="no_issues">No issues</option>
+                    <option value="minor_only">Minor only</option>
+                  </select>
+                  <label class="muted" for="pr-flow-cycles">Max cycles</label>
+                  <input id="pr-flow-cycles" type="number" min="1" placeholder="3" />
+                  <label class="muted" for="pr-flow-runs">Impl runs</label>
+                  <input id="pr-flow-runs" type="number" min="1" placeholder="auto" />
+                  <label class="muted" for="pr-flow-timeout">Timeout (s)</label>
+                  <input id="pr-flow-timeout" type="number" min="0" placeholder="auto" />
+                  <label class="muted" for="pr-flow-draft">Draft</label>
+                  <input id="pr-flow-draft" type="checkbox" checked />
+                </div>
+                <div class="actions github-flow-actions">
+                  <button id="pr-flow-start" class="primary sm">Start</button>
+                  <button id="pr-flow-stop" class="ghost sm">Stop</button>
+                  <button id="pr-flow-resume" class="ghost sm">Resume</button>
+                  <button id="pr-flow-collect" class="ghost sm">Collect reviews</button>
+                </div>
+                <div class="github-flow-status">
+                  <div class="github-flow-row">
+                    <span class="muted">Step</span>
+                    <span id="pr-flow-step" class="github-mono">–</span>
+                  </div>
+                  <div class="github-flow-row">
+                    <span class="muted">Cycle</span>
+                    <span id="pr-flow-cycle" class="github-mono">–</span>
+                  </div>
+                  <div class="github-flow-row">
+                    <span class="muted">Review</span>
+                    <span id="pr-flow-review" class="github-mono">–</span>
+                  </div>
+                </div>
+                <div class="github-flow-artifacts">
+                  <a id="pr-flow-review-link" class="github-link muted">Review bundle</a>
+                  <a id="pr-flow-log-link" class="github-link muted">Workflow log</a>
+                  <a id="pr-flow-final-link" class="github-link muted">Final report</a>
+                </div>
+              </div>
               <p id="github-note" class="muted small">–</p>
             </div>
           </div>

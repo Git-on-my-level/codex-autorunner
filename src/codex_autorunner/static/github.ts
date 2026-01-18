@@ -1,4 +1,4 @@
-import { api, flash, statusPill } from "./utils.js";
+import { api, flash, resolvePath, statusPill } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 
@@ -124,6 +124,166 @@ async function loadGitHubStatus(): Promise<void> {
   }
 }
 
+function prFlowEls(): {
+  statusPill: HTMLElement | null;
+  mode: HTMLSelectElement | null;
+  ref: HTMLInputElement | null;
+  base: HTMLInputElement | null;
+  until: HTMLSelectElement | null;
+  cycles: HTMLInputElement | null;
+  runs: HTMLInputElement | null;
+  timeout: HTMLInputElement | null;
+  draft: HTMLInputElement | null;
+  step: HTMLElement | null;
+  cycle: HTMLElement | null;
+  review: HTMLElement | null;
+  reviewLink: HTMLAnchorElement | null;
+  logLink: HTMLAnchorElement | null;
+  finalLink: HTMLAnchorElement | null;
+  startBtn: HTMLButtonElement | null;
+  stopBtn: HTMLButtonElement | null;
+  resumeBtn: HTMLButtonElement | null;
+  collectBtn: HTMLButtonElement | null;
+} {
+  return {
+    statusPill: $("pr-flow-status"),
+    mode: $("pr-flow-mode") as HTMLSelectElement | null,
+    ref: $("pr-flow-ref") as HTMLInputElement | null,
+    base: $("pr-flow-base") as HTMLInputElement | null,
+    until: $("pr-flow-until") as HTMLSelectElement | null,
+    cycles: $("pr-flow-cycles") as HTMLInputElement | null,
+    runs: $("pr-flow-runs") as HTMLInputElement | null,
+    timeout: $("pr-flow-timeout") as HTMLInputElement | null,
+    draft: $("pr-flow-draft") as HTMLInputElement | null,
+    step: $("pr-flow-step"),
+    cycle: $("pr-flow-cycle"),
+    review: $("pr-flow-review"),
+    reviewLink: $("pr-flow-review-link") as HTMLAnchorElement | null,
+    logLink: $("pr-flow-log-link") as HTMLAnchorElement | null,
+    finalLink: $("pr-flow-final-link") as HTMLAnchorElement | null,
+    startBtn: $("pr-flow-start") as HTMLButtonElement | null,
+    stopBtn: $("pr-flow-stop") as HTMLButtonElement | null,
+    resumeBtn: $("pr-flow-resume") as HTMLButtonElement | null,
+    collectBtn: $("pr-flow-collect") as HTMLButtonElement | null,
+  };
+}
+
+function formatReviewSummary(summary: Record<string, unknown> | null): string {
+  if (!summary) return "–";
+  const total = (summary.total as number | undefined) ?? 0;
+  const major = (summary.major as number | undefined) ?? 0;
+  const minor = (summary.minor as number | undefined) ?? 0;
+  if (total === 0) return "No issues";
+  return `${total} issues (${major} major, ${minor} minor)`;
+}
+
+function setArtifactLink(el: HTMLAnchorElement | null, kind: string, hasValue: boolean): void {
+  if (!el) return;
+  if (!hasValue) {
+    setLink(el, { href: undefined, text: el.textContent || "–" });
+    return;
+  }
+  setLink(el, {
+    href: resolvePath(`/api/github/pr_flow/artifact?kind=${kind}`),
+    text: el.textContent || kind,
+    title: `Open ${kind.replace("_", " ")}`,
+  });
+}
+
+async function loadPrFlowStatus(): Promise<void> {
+  const els = prFlowEls();
+  if (!els.statusPill) return;
+  try {
+    const data = await api("/api/github/pr_flow/status") as Record<string, unknown>;
+    const flow = (data.flow || {}) as Record<string, unknown>;
+    statusPill(els.statusPill, (flow.status as string | undefined) || "idle");
+    setText(els.step, (flow.step as string | undefined) || "–");
+    setText(els.cycle, flow.cycle ? String(flow.cycle) : "–");
+    setText(els.review, formatReviewSummary(flow.review_summary as Record<string, unknown> | null));
+    setArtifactLink(els.reviewLink, "review_bundle", !!flow.review_bundle_path);
+    setArtifactLink(els.logLink, "workflow_log", !!flow.workflow_log_path);
+    setArtifactLink(els.finalLink, "final_report", !!flow.final_report_path);
+    const running = flow.status === "running" || flow.status === "stopping";
+    if (els.startBtn) els.startBtn.disabled = running;
+    if (els.stopBtn) els.stopBtn.disabled = !running;
+    if (els.resumeBtn) els.resumeBtn.disabled = running;
+  } catch (_err) {
+    statusPill(els.statusPill, "error");
+    setText(els.step, "Error");
+  }
+}
+
+function prFlowPayload(): Record<string, unknown> | null {
+  const els = prFlowEls();
+  if (!els.mode || !els.ref) return null;
+  const mode = els.mode.value || "issue";
+  const ref = (els.ref.value || "").trim();
+  if (!ref) return null;
+  const payload: Record<string, unknown> = {
+    mode,
+    draft: !!els.draft?.checked,
+    base_branch: (els.base?.value || "").trim() || null,
+    stop_condition: (els.until?.value || "").trim() || null,
+  };
+  const cycles = parseInt(els.cycles?.value || "", 10);
+  if (!Number.isNaN(cycles) && cycles > 0) payload.max_cycles = cycles;
+  const runs = parseInt(els.runs?.value || "", 10);
+  if (!Number.isNaN(runs) && runs > 0) payload.max_implementation_runs = runs;
+  const timeout = parseInt(els.timeout?.value || "", 10);
+  if (!Number.isNaN(timeout) && timeout >= 0) payload.max_wallclock_seconds = timeout;
+  if (mode === "issue") {
+    payload.issue = ref;
+  } else {
+    payload.pr = ref;
+  }
+  return payload;
+}
+
+async function startPrFlow(): Promise<void> {
+  const payload = prFlowPayload();
+  if (!payload) {
+    flash("Provide an issue or PR reference", "error");
+    return;
+  }
+  try {
+    await api("/api/github/pr_flow/start", { method: "POST", body: payload });
+    flash("PR flow started");
+    await loadPrFlowStatus();
+  } catch (err) {
+    flash((err as Error).message || "PR flow start failed", "error");
+  }
+}
+
+async function stopPrFlow(): Promise<void> {
+  try {
+    await api("/api/github/pr_flow/stop", { method: "POST", body: {} });
+    flash("PR flow stopping");
+    await loadPrFlowStatus();
+  } catch (err) {
+    flash((err as Error).message || "PR flow stop failed", "error");
+  }
+}
+
+async function resumePrFlow(): Promise<void> {
+  try {
+    await api("/api/github/pr_flow/resume", { method: "POST", body: {} });
+    flash("PR flow resumed");
+    await loadPrFlowStatus();
+  } catch (err) {
+    flash((err as Error).message || "PR flow resume failed", "error");
+  }
+}
+
+async function collectPrFlow(): Promise<void> {
+  try {
+    await api("/api/github/pr_flow/collect", { method: "POST", body: {} });
+    flash("Review bundle updated");
+    await loadPrFlowStatus();
+  } catch (err) {
+    flash((err as Error).message || "Review collection failed", "error");
+  }
+}
+
 async function syncPr(): Promise<void> {
   const syncBtn = $("github-sync-pr") as HTMLButtonElement | null;
   const note = $("github-note") as HTMLElement | null;
@@ -153,12 +313,25 @@ export function initGitHub(): void {
   if (!card) return;
   const syncBtn = $("github-sync-pr") as HTMLButtonElement | null;
   if (syncBtn) syncBtn.addEventListener("click", syncPr);
+  const els = prFlowEls();
+  if (els.startBtn) els.startBtn.addEventListener("click", startPrFlow);
+  if (els.stopBtn) els.stopBtn.addEventListener("click", stopPrFlow);
+  if (els.resumeBtn) els.resumeBtn.addEventListener("click", resumePrFlow);
+  if (els.collectBtn) els.collectBtn.addEventListener("click", collectPrFlow);
 
   // Initial load + auto-refresh while dashboard is active.
   loadGitHubStatus();
+  loadPrFlowStatus();
   registerAutoRefresh("github-status", {
     callback: loadGitHubStatus,
     tabId: null, // global: keep PR link available while browsing other tabs (mobile-friendly)
+    interval: (CONSTANTS.UI?.AUTO_REFRESH_INTERVAL as number | undefined) || 15000,
+    refreshOnActivation: true,
+    immediate: false,
+  });
+  registerAutoRefresh("pr-flow-status", {
+    callback: loadPrFlowStatus,
+    tabId: null,
     interval: (CONSTANTS.UI?.AUTO_REFRESH_INTERVAL as number | undefined) || 15000,
     refreshOnActivation: true,
     immediate: false,

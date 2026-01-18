@@ -102,6 +102,25 @@ def _get_nested(d: Any, *keys: str, default: Any = None) -> Any:
     return cur if cur is not None else default
 
 
+def _body_has_issue_close(body: str, issue_num: Optional[int]) -> bool:
+    if not body or not issue_num:
+        return False
+    pattern = re.compile(
+        rf"(?i)\\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\\s+#?{int(issue_num)}\\b"
+    )
+    return bool(pattern.search(body))
+
+
+def _append_issue_close(body: str, issue_num: Optional[int]) -> str:
+    if not issue_num:
+        return body or ""
+    suffix = f"Closes #{int(issue_num)}"
+    if not body:
+        return suffix
+    trimmed = body.rstrip()
+    return f"{trimmed}\n\n{suffix}"
+
+
 def _run_codex_sync_agent(
     *,
     repo_root: Path,
@@ -218,6 +237,25 @@ def parse_issue_input(issue: str) -> Tuple[Optional[str], int]:
         raise GitHubError(
             "Invalid issue reference (expected issue number or GitHub issue URL)"
         )
+    slug = f"{m.group('owner')}/{m.group('repo')}"
+    return slug, int(m.group("num"))
+
+
+def parse_pr_input(pr: str) -> Tuple[Optional[str], int]:
+    """
+    Returns (repo_slug_or_none, pr_number).
+    Accepts:
+      - "123"
+      - "https://github.com/org/repo/pull/123"
+    """
+    raw = (pr or "").strip()
+    if not raw:
+        raise GitHubError("pr is required", status_code=400)
+    if raw.isdigit():
+        return None, int(raw)
+    m = PR_URL_RE.match(raw)
+    if not m:
+        raise GitHubError("Invalid PR reference (expected PR number or GitHub PR URL)")
     slug = f"{m.group('owner')}/{m.group('repo')}"
     return slug, int(m.group("num"))
 
@@ -365,6 +403,62 @@ class GitHubService:
             return None
         return arr[0] if arr else None
 
+    def list_open_issues(
+        self, *, limit: int = 10, cwd: Optional[Path] = None
+    ) -> list[dict[str, Any]]:
+        proc = self._gh(
+            [
+                "issue",
+                "list",
+                "--state",
+                "open",
+                "--limit",
+                str(int(limit)),
+                "--json",
+                "number,title,url",
+            ],
+            cwd=cwd or self.repo_root,
+            check=False,
+            timeout_seconds=20,
+        )
+        if proc.returncode != 0:
+            return []
+        try:
+            payload = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, dict)]
+
+    def list_open_prs(
+        self, *, limit: int = 10, cwd: Optional[Path] = None
+    ) -> list[dict[str, Any]]:
+        proc = self._gh(
+            [
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--limit",
+                str(int(limit)),
+                "--json",
+                "number,title,url,headRefName,baseRefName",
+            ],
+            cwd=cwd or self.repo_root,
+            check=False,
+            timeout_seconds=20,
+        )
+        if proc.returncode != 0:
+            return []
+        try:
+            payload = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, dict)]
+
     def issue_view(self, *, number: int, cwd: Optional[Path] = None) -> dict:
         proc = self._gh(
             [
@@ -403,7 +497,7 @@ class GitHubService:
                 "view",
                 str(number),
                 "--json",
-                "number,url,title,body,state,author,labels,files,additions,deletions,changedFiles",
+                "number,url,title,body,state,author,labels,files,additions,deletions,changedFiles,headRefName,baseRefName",
             ],
             cwd=cwd or self.repo_root,
             check=True,
@@ -485,6 +579,112 @@ class GitHubService:
                     )
             threads.append({"isResolved": node.get("isResolved"), "comments": comments})
         return threads
+
+    def pr_checks(
+        self, *, number: int, cwd: Optional[Path] = None
+    ) -> list[dict[str, Any]]:
+        proc = self._gh(
+            ["pr", "view", str(number), "--json", "statusCheckRollup"],
+            cwd=cwd or self.repo_root,
+            check=False,
+            timeout_seconds=30,
+        )
+        if proc.returncode != 0:
+            return []
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return []
+        rollup = payload.get("statusCheckRollup")
+        entries: list[dict[str, Any]] = []
+        if isinstance(rollup, list):
+            entries = [item for item in rollup if isinstance(item, dict)]
+        elif isinstance(rollup, dict):
+            contexts = rollup.get("contexts") or rollup.get("nodes")
+            if isinstance(contexts, list):
+                entries = [item for item in contexts if isinstance(item, dict)]
+        checks: list[dict[str, Any]] = []
+        for entry in entries:
+            name = entry.get("name") or entry.get("context") or entry.get("title")
+            status = entry.get("status") or entry.get("state")
+            conclusion = entry.get("conclusion") or entry.get("result")
+            details_url = entry.get("detailsUrl") or entry.get("targetUrl")
+            if name or status or conclusion:
+                checks.append(
+                    {
+                        "name": name,
+                        "status": status,
+                        "conclusion": conclusion,
+                        "details_url": details_url,
+                    }
+                )
+        return checks
+
+    def issue_meta(
+        self, *, owner: str, repo: str, number: int, cwd: Optional[Path] = None
+    ) -> dict[str, Any]:
+        proc = self._gh(
+            ["api", f"repos/{owner}/{repo}/issues/{int(number)}"],
+            cwd=cwd or self.repo_root,
+            check=False,
+            timeout_seconds=20,
+        )
+        if proc.returncode != 0:
+            return {}
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def issue_comments(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        since: Optional[str] = None,
+        limit: int = 100,
+        cwd: Optional[Path] = None,
+    ) -> list[dict[str, Any]]:
+        args = [
+            "api",
+            f"repos/{owner}/{repo}/issues/comments",
+            "-F",
+            f"per_page={int(limit)}",
+        ]
+        if since:
+            args += ["-F", f"since={since}"]
+        proc = self._gh(
+            args, cwd=cwd or self.repo_root, check=False, timeout_seconds=30
+        )
+        if proc.returncode != 0:
+            return []
+        try:
+            payload = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError:
+            return []
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        return []
+
+    def create_issue_comment(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        number: int,
+        body: str,
+        cwd: Optional[Path] = None,
+    ) -> None:
+        args = [
+            "api",
+            "-X",
+            "POST",
+            f"repos/{owner}/{repo}/issues/{int(number)}/comments",
+            "-f",
+            f"body={body}",
+        ]
+        self._gh(args, cwd=cwd or self.repo_root, check=True, timeout_seconds=20)
 
     def build_context_file_from_url(self, url: str) -> Optional[dict]:
         parsed = parse_github_url(url)
@@ -667,6 +867,8 @@ class GitHubService:
             if title:
                 args += ["--title", title]
             if body:
+                if issue_num and not _body_has_issue_close(body, issue_num):
+                    body = _append_issue_close(body, issue_num)
                 args += ["--body", body]
             else:
                 args.append("--fill")
@@ -685,6 +887,30 @@ class GitHubService:
                 "baseRefName": base,
             }
         pr_url = pr.get("url") if isinstance(pr, dict) else None
+
+        if issue_num and pr_url:
+            try:
+                body_proc = self._gh(
+                    ["pr", "view", pr_url, "--json", "body"],
+                    cwd=cwd,
+                    check=True,
+                    timeout_seconds=30,
+                )
+                payload = json.loads(body_proc.stdout or "{}")
+                body_text = payload.get("body") if isinstance(payload, dict) else ""
+            except Exception:
+                body_text = ""
+            if body_text and not _body_has_issue_close(body_text, issue_num):
+                updated = _append_issue_close(body_text, issue_num)
+                try:
+                    self._gh(
+                        ["pr", "edit", pr_url, "--body", updated],
+                        cwd=cwd,
+                        check=True,
+                        timeout_seconds=30,
+                    )
+                except Exception:
+                    pass
 
         state["repo"] = {"nameWithOwner": repo.name_with_owner, "url": repo.url}
         state["baseBranch"] = base
