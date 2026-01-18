@@ -474,6 +474,10 @@ class PrFlowManager:
             except Exception:
                 pass
         self._lock_handle = None
+        try:
+            atomic_write(self._lock_path, "")
+        except Exception:
+            pass
 
     def _should_stop(self) -> bool:
         if self._stop_event.is_set():
