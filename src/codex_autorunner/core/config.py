@@ -1,18 +1,21 @@
 import dataclasses
 import ipaddress
 import json
+import os
 import shlex
 from os import PathLike
 from pathlib import Path
-from typing import IO, Any, Dict, List, Optional, Union, cast
+from typing import IO, Any, Dict, List, Mapping, Optional, Union, cast
 
 import yaml
 
 from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
 
+DOTENV_AVAILABLE = True
 try:
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values, load_dotenv
 except ModuleNotFoundError:  # pragma: no cover
+    DOTENV_AVAILABLE = False
 
     def load_dotenv(
         dotenv_path: Optional[Union[str, PathLike[str]]] = None,
@@ -24,10 +27,20 @@ except ModuleNotFoundError:  # pragma: no cover
     ) -> bool:
         return False
 
+    def dotenv_values(
+        dotenv_path: Optional[Union[str, PathLike[str]]] = None,
+        stream: Optional[IO[str]] = None,
+        verbose: bool = False,
+        interpolate: bool = True,
+        encoding: Optional[str] = None,
+    ) -> Dict[str, Optional[str]]:
+        return {}
+
 
 CONFIG_FILENAME = ".codex-autorunner/config.yml"
 ROOT_CONFIG_FILENAME = "codex-autorunner.yml"
 ROOT_OVERRIDE_FILENAME = "codex-autorunner.override.yml"
+REPO_OVERRIDE_FILENAME = ".codex-autorunner/repo.override.yml"
 CONFIG_VERSION = 2
 TWELVE_HOUR_SECONDS = 12 * 60 * 60
 
@@ -306,9 +319,35 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     },
 }
 
+REPO_DEFAULT_KEYS = {
+    "docs",
+    "codex",
+    "prompt",
+    "runner",
+    "git",
+    "github",
+    "notifications",
+    "voice",
+    "log",
+    "server_log",
+}
+DEFAULT_REPO_DEFAULTS = {
+    key: json.loads(json.dumps(DEFAULT_REPO_CONFIG[key])) for key in REPO_DEFAULT_KEYS
+}
+REPO_SHARED_KEYS = {
+    "agents",
+    "server",
+    "app_server",
+    "telegram_bot",
+    "terminal",
+    "static_assets",
+    "housekeeping",
+}
+
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
     "mode": "hub",
+    "repo_defaults": DEFAULT_REPO_DEFAULTS,
     "agents": {
         "codex": {
             "binary": "codex",
@@ -527,9 +566,6 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     },
 }
 
-# Backwards-compatible alias for repo defaults
-DEFAULT_CONFIG = DEFAULT_REPO_CONFIG
-
 
 class ConfigError(Exception):
     """Raised when configuration is invalid."""
@@ -654,6 +690,7 @@ class HubConfig:
     root: Path
     version: int
     mode: str
+    repo_defaults: Dict[str, Any]
     agents: Dict[str, AgentConfig]
     repos_root: Path
     worktrees_root: Path
@@ -735,28 +772,66 @@ def _load_root_config(root: Path) -> Dict[str, Any]:
     return merged
 
 
-def load_root_defaults(root: Path, mode: str) -> Dict[str, Any]:
-    """Load repo/hub defaults from the root config + override file."""
-    raw = _load_root_config(root)
-    if not raw:
-        return {}
-    if "repo" in raw or "hub" in raw:
-        if mode == "hub":
-            return raw.get("hub", {}) if isinstance(raw.get("hub"), dict) else {}
-        return raw.get("repo", {}) if isinstance(raw.get("repo"), dict) else {}
-    return raw
+def load_root_defaults(root: Path) -> Dict[str, Any]:
+    """Load hub defaults from the root config + override file."""
+    return _load_root_config(root)
 
 
-def resolve_config_data(
-    root: Path, mode: str, overrides: Optional[Dict[str, Any]] = None
+def resolve_hub_config_data(
+    root: Path, overrides: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    if mode not in ("repo", "hub"):
-        raise ConfigError(f"Invalid mode '{mode}'; expected 'hub' or 'repo'")
-    base = DEFAULT_HUB_CONFIG if mode == "hub" else DEFAULT_REPO_CONFIG
-    merged = _merge_defaults(base, load_root_defaults(root, mode))
+    merged = _merge_defaults(DEFAULT_HUB_CONFIG, load_root_defaults(root))
     if overrides:
         merged = _merge_defaults(merged, overrides)
     return merged
+
+
+def repo_shared_overrides_from_hub(hub_data: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: hub_data[key] for key in REPO_SHARED_KEYS if key in hub_data}
+
+
+def _load_repo_override(repo_root: Path) -> Dict[str, Any]:
+    override_path = repo_root / REPO_OVERRIDE_FILENAME
+    data = _load_yaml_dict(override_path)
+    if not data:
+        return {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"Repo override file must be a mapping: {override_path}")
+    if "mode" in data or "version" in data:
+        raise ConfigError(
+            f"{override_path} must not set mode or version; those are hub-managed."
+        )
+    return data
+
+
+def derive_repo_config_data(
+    hub_data: Dict[str, Any], repo_root: Path
+) -> Dict[str, Any]:
+    repo_defaults = hub_data.get("repo_defaults") or {}
+    if not isinstance(repo_defaults, dict):
+        raise ConfigError("hub.repo_defaults must be a mapping if provided")
+    merged = _merge_defaults(
+        DEFAULT_REPO_CONFIG, repo_shared_overrides_from_hub(hub_data)
+    )
+    if repo_defaults:
+        merged = _merge_defaults(merged, repo_defaults)
+    repo_overrides = _load_repo_override(repo_root)
+    if repo_overrides:
+        merged = _merge_defaults(merged, repo_overrides)
+    return merged
+
+
+def find_nearest_hub_config_path(start: Path) -> Optional[Path]:
+    start = start.resolve()
+    search_dir = start if start.is_dir() else start.parent
+    for current in [search_dir] + list(search_dir.parents):
+        candidate = current / CONFIG_FILENAME
+        if not candidate.exists():
+            continue
+        data = _load_yaml_dict(candidate)
+        if data.get("mode") in (None, "hub"):
+            return candidate
+    return None
 
 
 def _normalize_base_path(path: Optional[str]) -> str:
@@ -944,17 +1019,6 @@ def _parse_static_assets_config(
     )
 
 
-def find_nearest_config_path(start: Path) -> Optional[Path]:
-    """Return the closest .codex-autorunner/config.yml walking upward from start."""
-    start = start.resolve()
-    search_dir = start if start.is_dir() else start.parent
-    for current in [search_dir] + list(search_dir.parents):
-        candidate = current / CONFIG_FILENAME
-        if candidate.exists():
-            return candidate
-    return None
-
-
 def load_dotenv_for_root(root: Path) -> None:
     """
     Best-effort load of environment variables for the provided repo root.
@@ -979,43 +1043,130 @@ def load_dotenv_for_root(root: Path) -> None:
         pass
 
 
-def load_config_data(config_path: Path) -> Dict[str, Any]:
-    """Load, merge, and return a raw config dict for the given config path."""
-    load_dotenv_for_root(config_path.parent.parent.resolve())
+def _parse_dotenv_fallback(path: Path) -> Dict[str, str]:
+    env: Dict[str, str] = {}
     try:
-        with config_path.open("r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"Invalid YAML in {config_path}: {exc}") from exc
-    except Exception as exc:
-        raise ConfigError(f"Failed to read config file {config_path}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ConfigError(f"Config file must be a mapping: {config_path}")
-    mode = data.get("mode", "repo")
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("export "):
+                stripped = stripped[len("export ") :].strip()
+            if "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            value = value.strip()
+            if value and value[0] in {"'", '"'} and value[-1] == value[0]:
+                value = value[1:-1]
+            env[key] = value
+    except OSError:
+        return {}
+    return env
+
+
+def resolve_env_for_root(
+    root: Path, base_env: Optional[Mapping[str, str]] = None
+) -> Dict[str, str]:
+    """
+    Return a merged env mapping for a repo root without mutating process env.
+
+    Precedence mirrors load_dotenv_for_root: root/.env then root/.codex-autorunner/.env.
+    """
+    env = dict(base_env) if base_env is not None else dict(os.environ)
+    candidates = [
+        root / ".env",
+        root / ".codex-autorunner" / ".env",
+    ]
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        if DOTENV_AVAILABLE:
+            values = dotenv_values(candidate)
+            if isinstance(values, dict):
+                for key, value in values.items():
+                    if key and value is not None:
+                        env[str(key)] = str(value)
+                continue
+        env.update(_parse_dotenv_fallback(candidate))
+    return env
+
+
+def load_hub_config_data(config_path: Path) -> Dict[str, Any]:
+    """Load, merge, and return a raw hub config dict for the given config path."""
+    load_dotenv_for_root(config_path.parent.parent.resolve())
+    data = _load_yaml_dict(config_path)
+    mode = data.get("mode")
+    if mode not in (None, "hub"):
+        raise ConfigError(f"Invalid mode '{mode}'; expected 'hub'")
     root = config_path.parent.parent.resolve()
-    return resolve_config_data(root, mode, data)
+    return resolve_hub_config_data(root, data)
 
 
-def load_config(start: Path) -> Union[RepoConfig, HubConfig]:
-    """
-    Load the nearest config walking upward from the provided path.
-    Returns a RepoConfig or HubConfig depending on the mode.
-    """
-    config_path = find_nearest_config_path(start)
+def _resolve_hub_config_path(start: Path) -> Path:
+    config_path = find_nearest_hub_config_path(start)
     if not config_path:
         raise ConfigError(
-            f"Missing config file; expected to find {CONFIG_FILENAME} in {start} or parents"
+            f"Missing hub config file; expected to find {CONFIG_FILENAME} in {start} or parents (use --hub to specify)"
         )
-    merged = load_config_data(config_path)
-    mode = merged.get("mode", "repo")
-    if mode == "hub":
-        _validate_hub_config(merged)
-        return _build_hub_config(config_path, merged)
-    if mode == "repo":
-        root = config_path.parent.parent.resolve()
-        _validate_repo_config(merged, root=root)
-        return _build_repo_config(config_path, merged)
-    raise ConfigError(f"Invalid mode '{mode}'; expected 'hub' or 'repo'")
+    return config_path
+
+
+def load_hub_config(start: Path) -> HubConfig:
+    """Load the nearest hub config walking upward from the provided path."""
+    config_path = _resolve_hub_config_path(start)
+    merged = load_hub_config_data(config_path)
+    _validate_hub_config(merged)
+    return _build_hub_config(config_path, merged)
+
+
+def _resolve_hub_path_for_repo(repo_root: Path, hub_path: Optional[Path]) -> Path:
+    if hub_path:
+        candidate = hub_path
+        if candidate.is_dir():
+            candidate = candidate / CONFIG_FILENAME
+        if not candidate.exists():
+            raise ConfigError(f"Hub config not found at {candidate}")
+        data = _load_yaml_dict(candidate)
+        mode = data.get("mode")
+        if mode not in (None, "hub"):
+            raise ConfigError(f"Invalid hub config mode '{mode}'; expected 'hub'")
+        return candidate
+    return _resolve_hub_config_path(repo_root)
+
+
+def derive_repo_config(
+    hub: HubConfig, repo_root: Path, *, load_env: bool = True
+) -> RepoConfig:
+    if load_env:
+        load_dotenv_for_root(repo_root)
+    merged = derive_repo_config_data(hub.raw, repo_root)
+    merged["mode"] = "repo"
+    merged["version"] = CONFIG_VERSION
+    _validate_repo_config(merged, root=repo_root)
+    return _build_repo_config(repo_root / CONFIG_FILENAME, merged)
+
+
+def _resolve_repo_root(start: Path) -> Path:
+    search_dir = start.resolve() if start.is_dir() else start.resolve().parent
+    for current in [search_dir] + list(search_dir.parents):
+        if (current / ".codex-autorunner" / "state.json").exists():
+            return current
+        if (current / ".git").exists():
+            return current
+    return search_dir
+
+
+def load_repo_config(start: Path, hub_path: Optional[Path] = None) -> RepoConfig:
+    """Load a repo config by deriving it from the nearest hub config."""
+    repo_root = _resolve_repo_root(start)
+    hub_config_path = _resolve_hub_path_for_repo(repo_root, hub_path)
+    hub_config = load_hub_config_data(hub_config_path)
+    _validate_hub_config(hub_config)
+    hub = _build_hub_config(hub_config_path, hub_config)
+    return derive_repo_config(hub, repo_root)
 
 
 def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
@@ -1138,6 +1289,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         root=root,
         version=int(cfg["version"]),
         mode="hub",
+        repo_defaults=cast(Dict[str, Any], cfg.get("repo_defaults") or {}),
         agents=_parse_agents_config(cfg, DEFAULT_HUB_CONFIG),
         repos_root=(root / hub_cfg["repos_root"]).resolve(),
         worktrees_root=(root / hub_cfg["worktrees_root"]).resolve(),
@@ -1555,7 +1707,15 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
     _validate_version(cfg)
     if cfg.get("mode") != "hub":
         raise ConfigError("Hub config must set mode: hub")
+    if "repo" in cfg:
+        raise ConfigError("repo section is no longer supported; use repo_defaults")
     _validate_agents_config(cfg)
+    repo_defaults = cfg.get("repo_defaults")
+    if repo_defaults is not None:
+        if not isinstance(repo_defaults, dict):
+            raise ConfigError("repo_defaults must be a mapping if provided")
+        if "mode" in repo_defaults or "version" in repo_defaults:
+            raise ConfigError("repo_defaults must not set mode or version")
     hub_cfg = cfg.get("hub")
     if not isinstance(hub_cfg, dict):
         raise ConfigError("hub section must be a mapping")

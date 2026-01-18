@@ -47,7 +47,8 @@ def repo(tmp_path: Path) -> Path:
 
     Several tests rely on `create_app(repo_root)` which requires:
     - a `.git/` directory
-    - `.codex-autorunner/config.yml` (and work docs) to exist
+    - a hub config at `.codex-autorunner/config.yml`
+    - work docs/state to exist
     """
 
     repo_root = tmp_path / "repo"
@@ -55,7 +56,8 @@ def repo(tmp_path: Path) -> Path:
     (repo_root / ".git").mkdir()
     # Import lazily so `pytest_configure()` can prepend the local src/ directory
     # before any `codex_autorunner` modules are loaded.
-    from codex_autorunner.bootstrap import seed_repo_files
+    from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 
+    seed_hub_files(repo_root, force=True)
     seed_repo_files(repo_root, git_required=False)
     return repo_root

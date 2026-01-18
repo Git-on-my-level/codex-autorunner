@@ -9,8 +9,7 @@ Use this guide when Telegram replies are missing, delayed, or out of order.
   - `launchctl print gui/$(id -u)/com.codex.autorunner.telegram`
 - Confirm the active log file:
   - The launchd plist `StandardOutPath` is the authoritative log path.
-  - In hub mode, Telegram JSON events go to `.codex-autorunner/codex-autorunner-hub.log` (launchd stdout can be empty).
-  - In repo mode, Telegram JSON events go to `.codex-autorunner/codex-autorunner.log`.
+  - Telegram JSON events go to `.codex-autorunner/codex-autorunner-hub.log` (launchd stdout can be empty).
 
 ## Follow a Turn End-to-End
 

@@ -63,6 +63,7 @@ async def _clear_pending_options(
 ) -> None:
     handlers._resume_options.pop(key, None)
     handlers._bind_options.pop(key, None)
+    handlers._agent_options.pop(key, None)
     handlers._model_options.pop(key, None)
     handlers._model_pending.pop(key, None)
     handlers._review_commit_options.pop(key, None)
@@ -191,6 +192,7 @@ async def handle_message_inner(
     if text and text.startswith("!") and not has_media:
         handlers._resume_options.pop(key, None)
         handlers._bind_options.pop(key, None)
+        handlers._agent_options.pop(key, None)
         handlers._model_options.pop(key, None)
         handlers._model_pending.pop(key, None)
         handlers._enqueue_topic_work(
@@ -221,6 +223,8 @@ async def handle_message_inner(
             handlers._resume_options.pop(key, None)
         if command.name != "bind":
             handlers._bind_options.pop(key, None)
+        if command.name != "agent":
+            handlers._agent_options.pop(key, None)
         if command.name != "model":
             handlers._model_options.pop(key, None)
             handlers._model_pending.pop(key, None)
@@ -232,6 +236,7 @@ async def handle_message_inner(
     else:
         handlers._resume_options.pop(key, None)
         handlers._bind_options.pop(key, None)
+        handlers._agent_options.pop(key, None)
         handlers._model_options.pop(key, None)
         handlers._model_pending.pop(key, None)
         handlers._review_commit_options.pop(key, None)

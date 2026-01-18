@@ -8,7 +8,7 @@ from codex_autorunner.core.app_server_prompts import (
     build_doc_chat_prompt,
     build_spec_ingest_prompt,
 )
-from codex_autorunner.core.config import load_config
+from codex_autorunner.core.config import load_repo_config
 
 
 def _write_text(path: Path, content: str) -> None:
@@ -17,7 +17,7 @@ def _write_text(path: Path, content: str) -> None:
 
 
 def test_doc_chat_prompt_limits_and_instructions(repo: Path) -> None:
-    config = load_config(repo)  # type: ignore[arg-type]
+    config = load_repo_config(repo)  # type: ignore[arg-type]
     limits = config.app_server.prompts.doc_chat
     _write_text(
         config.doc_path("todo"),
@@ -47,7 +47,7 @@ def test_doc_chat_prompt_limits_and_instructions(repo: Path) -> None:
 
 
 def test_spec_ingest_prompt_limits_and_instructions(repo: Path) -> None:
-    config = load_config(repo)  # type: ignore[arg-type]
+    config = load_repo_config(repo)  # type: ignore[arg-type]
     limits = config.app_server.prompts.spec_ingest
     _write_text(
         config.doc_path("spec"),
@@ -64,7 +64,7 @@ def test_spec_ingest_prompt_limits_and_instructions(repo: Path) -> None:
 
 
 def test_autorunner_prompt_limits_and_instructions(repo: Path) -> None:
-    config = load_config(repo)  # type: ignore[arg-type]
+    config = load_repo_config(repo)  # type: ignore[arg-type]
     limits = config.app_server.prompts.autorunner
     _write_text(
         config.doc_path("todo"),

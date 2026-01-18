@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from ..adapter import (
+    AgentCallback,
     ApprovalCallback,
     BindCallback,
     CancelCallback,
@@ -46,6 +47,9 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
                 await handlers._answer_callback(callback, "Selection expired")
                 return
             await handlers._bind_topic_by_repo_id(key, parsed.repo_id, callback)
+    elif isinstance(parsed, AgentCallback):
+        if key:
+            await handlers._handle_agent_callback(key, callback, parsed)
     elif isinstance(parsed, ModelCallback):
         if key:
             await handlers._handle_model_callback(key, callback, parsed)

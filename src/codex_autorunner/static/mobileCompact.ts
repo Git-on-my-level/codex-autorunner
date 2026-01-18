@@ -149,7 +149,7 @@ export function initMobileCompact(): void {
     updateComposeFixed();
     // Force a visual update
     document.documentElement.style.display = "none";
-    document.documentElement.offsetHeight; // trigger reflow
+    document.documentElement.getBoundingClientRect(); // trigger reflow
     document.documentElement.style.display = "";
   };
 

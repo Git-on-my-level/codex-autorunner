@@ -16,6 +16,15 @@ from typing import IO, Any, Iterator, Optional
 
 import yaml
 
+from ..agents.opencode.runtime import (
+    build_turn_id,
+    collect_opencode_output,
+    extract_session_id,
+    map_approval_policy_to_permission,
+    opencode_missing_env,
+    split_model_id,
+)
+from ..agents.opencode.supervisor import OpenCodeSupervisor, OpenCodeSupervisorError
 from ..integrations.app_server.client import (
     CodexAppServerError,
     _extract_thread_id,
@@ -27,9 +36,17 @@ from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
 from ..web.static_assets import missing_static_assets, resolve_static_dir
 from .about_car import ensure_about_car_file
+from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
-from .config import ConfigError, HubConfig, RepoConfig, _is_loopback_host, load_config
+from .config import (
+    ConfigError,
+    RepoConfig,
+    _is_loopback_host,
+    derive_repo_config,
+    load_hub_config,
+    load_repo_config,
+)
 from .docs import DocsManager, parse_todos
 from .git_utils import GitError, run_git
 from .locks import (
@@ -44,9 +61,12 @@ from .optional_dependencies import missing_optional_dependencies
 from .prompt import build_final_summary_prompt
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
+    RepoNotFoundError,
     atomic_write,
     ensure_executable,
     find_repo_root,
+    resolve_executable,
+    resolve_opencode_binary,
 )
 
 
@@ -77,12 +97,26 @@ class RunTelemetry:
     diff: Optional[Any] = None
 
 
+@dataclasses.dataclass
+class ActiveOpencodeRun:
+    session_id: str
+    turn_id: str
+    client: Any
+    interrupted: bool
+    interrupt_event: asyncio.Event
+
+
 class Engine:
-    def __init__(self, repo_root: Path):
-        config = load_config(repo_root)
-        if not isinstance(config, RepoConfig):
-            raise ConfigError("Engine requires repo mode configuration")
-        self.config: RepoConfig = config
+    def __init__(
+        self,
+        repo_root: Path,
+        *,
+        config: Optional[RepoConfig] = None,
+        hub_path: Optional[Path] = None,
+    ):
+        if config is None:
+            config = load_repo_config(repo_root, hub_path=hub_path)
+        self.config = config
         self.repo_root = self.config.root
         self.docs = DocsManager(self.config)
         self.notifier = NotificationManager(self.config)
@@ -98,6 +132,8 @@ class Engine:
         )
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
+        self._app_server_event_formatter = AppServerEventFormatter()
+        self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
         self._last_run_interrupted = False
@@ -258,16 +294,32 @@ class Engine:
             todo_before = self.docs.read_doc("todo")
         except Exception:
             todo_before = ""
+        state = load_state(self.state_path)
+        selected_agent = (state.autorunner_agent_override or "codex").strip().lower()
         self._update_state("running", run_id, None, started=True)
         self._last_run_interrupted = False
         self._start_run_telemetry(run_id)
         with self._run_log_context(run_id):
             self._write_run_marker(run_id, "start")
-            exit_code = await self._run_codex_app_server_async(
-                prompt,
-                run_id,
-                external_stop_flag=external_stop_flag,
-            )
+            if selected_agent == "opencode":
+                exit_code = await self._run_opencode_app_server_async(
+                    prompt,
+                    run_id,
+                    model=state.autorunner_model_override,
+                    reasoning=state.autorunner_effort_override,
+                    external_stop_flag=external_stop_flag,
+                )
+            else:
+                if selected_agent != "codex":
+                    self.log_line(
+                        run_id,
+                        f"info: unknown agent '{selected_agent}', defaulting to codex",
+                    )
+                exit_code = await self._run_codex_app_server_async(
+                    prompt,
+                    run_id,
+                    external_stop_flag=external_stop_flag,
+                )
             self._write_run_marker(run_id, "end", exit_code=exit_code)
 
         try:
@@ -591,6 +643,7 @@ class Engine:
     def _start_run_telemetry(self, run_id: int) -> None:
         with self._run_telemetry_lock:
             self._run_telemetry = RunTelemetry(run_id=run_id)
+        self._app_server_event_formatter.reset()
 
     def _update_run_telemetry(self, run_id: int, **updates: Any) -> None:
         with self._run_telemetry_lock:
@@ -619,12 +672,6 @@ class Engine:
         if not isinstance(message, dict):
             return
         method = message.get("method")
-        if method not in (
-            "thread/tokenUsage/updated",
-            "turn/plan/updated",
-            "turn/diff/updated",
-        ):
-            return
         params_raw = message.get("params")
         params = params_raw if isinstance(params_raw, dict) else {}
         thread_id = (
@@ -633,6 +680,7 @@ class Engine:
             or _extract_thread_id(message)
         )
         turn_id = _extract_turn_id(params) or _extract_turn_id(message)
+        run_id: Optional[int] = None
         with self._run_telemetry_lock:
             telemetry = self._run_telemetry
             if telemetry is None:
@@ -645,6 +693,7 @@ class Engine:
                 telemetry.thread_id = thread_id
             if telemetry.turn_id is None and turn_id:
                 telemetry.turn_id = turn_id
+            run_id = telemetry.run_id
             if method == "thread/tokenUsage/updated":
                 token_usage = (
                     params.get("token_usage") or params.get("tokenUsage") or {}
@@ -653,10 +702,8 @@ class Engine:
                     total = token_usage.get("total") or token_usage.get("totals")
                     if isinstance(total, dict):
                         telemetry.token_total = total
-                return
             if method == "turn/plan/updated":
                 telemetry.plan = params.get("plan") if "plan" in params else params
-                return
             if method == "turn/diff/updated":
                 diff = (
                     params.get("diff")
@@ -665,7 +712,10 @@ class Engine:
                     or params.get("value")
                 )
                 telemetry.diff = diff if diff is not None else params
-                return
+        if run_id is None:
+            return
+        for line in self._app_server_event_formatter.format_event(message):
+            self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
 
     def _load_run_index(self) -> dict[str, dict]:
         if not self.run_index_path.exists():
@@ -1154,6 +1204,91 @@ class Engine:
                 "app-server supervisor close failed: %s", exc
             )
 
+    def _command_available(self, command: list[str]) -> bool:
+        if not command:
+            return False
+        entry = str(command[0]).strip()
+        if not entry:
+            return False
+        if os.path.sep in entry or (os.path.altsep and os.path.altsep in entry):
+            path = Path(entry)
+            if not path.is_absolute():
+                path = self.repo_root / path
+            return path.is_file() and os.access(path, os.X_OK)
+        return resolve_executable(entry) is not None
+
+    def _build_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
+        config = self.config.app_server
+        opencode_command = self.config.agent_serve_command("opencode")
+        opencode_binary = None
+        try:
+            opencode_binary = self.config.agent_binary("opencode")
+        except ConfigError:
+            opencode_binary = None
+
+        command = list(opencode_command or [])
+        if not command and opencode_binary:
+            command = [
+                opencode_binary,
+                "serve",
+                "--hostname",
+                "127.0.0.1",
+                "--port",
+                "0",
+            ]
+
+        resolved_source = None
+        if opencode_command:
+            resolved_source = opencode_command[0]
+        elif opencode_binary:
+            resolved_source = opencode_binary
+        resolved_binary = resolve_opencode_binary(resolved_source)
+        if command:
+            if resolved_binary:
+                command[0] = resolved_binary
+        elif resolved_binary:
+            command = [
+                resolved_binary,
+                "serve",
+                "--hostname",
+                "127.0.0.1",
+                "--port",
+                "0",
+            ]
+
+        if not command or not self._command_available(command):
+            self._app_server_logger.info(
+                "OpenCode command unavailable; skipping opencode supervisor."
+            )
+            return None
+
+        username = os.environ.get("OPENCODE_SERVER_USERNAME")
+        password = os.environ.get("OPENCODE_SERVER_PASSWORD")
+        return OpenCodeSupervisor(
+            command,
+            logger=self._app_server_logger,
+            request_timeout=config.request_timeout,
+            max_handles=config.max_handles,
+            idle_ttl_seconds=config.idle_ttl_seconds,
+            username=username if username and password else None,
+            password=password if username and password else None,
+        )
+
+    def _ensure_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
+        if self._opencode_supervisor is None:
+            self._opencode_supervisor = self._build_opencode_supervisor()
+        return self._opencode_supervisor
+
+    async def _close_opencode_supervisor(self) -> None:
+        if self._opencode_supervisor is None:
+            return
+        supervisor = self._opencode_supervisor
+        self._opencode_supervisor = None
+        try:
+            await supervisor.close_all()
+        except Exception as exc:
+            self._app_server_logger.warning("opencode supervisor close failed: %s", exc)
+
     async def _wait_for_stop(
         self, external_stop_flag: Optional[threading.Event]
     ) -> None:
@@ -1231,6 +1366,172 @@ class Engine:
                 timeout_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await timeout_task
+
+    async def _abort_opencode(self, client: Any, session_id: str, run_id: int) -> None:
+        try:
+            await client.abort(session_id)
+        except Exception as exc:
+            self.log_line(run_id, f"error: opencode abort failed: {exc}")
+
+    async def _run_opencode_app_server_async(
+        self,
+        prompt: str,
+        run_id: int,
+        *,
+        model: Optional[str],
+        reasoning: Optional[str],
+        external_stop_flag: Optional[threading.Event] = None,
+    ) -> int:
+        supervisor = self._ensure_opencode_supervisor()
+        if supervisor is None:
+            self.log_line(
+                run_id, "error: opencode backend is not configured in this repo"
+            )
+            return 1
+        try:
+            client = await supervisor.get_client(self.repo_root)
+        except OpenCodeSupervisorError as exc:
+            self.log_line(run_id, f"error: opencode backend unavailable: {exc}")
+            return 1
+
+        key = "autorunner.opencode"
+        thread_id = self._app_server_threads.get_thread_id(key)
+        if thread_id:
+            try:
+                await client.get_session(thread_id)
+            except Exception:
+                self._app_server_threads.reset_thread(key)
+                thread_id = None
+        if not thread_id:
+            session = await client.create_session(directory=str(self.repo_root))
+            thread_id = extract_session_id(session, allow_fallback_id=True)
+            if not isinstance(thread_id, str) or not thread_id:
+                self.log_line(run_id, "error: opencode did not return a session id")
+                return 1
+            self._app_server_threads.set_thread_id(key, thread_id)
+
+        model_payload = split_model_id(model)
+        missing_env = await opencode_missing_env(
+            client, str(self.repo_root), model_payload
+        )
+        if missing_env:
+            provider_id = model_payload.get("providerID") if model_payload else None
+            self.log_line(
+                run_id,
+                "error: opencode provider "
+                f"{provider_id or 'selected'} requires env vars: "
+                f"{', '.join(missing_env)}",
+            )
+            return 1
+        turn_id = build_turn_id(thread_id)
+        self._update_run_telemetry(run_id, thread_id=thread_id, turn_id=turn_id)
+        app_server_meta = self._build_app_server_meta(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            thread_info=None,
+            model=model,
+            reasoning_effort=reasoning,
+        )
+        app_server_meta["agent"] = "opencode"
+        self._merge_run_index_entry(run_id, {"app_server": app_server_meta})
+
+        active = ActiveOpencodeRun(
+            session_id=thread_id,
+            turn_id=turn_id,
+            client=client,
+            interrupted=False,
+            interrupt_event=asyncio.Event(),
+        )
+        with state_lock(self.state_path):
+            state = load_state(self.state_path)
+        permission_policy = map_approval_policy_to_permission(
+            state.autorunner_approval_policy, default="allow"
+        )
+        output_task = asyncio.create_task(
+            collect_opencode_output(
+                client,
+                session_id=thread_id,
+                workspace_path=str(self.repo_root),
+                permission_policy=permission_policy,
+                should_stop=active.interrupt_event.is_set,
+            )
+        )
+        prompt_task = asyncio.create_task(
+            client.prompt(
+                thread_id,
+                message=prompt,
+                model=model_payload,
+                variant=reasoning,
+            )
+        )
+        stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
+        timeout_task = None
+        turn_timeout = self.config.app_server.turn_timeout_seconds
+        if turn_timeout:
+            timeout_task = asyncio.create_task(asyncio.sleep(turn_timeout))
+        timed_out = False
+        try:
+            try:
+                await prompt_task
+            except Exception as exc:
+                active.interrupt_event.set()
+                output_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await output_task
+                self.log_line(run_id, f"error: opencode prompt failed: {exc}")
+                return 1
+            tasks = {output_task, stop_task}
+            if timeout_task is not None:
+                tasks.add(timeout_task)
+            done, _pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            timed_out = timeout_task is not None and timeout_task in done
+            stopped = stop_task in done
+            if timed_out:
+                self.log_line(
+                    run_id, "error: opencode turn timed out; aborting session"
+                )
+                active.interrupt_event.set()
+            if stopped:
+                active.interrupted = True
+                active.interrupt_event.set()
+                self.log_line(run_id, "info: stop requested; aborting opencode")
+            if timed_out or stopped:
+                await self._abort_opencode(client, thread_id, run_id)
+                done, _pending = await asyncio.wait(
+                    {output_task}, timeout=AUTORUNNER_INTERRUPT_GRACE_SECONDS
+                )
+                if not done:
+                    output_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await output_task
+                    if timed_out:
+                        return 1
+                    self._last_run_interrupted = active.interrupted
+                    return 0
+            output_result = await output_task
+        finally:
+            stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+            if timeout_task is not None:
+                timeout_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await timeout_task
+
+        output = output_result.text
+        if output:
+            self._log_app_server_output(run_id, [output])
+        if output_result.error:
+            self.log_line(
+                run_id, f"error: opencode session error: {output_result.error}"
+            )
+            return 1
+        self._last_run_interrupted = active.interrupted
+        if timed_out:
+            return 1
+        return 0
 
     async def _run_loop_async(
         self,
@@ -1322,6 +1623,7 @@ class Engine:
                 pass
         finally:
             await self._close_app_server_supervisor()
+            await self._close_opencode_supervisor()
         # IMPORTANT: lock ownership is managed by the caller (CLI/Hub/Server runner).
         # Engine.run_loop must never unconditionally mutate the lock file.
 
@@ -1367,6 +1669,7 @@ class Engine:
                 last_exit_code=exit_code,
                 last_run_started_at=last_run_started_at,
                 last_run_finished_at=last_run_finished_at,
+                autorunner_agent_override=current.autorunner_agent_override,
                 autorunner_model_override=current.autorunner_model_override,
                 autorunner_effort_override=current.autorunner_effort_override,
                 autorunner_approval_policy=current.autorunner_approval_policy,
@@ -1506,14 +1809,21 @@ def _manifest_has_worktrees(manifest_path: Path) -> bool:
 
 
 def doctor(start_path: Path) -> DoctorReport:
-    config = load_config(start_path)
+    hub_config = load_hub_config(start_path)
+    repo_config: Optional[RepoConfig] = None
+    try:
+        repo_root = find_repo_root(start_path)
+        repo_config = derive_repo_config(hub_config, repo_root)
+    except RepoNotFoundError:
+        repo_config = None
     checks: list[DoctorCheck] = []
+    config = repo_config or hub_config
     root = config.root
 
-    if isinstance(config, RepoConfig):
+    if repo_config is not None:
         missing = []
         for key in ("todo", "progress", "opinions"):
-            path = config.doc_path(key)
+            path = repo_config.doc_path(key)
             if not path.exists():
                 missing.append(path)
         if missing:
@@ -1533,23 +1843,23 @@ def doctor(start_path: Path) -> DoctorReport:
                 "Required doc files are present.",
             )
 
-        if ensure_executable(config.codex_binary):
+        if ensure_executable(repo_config.codex_binary):
             _append_check(
                 checks,
                 "codex.binary",
                 "ok",
-                f"Codex binary resolved: {config.codex_binary}",
+                f"Codex binary resolved: {repo_config.codex_binary}",
             )
         else:
             _append_check(
                 checks,
                 "codex.binary",
                 "error",
-                f"Codex binary not found in PATH: {config.codex_binary}",
+                f"Codex binary not found in PATH: {repo_config.codex_binary}",
                 "Install Codex or set codex.binary to a full path.",
             )
 
-        voice_enabled = bool(config.voice.get("enabled", True))
+        voice_enabled = bool(repo_config.voice.get("enabled", True))
         if voice_enabled:
             missing_voice = missing_optional_dependencies(
                 (
@@ -1645,86 +1955,85 @@ def doctor(start_path: Path) -> DoctorReport:
         if static_context is not None:
             static_context.close()
 
-    if isinstance(config, HubConfig):
-        if config.manifest_path.exists():
-            version = _parse_manifest_version(config.manifest_path)
-            if version is None:
-                _append_check(
-                    checks,
-                    "hub.manifest.version",
-                    "error",
-                    f"Failed to read manifest version from {config.manifest_path}.",
-                    "Fix the manifest YAML or regenerate it with `car hub scan`.",
-                )
-            elif version != MANIFEST_VERSION:
-                _append_check(
-                    checks,
-                    "hub.manifest.version",
-                    "error",
-                    f"Hub manifest version {version} unsupported (expected {MANIFEST_VERSION}).",
-                    "Regenerate the manifest (delete it and run `car hub scan`).",
-                )
-            else:
-                _append_check(
-                    checks,
-                    "hub.manifest.version",
-                    "ok",
-                    f"Hub manifest version {version} is supported.",
-                )
-        else:
+    if hub_config.manifest_path.exists():
+        version = _parse_manifest_version(hub_config.manifest_path)
+        if version is None:
             _append_check(
                 checks,
-                "hub.manifest.exists",
-                "warning",
-                f"Hub manifest missing at {config.manifest_path}.",
-                "Run `car hub scan` or `car hub create` to generate it.",
-            )
-
-        if not config.repos_root.exists():
-            _append_check(
-                checks,
-                "hub.repos_root",
+                "hub.manifest.version",
                 "error",
-                f"Hub repos_root does not exist: {config.repos_root}",
-                "Create the directory or update hub.repos_root in config.",
+                f"Failed to read manifest version from {hub_config.manifest_path}.",
+                "Fix the manifest YAML or regenerate it with `car hub scan`.",
             )
-        elif not config.repos_root.is_dir():
+        elif version != MANIFEST_VERSION:
             _append_check(
                 checks,
-                "hub.repos_root",
+                "hub.manifest.version",
                 "error",
-                f"Hub repos_root is not a directory: {config.repos_root}",
-                "Point hub.repos_root at a directory.",
+                f"Hub manifest version {version} unsupported (expected {MANIFEST_VERSION}).",
+                "Regenerate the manifest (delete it and run `car hub scan`).",
             )
         else:
             _append_check(
                 checks,
-                "hub.repos_root",
+                "hub.manifest.version",
                 "ok",
-                f"Hub repos_root exists: {config.repos_root}",
+                f"Hub manifest version {version} is supported.",
             )
-
-        manifest_has_worktrees = (
-            config.manifest_path.exists()
-            and _manifest_has_worktrees(config.manifest_path)
+    else:
+        _append_check(
+            checks,
+            "hub.manifest.exists",
+            "warning",
+            f"Hub manifest missing at {hub_config.manifest_path}.",
+            "Run `car hub scan` or `car hub create` to generate it.",
         )
-        worktrees_enabled = config.worktrees_root.exists() or manifest_has_worktrees
-        if worktrees_enabled:
-            if ensure_executable("git"):
-                _append_check(
-                    checks,
-                    "hub.git",
-                    "ok",
-                    "git is available for hub worktrees.",
-                )
-            else:
-                _append_check(
-                    checks,
-                    "hub.git",
-                    "error",
-                    "git is not available but hub worktrees are enabled.",
-                    "Install git or disable worktrees.",
-                )
+
+    if not hub_config.repos_root.exists():
+        _append_check(
+            checks,
+            "hub.repos_root",
+            "error",
+            f"Hub repos_root does not exist: {hub_config.repos_root}",
+            "Create the directory or update hub.repos_root in config.",
+        )
+    elif not hub_config.repos_root.is_dir():
+        _append_check(
+            checks,
+            "hub.repos_root",
+            "error",
+            f"Hub repos_root is not a directory: {hub_config.repos_root}",
+            "Point hub.repos_root at a directory.",
+        )
+    else:
+        _append_check(
+            checks,
+            "hub.repos_root",
+            "ok",
+            f"Hub repos_root exists: {hub_config.repos_root}",
+        )
+
+    manifest_has_worktrees = (
+        hub_config.manifest_path.exists()
+        and _manifest_has_worktrees(hub_config.manifest_path)
+    )
+    worktrees_enabled = hub_config.worktrees_root.exists() or manifest_has_worktrees
+    if worktrees_enabled:
+        if ensure_executable("git"):
+            _append_check(
+                checks,
+                "hub.git",
+                "ok",
+                "git is available for hub worktrees.",
+            )
+        else:
+            _append_check(
+                checks,
+                "hub.git",
+                "error",
+                "git is not available but hub worktrees are enabled.",
+                "Install git or disable worktrees.",
+            )
 
     telegram_cfg = None
     if isinstance(config.raw, dict):

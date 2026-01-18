@@ -56,7 +56,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 
 ## Logs
 
-- Primary log file: `config.log.path` (default `.codex-autorunner/codex-autorunner.log`).
+- Primary log file: `config.log.path` (default `.codex-autorunner/codex-autorunner-hub.log`).
 - Telegram events are logged as JSON lines with `event` fields such as:
   - `telegram.update.received`
   - `telegram.send_message`

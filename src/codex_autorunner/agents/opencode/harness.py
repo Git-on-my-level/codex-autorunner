@@ -2,27 +2,16 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from ...core.app_server_events import format_sse
 from ..base import AgentHarness
 from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef
+from .runtime import build_turn_id, extract_session_id, extract_turn_id, split_model_id
 from .supervisor import OpenCodeSupervisor
 
 _logger = logging.getLogger(__name__)
-
-
-def _split_model_id(model: Optional[str]) -> Optional[dict[str, str]]:
-    if not model or "/" not in model:
-        return None
-    provider_id, model_id = model.split("/", 1)
-    provider_id = provider_id.strip()
-    model_id = model_id.strip()
-    if not provider_id or not model_id:
-        return None
-    return {"providerID": provider_id, "modelID": model_id}
 
 
 def _coerce_providers(payload: Any) -> list[dict[str, Any]]:
@@ -33,29 +22,6 @@ def _coerce_providers(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [entry for entry in payload if isinstance(entry, dict)]
     return []
-
-
-def _extract_session_id(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("sessionID", "sessionId", "session_id"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    properties = payload.get("properties")
-    if isinstance(properties, dict):
-        value = properties.get("sessionID")
-        if isinstance(value, str) and value:
-            return value
-        part = properties.get("part")
-        if isinstance(part, dict):
-            value = part.get("sessionID")
-            if isinstance(value, str) and value:
-                return value
-    session = payload.get("session")
-    if isinstance(session, dict):
-        return _extract_session_id(session)
-    return None
 
 
 class OpenCodeHarness(AgentHarness):
@@ -132,7 +98,7 @@ class OpenCodeHarness(AgentHarness):
             title=title,
             directory=str(workspace_root),
         )
-        session_id = _extract_session_id(result) or result.get("id")
+        session_id = extract_session_id(result) or result.get("id")
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("OpenCode did not return a session id")
         return ConversationRef(agent="opencode", id=session_id)
@@ -149,7 +115,7 @@ class OpenCodeHarness(AgentHarness):
             sessions = [entry for entry in result if isinstance(entry, dict)]
         conversations: list[ConversationRef] = []
         for entry in sessions:
-            session_id = _extract_session_id(entry) or entry.get("id")
+            session_id = extract_session_id(entry) or entry.get("id")
             if isinstance(session_id, str) and session_id:
                 conversations.append(ConversationRef(agent="opencode", id=session_id))
         return conversations
@@ -162,7 +128,7 @@ class OpenCodeHarness(AgentHarness):
             result = await client.get_session(conversation_id)
         except Exception:
             result = {}
-        session_id = _extract_session_id(result) or conversation_id
+        session_id = extract_session_id(result) or conversation_id
         return ConversationRef(agent="opencode", id=session_id)
 
     async def start_turn(
@@ -177,17 +143,17 @@ class OpenCodeHarness(AgentHarness):
         sandbox_policy: Optional[Any],
     ) -> TurnRef:
         client = await self._supervisor.get_client(workspace_root)
-        model_payload = _split_model_id(model)
-        result = await client.send_message(
+        model_payload = split_model_id(model)
+        await client.prompt(
             conversation_id,
             message=prompt,
             model=model_payload,
             variant=reasoning,
         )
-        turn_id = _extract_session_id(result) or result.get("id")
-        if not isinstance(turn_id, str) or not turn_id:
-            turn_id = f"{conversation_id}:{int(time.time() * 1000)}"
-        return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
+        return TurnRef(
+            conversation_id=conversation_id,
+            turn_id=build_turn_id(conversation_id),
+        )
 
     async def start_review(
         self,
@@ -202,13 +168,13 @@ class OpenCodeHarness(AgentHarness):
     ) -> TurnRef:
         client = await self._supervisor.get_client(workspace_root)
         arguments = prompt if prompt else ""
-        await client.send_command(
+        result = await client.send_command(
             conversation_id,
             command="review",
             arguments=arguments,
             model=model,
         )
-        turn_id = f"{conversation_id}:{int(time.time() * 1000)}"
+        turn_id = extract_turn_id(conversation_id, result)
         return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
 
     async def interrupt(
@@ -232,7 +198,7 @@ class OpenCodeHarness(AgentHarness):
                 parsed = json.loads(payload) if payload else {}
             except json.JSONDecodeError:
                 parsed = {"raw": payload}
-            session_id = _extract_session_id(parsed)
+            session_id = extract_session_id(parsed)
             if event.event == "session.idle" and session_id == conversation_id:
                 break
             if session_id and session_id != conversation_id:

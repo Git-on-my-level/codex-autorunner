@@ -15,6 +15,9 @@ class Payload(BaseModel):
 
 class RunControlRequest(Payload):
     once: bool = False
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
 
 
 class HubCreateRepoRequest(Payload):
@@ -221,8 +224,11 @@ class IngestSpecResponse(ResponseModel):
 
 class AppServerThreadsResponse(ResponseModel):
     doc_chat: Dict[str, Optional[str]]
+    doc_chat_opencode: Optional[Dict[str, Optional[str]]] = None
     spec_ingest: Optional[str] = None
+    spec_ingest_opencode: Optional[str] = None
     autorunner: Optional[str] = None
+    autorunner_opencode: Optional[str] = None
     corruption: Optional[Dict[str, Any]] = None
 
 

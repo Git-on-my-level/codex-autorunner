@@ -160,6 +160,7 @@ function saveSessionCache<T>(key: string, value: T): void {
     const payload: SessionCachePayload<T> = { at: Date.now(), value };
     sessionStorage.setItem(key, JSON.stringify(payload));
   } catch (_err) {
+    // Ignore storage errors; cache is best-effort.
   }
 }
 
@@ -1615,6 +1616,7 @@ async function checkUpdateStatus(): Promise<void> {
     }
     if (stamp) sessionStorage.setItem(UPDATE_STATUS_SEEN_KEY, stamp);
   } catch (_err) {
+    // Ignore update status failures; UI still renders.
   }
 }
 

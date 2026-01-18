@@ -26,6 +26,7 @@ FEATURE_KEYS = DOC_CHAT_KEYS | {
     "spec_ingest",
     "spec_ingest.opencode",
     "autorunner",
+    "autorunner.opencode",
 }
 
 
@@ -84,13 +85,21 @@ class AppServerThreadRegistry:
     def feature_map(self) -> dict[str, object]:
         threads = self.load()
         doc_chat_thread = threads.get(DOC_CHAT_KEY)
+        doc_chat_opencode_thread = threads.get(DOC_CHAT_OPENCODE_KEY)
         payload: dict[str, object] = {
             "doc_chat": {
                 kind: doc_chat_thread or threads.get(f"{DOC_CHAT_PREFIX}{kind}")
                 for kind in DOC_CHAT_KINDS
             },
+            "doc_chat_opencode": {
+                kind: doc_chat_opencode_thread
+                or threads.get(f"{DOC_CHAT_OPENCODE_PREFIX}{kind}")
+                for kind in DOC_CHAT_KINDS
+            },
             "spec_ingest": threads.get("spec_ingest"),
+            "spec_ingest_opencode": threads.get("spec_ingest.opencode"),
             "autorunner": threads.get("autorunner"),
+            "autorunner_opencode": threads.get("autorunner.opencode"),
         }
         notice = self.corruption_notice()
         if notice:

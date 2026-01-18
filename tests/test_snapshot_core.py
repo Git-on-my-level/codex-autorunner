@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from codex_autorunner.bootstrap import seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.snapshot import (
     collect_seed_context,
@@ -23,6 +23,7 @@ def test_collect_seed_context_avoids_secret_paths_and_bounds_excerpts(
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".git").mkdir()
+    seed_hub_files(repo, force=True)
     seed_repo_files(repo, git_required=False)
 
     # Secret-ish files: should not appear in tree outline.

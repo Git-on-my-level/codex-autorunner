@@ -59,8 +59,8 @@ create their own Telegram bot token and run their own instance.
 ## Observability
 
 The bot logs structured events (e.g. `telegram.update.received`,
-`telegram.turn.completed`, `telegram.allowlist.denied`) to the main log path
-(default `.codex-autorunner/codex-autorunner.log`). See
+`telegram.turn.completed`, `telegram.allowlist.denied`) to the hub log path
+(default `.codex-autorunner/codex-autorunner-hub.log`). See
 `docs/ops/telegram-bot-runbook.md` for troubleshooting.
 
 ## Quickstart (high level)

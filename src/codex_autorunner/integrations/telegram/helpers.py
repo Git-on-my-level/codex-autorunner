@@ -840,7 +840,7 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/review detached ...")
     lines.append("")
     lines.append("Other:")
-    lines.append("Note: /resume is only supported for the codex agent.")
+    lines.append("Note: /resume is supported for the codex and opencode agents.")
     lines.append(
         "!<cmd> - run a bash command in the bound workspace (non-interactive; long-running commands time out)"
     )
@@ -1965,6 +1965,10 @@ def _format_approval_prompt(message: dict[str, Any]) -> str:
     method = message.get("method")
     params_raw = message.get("params")
     params: dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
+    if isinstance(method, str) and method.startswith("opencode/permission"):
+        prompt = params.get("prompt")
+        if isinstance(prompt, str) and prompt:
+            return prompt
     lines = ["Approval required"]
     reason = params.get("reason")
     if isinstance(reason, str) and reason:

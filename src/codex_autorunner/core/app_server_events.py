@@ -32,6 +32,7 @@ class TurnEventEntry:
     last_event_at: float = field(default_factory=time.monotonic)
     next_id: int = 1
     active_streams: int = 0
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 class AppServerEventBuffer:
@@ -49,12 +50,20 @@ class AppServerEventBuffer:
         self._max_turns = max_turns
         self._turn_ttl_seconds = turn_ttl_seconds
 
-    async def register_turn(self, thread_id: str, turn_id: str) -> None:
+    async def register_turn(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        context: Optional[dict[str, Any]] = None,
+    ) -> None:
         if not thread_id or not turn_id:
             return
-        await self._ensure_entry(thread_id, turn_id)
+        entry = await self._ensure_entry(thread_id, turn_id)
         async with self._lock:
             self._turn_index[turn_id] = thread_id
+        if context:
+            entry.context.update(context)
 
     async def handle_notification(self, message: Dict[str, Any]) -> None:
         thread_id, turn_id = self._extract_turn_ids(message)
@@ -73,9 +82,11 @@ class AppServerEventBuffer:
                 entry.events = entry.events[-self._max_events_per_turn :]
             entry.last_event_at = time.monotonic()
             entry.condition.notify_all()
+        context = dict(entry.context) if entry.context else {}
         async with self._lock:
             self._turn_index[turn_id] = thread_id
             self._prune_locked()
+        self._emit_log_lines(context, message)
 
     async def stream(
         self,
@@ -155,3 +166,18 @@ class AppServerEventBuffer:
                 key, entry = inactive.pop(0)
                 self._entries.pop(key, None)
                 self._turn_index.pop(entry.turn_id, None)
+
+    def _emit_log_lines(self, context: dict[str, Any], message: Dict[str, Any]) -> None:
+        emit = context.get("emit")
+        formatter = context.get("formatter")
+        if emit is None or formatter is None:
+            return
+        try:
+            lines = formatter.format_event(message)
+        except Exception:
+            return
+        for line in lines:
+            try:
+                emit(line)
+            except Exception:
+                continue

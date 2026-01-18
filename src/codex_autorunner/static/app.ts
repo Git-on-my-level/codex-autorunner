@@ -1,4 +1,4 @@
-import { detectContext, REPO_ID, HUB_BASE } from "./env.js";
+import { REPO_ID, HUB_BASE } from "./env.js";
 import { initHub } from "./hub.js";
 import { initTabs, registerTab } from "./tabs.js";
 import { initDashboard } from "./dashboard.js";
@@ -76,15 +76,14 @@ function initRepoShell(): void {
   initGitHub();
   initMobileCompact();
 
-  loadState().catch(() => {});
+  loadState();
 }
 
-async function bootstrap(): Promise<void> {
-  const { mode } = await detectContext();
+function bootstrap() {
   const hubShell = document.getElementById("hub-shell");
   const repoShell = document.getElementById("repo-shell");
 
-  if (mode === "hub") {
+  if (!REPO_ID) {
     if (hubShell) hubShell.classList.remove("hidden");
     if (repoShell) repoShell.classList.add("hidden");
     initHub();

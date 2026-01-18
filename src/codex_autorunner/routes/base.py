@@ -174,6 +174,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         terminal_lock: asyncio.Lock = app.state.terminal_lock
         session_registry: dict[str, SessionRecord] = app.state.session_registry
         repo_to_session: dict[str, str] = app.state.repo_to_session
+        session_env = getattr(app.state, "env", None)
         repo_path = str(engine.repo_root)
         state_path = engine.state_path
         agent = (ws.query_params.get("agent") or "codex").strip().lower()
@@ -324,7 +325,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         reasoning=reasoning,
                     )
                 try:
-                    pty = PTYSession(cmd, cwd=str(engine.repo_root))
+                    pty = PTYSession(cmd, cwd=str(engine.repo_root), env=session_env)
                     active_session = ActiveSession(
                         session_id, pty, asyncio.get_running_loop()
                     )

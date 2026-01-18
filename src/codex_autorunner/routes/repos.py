@@ -16,6 +16,51 @@ from ..web.schemas import (
 )
 
 
+def _normalize_override(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
+def _apply_run_overrides(request: Request, payload: RunControlRequest) -> None:
+    engine = request.app.state.engine
+    agent = _normalize_override(payload.agent)
+    model = _normalize_override(payload.model)
+    reasoning = _normalize_override(payload.reasoning)
+    fields_set = getattr(payload, "model_fields_set", set())
+    agent_set = "agent" in fields_set
+    model_set = "model" in fields_set
+    reasoning_set = "reasoning" in fields_set
+    if not (agent_set or model_set or reasoning_set):
+        return
+    with state_lock(engine.state_path):
+        state = load_state(engine.state_path)
+        new_state = RunnerState(
+            last_run_id=state.last_run_id,
+            status=state.status,
+            last_exit_code=state.last_exit_code,
+            last_run_started_at=state.last_run_started_at,
+            last_run_finished_at=state.last_run_finished_at,
+            autorunner_agent_override=(
+                agent if agent_set else state.autorunner_agent_override
+            ),
+            autorunner_model_override=(
+                model if model_set else state.autorunner_model_override
+            ),
+            autorunner_effort_override=(
+                reasoning if reasoning_set else state.autorunner_effort_override
+            ),
+            autorunner_approval_policy=state.autorunner_approval_policy,
+            autorunner_sandbox_mode=state.autorunner_sandbox_mode,
+            autorunner_workspace_write_network=state.autorunner_workspace_write_network,
+            runner_pid=state.runner_pid,
+            sessions=state.sessions,
+            repo_to_session=state.repo_to_session,
+        )
+        save_state(engine.state_path, new_state)
+
+
 def build_repos_routes() -> APIRouter:
     """Build routes for run control."""
     router = APIRouter()
@@ -29,6 +74,8 @@ def build_repos_routes() -> APIRouter:
             logger.info("run/start once=%s", once)
         except Exception:
             pass
+        if payload:
+            _apply_run_overrides(request, payload)
         try:
             manager.start(once=once)
         except LockError as exc:
@@ -64,6 +111,7 @@ def build_repos_routes() -> APIRouter:
                 last_exit_code=137,
                 last_run_started_at=state.last_run_started_at,
                 last_run_finished_at=now_iso(),
+                autorunner_agent_override=state.autorunner_agent_override,
                 autorunner_model_override=state.autorunner_model_override,
                 autorunner_effort_override=state.autorunner_effort_override,
                 autorunner_approval_policy=state.autorunner_approval_policy,
@@ -114,6 +162,7 @@ def build_repos_routes() -> APIRouter:
                 last_exit_code=None,
                 last_run_started_at=None,
                 last_run_finished_at=None,
+                autorunner_agent_override=current_state.autorunner_agent_override,
                 autorunner_model_override=current_state.autorunner_model_override,
                 autorunner_effort_override=current_state.autorunner_effort_override,
                 autorunner_approval_policy=current_state.autorunner_approval_policy,

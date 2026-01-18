@@ -43,8 +43,20 @@ def test_root_path_proxy_serves_static(tmp_path: Path) -> None:
 
 
 def test_repo_mode_static_assets_served_with_base_path(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
     seed_repo_files(tmp_path, force=True, git_required=False)
     app = create_app(tmp_path, base_path="/car")
     client = TestClient(app)
     res = client.get("/car/static/app.js")
     assert res.status_code == 200
+
+
+def test_hub_routes_under_base_path(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+    repo_dir = tmp_path / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+    seed_repo_files(repo_dir, force=True, git_required=False)
+    app = create_hub_app(tmp_path, base_path="/car")
+    client = TestClient(app)
+    assert client.get("/car/hub/version").status_code == 200
+    assert client.get("/car/repos/demo/api/version").status_code == 200

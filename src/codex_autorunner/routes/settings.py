@@ -122,6 +122,7 @@ def build_settings_routes() -> APIRouter:
                 last_exit_code=state.last_exit_code,
                 last_run_started_at=state.last_run_started_at,
                 last_run_finished_at=state.last_run_finished_at,
+                autorunner_agent_override=state.autorunner_agent_override,
                 autorunner_model_override=model_override,
                 autorunner_effort_override=effort_override,
                 autorunner_approval_policy=approval_policy,

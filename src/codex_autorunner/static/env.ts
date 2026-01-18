@@ -1,22 +1,5 @@
 const hasWindow = typeof window !== "undefined" && typeof window.location !== "undefined";
 const pathname = hasWindow ? window.location.pathname || "/" : "/";
-const AUTH_TOKEN_KEY = "car_auth_token";
-
-function getAuthToken(): string | null {
-  let token: string | null = null;
-  try {
-    token = sessionStorage.getItem(AUTH_TOKEN_KEY);
-  } catch (_err) {
-    token = null;
-  }
-  if (token) {
-    return token;
-  }
-  if (hasWindow && (window as unknown as { __CAR_AUTH_TOKEN?: string }).__CAR_AUTH_TOKEN) {
-    return (window as unknown as { __CAR_AUTH_TOKEN: string }).__CAR_AUTH_TOKEN;
-  }
-  return null;
-}
 
 function normalizeBase(base: string): string {
   if (!base || base === "/") return "";
@@ -50,13 +33,14 @@ function detectBasePrefix(path: string): string {
 }
 
 const basePrefix =
-  hasWindow && typeof (window as unknown as { __CAR_BASE_PREFIX?: string }).__CAR_BASE_PREFIX !== "undefined"
-    ? (window as unknown as { __CAR_BASE_PREFIX: string }).__CAR_BASE_PREFIX
+  hasWindow &&
+  typeof (window as { __CAR_BASE_PREFIX?: string }).__CAR_BASE_PREFIX !== "undefined"
+    ? (window as { __CAR_BASE_PREFIX: string }).__CAR_BASE_PREFIX
     : detectBasePrefix(pathname);
 
 const repoId =
-  hasWindow && typeof (window as unknown as { __CAR_REPO_ID?: string }).__CAR_REPO_ID !== "undefined"
-    ? (window as unknown as { __CAR_REPO_ID: string }).__CAR_REPO_ID
+  hasWindow && typeof (window as { __CAR_REPO_ID?: string }).__CAR_REPO_ID !== "undefined"
+    ? (window as { __CAR_REPO_ID: string }).__CAR_REPO_ID
     : (() => {
         const match = pathname.match(/\/repos\/([^/]+)/);
         return match && match[1] ? match[1] : null;
@@ -64,40 +48,10 @@ const repoId =
 
 const derivedBasePath = repoId ? `${basePrefix}/repos/${repoId}` : basePrefix;
 const basePath =
-  hasWindow && typeof (window as unknown as { __CAR_BASE_PATH?: string }).__CAR_BASE_PATH !== "undefined"
-    ? (window as unknown as { __CAR_BASE_PATH: string }).__CAR_BASE_PATH
+  hasWindow && typeof (window as { __CAR_BASE_PATH?: string }).__CAR_BASE_PATH !== "undefined"
+    ? (window as { __CAR_BASE_PATH: string }).__CAR_BASE_PATH
     : derivedBasePath;
 
 export const REPO_ID: string | null = repoId;
 export const BASE_PATH: string = basePath;
 export const HUB_BASE: string = basePrefix || "/";
-
-let mode: string = repoId ? "repo" : "unknown";
-const hubEndpoint = `${basePrefix || ""}/hub/repos`;
-
-interface DetectContextResult {
-  mode: string;
-  repoId: string | null;
-}
-
-export async function detectContext(): Promise<DetectContextResult> {
-  if (mode !== "unknown") {
-    return { mode, repoId: REPO_ID };
-  }
-  if (!hasWindow || typeof fetch !== "function") {
-    mode = "repo";
-    return { mode, repoId: REPO_ID };
-  }
-  try {
-    const headers: Record<string, string> = {};
-    const token = getAuthToken();
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    const res = await fetch(hubEndpoint, { headers });
-    mode = res.ok ? "hub" : "repo";
-  } catch (err) {
-    mode = "repo";
-  }
-  return { mode, repoId: REPO_ID };
-}

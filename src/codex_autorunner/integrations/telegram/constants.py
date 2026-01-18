@@ -18,6 +18,7 @@ RESUME_REFRESH_LIMIT = 10
 TOKEN_USAGE_CACHE_LIMIT = 256
 TOKEN_USAGE_TURN_CACHE_LIMIT = 512
 DEFAULT_INTERRUPT_TIMEOUT_SECONDS = 30.0
+OPENCODE_TURN_TIMEOUT_SECONDS = 300.0
 DEFAULT_WORKSPACE_STATE_ROOT = "~/.codex-autorunner/workspaces"
 DEFAULT_AGENT = "codex"
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
@@ -52,6 +53,7 @@ RESUME_PICKER_PROMPT = (
     "Select a thread to resume (buttons below or reply with number/id)."
 )
 BIND_PICKER_PROMPT = "Select a repo to bind (buttons below or reply with number/id)."
+AGENT_PICKER_PROMPT = "Select an agent (buttons below)."
 MODEL_PICKER_PROMPT = "Select a model (buttons below)."
 EFFORT_PICKER_PROMPT = "Select a reasoning effort for {model}."
 UPDATE_PICKER_PROMPT = "Select update target (buttons below)."
@@ -100,6 +102,10 @@ COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
 MAX_MENTION_BYTES = 200_000
 VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 VALID_AGENT_VALUES = {"codex", "opencode"}
+DEFAULT_AGENT_MODELS = {
+    "codex": "gpt-5.2-codex",
+    "opencode": "zai-coding-plan/glm-4.7",
+}
 CONTEXT_BASELINE_TOKENS = 12000
 APPROVAL_POLICY_VALUES = {"untrusted", "on-failure", "on-request", "never"}
 APPROVAL_PRESETS = {

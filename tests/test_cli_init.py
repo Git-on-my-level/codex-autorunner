@@ -20,7 +20,7 @@ def test_init_from_subdir_walks_to_repo_root(tmp_path: Path):
     assert config_path.exists()
     assert not (nested / ".codex-autorunner").exists()
     contents = config_path.read_text(encoding="utf-8")
-    assert "mode: repo" in contents
+    assert "mode: hub" in contents
 
 
 def test_init_allows_child_git_repos_without_parent(tmp_path: Path):
@@ -70,3 +70,16 @@ def test_create_app_allows_parent_without_git(tmp_path: Path):
 
     app_instance = create_hub_app(workspace)
     assert app_instance is not None
+
+
+def test_init_errors_on_legacy_repo_config(tmp_path: Path):
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True, exist_ok=True)
+    config_dir = repo_root / ".codex-autorunner"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.yml").write_text("mode: repo\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["init", str(repo_root)])
+
+    assert result.exit_code != 0
+    assert "repo.override.yml" in result.output

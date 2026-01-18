@@ -2,11 +2,10 @@ import asyncio
 import logging
 import os
 import shlex
-import shutil
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -26,7 +25,10 @@ from ..core.config import (
     HubConfig,
     _is_loopback_host,
     _normalize_base_path,
-    load_config,
+    derive_repo_config,
+    load_hub_config,
+    load_repo_config,
+    resolve_env_for_root,
 )
 from ..core.doc_chat import DocChatService
 from ..core.engine import Engine, LockError
@@ -43,7 +45,7 @@ from ..core.usage import (
     get_hub_usage_summary_cached,
     parse_iso_datetime,
 )
-from ..core.utils import resolve_opencode_binary
+from ..core.utils import resolve_executable, resolve_opencode_binary
 from ..housekeeping import run_housekeeping_once
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
@@ -83,6 +85,7 @@ from .terminal_sessions import parse_tui_idle_seconds, prune_terminal_registry
 @dataclass(frozen=True)
 class AppContext:
     base_path: str
+    env: Mapping[str, str]
     engine: Engine
     manager: RunnerManager
     doc_chat: DocChatService
@@ -207,6 +210,7 @@ def _build_app_server_supervisor(
     *,
     logger: logging.Logger,
     event_prefix: str,
+    base_env: Optional[Mapping[str, str]] = None,
     notification_handler: Optional[NotificationHandler] = None,
     approval_handler: Optional[ApprovalHandler] = None,
 ) -> tuple[Optional[WorkspaceAppServerSupervisor], Optional[float]]:
@@ -223,6 +227,7 @@ def _build_app_server_supervisor(
             state_dir,
             logger=logger,
             event_prefix=event_prefix,
+            base_env=base_env,
         )
 
     try:
@@ -253,7 +258,12 @@ def _parse_command(raw: Optional[str]) -> list[str]:
         return []
 
 
-def _command_available(command: list[str], *, workspace_root: Path) -> bool:
+def _command_available(
+    command: list[str],
+    *,
+    workspace_root: Path,
+    env: Optional[Mapping[str, str]] = None,
+) -> bool:
     if not command:
         return False
     entry = str(command[0]).strip()
@@ -264,7 +274,7 @@ def _command_available(command: list[str], *, workspace_root: Path) -> bool:
         if not path.is_absolute():
             path = workspace_root / path
         return path.is_file() and os.access(path, os.X_OK)
-    return shutil.which(entry) is not None
+    return resolve_executable(entry, env=env) is not None
 
 
 def _build_opencode_supervisor(
@@ -274,6 +284,7 @@ def _build_opencode_supervisor(
     opencode_binary: Optional[str],
     opencode_command: Optional[list[str]],
     logger: logging.Logger,
+    env: Mapping[str, str],
 ) -> tuple[Optional[OpenCodeSupervisor], Optional[float]]:
     command = list(opencode_command or [])
     if not command and opencode_binary:
@@ -304,15 +315,19 @@ def _build_opencode_supervisor(
                 "--port",
                 "0",
             ]
-    if not command or not _command_available(command, workspace_root=workspace_root):
+    if not command or not _command_available(
+        command,
+        workspace_root=workspace_root,
+        env=env,
+    ):
         safe_log(
             logger,
             logging.INFO,
             "OpenCode command unavailable; skipping opencode supervisor.",
         )
         return None, None
-    username = os.environ.get("OPENCODE_SERVER_USERNAME")
-    password = os.environ.get("OPENCODE_SERVER_PASSWORD")
+    username = env.get("OPENCODE_SERVER_USERNAME")
+    password = env.get("OPENCODE_SERVER_PASSWORD")
     supervisor = OpenCodeSupervisor(
         command,
         logger=logger,
@@ -326,19 +341,25 @@ def _build_opencode_supervisor(
 
 
 def _build_app_context(
-    repo_root: Optional[Path], base_path: Optional[str]
+    repo_root: Optional[Path],
+    base_path: Optional[str],
+    hub_config: Optional[HubConfig] = None,
 ) -> AppContext:
-    config = load_config(repo_root or Path.cwd())
-    if isinstance(config, HubConfig):
-        raise ConfigError("create_app requires repo mode configuration")
+    target_root = (repo_root or Path.cwd()).resolve()
+    if hub_config is None:
+        config = load_repo_config(target_root)
+        env = dict(os.environ)
+    else:
+        env = resolve_env_for_root(target_root)
+        config = derive_repo_config(hub_config, target_root, load_env=False)
     normalized_base = (
         _normalize_base_path(base_path)
         if base_path is not None
         else config.server_base_path
     )
-    engine = Engine(config.root)
+    engine = Engine(config.root, config=config)
     manager = RunnerManager(engine)
-    voice_config = VoiceConfig.from_raw(config.voice, env=os.environ)
+    voice_config = VoiceConfig.from_raw(config.voice, env=env)
     voice_missing_reason: Optional[str] = None
     try:
         require_optional_dependencies(
@@ -443,6 +464,7 @@ def _build_app_context(
         engine.config.app_server,
         logger=logger,
         event_prefix="web.app_server",
+        base_env=env,
         notification_handler=app_server_events.handle_notification,
         approval_handler=_doc_chat_approval_handler,
     )
@@ -460,6 +482,7 @@ def _build_app_context(
         opencode_binary=opencode_binary,
         opencode_command=opencode_command,
         logger=logger,
+        env=env,
     )
     doc_chat = DocChatService(
         engine,
@@ -543,6 +566,7 @@ def _build_app_context(
         raise
     return AppContext(
         base_path=normalized_base,
+        env=env,
         engine=engine,
         manager=manager,
         doc_chat=doc_chat,
@@ -575,6 +599,7 @@ def _build_app_context(
 
 def _apply_app_context(app: FastAPI, context: AppContext) -> None:
     app.state.base_path = context.base_path
+    app.state.env = context.env
     app.state.logger = context.logger
     app.state.engine = context.engine
     app.state.config = context.engine.config  # Expose config consistently
@@ -606,9 +631,7 @@ def _apply_app_context(app: FastAPI, context: AppContext) -> None:
 def _build_hub_context(
     hub_root: Optional[Path], base_path: Optional[str]
 ) -> HubAppContext:
-    config = load_config(hub_root or Path.cwd())
-    if not isinstance(config, HubConfig):
-        raise ConfigError("Hub app requires hub mode configuration")
+    config = load_hub_config(hub_root or Path.cwd())
     normalized_base = (
         _normalize_base_path(base_path)
         if base_path is not None
@@ -875,8 +898,9 @@ def create_app(
     repo_root: Optional[Path] = None,
     base_path: Optional[str] = None,
     server_overrides: Optional[ServerOverrides] = None,
+    hub_config: Optional[HubConfig] = None,
 ) -> ASGIApp:
-    context = _build_app_context(repo_root, base_path)
+    context = _build_app_context(repo_root, base_path, hub_config=hub_config)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
     _apply_app_context(app, context)
     app.add_middleware(GZipMiddleware, minimum_size=500)
@@ -900,7 +924,7 @@ def create_app(
             allowed_origins = list(server_overrides.allowed_origins)
         if server_overrides.auth_token_env is not None:
             auth_token_env = server_overrides.auth_token_env
-    auth_token = _resolve_auth_token(auth_token_env)
+    auth_token = _resolve_auth_token(auth_token_env, env=context.env)
     app.state.auth_token = auth_token
     asgi_app: ASGIApp = app
     if auth_token:
@@ -981,6 +1005,7 @@ def create_hub_app(
                 repo_path,
                 base_path="",
                 server_overrides=repo_server_overrides,
+                hub_config=context.config,
             )
         except ConfigError as exc:
             mount_errors[prefix] = str(exc)
@@ -1532,10 +1557,13 @@ def create_hub_app(
     return asgi_app
 
 
-def _resolve_auth_token(env_name: str) -> Optional[str]:
+def _resolve_auth_token(
+    env_name: str, *, env: Optional[Mapping[str, str]] = None
+) -> Optional[str]:
     if not env_name:
         return None
-    value = os.environ.get(env_name)
+    source = env if env is not None else os.environ
+    value = source.get(env_name)
     if value is None:
         return None
     value = value.strip()
