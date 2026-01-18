@@ -1643,6 +1643,11 @@ class TelegramCommandHandlers:
                         _clear_pending_compact_seed,
                     )
                 output = output_result.text
+                if output and prompt_text:
+                    prompt_trimmed = prompt_text.strip()
+                    output_trimmed = output.lstrip()
+                    if prompt_trimmed and output_trimmed.startswith(prompt_trimmed):
+                        output = output_trimmed[len(prompt_trimmed) :].lstrip()
                 if output_result.error:
                     failure_message = f"OpenCode error: {output_result.error}"
                     if send_failure_response:
