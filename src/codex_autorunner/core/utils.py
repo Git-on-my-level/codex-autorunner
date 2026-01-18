@@ -3,7 +3,7 @@ import os
 import shlex
 import shutil
 from pathlib import Path
-from typing import Dict, Optional, Sequence, cast
+from typing import Dict, Mapping, Optional, Sequence, cast
 
 
 class RepoNotFoundError(Exception):
@@ -68,8 +68,11 @@ def augmented_path(path: Optional[str] = None) -> str:
     return os.pathsep.join(merged)
 
 
-def subprocess_env(extra_paths: Optional[Sequence[str]] = None) -> Dict[str, str]:
-    env = dict(os.environ)
+def subprocess_env(
+    extra_paths: Optional[Sequence[str]] = None,
+    base_env: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
+    env = dict(base_env) if base_env is not None else dict(os.environ)
     path = env.get("PATH")
     merged = augmented_path(path)
     if extra_paths:
@@ -80,7 +83,9 @@ def subprocess_env(extra_paths: Optional[Sequence[str]] = None) -> Dict[str, str
     return env
 
 
-def resolve_executable(binary: str) -> Optional[str]:
+def resolve_executable(
+    binary: str, *, env: Optional[Mapping[str, str]] = None
+) -> Optional[str]:
     """
     Resolve an executable path in a way that's resilient to minimal PATHs.
     Returns an absolute path if found, else None.
@@ -97,7 +102,8 @@ def resolve_executable(binary: str) -> Optional[str]:
     resolved = shutil.which(binary)
     if resolved:
         return resolved
-    resolved = shutil.which(binary, path=augmented_path(os.environ.get("PATH")))
+    path = env.get("PATH") if env is not None else os.environ.get("PATH")
+    resolved = shutil.which(binary, path=augmented_path(path))
     return resolved
 
 

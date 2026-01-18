@@ -12,6 +12,7 @@ from codex_autorunner.core.config import (
     ConfigError,
     load_hub_config,
     load_repo_config,
+    resolve_env_for_root,
 )
 
 
@@ -136,6 +137,18 @@ def test_repo_env_overrides_hub_env(tmp_path: Path) -> None:
             os.environ.pop("CAR_DOTENV_TEST", None)
         else:
             os.environ["CAR_DOTENV_TEST"] = previous
+
+
+def test_resolve_env_for_root_isolated(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".env").write_text("CAR_DOTENV_TEST=repo\n", encoding="utf-8")
+
+    base_env = {"CAR_DOTENV_TEST": "hub"}
+    previous = os.environ.get("CAR_DOTENV_TEST")
+    env = resolve_env_for_root(repo_root, base_env=base_env)
+    assert env["CAR_DOTENV_TEST"] == "repo"
+    assert os.environ.get("CAR_DOTENV_TEST") == previous
 
 
 def test_repo_docs_reject_absolute_path(tmp_path: Path) -> None:

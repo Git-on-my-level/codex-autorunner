@@ -1,18 +1,21 @@
 import dataclasses
 import ipaddress
 import json
+import os
 import shlex
 from os import PathLike
 from pathlib import Path
-from typing import IO, Any, Dict, List, Optional, Union, cast
+from typing import IO, Any, Dict, List, Mapping, Optional, Union, cast
 
 import yaml
 
 from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
 
+DOTENV_AVAILABLE = True
 try:
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values, load_dotenv
 except ModuleNotFoundError:  # pragma: no cover
+    DOTENV_AVAILABLE = False
 
     def load_dotenv(
         dotenv_path: Optional[Union[str, PathLike[str]]] = None,
@@ -23,6 +26,15 @@ except ModuleNotFoundError:  # pragma: no cover
         encoding: Optional[str] = None,
     ) -> bool:
         return False
+
+    def dotenv_values(
+        dotenv_path: Optional[Union[str, PathLike[str]]] = None,
+        stream: Optional[IO[str]] = None,
+        verbose: bool = False,
+        interpolate: bool = True,
+        encoding: Optional[str] = None,
+    ) -> Dict[str, Optional[str]]:
+        return {}
 
 
 CONFIG_FILENAME = ".codex-autorunner/config.yml"
@@ -817,7 +829,7 @@ def find_nearest_hub_config_path(start: Path) -> Optional[Path]:
         if not candidate.exists():
             continue
         data = _load_yaml_dict(candidate)
-        if data.get("mode") == "hub":
+        if data.get("mode") in (None, "hub"):
             return candidate
     return None
 
@@ -1029,6 +1041,57 @@ def load_dotenv_for_root(root: Path) -> None:
     except Exception:
         # Never fail config loading due to dotenv issues.
         pass
+
+
+def _parse_dotenv_fallback(path: Path) -> Dict[str, str]:
+    env: Dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("export "):
+                stripped = stripped[len("export ") :].strip()
+            if "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            value = value.strip()
+            if value and value[0] in {"'", '"'} and value[-1] == value[0]:
+                value = value[1:-1]
+            env[key] = value
+    except OSError:
+        return {}
+    return env
+
+
+def resolve_env_for_root(
+    root: Path, base_env: Optional[Mapping[str, str]] = None
+) -> Dict[str, str]:
+    """
+    Return a merged env mapping for a repo root without mutating process env.
+
+    Precedence mirrors load_dotenv_for_root: root/.env then root/.codex-autorunner/.env.
+    """
+    env = dict(base_env) if base_env is not None else dict(os.environ)
+    candidates = [
+        root / ".env",
+        root / ".codex-autorunner" / ".env",
+    ]
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        if DOTENV_AVAILABLE:
+            values = dotenv_values(candidate)
+            if isinstance(values, dict):
+                for key, value in values.items():
+                    if key and value is not None:
+                        env[str(key)] = str(value)
+                continue
+        env.update(_parse_dotenv_fallback(candidate))
+    return env
 
 
 def load_hub_config_data(config_path: Path) -> Dict[str, Any]:
