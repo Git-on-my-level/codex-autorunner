@@ -596,6 +596,9 @@ class SpecIngestService:
                 "OpenCode provider "
                 f"{provider_id or 'selected'} requires env vars: {missing_label}"
             )
+        opencode_turn_started = False
+        await supervisor.mark_turn_started(self.engine.repo_root)
+        opencode_turn_started = True
         turn_id = build_turn_id(thread_id)
         active = self._register_active_turn(client, turn_id, thread_id)
         permission_policy = PERMISSION_ALLOW
@@ -651,6 +654,8 @@ class SpecIngestService:
             interrupt_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await interrupt_task
+            if opencode_turn_started:
+                await supervisor.mark_turn_finished(self.engine.repo_root)
 
         if active.interrupted:
             self._restore_docs(backups)

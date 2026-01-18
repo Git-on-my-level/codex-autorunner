@@ -1079,6 +1079,9 @@ class DocChatService:
                     "OpenCode provider "
                     f"{provider_id or 'selected'} requires env vars: {missing_label}"
                 )
+            opencode_turn_started = False
+            await supervisor.mark_turn_started(self.engine.repo_root)
+            opencode_turn_started = True
             turn_id = build_turn_id(thread_id)
             active = self._register_active_turn(client, turn_id, thread_id)
             await self._handle_turn_start(
@@ -1155,6 +1158,8 @@ class DocChatService:
                 interrupt_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await interrupt_task
+                if opencode_turn_started:
+                    await supervisor.mark_turn_finished(self.engine.repo_root)
             if output_result.error:
                 duration_ms = int((time.time() - started_at) * 1000)
                 detail = self._compact_message(output_result.error)

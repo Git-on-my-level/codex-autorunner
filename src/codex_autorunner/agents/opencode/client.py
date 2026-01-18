@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, AsyncIterator, Optional
 
 import httpx
 
+from ...core.logging_utils import log_event
 from .events import SSEEvent, parse_sse_lines
+
+_MAX_INVALID_JSON_PREVIEW_BYTES = 512
 
 
 class OpenCodeClient:
@@ -15,12 +19,14 @@ class OpenCodeClient:
         *,
         auth: Optional[tuple[str, str]] = None,
         timeout: Optional[float] = None,
+        logger: Optional[logging.Logger] = None,
     ) -> None:
         self._client = httpx.AsyncClient(
             base_url=base_url,
             auth=auth,
             timeout=timeout,
         )
+        self._logger = logger or logging.getLogger(__name__)
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -35,18 +41,58 @@ class OpenCodeClient:
         *,
         params: Optional[dict[str, Any]] = None,
         json: Optional[dict[str, Any]] = None,
+        expect_json: bool = True,
     ) -> Any:
         response = await self._client.request(method, path, params=params, json=json)
         response.raise_for_status()
-        if response.content:
-            return response.json()
+        raw = response.content
+        if not raw or not raw.strip():
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            self._log_invalid_json(
+                method,
+                path,
+                response,
+                raw,
+                expect_json=expect_json,
+            )
+            if expect_json:
+                raise
         return None
+
+    def _log_invalid_json(
+        self,
+        method: str,
+        path: str,
+        response: httpx.Response,
+        raw: bytes,
+        *,
+        expect_json: bool,
+    ) -> None:
+        preview = raw[:_MAX_INVALID_JSON_PREVIEW_BYTES].decode(
+            "utf-8", errors="replace"
+        )
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "opencode.response.invalid_json",
+            method=method,
+            path=path,
+            status_code=response.status_code,
+            content_length=len(raw),
+            content_type=response.headers.get("content-type"),
+            expect_json=expect_json,
+            preview=preview,
+        )
 
     async def providers(self, directory: Optional[str] = None) -> Any:
         return await self._request(
             "GET",
             "/config/providers",
             params=self._dir_params(directory),
+            expect_json=True,
         )
 
     async def create_session(
@@ -60,15 +106,15 @@ class OpenCodeClient:
             payload["title"] = title
         if directory:
             payload["directory"] = directory
-        return await self._request("POST", "/session", json=payload)
+        return await self._request("POST", "/session", json=payload, expect_json=True)
 
     async def list_sessions(self, directory: Optional[str] = None) -> Any:
         return await self._request(
-            "GET", "/session", params=self._dir_params(directory)
+            "GET", "/session", params=self._dir_params(directory), expect_json=True
         )
 
     async def get_session(self, session_id: str) -> Any:
-        return await self._request("GET", f"/session/{session_id}")
+        return await self._request("GET", f"/session/{session_id}", expect_json=True)
 
     async def send_message(
         self,
@@ -89,7 +135,10 @@ class OpenCodeClient:
         if variant:
             payload["variant"] = variant
         return await self._request(
-            "POST", f"/session/{session_id}/message", json=payload
+            "POST",
+            f"/session/{session_id}/message",
+            json=payload,
+            expect_json=False,
         )
 
     async def prompt(
@@ -111,7 +160,10 @@ class OpenCodeClient:
         if variant:
             payload["variant"] = variant
         return await self._request(
-            "POST", f"/session/{session_id}/prompt", json=payload
+            "POST",
+            f"/session/{session_id}/prompt",
+            json=payload,
+            expect_json=False,
         )
 
     async def send_command(
@@ -132,7 +184,10 @@ class OpenCodeClient:
         if agent:
             payload["agent"] = agent
         return await self._request(
-            "POST", f"/session/{session_id}/command", json=payload
+            "POST",
+            f"/session/{session_id}/command",
+            json=payload,
+            expect_json=False,
         )
 
     async def summarize(
@@ -150,7 +205,10 @@ class OpenCodeClient:
         if auto is not None:
             payload["auto"] = auto
         return await self._request(
-            "POST", f"/session/{session_id}/summarize", json=payload
+            "POST",
+            f"/session/{session_id}/summarize",
+            json=payload,
+            expect_json=True,
         )
 
     async def respond_permission(
@@ -164,11 +222,16 @@ class OpenCodeClient:
         if message:
             payload["message"] = message
         return await self._request(
-            "POST", f"/permission/{request_id}/reply", json=payload
+            "POST",
+            f"/permission/{request_id}/reply",
+            json=payload,
+            expect_json=False,
         )
 
     async def abort(self, session_id: str) -> Any:
-        return await self._request("POST", f"/session/{session_id}/abort")
+        return await self._request(
+            "POST", f"/session/{session_id}/abort", expect_json=False
+        )
 
     async def stream_events(
         self, *, directory: Optional[str] = None

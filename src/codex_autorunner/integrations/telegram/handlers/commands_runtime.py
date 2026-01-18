@@ -1268,164 +1268,175 @@ class TelegramCommandHandlers:
                             placeholder_id,
                             PLACEHOLDER_TEXT,
                         )
-                    model_payload = split_model_id(record.model)
-                    missing_env = await opencode_missing_env(
-                        opencode_client,
-                        str(workspace_root),
-                        model_payload,
-                    )
-                    if missing_env:
-                        provider_id = (
-                            model_payload.get("providerID") if model_payload else None
-                        )
-                        failure_message = (
-                            "OpenCode provider "
-                            f"{provider_id or 'selected'} requires env vars: "
-                            f"{', '.join(missing_env)}. "
-                            "Set them or switch models."
-                        )
-                        if send_failure_response:
-                            await self._send_message(
-                                message.chat_id,
-                                failure_message,
-                                thread_id=message.thread_id,
-                                reply_to=message.message_id,
-                            )
-                        return _TurnRunFailure(
-                            failure_message,
-                            placeholder_id,
-                            transcript_message_id,
-                            transcript_text,
-                        )
-                    turn_started_at = time.monotonic()
-                    turn_id = build_turn_id(thread_id)
-                    runtime.current_turn_id = turn_id
-                    runtime.current_turn_key = (thread_id, turn_id)
-                    ctx = TurnContext(
-                        topic_key=key,
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                        codex_thread_id=thread_id,
-                        reply_to_message_id=message.message_id,
-                        placeholder_message_id=placeholder_id,
-                    )
-                    turn_key = self._turn_key(thread_id, turn_id)
-                    if turn_key is None or not self._register_turn_context(
-                        turn_key, turn_id, ctx
-                    ):
-                        runtime.current_turn_id = None
-                        runtime.current_turn_key = None
-                        runtime.interrupt_requested = False
-                        failure_message = "Turn collision detected; please retry."
-                        if send_failure_response:
-                            await self._send_message(
-                                message.chat_id,
-                                failure_message,
-                                thread_id=message.thread_id,
-                                reply_to=message.message_id,
-                            )
-                            if placeholder_id is not None:
-                                await self._delete_message(
-                                    message.chat_id, placeholder_id
-                                )
-                        return _TurnRunFailure(
-                            failure_message,
-                            placeholder_id,
-                            transcript_message_id,
-                            transcript_text,
-                        )
-                    approval_policy, _sandbox_policy = self._effective_policies(record)
-                    permission_policy = map_approval_policy_to_permission(
-                        approval_policy, default=PERMISSION_ALLOW
-                    )
-
-                    async def _permission_handler(
-                        request_id: str, props: dict[str, Any]
-                    ) -> str:
-                        if permission_policy != PERMISSION_ASK:
-                            return "reject"
-                        prompt = format_permission_prompt(props)
-                        decision = await self._handle_approval_request(
-                            {
-                                "id": request_id,
-                                "method": "opencode/permission/requestApproval",
-                                "params": {
-                                    "turnId": turn_id,
-                                    "threadId": thread_id,
-                                    "prompt": prompt,
-                                },
-                            }
-                        )
-                        return decision
-
-                    abort_requested = False
-
-                    async def _abort_opencode() -> None:
-                        try:
-                            await opencode_client.abort(thread_id)
-                        except Exception:
-                            pass
-
-                    def _should_stop() -> bool:
-                        nonlocal abort_requested
-                        if runtime.interrupt_requested and not abort_requested:
-                            abort_requested = True
-                            asyncio.create_task(_abort_opencode())
-                        return runtime.interrupt_requested
-
-                    output_task = asyncio.create_task(
-                        collect_opencode_output(
-                            opencode_client,
-                            session_id=thread_id,
-                            workspace_path=str(workspace_root),
-                            permission_policy=permission_policy,
-                            permission_handler=(
-                                _permission_handler
-                                if permission_policy == PERMISSION_ASK
-                                else None
-                            ),
-                            should_stop=_should_stop,
-                        )
-                    )
-                    prompt_task = asyncio.create_task(
-                        opencode_client.prompt(
-                            thread_id,
-                            message=prompt_text,
-                            model=model_payload,
-                        )
-                    )
+                    opencode_turn_started = False
                     try:
-                        await prompt_task
-                    except Exception as exc:
-                        output_task.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await output_task
-                        raise exc
-                    timeout_task = asyncio.create_task(
-                        asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
-                    )
-                    done, _pending = await asyncio.wait(
-                        {output_task, timeout_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if timeout_task in done:
-                        runtime.interrupt_requested = True
-                        await _abort_opencode()
-                        output_task.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await output_task
-                        turn_elapsed_seconds = time.monotonic() - turn_started_at
-                        return _TurnRunFailure(
-                            "OpenCode turn timed out.",
-                            placeholder_id,
-                            transcript_message_id,
-                            transcript_text,
+                        await supervisor.mark_turn_started(workspace_root)
+                        opencode_turn_started = True
+                        model_payload = split_model_id(record.model)
+                        missing_env = await opencode_missing_env(
+                            opencode_client,
+                            str(workspace_root),
+                            model_payload,
                         )
-                    timeout_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await timeout_task
-                    output_result = await output_task
-                    turn_elapsed_seconds = time.monotonic() - turn_started_at
+                        if missing_env:
+                            provider_id = (
+                                model_payload.get("providerID")
+                                if model_payload
+                                else None
+                            )
+                            failure_message = (
+                                "OpenCode provider "
+                                f"{provider_id or 'selected'} requires env vars: "
+                                f"{', '.join(missing_env)}. "
+                                "Set them or switch models."
+                            )
+                            if send_failure_response:
+                                await self._send_message(
+                                    message.chat_id,
+                                    failure_message,
+                                    thread_id=message.thread_id,
+                                    reply_to=message.message_id,
+                                )
+                            return _TurnRunFailure(
+                                failure_message,
+                                placeholder_id,
+                                transcript_message_id,
+                                transcript_text,
+                            )
+                        turn_started_at = time.monotonic()
+                        turn_id = build_turn_id(thread_id)
+                        runtime.current_turn_id = turn_id
+                        runtime.current_turn_key = (thread_id, turn_id)
+                        ctx = TurnContext(
+                            topic_key=key,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            codex_thread_id=thread_id,
+                            reply_to_message_id=message.message_id,
+                            placeholder_message_id=placeholder_id,
+                        )
+                        turn_key = self._turn_key(thread_id, turn_id)
+                        if turn_key is None or not self._register_turn_context(
+                            turn_key, turn_id, ctx
+                        ):
+                            runtime.current_turn_id = None
+                            runtime.current_turn_key = None
+                            runtime.interrupt_requested = False
+                            failure_message = "Turn collision detected; please retry."
+                            if send_failure_response:
+                                await self._send_message(
+                                    message.chat_id,
+                                    failure_message,
+                                    thread_id=message.thread_id,
+                                    reply_to=message.message_id,
+                                )
+                                if placeholder_id is not None:
+                                    await self._delete_message(
+                                        message.chat_id, placeholder_id
+                                    )
+                            return _TurnRunFailure(
+                                failure_message,
+                                placeholder_id,
+                                transcript_message_id,
+                                transcript_text,
+                            )
+                        approval_policy, _sandbox_policy = self._effective_policies(
+                            record
+                        )
+                        permission_policy = map_approval_policy_to_permission(
+                            approval_policy, default=PERMISSION_ALLOW
+                        )
+
+                        async def _permission_handler(
+                            request_id: str, props: dict[str, Any]
+                        ) -> str:
+                            if permission_policy != PERMISSION_ASK:
+                                return "reject"
+                            prompt = format_permission_prompt(props)
+                            decision = await self._handle_approval_request(
+                                {
+                                    "id": request_id,
+                                    "method": "opencode/permission/requestApproval",
+                                    "params": {
+                                        "turnId": turn_id,
+                                        "threadId": thread_id,
+                                        "prompt": prompt,
+                                    },
+                                }
+                            )
+                            return decision
+
+                        abort_requested = False
+
+                        async def _abort_opencode() -> None:
+                            try:
+                                await opencode_client.abort(thread_id)
+                            except Exception:
+                                pass
+
+                        def _should_stop() -> bool:
+                            nonlocal abort_requested
+                            if runtime.interrupt_requested and not abort_requested:
+                                abort_requested = True
+                                asyncio.create_task(_abort_opencode())
+                            return runtime.interrupt_requested
+
+                        output_task = asyncio.create_task(
+                            collect_opencode_output(
+                                opencode_client,
+                                session_id=thread_id,
+                                workspace_path=str(workspace_root),
+                                permission_policy=permission_policy,
+                                permission_handler=(
+                                    _permission_handler
+                                    if permission_policy == PERMISSION_ASK
+                                    else None
+                                ),
+                                should_stop=_should_stop,
+                            )
+                        )
+                        prompt_task = asyncio.create_task(
+                            opencode_client.prompt(
+                                thread_id,
+                                message=prompt_text,
+                                model=model_payload,
+                            )
+                        )
+                        try:
+                            await prompt_task
+                        except Exception as exc:
+                            output_task.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await output_task
+                            raise exc
+                        timeout_task = asyncio.create_task(
+                            asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
+                        )
+                        done, _pending = await asyncio.wait(
+                            {output_task, timeout_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if timeout_task in done:
+                            runtime.interrupt_requested = True
+                            await _abort_opencode()
+                            output_task.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await output_task
+                            turn_elapsed_seconds = time.monotonic() - turn_started_at
+                            return _TurnRunFailure(
+                                "OpenCode turn timed out.",
+                                placeholder_id,
+                                transcript_message_id,
+                                transcript_text,
+                            )
+                        timeout_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await timeout_task
+                        output_result = await output_task
+                        turn_elapsed_seconds = time.monotonic() - turn_started_at
+                    finally:
+                        if opencode_turn_started:
+                            await supervisor.mark_turn_finished(workspace_root)
                 finally:
                     turn_semaphore.release()
                 if pending_seed:
