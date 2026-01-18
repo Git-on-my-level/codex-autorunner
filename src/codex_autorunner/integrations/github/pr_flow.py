@@ -181,6 +181,19 @@ def _safe_text(value: Any, limit: int = 400) -> str:
     return text[: limit - 3] + "..."
 
 
+def _normalize_review_snippet(value: Any, limit: int = 100) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    for marker in ("- ", "* ", "• ", "-  ", "*  ", "•  "):
+        if text.startswith(marker):
+            text = text[len(marker) :]
+            break
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
 class PrFlowManager:
     def __init__(
         self,
@@ -963,7 +976,7 @@ class PrFlowManager:
                 line = comment.get("line")
                 if isinstance(line, int):
                     location = f"{location}:{line}"
-                snippet = _safe_text(body, 100)
+                snippet = _normalize_review_snippet(body, 100)
                 items.append(
                     f"- [ ] Address review: {location} {snippet} ({author_name})"
                 )
