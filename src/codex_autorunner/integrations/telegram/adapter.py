@@ -137,6 +137,18 @@ class ApprovalCallback:
 
 
 @dataclass(frozen=True)
+class QuestionOptionCallback:
+    request_id: str
+    question_index: int
+    option_index: int
+
+
+@dataclass(frozen=True)
+class QuestionCancelCallback:
+    request_id: str
+
+
+@dataclass(frozen=True)
 class ResumeCallback:
     thread_id: str
 
@@ -589,6 +601,20 @@ def encode_approval_callback(decision: str, request_id: str) -> str:
     return data
 
 
+def encode_question_option_callback(
+    request_id: str, question_index: int, option_index: int
+) -> str:
+    data = f"qopt:{question_index}:{option_index}:{request_id}"
+    _validate_callback_data(data)
+    return data
+
+
+def encode_question_cancel_callback(request_id: str) -> str:
+    data = f"qcancel:{request_id}"
+    _validate_callback_data(data)
+    return data
+
+
 def encode_resume_callback(thread_id: str) -> str:
     data = f"resume:{thread_id}"
     _validate_callback_data(data)
@@ -660,6 +686,8 @@ def parse_callback_data(
 ) -> Optional[
     Union[
         ApprovalCallback,
+        QuestionOptionCallback,
+        QuestionCancelCallback,
         ResumeCallback,
         BindCallback,
         AgentCallback,
@@ -681,6 +709,24 @@ def parse_callback_data(
         if not decision or not sep or not request_id:
             return None
         return ApprovalCallback(decision=decision, request_id=request_id)
+    if data.startswith("qopt:"):
+        _, _, rest = data.partition(":")
+        question_raw, sep, rest = rest.partition(":")
+        option_raw, sep2, request_id = rest.partition(":")
+        if not question_raw or not sep or not option_raw or not sep2 or not request_id:
+            return None
+        if not question_raw.isdigit() or not option_raw.isdigit():
+            return None
+        return QuestionOptionCallback(
+            request_id=request_id,
+            question_index=int(question_raw),
+            option_index=int(option_raw),
+        )
+    if data.startswith("qcancel:"):
+        _, _, request_id = data.partition(":")
+        if not request_id:
+            return None
+        return QuestionCancelCallback(request_id=request_id)
     if data.startswith("resume:"):
         _, _, thread_id = data.partition(":")
         if not thread_id:
@@ -758,6 +804,29 @@ def build_approval_keyboard(
             InlineButton(
                 "Accept session", encode_approval_callback("accept_session", request_id)
             ),
+        )
+    return build_inline_keyboard(rows)
+
+
+def build_question_keyboard(
+    request_id: str,
+    *,
+    question_index: int,
+    options: Sequence[str],
+    include_cancel: bool = True,
+) -> dict[str, Any]:
+    rows = [
+        [
+            InlineButton(
+                label,
+                encode_question_option_callback(request_id, question_index, index),
+            )
+        ]
+        for index, label in enumerate(options)
+    ]
+    if include_cancel:
+        rows.append(
+            [InlineButton("Cancel", encode_question_cancel_callback(request_id))]
         )
     return build_inline_keyboard(rows)
 

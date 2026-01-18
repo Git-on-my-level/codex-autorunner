@@ -279,6 +279,25 @@ class OpenCodeClient:
             expect_json=False,
         )
 
+    async def list_questions(self) -> Any:
+        return await self._request("GET", "/question", expect_json=True)
+
+    async def reply_question(self, request_id: str, *, answers: list[list[str]]) -> Any:
+        payload: dict[str, Any] = {"answers": answers}
+        return await self._request(
+            "POST",
+            f"/question/{request_id}/reply",
+            json_body=payload,
+            expect_json=False,
+        )
+
+    async def reject_question(self, request_id: str) -> Any:
+        return await self._request(
+            "POST",
+            f"/question/{request_id}/reject",
+            expect_json=False,
+        )
+
     async def abort(self, session_id: str) -> Any:
         return await self._request(
             "POST", f"/session/{session_id}/abort", expect_json=False

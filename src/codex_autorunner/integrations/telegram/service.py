@@ -50,6 +50,7 @@ from .constants import (
     MODEL_PENDING_TTL_SECONDS,
     OVERSIZE_WARNING_TTL_SECONDS,
     PENDING_APPROVAL_TTL_SECONDS,
+    PENDING_QUESTION_TTL_SECONDS,
     PROGRESS_STREAM_TTL_SECONDS,
     REASONING_BUFFER_TTL_SECONDS,
     SELECTION_STATE_TTL_SECONDS,
@@ -64,6 +65,7 @@ from .handlers.approvals import TelegramApprovalHandlers
 from .handlers.commands import build_command_specs
 from .handlers.commands_runtime import TelegramCommandHandlers
 from .handlers.messages import _CoalescedBuffer
+from .handlers.questions import TelegramQuestionHandlers
 from .handlers.selections import TelegramSelectionHandlers
 from .helpers import (
     ModelOption,
@@ -87,6 +89,7 @@ from .types import (
     CompactState,
     ModelPickerState,
     PendingApproval,
+    PendingQuestion,
     ReviewCommitSelectionState,
     SelectionState,
     TurnContext,
@@ -178,6 +181,7 @@ class TelegramBotService(
     TelegramMessageTransport,
     TelegramNotificationHandlers,
     TelegramApprovalHandlers,
+    TelegramQuestionHandlers,
     TelegramSelectionHandlers,
     TelegramCommandHandlers,
 ):
@@ -252,6 +256,7 @@ class TelegramBotService(
         self._turn_progress_heartbeat_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
+        self._pending_questions: dict[str, PendingQuestion] = {}
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
         self._update_options: dict[str, SelectionState] = {}
@@ -808,6 +813,8 @@ class TelegramBotService(
                 self._model_pending.pop(key, None)
             elif cache_name == "pending_approvals":
                 self._pending_approvals.pop(key, None)
+            elif cache_name == "pending_questions":
+                self._pending_questions.pop(key, None)
 
     async def _cache_cleanup_loop(self) -> None:
         interval = max(CACHE_CLEANUP_INTERVAL_SECONDS, 1.0)
@@ -864,6 +871,9 @@ class TelegramBotService(
             )
             self._evict_expired_cache_entries(
                 "pending_approvals", PENDING_APPROVAL_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "pending_questions", PENDING_QUESTION_TTL_SECONDS
             )
 
     async def _interrupt_timeout_check(
