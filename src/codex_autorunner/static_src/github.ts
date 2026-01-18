@@ -168,6 +168,36 @@ function prFlowEls(): {
   };
 }
 
+function formatMissingPrFlowElements(missing: string[]): string {
+  if (missing.length <= 4) {
+    return missing.join(", ");
+  }
+  const extra = missing.length - 4;
+  return `${missing.slice(0, 4).join(", ")} +${extra} more`;
+}
+
+function missingPrFlowElements(els: ReturnType<typeof prFlowEls>): string[] {
+  const required: Array<[string, HTMLElement | null]> = [
+    ["pr-flow-status", els.statusPill],
+    ["pr-flow-mode", els.mode],
+    ["pr-flow-ref", els.ref],
+    ["pr-flow-base", els.base],
+    ["pr-flow-until", els.until],
+    ["pr-flow-cycles", els.cycles],
+    ["pr-flow-runs", els.runs],
+    ["pr-flow-timeout", els.timeout],
+    ["pr-flow-draft", els.draft],
+    ["pr-flow-step", els.step],
+    ["pr-flow-cycle", els.cycle],
+    ["pr-flow-review", els.review],
+    ["pr-flow-start", els.startBtn],
+    ["pr-flow-stop", els.stopBtn],
+    ["pr-flow-resume", els.resumeBtn],
+    ["pr-flow-collect", els.collectBtn],
+  ];
+  return required.filter(([, el]) => !el).map(([id]) => id);
+}
+
 function formatReviewSummary(summary: Record<string, unknown> | null): string {
   if (!summary) return "–";
   const total = (summary.total as number | undefined) ?? 0;
@@ -426,14 +456,32 @@ export function initGitHub(): void {
   const syncBtn = $("github-sync-pr") as HTMLButtonElement | null;
   if (syncBtn) syncBtn.addEventListener("click", syncPr);
   const els = prFlowEls();
-  if (els.startBtn) els.startBtn.addEventListener("click", startPrFlow);
-  if (els.stopBtn) els.stopBtn.addEventListener("click", stopPrFlow);
-  if (els.resumeBtn) els.resumeBtn.addEventListener("click", resumePrFlow);
-  if (els.collectBtn) els.collectBtn.addEventListener("click", collectPrFlow);
+  const prFlowContainer = card.querySelector(".github-flow") as HTMLElement | null;
+  const missingPrFlow = missingPrFlowElements(els);
+  const prFlowReady = missingPrFlow.length === 0;
+  if (!prFlowReady) {
+    if (prFlowContainer) {
+      prFlowContainer.dataset.prFlowInitialized = "0";
+    }
+    if (!card.dataset.prFlowInitError) {
+      const summary = formatMissingPrFlowElements(missingPrFlow);
+      const message = `PR Flow UI not initialized (missing ${summary}). Static assets may be out of date; rebuild frontend bundle.`;
+      card.dataset.prFlowInitError = summary;
+      flash(message, "error");
+      console.warn(`[github] ${message}`);
+    }
+  } else {
+    if (prFlowContainer) {
+      prFlowContainer.dataset.prFlowInitialized = "1";
+    }
+    if (els.startBtn) els.startBtn.addEventListener("click", startPrFlow);
+    if (els.stopBtn) els.stopBtn.addEventListener("click", stopPrFlow);
+    if (els.resumeBtn) els.resumeBtn.addEventListener("click", resumePrFlow);
+    if (els.collectBtn) els.collectBtn.addEventListener("click", collectPrFlow);
+  }
 
   // Initial load + auto-refresh while dashboard is active.
   loadGitHubStatus();
-  loadPrFlowStatus();
   registerAutoRefresh("github-status", {
     callback: loadGitHubStatus,
     tabId: null, // global: keep PR link available while browsing other tabs (mobile-friendly)
@@ -441,12 +489,15 @@ export function initGitHub(): void {
     refreshOnActivation: true,
     immediate: false,
   });
-  registerAutoRefresh("pr-flow-status", {
-    callback: loadPrFlowStatus,
-    tabId: null,
-    interval: (CONSTANTS.UI?.AUTO_REFRESH_INTERVAL as number | undefined) || 15000,
-    refreshOnActivation: true,
-    immediate: false,
-  });
-  startPrFlowEventStream();
+  if (prFlowReady) {
+    loadPrFlowStatus();
+    registerAutoRefresh("pr-flow-status", {
+      callback: loadPrFlowStatus,
+      tabId: null,
+      interval: (CONSTANTS.UI?.AUTO_REFRESH_INTERVAL as number | undefined) || 15000,
+      refreshOnActivation: true,
+      immediate: false,
+    });
+    startPrFlowEventStream();
+  }
 }

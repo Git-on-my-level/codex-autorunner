@@ -5765,7 +5765,9 @@ class TelegramCommandHandlers:
     ) -> dict[str, Any]:
         base, headers = self._pr_flow_api_base(record)
         if not base:
-            raise RuntimeError("Repo server unavailable for PR flow.")
+            raise RuntimeError(
+                "PR flow cannot start: repo server base URL could not be resolved for this chat/topic."
+            )
         url = f"{base}{path}"
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.request(method, url, json=payload, headers=headers)
