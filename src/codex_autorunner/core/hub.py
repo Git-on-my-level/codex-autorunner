@@ -479,6 +479,7 @@ class HubSupervisor:
         base_repo_id: str,
         branch: str,
         force: bool = False,
+        start_point: Optional[str] = None,
     ) -> RepoSnapshot:
         self._invalidate_list_cache()
         """
@@ -525,8 +526,11 @@ class HubSupervisor:
                     timeout_seconds=120,
                 )
             else:
+                cmd = ["worktree", "add", "-b", branch, str(worktree_path)]
+                if start_point:
+                    cmd.append(start_point)
                 proc = run_git(
-                    ["worktree", "add", "-b", branch, str(worktree_path)],
+                    cmd,
                     base_path,
                     check=False,
                     timeout_seconds=120,
