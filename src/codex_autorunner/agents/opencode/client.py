@@ -40,10 +40,12 @@ class OpenCodeClient:
         path: str,
         *,
         params: Optional[dict[str, Any]] = None,
-        json: Optional[dict[str, Any]] = None,
+        json_body: Optional[dict[str, Any]] = None,
         expect_json: bool = True,
     ) -> Any:
-        response = await self._client.request(method, path, params=params, json=json)
+        response = await self._client.request(
+            method, path, params=params, json=json_body
+        )
         response.raise_for_status()
         raw = response.content
         if not raw or not raw.strip():
@@ -106,7 +108,9 @@ class OpenCodeClient:
             payload["title"] = title
         if directory:
             payload["directory"] = directory
-        return await self._request("POST", "/session", json=payload, expect_json=True)
+        return await self._request(
+            "POST", "/session", json_body=payload, expect_json=True
+        )
 
     async def list_sessions(self, directory: Optional[str] = None) -> Any:
         return await self._request(
@@ -137,7 +141,7 @@ class OpenCodeClient:
         return await self._request(
             "POST",
             f"/session/{session_id}/message",
-            json=payload,
+            json_body=payload,
             expect_json=False,
         )
 
@@ -162,7 +166,7 @@ class OpenCodeClient:
         return await self._request(
             "POST",
             f"/session/{session_id}/prompt",
-            json=payload,
+            json_body=payload,
             expect_json=False,
         )
 
@@ -186,7 +190,7 @@ class OpenCodeClient:
         return await self._request(
             "POST",
             f"/session/{session_id}/command",
-            json=payload,
+            json_body=payload,
             expect_json=False,
         )
 
@@ -207,7 +211,7 @@ class OpenCodeClient:
         return await self._request(
             "POST",
             f"/session/{session_id}/summarize",
-            json=payload,
+            json_body=payload,
             expect_json=True,
         )
 
@@ -224,7 +228,7 @@ class OpenCodeClient:
         return await self._request(
             "POST",
             f"/permission/{request_id}/reply",
-            json=payload,
+            json_body=payload,
             expect_json=False,
         )
 
