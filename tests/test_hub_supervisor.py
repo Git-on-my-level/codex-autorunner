@@ -1,11 +1,15 @@
 import json
+import shutil
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.routing import Mount
 
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
@@ -42,6 +46,26 @@ def _init_git_repo(path: Path) -> None:
         path,
         check=True,
     )
+
+
+def _unwrap_fastapi(sub_app) -> Optional[FastAPI]:
+    current = sub_app
+    while not isinstance(current, FastAPI):
+        current = getattr(current, "app", None)
+        if current is None:
+            return None
+    return current
+
+
+def _find_repo_mount(app: FastAPI, repo_id: str) -> Optional[Mount]:
+    mount_path = f"/repos/{repo_id}"
+    root = _unwrap_fastapi(app)
+    if root is None:
+        return None
+    for route in root.router.routes:
+        if isinstance(route, Mount) and route.path == mount_path:
+            return route
+    return None
 
 
 def test_scan_writes_hub_state(tmp_path: Path):
@@ -123,6 +147,98 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
     assert state["status"] == "idle"
 
 
+def test_hub_repo_lifespan_started_for_mount(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    with TestClient(app) as client:
+        resp = client.get("/hub/repos")
+        assert resp.status_code == 200
+        mount = _find_repo_mount(app, "demo")
+        assert mount is not None
+        fastapi_app = _unwrap_fastapi(mount.app)
+        assert fastapi_app is not None
+        shutdown_event = getattr(fastapi_app.state, "shutdown_event", None)
+        assert shutdown_event is not None
+        assert shutdown_event.is_set() is False
+
+
+def test_hub_scan_starts_lifespan_for_new_repo(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+    repo_dir = hub_root / "alpha"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    with TestClient(app) as client:
+        resp = client.get("/hub/repos")
+        assert resp.status_code == 200
+
+        repo_new = hub_root / "beta"
+        (repo_new / ".git").mkdir(parents=True, exist_ok=True)
+        scan_resp = client.post("/hub/repos/scan")
+        assert scan_resp.status_code == 200
+
+        mount = _find_repo_mount(app, "beta")
+        assert mount is not None
+        fastapi_app = _unwrap_fastapi(mount.app)
+        assert fastapi_app is not None
+        shutdown_event = getattr(fastapi_app.state, "shutdown_event", None)
+        assert shutdown_event is not None
+
+
+def test_hub_scan_unmount_exits_lifespan(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    with TestClient(app) as client:
+        resp = client.get("/hub/repos")
+        assert resp.status_code == 200
+        mount = _find_repo_mount(app, "demo")
+        assert mount is not None
+        fastapi_app = _unwrap_fastapi(mount.app)
+        assert fastapi_app is not None
+        shutdown_event = getattr(fastapi_app.state, "shutdown_event", None)
+        assert shutdown_event is not None
+        assert shutdown_event.is_set() is False
+
+        shutil.rmtree(repo_dir)
+        scan_resp = client.post("/hub/repos/scan")
+        assert scan_resp.status_code == 200
+        assert _find_repo_mount(app, "demo") is None
+        assert shutdown_event.is_set() is True
+
+
+def test_hub_repo_id_sanitized_for_unsafe_name(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+    repo_dir = hub_root / "demo#1"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+    resp = client.get("/hub/repos")
+    assert resp.status_code == 200
+    repo = next(r for r in resp.json()["repos"] if r["display_name"] == "demo#1")
+    assert repo["id"] == "demo-1"
+    state_resp = client.get("/repos/demo-1/api/state")
+    assert state_resp.status_code == 200
+
+
 def test_hub_init_endpoint_mounts_repo(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -134,23 +250,22 @@ def test_hub_init_endpoint_mounts_repo(tmp_path: Path):
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
     app = create_hub_app(hub_root)
-    client = TestClient(app)
+    with TestClient(app) as client:
+        scan_resp = client.post("/hub/repos/scan")
+        assert scan_resp.status_code == 200
+        scan_payload = scan_resp.json()
+        demo = next(r for r in scan_payload["repos"] if r["id"] == "demo")
+        assert demo["initialized"] is False
 
-    scan_resp = client.post("/hub/repos/scan")
-    assert scan_resp.status_code == 200
-    scan_payload = scan_resp.json()
-    demo = next(r for r in scan_payload["repos"] if r["id"] == "demo")
-    assert demo["initialized"] is False
+        init_resp = client.post("/hub/repos/demo/init")
+        assert init_resp.status_code == 200
+        init_payload = init_resp.json()
+        assert init_payload["initialized"] is True
+        assert init_payload["mounted"] is True
+        assert init_payload.get("mount_error") is None
 
-    init_resp = client.post("/hub/repos/demo/init")
-    assert init_resp.status_code == 200
-    init_payload = init_resp.json()
-    assert init_payload["initialized"] is True
-    assert init_payload["mounted"] is True
-    assert init_payload.get("mount_error") is None
-
-    state_resp = client.get("/repos/demo/api/state")
-    assert state_resp.status_code == 200
+        state_resp = client.get("/repos/demo/api/state")
+        assert state_resp.status_code == 200
 
 
 def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

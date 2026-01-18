@@ -5,7 +5,9 @@ from typing import Any, Dict, List, Optional, cast
 
 import yaml
 
-MANIFEST_VERSION = 2
+from .core.repo_ids import ensure_unique_repo_id, repo_id_is_safe, sanitize_repo_id
+
+MANIFEST_VERSION = 3
 
 
 class ManifestError(Exception):
@@ -16,6 +18,7 @@ class ManifestError(Exception):
 class ManifestRepo:
     id: str
     path: Path  # relative to hub root
+    display_name: str = ""
     enabled: bool = True
     auto_run: bool = False
     kind: str = "base"  # base|worktree
@@ -27,6 +30,7 @@ class ManifestRepo:
         payload: Dict[str, object] = {
             "id": self.id,
             "path": rel.as_posix(),
+            "display_name": self.display_name or self.id,
             "enabled": bool(self.enabled),
             "auto_run": bool(self.auto_run),
             "kind": str(self.kind),
@@ -55,6 +59,7 @@ class Manifest:
         repo_path: Path,
         repo_id: Optional[str] = None,
         *,
+        display_name: Optional[str] = None,
         kind: str = "base",
         worktree_of: Optional[str] = None,
         branch: Optional[str] = None,
@@ -62,11 +67,14 @@ class Manifest:
         repo_id = repo_id or repo_path.name
         existing = self.get(repo_id)
         if existing:
+            if display_name and existing.display_name != display_name:
+                existing.display_name = display_name
             return existing
         normalized_path = _relative_to_hub_root(hub_root, repo_path)
         repo = ManifestRepo(
             id=repo_id,
             path=normalized_path,
+            display_name=display_name or repo_id,
             enabled=True,
             auto_run=False,
             kind=str(kind),
@@ -102,7 +110,7 @@ def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
     data = cast(Dict[str, Any], raw_data)
 
     version = data.get("version")
-    if version != MANIFEST_VERSION:
+    if version not in (2, MANIFEST_VERSION):
         raise ManifestError(
             f"Unsupported manifest version {version}; expected {MANIFEST_VERSION}"
         )
@@ -119,6 +127,9 @@ def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
             continue
         if not isinstance(path_val, str) or not path_val:
             continue
+        display_name = entry.get("display_name") or entry.get("displayName")
+        if not isinstance(display_name, str) or not display_name:
+            display_name = repo_id
         kind = entry.get("kind")
         if kind not in ("base", "worktree"):
             raise ManifestError(
@@ -128,6 +139,7 @@ def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
             ManifestRepo(
                 id=repo_id,
                 path=_relative_to_hub_root(hub_root, hub_root / path_val),
+                display_name=display_name,
                 enabled=bool(entry.get("enabled", True)),
                 auto_run=bool(entry.get("auto_run", False)),
                 kind=str(kind),
@@ -137,7 +149,10 @@ def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
                 branch=str(entry.get("branch")) if entry.get("branch") else None,
             )
         )
-    return Manifest(version=MANIFEST_VERSION, repos=repos)
+    manifest, changed = _normalize_manifest(Manifest(version=version, repos=repos))
+    if changed:
+        save_manifest(manifest_path, manifest, hub_root)
+    return manifest
 
 
 def save_manifest(manifest_path: Path, manifest: Manifest, hub_root: Path) -> None:
@@ -148,3 +163,42 @@ def save_manifest(manifest_path: Path, manifest: Manifest, hub_root: Path) -> No
     }
     with manifest_path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(payload, f, sort_keys=False)
+
+
+def _normalize_manifest(manifest: Manifest) -> tuple[Manifest, bool]:
+    existing_ids: set[str] = set()
+    id_map: Dict[str, str] = {}
+    normalized: List[ManifestRepo] = []
+    changed = manifest.version != MANIFEST_VERSION
+
+    for repo in manifest.repos:
+        display_name = repo.display_name or repo.id
+        candidate = repo.id
+        if not repo_id_is_safe(repo.id):
+            candidate = sanitize_repo_id(display_name)
+        unique_id = ensure_unique_repo_id(candidate, existing_ids)
+        if unique_id != repo.id:
+            id_map[repo.id] = unique_id
+            changed = True
+        if display_name != repo.display_name:
+            changed = True
+        normalized.append(
+            ManifestRepo(
+                id=unique_id,
+                path=repo.path,
+                display_name=display_name,
+                enabled=repo.enabled,
+                auto_run=repo.auto_run,
+                kind=repo.kind,
+                worktree_of=repo.worktree_of,
+                branch=repo.branch,
+            )
+        )
+
+    if id_map:
+        for repo in normalized:
+            if repo.worktree_of and repo.worktree_of in id_map:
+                repo.worktree_of = id_map[repo.worktree_of]
+                changed = True
+
+    return Manifest(version=MANIFEST_VERSION, repos=normalized), changed

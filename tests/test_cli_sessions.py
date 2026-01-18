@@ -27,11 +27,12 @@ def test_resolve_repo_api_path_prefixes_repo_id(tmp_path: Path) -> None:
     _write_yaml(
         manifest_path,
         {
-            "version": 2,
+            "version": 3,
             "repos": [
                 {
                     "id": "repo",
                     "path": "repo",
+                    "display_name": "repo",
                     "kind": "base",
                     "enabled": True,
                     "auto_run": False,
