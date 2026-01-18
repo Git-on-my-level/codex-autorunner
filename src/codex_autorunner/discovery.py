@@ -97,8 +97,8 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
                 # name convention: <base_repo_id>--<branch>
                 worktree_of: Optional[str] = None
                 branch: Optional[str] = None
-                if kind == "worktree" and "--" in repo_id:
-                    base_id, rest = repo_id.split("--", 1)
+                if kind == "worktree" and "--" in display_name:
+                    base_id, rest = display_name.split("--", 1)
                     worktree_of = base_id or None
                     branch = rest or None
                 existing_entry = manifest.ensure_repo(
