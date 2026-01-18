@@ -1423,6 +1423,9 @@ class Engine:
                 f"{', '.join(missing_env)}",
             )
             return 1
+        opencode_turn_started = False
+        await supervisor.mark_turn_started(self.repo_root)
+        opencode_turn_started = True
         turn_id = build_turn_id(thread_id)
         self._update_run_telemetry(run_id, thread_id=thread_id, turn_id=turn_id)
         app_server_meta = self._build_app_server_meta(
@@ -1519,6 +1522,8 @@ class Engine:
                 timeout_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await timeout_task
+            if opencode_turn_started:
+                await supervisor.mark_turn_finished(self.repo_root)
 
         output = output_result.text
         if output:

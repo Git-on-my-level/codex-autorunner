@@ -32,6 +32,7 @@ class OpenCodeHandle:
     stdout_task: Optional[asyncio.Task[None]] = None
     started: bool = False
     last_used_at: float = 0.0
+    active_turns: int = 0
 
 
 class OpenCodeSupervisor:
@@ -82,8 +83,32 @@ class OpenCodeSupervisor:
             closed += 1
         return closed
 
+    async def mark_turn_started(self, workspace_root: Path) -> None:
+        canonical_root = canonical_workspace_root(workspace_root)
+        workspace_id = workspace_id_for_path(canonical_root)
+        async with self._lock:
+            handle = self._handles.get(workspace_id)
+            if handle is None:
+                return
+            handle.active_turns += 1
+            handle.last_used_at = time.monotonic()
+
+    async def mark_turn_finished(self, workspace_root: Path) -> None:
+        canonical_root = canonical_workspace_root(workspace_root)
+        workspace_id = workspace_id_for_path(canonical_root)
+        async with self._lock:
+            handle = self._handles.get(workspace_id)
+            if handle is None:
+                return
+            if handle.active_turns > 0:
+                handle.active_turns -= 1
+            handle.last_used_at = time.monotonic()
+
     async def _close_handle(self, handle: OpenCodeHandle, *, reason: str) -> None:
         try:
+            idle_seconds = None
+            if reason == "idle_ttl" and handle.last_used_at:
+                idle_seconds = max(0.0, time.monotonic() - handle.last_used_at)
             log_event(
                 self._logger,
                 logging.INFO,
@@ -92,6 +117,11 @@ class OpenCodeSupervisor:
                 workspace_id=handle.workspace_id,
                 workspace_root=str(handle.workspace_root),
                 last_used_at=handle.last_used_at,
+                idle_seconds=idle_seconds,
+                active_turns=handle.active_turns,
+                returncode=(
+                    handle.process.returncode if handle.process is not None else None
+                ),
             )
             if handle.client is not None:
                 await handle.client.close()
@@ -174,6 +204,7 @@ class OpenCodeSupervisor:
                 base_url,
                 auth=self._auth,
                 timeout=self._request_timeout,
+                logger=self._logger,
             )
             self._start_stdout_drain(handle)
             handle.started = True
@@ -308,6 +339,17 @@ class OpenCodeSupervisor:
         cutoff = time.monotonic() - self._idle_ttl_seconds
         stale: list[OpenCodeHandle] = []
         for handle in list(self._handles.values()):
+            if handle.active_turns:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "opencode.handle.prune.skipped",
+                    reason="active_turns",
+                    workspace_id=handle.workspace_id,
+                    workspace_root=str(handle.workspace_root),
+                    active_turns=handle.active_turns,
+                )
+                continue
             if handle.last_used_at and handle.last_used_at < cutoff:
                 self._handles.pop(handle.workspace_id, None)
                 stale.append(handle)
