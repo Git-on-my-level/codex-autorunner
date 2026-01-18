@@ -46,7 +46,7 @@ def build_turn_id(session_id: str) -> str:
 def extract_session_id(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
-    for key in ("sessionID", "sessionId", "session_id", "id"):
+    for key in ("sessionID", "sessionId", "session_id"):
         value = payload.get(key)
         if isinstance(value, str) and value:
             return value
