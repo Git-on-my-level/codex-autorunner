@@ -4,6 +4,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from .events import SSEEvent
@@ -201,6 +202,8 @@ async def opencode_missing_env(
         pid = provider.get("id") or provider.get("providerID")
         if pid != provider_id:
             continue
+        if _provider_has_auth(pid, workspace_root):
+            return []
         env_keys = provider.get("env")
         if not isinstance(env_keys, list):
             return []
@@ -211,6 +214,50 @@ async def opencode_missing_env(
         ]
         return missing
     return []
+
+
+def _provider_has_auth(provider_id: str, workspace_root: str) -> bool:
+    auth_path = _find_opencode_auth_path(workspace_root)
+    if auth_path is None or not auth_path.exists():
+        return False
+    try:
+        payload = json.loads(auth_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    entry = payload.get(provider_id)
+    return isinstance(entry, dict) and any(bool(value) for value in entry.values())
+
+
+def _find_opencode_auth_path(workspace_root: str) -> Optional[Path]:
+    data_home = os.getenv("XDG_DATA_HOME")
+    if not data_home:
+        home = os.getenv("HOME")
+        if not home:
+            inferred = _infer_home_from_workspace(workspace_root)
+            if inferred is None:
+                return None
+            data_home = str(inferred / ".local" / "share")
+        else:
+            data_home = str(Path(home) / ".local" / "share")
+    return Path(data_home) / "opencode" / "auth.json"
+
+
+def _infer_home_from_workspace(workspace_root: str) -> Optional[Path]:
+    resolved = Path(workspace_root).resolve()
+    parts = resolved.parts
+    if (
+        len(parts) >= 3
+        and parts[0] == os.path.sep
+        and parts[1]
+        in (
+            "Users",
+            "home",
+        )
+    ):
+        return Path(parts[0]) / parts[1] / parts[2]
+    return None
 
 
 async def collect_opencode_output_from_events(
