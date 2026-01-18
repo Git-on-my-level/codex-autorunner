@@ -31,13 +31,12 @@ from ....agents.opencode.runtime import (
     split_model_id,
 )
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
-from ....core.config import load_repo_config
+from ....core.config import load_hub_config, load_repo_config
 from ....core.injected_context import wrap_injected_context
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import _normalize_update_target, _spawn_update_process
 from ....core.utils import canonicalize_path, resolve_opencode_binary
-from ....integrations.github.pr_flow import PrFlowError, PrFlowManager
 from ....integrations.github.service import GitHubService
 from ....manifest import load_manifest
 from ...app_server.client import (
@@ -281,6 +280,30 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
         if detail:
             return f"OpenCode request failed: {detail}"
         return "OpenCode request failed."
+    return None
+
+
+def _format_httpx_exception(exc: Exception) -> Optional[str]:
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            payload = exc.response.json()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            detail = (
+                payload.get("detail") or payload.get("message") or payload.get("error")
+            )
+            if isinstance(detail, str) and detail:
+                return detail
+        response_text = exc.response.text.strip()
+        if response_text:
+            return response_text
+        return f"Request failed (HTTP {exc.response.status_code})."
+    if isinstance(exc, httpx.RequestError):
+        detail = str(exc).strip()
+        if detail:
+            return detail
+        return "Request failed."
     return None
 
 
@@ -5381,18 +5404,90 @@ class TelegramCommandHandlers:
             delivery=delivery,
         )
 
-    def _pr_flow_manager_for_record(
-        self, record: "TelegramTopicRecord"
-    ) -> Optional[PrFlowManager]:
-        if not record.workspace_path:
+    def _resolve_pr_flow_repo_id(self, record: "TelegramTopicRecord") -> Optional[str]:
+        if record.repo_id:
+            return record.repo_id
+        if not self._hub_root or not self._manifest_path or not record.workspace_path:
             return None
-        return PrFlowManager(
-            Path(record.workspace_path),
-            app_server_supervisor=self._app_server_supervisor,
-            opencode_supervisor=self._opencode_supervisor,
-            logger=self._logger,
-            hub_root=self._hub_root,
-        )
+        try:
+            manifest = load_manifest(self._manifest_path, self._hub_root)
+        except Exception:
+            return None
+        try:
+            workspace_path = canonicalize_path(Path(record.workspace_path))
+        except Exception:
+            return None
+        for repo in manifest.repos:
+            repo_path = canonicalize_path(self._hub_root / repo.path)
+            if repo_path == workspace_path:
+                return repo.id
+        return None
+
+    def _pr_flow_api_base(
+        self, record: "TelegramTopicRecord"
+    ) -> tuple[Optional[str], dict[str, str]]:
+        headers: dict[str, str] = {}
+        if self._hub_root is not None:
+            try:
+                hub_config = load_hub_config(self._hub_root)
+            except Exception:
+                return None, headers
+            host = hub_config.server_host
+            port = hub_config.server_port
+            base_path = hub_config.server_base_path
+            auth_env = hub_config.server_auth_token_env
+            repo_id = self._resolve_pr_flow_repo_id(record)
+            if not repo_id:
+                return None, headers
+            repo_prefix = f"/repos/{repo_id}"
+        else:
+            if not record.workspace_path:
+                return None, headers
+            try:
+                repo_config = load_repo_config(
+                    Path(record.workspace_path), hub_path=None
+                )
+            except Exception:
+                return None, headers
+            host = repo_config.server_host
+            port = repo_config.server_port
+            base_path = repo_config.server_base_path
+            auth_env = repo_config.server_auth_token_env
+            repo_prefix = ""
+        if isinstance(auth_env, str) and auth_env:
+            token = getenv(auth_env)
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+        if not host:
+            return None, headers
+        if host.startswith("http://") or host.startswith("https://"):
+            base = host.rstrip("/")
+        else:
+            base = f"http://{host}:{int(port)}"
+        base_path = (base_path or "").strip("/")
+        if base_path:
+            base = f"{base}/{base_path}"
+        return f"{base}{repo_prefix}", headers
+
+    async def _pr_flow_request(
+        self,
+        record: "TelegramTopicRecord",
+        *,
+        method: str,
+        path: str,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        base, headers = self._pr_flow_api_base(record)
+        if not base:
+            raise RuntimeError("Repo server unavailable for PR flow.")
+        url = f"{base}{path}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.request(method, url, json=payload, headers=headers)
+            res.raise_for_status()
+            data = res.json()
+            if isinstance(data, dict):
+                return data
+            return {"status": "ok", "flow": data}
 
     def _parse_pr_flags(self, argv: list[str]) -> tuple[Optional[str], dict[str, Any]]:
         ref: Optional[str] = None
@@ -5465,15 +5560,6 @@ class TelegramCommandHandlers:
         record = await self._require_bound_record(message)
         if not record:
             return
-        manager = self._pr_flow_manager_for_record(record)
-        if manager is None:
-            await self._send_message(
-                message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
         argv = self._parse_command_args(args)
         if not argv:
             await self._send_message(
@@ -5485,7 +5571,20 @@ class TelegramCommandHandlers:
             return
         command = argv[0].lower()
         if command == "status":
-            flow = await asyncio.to_thread(manager.status)
+            try:
+                data = await self._pr_flow_request(
+                    record, method="GET", path="/api/github/pr_flow/status"
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {detail}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             await self._send_message(
                 message.chat_id,
                 self._format_pr_flow_status(flow),
@@ -5494,7 +5593,20 @@ class TelegramCommandHandlers:
             )
             return
         if command == "stop":
-            flow = await asyncio.to_thread(manager.stop)
+            try:
+                data = await self._pr_flow_request(
+                    record, method="POST", path="/api/github/pr_flow/stop", payload={}
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {detail}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             await self._send_message(
                 message.chat_id,
                 self._format_pr_flow_status(flow),
@@ -5504,11 +5616,15 @@ class TelegramCommandHandlers:
             return
         if command == "resume":
             try:
-                flow = await asyncio.to_thread(manager.resume)
-            except PrFlowError as exc:
+                data = await self._pr_flow_request(
+                    record, method="POST", path="/api/github/pr_flow/resume", payload={}
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
                 await self._send_message(
                     message.chat_id,
-                    f"PR flow error: {exc}",
+                    f"PR flow error: {detail}",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -5522,11 +5638,18 @@ class TelegramCommandHandlers:
             return
         if command == "collect":
             try:
-                flow = await asyncio.to_thread(manager.collect_reviews)
-            except PrFlowError as exc:
+                data = await self._pr_flow_request(
+                    record,
+                    method="POST",
+                    path="/api/github/pr_flow/collect",
+                    payload={},
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
                 await self._send_message(
                     message.chat_id,
-                    f"PR flow error: {exc}",
+                    f"PR flow error: {detail}",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -5565,12 +5688,24 @@ class TelegramCommandHandlers:
                 )
                 return
             payload = {"mode": "issue", "issue": ref, **flags}
+            payload["source"] = "telegram"
+            payload["source_meta"] = {
+                "chat_id": message.chat_id,
+                "thread_id": message.thread_id,
+            }
             try:
-                flow = await asyncio.to_thread(manager.start, payload=payload)
-            except PrFlowError as exc:
+                data = await self._pr_flow_request(
+                    record,
+                    method="POST",
+                    path="/api/github/pr_flow/start",
+                    payload=payload,
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
                 await self._send_message(
                     message.chat_id,
-                    f"PR flow error: {exc}",
+                    f"PR flow error: {detail}",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -5609,12 +5744,24 @@ class TelegramCommandHandlers:
                 )
                 return
             payload = {"mode": "pr", "pr": ref, **flags}
+            payload["source"] = "telegram"
+            payload["source_meta"] = {
+                "chat_id": message.chat_id,
+                "thread_id": message.thread_id,
+            }
             try:
-                flow = await asyncio.to_thread(manager.start, payload=payload)
-            except PrFlowError as exc:
+                data = await self._pr_flow_request(
+                    record,
+                    method="POST",
+                    path="/api/github/pr_flow/start",
+                    payload=payload,
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
                 await self._send_message(
                     message.chat_id,
-                    f"PR flow error: {exc}",
+                    f"PR flow error: {detail}",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )

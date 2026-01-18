@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ..integrations.github.pr_flow import PrFlowError, PrFlowManager
 from ..integrations.github.service import GitHubError, GitHubService
@@ -19,6 +19,7 @@ from ..web.schemas import (
     GithubPrFlowStartRequest,
     GithubPrSyncRequest,
 )
+from .shared import SSE_HEADERS, jsonl_event_stream
 
 _GITHUB_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _GITHUB_CACHE_LOCK = asyncio.Lock()
@@ -275,6 +276,18 @@ def build_github_routes() -> APIRouter:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @router.get("/api/github/pr_flow/events")
+    async def github_pr_flow_events(request: Request):
+        shutdown_event = getattr(request.app.state, "shutdown_event", None)
+        events_path = _pr_flow(request).events_path()
+        return StreamingResponse(
+            jsonl_event_stream(
+                events_path, event_name="pr-flow", shutdown_event=shutdown_event
+            ),
+            headers=SSE_HEADERS,
+            media_type="text/event-stream",
+        )
 
     @router.get("/api/github/pr_flow/artifact")
     async def github_pr_flow_artifact(

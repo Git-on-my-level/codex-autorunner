@@ -20,6 +20,7 @@ _REQUIRED_STATIC_ASSETS = (
     "bootstrap.js",
     "loader.js",
     "app.js",
+    "github.js",
     "vendor/xterm.js",
     "vendor/xterm-addon-fit.js",
     "vendor/xterm.css",
