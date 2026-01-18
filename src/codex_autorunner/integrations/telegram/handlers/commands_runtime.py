@@ -16,6 +16,8 @@ from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
+import httpx
+
 from ....agents.opencode.harness import OpenCodeHarness
 from ....agents.opencode.runtime import (
     PERMISSION_ALLOW,
@@ -236,6 +238,69 @@ class _RuntimeStub:
     interrupt_requested: bool = False
     interrupt_message_id: Optional[int] = None
     interrupt_turn_id: Optional[str] = None
+
+
+def _extract_opencode_error_detail(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if isinstance(error, dict):
+        for key in ("message", "detail", "error", "reason"):
+            value = error.get(key)
+            if isinstance(value, str) and value:
+                return value
+    if isinstance(error, str) and error:
+        return error
+    for key in ("detail", "message", "reason"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _format_opencode_exception(exc: Exception) -> Optional[str]:
+    if isinstance(exc, OpenCodeSupervisorError):
+        detail = str(exc).strip()
+        if detail:
+            return f"OpenCode backend unavailable ({detail})."
+        return "OpenCode backend unavailable."
+    if isinstance(exc, httpx.HTTPStatusError):
+        detail = None
+        try:
+            detail = _extract_opencode_error_detail(exc.response.json())
+        except Exception:
+            detail = None
+        if detail:
+            return f"OpenCode error: {detail}"
+        response_text = exc.response.text.strip()
+        if response_text:
+            return f"OpenCode error: {response_text}"
+        return f"OpenCode request failed (HTTP {exc.response.status_code})."
+    if isinstance(exc, httpx.RequestError):
+        detail = str(exc).strip()
+        if detail:
+            return f"OpenCode request failed: {detail}"
+        return "OpenCode request failed."
+    return None
+
+
+def _extract_opencode_session_path(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("directory", "path", "workspace_path", "workspacePath"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        for key in ("directory", "path", "workspace_path", "workspacePath"):
+            value = properties.get(key)
+            if isinstance(value, str) and value:
+                return value
+    session = payload.get("session")
+    if isinstance(session, dict):
+        return _extract_opencode_session_path(session)
+    return None
 
 
 class TelegramCommandHandlers:
@@ -1478,6 +1543,9 @@ class TelegramCommandHandlers:
                     transcript_text=transcript_text,
                 )
             except Exception as exc:
+                log_extra: dict[str, Any] = {}
+                if isinstance(exc, httpx.HTTPStatusError):
+                    log_extra["status_code"] = exc.response.status_code
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -1486,8 +1554,12 @@ class TelegramCommandHandlers:
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                     exc=exc,
+                    **log_extra,
                 )
-                failure_message = "OpenCode turn failed; check logs for details."
+                failure_message = (
+                    _format_opencode_exception(exc)
+                    or "OpenCode turn failed; check logs for details."
+                )
                 if send_failure_response:
                     await self._send_message(
                         message.chat_id,
@@ -3402,6 +3474,76 @@ class TelegramCommandHandlers:
             reply_to=message.message_id,
         )
 
+    async def _handle_opencode_resume(
+        self,
+        message: TelegramMessage,
+        record: "TelegramTopicRecord",
+        *,
+        key: str,
+        show_unscoped: bool,
+        refresh: bool,
+    ) -> None:
+        if refresh:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.opencode.resume.refresh_ignored",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+            )
+        local_thread_ids: list[str] = []
+        local_previews: dict[str, str] = {}
+        if show_unscoped:
+            store_state = self._store.load()
+            local_thread_ids, local_previews, _topic_keys = _local_workspace_threads(
+                store_state, record.workspace_path, current_key=key
+            )
+            for thread_id in record.thread_ids:
+                if thread_id not in local_thread_ids:
+                    local_thread_ids.append(thread_id)
+                cached_preview = _thread_summary_preview(record, thread_id)
+                if cached_preview:
+                    local_previews.setdefault(thread_id, cached_preview)
+        else:
+            for thread_id in record.thread_ids:
+                local_thread_ids.append(thread_id)
+                cached_preview = _thread_summary_preview(record, thread_id)
+                if cached_preview:
+                    local_previews.setdefault(thread_id, cached_preview)
+        if not local_thread_ids:
+            await self._send_message(
+                message.chat_id,
+                _with_conversation_id(
+                    "No previous OpenCode threads found for this topic. "
+                    "Use /new to start one.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        items: list[tuple[str, str]] = []
+        seen_ids: set[str] = set()
+        for thread_id in local_thread_ids:
+            if thread_id in seen_ids:
+                continue
+            seen_ids.add(thread_id)
+            preview = local_previews.get(thread_id)
+            label = _format_missing_thread_label(thread_id, preview)
+            items.append((thread_id, label))
+        state = SelectionState(items=items)
+        keyboard = self._build_resume_keyboard(state)
+        self._resume_options[key] = state
+        self._touch_cache_timestamp("resume_options", key)
+        await self._send_message(
+            message.chat_id,
+            self._selection_prompt(RESUME_PICKER_PROMPT, state),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            reply_markup=keyboard,
+        )
+
     async def _handle_resume(self, message: TelegramMessage, args: str) -> None:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         argv = self._parse_command_args(args)
@@ -3452,6 +3594,15 @@ class TelegramCommandHandlers:
                 "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
+            )
+            return
+        if self._effective_agent(record) == "opencode":
+            await self._handle_opencode_resume(
+                message,
+                record,
+                key=key,
+                show_unscoped=show_unscoped,
+                refresh=refresh,
             )
             return
         client = await self._client_for_workspace(record.workspace_path)
@@ -3823,6 +3974,9 @@ class TelegramCommandHandlers:
         chat_id, thread_id_val = _split_topic_key(key)
         self._resume_options.pop(key, None)
         record = self._router.get_topic(key)
+        if record is not None and self._effective_agent(record) == "opencode":
+            await self._resume_opencode_thread_by_id(key, thread_id, callback=callback)
+            return
         if record is None or not record.workspace_path:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
@@ -3959,6 +4113,162 @@ class TelegramCommandHandlers:
             workspace_path=updated_record.workspace_path,
             model=updated_record.model,
             effort=updated_record.effort,
+        )
+        await self._finalize_selection(key, callback, message)
+
+    async def _resume_opencode_thread_by_id(
+        self,
+        key: str,
+        thread_id: str,
+        callback: Optional[TelegramCallbackQuery] = None,
+    ) -> None:
+        chat_id, thread_id_val = _split_topic_key(key)
+        self._resume_options.pop(key, None)
+        record = self._router.get_topic(key)
+        if record is None or not record.workspace_path:
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "Topic not bound; use /bind before resuming.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            return
+        supervisor = getattr(self, "_opencode_supervisor", None)
+        if supervisor is None:
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "OpenCode backend unavailable; install opencode or switch to /agent codex.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            return
+        workspace_root = self._canonical_workspace_root(record.workspace_path)
+        if workspace_root is None:
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "Workspace unavailable; resume aborted.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            return
+        try:
+            client = await supervisor.get_client(workspace_root)
+            session = await client.get_session(thread_id)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.opencode.resume.failed",
+                topic_key=key,
+                thread_id=thread_id,
+                exc=exc,
+            )
+            await self._answer_callback(callback, "Resume failed")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "Failed to resume OpenCode thread; check logs for details.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            return
+        resumed_path = _extract_opencode_session_path(session)
+        if resumed_path:
+            try:
+                workspace_root = Path(record.workspace_path).expanduser().resolve()
+                resumed_root = Path(resumed_path).expanduser().resolve()
+            except Exception:
+                await self._answer_callback(callback, "Resume aborted")
+                await self._finalize_selection(
+                    key,
+                    callback,
+                    _with_conversation_id(
+                        "Thread workspace path is invalid; resume aborted.",
+                        chat_id=chat_id,
+                        thread_id=thread_id_val,
+                    ),
+                )
+                return
+            if not _paths_compatible(workspace_root, resumed_root):
+                await self._answer_callback(callback, "Resume aborted")
+                await self._finalize_selection(
+                    key,
+                    callback,
+                    _with_conversation_id(
+                        "Thread belongs to a different workspace; resume aborted.",
+                        chat_id=chat_id,
+                        thread_id=thread_id_val,
+                    ),
+                )
+                return
+        conflict_key = self._find_thread_conflict(thread_id, key=key)
+        if conflict_key:
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "Thread is already active in another topic; resume aborted.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.resume.conflict",
+                topic_key=key,
+                thread_id=thread_id,
+                conflict_topic=conflict_key,
+            )
+            return
+
+        def apply(record: "TelegramTopicRecord") -> None:
+            record.active_thread_id = thread_id
+            if thread_id in record.thread_ids:
+                record.thread_ids.remove(thread_id)
+            record.thread_ids.insert(0, thread_id)
+            if len(record.thread_ids) > MAX_TOPIC_THREAD_HISTORY:
+                record.thread_ids = record.thread_ids[:MAX_TOPIC_THREAD_HISTORY]
+            _set_thread_summary(
+                record,
+                thread_id,
+                last_used_at=now_iso(),
+                workspace_path=record.workspace_path,
+                rollout_path=record.rollout_path,
+            )
+
+        updated_record = self._router.update_topic(chat_id, thread_id_val, apply)
+        await self._answer_callback(callback, "Resumed thread")
+        summary = None
+        if updated_record is not None:
+            summary = updated_record.thread_summaries.get(thread_id)
+        entry: dict[str, Any] = {}
+        if summary is not None:
+            entry = {
+                "user_preview": summary.user_preview,
+                "assistant_preview": summary.assistant_preview,
+            }
+        message = _format_resume_summary(
+            thread_id,
+            entry,
+            workspace_path=updated_record.workspace_path if updated_record else None,
+            model=updated_record.model if updated_record else None,
+            effort=updated_record.effort if updated_record else None,
         )
         await self._finalize_selection(key, callback, message)
 
