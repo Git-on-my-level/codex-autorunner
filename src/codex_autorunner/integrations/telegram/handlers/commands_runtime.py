@@ -17,6 +17,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 from ....agents.opencode.harness import OpenCodeHarness
+from ....agents.opencode.runtime import (
+    PERMISSION_ALLOW,
+    PERMISSION_ASK,
+    build_turn_id,
+    collect_opencode_output,
+    extract_session_id,
+    format_permission_prompt,
+    map_approval_policy_to_permission,
+    opencode_missing_env,
+    split_model_id,
+)
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.config import load_config
 from ....core.injected_context import wrap_injected_context
@@ -62,6 +73,7 @@ from ..constants import (
     MAX_MENTION_BYTES,
     MAX_TOPIC_THREAD_HISTORY,
     MODEL_PICKER_PROMPT,
+    OPENCODE_TURN_TIMEOUT_SECONDS,
     PLACEHOLDER_TEXT,
     QUEUED_PLACEHOLDER_TEXT,
     RESUME_MISSING_IDS_LOG_LIMIT,
@@ -415,145 +427,6 @@ class TelegramCommandHandlers:
         if not binary:
             return False
         return resolve_opencode_binary(binary) is not None
-
-    def _split_opencode_model(self, model: Optional[str]) -> Optional[dict[str, str]]:
-        if not model or "/" not in model:
-            return None
-        provider_id, model_id = model.split("/", 1)
-        provider_id = provider_id.strip()
-        model_id = model_id.strip()
-        if not provider_id or not model_id:
-            return None
-        return {"providerID": provider_id, "modelID": model_id}
-
-    async def _opencode_missing_env(
-        self,
-        client: Any,
-        workspace_root: Path,
-        model_payload: Optional[dict[str, str]],
-    ) -> list[str]:
-        if not model_payload:
-            return []
-        provider_id = model_payload.get("providerID")
-        if not provider_id:
-            return []
-        try:
-            payload = await client.providers(directory=str(workspace_root))
-        except Exception:
-            return []
-        providers: list[dict[str, Any]] = []
-        if isinstance(payload, dict):
-            raw_providers = payload.get("providers")
-            if isinstance(raw_providers, list):
-                providers = [
-                    entry for entry in raw_providers if isinstance(entry, dict)
-                ]
-        elif isinstance(payload, list):
-            providers = [entry for entry in payload if isinstance(entry, dict)]
-        for provider in providers:
-            pid = provider.get("id") or provider.get("providerID")
-            if pid != provider_id:
-                continue
-            env_keys = provider.get("env")
-            if not isinstance(env_keys, list):
-                return []
-            missing = [
-                key
-                for key in env_keys
-                if isinstance(key, str) and key and not getenv(key)
-            ]
-            return missing
-        return []
-
-    def _extract_opencode_turn_id(self, session_id: str, payload: Any) -> str:
-        if isinstance(payload, dict):
-            for key in ("id", "messageId", "message_id", "turn_id", "turnId"):
-                value = payload.get(key)
-                if isinstance(value, str) and value:
-                    return value
-        return f"{session_id}:{int(time.time() * 1000)}"
-
-    def _extract_opencode_session_id(self, payload: Any) -> Optional[str]:
-        if not isinstance(payload, dict):
-            return None
-        for key in ("sessionID", "sessionId", "session_id", "id"):
-            value = payload.get(key)
-            if isinstance(value, str) and value:
-                return value
-        properties = payload.get("properties")
-        if isinstance(properties, dict):
-            value = properties.get("sessionID")
-            if isinstance(value, str) and value:
-                return value
-            part = properties.get("part")
-            if isinstance(part, dict):
-                value = part.get("sessionID")
-                if isinstance(value, str) and value:
-                    return value
-        session = payload.get("session")
-        if isinstance(session, dict):
-            return self._extract_opencode_session_id(session)
-        return None
-
-    async def _collect_opencode_output(
-        self,
-        *,
-        client: Any,
-        session_id: str,
-        workspace_path: str,
-        runtime: Any,
-    ) -> str:
-        text_parts: list[str] = []
-        async for event in client.stream_events(directory=workspace_path):
-            if runtime.interrupt_requested:
-                try:
-                    await client.abort(session_id)
-                except Exception:
-                    pass
-                break
-            raw = event.data or ""
-            try:
-                payload = json.loads(raw) if raw else {}
-            except json.JSONDecodeError:
-                payload = {}
-            event_session_id = self._extract_opencode_session_id(payload)
-            if event_session_id and event_session_id != session_id:
-                continue
-            if event.event == "permission.asked":
-                properties = (
-                    payload.get("properties") if isinstance(payload, dict) else {}
-                )
-                request_id = None
-                if isinstance(properties, dict):
-                    request_id = properties.get("id") or properties.get("requestID")
-                if isinstance(request_id, str) and request_id:
-                    try:
-                        await client.respond_permission(
-                            request_id=request_id, reply="reject"
-                        )
-                    except Exception:
-                        pass
-            if event.event == "message.part.updated":
-                properties = (
-                    payload.get("properties") if isinstance(payload, dict) else None
-                )
-                if isinstance(properties, dict):
-                    part = properties.get("part")
-                    delta = properties.get("delta")
-                else:
-                    part = payload.get("part")
-                    delta = payload.get("delta")
-                if isinstance(delta, dict):
-                    delta = delta.get("text")
-                if isinstance(delta, str) and delta:
-                    text_parts.append(delta)
-                if isinstance(part, dict) and part.get("type") == "text":
-                    text = part.get("text")
-                    if isinstance(text, str) and text:
-                        text_parts.append(text)
-            if event.event == "session.idle" and event_session_id == session_id:
-                break
-        return "".join(text_parts).strip()
 
     async def _fetch_model_list(
         self,
@@ -1151,7 +1024,6 @@ class TelegramCommandHandlers:
             record = verified
         thread_id = record.active_thread_id
         turn_handle = None
-        turn_key: Optional[TurnKey] = None
         placeholder_id: Optional[int] = None
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
@@ -1276,7 +1148,7 @@ class TelegramCommandHandlers:
                     session = await opencode_client.create_session(
                         directory=str(workspace_root)
                     )
-                    thread_id = self._extract_opencode_session_id(session)
+                    thread_id = extract_session_id(session, allow_fallback_id=True)
                     if not thread_id:
                         failure_message = "Failed to start a new OpenCode thread."
                         if send_failure_response:
@@ -1369,6 +1241,7 @@ class TelegramCommandHandlers:
                         transcript_message_id,
                         transcript_text,
                     )
+                turn_key: Optional[TurnKey] = None
                 try:
                     queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
                     log_event(
@@ -1394,10 +1267,10 @@ class TelegramCommandHandlers:
                             placeholder_id,
                             PLACEHOLDER_TEXT,
                         )
-                    model_payload = self._split_opencode_model(record.model)
-                    missing_env = await self._opencode_missing_env(
+                    model_payload = split_model_id(record.model)
+                    missing_env = await opencode_missing_env(
                         opencode_client,
-                        workspace_root,
+                        str(workspace_root),
                         model_payload,
                     )
                     if missing_env:
@@ -1423,21 +1296,134 @@ class TelegramCommandHandlers:
                             transcript_message_id,
                             transcript_text,
                         )
-                    result = await opencode_client.send_message(
-                        thread_id,
-                        message=prompt_text,
-                        model=model_payload,
-                    )
                     turn_started_at = time.monotonic()
-                    turn_id = self._extract_opencode_turn_id(thread_id, result)
+                    turn_id = build_turn_id(thread_id)
                     runtime.current_turn_id = turn_id
                     runtime.current_turn_key = (thread_id, turn_id)
-                    output = await self._collect_opencode_output(
-                        client=opencode_client,
-                        session_id=thread_id,
-                        workspace_path=str(workspace_root),
-                        runtime=runtime,
+                    ctx = TurnContext(
+                        topic_key=key,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        codex_thread_id=thread_id,
+                        reply_to_message_id=message.message_id,
+                        placeholder_message_id=placeholder_id,
                     )
+                    turn_key = self._turn_key(thread_id, turn_id)
+                    if turn_key is None or not self._register_turn_context(
+                        turn_key, turn_id, ctx
+                    ):
+                        runtime.current_turn_id = None
+                        runtime.current_turn_key = None
+                        runtime.interrupt_requested = False
+                        failure_message = "Turn collision detected; please retry."
+                        if send_failure_response:
+                            await self._send_message(
+                                message.chat_id,
+                                failure_message,
+                                thread_id=message.thread_id,
+                                reply_to=message.message_id,
+                            )
+                            if placeholder_id is not None:
+                                await self._delete_message(
+                                    message.chat_id, placeholder_id
+                                )
+                        return _TurnRunFailure(
+                            failure_message,
+                            placeholder_id,
+                            transcript_message_id,
+                            transcript_text,
+                        )
+                    approval_policy, _sandbox_policy = self._effective_policies(record)
+                    permission_policy = map_approval_policy_to_permission(
+                        approval_policy, default=PERMISSION_ALLOW
+                    )
+
+                    async def _permission_handler(
+                        request_id: str, props: dict[str, Any]
+                    ) -> str:
+                        if permission_policy != PERMISSION_ASK:
+                            return "reject"
+                        prompt = format_permission_prompt(props)
+                        decision = await self._handle_approval_request(
+                            {
+                                "id": request_id,
+                                "method": "opencode/permission/requestApproval",
+                                "params": {
+                                    "turnId": turn_id,
+                                    "threadId": thread_id,
+                                    "prompt": prompt,
+                                },
+                            }
+                        )
+                        return decision
+
+                    abort_requested = False
+
+                    async def _abort_opencode() -> None:
+                        try:
+                            await opencode_client.abort(thread_id)
+                        except Exception:
+                            pass
+
+                    def _should_stop() -> bool:
+                        nonlocal abort_requested
+                        if runtime.interrupt_requested and not abort_requested:
+                            abort_requested = True
+                            asyncio.create_task(_abort_opencode())
+                        return runtime.interrupt_requested
+
+                    output_task = asyncio.create_task(
+                        collect_opencode_output(
+                            opencode_client,
+                            session_id=thread_id,
+                            workspace_path=str(workspace_root),
+                            permission_policy=permission_policy,
+                            permission_handler=(
+                                _permission_handler
+                                if permission_policy == PERMISSION_ASK
+                                else None
+                            ),
+                            should_stop=_should_stop,
+                        )
+                    )
+                    prompt_task = asyncio.create_task(
+                        opencode_client.prompt(
+                            thread_id,
+                            message=prompt_text,
+                            model=model_payload,
+                        )
+                    )
+                    try:
+                        await prompt_task
+                    except Exception as exc:
+                        output_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await output_task
+                        raise exc
+                    timeout_task = asyncio.create_task(
+                        asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
+                    )
+                    done, _pending = await asyncio.wait(
+                        {output_task, timeout_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if timeout_task in done:
+                        runtime.interrupt_requested = True
+                        await _abort_opencode()
+                        output_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await output_task
+                        turn_elapsed_seconds = time.monotonic() - turn_started_at
+                        return _TurnRunFailure(
+                            "OpenCode turn timed out.",
+                            placeholder_id,
+                            transcript_message_id,
+                            transcript_text,
+                        )
+                    timeout_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await timeout_task
+                    output_result = await output_task
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
                 finally:
                     turn_semaphore.release()
@@ -1446,6 +1432,22 @@ class TelegramCommandHandlers:
                         message.chat_id,
                         message.thread_id,
                         _clear_pending_compact_seed,
+                    )
+                output = output_result.text
+                if output_result.error:
+                    failure_message = f"OpenCode error: {output_result.error}"
+                    if send_failure_response:
+                        await self._send_message(
+                            message.chat_id,
+                            failure_message,
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                        )
+                    return _TurnRunFailure(
+                        failure_message,
+                        placeholder_id,
+                        transcript_message_id,
+                        transcript_text,
                     )
                 if output:
                     assistant_preview = _preview_from_text(
@@ -1463,9 +1465,6 @@ class TelegramCommandHandlers:
                             rollout_path=record.rollout_path,
                         ),
                     )
-                runtime.current_turn_id = None
-                runtime.current_turn_key = None
-                runtime.interrupt_requested = False
                 return _TurnRunResult(
                     record=record,
                     thread_id=thread_id,
@@ -1501,6 +1500,15 @@ class TelegramCommandHandlers:
                     transcript_message_id,
                     transcript_text,
                 )
+            finally:
+                if turn_key is not None:
+                    self._turn_contexts.pop(turn_key, None)
+                    self._clear_thinking_preview(turn_key)
+                    self._clear_turn_progress(turn_key)
+                if runtime.current_turn_key == turn_key:
+                    runtime.current_turn_id = None
+                    runtime.current_turn_key = None
+                runtime.interrupt_requested = False
         client = await self._client_for_workspace(record.workspace_path)
         if client is None:
             failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
@@ -1665,6 +1673,7 @@ class TelegramCommandHandlers:
                     transcript_message_id,
                     transcript_text,
                 )
+                turn_key: Optional[TurnKey] = None
             try:
                 queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
                 log_event(
@@ -3320,7 +3329,7 @@ class TelegramCommandHandlers:
                     reply_to=message.message_id,
                 )
                 return
-            session_id = self._extract_opencode_session_id(session)
+            session_id = extract_session_id(session, allow_fallback_id=True)
             if not session_id:
                 await self._send_message(
                     message.chat_id,
