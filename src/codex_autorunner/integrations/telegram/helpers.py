@@ -1965,6 +1965,10 @@ def _format_approval_prompt(message: dict[str, Any]) -> str:
     method = message.get("method")
     params_raw = message.get("params")
     params: dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
+    if isinstance(method, str) and method.startswith("opencode/permission"):
+        prompt = params.get("prompt")
+        if isinstance(prompt, str) and prompt:
+            return prompt
     lines = ["Approval required"]
     reason = params.get("reason")
     if isinstance(reason, str) and reason:

@@ -16,6 +16,14 @@ from typing import IO, Any, Iterator, Optional
 
 import yaml
 
+from ..agents.opencode.runtime import (
+    build_turn_id,
+    collect_opencode_output,
+    extract_session_id,
+    map_approval_policy_to_permission,
+    opencode_missing_env,
+    split_model_id,
+)
 from ..agents.opencode.supervisor import OpenCodeSupervisor, OpenCodeSupervisorError
 from ..integrations.app_server.client import (
     CodexAppServerError,
@@ -1346,105 +1354,11 @@ class Engine:
                 with contextlib.suppress(asyncio.CancelledError):
                     await timeout_task
 
-    def _split_opencode_model(self, model: Optional[str]) -> Optional[dict[str, str]]:
-        if not model or "/" not in model:
-            return None
-        provider_id, model_id = model.split("/", 1)
-        provider_id = provider_id.strip()
-        model_id = model_id.strip()
-        if not provider_id or not model_id:
-            return None
-        return {"providerID": provider_id, "modelID": model_id}
-
-    def _extract_opencode_turn_id(self, session_id: str, payload: Any) -> str:
-        if isinstance(payload, dict):
-            for key in ("id", "messageId", "message_id", "turn_id", "turnId"):
-                value = payload.get(key)
-                if isinstance(value, str) and value:
-                    return value
-        return f"{session_id}:{int(time.time() * 1000)}"
-
-    def _extract_opencode_session_id(self, payload: Any) -> Optional[str]:
-        if not isinstance(payload, dict):
-            return None
-        for key in ("sessionID", "sessionId", "session_id", "id"):
-            value = payload.get(key)
-            if isinstance(value, str) and value:
-                return value
-        properties = payload.get("properties")
-        if isinstance(properties, dict):
-            value = properties.get("sessionID")
-            if isinstance(value, str) and value:
-                return value
-            part = properties.get("part")
-            if isinstance(part, dict):
-                value = part.get("sessionID")
-                if isinstance(value, str) and value:
-                    return value
-        session = payload.get("session")
-        if isinstance(session, dict):
-            return self._extract_opencode_session_id(session)
-        return None
-
     async def _abort_opencode(self, client: Any, session_id: str, run_id: int) -> None:
         try:
             await client.abort(session_id)
         except Exception as exc:
             self.log_line(run_id, f"error: opencode abort failed: {exc}")
-
-    async def _collect_opencode_output(
-        self,
-        client: Any,
-        session_id: str,
-        active: ActiveOpencodeRun,
-    ) -> str:
-        text_parts: list[str] = []
-        async for event in client.stream_events(directory=str(self.repo_root)):
-            raw = event.data or ""
-            try:
-                payload = json.loads(raw) if raw else {}
-            except json.JSONDecodeError:
-                payload = {}
-            event_session_id = self._extract_opencode_session_id(payload)
-            if not event_session_id or event_session_id != session_id:
-                continue
-            if event.event == "permission.asked":
-                properties = (
-                    payload.get("properties") if isinstance(payload, dict) else {}
-                )
-                request_id = None
-                if isinstance(properties, dict):
-                    request_id = properties.get("id") or properties.get("requestID")
-                if isinstance(request_id, str) and request_id:
-                    try:
-                        await client.respond_permission(
-                            request_id=request_id, reply="reject"
-                        )
-                    except Exception:
-                        pass
-            if event.event == "message.part.updated":
-                properties = (
-                    payload.get("properties") if isinstance(payload, dict) else None
-                )
-                if isinstance(properties, dict):
-                    part = properties.get("part")
-                    delta = properties.get("delta")
-                else:
-                    part = payload.get("part")
-                    delta = payload.get("delta")
-                if isinstance(delta, dict):
-                    delta = delta.get("text")
-                if isinstance(delta, str) and delta:
-                    text_parts.append(delta)
-                if isinstance(part, dict) and part.get("type") == "text":
-                    text = part.get("text")
-                    if isinstance(text, str) and text:
-                        text_parts.append(text)
-            if event.event == "session.idle" and event_session_id == session_id:
-                break
-            if active.interrupt_event.is_set():
-                break
-        return "".join(text_parts).strip()
 
     async def _run_opencode_app_server_async(
         self,
@@ -1477,20 +1391,26 @@ class Engine:
                 thread_id = None
         if not thread_id:
             session = await client.create_session(directory=str(self.repo_root))
-            thread_id = self._extract_opencode_session_id(session)
+            thread_id = extract_session_id(session)
             if not isinstance(thread_id, str) or not thread_id:
                 self.log_line(run_id, "error: opencode did not return a session id")
                 return 1
             self._app_server_threads.set_thread_id(key, thread_id)
 
-        model_payload = self._split_opencode_model(model)
-        result = await client.send_message(
-            thread_id,
-            message=prompt,
-            model=model_payload,
-            variant=reasoning,
+        model_payload = split_model_id(model)
+        missing_env = await opencode_missing_env(
+            client, str(self.repo_root), model_payload
         )
-        turn_id = self._extract_opencode_turn_id(thread_id, result)
+        if missing_env:
+            provider_id = model_payload.get("providerID") if model_payload else None
+            self.log_line(
+                run_id,
+                "error: opencode provider "
+                f"{provider_id or 'selected'} requires env vars: "
+                f"{', '.join(missing_env)}",
+            )
+            return 1
+        turn_id = build_turn_id(thread_id)
         self._update_run_telemetry(run_id, thread_id=thread_id, turn_id=turn_id)
         app_server_meta = self._build_app_server_meta(
             thread_id=thread_id,
@@ -1509,8 +1429,27 @@ class Engine:
             interrupted=False,
             interrupt_event=asyncio.Event(),
         )
+        with state_lock(self.state_path):
+            state = load_state(self.state_path)
+        permission_policy = map_approval_policy_to_permission(
+            state.autorunner_approval_policy, default="allow"
+        )
         output_task = asyncio.create_task(
-            self._collect_opencode_output(client, thread_id, active)
+            collect_opencode_output(
+                client,
+                session_id=thread_id,
+                workspace_path=str(self.repo_root),
+                permission_policy=permission_policy,
+                should_stop=active.interrupt_event.is_set,
+            )
+        )
+        prompt_task = asyncio.create_task(
+            client.prompt(
+                thread_id,
+                message=prompt,
+                model=model_payload,
+                variant=reasoning,
+            )
         )
         stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
         timeout_task = None
@@ -1519,6 +1458,15 @@ class Engine:
             timeout_task = asyncio.create_task(asyncio.sleep(turn_timeout))
         timed_out = False
         try:
+            try:
+                await prompt_task
+            except Exception as exc:
+                active.interrupt_event.set()
+                output_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await output_task
+                self.log_line(run_id, f"error: opencode prompt failed: {exc}")
+                return 1
             tasks = {output_task, stop_task}
             if timeout_task is not None:
                 tasks.add(timeout_task)
@@ -1549,7 +1497,7 @@ class Engine:
                         return 1
                     self._last_run_interrupted = active.interrupted
                     return 0
-            output = await output_task
+            output_result = await output_task
         finally:
             stop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1559,8 +1507,14 @@ class Engine:
                 with contextlib.suppress(asyncio.CancelledError):
                     await timeout_task
 
+        output = output_result.text
         if output:
             self._log_app_server_output(run_id, [output])
+        if output_result.error:
+            self.log_line(
+                run_id, f"error: opencode session error: {output_result.error}"
+            )
+            return 1
         self._last_run_interrupted = active.interrupted
         if timed_out:
             return 1

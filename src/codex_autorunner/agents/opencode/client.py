@@ -92,6 +92,28 @@ class OpenCodeClient:
             "POST", f"/session/{session_id}/message", json=payload
         )
 
+    async def prompt(
+        self,
+        session_id: str,
+        *,
+        message: str,
+        agent: Optional[str] = None,
+        model: Optional[dict[str, str]] = None,
+        variant: Optional[str] = None,
+    ) -> Any:
+        payload: dict[str, Any] = {
+            "parts": [{"type": "text", "text": message}],
+        }
+        if agent:
+            payload["agent"] = agent
+        if model:
+            payload["model"] = model
+        if variant:
+            payload["variant"] = variant
+        return await self._request(
+            "POST", f"/session/{session_id}/prompt", json=payload
+        )
+
     async def send_command(
         self,
         session_id: str,
