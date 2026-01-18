@@ -1096,7 +1096,6 @@ def _resolve_repo_root(start: Path) -> Path:
 def load_repo_config(start: Path, hub_path: Optional[Path] = None) -> RepoConfig:
     """Load a repo config by deriving it from the nearest hub config."""
     repo_root = _resolve_repo_root(start)
-    load_dotenv_for_root(repo_root)
     hub_config_path = _resolve_hub_path_for_repo(repo_root, hub_path)
     hub_config = load_hub_config_data(hub_config_path)
     _validate_hub_config(hub_config)

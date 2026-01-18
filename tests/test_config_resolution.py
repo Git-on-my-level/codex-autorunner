@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -109,6 +110,32 @@ def test_repo_override_rejects_mode_and_version(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError):
         load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_repo_env_overrides_hub_env(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {"mode": "hub"},
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+
+    (hub_root / ".env").write_text("CAR_DOTENV_TEST=hub\n", encoding="utf-8")
+    (repo_root / ".env").write_text("CAR_DOTENV_TEST=repo\n", encoding="utf-8")
+
+    previous = os.environ.get("CAR_DOTENV_TEST")
+    try:
+        load_repo_config(repo_root, hub_path=hub_root)
+        assert os.environ.get("CAR_DOTENV_TEST") == "repo"
+    finally:
+        if previous is None:
+            os.environ.pop("CAR_DOTENV_TEST", None)
+        else:
+            os.environ["CAR_DOTENV_TEST"] = previous
 
 
 def test_repo_docs_reject_absolute_path(tmp_path: Path) -> None:
