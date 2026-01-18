@@ -162,7 +162,16 @@ def map_approval_policy_to_permission(
         return PERMISSION_ALLOW
     if normalized in ("deny", "reject", "blocked"):
         return PERMISSION_DENY
-    if normalized in ("on-request", "unlesstrusted", "ask", "auto"):
+    if normalized in (
+        "on-request",
+        "on-failure",
+        "on_failure",
+        "onfailure",
+        "unlesstrusted",
+        "untrusted",
+        "ask",
+        "auto",
+    ):
         return PERMISSION_ASK
     return default
 
