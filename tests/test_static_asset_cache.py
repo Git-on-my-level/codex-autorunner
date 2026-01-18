@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.server import create_app
 from codex_autorunner.web import static_assets
 
@@ -146,3 +147,20 @@ def test_static_assets_cached_and_compressed(tmp_path: Path, monkeypatch) -> Non
     gzip_res = client.get("/static/big.js", headers={"Accept-Encoding": "gzip"})
     assert gzip_res.status_code == 200
     assert gzip_res.headers.get("Content-Encoding") == "gzip"
+
+
+def test_repo_app_falls_back_to_hub_static_cache(tmp_path: Path, monkeypatch) -> None:
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    repo_root = hub_root / "worktrees" / "repo"
+    seed_repo_files(repo_root, force=True, git_required=False)
+    hub_config = load_hub_config(hub_root)
+    hub_cache_root = hub_config.static_assets.cache_root
+    existing_cache = hub_cache_root / "existing"
+    _write_required_assets(existing_cache)
+    source_dir = tmp_path / "missing_source"
+    monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
+    app = create_app(repo_root, hub_config=hub_config)
+    client = TestClient(app)
+    res = client.get("/static/app.js")
+    assert res.status_code == 200

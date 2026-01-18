@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import shlex
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
@@ -555,18 +555,48 @@ def _build_app_context(
             repo_to_session,
             terminal_max_idle_seconds,
         )
-    static_dir, static_context = materialize_static_assets(
-        config.static_assets.cache_root,
-        max_cache_entries=config.static_assets.max_cache_entries,
-        max_cache_age_days=config.static_assets.max_cache_age_days,
-        logger=logger,
-    )
+
+    def _load_static_assets(
+        cache_root: Path, max_cache_entries: int, max_cache_age_days: Optional[int]
+    ) -> tuple[Path, Optional[ExitStack]]:
+        static_dir, static_context = materialize_static_assets(
+            cache_root,
+            max_cache_entries=max_cache_entries,
+            max_cache_age_days=max_cache_age_days,
+            logger=logger,
+        )
+        try:
+            require_static_assets(static_dir, logger)
+        except Exception:
+            if static_context is not None:
+                static_context.close()
+            raise
+        return static_dir, static_context
+
     try:
-        require_static_assets(static_dir, logger)
-    except Exception:
-        if static_context is not None:
-            static_context.close()
-        raise
+        static_dir, static_context = _load_static_assets(
+            config.static_assets.cache_root,
+            config.static_assets.max_cache_entries,
+            config.static_assets.max_cache_age_days,
+        )
+    except Exception as exc:
+        if hub_config is None:
+            raise
+        hub_static = hub_config.static_assets
+        if hub_static.cache_root == config.static_assets.cache_root:
+            raise
+        safe_log(
+            logger,
+            logging.WARNING,
+            "Repo static assets unavailable; retrying with hub cache root %s",
+            hub_static.cache_root,
+            exc=exc,
+        )
+        static_dir, static_context = _load_static_assets(
+            hub_static.cache_root,
+            hub_static.max_cache_entries,
+            hub_static.max_cache_age_days,
+        )
     return AppContext(
         base_path=normalized_base,
         env=env,
