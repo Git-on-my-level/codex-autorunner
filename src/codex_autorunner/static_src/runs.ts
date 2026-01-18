@@ -48,6 +48,28 @@ const runsState: RunsState = {
 };
 
 let closeDetailsModal: (() => void) | null = null;
+const runLogCache = new Map<number, Promise<string | null>>();
+
+const RUN_OUTPUT_MAX_LINES = 160;
+const RUN_DIFF_MAX_LINES = 400;
+const RUN_PLAN_MAX_LINES = 120;
+
+const META_LINE_PATTERNS = [
+  /^=== run \d+/i,
+  /^tokens used/i,
+  /^thinking$/i,
+  /^\*\*.+\*\*$/,
+  /^exec$/i,
+  /^file update$/i,
+  /^apply_patch\(/i,
+  /^tool:\s+/i,
+  /^exit\s+\d+/i,
+  /^mcp startup:/i,
+  /^(diff --git |index [0-9a-f]+\.\.[0-9a-f]+)/i,
+  /^(---|\+\+\+)\s+[ab]\//,
+  /^@@\s+-\d+,?\d*\s+\+\d+,?\d*\s+@@/,
+  /^<\/?(SPEC|WORK_DOCS|TODO|PROGRESS|OPINIONS|TARGET_DOC|RECENT_RUN|SYSTEM|USER|ASSISTANT)>$/,
+];
 
 interface UIElements {
   refresh: HTMLElement | null;
@@ -111,6 +133,15 @@ function formatDuration(seconds: number | null | undefined): string {
 function formatNumber(value: number | null | undefined): string {
   if (typeof value !== "number" || Number.isNaN(value)) return "–";
   return value.toLocaleString();
+}
+
+function truncateLines(text: string, maxLines: number): string {
+  if (!text) return "";
+  const lines = text.split("\n");
+  if (lines.length <= maxLines) return text;
+  const trimmed = lines.slice(0, maxLines);
+  trimmed.push(`… (${lines.length - maxLines} more lines)`);
+  return trimmed.join("\n");
 }
 
 function runStatus(entry: RunEntry): string {
@@ -234,27 +265,6 @@ function renderTodoAnalytics(): void {
   }
 }
 
-async function loadArtifact(runId: number, kind: string, targetEl: HTMLElement | null): Promise<void> {
-  if (!targetEl) return;
-  targetEl.textContent = "Loading…";
-  try {
-    const text = await api(`/api/runs/${runId}/${kind}`);
-    if (typeof text === "string") {
-      targetEl.textContent = text || "Not available.";
-    } else if (text !== null && text !== undefined) {
-      targetEl.textContent = JSON.stringify(text, null, 2);
-    } else {
-      targetEl.textContent = "Not available.";
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "";
-    targetEl.textContent =
-      message.includes("401") || message.includes("403") || message.includes("404")
-        ? "Not available."
-        : "Unable to load.";
-  }
-}
-
 interface PlanStep {
   step?: string;
   task?: string;
@@ -319,7 +329,7 @@ async function loadPlan(runId: number): Promise<void> {
       planData = planRaw;
     }
     const formatted = formatPlan(planData);
-    ui.modalPlan.textContent = formatted || "Not available.";
+    ui.modalPlan.textContent = formatted ? truncateLines(formatted, RUN_PLAN_MAX_LINES) : "Not available.";
   } catch (err) {
     const message = err instanceof Error ? err.message : "";
     ui.modalPlan.textContent =
@@ -338,6 +348,49 @@ function stripLogPrefix(line: string): string {
     .trimEnd();
 }
 
+function looksLikeMetaLine(text: string): boolean {
+  if (!text) return true;
+  return META_LINE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function extractDiffFromLog(logText: string): string {
+  if (!logText) return "";
+  const lines = logText.split("\n").map((line) => stripLogPrefix(line));
+  const diffHeaderRe = /^diff --git /i;
+  const diffLineRe = /^(diff --git |index [0-9a-f]+\.\.[0-9a-f]+|--- |\+\+\+ |@@ |Binary files )/i;
+  const stopRe = /^=== run \d+|^tokens used/i;
+  let startIndex = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (diffHeaderRe.test(lines[i].trimStart())) {
+      startIndex = i;
+      break;
+    }
+  }
+  if (startIndex < 0) return "";
+  const diffLines: string[] = [];
+  for (let i = startIndex; i < lines.length; i += 1) {
+    const line = lines[i].trimEnd();
+    const trimmed = line.trim();
+    if (i > startIndex && stopRe.test(trimmed)) break;
+    if (
+      diffLineRe.test(line) ||
+      line.startsWith(" ") ||
+      line.startsWith("+") ||
+      line.startsWith("-") ||
+      line.startsWith("\\")
+    ) {
+      diffLines.push(line);
+      continue;
+    }
+    if (line === "" && diffLines.length) {
+      diffLines.push("");
+      continue;
+    }
+    if (diffLines.length) break;
+  }
+  return diffLines.join("\n").trim();
+}
+
 function extractFinalOutput(logText: string): string {
   if (!logText) return "";
   const lines = logText.split("\n");
@@ -349,18 +402,62 @@ function extractFinalOutput(logText: string): string {
       outputs.push(stripped.replace(/^Agent:\s*/i, ""));
     }
   });
-  if (!outputs.length) return "";
-  return outputs.join("\n").trim();
+  if (outputs.length) return outputs.join("\n").trim();
+
+  const blocks: string[][] = [];
+  let current: string[] = [];
+  lines.forEach((line) => {
+    const cleaned = stripLogPrefix(line);
+    const trimmed = cleaned.trim();
+    if (!trimmed) {
+      if (current.length) {
+        blocks.push(current);
+        current = [];
+      }
+      return;
+    }
+    if (looksLikeMetaLine(trimmed)) {
+      if (current.length) {
+        blocks.push(current);
+        current = [];
+      }
+      return;
+    }
+    current.push(cleaned);
+  });
+  if (current.length) {
+    blocks.push(current);
+  }
+  if (!blocks.length) return "";
+  const lastBlock = blocks[blocks.length - 1];
+  return lastBlock.join("\n").trim();
+}
+
+async function fetchRunLog(runId: number): Promise<string | null> {
+  const existing = runLogCache.get(runId);
+  if (existing) return existing;
+  const request = (async () => {
+    try {
+      const payload = await api(`/api/logs?run_id=${runId}`);
+      const logText = typeof (payload as { log?: string })?.log === "string" ? (payload as { log?: string }).log : "";
+      return logText || null;
+    } catch (_err) {
+      return null;
+    }
+  })();
+  runLogCache.set(runId, request);
+  return request;
 }
 
 async function loadFinalOutput(runId: number): Promise<void> {
   if (!ui.modalOutput) return;
   ui.modalOutput.textContent = "Loading…";
   try {
-    const payload = await api(`/api/logs?run_id=${runId}`);
-    const logText = typeof (payload as { log?: string })?.log === "string" ? (payload as { log?: string }).log : "";
-    const output = extractFinalOutput(logText);
-    ui.modalOutput.textContent = output || "Not available.";
+    const logText = await fetchRunLog(runId);
+    const output = extractFinalOutput(logText || "");
+    ui.modalOutput.textContent = output
+      ? truncateLines(output, RUN_OUTPUT_MAX_LINES)
+      : "Not available.";
   } catch (err) {
     const message = err instanceof Error ? err.message : "";
     ui.modalOutput.textContent =
@@ -368,6 +465,30 @@ async function loadFinalOutput(runId: number): Promise<void> {
         ? "Not available."
         : "Unable to load.";
   }
+}
+
+async function loadDiff(runId: number): Promise<void> {
+  if (!ui.modalDiff) return;
+  ui.modalDiff.textContent = "Loading…";
+  try {
+    const text = await api(`/api/runs/${runId}/diff`);
+    if (typeof text === "string" && text.trim()) {
+      ui.modalDiff.textContent = truncateLines(text, RUN_DIFF_MAX_LINES);
+      return;
+    }
+    if (text !== null && text !== undefined) {
+      const formatted = JSON.stringify(text, null, 2);
+      ui.modalDiff.textContent = truncateLines(formatted, RUN_DIFF_MAX_LINES);
+      return;
+    }
+  } catch (_err) {
+    // Fall back to log parsing below.
+  }
+  const logText = await fetchRunLog(runId);
+  const diffText = extractDiffFromLog(logText || "");
+  ui.modalDiff.textContent = diffText
+    ? truncateLines(diffText, RUN_DIFF_MAX_LINES)
+    : "Not available.";
 }
 
 function renderTokenBreakdown(run: RunEntry): void {
@@ -440,7 +561,7 @@ function openRunDetails(run: RunEntry): void {
   renderTokenBreakdown(run);
   renderCompletedTodos(run);
   if (ui.modalPlan) loadPlan(run.run_id);
-  if (ui.modalDiff) loadArtifact(run.run_id, "diff", ui.modalDiff);
+  if (ui.modalDiff) loadDiff(run.run_id);
   if (ui.modalOutput) loadFinalOutput(run.run_id);
   const triggerEl = document.activeElement;
   closeDetailsModal = openModal(ui.modal, {
