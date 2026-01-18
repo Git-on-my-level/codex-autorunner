@@ -1,11 +1,36 @@
 import dataclasses
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
 import yaml
 
 MANIFEST_VERSION = 2
+_SAFE_REPO_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+_SANITIZE_REPO_ID_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def is_safe_repo_id(value: str) -> bool:
+    return bool(value and _SAFE_REPO_ID_PATTERN.match(value))
+
+
+def sanitize_repo_id(value: str) -> str:
+    base = (value or "").strip()
+    base = _SANITIZE_REPO_ID_PATTERN.sub("-", base)
+    base = base.strip("-")
+    return base or "repo"
+
+
+def ensure_unique_repo_id(base: str, existing_ids: set[str]) -> str:
+    if base not in existing_ids:
+        return base
+    suffix = 2
+    candidate = f"{base}-{suffix}"
+    while candidate in existing_ids:
+        suffix += 1
+        candidate = f"{base}-{suffix}"
+    return candidate
 
 
 class ManifestError(Exception):
@@ -21,6 +46,7 @@ class ManifestRepo:
     kind: str = "base"  # base|worktree
     worktree_of: Optional[str] = None
     branch: Optional[str] = None
+    display_name: Optional[str] = None
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         rel = _relative_to_hub_root(hub_root, self.path)
@@ -31,6 +57,8 @@ class ManifestRepo:
             "auto_run": bool(self.auto_run),
             "kind": str(self.kind),
         }
+        if self.display_name:
+            payload["display_name"] = str(self.display_name)
         if self.worktree_of:
             payload["worktree_of"] = str(self.worktree_of)
         if self.branch:
@@ -49,20 +77,33 @@ class Manifest:
                 return repo
         return None
 
+    def get_by_path(self, hub_root: Path, repo_path: Path) -> Optional[ManifestRepo]:
+        normalized_path = _relative_to_hub_root(hub_root, repo_path)
+        for repo in self.repos:
+            if repo.path == normalized_path:
+                return repo
+        return None
+
     def ensure_repo(
         self,
         hub_root: Path,
         repo_path: Path,
         repo_id: Optional[str] = None,
+        display_name: Optional[str] = None,
         *,
         kind: str = "base",
         worktree_of: Optional[str] = None,
         branch: Optional[str] = None,
     ) -> ManifestRepo:
-        repo_id = repo_id or repo_path.name
+        base_name = display_name or repo_id or repo_path.name
+        repo_id = sanitize_repo_id(repo_id or base_name)
         existing = self.get(repo_id)
         if existing:
+            if display_name and not existing.display_name:
+                existing.display_name = display_name
             return existing
+        existing_ids = {repo.id for repo in self.repos}
+        repo_id = ensure_unique_repo_id(repo_id, existing_ids)
         normalized_path = _relative_to_hub_root(hub_root, repo_path)
         repo = ManifestRepo(
             id=repo_id,
@@ -72,6 +113,7 @@ class Manifest:
             kind=str(kind),
             worktree_of=str(worktree_of) if worktree_of else None,
             branch=str(branch) if branch else None,
+            display_name=display_name or base_name,
         )
         self.repos.append(repo)
         return repo
@@ -135,6 +177,11 @@ def load_manifest(manifest_path: Path, hub_root: Path) -> Manifest:
                     str(entry.get("worktree_of")) if entry.get("worktree_of") else None
                 ),
                 branch=str(entry.get("branch")) if entry.get("branch") else None,
+                display_name=(
+                    str(entry.get("display_name"))
+                    if entry.get("display_name")
+                    else None
+                ),
             )
         )
     return Manifest(version=MANIFEST_VERSION, repos=repos)

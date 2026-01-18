@@ -2,10 +2,13 @@ import json
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import yaml
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.routing import Mount
 
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
@@ -16,6 +19,7 @@ from codex_autorunner.core.config import (
 from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.manifest import sanitize_repo_id
 from codex_autorunner.server import create_hub_app
 
 
@@ -42,6 +46,22 @@ def _init_git_repo(path: Path) -> None:
         path,
         check=True,
     )
+
+
+def _unwrap_fastapi_app(sub_app) -> Optional[FastAPI]:
+    current = sub_app
+    while not isinstance(current, FastAPI):
+        current = getattr(current, "app", None)
+        if current is None:
+            return None
+    return current
+
+
+def _get_mounted_app(app: FastAPI, mount_path: str):
+    for route in app.router.routes:
+        if isinstance(route, Mount) and route.path == mount_path:
+            return route.app
+    return None
 
 
 def test_scan_writes_hub_state(tmp_path: Path):
@@ -121,6 +141,48 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
     assert state_resp.status_code == 200
     state = state_resp.json()
     assert state["status"] == "idle"
+
+
+def test_hub_mount_enters_repo_lifespan(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    with TestClient(app):
+        sub_app = _get_mounted_app(app, "/repos/demo")
+        assert sub_app is not None
+        fastapi_app = _unwrap_fastapi_app(sub_app)
+        assert fastapi_app is not None
+        assert hasattr(fastapi_app.state, "shutdown_event")
+
+
+def test_hub_scan_starts_repo_lifespan(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+
+    app = create_hub_app(hub_root)
+    with TestClient(app) as client:
+        repo_dir = hub_root / "demo#scan"
+        (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+        resp = client.post("/hub/repos/scan")
+        assert resp.status_code == 200
+        payload = resp.json()
+        entry = next(r for r in payload["repos"] if r["display_name"] == "demo#scan")
+        assert entry["id"] == sanitize_repo_id("demo#scan")
+        assert entry["mounted"] is True
+
+        sub_app = _get_mounted_app(app, f"/repos/{entry['id']}")
+        assert sub_app is not None
+        fastapi_app = _unwrap_fastapi_app(sub_app)
+        assert fastapi_app is not None
+        assert hasattr(fastapi_app.state, "shutdown_event")
 
 
 def test_hub_init_endpoint_mounts_repo(tmp_path: Path):

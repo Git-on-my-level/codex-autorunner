@@ -11,7 +11,7 @@ from codex_autorunner.core.config import (
     load_repo_config,
 )
 from codex_autorunner.discovery import discover_and_init
-from codex_autorunner.manifest import load_manifest, save_manifest
+from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
 
 
 def _write_config(path: Path, data: dict) -> None:
@@ -64,6 +64,30 @@ def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
     )
     assert manifest_data["repos"][0]["path"] == "workspace/demo"
     assert manifest_data["repos"][0]["kind"] == "base"
+
+
+def test_discovery_sanitizes_repo_ids(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config["hub"]["repos_root"] = "workspace"
+    config_path = hub_root / CONFIG_FILENAME
+    _write_config(config_path, config)
+
+    repos_root = hub_root / "workspace"
+    repo_dir = repos_root / "demo#repo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    hub_config = load_hub_config(hub_root)
+    manifest, records = discover_and_init(hub_config)
+
+    entry = next(r for r in records if r.repo.display_name == "demo#repo")
+    assert entry.repo.id == sanitize_repo_id("demo#repo")
+
+    manifest_data = yaml.safe_load(
+        (hub_root / ".codex-autorunner" / "manifest.yml").read_text()
+    )
+    repo_entry = next(r for r in manifest_data["repos"] if r["id"] == entry.repo.id)
+    assert repo_entry["display_name"] == "demo#repo"
 
 
 def test_discovery_includes_hub_root_repo(tmp_path: Path):

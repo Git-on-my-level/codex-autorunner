@@ -126,6 +126,7 @@ experience inside Telegram with user-in-the-loop approvals.
 2) Start the API/UI backend: `codex-autorunner serve` (or `car serve`) — defaults to `127.0.0.1:4173`; override via `server.host`/`server.port` in `.codex-autorunner/config.yml`.
 3) Open `http://127.0.0.1:4173` for the hub UI; repo UIs live under `/repos/<repo_id>/`. FastAPI endpoints are under `/api/*` (repo) and `/hub/*` (hub).
    - The Terminal tab launches the configured Codex binary inside a PTY via websocket; it uses `codex.terminal_args` (defaults empty, so it runs `codex` bare unless you override). xterm.js assets are vendored under `static/vendor`.
+   - Repo IDs are URL-safe slugs; if a repo directory or requested ID contains spaces, `#`, or other unsafe chars, the hub stores the original name as `display_name` and generates a safe `repo_id` for URLs.
    - If you need to serve under a proxy prefix (e.g., `/car`), set `server.base_path` in `.codex-autorunner/config.yml` or pass `--base-path` to `car serve/hub serve`; all HTTP/WS endpoints will be reachable under that prefix. Proxy must forward that prefix (e.g., Caddy `handle /car/* { reverse_proxy ... }` with a 404 fallback for everything else).
    - Chat composer shortcuts: desktop uses Cmd+Enter (or Ctrl+Enter) to send and Shift+Enter for newline; mobile uses Enter to send and Shift+Enter for newline.
 

@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
+from starlette.routing import Mount
 from starlette.types import ASGIApp
 
 from ..agents.opencode.supervisor import OpenCodeSupervisor
@@ -979,7 +980,16 @@ def create_hub_app(
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
     repo_apps: dict[str, ASGIApp] = {}
-    repo_startup_complete: set[str] = set()
+    repo_lifespans: dict[str, object] = {}
+    mount_order: list[str] = []
+    mount_lock: Optional[asyncio.Lock] = None
+
+    async def _get_mount_lock() -> asyncio.Lock:
+        nonlocal mount_lock
+        if mount_lock is None:
+            mount_lock = asyncio.Lock()
+        return mount_lock
+
     app.state.hub_started = False
     repo_server_overrides: Optional[ServerOverrides] = None
     if context.config.repo_server_inherit:
@@ -1000,27 +1010,65 @@ def create_hub_app(
             current = nested
         return current
 
-    async def _start_repo_app(prefix: str, sub_app: ASGIApp) -> None:
-        if prefix in repo_startup_complete:
+    async def _start_repo_lifespan_locked(prefix: str, sub_app: ASGIApp) -> None:
+        if prefix in repo_lifespans:
             return
         fastapi_app = _unwrap_fastapi(sub_app)
         if fastapi_app is None:
             return
         try:
-            await fastapi_app.router.startup()
-            repo_startup_complete.add(prefix)
+            ctx = fastapi_app.router.lifespan_context(fastapi_app)
+            await ctx.__aenter__()
+            repo_lifespans[prefix] = ctx
             safe_log(
                 app.state.logger,
                 logging.INFO,
-                f"Repo app startup complete for {prefix}",
+                f"Repo app lifespan entered for {prefix}",
+            )
+        except Exception as exc:
+            mount_errors[prefix] = str(exc)
+            try:
+                app.state.logger.warning("Repo lifespan failed for %s: %s", prefix, exc)
+            except Exception:
+                pass
+            await _unmount_repo_locked(prefix)
+
+    async def _stop_repo_lifespan_locked(prefix: str) -> None:
+        ctx = repo_lifespans.pop(prefix, None)
+        if ctx is None:
+            return
+        try:
+            await ctx.__aexit__(None, None, None)
+            safe_log(
+                app.state.logger,
+                logging.INFO,
+                f"Repo app lifespan exited for {prefix}",
             )
         except Exception as exc:
             try:
-                app.state.logger.warning("Repo startup failed for %s: %s", prefix, exc)
+                app.state.logger.warning(
+                    "Repo lifespan shutdown failed for %s: %s", prefix, exc
+                )
             except Exception:
                 pass
 
-    def _mount_repo(prefix: str, repo_path: Path) -> bool:
+    def _detach_mount_locked(prefix: str) -> None:
+        mount_path = f"/repos/{prefix}"
+        app.router.routes = [
+            route
+            for route in app.router.routes
+            if not (isinstance(route, Mount) and route.path == mount_path)
+        ]
+        mounted_repos.discard(prefix)
+        repo_apps.pop(prefix, None)
+        if prefix in mount_order:
+            mount_order.remove(prefix)
+
+    async def _unmount_repo_locked(prefix: str) -> None:
+        await _stop_repo_lifespan_locked(prefix)
+        _detach_mount_locked(prefix)
+
+    def _mount_repo_sync(prefix: str, repo_path: Path) -> bool:
         if prefix in mounted_repos:
             return True
         if prefix in mount_errors:
@@ -1050,33 +1098,79 @@ def create_hub_app(
         app.mount(f"/repos/{prefix}", sub_app)
         mounted_repos.add(prefix)
         repo_apps[prefix] = sub_app
+        if prefix not in mount_order:
+            mount_order.append(prefix)
         mount_errors.pop(prefix, None)
-        if app.state.hub_started:
-            try:
-                asyncio.create_task(_start_repo_app(prefix, sub_app))
-            except RuntimeError:
-                pass
         return True
 
-    def _refresh_mounts(snapshots):
-        for snap in snapshots:
-            if snap.initialized and snap.exists_on_disk:
-                _mount_repo(snap.id, snap.path)
+    async def _refresh_mounts(snapshots):
+        desired = {
+            snap.id for snap in snapshots if snap.initialized and snap.exists_on_disk
+        }
+        mount_lock = await _get_mount_lock()
+        async with mount_lock:
+            for prefix in list(mounted_repos):
+                if prefix not in desired:
+                    await _unmount_repo_locked(prefix)
+            for prefix in list(mount_errors):
+                if prefix not in desired:
+                    mount_errors.pop(prefix, None)
+            for snap in snapshots:
+                if snap.id not in desired:
+                    continue
+                if snap.id in mounted_repos or snap.id in mount_errors:
+                    continue
+                # Hub already handles the base path; avoid reapplying it in child apps.
+                try:
+                    sub_app = create_app(
+                        snap.path,
+                        base_path="",
+                        server_overrides=repo_server_overrides,
+                        hub_config=context.config,
+                    )
+                except ConfigError as exc:
+                    mount_errors[snap.id] = str(exc)
+                    try:
+                        app.state.logger.warning(
+                            "Cannot mount repo %s: %s", snap.id, exc
+                        )
+                    except Exception:
+                        pass
+                    continue
+                except Exception as exc:
+                    mount_errors[snap.id] = str(exc)
+                    try:
+                        app.state.logger.warning(
+                            "Cannot mount repo %s: %s", snap.id, exc
+                        )
+                    except Exception:
+                        pass
+                    continue
+                app.mount(f"/repos/{snap.id}", sub_app)
+                mounted_repos.add(snap.id)
+                repo_apps[snap.id] = sub_app
+                if snap.id not in mount_order:
+                    mount_order.append(snap.id)
+                mount_errors.pop(snap.id, None)
+                if app.state.hub_started:
+                    await _start_repo_lifespan_locked(snap.id, sub_app)
 
     def _add_mount_info(repo_dict: dict) -> dict:
         """Add mount_status to repo dict for UI to know if navigation is possible."""
         repo_id = repo_dict.get("id")
-        if repo_id in mounted_repos:
-            repo_dict["mounted"] = True
-        elif repo_id in mount_errors:
+        if repo_id in mount_errors:
             repo_dict["mounted"] = False
             repo_dict["mount_error"] = mount_errors[repo_id]
+        elif repo_id in mounted_repos:
+            repo_dict["mounted"] = True
         else:
             repo_dict["mounted"] = False
         return repo_dict
 
     initial_snapshots = context.supervisor.scan()
-    _refresh_mounts(initial_snapshots)
+    for snap in initial_snapshots:
+        if snap.initialized and snap.exists_on_disk:
+            _mount_repo_sync(snap.id, snap.path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -1123,23 +1217,21 @@ def create_hub_app(
                         )
 
             asyncio.create_task(_app_server_prune_loop())
-        for prefix, sub_app in list(repo_apps.items()):
-            await _start_repo_app(prefix, sub_app)
+        mount_lock = await _get_mount_lock()
+        async with mount_lock:
+            for prefix in list(mount_order):
+                sub_app = repo_apps.get(prefix)
+                if sub_app is not None:
+                    await _start_repo_lifespan_locked(prefix, sub_app)
         try:
             yield
         finally:
-            for prefix, sub_app in list(repo_apps.items()):
-                if prefix not in repo_startup_complete:
-                    continue
-                try:
-                    await sub_app.router.shutdown()
-                except Exception as exc:
-                    try:
-                        app.state.logger.warning(
-                            "Repo shutdown failed for %s: %s", prefix, exc
-                        )
-                    except Exception:
-                        pass
+            mount_lock = await _get_mount_lock()
+            async with mount_lock:
+                for prefix in list(reversed(mount_order)):
+                    await _stop_repo_lifespan_locked(prefix)
+                for prefix in list(mounted_repos):
+                    _detach_mount_locked(prefix)
             app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
             if app_server_supervisor is not None:
                 try:
@@ -1236,7 +1328,7 @@ def create_hub_app(
     async def list_repos():
         safe_log(app.state.logger, logging.INFO, "Hub list_repos")
         snapshots = await asyncio.to_thread(context.supervisor.list_repos)
-        _refresh_mounts(snapshots)
+        await _refresh_mounts(snapshots)
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
             "repos": [
@@ -1252,7 +1344,7 @@ def create_hub_app(
     async def scan_repos():
         safe_log(app.state.logger, logging.INFO, "Hub scan_repos")
         snapshots = await asyncio.to_thread(context.supervisor.scan)
-        _refresh_mounts(snapshots)
+        await _refresh_mounts(snapshots)
         return {
             "last_scan_at": context.supervisor.state.last_scan_at,
             "repos": [
@@ -1262,9 +1354,9 @@ def create_hub_app(
 
     @app.post("/hub/jobs/scan", response_model=HubJobResponse)
     async def scan_repos_job():
-        def _run_scan():
-            snapshots = context.supervisor.scan()
-            _refresh_mounts(snapshots)
+        async def _run_scan():
+            snapshots = await asyncio.to_thread(context.supervisor.scan)
+            await _refresh_mounts(snapshots)
             return {"status": "ok"}
 
         job = await context.job_manager.submit(
@@ -1307,12 +1399,12 @@ def create_hub_app(
                 )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/jobs/repos", response_model=HubJobResponse)
     async def create_repo_job(payload: HubCreateRepoRequest):
-        def _run_create_repo():
+        async def _run_create_repo():
             git_url = payload.git_url
             repo_id = payload.repo_id
             if not repo_id and not git_url:
@@ -1322,17 +1414,22 @@ def create_hub_app(
             git_init = payload.git_init
             force = payload.force
             if git_url:
-                snapshot = context.supervisor.clone_repo(
+                snapshot = await asyncio.to_thread(
+                    context.supervisor.clone_repo,
                     git_url=str(git_url),
                     repo_id=str(repo_id) if repo_id else None,
                     repo_path=repo_path,
                     force=force,
                 )
             else:
-                snapshot = context.supervisor.create_repo(
-                    str(repo_id), repo_path=repo_path, git_init=git_init, force=force
+                snapshot = await asyncio.to_thread(
+                    context.supervisor.create_repo,
+                    str(repo_id),
+                    repo_path=repo_path,
+                    git_init=git_init,
+                    force=force,
                 )
-            _refresh_mounts([snapshot])
+            await _refresh_mounts([snapshot])
             return _add_mount_info(snapshot.to_dict(context.config.root))
 
         job = await context.job_manager.submit(
@@ -1372,6 +1469,10 @@ def create_hub_app(
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        snapshots = await asyncio.to_thread(
+            context.supervisor.list_repos, use_cache=False
+        )
+        await _refresh_mounts(snapshots)
         return {"status": "ok"}
 
     @app.post("/hub/jobs/repos/{repo_id}/remove", response_model=HubJobResponse)
@@ -1380,13 +1481,18 @@ def create_hub_app(
     ):
         payload = payload or HubRemoveRepoRequest()
 
-        def _run_remove_repo():
-            context.supervisor.remove_repo(
+        async def _run_remove_repo():
+            await asyncio.to_thread(
+                context.supervisor.remove_repo,
                 repo_id,
                 force=payload.force,
                 delete_dir=payload.delete_dir,
                 delete_worktrees=payload.delete_worktrees,
             )
+            snapshots = await asyncio.to_thread(
+                context.supervisor.list_repos, use_cache=False
+            )
+            await _refresh_mounts(snapshots)
             return {"status": "ok"}
 
         job = await context.job_manager.submit(
@@ -1416,19 +1522,20 @@ def create_hub_app(
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/jobs/worktrees/create", response_model=HubJobResponse)
     async def create_worktree_job(payload: HubCreateWorktreeRequest):
-        def _run_create_worktree():
-            snapshot = context.supervisor.create_worktree(
+        async def _run_create_worktree():
+            snapshot = await asyncio.to_thread(
+                context.supervisor.create_worktree,
                 base_repo_id=str(payload.base_repo_id),
                 branch=str(payload.branch),
                 force=payload.force,
                 start_point=str(payload.start_point) if payload.start_point else None,
             )
-            _refresh_mounts([snapshot])
+            await _refresh_mounts([snapshot])
             return _add_mount_info(snapshot.to_dict(context.config.root))
 
         job = await context.job_manager.submit(
@@ -1496,7 +1603,7 @@ def create_hub_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/stop")
@@ -1543,7 +1650,7 @@ def create_hub_app(
             snapshot = await asyncio.to_thread(context.supervisor.init_repo, repo_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.post("/hub/repos/{repo_id}/sync-main")
@@ -1553,7 +1660,7 @@ def create_hub_app(
             snapshot = await asyncio.to_thread(context.supervisor.sync_main, repo_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _refresh_mounts([snapshot])
+        await _refresh_mounts([snapshot])
         return _add_mount_info(snapshot.to_dict(context.config.root))
 
     @app.get("/", include_in_schema=False)

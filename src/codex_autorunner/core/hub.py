@@ -9,7 +9,13 @@ from typing import Dict, List, Optional, Tuple
 
 from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
-from ..manifest import Manifest, load_manifest, save_manifest
+from ..manifest import (
+    Manifest,
+    ensure_unique_repo_id,
+    load_manifest,
+    sanitize_repo_id,
+    save_manifest,
+)
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .engine import Engine
 from .git_utils import (
@@ -367,8 +373,10 @@ class HubSupervisor:
         force: bool = False,
     ) -> RepoSnapshot:
         self._invalidate_list_cache()
+        display_name = repo_id
+        safe_repo_id = sanitize_repo_id(repo_id)
         base_dir = self.hub_config.repos_root
-        target = repo_path if repo_path is not None else Path(repo_id)
+        target = repo_path if repo_path is not None else Path(safe_repo_id)
         if not target.is_absolute():
             target = (base_dir / target).resolve()
         else:
@@ -382,12 +390,12 @@ class HubSupervisor:
             ) from exc
 
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        existing = manifest.get(repo_id)
+        existing = manifest.get(safe_repo_id)
         if existing:
             existing_path = (self.hub_config.root / existing.path).resolve()
             if existing_path != target:
                 raise ValueError(
-                    f"Repo id {repo_id} already exists at {existing.path}; choose a different id"
+                    f"Repo id {safe_repo_id} already exists at {existing.path}; choose a different id"
                 )
 
         if target.exists() and not force:
@@ -406,10 +414,19 @@ class HubSupervisor:
             raise ValueError(f"git init failed for {target}")
 
         seed_repo_files(target, force=force)
-        manifest.ensure_repo(self.hub_config.root, target, repo_id=repo_id, kind="base")
+        existing_ids = {repo.id for repo in manifest.repos}
+        if safe_repo_id in existing_ids and not existing:
+            safe_repo_id = ensure_unique_repo_id(safe_repo_id, existing_ids)
+        manifest.ensure_repo(
+            self.hub_config.root,
+            target,
+            repo_id=safe_repo_id,
+            display_name=display_name,
+            kind="base",
+        )
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
 
-        return self._snapshot_for_repo(repo_id)
+        return self._snapshot_for_repo(safe_repo_id)
 
     def clone_repo(
         self,
@@ -423,11 +440,13 @@ class HubSupervisor:
         git_url = (git_url or "").strip()
         if not git_url:
             raise ValueError("git_url is required")
-        inferred_id = (repo_id or "").strip() or _repo_id_from_url(git_url)
-        if not inferred_id:
+        inferred_name = (repo_id or "").strip() or _repo_id_from_url(git_url)
+        if not inferred_name:
             raise ValueError("Unable to infer repo id from git_url")
+        display_name = inferred_name
+        safe_repo_id = sanitize_repo_id(inferred_name)
         base_dir = self.hub_config.repos_root
-        target = repo_path if repo_path is not None else Path(inferred_id)
+        target = repo_path if repo_path is not None else Path(safe_repo_id)
         if not target.is_absolute():
             target = (base_dir / target).resolve()
         else:
@@ -441,12 +460,12 @@ class HubSupervisor:
             ) from exc
 
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        existing = manifest.get(inferred_id)
+        existing = manifest.get(safe_repo_id)
         if existing:
             existing_path = (self.hub_config.root / existing.path).resolve()
             if existing_path != target:
                 raise ValueError(
-                    f"Repo id {inferred_id} already exists at {existing.path}; choose a different id"
+                    f"Repo id {safe_repo_id} already exists at {existing.path}; choose a different id"
                 )
 
         if target.exists() and not force:
@@ -467,11 +486,18 @@ class HubSupervisor:
             raise ValueError(f"git clone failed: {_git_failure_detail(proc)}")
 
         seed_repo_files(target, force=False, git_required=False)
+        existing_ids = {repo.id for repo in manifest.repos}
+        if safe_repo_id in existing_ids and not existing:
+            safe_repo_id = ensure_unique_repo_id(safe_repo_id, existing_ids)
         manifest.ensure_repo(
-            self.hub_config.root, target, repo_id=inferred_id, kind="base"
+            self.hub_config.root,
+            target,
+            repo_id=safe_repo_id,
+            display_name=display_name,
+            kind="base",
         )
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        return self._snapshot_for_repo(inferred_id)
+        return self._snapshot_for_repo(safe_repo_id)
 
     def create_worktree(
         self,
@@ -806,7 +832,7 @@ class HubSupervisor:
         return RepoSnapshot(
             id=record.repo.id,
             path=repo_path,
-            display_name=repo_path.name,
+            display_name=record.repo.display_name or repo_path.name or record.repo.id,
             enabled=record.repo.enabled,
             auto_run=record.repo.auto_run,
             kind=record.repo.kind,
