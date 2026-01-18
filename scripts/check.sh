@@ -73,6 +73,13 @@ echo "Linting JS/TS (eslint)..."
 echo "Type check (tsc)..."
 "$TSC_BIN" -p tsconfig.json
 
+echo "Checking static build outputs are committed..."
+if ! git diff --exit-code -- src/codex_autorunner/static >/dev/null 2>&1; then
+  echo "Static assets are out of date. Run 'npm run build' and commit outputs." >&2
+  git diff --stat -- src/codex_autorunner/static >&2
+  exit 1
+fi
+
 echo "Running tests (pytest)..."
 "$PYTHON_BIN" -m pytest -m "not integration"
 

@@ -1,4 +1,4 @@
-import { api, flash, resolvePath, statusPill } from "./utils.js";
+import { api, flash, resolvePath, statusPill, streamEvents } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 function $(id) {
@@ -270,12 +270,14 @@ function prFlowPayload() {
 }
 async function startPrFlow() {
     const els = prFlowEls();
+    const note = $("github-note");
+    setTemporaryNote(note, "PR flow: click received.");
     const payload = prFlowPayload();
     if (!payload) {
+        setTemporaryNote(note, "Provide an issue or PR reference.");
         flash("Provide an issue or PR reference", "error");
         return;
     }
-    const note = $("github-note");
     const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
     const prevDisabled = setButtonsDisabled(buttons, true);
     setButtonBusy(els.startBtn, true);
@@ -297,6 +299,7 @@ async function startPrFlow() {
 async function stopPrFlow() {
     const els = prFlowEls();
     const note = $("github-note");
+    setTemporaryNote(note, "PR flow: click received.");
     const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
     const prevDisabled = setButtonsDisabled(buttons, true);
     setButtonBusy(els.stopBtn, true);
@@ -318,6 +321,7 @@ async function stopPrFlow() {
 async function resumePrFlow() {
     const els = prFlowEls();
     const note = $("github-note");
+    setTemporaryNote(note, "PR flow: click received.");
     const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
     const prevDisabled = setButtonsDisabled(buttons, true);
     setButtonBusy(els.resumeBtn, true);
@@ -339,6 +343,7 @@ async function resumePrFlow() {
 async function collectPrFlow() {
     const els = prFlowEls();
     const note = $("github-note");
+    setTemporaryNote(note, "PR flow: click received.");
     const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
     const prevDisabled = setButtonsDisabled(buttons, true);
     setButtonBusy(els.collectBtn, true);
@@ -385,10 +390,25 @@ async function syncPr() {
         restoreTemporaryNote(note, prevNote, message);
     }
 }
+function startPrFlowEventStream() {
+    const note = $("github-note");
+    const stop = streamEvents("/api/github/pr_flow/events", {
+        onMessage: (_data, _event) => {
+            void loadPrFlowStatus();
+        },
+        onError: (err) => {
+            setTemporaryNote(note, err.message || "PR flow events unavailable");
+            if (stop)
+                stop();
+        },
+    });
+}
 export function initGitHub() {
     const card = $("github-card");
     if (!card)
         return;
+    card.dataset.githubInitialized = "true";
+    console.debug("[github] init");
     const syncBtn = $("github-sync-pr");
     if (syncBtn)
         syncBtn.addEventListener("click", syncPr);
@@ -418,4 +438,5 @@ export function initGitHub() {
         refreshOnActivation: true,
         immediate: false,
     });
+    startPrFlowEventStream();
 }

@@ -21,6 +21,7 @@ def _write_required_assets(static_dir: Path) -> None:
     (static_dir / "loader.js").write_text("console.log('loader');", encoding="utf-8")
     (static_dir / "styles.css").write_text("body { }", encoding="utf-8")
     (static_dir / "app.js").write_text("console.log('app');", encoding="utf-8")
+    (static_dir / "github.js").write_text("console.log('github');", encoding="utf-8")
     vendor_dir = static_dir / "vendor"
     vendor_dir.mkdir(parents=True, exist_ok=True)
     (vendor_dir / "xterm.js").write_text("console.log('xterm');", encoding="utf-8")

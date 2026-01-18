@@ -141,6 +141,52 @@ async def log_stream(
                     return
 
 
+async def jsonl_event_stream(
+    path: Path,
+    *,
+    event_name: str = "message",
+    heartbeat_interval: float = 15.0,
+    shutdown_event: Optional[asyncio.Event] = None,
+):
+    """SSE stream generator for JSONL event files."""
+    last_emit_at = time.monotonic()
+    position = 0
+    while True:
+        if shutdown_event is not None and shutdown_event.is_set():
+            return
+        if not path.exists():
+            now = time.monotonic()
+            if now - last_emit_at >= heartbeat_interval:
+                yield ": ping\n\n"
+                last_emit_at = now
+            if await _interruptible_sleep(1.0, shutdown_event):
+                return
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                handle.seek(position)
+                while True:
+                    if shutdown_event is not None and shutdown_event.is_set():
+                        return
+                    line = handle.readline()
+                    if line:
+                        position = handle.tell()
+                        payload = line.strip()
+                        if payload:
+                            yield f"event: {event_name}\ndata: {payload}\n\n"
+                            last_emit_at = time.monotonic()
+                    else:
+                        now = time.monotonic()
+                        if now - last_emit_at >= heartbeat_interval:
+                            yield ": ping\n\n"
+                            last_emit_at = now
+                        if await _interruptible_sleep(0.5, shutdown_event):
+                            return
+        except OSError:
+            if await _interruptible_sleep(1.0, shutdown_event):
+                return
+
+
 async def state_stream(
     engine,
     manager,

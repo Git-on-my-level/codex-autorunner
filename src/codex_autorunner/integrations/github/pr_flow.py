@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +17,14 @@ from ...core.config import ConfigError
 from ...core.doc_chat import DocChatService
 from ...core.engine import Engine, LockError
 from ...core.hub import HubSupervisor
-from ...core.locks import FileLock, FileLockBusy, FileLockError
+from ...core.locks import (
+    FileLock,
+    FileLockBusy,
+    FileLockError,
+    process_alive,
+    read_lock_info,
+    write_lock_info,
+)
 from ...core.logging_utils import log_event
 from ...core.state import now_iso
 from ...core.utils import atomic_write, read_json
@@ -31,6 +40,8 @@ DEFAULT_PR_FLOW_CONFIG: dict[str, Any] = {
     "stop_condition": "no_issues",
     "max_implementation_runs": None,
     "max_wallclock_seconds": None,
+    "review_wait_seconds": 1800,
+    "review_poll_interval_seconds": 60,
     "review": {
         "include_codex": True,
         "include_github": True,
@@ -105,6 +116,8 @@ def _default_state() -> dict[str, Any]:
         "version": PR_FLOW_VERSION,
         "id": None,
         "status": "idle",
+        "source": None,
+        "source_meta": None,
         "mode": None,
         "step": None,
         "issue": None,
@@ -126,10 +139,16 @@ def _default_state() -> dict[str, Any]:
         "max_wallclock_seconds": None,
         "review_summary": None,
         "review_bundle_path": None,
+        "review_bundle_json_path": None,
         "review_snapshot_index": 0,
+        "review_last_seen_at": None,
         "workflow_log_path": None,
         "final_report_path": None,
         "last_error": None,
+        "stop_requested": False,
+        "worker_id": None,
+        "worker_pid": None,
+        "worker_started_at": None,
         "started_at": None,
         "updated_at": None,
         "finished_at": None,
@@ -194,6 +213,36 @@ def _normalize_review_snippet(value: Any, limit: int = 100) -> str:
     return text[: limit - 3] + "..."
 
 
+def _latest_review_timestamp(threads: list[dict[str, Any]]) -> Optional[str]:
+    latest: Optional[str] = None
+    for thread in threads:
+        if not isinstance(thread, dict):
+            continue
+        comments = thread.get("comments")
+        if not isinstance(comments, list):
+            continue
+        for comment in comments:
+            if not isinstance(comment, dict):
+                continue
+            created_at = comment.get("createdAt")
+            if not isinstance(created_at, str):
+                continue
+            if latest is None or created_at > latest:
+                latest = created_at
+    return latest
+
+
+def _has_new_review_feedback(
+    threads: list[dict[str, Any]], since: Optional[str]
+) -> bool:
+    if not since:
+        return bool(threads)
+    latest = _latest_review_timestamp(threads)
+    if not latest:
+        return False
+    return latest > since
+
+
 class PrFlowManager:
     def __init__(
         self,
@@ -211,25 +260,33 @@ class PrFlowManager:
         self._hub_root = hub_root
         self._state_path = _workflow_root(repo_root) / "state.json"
         self._lock_path = repo_root / ".codex-autorunner" / "locks" / "pr_flow.lock"
+        self._events_path = _workflow_root(repo_root) / "events.jsonl"
         self._thread: Optional[threading.Thread] = None
         self._thread_lock = threading.Lock()
+        self._events_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._lock_handle: Optional[FileLock] = None
         self._config = _pr_flow_config(self._load_engine().config.raw)
 
     def status(self) -> dict[str, Any]:
         state = self._load_state()
-        is_running = bool(self._thread and self._thread.is_alive())
+        lock_info = read_lock_info(self._lock_path)
+        lock_alive = bool(lock_info.pid and process_alive(lock_info.pid))
+        is_running = bool(self._thread and self._thread.is_alive()) or lock_alive
         state["running"] = is_running
-        if state.get("status") == "running" and not is_running:
+        if state.get("status") in ("running", "stopping") and not is_running:
             state["status"] = "stopped"
             state["last_error"] = "Recovered from restart"
+            state["stop_requested"] = False
             state["updated_at"] = now_iso()
             self._save_state(state)
         return state
 
     def start(self, *, payload: dict[str, Any]) -> dict[str, Any]:
         with self._thread_lock:
+            state = self.status()
+            if state.get("status") in ("running", "stopping"):
+                raise PrFlowError("PR flow already running", status_code=409)
             if self._thread and self._thread.is_alive():
                 raise PrFlowError("PR flow already running", status_code=409)
             if not self._config.get("enabled", True):
@@ -239,11 +296,16 @@ class PrFlowManager:
             try:
                 state = self._initialize_state(payload=payload)
                 self._stop_event.clear()
+                state["worker_id"] = uuid.uuid4().hex
+                state["worker_pid"] = os.getpid()
+                state["worker_started_at"] = now_iso()
+                self._save_state(state)
                 self._thread = threading.Thread(
                     target=self._run_flow, args=(state["id"],), daemon=True
                 )
                 self._thread.start()
                 thread_started = True
+                self._emit_event("start", state=state, message="PR flow started")
                 return state
             finally:
                 if not thread_started:
@@ -252,16 +314,18 @@ class PrFlowManager:
     def stop(self) -> dict[str, Any]:
         self._stop_event.set()
         state = self._load_state()
-        if state.get("status") == "running":
+        state["stop_requested"] = True
+        if state.get("status") in ("running", "stopping"):
             state["status"] = "stopping"
             state["updated_at"] = now_iso()
             self._save_state(state)
+            self._emit_event("stop_requested", state=state)
         return state
 
     def resume(self) -> dict[str, Any]:
         with self._thread_lock:
             state = self._load_state()
-            if state.get("status") not in ("stopped", "failed", "idle", "stopping"):
+            if state.get("status") not in ("stopped", "failed", "idle"):
                 raise PrFlowError("PR flow cannot be resumed in the current state")
             if self._thread and self._thread.is_alive():
                 raise PrFlowError("PR flow already running", status_code=409)
@@ -270,14 +334,19 @@ class PrFlowManager:
             try:
                 self._stop_event.clear()
                 state["status"] = "running"
+                state["stop_requested"] = False
                 state["updated_at"] = now_iso()
                 state["last_error"] = None
+                state["worker_id"] = uuid.uuid4().hex
+                state["worker_pid"] = os.getpid()
+                state["worker_started_at"] = now_iso()
                 self._save_state(state)
                 self._thread = threading.Thread(
                     target=self._run_flow, args=(state["id"],), daemon=True
                 )
                 self._thread.start()
                 thread_started = True
+                self._emit_event("resume", state=state, message="PR flow resumed")
                 return state
             finally:
                 if not thread_started:
@@ -314,6 +383,7 @@ class PrFlowManager:
         state["workflow_log_path"] = log_path.as_posix()
         state["updated_at"] = now_iso()
         self._save_state(state)
+        self._emit_event("log", state=state, message=message)
 
     def _load_state(self) -> dict[str, Any]:
         state = read_json(self._state_path) or {}
@@ -343,6 +413,8 @@ class PrFlowManager:
             {
                 "id": workflow_id,
                 "status": "running",
+                "source": payload.get("source"),
+                "source_meta": payload.get("source_meta"),
                 "mode": mode,
                 "step": "preflight",
                 "issue": issue,
@@ -359,10 +431,14 @@ class PrFlowManager:
                 "updated_at": now_iso(),
                 "finished_at": None,
                 "last_error": None,
+                "stop_requested": False,
             }
         )
         state["workflow_log_path"] = (
             _workflow_root(self.repo_root) / workflow_id / "workflow.log"
+        ).as_posix()
+        state["final_report_path"] = (
+            _workflow_root(self.repo_root) / "final_report.md"
         ).as_posix()
         self._save_state(state)
         return state
@@ -381,6 +457,15 @@ class PrFlowManager:
         except FileLockError as exc:
             raise PrFlowError(str(exc)) from exc
         self._lock_handle = lock
+        try:
+            write_lock_info(
+                self._lock_path,
+                os.getpid(),
+                started_at=now_iso(),
+                lock_file=lock.file,
+            )
+        except Exception:
+            pass
 
     def _release_lock(self) -> None:
         if self._lock_handle is not None:
@@ -389,9 +474,54 @@ class PrFlowManager:
             except Exception:
                 pass
         self._lock_handle = None
+        try:
+            atomic_write(self._lock_path, "")
+        except Exception:
+            pass
 
     def _should_stop(self) -> bool:
-        return self._stop_event.is_set()
+        if self._stop_event.is_set():
+            return True
+        state = self._load_state()
+        return bool(state.get("stop_requested"))
+
+    def _emit_event(
+        self,
+        event: str,
+        *,
+        state: Optional[dict[str, Any]] = None,
+        level: str = "info",
+        message: Optional[str] = None,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> None:
+        data = {
+            "ts": now_iso(),
+            "event": event,
+            "level": level,
+        }
+        if message:
+            data["message"] = message
+        if state:
+            data.update(
+                {
+                    "workflow_id": state.get("id"),
+                    "status": state.get("status"),
+                    "step": state.get("step"),
+                    "cycle": state.get("cycle"),
+                }
+            )
+        if payload:
+            data["payload"] = payload
+        with self._events_lock:
+            try:
+                self._events_path.parent.mkdir(parents=True, exist_ok=True)
+                with self._events_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(data) + "\n")
+            except Exception:
+                return
+
+    def events_path(self) -> Path:
+        return self._events_path
 
     def _run_flow(self, workflow_id: str) -> None:
         state = self._load_state()
@@ -399,19 +529,25 @@ class PrFlowManager:
             return
         try:
             self._log_line(state, "PR flow starting.")
+            self._emit_event("status", state=state, message="running")
             self._execute_flow(state)
             if state.get("status") == "running":
                 state["status"] = "completed"
                 state["finished_at"] = now_iso()
                 self._log_line(state, "PR flow completed.")
+                self._emit_event("status", state=state, message="completed")
         except Exception as exc:
             state["status"] = "failed"
             state["last_error"] = str(exc)
             state["finished_at"] = now_iso()
             self._log_line(state, f"PR flow failed: {exc}")
+            self._emit_event("status", state=state, level="error", message="failed")
         finally:
             state["updated_at"] = now_iso()
+            if state.get("status") in ("completed", "failed", "stopped"):
+                state["stop_requested"] = False
             self._save_state(state)
+            self._write_final_report(state)
             self._release_lock()
 
     def _execute_flow(self, state: dict[str, Any]) -> None:
@@ -437,6 +573,7 @@ class PrFlowManager:
             state["status"] = "running"
             state["updated_at"] = now_iso()
             self._save_state(state)
+            self._emit_event("step", state=state, message=f"step:{step}")
             if self._should_stop():
                 self._mark_stopped(state)
                 return
@@ -472,7 +609,9 @@ class PrFlowManager:
         state["status"] = "stopped"
         state["updated_at"] = now_iso()
         state["finished_at"] = now_iso()
+        state["stop_requested"] = False
         self._save_state(state)
+        self._emit_event("status", state=state, message="stopped")
 
     def _preflight(self, state: dict[str, Any]) -> None:
         engine = self._load_engine()
@@ -618,10 +757,6 @@ class PrFlowManager:
         self._save_state(state)
         self._log_line(state, f"Worktree created: {snapshot.path}")
         worktree_root = snapshot.path
-        state["final_report_path"] = (
-            worktree_root / ".codex-autorunner" / "SUMMARY.md"
-        ).as_posix()
-        self._save_state(state)
         if state.get("mode") == "issue" and state.get("issue"):
             engine = self._load_engine(worktree_root)
             gh = GitHubService(worktree_root, raw_config=engine.config.raw)
@@ -765,6 +900,11 @@ class PrFlowManager:
             state["review_bundle_path"] = bundle_path
             state["updated_at"] = now_iso()
             self._save_state(state)
+            self._emit_event(
+                "review_summary",
+                state=state,
+                payload=_format_review_summary(summary) or {},
+            )
             if summary.total == 0:
                 self._log_line(state, "No review issues found.")
                 return
@@ -777,6 +917,7 @@ class PrFlowManager:
             self._apply_review_to_todo(state, bundle_path, summary, review_data)
             self._run_implementation(state)
             self._sync_pr(state)
+            self._wait_for_review_feedback(state)
 
     def _collect_reviews(
         self, state: dict[str, Any]
@@ -803,8 +944,11 @@ class PrFlowManager:
         summary, lines = self._format_review_bundle(
             state, threads=threads, checks=checks, codex_review=codex_review
         )
+        last_seen_at = _latest_review_timestamp(threads)
         review_snapshot_index = int(state.get("review_snapshot_index") or 0) + 1
         state["review_snapshot_index"] = review_snapshot_index
+        if last_seen_at:
+            state["review_last_seen_at"] = last_seen_at
         state["updated_at"] = now_iso()
         self._save_state(state)
         workflow_dir = self._workflow_dir(state)
@@ -813,6 +957,8 @@ class PrFlowManager:
         bundle_path = workflow_dir / filename
         atomic_write(bundle_path, "\n".join(lines).rstrip() + "\n")
         self._log_line(state, f"Review bundle written: {bundle_path}")
+        json_name = f"review_bundle_snapshot_{review_snapshot_index}.json"
+        bundle_json_path = workflow_dir / json_name
         worktree_context_dir = worktree_root / ".codex-autorunner" / "contexts"
         worktree_context_dir.mkdir(parents=True, exist_ok=True)
         worktree_bundle_path = worktree_context_dir / f"pr_{filename}"
@@ -824,7 +970,18 @@ class PrFlowManager:
             "threads": threads,
             "checks": checks,
             "codex_review": codex_review,
+            "summary": _format_review_summary(summary),
         }
+        try:
+            atomic_write(
+                bundle_json_path,
+                json.dumps(review_data, indent=2, sort_keys=True) + "\n",
+            )
+            state["review_bundle_json_path"] = bundle_json_path.as_posix()
+            self._save_state(state)
+            self._log_line(state, f"Review bundle JSON written: {bundle_json_path}")
+        except Exception:
+            pass
         return summary, worktree_bundle_path.as_posix(), review_data
 
     def _format_review_bundle(
@@ -1067,6 +1224,84 @@ class PrFlowManager:
                 exc=exc,
             )
             return None
+
+    def _wait_for_review_feedback(self, state: dict[str, Any]) -> None:
+        worktree_root = self._require_worktree_root(state)
+        engine = self._load_engine(worktree_root)
+        gh = GitHubService(worktree_root, raw_config=engine.config.raw)
+        pr_number = state.get("pr_number")
+        if not pr_number:
+            return
+        timeout_seconds = int(self._config.get("review_wait_seconds", 1800) or 0)
+        poll_seconds = max(
+            5, int(self._config.get("review_poll_interval_seconds", 60) or 60)
+        )
+        if timeout_seconds <= 0:
+            return
+        try:
+            owner, repo_name = gh.repo_info().name_with_owner.split("/", 1)
+        except Exception as exc:
+            self._log_line(state, f"Review wait skipped: {exc}")
+            return
+        since = state.get("review_last_seen_at")
+        start = time.monotonic()
+        while time.monotonic() - start < timeout_seconds:
+            if self._should_stop():
+                self._mark_stopped(state)
+                return
+            try:
+                threads = gh.pr_review_threads(
+                    owner=owner, repo=repo_name, number=int(pr_number)
+                )
+            except Exception as exc:
+                self._log_line(state, f"Review wait error: {exc}")
+                return
+            if _has_new_review_feedback(threads, since):
+                self._log_line(state, "New GitHub review feedback detected.")
+                return
+            time.sleep(poll_seconds)
+        self._log_line(state, "Review wait timeout reached.")
+
+    def _write_final_report(self, state: dict[str, Any]) -> None:
+        report_path = Path(state.get("final_report_path") or "")
+        if not report_path:
+            return
+        try:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            lines = [
+                "# PR Flow Final Report",
+                "",
+                f"- Workflow: {state.get('id')}",
+                f"- Status: {state.get('status')}",
+                f"- Mode: {state.get('mode')}",
+                f"- Issue: {state.get('issue') or '–'}",
+                f"- PR: {state.get('pr_url') or state.get('pr') or '–'}",
+                f"- Started: {state.get('started_at') or '–'}",
+                f"- Finished: {state.get('finished_at') or '–'}",
+                "",
+                "## Artifacts",
+                f"- Workflow log: {state.get('workflow_log_path') or '–'}",
+                f"- Review bundle: {state.get('review_bundle_path') or '–'}",
+                f"- Review bundle JSON: {state.get('review_bundle_json_path') or '–'}",
+                "",
+            ]
+            summary = state.get("review_summary") or {}
+            if isinstance(summary, dict) and summary:
+                lines.extend(
+                    [
+                        "## Review Summary",
+                        f"- Total: {summary.get('total', 0)}",
+                        f"- Major: {summary.get('major', 0)}",
+                        f"- Minor: {summary.get('minor', 0)}",
+                        f"- Resolved: {summary.get('resolved', 0)}",
+                        "",
+                    ]
+                )
+            if state.get("last_error"):
+                lines.extend(["## Last Error", str(state.get("last_error")), ""])
+            atomic_write(report_path, "\n".join(lines).rstrip() + "\n")
+        except Exception:
+            return
 
     def _require_worktree_root(self, state: dict[str, Any]) -> Path:
         worktree_path = state.get("worktree_path")

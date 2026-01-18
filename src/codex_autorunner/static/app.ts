@@ -11,6 +11,7 @@ import { initGitHub } from "./github.js";
 import { initMobileCompact } from "./mobileCompact.js";
 import { subscribe } from "./bus.js";
 import { initRepoSettingsPanel } from "./settings.js";
+import { flash } from "./utils.js";
 
 function initRepoShell(): void {
   if (REPO_ID) {
@@ -77,6 +78,18 @@ function initRepoShell(): void {
   initMobileCompact();
 
   loadState();
+
+  const repoShell = document.getElementById("repo-shell");
+  if (repoShell?.hasAttribute("inert")) {
+    const openModals = document.querySelectorAll(".modal-overlay:not([hidden])");
+    const count = openModals.length;
+    flash(
+      count
+        ? `UI inert: ${count} modal${count === 1 ? "" : "s"} open`
+        : "UI inert but no modal is visible",
+      "error"
+    );
+  }
 }
 
 function bootstrap() {
