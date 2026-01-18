@@ -746,6 +746,14 @@ class Engine:
         entry = index.get(key, {})
         if not isinstance(entry, dict):
             entry = {}
+        if isinstance(updates.get("artifacts"), dict):
+            existing_artifacts = entry.get("artifacts")
+            merged_artifacts = (
+                dict(existing_artifacts) if isinstance(existing_artifacts, dict) else {}
+            )
+            merged_artifacts.update(updates["artifacts"])
+            updates = dict(updates)
+            updates["artifacts"] = merged_artifacts
         entry.update(updates)
         index[key] = entry
         self._save_run_index(index)
@@ -1106,6 +1114,14 @@ class Engine:
             )
             self._last_run_interrupted = interrupted
             self._log_app_server_output(run_id, turn_result.agent_messages)
+            output_text = "\n\n".join(turn_result.agent_messages).strip()
+            if output_text:
+                output_path = self._write_run_artifact(
+                    run_id, "output.txt", output_text
+                )
+                self._merge_run_index_entry(
+                    run_id, {"artifacts": {"output_path": str(output_path)}}
+                )
             if turn_result.errors:
                 for error in turn_result.errors:
                     self.log_line(run_id, f"error: {error}")
@@ -1562,6 +1578,14 @@ class Engine:
         output = output_result.text
         if output:
             self._log_app_server_output(run_id, [output])
+            output_text = output.strip()
+            if output_text:
+                output_path = self._write_run_artifact(
+                    run_id, "output.txt", output_text
+                )
+                self._merge_run_index_entry(
+                    run_id, {"artifacts": {"output_path": str(output_path)}}
+                )
         if output_result.error:
             self.log_line(
                 run_id, f"error: opencode session error: {output_result.error}"

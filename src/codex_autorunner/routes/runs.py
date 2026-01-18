@@ -115,4 +115,23 @@ def build_runs_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="Diff not found")
         return FileResponse(path, media_type="text/plain")
 
+    @router.get("/api/runs/{run_id}/output")
+    def fetch_run_output(request: Request, run_id: int):
+        engine = request.app.state.engine
+        entry = engine._load_run_index().get(str(run_id))
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=404, detail="Run not found")
+        artifacts = entry.get("artifacts")
+        if not isinstance(artifacts, dict):
+            raise HTTPException(status_code=404, detail="Output not found")
+        output_path = artifacts.get("output_path")
+        if not isinstance(output_path, str) or not output_path:
+            raise HTTPException(status_code=404, detail="Output not found")
+        path = Path(output_path)
+        if not is_within(engine.repo_root, path):
+            raise HTTPException(status_code=400, detail="Invalid output path")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Output not found")
+        return FileResponse(path, media_type="text/plain")
+
     return router
