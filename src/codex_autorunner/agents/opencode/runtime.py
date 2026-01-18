@@ -423,8 +423,10 @@ async def collect_opencode_output_from_events(
             else:
                 delta_text = None
             if isinstance(delta_text, str) and delta_text:
-                if part_type in (None, "text") and not part_ignored:
+                if part_type == "text" and not part_ignored:
                     _append_text_for_message(part_message_id, delta_text)
+                elif part_type == "reasoning":
+                    pass
                 elif part_handler and part_dict and part_type:
                     await part_handler(part_type, part_dict, delta_text)
             elif (
