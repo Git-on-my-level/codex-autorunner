@@ -1024,7 +1024,6 @@ class TelegramCommandHandlers:
             record = verified
         thread_id = record.active_thread_id
         turn_handle = None
-        turn_key: Optional[TurnKey] = None
         placeholder_id: Optional[int] = None
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
@@ -1242,6 +1241,7 @@ class TelegramCommandHandlers:
                         transcript_message_id,
                         transcript_text,
                     )
+                turn_key: Optional[TurnKey] = None
                 try:
                     queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
                     log_event(
@@ -1673,6 +1673,7 @@ class TelegramCommandHandlers:
                     transcript_message_id,
                     transcript_text,
                 )
+                turn_key: Optional[TurnKey] = None
             try:
                 queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
                 log_event(
