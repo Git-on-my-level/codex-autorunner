@@ -1,7 +1,6 @@
 import dataclasses
 import enum
 import logging
-import re
 import shutil
 import time
 from pathlib import Path
@@ -21,6 +20,7 @@ from .git_utils import (
     run_git,
 )
 from .locks import process_alive, read_lock_info
+from .repo_ids import ensure_unique_repo_id, reserve_repo_id, sanitize_repo_id
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
@@ -139,7 +139,12 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
             repo = RepoSnapshot(
                 id=str(entry.get("id")),
                 path=hub_root / entry.get("path", ""),
-                display_name=str(entry.get("display_name", "")),
+                display_name=str(
+                    entry.get("display_name")
+                    or entry.get("displayName")
+                    or entry.get("id")
+                    or ""
+                ),
                 enabled=bool(entry.get("enabled", True)),
                 auto_run=bool(entry.get("auto_run", False)),
                 kind=str(entry.get("kind", "base")),
@@ -367,6 +372,11 @@ class HubSupervisor:
         force: bool = False,
     ) -> RepoSnapshot:
         self._invalidate_list_cache()
+        display_name = (repo_id or "").strip()
+        if not display_name:
+            raise ValueError("repo_id is required")
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        repo_id = reserve_repo_id(display_name, {repo.id for repo in manifest.repos})
         base_dir = self.hub_config.repos_root
         target = repo_path if repo_path is not None else Path(repo_id)
         if not target.is_absolute():
@@ -381,7 +391,6 @@ class HubSupervisor:
                 f"Repo path must live under repos_root ({base_dir})"
             ) from exc
 
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         existing = manifest.get(repo_id)
         if existing:
             existing_path = (self.hub_config.root / existing.path).resolve()
@@ -406,7 +415,13 @@ class HubSupervisor:
             raise ValueError(f"git init failed for {target}")
 
         seed_repo_files(target, force=force)
-        manifest.ensure_repo(self.hub_config.root, target, repo_id=repo_id, kind="base")
+        manifest.ensure_repo(
+            self.hub_config.root,
+            target,
+            repo_id=repo_id,
+            kind="base",
+            display_name=display_name,
+        )
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
 
         return self._snapshot_for_repo(repo_id)
@@ -423,9 +438,13 @@ class HubSupervisor:
         git_url = (git_url or "").strip()
         if not git_url:
             raise ValueError("git_url is required")
-        inferred_id = (repo_id or "").strip() or _repo_id_from_url(git_url)
-        if not inferred_id:
+        display_name = (repo_id or "").strip() or _repo_id_from_url(git_url)
+        if not display_name:
             raise ValueError("Unable to infer repo id from git_url")
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        inferred_id = reserve_repo_id(
+            display_name, {repo.id for repo in manifest.repos}
+        )
         base_dir = self.hub_config.repos_root
         target = repo_path if repo_path is not None else Path(inferred_id)
         if not target.is_absolute():
@@ -440,7 +459,6 @@ class HubSupervisor:
                 f"Repo path must live under repos_root ({base_dir})"
             ) from exc
 
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         existing = manifest.get(inferred_id)
         if existing:
             existing_path = (self.hub_config.root / existing.path).resolve()
@@ -468,7 +486,11 @@ class HubSupervisor:
 
         seed_repo_files(target, force=False, git_required=False)
         manifest.ensure_repo(
-            self.hub_config.root, target, repo_id=inferred_id, kind="base"
+            self.hub_config.root,
+            target,
+            repo_id=inferred_id,
+            kind="base",
+            display_name=display_name,
         )
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
         return self._snapshot_for_repo(inferred_id)
@@ -499,8 +521,13 @@ class HubSupervisor:
             raise ValueError(f"Base repo missing on disk: {base_repo_id}")
 
         self.hub_config.worktrees_root.mkdir(parents=True, exist_ok=True)
-        safe_branch = re.sub(r"[^a-zA-Z0-9._/-]+", "-", branch).strip("-") or "work"
-        repo_id = f"{base_repo_id}--{safe_branch.replace('/', '-')}"
+        safe_branch = sanitize_repo_id(branch)
+        if safe_branch == "repo" and branch.strip().lower() != "repo":
+            safe_branch = "work"
+        candidate_id = f"{base_repo_id}--{safe_branch}"
+        repo_id = ensure_unique_repo_id(
+            candidate_id, {repo.id for repo in manifest.repos}
+        )
         if manifest.get(repo_id) and not force:
             raise ValueError(f"Worktree repo already exists: {repo_id}")
         worktree_path = (self.hub_config.worktrees_root / repo_id).resolve()
@@ -541,6 +568,7 @@ class HubSupervisor:
             raise ValueError(f"git worktree add failed: {_git_failure_detail(proc)}")
 
         seed_repo_files(worktree_path, force=force, git_required=False)
+        display_name = f"{base.display_name or base.id}--{branch}"
         manifest.ensure_repo(
             self.hub_config.root,
             worktree_path,
@@ -548,6 +576,7 @@ class HubSupervisor:
             kind="worktree",
             worktree_of=base_repo_id,
             branch=branch,
+            display_name=display_name,
         )
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
         return self._snapshot_for_repo(repo_id)
@@ -806,7 +835,7 @@ class HubSupervisor:
         return RepoSnapshot(
             id=record.repo.id,
             path=repo_path,
-            display_name=repo_path.name,
+            display_name=record.repo.display_name or repo_path.name,
             enabled=record.repo.enabled,
             auto_run=record.repo.auto_run,
             kind=record.repo.kind,

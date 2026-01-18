@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 
 from .bootstrap import seed_repo_files
 from .core.config import HubConfig
+from .core.repo_ids import reserve_repo_id, sanitize_repo_id
 from .manifest import Manifest, ManifestRepo, load_manifest, save_manifest
 
 
@@ -25,6 +26,10 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
     manifest = load_manifest(hub_config.manifest_path, hub_config.root)
     records: List[DiscoveryRecord] = []
     seen_ids: set[str] = set()
+    known_ids: set[str] = {repo.id for repo in manifest.repos}
+    path_to_entry = {
+        (hub_config.root / entry.path).resolve(): entry for entry in manifest.repos
+    }
 
     def _record_repo(repo_entry: ManifestRepo, *, added: bool) -> None:
         repo_path = (hub_config.root / repo_entry.path).resolve()
@@ -58,27 +63,45 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
             if not (child / ".git").exists():
                 continue
 
-            repo_id = child.name
-            existing_entry = manifest.get(repo_id)
+            repo_path = child.resolve()
+            display_name = child.name
+            existing_entry = path_to_entry.get(repo_path)
             added = False
             if not existing_entry:
                 # Best-effort grouping inference for worktrees created outside of CAR:
                 # name convention: <base_repo_id>--<branch>
                 worktree_of: Optional[str] = None
                 branch: Optional[str] = None
-                if kind == "worktree" and "--" in repo_id:
-                    base_id, rest = repo_id.split("--", 1)
-                    worktree_of = base_id or None
+                if kind == "worktree" and "--" in display_name:
+                    base_id, rest = display_name.split("--", 1)
                     branch = rest or None
+                    if base_id:
+                        base_entry = manifest.get(base_id)
+                        if not base_entry:
+                            base_entry = next(
+                                (
+                                    entry
+                                    for entry in manifest.repos
+                                    if entry.display_name == base_id
+                                ),
+                                None,
+                            )
+                        worktree_of = (
+                            base_entry.id if base_entry else sanitize_repo_id(base_id)
+                        )
+                repo_id = reserve_repo_id(display_name, known_ids)
                 existing_entry = manifest.ensure_repo(
                     hub_config.root,
-                    child,
+                    repo_path,
                     repo_id=repo_id,
                     kind=kind,
                     worktree_of=worktree_of,
                     branch=branch,
+                    display_name=display_name,
                 )
                 added = True
+            elif existing_entry.display_name != display_name:
+                existing_entry.display_name = display_name
             repo_entry = existing_entry
             _record_repo(repo_entry, added=added)
 
@@ -103,18 +126,14 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
         if not root_is_repo and hub_config.repos_root.resolve() == root_resolved:
             root_is_repo = (hub_config.root / ".git").exists()
         if root_is_repo:
-            repo_id_base = hub_config.root.name or "root"
-            repo_id = repo_id_base
-            suffix = 0
-            existing_ids = {repo.id for repo in manifest.repos}
-            while repo_id in existing_ids:
-                suffix += 1
-                if suffix == 1:
-                    repo_id = f"{repo_id_base}-root"
-                else:
-                    repo_id = f"{repo_id_base}-root-{suffix}"
+            display_name = hub_config.root.name or "root"
+            repo_id = reserve_repo_id(display_name, known_ids)
             root_entry = manifest.ensure_repo(
-                hub_config.root, hub_config.root, repo_id=repo_id, kind="base"
+                hub_config.root,
+                hub_config.root,
+                repo_id=repo_id,
+                kind="base",
+                display_name=display_name,
             )
             _record_repo(root_entry, added=True)
 

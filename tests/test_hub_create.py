@@ -56,6 +56,7 @@ def test_hub_create_repo_cli(tmp_path: Path):
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     assert manifest["repos"][0]["id"] == "demo"
+    assert manifest["repos"][0]["display_name"] == "demo"
     assert manifest["repos"][0]["path"] == "workspace/demo"
 
 

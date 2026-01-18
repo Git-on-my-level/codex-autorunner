@@ -30,8 +30,9 @@ def test_manifest_creation_and_normalization(tmp_path: Path):
     save_manifest(manifest_path, manifest, hub_root)
 
     data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    assert data["version"] == 2
+    assert data["version"] == 3
     assert data["repos"][0]["path"] == "projects/demo-repo"
+    assert data["repos"][0]["display_name"] == "demo-repo"
     assert data["repos"][0]["kind"] == "base"
 
 
@@ -63,6 +64,7 @@ def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
         (hub_root / ".codex-autorunner" / "manifest.yml").read_text()
     )
     assert manifest_data["repos"][0]["path"] == "workspace/demo"
+    assert manifest_data["repos"][0]["display_name"] == "demo"
     assert manifest_data["repos"][0]["kind"] == "base"
 
 
@@ -91,6 +93,7 @@ def test_discovery_includes_hub_root_repo(tmp_path: Path):
     )
     root_entry = next(r for r in manifest_data["repos"] if r["path"] == ".")
     assert root_entry["id"] == "hub"
+    assert root_entry["display_name"] == "hub"
 
 
 def test_load_repo_config_uses_nearest_hub_config(tmp_path: Path):
