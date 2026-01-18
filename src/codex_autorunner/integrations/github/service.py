@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from ...core.git_utils import (
+    GitError,
     git_branch,
     git_is_clean,
+    run_git,
 )
 from ...core.injected_context import wrap_injected_context
 from ...core.prompts import build_github_issue_to_spec_prompt, build_sync_agent_prompt
@@ -91,6 +93,14 @@ def _sanitize_cmd(args: list[str]) -> str:
         else:
             redacted.append(a)
     return " ".join(redacted)
+
+
+def _git_ref_exists(repo_root: Path, ref: str) -> bool:
+    try:
+        proc = run_git(["show-ref", "--verify", "--quiet", ref], repo_root, check=False)
+    except GitError:
+        return False
+    return proc.returncode == 0
 
 
 def _get_nested(d: Any, *keys: str, default: Any = None) -> Any:
@@ -510,6 +520,32 @@ class GitHubService:
                 "Unable to parse gh pr view output", status_code=500
             ) from exc
         return payload if isinstance(payload, dict) else {}
+
+    def ensure_pr_head(
+        self,
+        *,
+        number: int,
+        branch: Optional[str] = None,
+        cwd: Optional[Path] = None,
+    ) -> None:
+        repo_root = cwd or self.repo_root
+        if branch:
+            if _git_ref_exists(repo_root, f"refs/heads/{branch}"):
+                return
+            if _git_ref_exists(repo_root, f"refs/remotes/origin/{branch}"):
+                return
+        current_branch = git_branch(repo_root) or "HEAD"
+        args = ["pr", "checkout", str(int(number)), "--force"]
+        if branch:
+            args += ["--branch", branch]
+        else:
+            args.append("--detach")
+        self._gh(args, cwd=repo_root, check=True, timeout_seconds=60)
+        if current_branch and current_branch != "HEAD":
+            try:
+                run_git(["checkout", current_branch], repo_root, check=False)
+            except GitError:
+                pass
 
     def pr_review_threads(
         self,

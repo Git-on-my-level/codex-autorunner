@@ -214,7 +214,11 @@ class PrFlowManager:
             if not self._config.get("enabled", True):
                 raise PrFlowError("PR flow disabled by config", status_code=409)
             self._acquire_lock()
-            state = self._initialize_state(payload=payload)
+            try:
+                state = self._initialize_state(payload=payload)
+            except Exception:
+                self._release_lock()
+                raise
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._run_flow, args=(state["id"],), daemon=True
@@ -546,6 +550,7 @@ class PrFlowManager:
             return
         hub = self._ensure_hub()
         base_repo = self._resolve_base_repo(hub)
+        base_repo_path = (hub.hub_config.root / base_repo.path).resolve()
         mode = state.get("mode")
         base_branch = state.get("base_branch") or "main"
         branch = None
@@ -563,6 +568,12 @@ class PrFlowManager:
                 branch = f"car/pr-{pr_number}-fix"
         if not branch:
             raise PrFlowError("Unable to determine branch name for worktree")
+        if mode == "pr" and state.get("pr_number"):
+            self._ensure_pr_head_available(
+                base_repo_path,
+                pr_number=int(state.get("pr_number") or 0),
+                branch=branch,
+            )
         snapshot = hub.create_worktree(
             base_repo_id=base_repo.id,
             branch=branch,
@@ -584,6 +595,20 @@ class PrFlowManager:
             engine = self._load_engine(worktree_root)
             gh = GitHubService(worktree_root, raw_config=engine.config.raw)
             gh.link_issue(str(state.get("issue")))
+
+    def _ensure_pr_head_available(
+        self,
+        base_repo_path: Path,
+        *,
+        pr_number: int,
+        branch: str,
+    ) -> None:
+        engine = self._load_engine(base_repo_path)
+        gh = GitHubService(base_repo_path, raw_config=engine.config.raw)
+        try:
+            gh.ensure_pr_head(number=int(pr_number), branch=branch, cwd=base_repo_path)
+        except Exception as exc:
+            raise PrFlowError(f"Unable to fetch PR head: {exc}") from exc
 
     def _generate_spec(self, state: dict[str, Any]) -> None:
         if self._app_server_supervisor is None:
