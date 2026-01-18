@@ -248,6 +248,15 @@ def _infer_home_from_workspace(workspace_root: str) -> Optional[Path]:
     resolved = Path(workspace_root).resolve()
     parts = resolved.parts
     if (
+        len(parts) >= 6
+        and parts[0] == os.path.sep
+        and parts[1] == "System"
+        and parts[2] == "Volumes"
+        and parts[3] == "Data"
+        and parts[4] == "Users"
+    ):
+        return Path(parts[0]) / parts[1] / parts[2] / parts[3] / parts[4] / parts[5]
+    if (
         len(parts) >= 3
         and parts[0] == os.path.sep
         and parts[1]
