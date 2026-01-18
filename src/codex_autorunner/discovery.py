@@ -99,7 +99,16 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
                 branch: Optional[str] = None
                 if kind == "worktree" and "--" in display_name:
                     base_id, rest = display_name.split("--", 1)
-                    worktree_of = base_id or None
+                    if base_id:
+                        matched_base = next(
+                            (
+                                repo.id
+                                for repo in manifest.repos
+                                if repo.display_name == base_id
+                            ),
+                            None,
+                        )
+                        worktree_of = matched_base or sanitize_repo_id(base_id)
                     branch = rest or None
                 existing_entry = manifest.ensure_repo(
                     hub_config.root,
