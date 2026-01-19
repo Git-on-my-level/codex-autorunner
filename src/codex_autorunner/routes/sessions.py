@@ -121,15 +121,17 @@ def build_sessions_routes() -> APIRouter:
             repo_root = Path(request.app.state.engine.repo_root)
             normalized_repo_path = repo_path.strip()
             if normalized_repo_path:
-                candidate = Path(normalized_repo_path)
-                if not candidate.is_absolute():
-                    candidate = (repo_root / candidate).resolve()
+                raw_path = Path(normalized_repo_path)
+                if raw_path.is_absolute():
+                    resolved = raw_path.resolve()
+                else:
+                    resolved = (repo_root / raw_path).resolve()
                 try:
-                    candidate.relative_to(repo_root)
+                    resolved.relative_to(repo_root)
                 except ValueError:
                     normalized_repo_path = ""
                 else:
-                    normalized_repo_path = str(candidate)
+                    normalized_repo_path = str(resolved)
             candidates: list[str] = []
             if normalized_repo_path:
                 candidates.extend(
