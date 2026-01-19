@@ -66,7 +66,7 @@ function renderState(state) {
     const stopBtn = document.getElementById("stop-run");
     const killBtn = document.getElementById("kill-run");
     const resetBtn = document.getElementById("reset-runner");
-    if (status === "idle") {
+    if (status === "idle" || status === "stopped" || status === "completed") {
         if (startBtn)
             startBtn.classList.remove("hidden");
         if (stopBtn)
