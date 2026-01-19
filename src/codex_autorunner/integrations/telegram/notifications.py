@@ -28,6 +28,26 @@ from .progress_stream import TurnProgressTracker, render_progress_text
 
 
 class TelegramNotificationHandlers:
+    def _cache_token_usage(
+        self,
+        token_usage: dict[str, Any],
+        *,
+        turn_id: Optional[str],
+        thread_id: Optional[str],
+    ) -> None:
+        if not isinstance(token_usage, dict):
+            return
+        if isinstance(thread_id, str) and thread_id:
+            self._token_usage_by_thread[thread_id] = token_usage
+            self._token_usage_by_thread.move_to_end(thread_id)
+            while len(self._token_usage_by_thread) > TOKEN_USAGE_CACHE_LIMIT:
+                self._token_usage_by_thread.popitem(last=False)
+        if isinstance(turn_id, str) and turn_id:
+            self._token_usage_by_turn[turn_id] = token_usage
+            self._token_usage_by_turn.move_to_end(turn_id)
+            while len(self._token_usage_by_turn) > TOKEN_USAGE_TURN_CACHE_LIMIT:
+                self._token_usage_by_turn.popitem(last=False)
+
     async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
         method = message.get("method")
         params_raw = message.get("params")
@@ -92,15 +112,7 @@ class TelegramNotificationHandlers:
             token_usage = params.get("tokenUsage")
             if not isinstance(thread_id, str) or not isinstance(token_usage, dict):
                 return
-            self._token_usage_by_thread[thread_id] = token_usage
-            self._token_usage_by_thread.move_to_end(thread_id)
-            while len(self._token_usage_by_thread) > TOKEN_USAGE_CACHE_LIMIT:
-                self._token_usage_by_thread.popitem(last=False)
-            if turn_id:
-                self._token_usage_by_turn[turn_id] = token_usage
-                self._token_usage_by_turn.move_to_end(turn_id)
-                while len(self._token_usage_by_turn) > TOKEN_USAGE_TURN_CACHE_LIMIT:
-                    self._token_usage_by_turn.popitem(last=False)
+            self._cache_token_usage(token_usage, turn_id=turn_id, thread_id=thread_id)
             if self._config.progress_stream.enabled:
                 await self._note_progress_context_usage(
                     token_usage, turn_id=turn_id, thread_id=thread_id

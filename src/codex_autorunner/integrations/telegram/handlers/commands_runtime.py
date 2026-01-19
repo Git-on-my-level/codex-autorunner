@@ -90,8 +90,6 @@ from ..constants import (
     TELEGRAM_MAX_MESSAGE_LENGTH,
     THREAD_LIST_MAX_PAGES,
     THREAD_LIST_PAGE_LIMIT,
-    TOKEN_USAGE_CACHE_LIMIT,
-    TOKEN_USAGE_TURN_CACHE_LIMIT,
     UPDATE_PICKER_PROMPT,
     UPDATE_TARGET_OPTIONS,
     VALID_AGENT_VALUES,
@@ -1951,33 +1949,11 @@ class TelegramCommandHandlers:
                                 )
                                 if token_usage:
                                     if is_primary_session:
-                                        self._token_usage_by_thread[thread_id] = (
-                                            token_usage
+                                        self._cache_token_usage(
+                                            token_usage,
+                                            turn_id=turn_id,
+                                            thread_id=thread_id,
                                         )
-                                        self._token_usage_by_thread.move_to_end(
-                                            thread_id
-                                        )
-                                        while (
-                                            len(self._token_usage_by_thread)
-                                            > TOKEN_USAGE_CACHE_LIMIT
-                                        ):
-                                            self._token_usage_by_thread.popitem(
-                                                last=False
-                                            )
-                                        if turn_id:
-                                            self._token_usage_by_turn[turn_id] = (
-                                                token_usage
-                                            )
-                                            self._token_usage_by_turn.move_to_end(
-                                                turn_id
-                                            )
-                                            while (
-                                                len(self._token_usage_by_turn)
-                                                > TOKEN_USAGE_TURN_CACHE_LIMIT
-                                            ):
-                                                self._token_usage_by_turn.popitem(
-                                                    last=False
-                                                )
                                     await self._note_progress_context_usage(
                                         token_usage,
                                         turn_id=turn_id,
@@ -6356,6 +6332,12 @@ class TelegramCommandHandlers:
                                 else None
                             )
                             if token_usage:
+                                if is_primary_session:
+                                    self._cache_token_usage(
+                                        token_usage,
+                                        turn_id=turn_id,
+                                        thread_id=review_session_id,
+                                    )
                                 await self._note_progress_context_usage(
                                     token_usage,
                                     turn_id=turn_id,
