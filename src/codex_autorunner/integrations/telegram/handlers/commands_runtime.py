@@ -38,7 +38,7 @@ from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import _normalize_update_target, _spawn_update_process
 from ....core.utils import canonicalize_path, resolve_opencode_binary
-from ....integrations.github.service import GitHubService
+from ....integrations.github.service import GitHubError, GitHubService
 from ....manifest import load_manifest
 from ...app_server.client import (
     CodexAppServerClient,
@@ -6846,6 +6846,20 @@ class TelegramCommandHandlers:
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                 ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        try:
+            from pathlib import Path
+            service = GitHubService(Path(record.workspace_path), self._raw_config)
+            issue_ref = f"{slug}#{number}"
+            service.validate_issue_same_repo(issue_ref)
+        except GitHubError as exc:
+            await self._send_message(
+                message.chat_id,
+                str(exc),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
