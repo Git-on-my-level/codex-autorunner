@@ -279,6 +279,23 @@ def _extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
     return None
 
 
+def _extract_usage_details(usage: dict[str, Any]) -> dict[str, int]:
+    details: dict[str, int] = {}
+    input_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_INPUT_KEYS)
+    if input_tokens is not None:
+        details["inputTokens"] = input_tokens
+    cached_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_CACHED_KEYS)
+    if cached_tokens is not None:
+        details["cachedInputTokens"] = cached_tokens
+    output_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_OUTPUT_KEYS)
+    if output_tokens is not None:
+        details["outputTokens"] = output_tokens
+    reasoning_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_REASONING_KEYS)
+    if reasoning_tokens is not None:
+        details["reasoningTokens"] = reasoning_tokens
+    return details
+
+
 def _extract_context_window(
     payload: Any, usage: Optional[dict[str, Any]]
 ) -> Optional[int]:
@@ -611,6 +628,7 @@ async def collect_opencode_output_from_events(
                 if usage is not None:
                     total_tokens = _extract_total_tokens(usage)
                     context_window = _extract_context_window(payload, usage)
+                    usage_details = _extract_usage_details(usage)
                     if (
                         total_tokens != last_usage_total
                         or context_window != last_context_window
@@ -620,6 +638,8 @@ async def collect_opencode_output_from_events(
                         usage_snapshot: dict[str, Any] = {}
                         if total_tokens is not None:
                             usage_snapshot["totalTokens"] = total_tokens
+                        if usage_details:
+                            usage_snapshot.update(usage_details)
                         if context_window is not None:
                             usage_snapshot["modelContextWindow"] = context_window
                         if usage_snapshot:
