@@ -562,16 +562,18 @@ def build_base_routes(static_dir: Path) -> APIRouter:
 
         forward_task = asyncio.create_task(pty_to_ws())
         input_task = asyncio.create_task(ws_to_pty())
-        done, pending = await asyncio.wait(
-            [forward_task, input_task], return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in done:
-            try:
-                task.result()
-            except Exception:
-                safe_log(logger, logging.WARNING, "Terminal websocket task failed")
-        forward_task.cancel()
-        input_task.cancel()
+        try:
+            done, pending = await asyncio.wait(
+                [forward_task, input_task], return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                try:
+                    task.result()
+                except Exception:
+                    safe_log(logger, logging.WARNING, "Terminal websocket task failed")
+        finally:
+            forward_task.cancel()
+            input_task.cancel()
 
         if active_session:
             active_session.remove_subscriber(queue)
