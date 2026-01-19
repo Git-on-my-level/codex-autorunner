@@ -30,6 +30,26 @@ def _parse_payload(raw: Optional[str]) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _load_legacy_run_index(path: Path) -> dict[int, dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    entries: dict[int, dict[str, Any]] = {}
+    for key, entry in payload.items():
+        if isinstance(key, int) and not isinstance(key, bool):
+            run_id = key
+        elif isinstance(key, str) and key.isdigit():
+            run_id = int(key)
+        else:
+            continue
+        if isinstance(entry, dict):
+            entries[run_id] = entry
+    return entries
+
+
 class RunIndexStore:
     def __init__(self, db_path: Path) -> None:
         self._path = db_path
@@ -58,6 +78,20 @@ class RunIndexStore:
                     ON runs(started_at)
                 """
             )
+
+    def _maybe_migrate_legacy(self, conn) -> None:
+        legacy_path = self._path.with_name("run_index.json")
+        if not legacy_path.exists():
+            return
+        existing = conn.execute("SELECT 1 FROM runs LIMIT 1").fetchone()
+        if existing is not None:
+            return
+        entries = _load_legacy_run_index(legacy_path)
+        if not entries:
+            return
+        with conn:
+            for run_id, entry in entries.items():
+                self._save_entry(conn, run_id, entry)
 
     def _load_entry(self, conn, run_id: int) -> Optional[dict[str, Any]]:
         row = conn.execute(
@@ -122,6 +156,7 @@ class RunIndexStore:
     def load_all(self) -> dict[str, dict[str, Any]]:
         with open_sqlite(self._path) as conn:
             self._ensure_schema(conn)
+            self._maybe_migrate_legacy(conn)
             entries: dict[str, dict[str, Any]] = {}
             for row in conn.execute("SELECT run_id, payload_json FROM runs"):
                 entry = _parse_payload(row["payload_json"])
@@ -131,11 +166,13 @@ class RunIndexStore:
     def get_entry(self, run_id: int) -> Optional[dict[str, Any]]:
         with open_sqlite(self._path) as conn:
             self._ensure_schema(conn)
+            self._maybe_migrate_legacy(conn)
             return self._load_entry(conn, run_id)
 
     def merge_entry(self, run_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         with open_sqlite(self._path) as conn:
             self._ensure_schema(conn)
+            self._maybe_migrate_legacy(conn)
             entry = self._load_entry(conn, run_id) or {}
             if isinstance(updates.get("artifacts"), dict):
                 existing_artifacts = entry.get("artifacts")
@@ -163,6 +200,7 @@ class RunIndexStore:
     ) -> dict[str, Any]:
         with open_sqlite(self._path) as conn:
             self._ensure_schema(conn)
+            self._maybe_migrate_legacy(conn)
             entry = self._load_entry(conn, run_id) or {}
             if marker == "start":
                 entry["start_offset"] = offset[0] if offset else None

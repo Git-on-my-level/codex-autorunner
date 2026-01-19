@@ -809,6 +809,7 @@ class TelegramStateStore:
             conn = connect_sqlite(self._path)
             self._ensure_schema(conn)
             self._connection = conn
+            self._maybe_migrate_legacy(conn)
         return self._connection
 
     def _close_sync(self) -> None:
@@ -940,6 +941,108 @@ class TelegramStateStore:
             now = now_iso()
             self._set_meta(conn, "schema_version", str(TELEGRAM_SCHEMA_VERSION), now)
             self._set_meta(conn, "state_version", str(STATE_VERSION), now)
+
+    def _has_persisted_rows(self, conn: sqlite3.Connection) -> bool:
+        for table in (
+            "telegram_topics",
+            "telegram_topic_scopes",
+            "telegram_pending_approvals",
+            "telegram_outbox",
+            "telegram_pending_voice",
+        ):
+            row = conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            if row is not None:
+                return True
+        if self._get_meta(conn, "last_update_id_global") is not None:
+            return True
+        return False
+
+    def _load_legacy_state_json(self, path: Path) -> Optional[TelegramState]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        raw_version = payload.get("version")
+        if isinstance(raw_version, int) and not isinstance(raw_version, bool):
+            version = raw_version
+        else:
+            version = STATE_VERSION
+        topics: dict[str, TelegramTopicRecord] = {}
+        topics_payload = payload.get("topics")
+        if isinstance(topics_payload, dict):
+            for key, record_payload in topics_payload.items():
+                if not isinstance(key, str) or not key:
+                    continue
+                record = TelegramTopicRecord.from_dict(
+                    record_payload, default_approval_mode=self._default_approval_mode
+                )
+                if record is not None:
+                    topics[key] = record
+        topic_scopes: dict[str, str] = {}
+        scopes_payload = payload.get("topic_scopes")
+        if isinstance(scopes_payload, dict):
+            for key, scope in scopes_payload.items():
+                if not isinstance(key, str) or not key:
+                    continue
+                if isinstance(scope, str) and scope:
+                    topic_scopes[key] = scope
+        pending_approvals: dict[str, PendingApprovalRecord] = {}
+        approvals_payload = payload.get("pending_approvals")
+        if isinstance(approvals_payload, dict):
+            for request_id, record_payload in approvals_payload.items():
+                record = PendingApprovalRecord.from_dict(record_payload)
+                if record is None:
+                    continue
+                key = record.request_id or request_id
+                if key:
+                    pending_approvals[key] = record
+        outbox: dict[str, OutboxRecord] = {}
+        outbox_payload = payload.get("outbox")
+        if isinstance(outbox_payload, dict):
+            for record_id, record_payload in outbox_payload.items():
+                record = OutboxRecord.from_dict(record_payload)
+                if record is None:
+                    continue
+                key = record.record_id or record_id
+                if key:
+                    outbox[key] = record
+        pending_voice: dict[str, PendingVoiceRecord] = {}
+        voice_payload = payload.get("pending_voice")
+        if isinstance(voice_payload, dict):
+            for record_id, record_payload in voice_payload.items():
+                record = PendingVoiceRecord.from_dict(record_payload)
+                if record is None:
+                    continue
+                key = record.record_id or record_id
+                if key:
+                    pending_voice[key] = record
+        last_update_id_global = None
+        raw_update_id = payload.get("last_update_id_global")
+        if isinstance(raw_update_id, int) and not isinstance(raw_update_id, bool):
+            last_update_id_global = raw_update_id
+        return TelegramState(
+            version=version,
+            topics=topics,
+            topic_scopes=topic_scopes,
+            pending_approvals=pending_approvals,
+            outbox=outbox,
+            pending_voice=pending_voice,
+            last_update_id_global=last_update_id_global,
+        )
+
+    def _maybe_migrate_legacy(self, conn: sqlite3.Connection) -> None:
+        legacy_path = self._path.with_name("telegram_state.json")
+        # Legacy JSON migration (remove after old telegram_state.json is retired).
+        if not legacy_path.exists():
+            return
+        if self._has_persisted_rows(conn):
+            return
+        state = self._load_legacy_state_json(legacy_path)
+        if state is None:
+            return
+        self._save_state_sync(state)
 
     def _set_meta(
         self, conn: sqlite3.Connection, key: str, value: str, updated_at: str
