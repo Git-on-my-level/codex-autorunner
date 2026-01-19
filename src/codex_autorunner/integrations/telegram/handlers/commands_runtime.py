@@ -6832,12 +6832,9 @@ class TelegramCommandHandlers:
         return "\n".join(lines)
 
     async def _handle_github_issue_url(
-        self, message: TelegramMessage, runtime: Any, key: str, issue_url: str
+        self, message: TelegramMessage, key: str, slug: str, number: int
     ) -> None:
-        from ....integrations.github.service import parse_github_url
-
-        parsed = parse_github_url(issue_url.strip())
-        if not parsed or parsed[1] != "issue":
+        if key is None:
             return
 
         record = self._router.get_topic(key)
@@ -6854,14 +6851,12 @@ class TelegramCommandHandlers:
             )
             return
 
-        slug, kind, number = parsed
-        await self._offer_pr_flow_start(message, record, issue_url, slug, number)
+        await self._offer_pr_flow_start(message, record, slug, number)
 
     async def _offer_pr_flow_start(
         self,
         message: TelegramMessage,
         record: "TelegramTopicRecord",
-        issue_url: str,
         slug: str,
         number: int,
     ) -> None:
@@ -6877,7 +6872,7 @@ class TelegramCommandHandlers:
                 [
                     InlineButton(
                         f"Create PR for #{number}",
-                        encode_pr_flow_start_callback(str(number)),
+                        encode_pr_flow_start_callback(slug, number),
                     ),
                     InlineButton(
                         "Cancel",
@@ -6901,20 +6896,23 @@ class TelegramCommandHandlers:
         callback: TelegramCallbackQuery,
         parsed: PrFlowStartCallback,
     ) -> None:
-        from ..adapter import parse_github_url
+        from ..adapter import TelegramMessage
 
         await self._answer_callback(callback)
         record = self._router.get_topic(key)
         if record is None or not record.workspace_path:
             return
 
-        issue_ref = parsed.issue
+        issue_ref = f"{parsed.slug}#{parsed.number}"
         payload = {"mode": "issue", "issue": issue_ref}
         payload["source"] = "telegram"
-        payload["source_meta"] = {
-            "chat_id": callback.chat_id,
-            "thread_id": callback.thread_id,
-        }
+        source_meta: dict[str, Any] = {}
+        if callback.chat_id is not None:
+            source_meta["chat_id"] = callback.chat_id
+        if callback.thread_id is not None:
+            source_meta["thread_id"] = callback.thread_id
+        if source_meta:
+            payload["source_meta"] = source_meta
 
         message = TelegramMessage(
             update_id=callback.update_id,

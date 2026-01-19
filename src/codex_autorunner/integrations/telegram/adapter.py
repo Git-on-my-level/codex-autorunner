@@ -190,7 +190,8 @@ class ReviewCommitCallback:
 
 @dataclass(frozen=True)
 class PrFlowStartCallback:
-    issue: str
+    slug: str
+    number: int
 
 
 @dataclass(frozen=True)
@@ -680,8 +681,8 @@ def encode_page_callback(kind: str, page: int) -> str:
     return data
 
 
-def encode_pr_flow_start_callback(issue: str) -> str:
-    data = f"pr_flow_start:{issue}"
+def encode_pr_flow_start_callback(slug: str, number: int) -> str:
+    data = f"pr_flow_start:{slug}#{number}"
     _validate_callback_data(data)
     return data
 
@@ -780,10 +781,15 @@ def parse_callback_data(
             return None
         return ReviewCommitCallback(sha=sha)
     if data.startswith("pr_flow_start:"):
-        _, _, issue = data.partition(":")
-        if not issue:
+        _, _, rest = data.partition(":")
+        if not rest:
             return None
-        return PrFlowStartCallback(issue=issue)
+        if "#" not in rest:
+            return None
+        slug, _, number_str = rest.partition("#")
+        if not slug or not number_str or not number_str.isdigit():
+            return None
+        return PrFlowStartCallback(slug=slug, number=int(number_str))
     if data.startswith("cancel:"):
         _, _, kind = data.partition(":")
         if not kind:

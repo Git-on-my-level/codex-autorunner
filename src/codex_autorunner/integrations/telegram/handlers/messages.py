@@ -189,7 +189,8 @@ async def handle_message_inner(
     if text:
         parsed = parse_github_url(text.strip())
         if parsed and parsed[1] == "issue":
-            await handlers._handle_github_issue_url(message, runtime, key, text.strip())
+            slug, kind, number = parsed
+            await handlers._handle_github_issue_url(message, key, slug, number)
             return
 
     if text and is_interrupt_alias(text):
