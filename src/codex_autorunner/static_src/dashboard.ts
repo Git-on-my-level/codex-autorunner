@@ -6,7 +6,6 @@ import {
   loadState,
   startRun,
   stopRun,
-  resumeRun,
   killRun,
   resetRun,
   startStatePolling,
@@ -90,6 +89,29 @@ function renderState(state: State | null): void {
   if (summaryBtn) {
     const done = Number(state.outstanding_count ?? NaN) === 0;
     summaryBtn.classList.toggle("hidden", !done);
+  }
+  
+  const status = state.status || "idle";
+  const startBtn = document.getElementById("start-run");
+  const stopBtn = document.getElementById("stop-run");
+  const killBtn = document.getElementById("kill-run");
+  const resetBtn = document.getElementById("reset-runner");
+  
+  if (status === "idle" || status === "stopped" || status === "completed") {
+    if (startBtn) startBtn.classList.remove("hidden");
+    if (stopBtn) stopBtn.classList.add("hidden");
+    if (killBtn) killBtn.classList.add("hidden");
+    if (resetBtn) resetBtn.classList.remove("hidden");
+  } else if (status === "running") {
+    if (startBtn) startBtn.classList.add("hidden");
+    if (stopBtn) stopBtn.classList.remove("hidden");
+    if (killBtn) killBtn.classList.remove("hidden");
+    if (resetBtn) resetBtn.classList.add("hidden");
+  } else if (status === "error") {
+    if (startBtn) startBtn.classList.remove("hidden");
+    if (stopBtn) stopBtn.classList.add("hidden");
+    if (killBtn) killBtn.classList.remove("hidden");
+    if (resetBtn) resetBtn.classList.remove("hidden");
   }
 }
 
@@ -833,9 +855,7 @@ export function initDashboard(): void {
     }
   });
   bindAction("start-run", () => startRun(false, buildRunOverrides()));
-  bindAction("start-once", () => startRun(true, buildRunOverrides()));
   bindAction("stop-run", stopRun);
-  bindAction("resume-run", resumeRun);
   bindAction("kill-run", killRun);
   bindAction("reset-runner", async () => {
     const confirmed = await confirmModal(
