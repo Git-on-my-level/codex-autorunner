@@ -183,8 +183,7 @@ class TelegramVoiceManager:
             self._store.update_pending_voice(record)
         data = path.read_bytes()
         try:
-            result = await asyncio.to_thread(
-                self._voice_service.transcribe,
+            result = await self._voice_service.transcribe_async(
                 data,
                 client="telegram",
                 filename=record.file_name or path.name,

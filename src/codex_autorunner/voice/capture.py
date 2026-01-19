@@ -115,7 +115,7 @@ class PushToTalkCapture(VoiceCaptureSession):
         except Exception as exc:
             self.fail("permission_error")
             self._logger.error(
-                "Microphone permission request failed: %s", exc, exc_info=False
+                "Microphone permission request failed: %s", exc, exc_info=True
             )
             return
 
@@ -146,7 +146,7 @@ class PushToTalkCapture(VoiceCaptureSession):
         except Exception as exc:
             self.fail("provider_error")
             self._logger.error(
-                "Failed to start transcription stream: %s", exc, exc_info=False
+                "Failed to start transcription stream: %s", exc, exc_info=True
             )
             return
 
@@ -184,7 +184,7 @@ class PushToTalkCapture(VoiceCaptureSession):
             self._logger.warning(
                 "Transcription chunk failed; will retry if allowed: %s",
                 exc,
-                exc_info=False,
+                exc_info=True,
             )
             if not self._fail_with_retry("provider_error"):
                 return
@@ -211,7 +211,7 @@ class PushToTalkCapture(VoiceCaptureSession):
                 self._handle_events(events)
             except Exception as exc:
                 self._logger.error(
-                    "Final transcription flush failed: %s", exc, exc_info=False
+                    "Final transcription flush failed: %s", exc, exc_info=True
                 )
                 if self._fail_with_retry("provider_error"):
                     continue
@@ -233,9 +233,9 @@ class PushToTalkCapture(VoiceCaptureSession):
         if self._stream is not None:
             try:
                 self._stream.abort(reason)
-            except Exception:
+            except Exception as exc:
                 # Abort failures should not mask the root cause.
-                pass
+                self._logger.warning("Stream abort failed: %s", exc, exc_info=True)
         self._reset()
         self._emit_error(reason)
         self._emit_state(CaptureState.ERROR)
@@ -324,7 +324,7 @@ class PushToTalkCapture(VoiceCaptureSession):
             return True
         except Exception as exc:
             self._logger.error(
-                "Retrying transcription stream failed: %s", exc, exc_info=False
+                "Retrying transcription stream failed: %s", exc, exc_info=True
             )
             self.fail(reason)
             return False

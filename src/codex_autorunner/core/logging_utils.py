@@ -74,6 +74,7 @@ def safe_log(
     message: str,
     *args,
     exc: Optional[Exception] = None,
+    exc_info: bool = False,
 ) -> None:
     try:
         formatted = message
@@ -84,7 +85,7 @@ def safe_log(
                 formatted = f"{message} {' '.join(str(arg) for arg in args)}"
         if exc is not None:
             formatted = f"{formatted}: {exc}"
-        logger.log(level, formatted)
+        logger.log(level, formatted, exc_info=exc_info)
     except Exception:
         pass
 
