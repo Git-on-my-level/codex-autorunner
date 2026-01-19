@@ -18,7 +18,6 @@ from ..adapter import (
 )
 from ..config import TelegramMediaCandidate
 
-COALESCE_WINDOW_SECONDS = 2.0
 MEDIA_BATCH_WINDOW_SECONDS = 1.0
 IMAGE_CONTENT_TYPES = {
     "image/png": ".png",
@@ -261,9 +260,16 @@ async def handle_message_inner(
         )
         return
 
+    queued_placeholder = handlers._get_queued_placeholder(
+        message.chat_id, message.message_id
+    )
+    if queued_placeholder is not None:
+        handlers._clear_queued_placeholder(message.chat_id, message.message_id)
     handlers._enqueue_topic_work(
         key,
-        lambda: handlers._handle_normal_message(message, runtime, text_override=text),
+        lambda: handlers._handle_normal_message(
+            message, runtime, text_override=text, placeholder_id=queued_placeholder
+        ),
     )
 
 
@@ -297,12 +303,17 @@ async def buffer_coalesced_message(
         task = buffer.task
         if task is not None and task is not asyncio.current_task():
             task.cancel()
-        buffer.task = handlers._spawn_task(coalesce_flush_after(handlers, key))
+        window_seconds = handlers._config.coalesce_window_seconds
+        buffer.task = handlers._spawn_task(
+            coalesce_flush_after(handlers, key, window_seconds)
+        )
 
 
-async def coalesce_flush_after(handlers: Any, key: str) -> None:
+async def coalesce_flush_after(
+    handlers: Any, key: str, window_seconds: float
+) -> None:
     try:
-        await asyncio.sleep(COALESCE_WINDOW_SECONDS)
+        await asyncio.sleep(window_seconds)
     except asyncio.CancelledError:
         return
     try:

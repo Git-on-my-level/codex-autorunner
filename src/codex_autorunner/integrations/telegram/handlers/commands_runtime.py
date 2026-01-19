@@ -57,7 +57,7 @@ from ..adapter import (
     build_update_confirm_keyboard,
     encode_cancel_callback,
 )
-from ..config import TelegramMediaCandidate
+from ..config import AppServerUnavailableError, TelegramMediaCandidate
 from ..constants import (
     AGENT_PICKER_PROMPT,
     APPROVAL_POLICY_VALUES,
@@ -422,10 +422,28 @@ class TelegramCommandHandlers:
             )
             return
         desired = normalize_agent(argv[0])
-        if not desired:
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
             await self._send_message(
                 message.chat_id,
-                "Usage: /agent codex|opencode",
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -607,7 +625,24 @@ class TelegramCommandHandlers:
         thread_id = record.active_thread_id
         if not thread_id:
             return record
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -833,7 +868,24 @@ class TelegramCommandHandlers:
             thread_id = record.active_thread_id
             if thread_id:
                 return thread_id
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -970,7 +1022,10 @@ class TelegramCommandHandlers:
         send_placeholder: bool = True,
         transcript_message_id: Optional[int] = None,
         transcript_text: Optional[str] = None,
+        placeholder_id: Optional[int] = None,
     ) -> None:
+        if placeholder_id is not None:
+            send_placeholder = False
         outcome = await self._run_turn_and_collect_result(
             message,
             runtime,
@@ -982,6 +1037,7 @@ class TelegramCommandHandlers:
             transcript_text=transcript_text,
             allow_new_thread=True,
             send_failure_response=True,
+            placeholder_id=placeholder_id,
         )
         if isinstance(outcome, _TurnRunFailure):
             return
@@ -999,6 +1055,18 @@ class TelegramCommandHandlers:
             placeholder_id=outcome.placeholder_id,
             response=response_text,
         )
+        if response_sent:
+            key = self._resolve_topic_key(message.chat_id, message.thread_id)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.response.sent",
+                topic_key=key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                placeholder_id=outcome.placeholder_id,
+                final_response_sent_at=now_iso(),
+            )
         placeholder_handled = False
         if metrics and metrics_mode == "separate":
             await self._send_turn_metrics(
@@ -1097,6 +1165,7 @@ class TelegramCommandHandlers:
         allow_new_thread: bool = True,
         missing_thread_message: Optional[str] = None,
         send_failure_response: bool = True,
+        placeholder_id: Optional[int] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         record = record or self._router.get_topic(key)
@@ -1112,6 +1181,34 @@ class TelegramCommandHandlers:
             return _TurnRunFailure(
                 failure_message, None, transcript_message_id, transcript_text
             )
+        turn_handle = None
+        if placeholder_id is None and send_placeholder:
+            turn_started_at: Optional[float] = None
+            turn_elapsed_seconds: Optional[float] = None
+            turn_semaphore = self._ensure_turn_semaphore()
+            queued = turn_semaphore.locked()
+            placeholder_text = PLACEHOLDER_TEXT
+            if queued:
+                placeholder_text = QUEUED_PLACEHOLDER_TEXT
+            placeholder_id = await self._send_placeholder(
+                message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                text=placeholder_text,
+            )
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.placeholder.sent",
+                topic_key=key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                placeholder_id=placeholder_id,
+                placeholder_sent_at=now_iso(),
+            )
+        else:
+            turn_started_at: Optional[float] = None
+            turn_elapsed_seconds: Optional[float] = None
         if record.active_thread_id:
             conflict_key = self._find_thread_conflict(
                 record.active_thread_id,
@@ -1126,7 +1223,7 @@ class TelegramCommandHandlers:
                 )
                 return _TurnRunFailure(
                     "Thread conflict detected.",
-                    None,
+                    placeholder_id,
                     transcript_message_id,
                     transcript_text,
                 )
@@ -1134,16 +1231,12 @@ class TelegramCommandHandlers:
             if not verified:
                 return _TurnRunFailure(
                     "Active thread verification failed.",
-                    None,
+                    placeholder_id,
                     transcript_message_id,
                     transcript_text,
                 )
             record = verified
         thread_id = record.active_thread_id
-        turn_handle = None
-        placeholder_id: Optional[int] = None
-        turn_started_at: Optional[float] = None
-        turn_elapsed_seconds: Optional[float] = None
         prompt_text = (
             text_override if text_override is not None else (message.text or "")
         )
@@ -1205,7 +1298,7 @@ class TelegramCommandHandlers:
                         reply_to=message.message_id,
                     )
                 return _TurnRunFailure(
-                    failure_message, None, transcript_message_id, transcript_text
+                    failure_message, placeholder_id, transcript_message_id, transcript_text
                 )
             workspace_root = self._canonical_workspace_root(record.workspace_path)
             if workspace_root is None:
@@ -1218,7 +1311,7 @@ class TelegramCommandHandlers:
                         reply_to=message.message_id,
                     )
                 return _TurnRunFailure(
-                    failure_message, None, transcript_message_id, transcript_text
+                    failure_message, placeholder_id, transcript_message_id, transcript_text
                 )
             try:
                 opencode_client = await supervisor.get_client(workspace_root)
@@ -1230,6 +1323,8 @@ class TelegramCommandHandlers:
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                     exc=exc,
+                    error_at=now_iso(),
+                    reason="opencode_client_failed",
                 )
                 failure_message = "OpenCode backend unavailable."
                 if send_failure_response:
@@ -1240,7 +1335,7 @@ class TelegramCommandHandlers:
                         reply_to=message.message_id,
                     )
                 return _TurnRunFailure(
-                    failure_message, None, transcript_message_id, transcript_text
+                    failure_message, placeholder_id, transcript_message_id, transcript_text
                 )
             try:
                 if not thread_id:
@@ -1258,7 +1353,7 @@ class TelegramCommandHandlers:
                             )
                         return _TurnRunFailure(
                             failure_message,
-                            None,
+                            placeholder_id,
                             transcript_message_id,
                             transcript_text,
                         )
@@ -1277,7 +1372,7 @@ class TelegramCommandHandlers:
                             )
                         return _TurnRunFailure(
                             failure_message,
-                            None,
+                            placeholder_id,
                             transcript_message_id,
                             transcript_text,
                         )
@@ -1330,19 +1425,17 @@ class TelegramCommandHandlers:
                         pending_seed = record.pending_compact_seed
                 if pending_seed:
                     prompt_text = f"{pending_seed}\n\n{prompt_text}"
-                turn_semaphore = self._ensure_turn_semaphore()
-                queued = turn_semaphore.locked()
-                placeholder_text = PLACEHOLDER_TEXT
-                if queued:
-                    placeholder_text = QUEUED_PLACEHOLDER_TEXT
-                if send_placeholder:
-                    placeholder_id = await self._send_placeholder(
-                        message.chat_id,
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                        text=placeholder_text,
-                    )
                 queue_started_at = time.monotonic()
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.turn.queued",
+                    topic_key=key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    codex_thread_id=thread_id,
+                    turn_queued_at=now_iso(),
+                )
                 acquired = await self._await_turn_slot(
                     turn_semaphore,
                     runtime,
@@ -1420,6 +1513,16 @@ class TelegramCommandHandlers:
                                 transcript_text,
                             )
                         turn_started_at = time.monotonic()
+                        log_event(
+                            self._logger,
+                            logging.INFO,
+                            "telegram.turn.started",
+                            topic_key=key,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            codex_thread_id=thread_id,
+                            turn_started_at=now_iso(),
+                        )
                         turn_id = build_turn_id(thread_id)
                         runtime.current_turn_id = turn_id
                         runtime.current_turn_key = (thread_id, turn_id)
@@ -1864,6 +1967,8 @@ class TelegramCommandHandlers:
                     thread_id=message.thread_id,
                     exc=exc,
                     **log_extra,
+                    error_at=now_iso(),
+                    reason="opencode_turn_failed",
                 )
                 failure_message = (
                     _format_opencode_exception(exc)
@@ -1891,7 +1996,29 @@ class TelegramCommandHandlers:
                     runtime.current_turn_id = None
                     runtime.current_turn_key = None
                 runtime.interrupt_requested = False
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                topic_key=key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            failure_message = "App server unavailable; try again or check logs."
+            if send_failure_response:
+                await self._send_message(
+                    message.chat_id,
+                    failure_message,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+            return _TurnRunFailure(
+                failure_message, placeholder_id, transcript_message_id, transcript_text
+            )
         if client is None:
             failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
             if send_failure_response:
@@ -2026,20 +2153,17 @@ class TelegramCommandHandlers:
                 sandbox_policy=sandbox_policy,
             )
 
-            turn_semaphore = self._ensure_turn_semaphore()
-            queued = turn_semaphore.locked()
-            placeholder_text = PLACEHOLDER_TEXT
-            if queued:
-                placeholder_text = QUEUED_PLACEHOLDER_TEXT
-            if send_placeholder:
-                placeholder_id = await self._send_placeholder(
-                    message.chat_id,
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                    text=placeholder_text,
-                    reply_markup=self._interrupt_keyboard(),
-                )
             queue_started_at = time.monotonic()
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.turn.queued",
+                topic_key=key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                codex_thread_id=thread_id,
+                turn_queued_at=now_iso(),
+            )
             acquired = await self._await_turn_slot(
                 turn_semaphore,
                 runtime,
@@ -2096,6 +2220,16 @@ class TelegramCommandHandlers:
                         _clear_pending_compact_seed,
                     )
                 turn_started_at = time.monotonic()
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.turn.started",
+                    topic_key=key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    codex_thread_id=thread_id,
+                    turn_started_at=now_iso(),
+                )
                 turn_key = self._turn_key(thread_id, turn_handle.turn_id)
                 runtime.current_turn_id = turn_handle.turn_id
                 runtime.current_turn_key = turn_key
@@ -2149,6 +2283,7 @@ class TelegramCommandHandlers:
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
             failure_message = "Codex turn failed; check logs for details."
+            reason = "codex_turn_failed"
             if isinstance(exc, CodexAppServerDisconnected):
                 log_event(
                     self._logger,
@@ -2163,6 +2298,7 @@ class TelegramCommandHandlers:
                     "Codex app-server disconnected; recovering now. "
                     "Your request did not complete. Please resend your message in a moment."
                 )
+                reason = "app_server_disconnected"
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2171,6 +2307,8 @@ class TelegramCommandHandlers:
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 exc=exc,
+                error_at=now_iso(),
+                reason=reason,
             )
             if send_failure_response:
                 response_sent = await self._deliver_turn_response(
@@ -2456,126 +2594,29 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
+        command_text = text[1:].strip()
         try:
-            data, file_path, file_size = await self._download_telegram_file(
-                candidate.file_id
-            )
-        except Exception as exc:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
-                "telegram.media.image.download_failed",
+                "telegram.app_server.unavailable",
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
-                message_id=message.message_id,
                 exc=exc,
             )
             await self._send_message(
                 message.chat_id,
-                "Failed to download image.",
+                "App server unavailable; try again or check logs.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
-        if file_size and file_size > max_bytes:
+        if client is None:
             await self._send_message(
                 message.chat_id,
-                f"Image too large (max {max_bytes} bytes).",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if len(data) > max_bytes:
-            await self._send_message(
-                message.chat_id,
-                f"Image too large (max {max_bytes} bytes).",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        try:
-            image_path = self._save_image_file(
-                record.workspace_path, data, file_path, candidate
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.media.image.save_failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
-                exc=exc,
-            )
-            await self._send_message(
-                message.chat_id,
-                "Failed to save image.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        prompt_text = caption_text.strip()
-        if not prompt_text:
-            prompt_text = self._config.media.image_prompt
-        input_items = [
-            {"type": "text", "text": prompt_text},
-            {"type": "localImage", "path": str(image_path)},
-        ]
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.media.image.ready",
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            message_id=message.message_id,
-            path=str(image_path),
-            prompt_len=len(prompt_text),
-        )
-        await self._handle_normal_message(
-            message,
-            runtime,
-            text_override=prompt_text,
-            input_items=input_items,
-            record=record,
-        )
-
-    async def _handle_voice_message(
-        self,
-        message: TelegramMessage,
-        runtime: Any,
-        record: Any,
-        candidate: TelegramMediaCandidate,
-        caption_text: str,
-    ) -> None:
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.media.voice.received",
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            message_id=message.message_id,
-            file_id=candidate.file_id,
-            file_size=candidate.file_size,
-            duration=candidate.duration,
-            has_caption=bool(caption_text),
-        )
-        if (
-            not self._voice_service
-            or not self._voice_config
-            or not self._voice_config.enabled
-        ):
-            await self._send_message(
-                message.chat_id,
-                "Voice transcription is disabled.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        max_bytes = self._config.media.max_voice_bytes
-        if candidate.file_size and candidate.file_size > max_bytes:
-            await self._send_message(
-                message.chat_id,
-                f"Voice note too large (max {max_bytes} bytes).",
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2635,1036 +2676,26 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
+        command_text = text[1:].strip()
         try:
-            data, file_path, file_size = await self._download_telegram_file(
-                candidate.file_id
-            )
-        except Exception as exc:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
-                "telegram.media.file.download_failed",
+                "telegram.app_server.unavailable",
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
-                message_id=message.message_id,
                 exc=exc,
             )
             await self._send_message(
                 message.chat_id,
-                "Failed to download file.",
+                "App server unavailable; try again or check logs.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
-        if file_size and file_size > max_bytes:
-            await self._send_message(
-                message.chat_id,
-                f"File too large (max {max_bytes} bytes).",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if len(data) > max_bytes:
-            await self._send_message(
-                message.chat_id,
-                f"File too large (max {max_bytes} bytes).",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        try:
-            file_path_local = self._save_inbox_file(
-                record.workspace_path,
-                key,
-                data,
-                candidate=candidate,
-                file_path=file_path,
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.media.file.save_failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                message_id=message.message_id,
-                exc=exc,
-            )
-            await self._send_message(
-                message.chat_id,
-                "Failed to save file.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        prompt_text = self._format_file_prompt(
-            caption_text,
-            candidate=candidate,
-            saved_path=file_path_local,
-            source_path=file_path,
-            file_size=file_size or len(data),
-            topic_key=key,
-            workspace_path=record.workspace_path,
-        )
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.media.file.ready",
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            message_id=message.message_id,
-            path=str(file_path_local),
-        )
-        await self._handle_normal_message(
-            message,
-            runtime,
-            text_override=prompt_text,
-            record=record,
-        )
-
-    async def _handle_media_batch(self, messages: Sequence[TelegramMessage]) -> None:
-        if not messages:
-            return
-        if not self._config.media.enabled:
-            first_msg = messages[0]
-            await self._send_message(
-                first_msg.chat_id,
-                "Media handling is disabled.",
-                thread_id=first_msg.thread_id,
-                reply_to=first_msg.message_id,
-            )
-            return
-        first_msg = messages[0]
-        topic_key = self._resolve_topic_key(first_msg.chat_id, first_msg.thread_id)
-        record = self._router.get_topic(topic_key)
-        if record is None or not record.workspace_path:
-            await self._send_message(
-                first_msg.chat_id,
-                self._with_conversation_id(
-                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
-                    chat_id=first_msg.chat_id,
-                    thread_id=first_msg.thread_id,
-                ),
-                thread_id=first_msg.thread_id,
-                reply_to=first_msg.message_id,
-            )
-            return
-        runtime = self._router.runtime_for(topic_key)
-
-        sorted_messages = sorted(messages, key=lambda m: m.message_id)
-        saved_image_paths: list[Path] = []
-        saved_file_info: list[tuple[str, str, int]] = []
-        failed_count = 0
-
-        for msg in sorted_messages:
-            image_candidate = message_handlers.select_image_candidate(msg)
-            if image_candidate:
-                if not self._config.media.images:
-                    await self._send_message(
-                        msg.chat_id,
-                        "Image handling is disabled.",
-                        thread_id=msg.thread_id,
-                        reply_to=msg.message_id,
-                    )
-                    failed_count += 1
-                    continue
-                try:
-                    data, file_path, file_size = await self._download_telegram_file(
-                        image_candidate.file_id
-                    )
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.media_batch.image.download_failed",
-                        chat_id=msg.chat_id,
-                        thread_id=msg.thread_id,
-                        message_id=msg.message_id,
-                        exc=exc,
-                    )
-                    failed_count += 1
-                    continue
-                max_bytes = self._config.media.max_image_bytes
-                if file_size and file_size > max_bytes:
-                    await self._send_message(
-                        msg.chat_id,
-                        f"Image too large (max {max_bytes} bytes).",
-                        thread_id=msg.thread_id,
-                        reply_to=msg.message_id,
-                    )
-                    failed_count += 1
-                    continue
-                if len(data) > max_bytes:
-                    await self._send_message(
-                        msg.chat_id,
-                        f"Image too large (max {max_bytes} bytes).",
-                        thread_id=msg.thread_id,
-                        reply_to=msg.message_id,
-                    )
-                    failed_count += 1
-                    continue
-                try:
-                    image_path = self._save_image_file(
-                        record.workspace_path, data, file_path, image_candidate
-                    )
-                    saved_image_paths.append(image_path)
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.media_batch.image.save_failed",
-                        chat_id=msg.chat_id,
-                        thread_id=msg.thread_id,
-                        message_id=msg.message_id,
-                        exc=exc,
-                    )
-                    failed_count += 1
-                    continue
-
-            file_candidate = message_handlers.select_file_candidate(msg)
-            if file_candidate:
-                if not self._config.media.files:
-                    await self._send_message(
-                        msg.chat_id,
-                        "File handling is disabled.",
-                        thread_id=msg.thread_id,
-                        reply_to=msg.message_id,
-                    )
-                    failed_count += 1
-                    continue
-                try:
-                    data, file_path, file_size = await self._download_telegram_file(
-                        file_candidate.file_id
-                    )
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.media_batch.file.download_failed",
-                        chat_id=msg.chat_id,
-                        thread_id=msg.thread_id,
-                        message_id=msg.message_id,
-                        exc=exc,
-                    )
-                    failed_count += 1
-                    continue
-                max_bytes = self._config.media.max_file_bytes
-                if file_size is not None and file_size > max_bytes:
-                    await self._send_message(
-                        msg.chat_id,
-                        f"File too large (max {max_bytes} bytes).",
-                        thread_id=msg.thread_id,
-                        reply_to=msg.message_id,
-                    )
-                    failed_count += 1
-                    continue
-                if len(data) > max_bytes:
-                    await self._send_message(
-                        msg.chat_id,
-                        f"File too large (max {max_bytes} bytes).",
-                        thread_id=msg.thread_id,
-                        reply_to=msg.message_id,
-                    )
-                    failed_count += 1
-                    continue
-                try:
-                    file_path_local = self._save_inbox_file(
-                        record.workspace_path,
-                        topic_key,
-                        data,
-                        candidate=file_candidate,
-                        file_path=file_path,
-                    )
-                    original_name = (
-                        file_candidate.file_name
-                        or (Path(file_path).name if file_path else None)
-                        or "unknown"
-                    )
-                    saved_file_info.append(
-                        (
-                            original_name,
-                            str(file_path_local),
-                            file_size or len(data),
-                        )
-                    )
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.media_batch.file.save_failed",
-                        chat_id=msg.chat_id,
-                        thread_id=msg.thread_id,
-                        message_id=msg.message_id,
-                        exc=exc,
-                    )
-                    failed_count += 1
-                    continue
-
-        if not saved_image_paths and not saved_file_info:
-            await self._send_message(
-                first_msg.chat_id,
-                "Failed to process any media in the batch.",
-                thread_id=first_msg.thread_id,
-                reply_to=first_msg.message_id,
-            )
-            return
-
-        captions = [
-            m.caption or "" for m in sorted_messages if m.caption and m.caption.strip()
-        ]
-        prompt_parts = []
-        if captions:
-            if len(captions) == 1:
-                prompt_parts.append(captions[0].strip())
-            else:
-                prompt_parts.append("\n".join(f"- {c.strip()}" for c in captions))
-        else:
-            if saved_image_paths:
-                prompt_parts.append(self._config.media.image_prompt)
-            else:
-                prompt_parts.append("Media received.")
-        if saved_file_info:
-            file_summary = ["\nFiles:"]
-            for name, path, size in saved_file_info:
-                file_summary.append(f"- {name} ({size} bytes) -> {path}")
-            prompt_parts.append("\n".join(file_summary))
-        if failed_count > 0:
-            prompt_parts.append(f"\nFailed to process {failed_count} item(s).")
-
-        inbox_dir = self._files_inbox_dir(record.workspace_path, topic_key)
-        outbox_dir = self._files_outbox_pending_dir(record.workspace_path, topic_key)
-        topic_dir = self._files_topic_dir(record.workspace_path, topic_key)
-        hint = wrap_injected_context(
-            FILES_HINT_TEMPLATE.format(
-                inbox=str(inbox_dir),
-                outbox=str(outbox_dir),
-                topic_key=topic_key,
-                topic_dir=str(topic_dir),
-                max_bytes=self._config.media.max_file_bytes,
-            )
-        )
-        prompt_parts.append(hint)
-        combined_prompt = "\n\n".join(prompt_parts)
-
-        input_items: Optional[list[dict[str, Any]]] = None
-        if saved_image_paths:
-            input_items = [{"type": "text", "text": combined_prompt}]
-            for image_path in saved_image_paths:
-                input_items.append({"type": "localImage", "path": str(image_path)})
-
-        last_message = sorted_messages[-1]
-        reply_to_id = last_message.message_id
-
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.media_batch.ready",
-            chat_id=first_msg.chat_id,
-            thread_id=first_msg.thread_id,
-            image_count=len(saved_image_paths),
-            file_count=len(saved_file_info),
-            failed_count=failed_count,
-            reply_to_message_id=reply_to_id,
-        )
-        await self._handle_normal_message(
-            last_message,
-            runtime,
-            text_override=combined_prompt,
-            input_items=input_items,
-            record=record,
-        )
-
-    async def _download_telegram_file(
-        self, file_id: str
-    ) -> tuple[bytes, Optional[str], Optional[int]]:
-        payload = await self._bot.get_file(file_id)
-        file_path = payload.get("file_path") if isinstance(payload, dict) else None
-        file_size = payload.get("file_size") if isinstance(payload, dict) else None
-        if file_size is not None and not isinstance(file_size, int):
-            file_size = None
-        if not isinstance(file_path, str) or not file_path:
-            raise RuntimeError("Telegram getFile returned no file_path")
-        data = await self._bot.download_file(file_path)
-        return data, file_path, file_size
-
-    async def _send_voice_progress_message(
-        self, record: PendingVoiceRecord, text: str
-    ) -> Optional[int]:
-        payload_text, parse_mode = self._prepare_outgoing_text(
-            text,
-            chat_id=record.chat_id,
-            thread_id=record.thread_id,
-            reply_to=record.message_id,
-            workspace_path=record.workspace_path,
-        )
-        try:
-            response = await self._bot.send_message(
-                record.chat_id,
-                payload_text,
-                message_thread_id=record.thread_id,
-                reply_to_message_id=record.message_id,
-                parse_mode=parse_mode,
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.voice.progress_failed",
-                record_id=record.record_id,
-                chat_id=record.chat_id,
-                thread_id=record.thread_id,
-                exc=exc,
-            )
-            return None
-        message_id = response.get("message_id") if isinstance(response, dict) else None
-        return message_id if isinstance(message_id, int) else None
-
-    async def _update_voice_progress_message(
-        self, record: PendingVoiceRecord, text: str
-    ) -> None:
-        if record.progress_message_id is None:
-            return
-        await self._edit_message_text(
-            record.chat_id,
-            record.progress_message_id,
-            text,
-        )
-
-    async def _deliver_voice_transcript(
-        self,
-        record: PendingVoiceRecord,
-        transcript_text: str,
-    ) -> None:
-        if record.transcript_message_id is None:
-            transcript_message = self._format_voice_transcript_message(
-                transcript_text,
-                PLACEHOLDER_TEXT,
-            )
-            record.transcript_message_id = await self._send_voice_transcript_message(
-                record.chat_id,
-                transcript_message,
-                thread_id=record.thread_id,
-                reply_to=record.message_id,
-            )
-            self._store.update_pending_voice(record)
-        if record.transcript_message_id is None:
-            raise RuntimeError("Failed to send voice transcript message")
-        await self._update_voice_progress_message(record, "Voice note transcribed.")
-        message = TelegramMessage(
-            update_id=0,
-            message_id=record.message_id,
-            chat_id=record.chat_id,
-            thread_id=record.thread_id,
-            from_user_id=None,
-            text=None,
-            date=None,
-            is_topic_message=record.thread_id is not None,
-        )
-        key = self._resolve_topic_key(record.chat_id, record.thread_id)
-        runtime = self._router.runtime_for(key)
-        if self._config.concurrency.per_topic_queue:
-            await runtime.queue.enqueue(
-                lambda: self._handle_normal_message(
-                    message,
-                    runtime,
-                    text_override=transcript_text,
-                    send_placeholder=True,
-                    transcript_message_id=record.transcript_message_id,
-                    transcript_text=transcript_text,
-                )
-            )
-        else:
-            await self._handle_normal_message(
-                message,
-                runtime,
-                text_override=transcript_text,
-                send_placeholder=True,
-                transcript_message_id=record.transcript_message_id,
-                transcript_text=transcript_text,
-            )
-
-    def _image_storage_dir(self, workspace_path: str) -> Path:
-        return (
-            Path(workspace_path) / ".codex-autorunner" / "uploads" / "telegram-images"
-        )
-
-    def _choose_image_extension(
-        self,
-        *,
-        file_path: Optional[str],
-        file_name: Optional[str],
-        mime_type: Optional[str],
-    ) -> str:
-        for candidate in (file_path, file_name):
-            if candidate:
-                suffix = Path(candidate).suffix.lower()
-                if suffix in message_handlers.IMAGE_EXTS:
-                    return suffix
-        if mime_type:
-            base = mime_type.lower().split(";", 1)[0].strip()
-            mapped = message_handlers.IMAGE_CONTENT_TYPES.get(base)
-            if mapped:
-                return mapped
-        return ".img"
-
-    def _save_image_file(
-        self,
-        workspace_path: str,
-        data: bytes,
-        file_path: Optional[str],
-        candidate: TelegramMediaCandidate,
-    ) -> Path:
-        images_dir = self._image_storage_dir(workspace_path)
-        images_dir.mkdir(parents=True, exist_ok=True)
-        ext = self._choose_image_extension(
-            file_path=file_path,
-            file_name=candidate.file_name,
-            mime_type=candidate.mime_type,
-        )
-        token = secrets.token_hex(6)
-        name = f"telegram-{int(time.time())}-{token}{ext}"
-        path = images_dir / name
-        path.write_bytes(data)
-        return path
-
-    def _files_root_dir(self, workspace_path: str) -> Path:
-        return Path(workspace_path) / ".codex-autorunner" / "uploads" / "telegram-files"
-
-    def _sanitize_topic_dir_name(self, key: str) -> str:
-        cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", key).strip("._-")
-        if not cleaned:
-            cleaned = "topic"
-        if len(cleaned) > 80:
-            digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
-            cleaned = f"{cleaned[:72]}-{digest}"
-        return cleaned
-
-    def _files_topic_dir(self, workspace_path: str, topic_key: str) -> Path:
-        return self._files_root_dir(workspace_path) / self._sanitize_topic_dir_name(
-            topic_key
-        )
-
-    def _files_inbox_dir(self, workspace_path: str, topic_key: str) -> Path:
-        return self._files_topic_dir(workspace_path, topic_key) / "inbox"
-
-    def _files_outbox_pending_dir(self, workspace_path: str, topic_key: str) -> Path:
-        return self._files_topic_dir(workspace_path, topic_key) / "outbox" / "pending"
-
-    def _files_outbox_sent_dir(self, workspace_path: str, topic_key: str) -> Path:
-        return self._files_topic_dir(workspace_path, topic_key) / "outbox" / "sent"
-
-    def _sanitize_filename_component(self, value: str, *, fallback: str) -> str:
-        cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._-")
-        return cleaned or fallback
-
-    def _choose_file_extension(
-        self,
-        *,
-        file_name: Optional[str],
-        file_path: Optional[str],
-        mime_type: Optional[str],
-    ) -> str:
-        for candidate in (file_name, file_path):
-            if candidate:
-                suffix = Path(candidate).suffix
-                if suffix:
-                    return suffix
-        if mime_type and mime_type.startswith("text/"):
-            return ".txt"
-        return ".bin"
-
-    def _choose_file_stem(
-        self, file_name: Optional[str], file_path: Optional[str]
-    ) -> str:
-        for candidate in (file_name, file_path):
-            if candidate:
-                stem = Path(candidate).stem
-                if stem:
-                    return stem
-        return "file"
-
-    def _save_inbox_file(
-        self,
-        workspace_path: str,
-        topic_key: str,
-        data: bytes,
-        *,
-        candidate: TelegramMediaCandidate,
-        file_path: Optional[str],
-    ) -> Path:
-        inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
-        inbox_dir.mkdir(parents=True, exist_ok=True)
-        stem = self._sanitize_filename_component(
-            self._choose_file_stem(candidate.file_name, file_path),
-            fallback="file",
-        )
-        ext = self._choose_file_extension(
-            file_name=candidate.file_name,
-            file_path=file_path,
-            mime_type=candidate.mime_type,
-        )
-        token = secrets.token_hex(6)
-        name = f"{stem}-{token}{ext}"
-        path = inbox_dir / name
-        path.write_bytes(data)
-        return path
-
-    def _format_file_prompt(
-        self,
-        caption_text: str,
-        *,
-        candidate: TelegramMediaCandidate,
-        saved_path: Path,
-        source_path: Optional[str],
-        file_size: int,
-        topic_key: str,
-        workspace_path: str,
-    ) -> str:
-        header = caption_text.strip() or "File received."
-        original_name = (
-            candidate.file_name
-            or (Path(source_path).name if source_path else None)
-            or "unknown"
-        )
-        inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
-        outbox_dir = self._files_outbox_pending_dir(workspace_path, topic_key)
-        topic_dir = self._files_topic_dir(workspace_path, topic_key)
-        hint = wrap_injected_context(
-            FILES_HINT_TEMPLATE.format(
-                inbox=str(inbox_dir),
-                outbox=str(outbox_dir),
-                topic_key=topic_key,
-                topic_dir=str(topic_dir),
-                max_bytes=self._config.media.max_file_bytes,
-            )
-        )
-        parts = [
-            header,
-            "",
-            "File details:",
-            f"- Name: {original_name}",
-            f"- Size: {file_size} bytes",
-        ]
-        if candidate.mime_type:
-            parts.append(f"- Mime: {candidate.mime_type}")
-        parts.append(f"- Saved to: {saved_path}")
-        parts.append("")
-        parts.append(hint)
-        return "\n".join(parts)
-
-    def _format_bytes(self, size: int) -> str:
-        if size < 1024:
-            return f"{size} B"
-        value = size / 1024
-        for unit in ("KB", "MB", "GB", "TB"):
-            if value < 1024:
-                return f"{value:.1f} {unit}"
-            value /= 1024
-        return f"{value:.1f} PB"
-
-    def _list_files(self, folder: Path) -> list[Path]:
-        if not folder.exists():
-            return []
-        files: list[Path] = []
-        for path in folder.iterdir():
-            try:
-                if path.is_file():
-                    files.append(path)
-            except OSError:
-                continue
-
-        def _mtime(entry: Path) -> float:
-            try:
-                return entry.stat().st_mtime
-            except OSError:
-                return 0.0
-
-        return sorted(files, key=_mtime, reverse=True)
-
-    async def _send_outbox_file(
-        self,
-        path: Path,
-        *,
-        sent_dir: Path,
-        chat_id: int,
-        thread_id: Optional[int],
-        reply_to: Optional[int],
-    ) -> bool:
-        try:
-            data = path.read_bytes()
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.files.outbox.read_failed",
-                chat_id=chat_id,
-                thread_id=thread_id,
-                path=str(path),
-                exc=exc,
-            )
-            return False
-        try:
-            await self._bot.send_document(
-                chat_id,
-                data,
-                filename=path.name,
-                message_thread_id=thread_id,
-                reply_to_message_id=reply_to,
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.files.outbox.send_failed",
-                chat_id=chat_id,
-                thread_id=thread_id,
-                path=str(path),
-                exc=exc,
-            )
-            return False
-        try:
-            sent_dir.mkdir(parents=True, exist_ok=True)
-            destination = sent_dir / path.name
-            if destination.exists():
-                token = secrets.token_hex(3)
-                destination = sent_dir / f"{path.stem}-{token}{path.suffix}"
-            path.replace(destination)
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.files.outbox.move_failed",
-                chat_id=chat_id,
-                thread_id=thread_id,
-                path=str(path),
-                exc=exc,
-            )
-            return False
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.files.outbox.sent",
-            chat_id=chat_id,
-            thread_id=thread_id,
-            path=str(path),
-        )
-        return True
-
-    async def _flush_outbox_files(
-        self,
-        record: Optional["TelegramTopicRecord"],
-        *,
-        chat_id: int,
-        thread_id: Optional[int],
-        reply_to: Optional[int],
-        topic_key: Optional[str] = None,
-    ) -> None:
-        if (
-            record is None
-            or not record.workspace_path
-            or not self._config.media.enabled
-            or not self._config.media.files
-        ):
-            return
-        key = topic_key or self._resolve_topic_key(chat_id, thread_id)
-        pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)
-        if not pending_dir.exists():
-            return
-        files = self._list_files(pending_dir)
-        if not files:
-            return
-        sent_dir = self._files_outbox_sent_dir(record.workspace_path, key)
-        max_bytes = self._config.media.max_file_bytes
-        for path in files:
-            if not _path_within(pending_dir, path):
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            if size > max_bytes:
-                await self._send_message(
-                    chat_id,
-                    f"Outbox file too large: {path.name} (max {max_bytes} bytes).",
-                    thread_id=thread_id,
-                    reply_to=reply_to,
-                )
-                continue
-            await self._send_outbox_file(
-                path,
-                sent_dir=sent_dir,
-                chat_id=chat_id,
-                thread_id=thread_id,
-                reply_to=reply_to,
-            )
-
-    async def _handle_interrupt(self, message: TelegramMessage, runtime: Any) -> None:
-        await self._process_interrupt(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            runtime=runtime,
-            message_id=message.message_id,
-        )
-
-    async def _handle_interrupt_callback(self, callback: TelegramCallbackQuery) -> None:
-        if callback.chat_id is None or callback.message_id is None:
-            await self._answer_callback(callback, "Cancel unavailable")
-            return
-        runtime = self._router.runtime_for(
-            self._resolve_topic_key(callback.chat_id, callback.thread_id)
-        )
-        await self._answer_callback(callback, "Stopping...")
-        await self._process_interrupt(
-            chat_id=callback.chat_id,
-            thread_id=callback.thread_id,
-            reply_to=callback.message_id,
-            runtime=runtime,
-            message_id=callback.message_id,
-        )
-
-    async def _process_interrupt(
-        self,
-        *,
-        chat_id: int,
-        thread_id: Optional[int],
-        reply_to: Optional[int],
-        runtime: Any,
-        message_id: Optional[int],
-    ) -> None:
-        turn_id = runtime.current_turn_id
-        key = self._resolve_topic_key(chat_id, thread_id)
-        if (
-            turn_id
-            and runtime.interrupt_requested
-            and runtime.interrupt_turn_id == turn_id
-        ):
-            await self._send_message(
-                chat_id,
-                "Already stopping current turn.",
-                thread_id=thread_id,
-                reply_to=reply_to,
-            )
-            return
-        pending_request_ids = [
-            request_id
-            for request_id, pending in self._pending_approvals.items()
-            if (pending.topic_key == key)
-            or (
-                pending.topic_key is None
-                and pending.chat_id == chat_id
-                and pending.thread_id == thread_id
-            )
-        ]
-        for request_id in pending_request_ids:
-            pending = self._pending_approvals.pop(request_id, None)
-            if pending and not pending.future.done():
-                pending.future.set_result("cancel")
-            self._store.clear_pending_approval(request_id)
-        if pending_request_ids:
-            runtime.pending_request_id = None
-        queued_turn_cancelled = False
-        if (
-            runtime.queued_turn_cancel is not None
-            and not runtime.queued_turn_cancel.is_set()
-        ):
-            runtime.queued_turn_cancel.set()
-            queued_turn_cancelled = True
-        queued_cancelled = runtime.queue.cancel_pending()
-        if not turn_id:
-            pending_records = self._store.pending_approvals_for_key(key)
-            if pending_records:
-                self._store.clear_pending_approvals_for_key(key)
-                runtime.pending_request_id = None
-            pending_count = len(pending_records) if pending_records else 0
-            pending_count += len(pending_request_ids)
-            if queued_turn_cancelled or queued_cancelled or pending_count:
-                parts = []
-                if queued_turn_cancelled:
-                    parts.append("Cancelled queued turn.")
-                if queued_cancelled:
-                    parts.append(f"Cancelled {queued_cancelled} queued job(s).")
-                if pending_count:
-                    parts.append(f"Cleared {pending_count} pending approval(s).")
-                await self._send_message(
-                    chat_id,
-                    " ".join(parts),
-                    thread_id=thread_id,
-                    reply_to=reply_to,
-                )
-                return
-            log_event(
-                self._logger,
-                logging.INFO,
-                "telegram.interrupt.none",
-                chat_id=chat_id,
-                thread_id=thread_id,
-                message_id=message_id,
-            )
-            await self._send_message(
-                chat_id,
-                "No active turn to interrupt.",
-                thread_id=thread_id,
-                reply_to=reply_to,
-            )
-            return
-        runtime.interrupt_requested = True
-        log_event(
-            self._logger,
-            logging.INFO,
-            "telegram.interrupt.requested",
-            chat_id=chat_id,
-            thread_id=thread_id,
-            message_id=message_id,
-            turn_id=turn_id,
-        )
-        payload_text, parse_mode = self._prepare_outgoing_text(
-            "Stopping current turn...",
-            chat_id=chat_id,
-            thread_id=thread_id,
-            reply_to=reply_to,
-        )
-        response = await self._bot.send_message(
-            chat_id,
-            payload_text,
-            message_thread_id=thread_id,
-            reply_to_message_id=reply_to,
-            parse_mode=parse_mode,
-        )
-        response_message_id = (
-            response.get("message_id") if isinstance(response, dict) else None
-        )
-        codex_thread_id = None
-        if runtime.current_turn_key and runtime.current_turn_key[1] == turn_id:
-            codex_thread_id = runtime.current_turn_key[0]
-        if isinstance(response_message_id, int):
-            runtime.interrupt_message_id = response_message_id
-            runtime.interrupt_turn_id = turn_id
-            self._spawn_task(
-                self._interrupt_timeout_check(
-                    self._resolve_topic_key(chat_id, thread_id),
-                    turn_id,
-                    response_message_id,
-                )
-            )
-        self._spawn_task(
-            self._dispatch_interrupt_request(
-                turn_id=turn_id,
-                codex_thread_id=codex_thread_id,
-                runtime=runtime,
-                chat_id=chat_id,
-                thread_id=thread_id,
-            )
-        )
-
-    async def _handle_bind(self, message: TelegramMessage, args: str) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        if not args:
-            options = self._list_manifest_repos()
-            if not options:
-                await self._send_message(
-                    message.chat_id,
-                    "Usage: /bind <repo_id> or /bind <path>.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            items = [(repo_id, repo_id) for repo_id in options]
-            state = SelectionState(items=items)
-            keyboard = self._build_bind_keyboard(state)
-            self._bind_options[key] = state
-            self._touch_cache_timestamp("bind_options", key)
-            await self._send_message(
-                message.chat_id,
-                self._selection_prompt(BIND_PICKER_PROMPT, state),
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                reply_markup=keyboard,
-            )
-            return
-        await self._bind_topic_with_arg(key, args, message)
-
-    async def _bind_topic_by_repo_id(
-        self,
-        key: str,
-        repo_id: str,
-        callback: Optional[TelegramCallbackQuery] = None,
-    ) -> None:
-        self._bind_options.pop(key, None)
-        resolved = self._resolve_workspace(repo_id)
-        if resolved is None:
-            await self._answer_callback(callback, "Repo not found")
-            await self._finalize_selection(key, callback, "Repo not found.")
-            return
-        workspace_path, resolved_repo_id = resolved
-        chat_id, thread_id = _split_topic_key(key)
-        scope = self._topic_scope_id(resolved_repo_id, workspace_path)
-        self._router.set_topic_scope(chat_id, thread_id, scope)
-        self._router.bind_topic(
-            chat_id,
-            thread_id,
-            workspace_path,
-            repo_id=resolved_repo_id,
-            scope=scope,
-        )
-        workspace_id = self._workspace_id_for_path(workspace_path)
-        if workspace_id:
-            self._router.update_topic(
-                chat_id,
-                thread_id,
-                lambda record: setattr(record, "workspace_id", workspace_id),
-                scope=scope,
-            )
-        await self._answer_callback(callback, "Bound to repo")
-        await self._finalize_selection(
-            key,
-            callback,
-            f"Bound to {resolved_repo_id or workspace_path}.",
-        )
-
-    async def _bind_topic_with_arg(
-        self, key: str, arg: str, message: TelegramMessage
-    ) -> None:
-        self._bind_options.pop(key, None)
-        resolved = self._resolve_workspace(arg)
-        if resolved is None:
-            await self._send_message(
-                message.chat_id,
-                "Unknown repo or path. Use /bind <repo_id> or /bind <path>.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        workspace_path, repo_id = resolved
-        scope = self._topic_scope_id(repo_id, workspace_path)
-        self._router.set_topic_scope(message.chat_id, message.thread_id, scope)
-        self._router.bind_topic(
-            message.chat_id,
-            message.thread_id,
-            workspace_path,
-            repo_id=repo_id,
-            scope=scope,
-        )
-        workspace_id = self._workspace_id_for_path(workspace_path)
-        if workspace_id:
-            self._router.update_topic(
-                message.chat_id,
-                message.thread_id,
-                lambda record: setattr(record, "workspace_id", workspace_id),
-                scope=scope,
-            )
-        await self._send_message(
-            message.chat_id,
-            f"Bound to {repo_id or workspace_path}.",
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-
-    async def _handle_new(self, message: TelegramMessage) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        record = self._router.get_topic(key)
-        if record is None or not record.workspace_path:
+        if client is None:
             await self._send_message(
                 message.chat_id,
                 "Topic not bound. Use /bind <repo_id> or /bind <path>.",
@@ -3672,26 +2703,6 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        agent = self._effective_agent(record)
-        if agent == "opencode":
-            supervisor = getattr(self, "_opencode_supervisor", None)
-            if supervisor is None:
-                await self._send_message(
-                    message.chat_id,
-                    "OpenCode backend unavailable; install opencode or switch to /agent codex.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            workspace_root = self._canonical_workspace_root(record.workspace_path)
-            if workspace_root is None:
-                await self._send_message(
-                    message.chat_id,
-                    "Workspace unavailable.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
             try:
                 client = await supervisor.get_client(workspace_root)
                 session = await client.create_session(directory=str(workspace_root))
@@ -3709,17 +2720,34 @@ class TelegramCommandHandlers:
                     "Failed to start a new OpenCode thread.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
-                )
-                return
-            session_id = extract_session_id(session, allow_fallback_id=True)
-            if not session_id:
-                await self._send_message(
-                    message.chat_id,
-                    "Failed to start a new OpenCode thread.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
+            )
+            return
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
 
             def apply(record: "TelegramTopicRecord") -> None:
                 record.active_thread_id = session_id
@@ -3739,7 +2767,24 @@ class TelegramCommandHandlers:
             self._router.update_topic(message.chat_id, message.thread_id, apply)
             thread_id = session_id
         else:
-            client = await self._client_for_workspace(record.workspace_path)
+            try:
+                client = await self._client_for_workspace(record.workspace_path)
+            except AppServerUnavailableError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.unavailable",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "App server unavailable; try again or check logs.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             if client is None:
                 await self._send_message(
                     message.chat_id,
@@ -3753,15 +2798,33 @@ class TelegramCommandHandlers:
                 message, record.workspace_path, thread, action="thread_start"
             ):
                 return
-            thread_id = _extract_thread_id(thread)
-            if not thread_id:
-                await self._send_message(
-                    message.chat_id,
-                    "Failed to start a new thread.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
+        desired = normalize_agent(argv[0])
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
             self._apply_thread_result(
                 message.chat_id, message.thread_id, thread, active_thread_id=thread_id
             )
@@ -3947,7 +3010,24 @@ class TelegramCommandHandlers:
                 refresh=refresh,
             )
             return
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -4331,7 +3411,28 @@ class TelegramCommandHandlers:
                 ),
             )
             return
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=chat_id,
+                thread_id=thread_id_val,
+                exc=exc,
+            )
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "App server unavailable; try again or check logs.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            return
         if client is None:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
@@ -4763,15 +3864,32 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        if subcommand == "clear":
-            if len(argv) < 2:
-                await self._send_message(
-                    message.chat_id,
-                    "Usage: /files clear inbox|outbox|all",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
             target = argv[1].lower()
             deleted = 0
             if target == "inbox":
@@ -4798,15 +3916,32 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        if subcommand == "send":
-            if len(argv) < 2:
-                await self._send_message(
-                    message.chat_id,
-                    "Usage: /files send <filename>",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
             name = Path(argv[1]).name
             candidate = pending_dir / name
             if not _path_within(pending_dir, candidate) or not candidate.is_file():
@@ -4930,7 +4065,10 @@ class TelegramCommandHandlers:
     async def _read_rate_limits(
         self, workspace_path: Optional[str]
     ) -> Optional[dict[str, Any]]:
-        client = await self._client_for_workspace(workspace_path)
+        try:
+            client = await self._client_for_workspace(workspace_path)
+        except AppServerUnavailableError:
+            return None
         if client is None:
             return None
         for method in ("account/rateLimits/read", "account/read"):
@@ -5072,9 +4210,26 @@ class TelegramCommandHandlers:
             "limit": DEFAULT_MODEL_LIST_LIMIT,
             "agent": agent,
         }
-        client = await self._client_for_workspace(
-            record.workspace_path if record else None
-        )
+        try:
+            client = await self._client_for_workspace(
+                record.workspace_path if record else None
+            )
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -5305,7 +4460,24 @@ class TelegramCommandHandlers:
         target: dict[str, Any],
         delivery: str,
     ) -> None:
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -5848,11 +5020,28 @@ class TelegramCommandHandlers:
         record = await self._require_bound_record(message)
         if not record:
             return
-        argv = self._parse_command_args(args)
-        if not argv:
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
             await self._send_message(
                 message.chat_id,
-                "Usage: /pr start <issueRef> | /pr fix <prRef> | /pr status | /pr stop | /pr resume | /pr collect",
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -6109,7 +5298,10 @@ class TelegramCommandHandlers:
     async def _list_recent_commits(
         self, record: TelegramTopicRecord
     ) -> list[tuple[str, str]]:
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError:
+            return []
         if client is None:
             return []
         command = "git log -n 50 --pretty=format:%H%x1f%s%x1e"
@@ -6149,16 +5341,24 @@ class TelegramCommandHandlers:
         record = await self._require_bound_record(message)
         if not record:
             return
-        command_text = text[1:].strip()
-        if not command_text:
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
             await self._send_message(
                 message.chat_id,
-                "Prefix a command with ! to run it locally.\nExample: !ls",
+                "App server unavailable; try again or check logs.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
-        client = await self._client_for_workspace(record.workspace_path)
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -6331,11 +5531,28 @@ class TelegramCommandHandlers:
         record = await self._require_bound_record(message)
         if not record:
             return
-        argv = self._parse_command_args(args)
-        if not argv:
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
             await self._send_message(
                 message.chat_id,
-                "Usage: /mention <path> [request]",
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -6725,7 +5942,18 @@ class TelegramCommandHandlers:
     ) -> tuple[bool, str | None]:
         if not record.workspace_path:
             return False, "Topic not bound. Use /bind <repo_id> or /bind <path>."
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            return False, "App server unavailable; try again or check logs."
         if client is None:
             return False, "Topic not bound. Use /bind <repo_id> or /bind <path>."
         log_event(
@@ -6806,11 +6034,28 @@ class TelegramCommandHandlers:
         record = await self._require_bound_record(message)
         if not record:
             return
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        if not record.active_thread_id:
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
             await self._send_message(
                 message.chat_id,
-                "No active thread to compact. Use /new to start one.",
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
