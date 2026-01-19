@@ -21,6 +21,7 @@ Config lives under `telegram_bot` in `codex-autorunner.yml` and the generated
 - `telegram_bot.parse_mode`: `HTML`, `Markdown`, `MarkdownV2`, or null.
 - `telegram_bot.debug.prefix_context`: when true, prefix outgoing messages with routing metadata.
 - `telegram_bot.app_server_command(_env)`: how to launch `codex app-server`.
+- `telegram_bot.app_server`: app-server tuning (`max_handles`, `idle_ttl_seconds`, `turn_timeout_seconds`).
 - `telegram_bot.media`: image/voice handling limits and prompts.
 - `telegram_bot.shell`: `!<cmd>` settings (enable flag, timeouts, output limits).
 - `telegram_bot.defaults`: approval/sandbox defaults for the app-server client.
