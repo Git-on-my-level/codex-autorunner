@@ -23,6 +23,22 @@ class PendingApproval:
 
 
 @dataclass
+class PendingQuestion:
+    request_id: str
+    turn_id: str
+    codex_thread_id: Optional[str]
+    chat_id: int
+    thread_id: Optional[int]
+    topic_key: Optional[str]
+    message_id: Optional[int]
+    created_at: str
+    question_index: int
+    prompt: str
+    options: list[str]
+    future: asyncio.Future[Optional[int]]
+
+
+@dataclass
 class TurnContext:
     topic_key: str
     chat_id: int

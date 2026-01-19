@@ -1489,6 +1489,28 @@ class TelegramCommandHandlers:
                             )
                             return decision
 
+                        async def _question_handler(
+                            request_id: str, props: dict[str, Any]
+                        ) -> Optional[list[list[str]]]:
+                            questions_raw = (
+                                props.get("questions")
+                                if isinstance(props, dict)
+                                else None
+                            )
+                            questions = []
+                            if isinstance(questions_raw, list):
+                                questions = [
+                                    question
+                                    for question in questions_raw
+                                    if isinstance(question, dict)
+                                ]
+                            return await self._handle_question_request(
+                                request_id=request_id,
+                                turn_id=turn_id,
+                                thread_id=thread_id,
+                                questions=questions,
+                            )
+
                         abort_requested = False
 
                         async def _abort_opencode() -> None:
@@ -1749,6 +1771,7 @@ class TelegramCommandHandlers:
                                     if permission_policy == PERMISSION_ASK
                                     else None
                                 ),
+                                question_handler=_question_handler,
                                 should_stop=_should_stop,
                                 part_handler=_handle_opencode_part,
                             )
@@ -3457,11 +3480,25 @@ class TelegramCommandHandlers:
                 and pending.thread_id == thread_id
             )
         ]
+        pending_question_ids = [
+            request_id
+            for request_id, pending in self._pending_questions.items()
+            if (pending.topic_key == key)
+            or (
+                pending.topic_key is None
+                and pending.chat_id == chat_id
+                and pending.thread_id == thread_id
+            )
+        ]
         for request_id in pending_request_ids:
             pending = self._pending_approvals.pop(request_id, None)
             if pending and not pending.future.done():
                 pending.future.set_result("cancel")
             self._store.clear_pending_approval(request_id)
+        for request_id in pending_question_ids:
+            pending = self._pending_questions.pop(request_id, None)
+            if pending and not pending.future.done():
+                pending.future.set_result(None)
         if pending_request_ids:
             runtime.pending_request_id = None
         queued_turn_cancelled = False
@@ -3479,7 +3516,13 @@ class TelegramCommandHandlers:
                 runtime.pending_request_id = None
             pending_count = len(pending_records) if pending_records else 0
             pending_count += len(pending_request_ids)
-            if queued_turn_cancelled or queued_cancelled or pending_count:
+            pending_question_count = len(pending_question_ids)
+            if (
+                queued_turn_cancelled
+                or queued_cancelled
+                or pending_count
+                or pending_question_count
+            ):
                 parts = []
                 if queued_turn_cancelled:
                     parts.append("Cancelled queued turn.")
@@ -3487,6 +3530,10 @@ class TelegramCommandHandlers:
                     parts.append(f"Cancelled {queued_cancelled} queued job(s).")
                 if pending_count:
                     parts.append(f"Cleared {pending_count} pending approval(s).")
+                if pending_question_count:
+                    parts.append(
+                        f"Cleared {pending_question_count} pending question(s)."
+                    )
                 await self._send_message(
                     chat_id,
                     " ".join(parts),
