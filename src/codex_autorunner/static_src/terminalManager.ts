@@ -1967,6 +1967,13 @@ export class TerminalManager {
       return false;
     }
     if (this.term) {
+      if (!this.inputDisposable) {
+        this.inputDisposable = this.term.onData((data) => {
+          if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+          this._markSessionActive();
+          this.socket.send(textEncoder.encode(data));
+        });
+      }
       return true;
     }
     const container = document.getElementById("terminal-container") as HTMLElement | null;
