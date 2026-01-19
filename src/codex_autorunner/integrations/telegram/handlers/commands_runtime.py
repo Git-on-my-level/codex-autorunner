@@ -68,6 +68,7 @@ from ..constants import (
     COMPACT_SUMMARY_PROMPT,
     DEFAULT_AGENT,
     DEFAULT_AGENT_MODELS,
+    DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     DEFAULT_MCP_LIST_LIMIT,
     DEFAULT_MODEL_LIST_LIMIT,
     DEFAULT_PAGE_SIZE,
@@ -1448,6 +1449,79 @@ class TelegramCommandHandlers:
                     await cancel_task
             runtime.queued_turn_cancel = None
 
+    async def _wait_for_turn_result(
+        self,
+        client: CodexAppServerClient,
+        turn_handle: Any,
+        *,
+        timeout_seconds: Optional[float],
+        topic_key: Optional[str],
+        chat_id: int,
+        thread_id: Optional[int],
+    ) -> Any:
+        if not timeout_seconds:
+            return await turn_handle.wait()
+        turn_task = asyncio.create_task(turn_handle.wait(timeout=None))
+        timeout_task = asyncio.create_task(asyncio.sleep(timeout_seconds))
+        try:
+            done, _pending = await asyncio.wait(
+                {turn_task, timeout_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if turn_task in done:
+                return await turn_task
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.turn.timeout",
+                topic_key=topic_key,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                codex_thread_id=getattr(turn_handle, "thread_id", None),
+                turn_id=getattr(turn_handle, "turn_id", None),
+                timeout_seconds=timeout_seconds,
+            )
+            try:
+                await client.turn_interrupt(
+                    turn_handle.turn_id, thread_id=turn_handle.thread_id
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.turn.timeout_interrupt_failed",
+                    topic_key=topic_key,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    codex_thread_id=getattr(turn_handle, "thread_id", None),
+                    turn_id=getattr(turn_handle, "turn_id", None),
+                    exc=exc,
+                )
+            done, _pending = await asyncio.wait(
+                {turn_task}, timeout=DEFAULT_INTERRUPT_TIMEOUT_SECONDS
+            )
+            if not done:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.turn.timeout_grace_exhausted",
+                    topic_key=topic_key,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    codex_thread_id=getattr(turn_handle, "thread_id", None),
+                    turn_id=getattr(turn_handle, "turn_id", None),
+                )
+                if not turn_task.done():
+                    turn_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await turn_task
+                raise asyncio.TimeoutError("Codex turn timed out")
+            await turn_task
+            raise asyncio.TimeoutError("Codex turn timed out")
+        finally:
+            timeout_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await timeout_task
+
     async def _run_turn_and_collect_result(
         self,
         message: TelegramMessage,
@@ -2604,7 +2678,14 @@ class TelegramCommandHandlers:
                     model=record.model,
                     label="working",
                 )
-                result = await turn_handle.wait()
+                result = await self._wait_for_turn_result(
+                    client,
+                    turn_handle,
+                    timeout_seconds=self._config.app_server_turn_timeout_seconds,
+                    topic_key=key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                )
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
             finally:
@@ -2618,7 +2699,13 @@ class TelegramCommandHandlers:
             runtime.interrupt_requested = False
             failure_message = "Codex turn failed; check logs for details."
             reason = "codex_turn_failed"
-            if isinstance(exc, CodexAppServerDisconnected):
+            if isinstance(exc, asyncio.TimeoutError):
+                failure_message = (
+                    "Codex turn timed out; interrupting now. "
+                    "Please resend your message in a moment."
+                )
+                reason = "turn_timeout"
+            elif isinstance(exc, CodexAppServerDisconnected):
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -6184,7 +6271,14 @@ class TelegramCommandHandlers:
                     model=record.model,
                     label="working",
                 )
-                result = await turn_handle.wait()
+                result = await self._wait_for_turn_result(
+                    client,
+                    turn_handle,
+                    timeout_seconds=self._config.app_server_turn_timeout_seconds,
+                    topic_key=topic_key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                )
                 if turn_started_at is not None:
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
             finally:
@@ -6197,7 +6291,14 @@ class TelegramCommandHandlers:
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
             failure_message = "Codex review failed; check logs for details."
-            if isinstance(exc, CodexAppServerDisconnected):
+            reason = "review_failed"
+            if isinstance(exc, asyncio.TimeoutError):
+                failure_message = (
+                    "Codex review timed out; interrupting now. "
+                    "Please resend the review command in a moment."
+                )
+                reason = "turn_timeout"
+            elif isinstance(exc, CodexAppServerDisconnected):
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -6217,6 +6318,7 @@ class TelegramCommandHandlers:
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 exc=exc,
+                reason=reason,
             )
             response_sent = await self._deliver_turn_response(
                 chat_id=message.chat_id,

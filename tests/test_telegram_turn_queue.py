@@ -31,7 +31,7 @@ class _TurnHandle:
         self.turn_id = turn_id
         self._wait_event = wait_event
 
-    async def wait(self) -> _TurnResult:
+    async def wait(self, *_args: object, **_kwargs: object) -> _TurnResult:
         await self._wait_event.wait()
         return _TurnResult()
 
@@ -110,7 +110,8 @@ class _HandlerStub(TelegramCommandHandlers):
             concurrency=SimpleNamespace(
                 max_parallel_turns=max_parallel_turns,
                 per_topic_queue=False,
-            )
+            ),
+            app_server_turn_timeout_seconds=None,
         )
         self._router = _RouterStub(records)
         self._turn_semaphore = asyncio.Semaphore(max_parallel_turns)
