@@ -15,7 +15,6 @@ from .adapter import (
     allowlist_allows,
     parse_callback_data,
 )
-from .constants import QUEUED_PLACEHOLDER_TEXT
 from .state import topic_key
 
 
@@ -117,32 +116,12 @@ async def _dispatch_message(
     if message is None:
         return
     if context.topic_key:
+        await handlers._maybe_send_queued_placeholder(
+            message, topic_key=context.topic_key
+        )
         if handlers._should_bypass_topic_queue(message):
             await handlers._handle_message(message)
             return
-        runtime = handlers._router.runtime_for(context.topic_key)
-        is_busy = runtime.current_turn_id is not None or runtime.queue.pending() > 0
-        if is_busy:
-            placeholder_id = await handlers._send_placeholder(
-                message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                text=QUEUED_PLACEHOLDER_TEXT,
-            )
-            if placeholder_id is not None:
-                handlers._set_queued_placeholder(
-                    message.chat_id, message.message_id, placeholder_id
-                )
-                log_event(
-                    handlers._logger,
-                    logging.INFO,
-                    "telegram.placeholder.queued",
-                    topic_key=context.topic_key,
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    message_id=message.message_id,
-                    placeholder_id=placeholder_id,
-                )
         handlers._enqueue_topic_work(
             context.topic_key,
             lambda: handlers._handle_message(message),

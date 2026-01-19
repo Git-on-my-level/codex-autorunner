@@ -38,6 +38,7 @@ class _CoalescedBuffer:
     message: TelegramMessage
     parts: list[str]
     topic_key: str
+    placeholder_id: Optional[int] = None
     task: Optional[asyncio.Task[None]] = None
 
 
@@ -45,6 +46,7 @@ class _CoalescedBuffer:
 class _MediaBatchBuffer:
     topic_key: str
     messages: list[TelegramMessage] = field(default_factory=list)
+    placeholder_id: Optional[int] = None
     task: Optional[asyncio.Task[None]] = None
     media_group_id: Optional[str] = None
     created_at: float = 0.0
@@ -73,14 +75,19 @@ async def _clear_pending_options(
 
 
 async def handle_message(handlers: Any, message: TelegramMessage) -> None:
+    placeholder_id = handlers._claim_queued_placeholder(
+        message.chat_id, message.message_id
+    )
     if message.is_edited:
-        await handle_edited_message(handlers, message)
+        await handle_edited_message(handlers, message, placeholder_id=placeholder_id)
         return
 
     _raw_text, text_candidate, entities = _message_text_candidate(message)
     trimmed_text = text_candidate.strip()
     has_media = message_has_media(message)
     if not trimmed_text and not has_media:
+        if placeholder_id is not None:
+            await handlers._delete_message(message.chat_id, placeholder_id)
         return
 
     should_bypass = False
@@ -102,7 +109,9 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
                 )
                 await _clear_pending_options(handlers, topic_key, message)
                 await flush_coalesced_message(handlers, message)
-                await buffer_media_batch(handlers, message)
+                await buffer_media_batch(
+                    handlers, message, placeholder_id=placeholder_id
+                )
                 return
             should_bypass = True
         else:
@@ -110,10 +119,12 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
 
     if should_bypass:
         await flush_coalesced_message(handlers, message)
-        await handle_message_inner(handlers, message)
+        await handle_message_inner(handlers, message, placeholder_id=placeholder_id)
         return
 
-    await buffer_coalesced_message(handlers, message, text_candidate)
+    await buffer_coalesced_message(
+        handlers, message, text_candidate, placeholder_id=placeholder_id
+    )
 
 
 def should_bypass_topic_queue(handlers: Any, message: TelegramMessage) -> bool:
@@ -134,34 +145,58 @@ def should_bypass_topic_queue(handlers: Any, message: TelegramMessage) -> bool:
     return bool(spec and spec.allow_during_turn)
 
 
-async def handle_edited_message(handlers: Any, message: TelegramMessage) -> None:
+async def handle_edited_message(
+    handlers: Any,
+    message: TelegramMessage,
+    *,
+    placeholder_id: Optional[int] = None,
+) -> None:
     text = (message.text or "").strip()
     if not text:
         text = (message.caption or "").strip()
     if not text:
+        if placeholder_id is not None:
+            await handlers._delete_message(message.chat_id, placeholder_id)
         return
     key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
     runtime = handlers._router.runtime_for(key)
     turn_key = runtime.current_turn_key
     if not turn_key:
+        if placeholder_id is not None:
+            await handlers._delete_message(message.chat_id, placeholder_id)
         return
     ctx = handlers._turn_contexts.get(turn_key)
     if ctx is None or ctx.reply_to_message_id != message.message_id:
+        if placeholder_id is not None:
+            await handlers._delete_message(message.chat_id, placeholder_id)
         return
     await handlers._handle_interrupt(message, runtime)
     edited_text = f"Edited: {text}"
-    handlers._enqueue_topic_work(
-        key,
-        lambda: handlers._handle_normal_message(
+
+    async def work() -> None:
+        await handlers._handle_normal_message(
             message,
             runtime,
             text_override=edited_text,
+            placeholder_id=placeholder_id,
+        )
+
+    handlers._enqueue_topic_work(
+        key,
+        handlers._wrap_placeholder_work(
+            chat_id=message.chat_id,
+            placeholder_id=placeholder_id,
+            work=work,
         ),
     )
 
 
 async def handle_message_inner(
-    handlers: Any, message: TelegramMessage, *, topic_key: Optional[str] = None
+    handlers: Any,
+    message: TelegramMessage,
+    *,
+    topic_key: Optional[str] = None,
+    placeholder_id: Optional[int] = None,
 ) -> None:
     raw_text = message.text or ""
     raw_caption = message.caption or ""
@@ -172,7 +207,14 @@ async def handle_message_inner(
         entities = message.caption_entities
     has_media = message_has_media(message)
     if not text and not has_media:
+        if placeholder_id is not None:
+            await handlers._delete_message(message.chat_id, placeholder_id)
         return
+
+    async def _clear_placeholder() -> None:
+        if placeholder_id is not None:
+            await handlers._delete_message(message.chat_id, placeholder_id)
+
     key = (
         topic_key
         if isinstance(topic_key, str) and topic_key
@@ -181,8 +223,10 @@ async def handle_message_inner(
     runtime = handlers._router.runtime_for(key)
 
     if text and handlers._handle_pending_resume(key, text):
+        await _clear_placeholder()
         return
     if text and handlers._handle_pending_bind(key, text):
+        await _clear_placeholder()
         return
 
     if text:
@@ -190,10 +234,12 @@ async def handle_message_inner(
         if parsed and parsed[1] == "issue":
             slug, kind, number = parsed
             await handlers._handle_github_issue_url(message, key, slug, number)
+            await _clear_placeholder()
             return
 
     if text and is_interrupt_alias(text):
         await handlers._handle_interrupt(message, runtime)
+        await _clear_placeholder()
         return
 
     if text and text.startswith("!") and not has_media:
@@ -202,15 +248,24 @@ async def handle_message_inner(
         handlers._agent_options.pop(key, None)
         handlers._model_options.pop(key, None)
         handlers._model_pending.pop(key, None)
+
+        async def work() -> None:
+            await handlers._handle_bang_shell(message, text, runtime)
+
         handlers._enqueue_topic_work(
             key,
-            lambda: handlers._handle_bang_shell(message, text, runtime),
+            handlers._wrap_placeholder_work(
+                chat_id=message.chat_id,
+                placeholder_id=placeholder_id,
+                work=work,
+            ),
         )
         return
 
     if text and await handlers._handle_pending_review_commit(
         message, runtime, key, text
     ):
+        await _clear_placeholder()
         return
 
     command_text = raw_text if raw_text.strip() else raw_caption
@@ -224,6 +279,7 @@ async def handle_message_inner(
     if await handlers._handle_pending_review_custom(
         key, message, runtime, command, raw_text, raw_caption
     ):
+        await _clear_placeholder()
         return
     if command:
         if command.name != "resume":
@@ -252,31 +308,63 @@ async def handle_message_inner(
         await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     if command:
         spec = handlers._command_specs.get(command.name)
+
+        async def work() -> None:
+            await handlers._handle_command(command, message, runtime)
+
         if spec and spec.allow_during_turn:
-            handlers._spawn_task(handlers._handle_command(command, message, runtime))
+            wrapped = handlers._wrap_placeholder_work(
+                chat_id=message.chat_id,
+                placeholder_id=placeholder_id,
+                work=work,
+            )
+            handlers._spawn_task(wrapped())
         else:
             handlers._enqueue_topic_work(
                 key,
-                lambda: handlers._handle_command(command, message, runtime),
+                handlers._wrap_placeholder_work(
+                    chat_id=message.chat_id,
+                    placeholder_id=placeholder_id,
+                    work=work,
+                ),
             )
         return
 
     if has_media:
+
+        async def work() -> None:
+            await handle_media_message(
+                handlers,
+                message,
+                runtime,
+                text,
+                placeholder_id=placeholder_id,
+            )
+
         handlers._enqueue_topic_work(
             key,
-            lambda: handle_media_message(handlers, message, runtime, text),
+            handlers._wrap_placeholder_work(
+                chat_id=message.chat_id,
+                placeholder_id=placeholder_id,
+                work=work,
+            ),
         )
         return
 
-    queued_placeholder = handlers._get_queued_placeholder(
-        message.chat_id, message.message_id
-    )
-    if queued_placeholder is not None:
-        handlers._clear_queued_placeholder(message.chat_id, message.message_id)
+    async def work() -> None:
+        await handlers._handle_normal_message(
+            message,
+            runtime,
+            text_override=text,
+            placeholder_id=placeholder_id,
+        )
+
     handlers._enqueue_topic_work(
         key,
-        lambda: handlers._handle_normal_message(
-            message, runtime, text_override=text, placeholder_id=queued_placeholder
+        handlers._wrap_placeholder_work(
+            chat_id=message.chat_id,
+            placeholder_id=placeholder_id,
+            work=work,
         ),
     )
 
@@ -293,20 +381,33 @@ def coalesce_key(handlers: Any, message: TelegramMessage) -> str:
 
 
 async def buffer_coalesced_message(
-    handlers: Any, message: TelegramMessage, text: str
+    handlers: Any,
+    message: TelegramMessage,
+    text: str,
+    *,
+    placeholder_id: Optional[int] = None,
 ) -> None:
     topic_key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
     key = coalesce_key_for_topic(handlers, topic_key, message.from_user_id)
     lock = handlers._coalesce_locks.setdefault(key, asyncio.Lock())
+    drop_placeholder = False
     async with lock:
         buffer = handlers._coalesced_buffers.get(key)
         if buffer is None:
             buffer = _CoalescedBuffer(
-                message=message, parts=[text], topic_key=topic_key
+                message=message,
+                parts=[text],
+                topic_key=topic_key,
+                placeholder_id=placeholder_id,
             )
             handlers._coalesced_buffers[key] = buffer
         else:
             buffer.parts.append(text)
+            if placeholder_id is not None:
+                if buffer.placeholder_id is None:
+                    buffer.placeholder_id = placeholder_id
+                else:
+                    drop_placeholder = True
         handlers._touch_cache_timestamp("coalesced_buffers", key)
         task = buffer.task
         if task is not None and task is not asyncio.current_task():
@@ -315,6 +416,8 @@ async def buffer_coalesced_message(
         buffer.task = handlers._spawn_task(
             coalesce_flush_after(handlers, key, window_seconds)
         )
+    if drop_placeholder and placeholder_id is not None:
+        await handlers._delete_message(message.chat_id, placeholder_id)
 
 
 async def coalesce_flush_after(handlers: Any, key: str, window_seconds: float) -> None:
@@ -345,16 +448,17 @@ async def flush_coalesced_key(handlers: Any, key: str) -> None:
     buffer = None
     async with lock:
         buffer = handlers._coalesced_buffers.pop(key, None)
-        if buffer is None:
-            return
-        task = buffer.task
-        if task is not None and task is not asyncio.current_task():
-            task.cancel()
+    if buffer is None:
+        return
+    task = buffer.task
+    if task is not None and task is not asyncio.current_task():
+        task.cancel()
     combined_message = build_coalesced_message(buffer)
     await handle_message_inner(
         handlers,
         combined_message,
         topic_key=buffer.topic_key,
+        placeholder_id=buffer.placeholder_id,
     )
 
 
@@ -467,20 +571,37 @@ def media_batch_key(handlers: Any, message: TelegramMessage) -> str:
     return f"{topic_key}:user:{user_id}:burst"
 
 
-async def buffer_media_batch(handlers: Any, message: TelegramMessage) -> None:
+async def buffer_media_batch(
+    handlers: Any,
+    message: TelegramMessage,
+    *,
+    placeholder_id: Optional[int] = None,
+) -> None:
     if not has_batchable_media(message):
         return
     topic_key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
     key = media_batch_key(handlers, message)
     lock = handlers._media_batch_locks.setdefault(key, asyncio.Lock())
+    drop_placeholder = False
     async with lock:
         buffer = handlers._media_batch_buffers.get(key)
         if buffer is not None and len(buffer.messages) >= MAX_BATCH_ITEMS:
             if buffer.task and buffer.task is not asyncio.current_task():
                 buffer.task.cancel()
+
+            async def work(
+                msgs: list[TelegramMessage] = buffer.messages,
+                pid: Optional[int] = buffer.placeholder_id,
+            ) -> None:
+                await handlers._handle_media_batch(msgs, placeholder_id=pid)
+
             handlers._enqueue_topic_work(
                 buffer.topic_key,
-                lambda msgs=buffer.messages: handlers._handle_media_batch(msgs),
+                handlers._wrap_placeholder_work(
+                    chat_id=message.chat_id,
+                    placeholder_id=buffer.placeholder_id,
+                    work=work,
+                ),
             )
             handlers._media_batch_buffers.pop(key, None)
             buffer = None
@@ -489,12 +610,18 @@ async def buffer_media_batch(handlers: Any, message: TelegramMessage) -> None:
             buffer = _MediaBatchBuffer(
                 topic_key=topic_key,
                 messages=[message],
+                placeholder_id=placeholder_id,
                 media_group_id=message.media_group_id,
                 created_at=time.monotonic(),
             )
             handlers._media_batch_buffers[key] = buffer
         else:
             buffer.messages.append(message)
+            if placeholder_id is not None:
+                if buffer.placeholder_id is None:
+                    buffer.placeholder_id = placeholder_id
+                else:
+                    drop_placeholder = True
 
         handlers._touch_cache_timestamp("media_batch_buffers", key)
         task = buffer.task
@@ -504,6 +631,8 @@ async def buffer_media_batch(handlers: Any, message: TelegramMessage) -> None:
         buffer.task = handlers._spawn_task(
             flush_media_batch_after(handlers, key, window_seconds)
         )
+    if drop_placeholder and placeholder_id is not None:
+        await handlers._delete_message(message.chat_id, placeholder_id)
 
 
 async def flush_media_batch_after(
@@ -539,14 +668,29 @@ async def flush_media_batch_key(handlers: Any, key: str) -> None:
             task.cancel()
         handlers._media_batch_locks.pop(key, None)
     if buffer.messages:
+
+        async def work() -> None:
+            await handlers._handle_media_batch(
+                buffer.messages, placeholder_id=buffer.placeholder_id
+            )
+
         handlers._enqueue_topic_work(
             buffer.topic_key,
-            lambda: handlers._handle_media_batch(buffer.messages),
+            handlers._wrap_placeholder_work(
+                chat_id=buffer.messages[0].chat_id,
+                placeholder_id=buffer.placeholder_id,
+                work=work,
+            ),
         )
 
 
 async def handle_media_message(
-    handlers: Any, message: TelegramMessage, runtime: Any, caption_text: str
+    handlers: Any,
+    message: TelegramMessage,
+    runtime: Any,
+    caption_text: str,
+    *,
+    placeholder_id: Optional[int] = None,
 ) -> None:
     if not handlers._config.media.enabled:
         await handlers._send_message(
@@ -582,7 +726,12 @@ async def handle_media_message(
             )
             return
         await handlers._handle_image_message(
-            message, runtime, record, image_candidate, caption_text
+            message,
+            runtime,
+            record,
+            image_candidate,
+            caption_text,
+            placeholder_id=placeholder_id,
         )
         return
 
@@ -597,7 +746,12 @@ async def handle_media_message(
             )
             return
         await handlers._handle_voice_message(
-            message, runtime, record, voice_candidate, caption_text
+            message,
+            runtime,
+            record,
+            voice_candidate,
+            caption_text,
+            placeholder_id=placeholder_id,
         )
         return
 
@@ -612,7 +766,12 @@ async def handle_media_message(
             )
             return
         await handlers._handle_file_message(
-            message, runtime, record, file_candidate, caption_text
+            message,
+            runtime,
+            record,
+            file_candidate,
+            caption_text,
+            placeholder_id=placeholder_id,
         )
         return
 
@@ -622,6 +781,7 @@ async def handle_media_message(
             runtime,
             text_override=caption_text,
             record=record,
+            placeholder_id=placeholder_id,
         )
         return
     await handlers._send_message(

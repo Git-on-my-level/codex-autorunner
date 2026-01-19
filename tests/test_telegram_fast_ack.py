@@ -77,6 +77,25 @@ class _ServiceStub:
     def _spawn_task(self, coro) -> asyncio.Task:
         return asyncio.create_task(coro)
 
+    async def _maybe_send_queued_placeholder(
+        self, message: TelegramMessage, *, topic_key: str
+    ) -> Optional[int]:
+        runtime = self._router.runtime_for(topic_key)
+        is_busy = runtime.current_turn_id is not None or runtime.queue.pending() > 0
+        if not is_busy:
+            return None
+        placeholder_id = await self._send_placeholder(
+            message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            text=QUEUED_PLACEHOLDER_TEXT,
+        )
+        if placeholder_id is not None:
+            self._set_queued_placeholder(
+                message.chat_id, message.message_id, placeholder_id
+            )
+        return placeholder_id
+
     def _get_queued_placeholder(self, chat_id: int, message_id: int) -> Optional[int]:
         return self._queued_placeholder_map.get((chat_id, message_id))
 

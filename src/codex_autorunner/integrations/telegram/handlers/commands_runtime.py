@@ -1378,14 +1378,14 @@ class TelegramCommandHandlers:
                 failure_message, None, transcript_message_id, transcript_text
             )
         turn_handle = None
+        turn_semaphore = self._ensure_turn_semaphore()
+        queued = turn_semaphore.locked()
+        placeholder_text = PLACEHOLDER_TEXT
+        if queued:
+            placeholder_text = QUEUED_PLACEHOLDER_TEXT
+        turn_started_at: Optional[float] = None
+        turn_elapsed_seconds: Optional[float] = None
         if placeholder_id is None and send_placeholder:
-            turn_started_at: Optional[float] = None
-            turn_elapsed_seconds: Optional[float] = None
-            turn_semaphore = self._ensure_turn_semaphore()
-            queued = turn_semaphore.locked()
-            placeholder_text = PLACEHOLDER_TEXT
-            if queued:
-                placeholder_text = QUEUED_PLACEHOLDER_TEXT
             placeholder_id = await self._send_placeholder(
                 message.chat_id,
                 thread_id=message.thread_id,
@@ -1402,9 +1402,6 @@ class TelegramCommandHandlers:
                 placeholder_id=placeholder_id,
                 placeholder_sent_at=now_iso(),
             )
-        else:
-            turn_started_at: Optional[float] = None
-            turn_elapsed_seconds: Optional[float] = None
         if record.active_thread_id:
             conflict_key = self._find_thread_conflict(
                 record.active_thread_id,
@@ -2807,6 +2804,8 @@ class TelegramCommandHandlers:
         record: Any,
         candidate: TelegramMediaCandidate,
         caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
     ) -> None:
         log_event(
             self._logger,
@@ -2909,6 +2908,7 @@ class TelegramCommandHandlers:
             text_override=prompt_text,
             input_items=input_items,
             record=record,
+            placeholder_id=placeholder_id,
         )
 
     async def _handle_voice_message(
@@ -2918,6 +2918,8 @@ class TelegramCommandHandlers:
         record: Any,
         candidate: TelegramMediaCandidate,
         caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
     ) -> None:
         log_event(
             self._logger,
@@ -2986,6 +2988,8 @@ class TelegramCommandHandlers:
         record: Any,
         candidate: TelegramMediaCandidate,
         caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
     ) -> None:
         log_event(
             self._logger,
@@ -3093,9 +3097,15 @@ class TelegramCommandHandlers:
             runtime,
             text_override=prompt_text,
             record=record,
+            placeholder_id=placeholder_id,
         )
 
-    async def _handle_media_batch(self, messages: Sequence[TelegramMessage]) -> None:
+    async def _handle_media_batch(
+        self,
+        messages: Sequence[TelegramMessage],
+        *,
+        placeholder_id: Optional[int] = None,
+    ) -> None:
         if not messages:
             return
         if not self._config.media.enabled:
@@ -3345,6 +3355,7 @@ class TelegramCommandHandlers:
             text_override=combined_prompt,
             input_items=input_items,
             record=record,
+            placeholder_id=placeholder_id,
         )
 
     async def _download_telegram_file(

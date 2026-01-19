@@ -54,6 +54,7 @@ from .constants import (
     PENDING_APPROVAL_TTL_SECONDS,
     PENDING_QUESTION_TTL_SECONDS,
     PROGRESS_STREAM_TTL_SECONDS,
+    QUEUED_PLACEHOLDER_TEXT,
     REASONING_BUFFER_TTL_SECONDS,
     SELECTION_STATE_TTL_SECONDS,
     TURN_PREVIEW_TTL_SECONDS,
@@ -1058,9 +1059,15 @@ class TelegramBotService(
         await message_handlers.handle_edited_message(self, message)
 
     async def _handle_message_inner(
-        self, message: TelegramMessage, *, topic_key: Optional[str] = None
+        self,
+        message: TelegramMessage,
+        *,
+        topic_key: Optional[str] = None,
+        placeholder_id: Optional[int] = None,
     ) -> None:
-        await message_handlers.handle_message_inner(self, message, topic_key=topic_key)
+        await message_handlers.handle_message_inner(
+            self, message, topic_key=topic_key, placeholder_id=placeholder_id
+        )
 
     def _coalesce_key_for_topic(self, key: str, user_id: Optional[int]) -> str:
         return message_handlers.coalesce_key_for_topic(self, key, user_id)
@@ -1069,9 +1076,15 @@ class TelegramBotService(
         return message_handlers.coalesce_key(self, message)
 
     async def _buffer_coalesced_message(
-        self, message: TelegramMessage, text: str
+        self,
+        message: TelegramMessage,
+        text: str,
+        *,
+        placeholder_id: Optional[int] = None,
     ) -> None:
-        await message_handlers.buffer_coalesced_message(self, message, text)
+        await message_handlers.buffer_coalesced_message(
+            self, message, text, placeholder_id=placeholder_id
+        )
 
     async def _coalesce_flush_after(self, key: str) -> None:
         window_seconds = self._config.coalesce_window_seconds
@@ -1108,10 +1121,19 @@ class TelegramBotService(
         return message_handlers.select_voice_candidate(message)
 
     async def _handle_media_message(
-        self, message: TelegramMessage, runtime: Any, caption_text: str
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
     ) -> None:
         await message_handlers.handle_media_message(
-            self, message, runtime, caption_text
+            self,
+            message,
+            runtime,
+            caption_text,
+            placeholder_id=placeholder_id,
         )
 
     def _with_conversation_id(
@@ -1162,6 +1184,59 @@ class TelegramBotService(
             self._spawn_task(runtime.queue.enqueue(wrapped))
         else:
             self._spawn_task(wrapped())
+
+    async def _maybe_send_queued_placeholder(
+        self, message: TelegramMessage, *, topic_key: str
+    ) -> Optional[int]:
+        runtime = self._router.runtime_for(topic_key)
+        is_busy = runtime.current_turn_id is not None or runtime.queue.pending() > 0
+        if not is_busy:
+            return None
+        placeholder_id = await self._send_placeholder(
+            message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            text=QUEUED_PLACEHOLDER_TEXT,
+        )
+        if placeholder_id is None:
+            return None
+        self._set_queued_placeholder(
+            message.chat_id, message.message_id, placeholder_id
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.placeholder.queued",
+            topic_key=topic_key,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            placeholder_id=placeholder_id,
+        )
+        return placeholder_id
+
+    def _wrap_placeholder_work(
+        self,
+        *,
+        chat_id: int,
+        placeholder_id: Optional[int],
+        work: Any,
+    ) -> Any:
+        if placeholder_id is None:
+            return work
+
+        async def wrapped() -> Any:
+            try:
+                return await work()
+            finally:
+                await self._delete_message(chat_id, placeholder_id)
+
+        return wrapped
+
+    def _claim_queued_placeholder(self, chat_id: int, message_id: int) -> Optional[int]:
+        placeholder_id = self._queued_placeholder_map.pop((chat_id, message_id), None)
+        self._queued_placeholder_timestamps.pop((chat_id, message_id), None)
+        return placeholder_id
 
     def _get_queued_placeholder(self, chat_id: int, message_id: int) -> Optional[int]:
         return self._queued_placeholder_map.get((chat_id, message_id))

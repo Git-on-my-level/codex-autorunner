@@ -227,6 +227,8 @@ async def test_audio_message_bypasses_coalescing_like_voice(
     handlers._bot_username = "CodexBot"
     handlers._config.media.batch_uploads = True
     handlers._config.media.enabled = True
+    handlers._claim_queued_placeholder = MagicMock(return_value=None)
+    handlers._delete_message = MagicMock()
 
     # Mock module-level functions that are awaited
     mock_flush = MagicMock()
@@ -261,7 +263,9 @@ async def test_audio_message_bypasses_coalescing_like_voice(
 
     # Audio should bypass, so it flushes and calls inner directly
     mock_flush.assert_called_once_with(handlers, audio_message)
-    mock_handle_inner.assert_called_once_with(handlers, audio_message)
+    mock_handle_inner.assert_called_once_with(
+        handlers, audio_message, placeholder_id=None
+    )
     mock_buffer.assert_not_called()
     mock_buffer_media.assert_not_called()
 
