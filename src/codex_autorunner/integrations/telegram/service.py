@@ -37,6 +37,7 @@ from .adapter import (
 )
 from .commands_registry import build_command_payloads, diff_command_lists
 from .config import (
+    AppServerUnavailableError,
     TelegramBotConfig,
     TelegramBotConfigError,
     TelegramBotLockError,
@@ -53,6 +54,7 @@ from .constants import (
     PENDING_APPROVAL_TTL_SECONDS,
     PENDING_QUESTION_TTL_SECONDS,
     PROGRESS_STREAM_TTL_SECONDS,
+    QUEUED_PLACEHOLDER_TEXT,
     REASONING_BUFFER_TTL_SECONDS,
     SELECTION_STATE_TTL_SECONDS,
     TURN_PREVIEW_TTL_SECONDS,
@@ -224,6 +226,8 @@ class TelegramBotService(
         self._media_batch_locks: dict[str, asyncio.Lock] = {}
         self._outbox_inflight: set[str] = set()
         self._outbox_lock: Optional[asyncio.Lock] = None
+        self._queued_placeholder_map: dict[tuple[int, int], int] = {}
+        self._queued_placeholder_timestamps: dict[tuple[int, int], float] = {}
         self._bot_username: Optional[str] = None
         self._token_usage_by_thread: "collections.OrderedDict[str, dict[str, Any]]" = (
             collections.OrderedDict()
@@ -290,6 +294,81 @@ class TelegramBotService(
         if self._config.root:
             roots.add(self._config.root.resolve())
         return sorted(roots)
+
+    def _gather_workspace_roots(self) -> list[Path]:
+        roots: set[Path] = set()
+        try:
+            state = self._store.load()
+            for record in state.topics.values():
+                if isinstance(record.workspace_path, str) and record.workspace_path:
+                    roots.add(Path(record.workspace_path).expanduser().resolve())
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.prewarm.state_failed",
+                exc=exc,
+            )
+        return sorted(roots)
+
+    async def _prewarm_workspace_clients(self) -> None:
+        workspace_roots = self._gather_workspace_roots()
+        if not workspace_roots:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.prewarm.skipped",
+                reason="no_workspaces",
+            )
+            return
+
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.prewarm.started",
+            workspace_count=len(workspace_roots),
+            workspaces=[str(p) for p in workspace_roots],
+        )
+
+        sem = asyncio.Semaphore(3)
+        prewarmed_count = 0
+        failed_count = 0
+
+        async def prewarm_one(workspace_root: Path) -> None:
+            nonlocal prewarmed_count, failed_count
+            async with sem:
+                try:
+                    await self._app_server_supervisor.get_client(workspace_root)
+                    prewarmed_count += 1
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "telegram.prewarm.client_ready",
+                        workspace_root=str(workspace_root),
+                    )
+                except Exception as exc:
+                    failed_count += 1
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.prewarm.client_failed",
+                        workspace_root=str(workspace_root),
+                        exc=exc,
+                    )
+
+        await asyncio.gather(
+            *[prewarm_one(root) for root in workspace_roots],
+            return_exceptions=True,
+        )
+
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.prewarm.completed",
+            workspace_count=len(workspace_roots),
+            prewarmed_count=prewarmed_count,
+            failed_count=failed_count,
+        )
 
     async def _housekeeping_loop(self) -> None:
         config = self._housekeeping_config
@@ -449,6 +528,7 @@ class TelegramBotService(
             self._voice_task = asyncio.create_task(self._voice_manager.run_loop())
             self._housekeeping_task = asyncio.create_task(self._housekeeping_loop())
             self._cache_cleanup_task = asyncio.create_task(self._cache_cleanup_loop())
+            self._spawn_task(self._prewarm_workspace_clients())
             log_event(
                 self._logger,
                 logging.INFO,
@@ -828,6 +908,14 @@ class TelegramBotService(
             self._evict_expired_cache_entries(
                 "pending_questions", PENDING_QUESTION_TTL_SECONDS
             )
+            now = time.monotonic()
+            expired_placeholders = []
+            for key, timestamp in self._queued_placeholder_timestamps.items():
+                if (now - timestamp) > PENDING_APPROVAL_TTL_SECONDS:
+                    expired_placeholders.append(key)
+            for key in expired_placeholders:
+                self._queued_placeholder_map.pop(key, None)
+                self._queued_placeholder_timestamps.pop(key, None)
 
     async def _interrupt_timeout_check(
         self, key: str, turn_id: str, message_id: int
@@ -910,9 +998,21 @@ class TelegramBotService(
             runtime.interrupt_turn_id = None
             runtime.interrupt_requested = False
             return
-        client = await self._client_for_workspace(
-            record.workspace_path if record else None
-        )
+        try:
+            client = await self._client_for_workspace(
+                record.workspace_path if record else None
+            )
+        except AppServerUnavailableError:
+            runtime.interrupt_requested = False
+            if runtime.interrupt_message_id is not None:
+                await self._edit_message_text(
+                    chat_id,
+                    runtime.interrupt_message_id,
+                    "Interrupt failed (app-server unavailable).",
+                )
+                runtime.interrupt_message_id = None
+                runtime.interrupt_turn_id = None
+            return
         if client is None:
             runtime.interrupt_requested = False
             if runtime.interrupt_message_id is not None:
@@ -959,9 +1059,15 @@ class TelegramBotService(
         await message_handlers.handle_edited_message(self, message)
 
     async def _handle_message_inner(
-        self, message: TelegramMessage, *, topic_key: Optional[str] = None
+        self,
+        message: TelegramMessage,
+        *,
+        topic_key: Optional[str] = None,
+        placeholder_id: Optional[int] = None,
     ) -> None:
-        await message_handlers.handle_message_inner(self, message, topic_key=topic_key)
+        await message_handlers.handle_message_inner(
+            self, message, topic_key=topic_key, placeholder_id=placeholder_id
+        )
 
     def _coalesce_key_for_topic(self, key: str, user_id: Optional[int]) -> str:
         return message_handlers.coalesce_key_for_topic(self, key, user_id)
@@ -970,12 +1076,19 @@ class TelegramBotService(
         return message_handlers.coalesce_key(self, message)
 
     async def _buffer_coalesced_message(
-        self, message: TelegramMessage, text: str
+        self,
+        message: TelegramMessage,
+        text: str,
+        *,
+        placeholder_id: Optional[int] = None,
     ) -> None:
-        await message_handlers.buffer_coalesced_message(self, message, text)
+        await message_handlers.buffer_coalesced_message(
+            self, message, text, placeholder_id=placeholder_id
+        )
 
     async def _coalesce_flush_after(self, key: str) -> None:
-        await message_handlers.coalesce_flush_after(self, key)
+        window_seconds = self._config.coalesce_window_seconds
+        await message_handlers.coalesce_flush_after(self, key, window_seconds)
 
     async def _flush_coalesced_message(self, message: TelegramMessage) -> None:
         await message_handlers.flush_coalesced_message(self, message)
@@ -1008,10 +1121,19 @@ class TelegramBotService(
         return message_handlers.select_voice_candidate(message)
 
     async def _handle_media_message(
-        self, message: TelegramMessage, runtime: Any, caption_text: str
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
     ) -> None:
         await message_handlers.handle_media_message(
-            self, message, runtime, caption_text
+            self,
+            message,
+            runtime,
+            caption_text,
+            placeholder_id=placeholder_id,
         )
 
     def _with_conversation_id(
@@ -1062,6 +1184,72 @@ class TelegramBotService(
             self._spawn_task(runtime.queue.enqueue(wrapped))
         else:
             self._spawn_task(wrapped())
+
+    async def _maybe_send_queued_placeholder(
+        self, message: TelegramMessage, *, topic_key: str
+    ) -> Optional[int]:
+        runtime = self._router.runtime_for(topic_key)
+        is_busy = runtime.current_turn_id is not None or runtime.queue.pending() > 0
+        if not is_busy:
+            return None
+        placeholder_id = await self._send_placeholder(
+            message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            text=QUEUED_PLACEHOLDER_TEXT,
+        )
+        if placeholder_id is None:
+            return None
+        self._set_queued_placeholder(
+            message.chat_id, message.message_id, placeholder_id
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.placeholder.queued",
+            topic_key=topic_key,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            placeholder_id=placeholder_id,
+        )
+        return placeholder_id
+
+    def _wrap_placeholder_work(
+        self,
+        *,
+        chat_id: int,
+        placeholder_id: Optional[int],
+        work: Any,
+    ) -> Any:
+        if placeholder_id is None:
+            return work
+
+        async def wrapped() -> Any:
+            try:
+                return await work()
+            finally:
+                await self._delete_message(chat_id, placeholder_id)
+
+        return wrapped
+
+    def _claim_queued_placeholder(self, chat_id: int, message_id: int) -> Optional[int]:
+        placeholder_id = self._queued_placeholder_map.pop((chat_id, message_id), None)
+        self._queued_placeholder_timestamps.pop((chat_id, message_id), None)
+        return placeholder_id
+
+    def _get_queued_placeholder(self, chat_id: int, message_id: int) -> Optional[int]:
+        return self._queued_placeholder_map.get((chat_id, message_id))
+
+    def _set_queued_placeholder(
+        self, chat_id: int, message_id: int, placeholder_id: int
+    ) -> None:
+        self._queued_placeholder_map[(chat_id, message_id)] = placeholder_id
+        self._queued_placeholder_timestamps[(chat_id, message_id)] = time.monotonic()
+
+    def _clear_queued_placeholder(self, chat_id: int, message_id: int) -> None:
+        self._queued_placeholder_map.pop((chat_id, message_id), None)
+        self._queued_placeholder_timestamps.pop((chat_id, message_id), None)
 
     def _wrap_topic_work(self, key: str, work: Any) -> Any:
         conversation_id = None

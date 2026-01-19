@@ -6,6 +6,7 @@ import time
 from typing import Any, Optional
 
 from ...core.logging_utils import log_event
+from ...core.state import now_iso
 from .constants import (
     PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
     STREAM_PREVIEW_PREFIX,
@@ -230,6 +231,21 @@ class TelegramNotificationHandlers:
         self._turn_progress_rendered.pop(turn_key, None)
         self._turn_progress_updated_at.pop(turn_key, None)
         self._touch_cache_timestamp("progress_trackers", turn_key)
+        if ctx:
+            chat_id = ctx.chat_id
+            thread_id = ctx.thread_id
+        else:
+            chat_id = None
+            thread_id = None
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.progress.first",
+            topic_key=ctx.topic_key if ctx else None,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            first_progress_at=now_iso(),
+        )
         await self._emit_progress_edit(turn_key, ctx=ctx, force=True)
         heartbeat_task = self._turn_progress_heartbeat_tasks.get(turn_key)
         if heartbeat_task and not heartbeat_task.done():

@@ -114,13 +114,16 @@ function handleDocsEvent(payload) {
         updateTodoPreview(payload.todo);
     }
 }
-async function loadTodoPreview() {
+async function loadTodoPreview(options = {}) {
+    const { silent = false } = options;
     try {
         const data = await api("/api/docs");
         updateTodoPreview(data?.todo || "");
     }
     catch (err) {
-        flash(err.message || "Failed to load TODO preview", "error");
+        if (!silent) {
+            flash(err.message || "Failed to load TODO preview", "error");
+        }
     }
 }
 function setUsageLoading(loading) {
@@ -696,6 +699,9 @@ export function initDashboard() {
         return overrides;
     };
     subscribe("state:update", renderState);
+    subscribe("todo:invalidate", () => {
+        void loadTodoPreview({ silent: true });
+    });
     subscribe("docs:updated", handleDocsEvent);
     subscribe("docs:loaded", handleDocsEvent);
     subscribe("docs:ready", () => {

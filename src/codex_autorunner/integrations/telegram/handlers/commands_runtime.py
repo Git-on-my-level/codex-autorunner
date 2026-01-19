@@ -58,7 +58,7 @@ from ..adapter import (
     build_update_confirm_keyboard,
     encode_cancel_callback,
 )
-from ..config import TelegramMediaCandidate
+from ..config import AppServerUnavailableError, TelegramMediaCandidate
 from ..constants import (
     AGENT_PICKER_PROMPT,
     APPROVAL_POLICY_VALUES,
@@ -594,10 +594,28 @@ class TelegramCommandHandlers:
             )
             return
         desired = normalize_agent(argv[0])
-        if not desired:
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
             await self._send_message(
                 message.chat_id,
-                "Usage: /agent codex|opencode",
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -779,7 +797,24 @@ class TelegramCommandHandlers:
         thread_id = record.active_thread_id
         if not thread_id:
             return record
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -1073,7 +1108,24 @@ class TelegramCommandHandlers:
 
             self._router.update_topic(message.chat_id, message.thread_id, apply)
             return session_id
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -1209,7 +1261,10 @@ class TelegramCommandHandlers:
         send_placeholder: bool = True,
         transcript_message_id: Optional[int] = None,
         transcript_text: Optional[str] = None,
+        placeholder_id: Optional[int] = None,
     ) -> None:
+        if placeholder_id is not None:
+            send_placeholder = False
         outcome = await self._run_turn_and_collect_result(
             message,
             runtime,
@@ -1221,6 +1276,7 @@ class TelegramCommandHandlers:
             transcript_text=transcript_text,
             allow_new_thread=True,
             send_failure_response=True,
+            placeholder_id=placeholder_id,
         )
         if isinstance(outcome, _TurnRunFailure):
             return
@@ -1238,6 +1294,18 @@ class TelegramCommandHandlers:
             placeholder_id=outcome.placeholder_id,
             response=response_text,
         )
+        if response_sent:
+            key = self._resolve_topic_key(message.chat_id, message.thread_id)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.response.sent",
+                topic_key=key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                placeholder_id=outcome.placeholder_id,
+                final_response_sent_at=now_iso(),
+            )
         placeholder_handled = False
         if metrics and metrics_mode == "separate":
             await self._send_turn_metrics(
@@ -1336,6 +1404,7 @@ class TelegramCommandHandlers:
         allow_new_thread: bool = True,
         missing_thread_message: Optional[str] = None,
         send_failure_response: bool = True,
+        placeholder_id: Optional[int] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         key = self._resolve_topic_key(message.chat_id, message.thread_id)
         record = record or self._router.get_topic(key)
@@ -1351,6 +1420,31 @@ class TelegramCommandHandlers:
             return _TurnRunFailure(
                 failure_message, None, transcript_message_id, transcript_text
             )
+        turn_handle = None
+        turn_semaphore = self._ensure_turn_semaphore()
+        queued = turn_semaphore.locked()
+        placeholder_text = PLACEHOLDER_TEXT
+        if queued:
+            placeholder_text = QUEUED_PLACEHOLDER_TEXT
+        turn_started_at: Optional[float] = None
+        turn_elapsed_seconds: Optional[float] = None
+        if placeholder_id is None and send_placeholder:
+            placeholder_id = await self._send_placeholder(
+                message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                text=placeholder_text,
+            )
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.placeholder.sent",
+                topic_key=key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                placeholder_id=placeholder_id,
+                placeholder_sent_at=now_iso(),
+            )
         if record.active_thread_id:
             conflict_key = self._find_thread_conflict(
                 record.active_thread_id,
@@ -1365,7 +1459,7 @@ class TelegramCommandHandlers:
                 )
                 return _TurnRunFailure(
                     "Thread conflict detected.",
-                    None,
+                    placeholder_id,
                     transcript_message_id,
                     transcript_text,
                 )
@@ -1373,16 +1467,12 @@ class TelegramCommandHandlers:
             if not verified:
                 return _TurnRunFailure(
                     "Active thread verification failed.",
-                    None,
+                    placeholder_id,
                     transcript_message_id,
                     transcript_text,
                 )
             record = verified
         thread_id = record.active_thread_id
-        turn_handle = None
-        placeholder_id: Optional[int] = None
-        turn_started_at: Optional[float] = None
-        turn_elapsed_seconds: Optional[float] = None
         prompt_text = (
             text_override if text_override is not None else (message.text or "")
         )
@@ -1444,7 +1534,10 @@ class TelegramCommandHandlers:
                         reply_to=message.message_id,
                     )
                 return _TurnRunFailure(
-                    failure_message, None, transcript_message_id, transcript_text
+                    failure_message,
+                    placeholder_id,
+                    transcript_message_id,
+                    transcript_text,
                 )
             workspace_root = self._canonical_workspace_root(record.workspace_path)
             if workspace_root is None:
@@ -1457,7 +1550,10 @@ class TelegramCommandHandlers:
                         reply_to=message.message_id,
                     )
                 return _TurnRunFailure(
-                    failure_message, None, transcript_message_id, transcript_text
+                    failure_message,
+                    placeholder_id,
+                    transcript_message_id,
+                    transcript_text,
                 )
             try:
                 opencode_client = await supervisor.get_client(workspace_root)
@@ -1469,6 +1565,8 @@ class TelegramCommandHandlers:
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                     exc=exc,
+                    error_at=now_iso(),
+                    reason="opencode_client_failed",
                 )
                 failure_message = "OpenCode backend unavailable."
                 if send_failure_response:
@@ -1479,7 +1577,10 @@ class TelegramCommandHandlers:
                         reply_to=message.message_id,
                     )
                 return _TurnRunFailure(
-                    failure_message, None, transcript_message_id, transcript_text
+                    failure_message,
+                    placeholder_id,
+                    transcript_message_id,
+                    transcript_text,
                 )
             try:
                 if not thread_id:
@@ -1497,7 +1598,7 @@ class TelegramCommandHandlers:
                             )
                         return _TurnRunFailure(
                             failure_message,
-                            None,
+                            placeholder_id,
                             transcript_message_id,
                             transcript_text,
                         )
@@ -1516,7 +1617,7 @@ class TelegramCommandHandlers:
                             )
                         return _TurnRunFailure(
                             failure_message,
-                            None,
+                            placeholder_id,
                             transcript_message_id,
                             transcript_text,
                         )
@@ -1569,19 +1670,17 @@ class TelegramCommandHandlers:
                         pending_seed = record.pending_compact_seed
                 if pending_seed:
                     prompt_text = f"{pending_seed}\n\n{prompt_text}"
-                turn_semaphore = self._ensure_turn_semaphore()
-                queued = turn_semaphore.locked()
-                placeholder_text = PLACEHOLDER_TEXT
-                if queued:
-                    placeholder_text = QUEUED_PLACEHOLDER_TEXT
-                if send_placeholder:
-                    placeholder_id = await self._send_placeholder(
-                        message.chat_id,
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                        text=placeholder_text,
-                    )
                 queue_started_at = time.monotonic()
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.turn.queued",
+                    topic_key=key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    codex_thread_id=thread_id,
+                    turn_queued_at=now_iso(),
+                )
                 acquired = await self._await_turn_slot(
                     turn_semaphore,
                     runtime,
@@ -1659,6 +1758,16 @@ class TelegramCommandHandlers:
                                 transcript_text,
                             )
                         turn_started_at = time.monotonic()
+                        log_event(
+                            self._logger,
+                            logging.INFO,
+                            "telegram.turn.started",
+                            topic_key=key,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            codex_thread_id=thread_id,
+                            turn_started_at=now_iso(),
+                        )
                         turn_id = build_turn_id(thread_id)
                         runtime.current_turn_id = turn_id
                         runtime.current_turn_key = (thread_id, turn_id)
@@ -2132,6 +2241,8 @@ class TelegramCommandHandlers:
                     thread_id=message.thread_id,
                     exc=exc,
                     **log_extra,
+                    error_at=now_iso(),
+                    reason="opencode_turn_failed",
                 )
                 failure_message = (
                     _format_opencode_exception(exc)
@@ -2159,7 +2270,29 @@ class TelegramCommandHandlers:
                     runtime.current_turn_id = None
                     runtime.current_turn_key = None
                 runtime.interrupt_requested = False
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                topic_key=key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            failure_message = "App server unavailable; try again or check logs."
+            if send_failure_response:
+                await self._send_message(
+                    message.chat_id,
+                    failure_message,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+            return _TurnRunFailure(
+                failure_message, placeholder_id, transcript_message_id, transcript_text
+            )
         if client is None:
             failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
             if send_failure_response:
@@ -2294,20 +2427,17 @@ class TelegramCommandHandlers:
                 sandbox_policy=sandbox_policy,
             )
 
-            turn_semaphore = self._ensure_turn_semaphore()
-            queued = turn_semaphore.locked()
-            placeholder_text = PLACEHOLDER_TEXT
-            if queued:
-                placeholder_text = QUEUED_PLACEHOLDER_TEXT
-            if send_placeholder:
-                placeholder_id = await self._send_placeholder(
-                    message.chat_id,
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                    text=placeholder_text,
-                    reply_markup=self._interrupt_keyboard(),
-                )
             queue_started_at = time.monotonic()
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.turn.queued",
+                topic_key=key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                codex_thread_id=thread_id,
+                turn_queued_at=now_iso(),
+            )
             acquired = await self._await_turn_slot(
                 turn_semaphore,
                 runtime,
@@ -2364,6 +2494,16 @@ class TelegramCommandHandlers:
                         _clear_pending_compact_seed,
                     )
                 turn_started_at = time.monotonic()
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.turn.started",
+                    topic_key=key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    codex_thread_id=thread_id,
+                    turn_started_at=now_iso(),
+                )
                 turn_key = self._turn_key(thread_id, turn_handle.turn_id)
                 runtime.current_turn_id = turn_handle.turn_id
                 runtime.current_turn_key = turn_key
@@ -2417,6 +2557,7 @@ class TelegramCommandHandlers:
             runtime.current_turn_key = None
             runtime.interrupt_requested = False
             failure_message = "Codex turn failed; check logs for details."
+            reason = "codex_turn_failed"
             if isinstance(exc, CodexAppServerDisconnected):
                 log_event(
                     self._logger,
@@ -2431,6 +2572,7 @@ class TelegramCommandHandlers:
                     "Codex app-server disconnected; recovering now. "
                     "Your request did not complete. Please resend your message in a moment."
                 )
+                reason = "app_server_disconnected"
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2439,6 +2581,8 @@ class TelegramCommandHandlers:
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 exc=exc,
+                error_at=now_iso(),
+                reason=reason,
             )
             if send_failure_response:
                 response_sent = await self._deliver_turn_response(
@@ -2703,6 +2847,8 @@ class TelegramCommandHandlers:
         record: Any,
         candidate: TelegramMediaCandidate,
         caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
     ) -> None:
         log_event(
             self._logger,
@@ -2805,6 +2951,7 @@ class TelegramCommandHandlers:
             text_override=prompt_text,
             input_items=input_items,
             record=record,
+            placeholder_id=placeholder_id,
         )
 
     async def _handle_voice_message(
@@ -2814,6 +2961,8 @@ class TelegramCommandHandlers:
         record: Any,
         candidate: TelegramMediaCandidate,
         caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
     ) -> None:
         log_event(
             self._logger,
@@ -2882,6 +3031,8 @@ class TelegramCommandHandlers:
         record: Any,
         candidate: TelegramMediaCandidate,
         caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
     ) -> None:
         log_event(
             self._logger,
@@ -2989,9 +3140,15 @@ class TelegramCommandHandlers:
             runtime,
             text_override=prompt_text,
             record=record,
+            placeholder_id=placeholder_id,
         )
 
-    async def _handle_media_batch(self, messages: Sequence[TelegramMessage]) -> None:
+    async def _handle_media_batch(
+        self,
+        messages: Sequence[TelegramMessage],
+        *,
+        placeholder_id: Optional[int] = None,
+    ) -> None:
         if not messages:
             return
         if not self._config.media.enabled:
@@ -3297,6 +3454,7 @@ class TelegramCommandHandlers:
             text_override=combined_prompt,
             input_items=input_items,
             record=record,
+            placeholder_id=placeholder_id,
         )
 
     async def _download_telegram_file(
@@ -4087,7 +4245,24 @@ class TelegramCommandHandlers:
             self._router.update_topic(message.chat_id, message.thread_id, apply)
             thread_id = session_id
         else:
-            client = await self._client_for_workspace(record.workspace_path)
+            try:
+                client = await self._client_for_workspace(record.workspace_path)
+            except AppServerUnavailableError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.unavailable",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "App server unavailable; try again or check logs.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             if client is None:
                 await self._send_message(
                     message.chat_id,
@@ -4295,7 +4470,24 @@ class TelegramCommandHandlers:
                 refresh=refresh,
             )
             return
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -4679,7 +4871,28 @@ class TelegramCommandHandlers:
                 ),
             )
             return
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=chat_id,
+                thread_id=thread_id_val,
+                exc=exc,
+            )
+            await self._answer_callback(callback, "Resume aborted")
+            await self._finalize_selection(
+                key,
+                callback,
+                _with_conversation_id(
+                    "App server unavailable; try again or check logs.",
+                    chat_id=chat_id,
+                    thread_id=thread_id_val,
+                ),
+            )
+            return
         if client is None:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
@@ -5111,15 +5324,32 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        if subcommand == "clear":
-            if len(argv) < 2:
-                await self._send_message(
-                    message.chat_id,
-                    "Usage: /files clear inbox|outbox|all",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
             target = argv[1].lower()
             deleted = 0
             if target == "inbox":
@@ -5146,15 +5376,32 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        if subcommand == "send":
-            if len(argv) < 2:
-                await self._send_message(
-                    message.chat_id,
-                    "Usage: /files send <filename>",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
             name = Path(argv[1]).name
             candidate = pending_dir / name
             if not _path_within(pending_dir, candidate) or not candidate.is_file():
@@ -5278,7 +5525,10 @@ class TelegramCommandHandlers:
     async def _read_rate_limits(
         self, workspace_path: Optional[str]
     ) -> Optional[dict[str, Any]]:
-        client = await self._client_for_workspace(workspace_path)
+        try:
+            client = await self._client_for_workspace(workspace_path)
+        except AppServerUnavailableError:
+            return None
         if client is None:
             return None
         for method in ("account/rateLimits/read", "account/read"):
@@ -5420,9 +5670,26 @@ class TelegramCommandHandlers:
             "limit": DEFAULT_MODEL_LIST_LIMIT,
             "agent": agent,
         }
-        client = await self._client_for_workspace(
-            record.workspace_path if record else None
-        )
+        try:
+            client = await self._client_for_workspace(
+                record.workspace_path if record else None
+            )
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -5653,7 +5920,24 @@ class TelegramCommandHandlers:
         target: dict[str, Any],
         delivery: str,
     ) -> None:
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -7312,7 +7596,10 @@ class TelegramCommandHandlers:
     async def _list_recent_commits(
         self, record: TelegramTopicRecord
     ) -> list[tuple[str, str]]:
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError:
+            return []
         if client is None:
             return []
         command = "git log -n 50 --pretty=format:%H%x1f%s%x1e"
@@ -7361,7 +7648,24 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -7928,7 +8232,18 @@ class TelegramCommandHandlers:
     ) -> tuple[bool, str | None]:
         if not record.workspace_path:
             return False, "Topic not bound. Use /bind <repo_id> or /bind <path>."
-        client = await self._client_for_workspace(record.workspace_path)
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            return False, "App server unavailable; try again or check logs."
         if client is None:
             return False, "Topic not bound. Use /bind <repo_id> or /bind <path>."
         log_event(

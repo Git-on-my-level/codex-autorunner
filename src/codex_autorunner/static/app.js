@@ -12,6 +12,7 @@ import { initMobileCompact } from "./mobileCompact.js";
 import { subscribe } from "./bus.js";
 import { initRepoSettingsPanel } from "./settings.js";
 import { flash } from "./utils.js";
+import { initLiveUpdates } from "./liveUpdates.js";
 function initRepoShell() {
     if (REPO_ID) {
         const navBar = document.querySelector(".nav-bar");
@@ -67,6 +68,7 @@ function initRepoShell() {
         lazyInit("terminal");
     }, { once: true });
     initDashboard();
+    initLiveUpdates();
     initRepoSettingsPanel();
     initGitHub();
     initMobileCompact();

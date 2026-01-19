@@ -9,7 +9,6 @@ import {
   openModal,
 } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
-import { CONSTANTS } from "./constants.js";
 import { HUB_BASE } from "./env.js";
 
 interface HubRepo {
@@ -119,6 +118,10 @@ const PR_CACHE_TTL_MS = 120000;
 const PR_FAILURE_TTL_MS = 15000;
 const PR_FETCH_CONCURRENCY = 3;
 const PR_PREFETCH_MARGIN = "200px";
+const HUB_REFRESH_ACTIVE_MS = 5000;
+const HUB_REFRESH_IDLE_MS = 30000;
+
+let lastHubAutoRefreshAt = 0;
 
 const repoListEl = document.getElementById("hub-repo-list");
 const lastScanEl = document.getElementById("hub-last-scan");
@@ -1246,6 +1249,7 @@ async function refreshHub(): Promise<void> {
   try {
     const data = await api("/hub/repos", { method: "GET" }) as HubData;
     hubData = data;
+    markHubRefreshed();
     saveSessionCache(HUB_CACHE_KEY, hubData);
     renderSummary(data.repos || []);
     renderRepos(data.repos || []);
@@ -1585,6 +1589,7 @@ async function silentRefreshHub(): Promise<void> {
   try {
     const data = await api("/hub/repos", { method: "GET" }) as HubData;
     hubData = data;
+    markHubRefreshed();
     saveSessionCache(HUB_CACHE_KEY, hubData);
     renderSummary(data.repos || []);
     renderRepos(data.repos || []);
@@ -1592,6 +1597,22 @@ async function silentRefreshHub(): Promise<void> {
   } catch (err) {
     console.error("Auto-refresh hub failed:", err);
   }
+}
+
+function markHubRefreshed(): void {
+  lastHubAutoRefreshAt = Date.now();
+}
+
+function hasActiveRuns(repos: HubRepo[]): boolean {
+  return repos.some((repo) => repo.status === "running");
+}
+
+async function dynamicRefreshHub(): Promise<void> {
+  const now = Date.now();
+  const running = hasActiveRuns(hubData.repos || []);
+  const minInterval = running ? HUB_REFRESH_ACTIVE_MS : HUB_REFRESH_IDLE_MS;
+  if (now - lastHubAutoRefreshAt < minInterval) return;
+  await silentRefreshHub();
 }
 
 async function loadHubVersion(): Promise<void> {
@@ -1646,9 +1667,9 @@ export function initHub(): void {
   checkUpdateStatus();
 
   registerAutoRefresh("hub-repos", {
-    callback: async () => { await silentRefreshHub(); },
+    callback: async () => { await dynamicRefreshHub(); },
     tabId: null,
-    interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
+    interval: HUB_REFRESH_ACTIVE_MS,
     refreshOnActivation: true,
     immediate: false,
   });

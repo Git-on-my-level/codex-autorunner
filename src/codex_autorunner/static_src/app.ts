@@ -12,6 +12,7 @@ import { initMobileCompact } from "./mobileCompact.js";
 import { subscribe } from "./bus.js";
 import { initRepoSettingsPanel } from "./settings.js";
 import { flash } from "./utils.js";
+import { initLiveUpdates } from "./liveUpdates.js";
 
 function initRepoShell(): void {
   if (REPO_ID) {
@@ -73,6 +74,7 @@ function initRepoShell(): void {
     { once: true }
   );
   initDashboard();
+  initLiveUpdates();
   initRepoSettingsPanel();
   initGitHub();
   initMobileCompact();

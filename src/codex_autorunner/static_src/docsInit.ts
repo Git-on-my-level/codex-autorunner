@@ -1,5 +1,5 @@
 import { CONSTANTS } from "./constants.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
+import { registerAutoRefresh, triggerRefresh } from "./autoRefresh.js";
 import {
   chatUI,
   docActionsUI,
@@ -56,7 +56,7 @@ import {
   loadThreadRegistryStatus,
   resetThreadRegistry,
 } from "./docsThreadRegistry.js";
-import { publish } from "./bus.js";
+import { publish, subscribe } from "./bus.js";
 
 export function initDocs(): void {
   if (!chatUI.send || !chatUI.input) {
@@ -333,4 +333,16 @@ export function initDocs(): void {
     refreshOnActivation: true,
     immediate: false,
   });
+
+  let docsInvalidateTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleDocsRefresh = () => {
+    if (docsInvalidateTimer) {
+      clearTimeout(docsInvalidateTimer);
+    }
+    docsInvalidateTimer = setTimeout(() => {
+      triggerRefresh("docs-content");
+    }, 500);
+  };
+  subscribe("todo:invalidate", scheduleDocsRefresh);
+  subscribe("runs:invalidate", scheduleDocsRefresh);
 }

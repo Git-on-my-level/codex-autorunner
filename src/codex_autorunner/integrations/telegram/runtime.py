@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +11,7 @@ from ...core.utils import canonicalize_path
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from ..app_server.client import CodexAppServerClient
 from ..app_server.env import build_app_server_env
+from .config import AppServerUnavailableError
 from .constants import (
     APP_SERVER_START_BACKOFF_INITIAL_SECONDS,
     APP_SERVER_START_BACKOFF_MAX_SECONDS,
@@ -70,12 +72,32 @@ class TelegramRuntimeHelpers:
         if workspace_root is None:
             return None
         delay = APP_SERVER_START_BACKOFF_INITIAL_SECONDS
+        timeout = self._config.app_server_start_timeout_seconds
+        max_attempts = self._config.app_server_start_max_attempts
+        started_at = time.monotonic()
+        attempt = 0
         while True:
+            attempt += 1
+            if max_attempts is not None and attempt > max_attempts:
+                raise AppServerUnavailableError(
+                    f"App-server unavailable after {max_attempts} attempts"
+                )
+            elapsed = time.monotonic() - started_at
+            if elapsed >= timeout:
+                raise AppServerUnavailableError(
+                    f"App-server unavailable after {timeout:.1f}s"
+                )
             try:
                 return await self._app_server_supervisor.get_client(workspace_root)
             except Exception as exc:
                 self._log_app_server_start_failure(workspace_root, exc)
-                await asyncio.sleep(delay)
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    raise AppServerUnavailableError(
+                        f"App-server unavailable after {timeout:.1f}s"
+                    ) from exc
+                sleep_time = min(delay, remaining)
+                await asyncio.sleep(sleep_time)
                 delay = min(delay * 2, APP_SERVER_START_BACKOFF_MAX_SECONDS)
 
     def _log_app_server_start_failure(

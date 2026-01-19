@@ -457,7 +457,7 @@ class SecurityHeadersMiddleware:
 
 
 class RequestIdMiddleware:
-    """Attach request ids and emit structured request logs."""
+    """Attach request ids and emit structured request logs with latency and response size tracking."""
 
     def __init__(self, app, header_name: str = "x-request-id"):
         self.app = app
@@ -486,6 +486,20 @@ class RequestIdMiddleware:
             return logger
         return logging.getLogger("codex_autorunner.web")
 
+    def _is_heavy_endpoint(self, path: str) -> bool:
+        """Check if endpoint should log response size (docs, runs, hub repos)."""
+        path_lower = path.lower()
+        heavy_prefixes = (
+            "/api/docs",
+            "/api/snapshot",
+            "/api/runs",
+            "/api/usage",
+            "/api/ingest-spec",
+            "/hub/usage",
+            "/hub/repos",
+        )
+        return any(path_lower.startswith(prefix) for prefix in heavy_prefixes)
+
     async def __call__(self, scope, receive, send):
         scope_type = scope.get("type")
         if scope_type != "http":
@@ -502,6 +516,8 @@ class RequestIdMiddleware:
             client_addr = f"{client[0]}:{client[1]}"
         start = time.monotonic()
         status_code = None
+        response_size = 0
+        should_log_size = self._is_heavy_endpoint(path)
 
         log_event(
             logger,
@@ -513,7 +529,7 @@ class RequestIdMiddleware:
         )
 
         async def send_wrapper(message):
-            nonlocal status_code
+            nonlocal status_code, response_size
             if message.get("type") == "http.response.start":
                 status_code = message.get("status")
                 headers = list(message.get("headers") or [])
@@ -521,33 +537,47 @@ class RequestIdMiddleware:
                 if self.header_bytes not in existing:
                     headers.append((self.header_bytes, request_id.encode("latin-1")))
                 message["headers"] = headers
+            elif message.get("type") == "http.response.body" and should_log_size:
+                body = message.get("body") or b""
+                if isinstance(body, (bytes, bytearray)):
+                    response_size += len(body)
             await send(message)
 
         try:
             await self.app(scope, receive, send_wrapper)
         except Exception as exc:
             duration_ms = (time.monotonic() - start) * 1000
+            fields = {
+                "method": method,
+                "path": path,
+                "status": status_code or 500,
+                "duration_ms": round(duration_ms, 2),
+            }
+            if should_log_size:
+                fields["response_size"] = response_size
             log_event(
                 logger,
                 logging.ERROR,
                 "http.response",
-                method=method,
-                path=path,
-                status=status_code or 500,
-                duration_ms=round(duration_ms, 2),
                 exc=exc,
+                **fields,
             )
             raise
         else:
             duration_ms = (time.monotonic() - start) * 1000
+            fields = {
+                "method": method,
+                "path": path,
+                "status": status_code or 200,
+                "duration_ms": round(duration_ms, 2),
+            }
+            if should_log_size:
+                fields["response_size"] = response_size
             log_event(
                 logger,
                 logging.INFO,
                 "http.response",
-                method=method,
-                path=path,
-                status=status_code or 200,
-                duration_ms=round(duration_ms, 2),
+                **fields,
             )
         finally:
             reset_request_id(token)

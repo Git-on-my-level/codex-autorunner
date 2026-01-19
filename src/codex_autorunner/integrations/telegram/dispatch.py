@@ -116,6 +116,9 @@ async def _dispatch_message(
     if message is None:
         return
     if context.topic_key:
+        await handlers._maybe_send_queued_placeholder(
+            message, topic_key=context.topic_key
+        )
         if handlers._should_bypass_topic_queue(message):
             await handlers._handle_message(message)
             return
@@ -135,6 +138,8 @@ _ROUTES: tuple[tuple[str, DispatchRoute], ...] = (
 
 
 async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
+    from ...core.state import now_iso
+
     context = _build_context(handlers, update)
     conversation_id = None
     if context.chat_id is not None:
@@ -157,6 +162,7 @@ async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
             is_edited=context.is_edited,
             has_message=bool(update.message),
             has_callback=bool(update.callback),
+            update_received_at=now_iso(),
         )
         if (
             update.update_id is not None

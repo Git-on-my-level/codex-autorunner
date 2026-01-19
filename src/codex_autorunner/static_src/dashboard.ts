@@ -139,12 +139,15 @@ function handleDocsEvent(payload: DocsEventPayload | null): void {
   }
 }
 
-async function loadTodoPreview(): Promise<void> {
+async function loadTodoPreview(options: { silent?: boolean } = {}): Promise<void> {
+  const { silent = false } = options;
   try {
     const data = await api("/api/docs");
     updateTodoPreview((data as { todo?: string })?.todo || "");
   } catch (err) {
-    flash((err as Error).message || "Failed to load TODO preview", "error");
+    if (!silent) {
+      flash((err as Error).message || "Failed to load TODO preview", "error");
+    }
   }
 }
 
@@ -841,6 +844,9 @@ export function initDashboard(): void {
     return overrides;
   };
   subscribe("state:update", renderState);
+  subscribe("todo:invalidate", () => {
+    void loadTodoPreview({ silent: true });
+  });
   subscribe("docs:updated", handleDocsEvent);
   subscribe("docs:loaded", handleDocsEvent);
   subscribe("docs:ready", () => {

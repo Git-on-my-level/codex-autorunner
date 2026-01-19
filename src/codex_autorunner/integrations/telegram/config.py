@@ -20,6 +20,8 @@ DEFAULT_STATE_FILE = ".codex-autorunner/telegram_state.json"
 DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
 DEFAULT_APP_SERVER_MAX_HANDLES = 20
 DEFAULT_APP_SERVER_IDLE_TTL_SECONDS = 3600
+DEFAULT_APP_SERVER_START_TIMEOUT_SECONDS = 30
+DEFAULT_APP_SERVER_START_MAX_ATTEMPTS: Optional[int] = None
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
@@ -30,6 +32,7 @@ DEFAULT_MEDIA_IMAGE_PROMPT = (
 )
 DEFAULT_MEDIA_BATCH_UPLOADS = True
 DEFAULT_MEDIA_BATCH_WINDOW_SECONDS = 1.0
+DEFAULT_COALESCE_WINDOW_SECONDS = 0.5
 DEFAULT_SHELL_TIMEOUT_MS = 120_000
 DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
 DEFAULT_PROGRESS_STREAM_ENABLED = True
@@ -54,6 +57,10 @@ class TelegramBotConfigError(Exception):
 
 class TelegramBotLockError(Exception):
     """Raised when another telegram bot instance already holds the lock."""
+
+
+class AppServerUnavailableError(Exception):
+    """Raised when the app-server is unavailable after timeout."""
 
 
 @dataclass(frozen=True)
@@ -152,10 +159,13 @@ class TelegramBotConfig:
     app_server_command: list[str]
     app_server_max_handles: Optional[int]
     app_server_idle_ttl_seconds: Optional[int]
+    app_server_start_timeout_seconds: float
+    app_server_start_max_attempts: Optional[int]
     poll_timeout_seconds: int
     poll_allowed_updates: list[str]
     message_overflow: str
     metrics_mode: str
+    coalesce_window_seconds: float
     agent_binaries: dict[str, str]
 
     @classmethod
@@ -353,6 +363,13 @@ class TelegramBotConfig:
             metrics_mode = metrics_mode.lower()
         if metrics_mode not in METRICS_MODE_OPTIONS:
             metrics_mode = DEFAULT_METRICS_MODE
+
+        coalesce_window_seconds = float(
+            cfg.get("coalesce_window_seconds", DEFAULT_COALESCE_WINDOW_SECONDS)
+        )
+        if coalesce_window_seconds <= 0:
+            coalesce_window_seconds = DEFAULT_COALESCE_WINDOW_SECONDS
+
         agent_binaries = dict(agent_binaries or {})
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
@@ -395,6 +412,20 @@ class TelegramBotConfig:
         )
         if app_server_idle_ttl_seconds <= 0:
             app_server_idle_ttl_seconds = None
+        app_server_start_timeout_seconds = float(
+            app_server_raw.get(
+                "start_timeout_seconds", DEFAULT_APP_SERVER_START_TIMEOUT_SECONDS
+            )
+        )
+        if app_server_start_timeout_seconds <= 0:
+            app_server_start_timeout_seconds = DEFAULT_APP_SERVER_START_TIMEOUT_SECONDS
+        app_server_start_max_attempts_raw = app_server_raw.get("max_attempts")
+        if app_server_start_max_attempts_raw is not None:
+            app_server_start_max_attempts = int(app_server_start_max_attempts_raw)
+            if app_server_start_max_attempts <= 0:
+                app_server_start_max_attempts = None
+        else:
+            app_server_start_max_attempts = None
 
         polling_raw_value = cfg.get("polling")
         polling_raw: dict[str, Any] = (
@@ -432,10 +463,13 @@ class TelegramBotConfig:
             app_server_command=app_server_command,
             app_server_max_handles=app_server_max_handles,
             app_server_idle_ttl_seconds=app_server_idle_ttl_seconds,
+            app_server_start_timeout_seconds=app_server_start_timeout_seconds,
+            app_server_start_max_attempts=app_server_start_max_attempts,
             poll_timeout_seconds=poll_timeout_seconds,
             poll_allowed_updates=poll_allowed_updates,
             message_overflow=message_overflow,
             metrics_mode=metrics_mode,
+            coalesce_window_seconds=coalesce_window_seconds,
             agent_binaries=agent_binaries,
         )
 
