@@ -6853,6 +6853,7 @@ class TelegramCommandHandlers:
 
         try:
             from pathlib import Path
+
             service = GitHubService(Path(record.workspace_path), self._raw_config)
             issue_ref = f"{slug}#{number}"
             service.validate_issue_same_repo(issue_ref)
