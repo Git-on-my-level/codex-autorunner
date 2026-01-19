@@ -848,16 +848,26 @@ async def collect_opencode_output_from_events(
             else:
                 delta_text = None
             if isinstance(delta_text, str) and delta_text:
-                if part_type == "text" and not part_ignored:
+                # OpenCode text parts may have part_type=None (legacy) or "text" (explicit).
+                # We must include both in final output to avoid losing text content.
+                # Reasoning parts are explicitly filtered to prevent them from appearing in final output.
+                # This logic was inadvertently broken in commit 9bf9d25 by changing
+                # `part_type in (None, "text")` to `part_type == "text"`, causing text
+                # with part_type=None to be lost since part_handler only handles "reasoning", "tool", "patch".
+                if part_type in (None, "text") and not part_ignored:
                     if not is_primary_session:
                         continue
                     _append_text_for_message(part_message_id, delta_text)
+                elif part_type == "reasoning":
+                    pass
                 elif part_handler and part_dict and part_type:
                     await part_handler(
                         part_type, part_with_session or part_dict, delta_text
                     )
             elif (
-                isinstance(part_dict, dict) and part_type == "text" and not part_ignored
+                isinstance(part_dict, dict)
+                and part_type in (None, "text")
+                and not part_ignored
             ):
                 if not is_primary_session:
                     continue

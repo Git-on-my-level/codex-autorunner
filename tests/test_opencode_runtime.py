@@ -129,6 +129,43 @@ async def test_collect_output_question_deduplicates() -> None:
     assert len(replies) == 1
 
 
+@pytest.mark.anyio
+async def test_collect_output_filters_reasoning_and_includes_legacy_none_type() -> None:
+    events = [
+        # Legacy text part with type=None should be included in output
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"Hello "},"part":{"text":"Hello "}}}',
+        ),
+        # Explicit text part should be included in output
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"world"},"part":{"type":"text","text":"world"}}}',
+        ),
+        # Reasoning part should be excluded from output
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"thinking..."},"part":{"type":"reasoning","id":"r1","text":"thinking..."}}}',
+        ),
+        # Another text part with type=None should be included
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"!"},"part":{"text":"!"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    # All text content (except reasoning) should be in output
+    # This tests that parts with type=None (legacy) are included
+    assert output.text == "Hello world!"
+    # Reasoning should be excluded
+    assert "thinking" not in output.text.lower()
+    assert output.error is None
+
+
 def test_parse_message_response() -> None:
     payload = {
         "info": {"id": "turn-1", "error": "bad auth"},
