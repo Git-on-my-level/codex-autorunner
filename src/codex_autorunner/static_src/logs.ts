@@ -21,7 +21,12 @@ let renderedEndIndex = 0;
 let isViewingTail = true;
 let renderState: RenderState | null = null;
 let logContexts: LogContextState[] = [];
-let logContextState: LogContextState = { inPromptBlock: false, inDiffBlock: false };
+let logContextState: LogContextState = {
+  inPromptBlock: false,
+  inDiffBlock: false,
+  inFinalOutput: false,
+  inRun: false,
+};
 
 const DOC_CHAT_META_RE = /doc-chat id=[a-f0-9]+ (result=|exit_code=)/i;
 
@@ -66,9 +71,17 @@ interface LineClassification {
   resetDiff?: boolean;
 }
 
+interface LineContext {
+  inPromptBlock: boolean;
+  inDiffBlock: boolean;
+}
+
 let lastClassificationType: string | null = null;
 
-function classifyLine(line: string, context: LogContextState = { inPromptBlock: false, inDiffBlock: false }): LineClassification {
+function classifyLine(
+  line: string,
+  context: LineContext = { inPromptBlock: false, inDiffBlock: false }
+): LineClassification {
   const stripped = line
     .replace(/^\[[^\]]*]\s*/, "")
     .replace(/^(run=\d+\s*)?(stdout|stderr):\s*/, "")
@@ -217,14 +230,19 @@ function resetRenderState(): void {
   };
 }
 
-interface LogContextState {
-  inPromptBlock: boolean;
-  inDiffBlock: boolean;
+interface LogContextState extends LineContext {
+  inFinalOutput: boolean;
+  inRun: boolean;
 }
 
 function resetLogContexts(): void {
   logContexts = [];
-  logContextState = { inPromptBlock: false, inDiffBlock: false };
+  logContextState = {
+    inPromptBlock: false,
+    inDiffBlock: false,
+    inFinalOutput: false,
+    inRun: false,
+  };
 }
 
 function updateLogContextForLine(line: string): void {
@@ -241,6 +259,16 @@ function updateLogContextForLine(line: string): void {
     logContextState.inDiffBlock = false;
   } else if (classification.type === "prompt-marker-end") {
     logContextState.inPromptBlock = false;
+  }
+
+  if (classification.type === "run-start") {
+    logContextState.inRun = true;
+    logContextState.inFinalOutput = false;
+  } else if (classification.type === "run-end") {
+    logContextState.inRun = false;
+    logContextState.inFinalOutput = false;
+  } else if (classification.type === "tokens" || classification.type === "agent-output") {
+    logContextState.inFinalOutput = true;
   }
 }
 
@@ -456,14 +484,24 @@ function renderLogWindow({ startIndex = null, followTail = true }: RenderLogWind
   }
 
   const showSummary = isSummaryMode();
+  const defaultContext: LogContextState = {
+    inPromptBlock: false,
+    inDiffBlock: false,
+    inFinalOutput: false,
+    inRun: false,
+  };
 
   for (let i = windowStart; i < windowEnd; i += 1) {
     const line = rawLogLines[i];
-    const classification = classifyLine(line, renderState || { inPromptBlock: false, inDiffBlock: false });
+    const classification = classifyLine(line, renderState || {
+      inPromptBlock: false,
+      inDiffBlock: false,
+    });
+    const summaryContext = logContexts[i] || defaultContext;
 
     setLastClassificationType(classification.type);
 
-    if (showSummary && classification.priority > 2) {
+    if (showSummary && !shouldRenderSummaryLine(classification, summaryContext)) {
       if (renderState) {
         if (classification.startDiff) {
           renderState.inDiffBlock = true;
@@ -510,6 +548,7 @@ function appendLogLine(line: string): void {
     isViewingTail = true;
   }
 
+  const summaryContext = { ...logContextState };
   rawLogLines.push(line);
   updateLogContextForLine(line);
   trimLogBuffer();
@@ -520,13 +559,22 @@ function appendLogLine(line: string): void {
     return;
   }
 
-  const classification = classifyLine(line, renderState || { inPromptBlock: false, inDiffBlock: false });
+  const classification = classifyLine(line, renderState || {
+    inPromptBlock: false,
+    inDiffBlock: false,
+  });
   const showSummary = isSummaryMode();
 
   setLastClassificationType(classification.type);
 
-  if (showSummary && classification.priority > 2) {
+  if (showSummary && !shouldRenderSummaryLine(classification, summaryContext)) {
     if (renderState) {
+      if (classification.startDiff) {
+        renderState.inDiffBlock = true;
+      }
+      if (classification.resetDiff) {
+        renderState.inDiffBlock = false;
+      }
       if (classification.type === "prompt-marker-end") {
         renderState.inPromptBlock = false;
         renderState.inDiffBlock = false;
@@ -700,6 +748,19 @@ function syncRunIdPlaceholder(state: { last_run_id?: number } | null): void {
 
 function renderLogs(): void {
   renderLogWindow({ followTail: isViewingTail });
+}
+
+function shouldRenderSummaryLine(
+  classification: LineClassification,
+  summaryContext: LogContextState
+): boolean {
+  if (classification.type === "run-start" || classification.type === "run-end") {
+    return true;
+  }
+  if (classification.type === "tokens" || classification.type === "agent-output") {
+    return true;
+  }
+  return summaryContext.inFinalOutput;
 }
 
 export function initLogs(): void {
