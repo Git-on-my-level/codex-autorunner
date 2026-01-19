@@ -9,6 +9,8 @@ from ...core.request_context import reset_conversation_id, set_conversation_id
 from .adapter import (
     ApprovalCallback,
     CancelCallback,
+    QuestionCancelCallback,
+    QuestionOptionCallback,
     TelegramUpdate,
     allowlist_allows,
     parse_callback_data,
@@ -93,9 +95,9 @@ async def _dispatch_callback(
     if callback is None:
         return
     parsed = parse_callback_data(callback.data)
-    should_bypass_queue = isinstance(parsed, ApprovalCallback) or (
-        isinstance(parsed, CancelCallback) and parsed.kind == "interrupt"
-    )
+    should_bypass_queue = isinstance(
+        parsed, (ApprovalCallback, QuestionOptionCallback, QuestionCancelCallback)
+    ) or (isinstance(parsed, CancelCallback) and parsed.kind == "interrupt")
     if context.topic_key:
         if not should_bypass_queue:
             handlers._enqueue_topic_work(
