@@ -157,19 +157,31 @@ export async function initVoiceInput({ button, input: _input, statusEl, onTransc
             stopRecording();
         }
     };
+    const pointerLeaveHandler = () => {
+        if (state.recording && !state.isClickToggleMode) {
+            stopRecording();
+        }
+    };
+    const pointerCancelHandler = () => {
+        if (state.recording && !state.isClickToggleMode) {
+            stopRecording();
+        }
+    };
+    const clickHandler = (e) => e.preventDefault();
     button.addEventListener("pointerdown", startHandler);
     button.addEventListener("pointerup", endHandler);
-    button.addEventListener("pointerleave", () => {
-        if (state.recording && !state.isClickToggleMode) {
-            stopRecording();
-        }
-    });
-    button.addEventListener("pointercancel", () => {
-        if (state.recording && !state.isClickToggleMode) {
-            stopRecording();
-        }
-    });
-    button.addEventListener("click", (e) => e.preventDefault());
+    button.addEventListener("pointerleave", pointerLeaveHandler);
+    button.addEventListener("pointercancel", pointerCancelHandler);
+    button.addEventListener("click", clickHandler);
+    function cleanup() {
+        button.removeEventListener("pointerdown", startHandler);
+        button.removeEventListener("pointerup", endHandler);
+        button.removeEventListener("pointerleave", pointerLeaveHandler);
+        button.removeEventListener("pointercancel", pointerCancelHandler);
+        button.removeEventListener("click", clickHandler);
+        cleanupRecorder(state);
+        cleanupStream(state);
+    }
     async function startRecording() {
         let stream;
         try {
@@ -476,6 +488,7 @@ export async function initVoiceInput({ button, input: _input, statusEl, onTransc
         stop: () => endHandler(),
         isRecording: () => state.recording,
         hasPending: () => Boolean(state.pendingBlob),
+        cleanup,
     };
 }
 function cleanupStream(state) {

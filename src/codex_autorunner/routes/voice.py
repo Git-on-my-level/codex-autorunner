@@ -28,12 +28,6 @@ def build_voice_routes() -> APIRouter:
                 "sample_rate": voice_config.sample_rate,
                 "warn_on_remote_api": voice_config.warn_on_remote_api,
                 "has_api_key": False,
-                "api_key_env": (
-                    voice_config.providers.get(
-                        voice_config.provider or "openai_whisper", {}
-                    )
-                    or {}
-                ).get("api_key_env", "OPENAI_API_KEY"),
                 "push_to_talk": {
                     "max_ms": voice_config.push_to_talk.max_ms,
                     "silence_auto_stop_ms": voice_config.push_to_talk.silence_auto_stop_ms,
@@ -56,12 +50,6 @@ def build_voice_routes() -> APIRouter:
                     "sample_rate": voice_config.sample_rate,
                     "warn_on_remote_api": voice_config.warn_on_remote_api,
                     "has_api_key": False,
-                    "api_key_env": (
-                        voice_config.providers.get(
-                            voice_config.provider or "openai_whisper", {}
-                        )
-                        or {}
-                    ).get("api_key_env", "OPENAI_API_KEY"),
                     "push_to_talk": {
                         "max_ms": voice_config.push_to_talk.max_ms,
                         "silence_auto_stop_ms": voice_config.push_to_talk.silence_auto_stop_ms,
