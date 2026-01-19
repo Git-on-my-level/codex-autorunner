@@ -839,6 +839,21 @@ class TelegramStateStore:
                 )
                 """
             )
+            self._dedupe_topic_scopes(conn)
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_tg_scopes_root
+                    ON telegram_topic_scopes(chat_id)
+                    WHERE thread_id IS NULL
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_tg_scopes_thread
+                    ON telegram_topic_scopes(chat_id, thread_id)
+                    WHERE thread_id IS NOT NULL
+                """
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS telegram_topics (
@@ -941,6 +956,47 @@ class TelegramStateStore:
             now = now_iso()
             self._set_meta(conn, "schema_version", str(TELEGRAM_SCHEMA_VERSION), now)
             self._set_meta(conn, "state_version", str(STATE_VERSION), now)
+
+    def _dedupe_topic_scopes(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            DELETE FROM telegram_topic_scopes
+             WHERE thread_id IS NULL
+               AND EXISTS (
+                SELECT 1
+                  FROM telegram_topic_scopes AS newer
+                 WHERE newer.thread_id IS NULL
+                   AND newer.chat_id = telegram_topic_scopes.chat_id
+                   AND (
+                    newer.updated_at > telegram_topic_scopes.updated_at
+                    OR (
+                        newer.updated_at = telegram_topic_scopes.updated_at
+                        AND newer.rowid > telegram_topic_scopes.rowid
+                    )
+                   )
+               )
+            """
+        )
+        conn.execute(
+            """
+            DELETE FROM telegram_topic_scopes
+             WHERE thread_id IS NOT NULL
+               AND EXISTS (
+                SELECT 1
+                  FROM telegram_topic_scopes AS newer
+                 WHERE newer.thread_id IS NOT NULL
+                   AND newer.chat_id = telegram_topic_scopes.chat_id
+                   AND newer.thread_id = telegram_topic_scopes.thread_id
+                   AND (
+                    newer.updated_at > telegram_topic_scopes.updated_at
+                    OR (
+                        newer.updated_at = telegram_topic_scopes.updated_at
+                        AND newer.rowid > telegram_topic_scopes.rowid
+                    )
+                   )
+               )
+            """
+        )
 
     def _has_persisted_rows(self, conn: sqlite3.Connection) -> bool:
         for table in (
@@ -1367,21 +1423,40 @@ class TelegramStateStore:
         clause, params = _thread_predicate(thread_id)
         with conn:
             if isinstance(scope, str) and scope:
-                conn.execute(
-                    """
-                    INSERT INTO telegram_topic_scopes (
-                        chat_id,
-                        thread_id,
-                        scope,
-                        updated_at
+                if thread_id is None:
+                    conn.execute(
+                        """
+                        INSERT INTO telegram_topic_scopes (
+                            chat_id,
+                            thread_id,
+                            scope,
+                            updated_at
+                        )
+                        VALUES (?, NULL, ?, ?)
+                        ON CONFLICT(chat_id) WHERE thread_id IS NULL
+                        DO UPDATE SET
+                            scope=excluded.scope,
+                            updated_at=excluded.updated_at
+                        """,
+                        (chat_id, scope, now),
                     )
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(chat_id, thread_id) DO UPDATE SET
-                        scope=excluded.scope,
-                        updated_at=excluded.updated_at
-                    """,
-                    (chat_id, thread_id, scope, now),
-                )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO telegram_topic_scopes (
+                            chat_id,
+                            thread_id,
+                            scope,
+                            updated_at
+                        )
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(chat_id, thread_id) WHERE thread_id IS NOT NULL
+                        DO UPDATE SET
+                            scope=excluded.scope,
+                            updated_at=excluded.updated_at
+                        """,
+                        (chat_id, thread_id, scope, now),
+                    )
             else:
                 conn.execute(
                     f"DELETE FROM telegram_topic_scopes WHERE chat_id = ? AND {clause}",

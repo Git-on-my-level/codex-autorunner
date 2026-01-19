@@ -632,6 +632,15 @@ class TelegramBotService(
                         "telegram.app_server.close_failed",
                         exc=exc,
                     )
+                try:
+                    await self._store.close()
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.state.close_failed",
+                        exc=exc,
+                    )
                 self._release_instance_lock()
 
     async def _prime_bot_identity(self) -> None:
