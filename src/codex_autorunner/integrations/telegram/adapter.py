@@ -1418,7 +1418,9 @@ class TelegramBotClient:
             except Exception as exc:
                 retry_after = _extract_retry_after_seconds(exc)
                 if retry_after is not None:
-                    await self._apply_rate_limit(method, retry_after)
+                    raise TelegramAPIError(
+                        "Telegram request failed", retry_after=retry_after
+                    ) from exc
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -1428,13 +1430,14 @@ class TelegramBotClient:
                 )
                 raise TelegramAPIError("Telegram request failed") from exc
             if not isinstance(payload, dict) or not payload.get("ok"):
-                retry_after = self._retry_after_from_payload(payload)
-                if retry_after is not None:
-                    await self._apply_rate_limit(method, retry_after)
                 description = (
                     payload.get("description") if isinstance(payload, dict) else None
                 )
-                raise TelegramAPIError(description or "Telegram API returned error")
+                retry_after = self._retry_after_from_payload(payload)
+                raise TelegramAPIError(
+                    description or "Telegram API returned error",
+                    retry_after=retry_after,
+                )
             return payload.get("result")
 
     def _retry_after_from_payload(self, payload: Any) -> Optional[int]:

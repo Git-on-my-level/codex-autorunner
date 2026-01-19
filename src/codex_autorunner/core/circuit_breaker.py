@@ -78,13 +78,17 @@ class CircuitBreaker:
             async with circuit_breaker.call():
                 result = await external_service.request()
         """
+        is_open = False
         async with self._lock:
             if self._should_open_circuit():
                 self._open_circuit()
+                is_open = True
             elif self._should_half_open_circuit():
                 self._half_open_circuit()
+            elif self._state.state == CircuitState.OPEN:
+                is_open = True
 
-        if self._state.state == CircuitState.OPEN:
+        if is_open:
             raise CircuitOpenError(
                 self._service_name,
                 message=f"Circuit breaker OPEN for {self._service_name}. "
