@@ -189,6 +189,11 @@ class ReviewCommitCallback:
 
 
 @dataclass(frozen=True)
+class PrFlowStartCallback:
+    issue: str
+
+
+@dataclass(frozen=True)
 class CancelCallback:
     kind: str
 
@@ -675,6 +680,12 @@ def encode_page_callback(kind: str, page: int) -> str:
     return data
 
 
+def encode_pr_flow_start_callback(issue: str) -> str:
+    data = f"pr_flow_start:{issue}"
+    _validate_callback_data(data)
+    return data
+
+
 def encode_compact_callback(action: str) -> str:
     data = f"compact:{action}"
     _validate_callback_data(data)
@@ -696,6 +707,7 @@ def parse_callback_data(
         UpdateCallback,
         UpdateConfirmCallback,
         ReviewCommitCallback,
+        PrFlowStartCallback,
         CancelCallback,
         CompactCallback,
         PageCallback,
@@ -767,6 +779,11 @@ def parse_callback_data(
         if not sha:
             return None
         return ReviewCommitCallback(sha=sha)
+    if data.startswith("pr_flow_start:"):
+        _, _, issue = data.partition(":")
+        if not issue:
+            return None
+        return PrFlowStartCallback(issue=issue)
     if data.startswith("cancel:"):
         _, _, kind = data.partition(":")
         if not kind:

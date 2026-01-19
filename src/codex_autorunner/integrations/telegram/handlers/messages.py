@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from ....core.logging_utils import log_event
+from ....integrations.github.service import parse_github_url
 from ..adapter import (
     TelegramDocument,
     TelegramMessage,
@@ -184,6 +185,12 @@ async def handle_message_inner(
         return
     if text and handlers._handle_pending_bind(key, text):
         return
+
+    if text:
+        parsed = parse_github_url(text.strip())
+        if parsed and parsed[1] == "issue":
+            await handlers._handle_github_issue_url(message, runtime, key, text.strip())
+            return
 
     if text and is_interrupt_alias(text):
         await handlers._handle_interrupt(message, runtime)
