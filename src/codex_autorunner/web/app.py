@@ -54,6 +54,7 @@ from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..integrations.github.chatops import GitHubChatOpsPoller
 from ..integrations.github.pr_flow import PrFlowManager
 from ..manifest import load_manifest
+from ..routes import build_repo_router
 from ..routes.system import build_system_routes
 from ..spec_ingest import SpecIngestService
 from ..voice import VoiceConfig, VoiceService
@@ -942,8 +943,187 @@ def _app_lifespan(context: AppContext):
                         logging.WARNING,
                         "OpenCode shutdown failed",
                         exc,
-                        exc_info=True,
                     )
+            static_context = getattr(app.state, "static_assets_context", None)
+            if static_context is not None:
+                static_context.close()
+
+    return lifespan
+
+
+def create_app(
+    repo_root: Optional[Path] = None,
+    base_path: Optional[str] = None,
+    server_overrides: Optional[ServerOverrides] = None,
+    hub_config: Optional[HubConfig] = None,
+) -> ASGIApp:
+    context = _build_app_context(repo_root, base_path, hub_config=hub_config)
+    app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
+    _apply_app_context(app, context)
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+    app.mount(
+        "/static",
+        CacheStaticFiles(directory=context.static_dir),
+        name="static",
+    )
+    # Route handlers
+    app.include_router(build_repo_router(context.static_dir))
+
+    allowed_hosts = _resolve_allowed_hosts(
+        context.engine.config.server_host, context.engine.config.server_allowed_hosts
+    )
+    allowed_origins = context.engine.config.server_allowed_origins
+    auth_token_env = context.engine.config.server_auth_token_env
+    if server_overrides is not None:
+        if server_overrides.allowed_hosts is not None:
+            allowed_hosts = list(server_overrides.allowed_hosts)
+        if server_overrides.allowed_origins is not None:
+            allowed_origins = list(server_overrides.allowed_origins)
+        if server_overrides.auth_token_env is not None:
+            auth_token_env = server_overrides.auth_token_env
+    auth_token = _resolve_auth_token(auth_token_env, env=context.env)
+    app.state.auth_token = auth_token
+    asgi_app: ASGIApp = app
+    if auth_token:
+        asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
+    if context.base_path:
+        asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
+    asgi_app = HostOriginMiddleware(asgi_app, allowed_hosts, allowed_origins)
+    asgi_app = RequestIdMiddleware(asgi_app)
+    asgi_app = SecurityHeadersMiddleware(asgi_app)
+
+    return asgi_app
+
+
+def create_hub_app(
+    hub_root: Optional[Path] = None, base_path: Optional[str] = None
+) -> ASGIApp:
+    context = _build_hub_context(hub_root, base_path)
+    app = FastAPI(redirect_slashes=False)
+    _apply_hub_context(app, context)
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+    app.mount(
+        "/static",
+        CacheStaticFiles(directory=context.static_dir),
+        name="static",
+    )
+    mounted_repos: set[str] = set()
+    mount_errors: dict[str, str] = {}
+    repo_apps: dict[str, ASGIApp] = {}
+    repo_lifespans: dict[str, object] = {}
+    mount_order: list[str] = []
+    mount_lock: Optional[asyncio.Lock] = None
+
+    async def _get_mount_lock() -> asyncio.Lock:
+        nonlocal mount_lock
+        if mount_lock is None:
+            mount_lock = asyncio.Lock()
+        return mount_lock
+
+    app.state.hub_started = False
+    repo_server_overrides: Optional[ServerOverrides] = None
+    if context.config.repo_server_inherit:
+        repo_server_overrides = ServerOverrides(
+            allowed_hosts=_resolve_allowed_hosts(
+                context.config.server_host, context.config.server_allowed_hosts
+            ),
+            allowed_origins=list(context.config.server_allowed_origins),
+            auth_token_env=context.config.server_auth_token_env,
+        )
+
+    def _unwrap_fastapi(sub_app: ASGIApp) -> Optional[FastAPI]:
+        current: ASGIApp = sub_app
+        while not isinstance(current, FastAPI):
+            nested = getattr(current, "app", None)
+            if nested is None:
+                return None
+            current = nested
+        return current
+
+    async def _start_repo_lifespan_locked(prefix: str, sub_app: ASGIApp) -> None:
+        if prefix in repo_lifespans:
+            return
+        fastapi_app = _unwrap_fastapi(sub_app)
+        if fastapi_app is None:
+            return
+        try:
+            ctx = fastapi_app.router.lifespan_context(fastapi_app)
+            await ctx.__aenter__()
+            repo_lifespans[prefix] = ctx
+            safe_log(
+                app.state.logger,
+                logging.INFO,
+                f"Repo app lifespan entered for {prefix}",
+            )
+        except Exception as exc:
+            mount_errors[prefix] = str(exc)
+            try:
+                app.state.logger.warning("Repo lifespan failed for %s: %s", prefix, exc)
+            except Exception:
+                pass
+            await _unmount_repo_locked(prefix)
+
+    async def _stop_repo_lifespan_locked(prefix: str) -> None:
+        ctx = repo_lifespans.pop(prefix, None)
+        if ctx is None:
+            return
+        try:
+            await ctx.__aexit__(None, None, None)
+            safe_log(
+                app.state.logger,
+                logging.INFO,
+                f"Repo app lifespan exited for {prefix}",
+            )
+        except Exception as exc:
+            try:
+                app.state.logger.warning(
+                    "Repo lifespan shutdown failed for %s: %s", prefix, exc
+                )
+            except Exception:
+                pass
+
+    def _detach_mount_locked(prefix: str) -> None:
+        mount_path = f"/repos/{prefix}"
+        app.router.routes = [
+            route
+            for route in app.router.routes
+            if not (isinstance(route, Mount) and route.path == mount_path)
+        ]
+        mounted_repos.discard(prefix)
+        repo_apps.pop(prefix, None)
+        if prefix in mount_order:
+            mount_order.remove(prefix)
+
+    async def _unmount_repo_locked(prefix: str) -> None:
+        await _stop_repo_lifespan_locked(prefix)
+        _detach_mount_locked(prefix)
+
+    def _mount_repo_sync(prefix: str, repo_path: Path) -> bool:
+        if prefix in mounted_repos:
+            return True
+        if prefix in mount_errors:
+            return False
+        try:
+            # Hub already handles the base path; avoid reapplying it in child apps.
+            sub_app = create_app(
+                repo_path,
+                base_path="",
+                server_overrides=repo_server_overrides,
+                hub_config=context.config,
+            )
+        except ConfigError as exc:
+            mount_errors[prefix] = str(exc)
+            try:
+                app.state.logger.warning("Cannot mount repo %s: %s", prefix, exc)
+            except Exception:
+                pass
+            return False
+        except Exception as exc:
+            mount_errors[prefix] = str(exc)
+            try:
+                app.state.logger.warning("Cannot mount repo %s: %s", prefix, exc)
+            except Exception:
+                pass
             return False
         app.mount(f"/repos/{prefix}", sub_app)
         mounted_repos.add(prefix)

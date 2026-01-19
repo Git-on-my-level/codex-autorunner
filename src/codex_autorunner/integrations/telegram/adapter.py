@@ -1018,6 +1018,9 @@ class TelegramBotClient:
         else:
             self._client = client
             self._owns_client = False
+        self._rate_limit_until: Optional[float] = None
+        self._rate_limit_lock: Optional[asyncio.Lock] = None
+        self._rate_limit_lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self._circuit_breaker = CircuitBreaker("Telegram", logger=self._logger)
 
     async def close(self) -> None:

@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import logging
 from functools import wraps
-from typing import Any, Callable, Coroutine, ParamSpec, TypeVar, cast
+from typing import Any, Callable, Coroutine, TypeVar, cast
 
 from tenacity import (
-    after_log,
     before_sleep_log,
-    retry,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
+from tenacity import (
+    retry as tenacity_retry,
+)
 
 from .exceptions import TransientError
 
-P = ParamSpec("P")
 T = TypeVar("T")
 
 
@@ -24,7 +24,7 @@ def retry_transient(
     base_wait: float = 1.0,
     max_wait: float = 60.0,
     jitter: float = 0.1,
-) -> Callable[[Callable[P, Coroutine[Any, T]]], Callable[P, Coroutine[Any, T]]]:
+) -> Any:
     """
     Decorator for retrying transient errors with exponential backoff.
 
@@ -43,18 +43,17 @@ def retry_transient(
     logger = logging.getLogger(__name__)
 
     def decorator(
-        func: Callable[P, Coroutine[Any, T]],
-    ) -> Callable[P, Coroutine[Any, T]]:
+        func: Callable[..., Coroutine[Any, Any, T]],
+    ) -> Callable[..., Coroutine[Any, Any, T]]:
         @wraps(func)
-        @retry(
+        @tenacity_retry(
             stop=stop_after_attempt(max_attempts),
             wait=wait_exponential(multiplier=base_wait, max=max_wait, exp_base=2),
             retry=retry_if_exception_type(TransientError),
             before_sleep=before_sleep_log(logger, logging.WARNING),
-            after_log=after_log(logger, logging.INFO),
             reraise=True,
         )
-        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        async def wrapper(*args: Any, **kwargs: Any) -> T:
             return cast(T, await func(*args, **kwargs))
 
         return wrapper
