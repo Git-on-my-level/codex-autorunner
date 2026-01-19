@@ -837,6 +837,9 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/review commit <sha> (or /review commit to pick)")
         lines.append("/review custom <instructions> (or /review custom to prompt)")
         lines.append("/review detached ...")
+        lines.append(
+            "Note: /review works for codex and opencode; OpenCode passes arguments to its review command (commit/branch/PR heuristics)."
+        )
     if "pr" in command_specs:
         lines.append("")
         lines.append("PR Flow:")
