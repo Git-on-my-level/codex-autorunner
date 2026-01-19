@@ -557,7 +557,7 @@ async def collect_opencode_output_from_events(
     pending_text: dict[str, list[str]] = {}
     last_usage_total: Optional[int] = None
     last_context_window: Optional[int] = None
-    seen_question_request_ids: set[str] = set()
+    seen_question_request_ids: set[tuple[str, str]] = set()
     normalized_question_policy = _normalize_question_policy(question_policy)
     logger = logging.getLogger(__name__)
 
@@ -664,9 +664,10 @@ async def collect_opencode_output_from_events(
             )
             if not request_id:
                 continue
-            if request_id in seen_question_request_ids:
+            dedupe_key = (event_session_id, request_id)
+            if dedupe_key in seen_question_request_ids:
                 continue
-            seen_question_request_ids.add(request_id)
+            seen_question_request_ids.add(dedupe_key)
             if question_handler is not None:
                 try:
                     answers = await question_handler(request_id, props)
