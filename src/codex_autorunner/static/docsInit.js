@@ -1,5 +1,5 @@
 import { CONSTANTS } from "./constants.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
+import { registerAutoRefresh, triggerRefresh } from "./autoRefresh.js";
 import { chatUI, docActionsUI, docButtons, snapshotUI, specIngestUI, specIssueUI, threadRegistryUI, } from "./docsElements.js";
 import { getActiveDoc, getChatState, setActiveDoc, setHistoryNavIndex, getHistoryNavIndex, } from "./docsState.js";
 import { autoResizeTextarea, getDocTextarea, updateDocControls } from "./docsUi.js";
@@ -12,7 +12,7 @@ import { initDocVoice } from "./docsVoice.js";
 import { loadSnapshot, runSnapshot } from "./docsSnapshot.js";
 import { initAgentControls } from "./agentControls.js";
 import { downloadThreadRegistryBackup, loadThreadRegistryStatus, resetThreadRegistry, } from "./docsThreadRegistry.js";
-import { publish } from "./bus.js";
+import { publish, subscribe } from "./bus.js";
 export function initDocs() {
     if (!chatUI.send || !chatUI.input) {
         console.warn("Doc chat UI elements missing; skipping doc chat init.");
@@ -271,4 +271,15 @@ export function initDocs() {
         refreshOnActivation: true,
         immediate: false,
     });
+    let docsInvalidateTimer = null;
+    const scheduleDocsRefresh = () => {
+        if (docsInvalidateTimer) {
+            clearTimeout(docsInvalidateTimer);
+        }
+        docsInvalidateTimer = setTimeout(() => {
+            triggerRefresh("docs-content");
+        }, 500);
+    };
+    subscribe("todo:invalidate", scheduleDocsRefresh);
+    subscribe("runs:invalidate", scheduleDocsRefresh);
 }

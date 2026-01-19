@@ -1,5 +1,8 @@
 import { api, flash, getAuthToken, openModal, resolvePath } from "./utils.js";
+import { registerAutoRefresh, triggerRefresh } from "./autoRefresh.js";
+import { subscribe } from "./bus.js";
 let initialized = false;
+const RUNS_AUTO_REFRESH_INTERVAL = 15000;
 const runsState = {
     runs: [],
     attributionMode: "split",
@@ -401,5 +404,15 @@ export function initRuns() {
                 closeDetailsModal();
         });
     }
+    registerAutoRefresh("runs-list", {
+        callback: loadRuns,
+        tabId: "runs",
+        interval: RUNS_AUTO_REFRESH_INTERVAL,
+        refreshOnActivation: true,
+        immediate: false,
+    });
+    subscribe("runs:invalidate", () => {
+        triggerRefresh("runs-list");
+    });
     loadRuns();
 }
