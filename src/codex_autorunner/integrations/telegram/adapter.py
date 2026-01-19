@@ -7,7 +7,10 @@ from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence, Union
 
 import httpx
 
+from ...core.circuit_breaker import CircuitBreaker
+from ...core.exceptions import TransientError
 from ...core.logging_utils import log_event
+from ...core.retry import retry_transient
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .retry import _extract_retry_after_seconds
 
@@ -23,8 +26,14 @@ INTERRUPT_ALIASES = {
 }
 
 
-class TelegramAPIError(Exception):
+class TelegramAPIError(TransientError):
     """Raised when the Telegram Bot API returns an error."""
+
+    def __init__(self, message: str, *, retry_after: Optional[int] = None) -> None:
+        super().__init__(
+            message, user_message="Telegram API error. Retrying with backoff..."
+        )
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
@@ -1035,6 +1044,7 @@ class TelegramBotClient:
         self._rate_limit_until: Optional[float] = None
         self._rate_limit_lock: Optional[asyncio.Lock] = None
         self._rate_limit_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._circuit_breaker = CircuitBreaker("Telegram", logger=self._logger)
 
     async def close(self) -> None:
         if self._owns_client:
@@ -1418,10 +1428,11 @@ class TelegramBotClient:
 
         return await self._request_with_retry(method, send)
 
+    @retry_transient(max_attempts=5, base_wait=1.0, max_wait=60.0)
     async def _request_with_retry(
         self, method: str, send: Callable[[], Awaitable[httpx.Response]]
     ) -> Any:
-        while True:
+        async with self._circuit_breaker.call():
             await self._wait_for_rate_limit(method)
             try:
                 response = await send()
@@ -1430,8 +1441,9 @@ class TelegramBotClient:
             except Exception as exc:
                 retry_after = _extract_retry_after_seconds(exc)
                 if retry_after is not None:
-                    await self._apply_rate_limit(method, retry_after)
-                    continue
+                    raise TelegramAPIError(
+                        "Telegram request failed", retry_after=retry_after
+                    ) from exc
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -1441,14 +1453,14 @@ class TelegramBotClient:
                 )
                 raise TelegramAPIError("Telegram request failed") from exc
             if not isinstance(payload, dict) or not payload.get("ok"):
-                retry_after = self._retry_after_from_payload(payload)
-                if retry_after is not None:
-                    await self._apply_rate_limit(method, retry_after)
-                    continue
                 description = (
                     payload.get("description") if isinstance(payload, dict) else None
                 )
-                raise TelegramAPIError(description or "Telegram API returned error")
+                retry_after = self._retry_after_from_payload(payload)
+                raise TelegramAPIError(
+                    description or "Telegram API returned error",
+                    retry_after=retry_after,
+                )
             return payload.get("result")
 
     def _retry_after_from_payload(self, payload: Any) -> Optional[int]:

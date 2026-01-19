@@ -1,23 +1,40 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
 from typing import Callable, Optional
 
+from ..core.circuit_breaker import CircuitBreaker
+from ..core.exceptions import CodexError, PermanentError, TransientError
 from .capture import CaptureCallbacks, CaptureState, PushToTalkCapture
 from .config import VoiceConfig
 from .provider import SpeechSessionMetadata
 from .resolver import resolve_speech_provider
 
 
-class VoiceServiceError(Exception):
-    """Raised when voice transcription fails at the service boundary."""
+class VoiceServiceError(CodexError):
+    """Raised when voice transcription fails at service boundary."""
 
-    def __init__(self, reason: str, detail: str):
-        super().__init__(detail)
+    def __init__(
+        self, reason: str, detail: str, *, user_message: Optional[str] = None
+    ) -> None:
+        super().__init__(detail, user_message=user_message or detail)
         self.reason = reason
         self.detail = detail
+
+
+class VoiceTransientError(VoiceServiceError, TransientError):
+    """Transient voice errors (rate limits, network issues)."""
+
+    pass
+
+
+class VoicePermanentError(VoiceServiceError, PermanentError):
+    """Permanent voice errors (auth, invalid config)."""
+
+    pass
 
 
 class VoiceService:
@@ -39,6 +56,7 @@ class VoiceService:
         self._provider_resolver = provider_resolver
         self._provider = provider
         self._env = env if env is not None else os.environ
+        self._circuit_breaker = CircuitBreaker("Voice", logger=self._logger)
 
     def config_payload(self) -> dict:
         """Expose safe config fields to the UI."""
@@ -115,28 +133,32 @@ class VoiceService:
                     self.config.provider or "openai_whisper", {}
                 )
                 api_key_env = provider_cfg.get("api_key_env", "OPENAI_API_KEY")
-                raise VoiceServiceError(
+                raise VoicePermanentError(
                     buffer.error_reason,
                     f"OpenAI API key rejected ({buffer.error_reason}); check {api_key_env}",
+                    user_message=f"Voice transcription failed: Invalid API key. Please set {api_key_env}.",
                 )
             if buffer.error_reason == "invalid_audio":
                 meta = ""
                 if filename or content_type:
                     meta = f" (file={filename or 'audio'}, type={content_type or 'unknown'})"
-                raise VoiceServiceError(
+                raise VoicePermanentError(
                     "invalid_audio",
                     "OpenAI rejected the audio upload (bad request). "
                     f"Try re-recording or switching formats/browsers{meta}.",
+                    user_message="Voice transcription failed: Invalid audio. Try re-recording.",
                 )
             if buffer.error_reason == "audio_too_large":
-                raise VoiceServiceError(
+                raise VoicePermanentError(
                     "audio_too_large",
                     "Audio upload too large; record a shorter clip and try again.",
+                    user_message="Voice transcription failed: Audio too large. Record a shorter clip.",
                 )
             if buffer.error_reason == "rate_limited":
-                raise VoiceServiceError(
+                raise VoiceTransientError(
                     "rate_limited",
                     "OpenAI rate limited the request; wait a moment and try again.",
+                    user_message="Voice transcription rate limited. Retrying...",
                 )
             raise VoiceServiceError(
                 buffer.error_reason, buffer.error_reason.replace("_", " ")
@@ -147,6 +169,27 @@ class VoiceService:
             "text": transcript,
             "warnings": buffer.warnings,
         }
+
+    async def transcribe_async(
+        self,
+        audio_bytes: bytes,
+        *,
+        client: str = "web",
+        user_agent: Optional[str] = None,
+        language: Optional[str] = None,
+        filename: Optional[str] = None,
+        content_type: Optional[str] = None,
+    ) -> dict:
+        async with self._circuit_breaker.call():
+            return await asyncio.to_thread(
+                self.transcribe,
+                audio_bytes,
+                client=client,
+                user_agent=user_agent,
+                language=language,
+                filename=filename,
+                content_type=content_type,
+            )
 
     def _resolve_provider(self):
         if self._provider is None:

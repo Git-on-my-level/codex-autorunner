@@ -9,7 +9,10 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Union, cast
 
+from ...core.circuit_breaker import CircuitBreaker
+from ...core.exceptions import CodexError, PermanentError, TransientError
 from ...core.logging_utils import log_event, sanitize_log_value
+from ...core.retry import retry_transient
 
 ApprovalDecision = Union[str, Dict[str, Any]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
@@ -30,7 +33,7 @@ _RESTART_BACKOFF_MAX_SECONDS = 30.0
 _RESTART_BACKOFF_JITTER_RATIO = 0.1
 
 
-class CodexAppServerError(Exception):
+class CodexAppServerError(CodexError):
     """Base error for app-server client failures."""
 
 
@@ -51,12 +54,20 @@ class CodexAppServerResponseError(CodexAppServerError):
         self.data = data
 
 
-class CodexAppServerDisconnected(CodexAppServerError):
+class CodexAppServerDisconnected(CodexAppServerError, TransientError):
     """Raised when the app-server disconnects mid-flight."""
 
+    def __init__(self, message: str = "App-server disconnected") -> None:
+        super().__init__(
+            message, user_message="App-server temporarily unavailable. Reconnecting..."
+        )
 
-class CodexAppServerProtocolError(CodexAppServerError):
+
+class CodexAppServerProtocolError(CodexAppServerError, PermanentError):
     """Raised when the app-server returns malformed responses."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, user_message="App-server protocol error. Check logs.")
 
 
 @dataclass
@@ -116,6 +127,7 @@ class CodexAppServerClient:
         self._request_timeout = request_timeout
         self._notification_handler = notification_handler
         self._logger = logger or logging.getLogger(__name__)
+        self._circuit_breaker = CircuitBreaker("App-Server", logger=self._logger)
 
         self._process: Optional[asyncio.subprocess.Process] = None
         self._reader_task: Optional[asyncio.Task] = None
@@ -339,21 +351,22 @@ class CodexAppServerClient:
         return result
 
     async def _ensure_process(self) -> None:
-        self._ensure_locks()
-        start_lock = self._start_lock
-        if start_lock is None:
-            raise CodexAppServerProtocolError("start lock unavailable")
-        async with start_lock:
-            if self._closed:
-                raise CodexAppServerDisconnected("Client closed")
-            if (
-                self._process is not None
-                and self._process.returncode is None
-                and self._initialized
-            ):
-                return
-            await self._spawn_process()
-            await self._initialize_handshake()
+        async with self._circuit_breaker.call():
+            self._ensure_locks()
+            start_lock = self._start_lock
+            if start_lock is None:
+                raise CodexAppServerProtocolError("start lock unavailable")
+            async with start_lock:
+                if self._closed:
+                    raise CodexAppServerDisconnected("Client closed")
+                if (
+                    self._process is not None
+                    and self._process.returncode is None
+                    and self._initialized
+                ):
+                    return
+                await self._spawn_process()
+                await self._initialize_handshake()
 
     async def _spawn_process(self) -> None:
         await self._terminate_process()
@@ -1113,6 +1126,7 @@ class CodexAppServerClient:
             return
         self._restart_task = asyncio.create_task(self._restart_after_disconnect())
 
+    @retry_transient(max_attempts=10, base_wait=0.5, max_wait=30.0)
     async def _restart_after_disconnect(self) -> None:
         delay = max(self._restart_backoff_seconds, _RESTART_BACKOFF_INITIAL_SECONDS)
         jitter = delay * _RESTART_BACKOFF_JITTER_RATIO
@@ -1120,7 +1134,7 @@ class CodexAppServerClient:
             delay += random.uniform(0, jitter)
         await asyncio.sleep(delay)
         if self._closed:
-            return
+            raise CodexAppServerDisconnected("Client closed")
         try:
             await self._ensure_process()
             self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
@@ -1130,6 +1144,8 @@ class CodexAppServerClient:
                 "app_server.restarted",
                 delay_seconds=round(delay, 2),
             )
+        except CodexAppServerDisconnected:
+            raise
         except Exception as exc:
             next_delay = min(
                 max(
@@ -1146,8 +1162,7 @@ class CodexAppServerClient:
                 exc=exc,
             )
             self._restart_backoff_seconds = next_delay
-            if not self._closed:
-                self._schedule_restart()
+            raise CodexAppServerDisconnected(f"Restart failed: {exc}") from exc
 
     async def _terminate_process(self) -> None:
         if self._reader_task is not None:
