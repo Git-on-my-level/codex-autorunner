@@ -44,6 +44,9 @@ If you see `app_server.turn.completed` but no `telegram.turn.completed`, the bot
 - **Silent drop**
   - `telegram.turn.completed` exists, but no outbox events.
   - Indicates delivery path skipped or crashed before enqueue.
+- **Turn timed out**
+  - Look for `telegram.turn.timeout` or `telegram.turn.timeout_grace_exhausted`.
+  - Increase `telegram_bot.app_server.turn_timeout_seconds` if the work legitimately runs longer.
 
 ## Useful Commands
 

@@ -22,6 +22,7 @@ DEFAULT_APP_SERVER_MAX_HANDLES = 20
 DEFAULT_APP_SERVER_IDLE_TTL_SECONDS = 3600
 DEFAULT_APP_SERVER_START_TIMEOUT_SECONDS = 30
 DEFAULT_APP_SERVER_START_MAX_ATTEMPTS: Optional[int] = None
+DEFAULT_APP_SERVER_TURN_TIMEOUT_SECONDS = 28800
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
@@ -161,6 +162,7 @@ class TelegramBotConfig:
     app_server_idle_ttl_seconds: Optional[int]
     app_server_start_timeout_seconds: float
     app_server_start_max_attempts: Optional[int]
+    app_server_turn_timeout_seconds: Optional[float]
     poll_timeout_seconds: int
     poll_allowed_updates: list[str]
     message_overflow: str
@@ -426,6 +428,15 @@ class TelegramBotConfig:
                 app_server_start_max_attempts = None
         else:
             app_server_start_max_attempts = None
+        app_server_turn_timeout_raw = app_server_raw.get(
+            "turn_timeout_seconds", DEFAULT_APP_SERVER_TURN_TIMEOUT_SECONDS
+        )
+        if app_server_turn_timeout_raw is None:
+            app_server_turn_timeout_seconds = None
+        else:
+            app_server_turn_timeout_seconds = float(app_server_turn_timeout_raw)
+            if app_server_turn_timeout_seconds <= 0:
+                app_server_turn_timeout_seconds = None
 
         polling_raw_value = cfg.get("polling")
         polling_raw: dict[str, Any] = (
@@ -465,6 +476,7 @@ class TelegramBotConfig:
             app_server_idle_ttl_seconds=app_server_idle_ttl_seconds,
             app_server_start_timeout_seconds=app_server_start_timeout_seconds,
             app_server_start_max_attempts=app_server_start_max_attempts,
+            app_server_turn_timeout_seconds=app_server_turn_timeout_seconds,
             poll_timeout_seconds=poll_timeout_seconds,
             poll_allowed_updates=poll_allowed_updates,
             message_overflow=message_overflow,

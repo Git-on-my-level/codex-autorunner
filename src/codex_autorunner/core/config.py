@@ -229,6 +229,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "app_server": {
             "max_handles": 20,
             "idle_ttl_seconds": 3600,
+            "turn_timeout_seconds": 28800,
         },
         "polling": {
             "timeout_seconds": 30,
@@ -452,6 +453,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "app_server": {
             "max_handles": 20,
             "idle_ttl_seconds": 3600,
+            "turn_timeout_seconds": 28800,
         },
         "polling": {
             "timeout_seconds": 30,
@@ -2167,6 +2169,18 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
         telegram_cfg.get("app_server_command"), (list, str)
     ):
         raise ConfigError("telegram_bot.app_server_command must be a list or string")
+    app_server_cfg = telegram_cfg.get("app_server")
+    if app_server_cfg is not None and not isinstance(app_server_cfg, dict):
+        raise ConfigError("telegram_bot.app_server must be a mapping if provided")
+    if isinstance(app_server_cfg, dict):
+        if (
+            "turn_timeout_seconds" in app_server_cfg
+            and app_server_cfg.get("turn_timeout_seconds") is not None
+            and not isinstance(app_server_cfg.get("turn_timeout_seconds"), (int, float))
+        ):
+            raise ConfigError(
+                "telegram_bot.app_server.turn_timeout_seconds must be a number or null"
+            )
     polling_cfg = telegram_cfg.get("polling")
     if polling_cfg is not None and not isinstance(polling_cfg, dict):
         raise ConfigError("telegram_bot.polling must be a mapping if provided")
