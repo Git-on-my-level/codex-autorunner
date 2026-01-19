@@ -65,17 +65,16 @@ def resolve_config_path(
         ConfigPathError: If path is invalid
     """
     value_str = str(value)
-    stripped = value_str.strip()
 
     if not value_str:
         raise ConfigPathError("Path cannot be empty", path=value_str, scope=scope)
 
-    if stripped and not stripped:
+    if value_str.strip() == "":
         raise ConfigPathError(
             "Path cannot be whitespace only", path=value_str, scope=scope
         )
 
-    value_str = stripped
+    value_str = value_str.strip()
 
     path = Path(value_str)
 

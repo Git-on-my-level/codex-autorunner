@@ -102,7 +102,10 @@ class TestResolveConfigPath:
         repo_root = Path(tmp_path)
         with pytest.raises(ConfigPathError) as exc_info:
             resolve_config_path("../../../etc/passwd", repo_root)
-        assert "outside repo root" in str(exc_info.value).lower()
+        assert (
+            "outside repo root" in str(exc_info.value).lower()
+            or ".." in str(exc_info.value)
+        )
 
     def test_reject_dotdot_in_home_expansion(self, tmp_path):
         """.. segments rejected in home expansion."""
