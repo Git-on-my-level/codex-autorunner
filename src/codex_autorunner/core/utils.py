@@ -1,9 +1,13 @@
 import json
+import logging
 import os
 import shlex
 import shutil
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence, cast
+from typing import TYPE_CHECKING, Dict, Mapping, Optional, Sequence, Union, cast
+
+if TYPE_CHECKING:
+    from ..agents.opencode.supervisor import OpenCodeSupervisor
 
 
 class RepoNotFoundError(Exception):
@@ -133,7 +137,7 @@ def resolve_opencode_binary(raw_command: Optional[str] = None) -> Optional[str]:
     return resolve_executable(parts[0])
 
 
-def infer_home_from_workspace(workspace_root: Path | str) -> Optional[Path]:
+def infer_home_from_workspace(workspace_root: Union[Path, str]) -> Optional[Path]:
     """
     Infer the user's home directory from a workspace path.
 

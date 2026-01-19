@@ -66,8 +66,6 @@ from .utils import (
     build_opencode_supervisor,
     ensure_executable,
     find_repo_root,
-    resolve_executable,
-    resolve_opencode_binary,
 )
 
 

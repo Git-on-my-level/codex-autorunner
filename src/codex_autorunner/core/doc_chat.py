@@ -10,7 +10,16 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Mapping, Optional, Tuple
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Tuple,
+)
 
 from ..agents.opencode.runtime import (
     PERMISSION_ALLOW,

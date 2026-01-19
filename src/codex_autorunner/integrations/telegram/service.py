@@ -5,7 +5,6 @@ import collections
 import json
 import logging
 import os
-import shlex
 import socket
 import time
 from pathlib import Path
@@ -20,7 +19,9 @@ from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
-from ...core.utils import build_opencode_supervisor, resolve_executable, resolve_opencode_binary
+from ...core.utils import (
+    build_opencode_supervisor,
+)
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
 from ...manifest import load_manifest
 from ...voice import VoiceConfig, VoiceService
@@ -95,7 +96,6 @@ from .types import (
     TurnContext,
 )
 from .voice import TelegramVoiceManager
-
 
 
 def _build_opencode_supervisor(

@@ -46,7 +46,9 @@ from ..core.usage import (
     get_hub_usage_summary_cached,
     parse_iso_datetime,
 )
-from ..core.utils import build_opencode_supervisor, resolve_executable, resolve_opencode_binary
+from ..core.utils import (
+    build_opencode_supervisor,
+)
 from ..housekeeping import run_housekeeping_once
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
