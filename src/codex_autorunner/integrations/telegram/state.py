@@ -1905,9 +1905,19 @@ class TopicQueue:
         self._queue: asyncio.Queue[object] = asyncio.Queue()
         self._worker: Optional[asyncio.Task[None]] = None
         self._closed = False
+        self._current_task: Optional[asyncio.Task[Any]] = None
+        self._cancel_active_requested = False
 
     def pending(self) -> int:
         return self._queue.qsize()
+
+    def cancel_active(self) -> bool:
+        task = self._current_task
+        if task is None or task.done():
+            return False
+        self._cancel_active_requested = True
+        task.cancel()
+        return True
 
     def cancel_pending(self) -> int:
         cancelled = 0
@@ -1968,7 +1978,20 @@ class TopicQueue:
                 if future.cancelled():
                     continue
                 try:
-                    result: Any = await work()
+                    self._current_task = asyncio.create_task(work())
+                    result: Any = await self._current_task
+                except asyncio.CancelledError:
+                    if self._cancel_active_requested:
+                        self._cancel_active_requested = False
+                        if not future.cancelled():
+                            future.cancel()
+                    else:
+                        if (
+                            self._current_task is not None
+                            and not self._current_task.done()
+                        ):
+                            self._current_task.cancel()
+                        raise
                 except Exception as exc:
                     if not future.cancelled():
                         future.set_exception(exc)
@@ -1976,6 +1999,8 @@ class TopicQueue:
                     if not future.cancelled():
                         future.set_result(result)
             finally:
+                self._current_task = None
+                self._cancel_active_requested = False
                 self._queue.task_done()
 
 

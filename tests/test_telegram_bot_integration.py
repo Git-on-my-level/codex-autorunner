@@ -246,7 +246,9 @@ async def test_document_message_saves_inbox(tmp_path: Path) -> None:
     service._bot = fake_bot
     bind_message = build_message("/bind", message_id=10)
 
-    async def fake_download(_file_id: str) -> tuple[bytes, str, int]:
+    async def fake_download(
+        _file_id: str, *, max_bytes: Optional[int] = None
+    ) -> tuple[bytes, str, int]:
         return b"data", "files/report.txt", 4
 
     service._download_telegram_file = fake_download

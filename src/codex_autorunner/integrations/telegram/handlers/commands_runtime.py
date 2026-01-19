@@ -464,6 +464,50 @@ def _format_httpx_exception(exc: Exception) -> Optional[str]:
     return None
 
 
+_GENERIC_TELEGRAM_ERRORS = {
+    "Telegram request failed",
+    "Telegram file download failed",
+    "Telegram API returned error",
+}
+
+
+def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    current: Optional[BaseException] = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _sanitize_error_detail(detail: str, *, limit: int = 200) -> str:
+    cleaned = " ".join(detail.split())
+    if len(cleaned) > limit:
+        return f"{cleaned[: limit - 3]}..."
+    return cleaned
+
+
+def _format_telegram_download_error(exc: Exception) -> Optional[str]:
+    for current in _iter_exception_chain(exc):
+        if isinstance(current, Exception):
+            detail = _format_httpx_exception(current)
+            if detail:
+                return _sanitize_error_detail(detail)
+            message = str(current).strip()
+            if message and message not in _GENERIC_TELEGRAM_ERRORS:
+                return _sanitize_error_detail(message)
+    return None
+
+
+def _format_download_failure_response(kind: str, detail: Optional[str]) -> str:
+    base = f"Failed to download {kind}."
+    if detail:
+        return f"{base} Reason: {detail}"
+    return base
+
+
 def _format_media_batch_failure(
     *,
     image_disabled: int,
@@ -472,6 +516,8 @@ def _format_media_batch_failure(
     file_too_large: int,
     image_download_failed: int,
     file_download_failed: int,
+    image_download_detail: Optional[str] = None,
+    file_download_detail: Optional[str] = None,
     image_save_failed: int,
     file_save_failed: int,
     unsupported: int,
@@ -493,9 +539,17 @@ def _format_media_batch_failure(
             f"{file_too_large} file(s) too large (max {max_file_bytes} bytes)."
         )
     if image_download_failed:
-        details.append(f"{image_download_failed} image(s) failed to download.")
+        line = f"{image_download_failed} image(s) failed to download."
+        if image_download_detail:
+            label = "error" if image_download_failed == 1 else "last error"
+            line = f"{line} ({label}: {image_download_detail})"
+        details.append(line)
     if file_download_failed:
-        details.append(f"{file_download_failed} file(s) failed to download.")
+        line = f"{file_download_failed} file(s) failed to download."
+        if file_download_detail:
+            label = "error" if file_download_failed == 1 else "last error"
+            line = f"{line} ({label}: {file_download_detail})"
+        details.append(line)
     if image_save_failed:
         details.append(f"{image_save_failed} image(s) failed to save.")
     if file_save_failed:
@@ -2878,9 +2932,13 @@ class TelegramCommandHandlers:
             return
         try:
             data, file_path, file_size = await self._download_telegram_file(
-                candidate.file_id
+                candidate.file_id,
+                max_bytes=max_bytes,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
+            detail = _format_telegram_download_error(exc)
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2888,11 +2946,12 @@ class TelegramCommandHandlers:
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 message_id=message.message_id,
+                detail=detail,
                 exc=exc,
             )
             await self._send_message(
                 message.chat_id,
-                "Failed to download image.",
+                _format_download_failure_response("image", detail),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2917,6 +2976,8 @@ class TelegramCommandHandlers:
             image_path = self._save_image_file(
                 record.workspace_path, data, file_path, candidate
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             log_event(
                 self._logger,
@@ -3062,9 +3123,13 @@ class TelegramCommandHandlers:
             return
         try:
             data, file_path, file_size = await self._download_telegram_file(
-                candidate.file_id
+                candidate.file_id,
+                max_bytes=max_bytes,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
+            detail = _format_telegram_download_error(exc)
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3072,11 +3137,12 @@ class TelegramCommandHandlers:
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 message_id=message.message_id,
+                detail=detail,
                 exc=exc,
             )
             await self._send_message(
                 message.chat_id,
-                "Failed to download file.",
+                _format_download_failure_response("file", detail),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3106,6 +3172,8 @@ class TelegramCommandHandlers:
                 candidate=candidate,
                 file_path=file_path,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             log_event(
                 self._logger,
@@ -3197,6 +3265,8 @@ class TelegramCommandHandlers:
         file_too_large = 0
         image_download_failed = 0
         file_download_failed = 0
+        image_download_detail: Optional[str] = None
+        file_download_detail: Optional[str] = None
         image_save_failed = 0
         file_save_failed = 0
         unsupported_count = 0
@@ -3221,9 +3291,13 @@ class TelegramCommandHandlers:
                     continue
                 try:
                     data, file_path, file_size = await self._download_telegram_file(
-                        image_candidate.file_id
+                        image_candidate.file_id,
+                        max_bytes=max_image_bytes,
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
+                    detail = _format_telegram_download_error(exc)
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -3231,8 +3305,11 @@ class TelegramCommandHandlers:
                         chat_id=msg.chat_id,
                         thread_id=msg.thread_id,
                         message_id=msg.message_id,
+                        detail=detail,
                         exc=exc,
                     )
+                    if detail and image_download_detail is None:
+                        image_download_detail = detail
                     image_download_failed += 1
                     failed_count += 1
                     continue
@@ -3261,6 +3338,8 @@ class TelegramCommandHandlers:
                         record.workspace_path, data, file_path, image_candidate
                     )
                     saved_image_paths.append(image_path)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     log_event(
                         self._logger,
@@ -3288,9 +3367,13 @@ class TelegramCommandHandlers:
                     continue
                 try:
                     data, file_path, file_size = await self._download_telegram_file(
-                        file_candidate.file_id
+                        file_candidate.file_id,
+                        max_bytes=max_file_bytes,
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
+                    detail = _format_telegram_download_error(exc)
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -3298,8 +3381,11 @@ class TelegramCommandHandlers:
                         chat_id=msg.chat_id,
                         thread_id=msg.thread_id,
                         message_id=msg.message_id,
+                        detail=detail,
                         exc=exc,
                     )
+                    if detail and file_download_detail is None:
+                        file_download_detail = detail
                     file_download_failed += 1
                     failed_count += 1
                     continue
@@ -3343,6 +3429,8 @@ class TelegramCommandHandlers:
                             file_size or len(data),
                         )
                     )
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     log_event(
                         self._logger,
@@ -3388,6 +3476,8 @@ class TelegramCommandHandlers:
                     file_too_large=file_too_large,
                     image_download_failed=image_download_failed,
                     file_download_failed=file_download_failed,
+                    image_download_detail=image_download_detail,
+                    file_download_detail=file_download_detail,
                     image_save_failed=image_save_failed,
                     file_save_failed=file_save_failed,
                     unsupported=unsupported_count,
@@ -3466,7 +3556,7 @@ class TelegramCommandHandlers:
         )
 
     async def _download_telegram_file(
-        self, file_id: str
+        self, file_id: str, *, max_bytes: Optional[int] = None
     ) -> tuple[bytes, Optional[str], Optional[int]]:
         payload = await self._bot.get_file(file_id)
         file_path = payload.get("file_path") if isinstance(payload, dict) else None
@@ -3475,7 +3565,10 @@ class TelegramCommandHandlers:
             file_size = None
         if not isinstance(file_path, str) or not file_path:
             raise RuntimeError("Telegram getFile returned no file_path")
-        data = await self._bot.download_file(file_path)
+        if max_bytes is not None and max_bytes > 0:
+            data = await self._bot.download_file(file_path, max_size_bytes=max_bytes)
+        else:
+            data = await self._bot.download_file(file_path)
         return data, file_path, file_size
 
     async def _send_voice_progress_message(
@@ -3980,6 +4073,7 @@ class TelegramCommandHandlers:
             queued_turn_cancelled = True
         queued_cancelled = runtime.queue.cancel_pending()
         if not turn_id:
+            active_cancelled = runtime.queue.cancel_active()
             pending_records = await self._store.pending_approvals_for_key(key)
             if pending_records:
                 await self._store.clear_pending_approvals_for_key(key)
@@ -3990,12 +4084,15 @@ class TelegramCommandHandlers:
             if (
                 queued_turn_cancelled
                 or queued_cancelled
+                or active_cancelled
                 or pending_count
                 or pending_question_count
             ):
                 parts = []
                 if queued_turn_cancelled:
                     parts.append("Cancelled queued turn.")
+                if active_cancelled:
+                    parts.append("Cancelled active job.")
                 if queued_cancelled:
                     parts.append(f"Cancelled {queued_cancelled} queued job(s).")
                 if pending_count:
