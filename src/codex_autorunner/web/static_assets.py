@@ -38,6 +38,61 @@ def missing_static_assets(static_dir: Path) -> list[str]:
     return missing
 
 
+def _iter_static_source_files(source_dir: Path) -> Iterable[Path]:
+    try:
+        for path in source_dir.rglob("*.ts"):
+            try:
+                if path.name.endswith(".d.ts"):
+                    continue
+                if path.is_dir():
+                    continue
+                yield path
+            except OSError:
+                continue
+    except Exception:
+        return
+
+
+def _stale_static_sources(source_dir: Path, static_dir: Path) -> list[str]:
+    stale: list[str] = []
+    for source in _iter_static_source_files(source_dir):
+        try:
+            rel_path = source.relative_to(source_dir)
+        except ValueError:
+            rel_path = Path(source.name)
+        target = (static_dir / rel_path).with_suffix(".js")
+        try:
+            source_mtime = source.stat().st_mtime
+        except OSError:
+            continue
+        try:
+            target_mtime = target.stat().st_mtime
+        except OSError:
+            stale.append(rel_path.as_posix())
+            continue
+        if source_mtime > target_mtime:
+            stale.append(rel_path.as_posix())
+    return stale
+
+
+def warn_on_stale_static_assets(static_dir: Path, logger: logging.Logger) -> None:
+    source_dir = Path(__file__).resolve().parent.parent / "static_src"
+    if not source_dir.exists():
+        return
+    stale = _stale_static_sources(source_dir, static_dir)
+    if not stale:
+        return
+    preview = ", ".join(stale[:5])
+    suffix = f" (+{len(stale) - 5} more)" if len(stale) > 5 else ""
+    safe_log(
+        logger,
+        logging.WARNING,
+        "Static assets appear stale; run `pnpm run build`. Newer sources: %s%s",
+        preview,
+        suffix,
+    )
+
+
 def _iter_asset_files(static_dir: Path) -> Iterable[Path]:
     try:
         for path in static_dir.rglob("*"):
@@ -420,6 +475,7 @@ def materialize_static_assets(
 def require_static_assets(static_dir: Path, logger: logging.Logger) -> None:
     missing = missing_static_assets(static_dir)
     if not missing:
+        warn_on_stale_static_assets(static_dir, logger)
         return
     safe_log(
         logger,

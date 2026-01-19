@@ -26,6 +26,7 @@ elif command -v python3 >/dev/null 2>&1; then
 fi
 need_cmd "$PYTHON_BIN"
 need_cmd node
+need_cmd pnpm
 
 if [ -x "./node_modules/.bin/eslint" ]; then
   ESLINT_BIN="./node_modules/.bin/eslint"
@@ -33,14 +34,6 @@ elif command -v eslint >/dev/null 2>&1; then
   ESLINT_BIN="eslint"
 else
   echo "Missing required command: eslint. Install dev deps via 'pnpm install'." >&2
-  exit 1
-fi
-if [ -x "./node_modules/.bin/tsc" ]; then
-  TSC_BIN="./node_modules/.bin/tsc"
-elif command -v tsc >/dev/null 2>&1; then
-  TSC_BIN="tsc"
-else
-  echo "Missing required command: tsc. Install dev deps via 'pnpm install'." >&2
   exit 1
 fi
 
@@ -70,8 +63,8 @@ echo "Type check (mypy)..."
 echo "Linting JS/TS (eslint)..."
 "$ESLINT_BIN" "src/codex_autorunner/static/**/*.js" "src/codex_autorunner/static_src/**/*.ts"
 
-echo "Type check (tsc)..."
-"$TSC_BIN" -p tsconfig.json
+echo "Build static assets (pnpm run build)..."
+pnpm run build
 
 echo "Checking static build outputs are committed..."
 if ! git diff --exit-code -- src/codex_autorunner/static >/dev/null 2>&1; then
