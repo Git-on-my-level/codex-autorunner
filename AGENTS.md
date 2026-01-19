@@ -28,6 +28,10 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 - serve (API/UI)
 - hub: `car hub serve|scan|create` (worktrees via UI/API)
 
+## Docs
+
+Reference docs in `docs/` (e.g., configuration, operations, debugging).
+
 ## Python venv
 - Always use the project venv (`.venv/bin/python`) for running Python and tests.
 

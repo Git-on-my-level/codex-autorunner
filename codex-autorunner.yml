@@ -12,6 +12,8 @@ mode: hub
 repo_defaults:
   docs:
     # Paths are relative to the repo root.
+    # Example: .codex-autorunner/TODO.md → /repo/root/.codex-autorunner/TODO.md
+    # Note: Absolute paths and ~ expansion are NOT allowed for docs.*
     todo: .codex-autorunner/TODO.md
     progress: .codex-autorunner/PROGRESS.md
     opinions: .codex-autorunner/OPINIONS.md
@@ -44,6 +46,7 @@ repo_defaults:
     # Max characters of previous run output to include.
     prev_run_max_chars: 6000
     # Custom prompt template path (relative to repo root). null = use built-in.
+    # Example: .codex-autorunner/prompt.txt → /repo/root/.codex-autorunner/prompt.txt
     template: .codex-autorunner/prompt.txt
 
   runner:
@@ -112,11 +115,15 @@ repo_defaults:
         redact_request: true
 
   log:
+    # Path is relative to the repo root.
+    # Example: .codex-autorunner/codex-autorunner.log → /repo/root/.codex-autorunner/codex-autorunner.log
     path: .codex-autorunner/codex-autorunner.log
     max_bytes: 10000000
     backup_count: 3
 
   server_log:
+    # Path is relative to the repo root.
+    # Example: .codex-autorunner/codex-server.log → /repo/root/.codex-autorunner/codex-server.log
     path: .codex-autorunner/codex-server.log
     max_bytes: 10000000
     backup_count: 3
@@ -192,11 +199,13 @@ telegram_bot:
       - callback_query
 
 hub:
-  # Hub repo discovery root.
+  # Hub repo discovery root (relative to config file location).
+  # Example: . → /repo/root/ (where codex-autorunner.yml is located)
   repos_root: .
   # Hub-managed git worktrees live here (depth=1 scan).
+  # Relative to config file location.
   worktrees_root: worktrees
-  # Manifest path for the hub.
+  # Manifest path for the hub (relative to repo root).
   manifest: .codex-autorunner/manifest.yml
   discover_depth: 1
   auto_init_missing: true
@@ -216,6 +225,8 @@ app_server:
     - codex
     - app-server
   # Workspace state root (stores per-repo CODEX_HOME state).
+  # Supports ~ expansion: ~/.codex-autorunner/workspaces → /home/user/.codex-autorunner/workspaces
+  # Can also be relative to repo root: .codex-autorunner/workspaces
   state_root: ~/.codex-autorunner/workspaces
   # Cap concurrent handles; null/<=0 disables the cap.
   max_handles: 20
@@ -261,6 +272,9 @@ server:
 server_log: null
 
 static_assets:
+  # Cache root for static assets (relative to repo root or ~ expansion).
+  # Example: .codex-autorunner/static-cache → /repo/root/.codex-autorunner/static-cache
+  # Example with ~: ~/.codex-autorunner/static-cache → /home/user/.codex-autorunner/static-cache
   cache_root: .codex-autorunner/static-cache
   max_cache_entries: 5
   max_cache_age_days: 30
@@ -271,6 +285,10 @@ housekeeping:
   min_file_age_seconds: 600
   dry_run: false
   rules:
+    # Note: housekeeping rule paths support both:
+    # - Relative paths: .codex-autorunner/runs → /repo/root/.codex-autorunner/runs
+    # - ~ expansion: ~/.codex-autorunner/update_cache → /home/user/.codex-autorunner/update_cache
+    # Absolute paths and .. segments are NOT allowed.
     - name: run_logs
       kind: directory
       path: .codex-autorunner/runs

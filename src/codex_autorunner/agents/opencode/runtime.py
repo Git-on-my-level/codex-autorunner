@@ -455,6 +455,22 @@ def _extract_context_window(
             prop_info = properties.get("info")
             if isinstance(prop_info, dict):
                 containers.append(prop_info)
+        response = payload.get("response")
+        if isinstance(response, dict):
+            containers.append(response)
+            response_info = response.get("info")
+            if isinstance(response_info, dict):
+                containers.append(response_info)
+            response_props = response.get("properties")
+            if isinstance(response_props, dict):
+                containers.append(response_props)
+                response_prop_info = response_props.get("info")
+                if isinstance(response_prop_info, dict):
+                    containers.append(response_prop_info)
+        for key in ("model", "modelInfo", "model_info", "modelConfig", "model_config"):
+            model = payload.get(key)
+            if isinstance(model, dict):
+                containers.append(model)
     if isinstance(usage, dict):
         containers.insert(0, usage)
     for container in containers:

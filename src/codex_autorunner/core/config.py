@@ -10,6 +10,7 @@ from typing import IO, Any, Dict, List, Mapping, Optional, Union, cast
 import yaml
 
 from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
+from .path_utils import ConfigPathError, resolve_config_path
 
 DOTENV_AVAILABLE = True
 try:
@@ -608,6 +609,12 @@ class ConfigError(Exception):
     """Raised when configuration is invalid."""
 
 
+__all__ = [
+    "ConfigError",
+    "ConfigPathError",
+]
+
+
 @dataclasses.dataclass
 class LogConfig:
     path: Path
@@ -968,9 +975,14 @@ def _parse_app_server_config(
     cfg = cfg if isinstance(cfg, dict) else {}
     command = _parse_command(cfg.get("command", defaults.get("command")))
     state_root_raw = cfg.get("state_root", defaults.get("state_root"))
-    state_root = Path(str(state_root_raw)).expanduser()
-    if not state_root.is_absolute():
-        state_root = root / state_root
+    if state_root_raw is None:
+        raise ConfigError("app_server.state_root is required")
+    state_root = resolve_config_path(
+        state_root_raw,
+        root,
+        allow_home=True,
+        scope="app_server.state_root",
+    )
     max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
     max_handles = int(max_handles_raw) if max_handles_raw is not None else None
     if max_handles is not None and max_handles <= 0:
@@ -1037,9 +1049,14 @@ def _parse_static_assets_config(
     if not isinstance(cfg, dict):
         cfg = defaults
     cache_root_raw = cfg.get("cache_root", defaults.get("cache_root"))
-    cache_root = Path(str(cache_root_raw))
-    if not cache_root.is_absolute():
-        cache_root = root / cache_root
+    if cache_root_raw is None:
+        raise ConfigError("static_assets.cache_root is required")
+    cache_root = resolve_config_path(
+        cache_root_raw,
+        root,
+        allow_home=True,
+        scope="static_assets.cache_root",
+    )
     max_cache_entries = int(
         cfg.get("max_cache_entries", defaults.get("max_cache_entries", 0))
     )
@@ -1509,17 +1526,14 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     for key, value in docs.items():
         if not isinstance(value, str) or not value:
             raise ConfigError(f"docs.{key} must be a non-empty string path")
-        path = Path(value)
-        if path.is_absolute():
-            raise ConfigError(f"docs.{key} must be a relative path under repo root")
-        if ".." in path.parts:
-            raise ConfigError(f"docs.{key} must not contain '..' segments")
         try:
-            (root / path).resolve().relative_to(root)
-        except ValueError as exc:
-            raise ConfigError(
-                f"docs.{key} must resolve under repo root ({root})"
-            ) from exc
+            resolve_config_path(
+                value,
+                root,
+                scope=f"docs.{key}",
+            )
+        except ConfigPathError as exc:
+            raise ConfigError(str(exc)) from exc
     for key in ("todo", "progress", "opinions", "spec", "summary"):
         if not isinstance(docs.get(key), str) or not docs[key]:
             raise ConfigError(f"docs.{key} must be a non-empty string path")
@@ -1936,6 +1950,21 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
                     )
             if "path" in rule and not isinstance(rule.get("path"), str):
                 raise ConfigError(f"housekeeping.rules[{idx}].path must be a string")
+            if "path" in rule:
+                path_value = rule.get("path")
+                if not isinstance(path_value, str) or not path_value:
+                    raise ConfigError(
+                        f"housekeeping.rules[{idx}].path must be a non-empty string path"
+                    )
+                path = Path(path_value)
+                if path.is_absolute():
+                    raise ConfigError(
+                        f"housekeeping.rules[{idx}].path must be relative or start with '~'"
+                    )
+                if ".." in path.parts:
+                    raise ConfigError(
+                        f"housekeeping.rules[{idx}].path must not contain '..' segments"
+                    )
             if "glob" in rule and not isinstance(rule.get("glob"), str):
                 raise ConfigError(
                     f"housekeeping.rules[{idx}].glob must be a string if provided"
