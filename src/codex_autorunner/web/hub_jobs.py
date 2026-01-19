@@ -72,9 +72,10 @@ class HubJobManager:
                 raise Exception(
                     f"Too many concurrent jobs: {running_count} (max {self._max_concurrent_jobs})"
                 )
-        job_id = uuid.uuid4().hex
-        job = HubJob(job_id=job_id, kind=kind, status="queued", created_at=now_iso())
-        async with self._lock:
+            job_id = uuid.uuid4().hex
+            job = HubJob(
+                job_id=job_id, kind=kind, status="queued", created_at=now_iso()
+            )
             self._jobs[job_id] = job
             self._order.append(job_id)
             self._prune_locked()
