@@ -16,6 +16,7 @@ from typing import IO, Any, Iterator, Optional
 
 import yaml
 
+from ..agents.opencode.logging import OpenCodeEventFormatter
 from ..agents.opencode.runtime import (
     build_turn_id,
     collect_opencode_output,
@@ -135,6 +136,7 @@ class Engine:
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         self._app_server_event_formatter = AppServerEventFormatter()
+        self._opencode_event_formatter = OpenCodeEventFormatter()
         self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
@@ -649,6 +651,7 @@ class Engine:
         with self._run_telemetry_lock:
             self._run_telemetry = RunTelemetry(run_id=run_id)
         self._app_server_event_formatter.reset()
+        self._opencode_event_formatter.reset()
 
     def _update_run_telemetry(self, run_id: int, **updates: Any) -> None:
         with self._run_telemetry_lock:
@@ -1477,6 +1480,19 @@ class Engine:
         permission_policy = map_approval_policy_to_permission(
             state.autorunner_approval_policy, default="allow"
         )
+
+        async def _opencode_part_handler(
+            part_type: str, part: dict[str, Any], delta_text: Optional[str]
+        ) -> None:
+            if part_type == "usage" and isinstance(part, dict):
+                for line in self._opencode_event_formatter.format_usage(part):
+                    self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
+            else:
+                for line in self._opencode_event_formatter.format_part(
+                    part_type, part, delta_text
+                ):
+                    self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
+
         output_task = asyncio.create_task(
             collect_opencode_output(
                 client,
@@ -1485,6 +1501,7 @@ class Engine:
                 permission_policy=permission_policy,
                 question_policy="auto_first_option",
                 should_stop=active.interrupt_event.is_set,
+                part_handler=_opencode_part_handler,
             )
         )
         prompt_task = asyncio.create_task(

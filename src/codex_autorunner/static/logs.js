@@ -29,6 +29,9 @@ const LINE_PATTERNS = {
     thinkingMultiline: /^I'm (preparing|planning|considering|reviewing|analyzing|checking|looking|reading|searching)/i,
     execStart: /^exec$/i,
     execCommand: /^\/bin\/(zsh|bash|sh)\s+-[a-z]+\s+['"]?.+in\s+\//i,
+    toolLine: /^tool:\s*/i,
+    exitSimple: /^exit\s+\d+$/i,
+    errorSimple: /^error:\s+/i,
     applyPatch: /^apply_patch\(/i,
     fileUpdate: /^file update:?$/i,
     fileModified: /^M\s+[\w./]/,
@@ -47,6 +50,7 @@ const LINE_PATTERNS = {
     pythonTraceback: /^(Traceback \(most recent|File ".*", line \d+|.*Error:)/i,
     markdownList: /^- (\[[ x]\]\s)?[A-Z]/,
 };
+let lastClassificationType = null;
 function classifyLine(line, context = { inPromptBlock: false, inDiffBlock: false }) {
     const stripped = line
         .replace(/^\[[^\]]*]\s*/, "")
@@ -69,6 +73,12 @@ function classifyLine(line, context = { inPromptBlock: false, inDiffBlock: false
         return { type: "exec-label", priority: 3 };
     if (LINE_PATTERNS.execCommand.test(stripped))
         return { type: "exec-command", priority: 3 };
+    if (LINE_PATTERNS.toolLine.test(stripped))
+        return { type: "exec-command", priority: 3 };
+    if (LINE_PATTERNS.exitSimple.test(stripped))
+        return { type: "exit-code", priority: 3 };
+    if (LINE_PATTERNS.errorSimple.test(stripped))
+        return { type: "error-output", priority: 2 };
     if (LINE_PATTERNS.applyPatch.test(stripped))
         return { type: "exec-command", priority: 3 };
     if (LINE_PATTERNS.fileUpdate.test(stripped))
@@ -107,7 +117,15 @@ function classifyLine(line, context = { inPromptBlock: false, inDiffBlock: false
         return { type: "exit-code", priority: 3 };
     if (context.inPromptBlock)
         return { type: "prompt-context", priority: 5 };
-    return { type: "output", priority: 4 };
+    const classification = { type: "output", priority: 4 };
+    if (lastClassificationType === "exec-label" && stripped.length > 0) {
+        classification.type = "exec-command";
+        classification.priority = 3;
+    }
+    return classification;
+}
+function setLastClassificationType(type) {
+    lastClassificationType = type;
 }
 function isSummaryMode() {
     return !showSummaryToggle || showSummaryToggle.checked;
@@ -195,13 +213,6 @@ function startPromptBlock(output, label) {
     renderState.promptBlockDetails.appendChild(renderState.promptBlockContent);
     renderState.promptLineCount = 0;
     output.appendChild(renderState.promptBlockDetails);
-}
-function appendRawLine(line, output) {
-    const isBlank = line.trim() === "";
-    const div = document.createElement("div");
-    div.textContent = line;
-    div.className = isBlank ? "log-line log-blank" : "log-line log-raw";
-    output.appendChild(div);
 }
 function appendRenderedLine(line, output) {
     if (!renderState)
@@ -334,6 +345,7 @@ function syncLogUrlState() {
     });
 }
 function renderLogWindow({ startIndex = null, followTail = true } = {}) {
+    lastClassificationType = null;
     const output = document.getElementById("log-output");
     if (!output)
         return;
@@ -353,21 +365,6 @@ function renderLogWindow({ startIndex = null, followTail = true } = {}) {
         windowStart = Math.max(0, endIndex - CONSTANTS.UI.MAX_LOG_LINES_IN_DOM);
     }
     const windowEnd = Math.min(endIndex, windowStart + CONSTANTS.UI.MAX_LOG_LINES_IN_DOM);
-    if (!isSummaryMode()) {
-        output.innerHTML = "";
-        delete output.dataset.isPlaceholder;
-        for (let i = windowStart; i < windowEnd; i += 1) {
-            appendRawLine(rawLogLines[i], output);
-        }
-        renderedStartIndex = windowStart;
-        renderedEndIndex = windowEnd;
-        isViewingTail = followTail && windowEnd === endIndex;
-        updateLoadOlderButton();
-        if (isViewingTail) {
-            scrollLogsToBottom(true);
-        }
-        return;
-    }
     output.innerHTML = "";
     delete output.dataset.isPlaceholder;
     resetRenderState();
@@ -379,8 +376,31 @@ function renderLogWindow({ startIndex = null, followTail = true } = {}) {
             startPromptBlock(output, "CONTEXT (continued)");
         }
     }
+    const showSummary = isSummaryMode();
     for (let i = windowStart; i < windowEnd; i += 1) {
-        appendRenderedLine(rawLogLines[i], output);
+        const line = rawLogLines[i];
+        const classification = classifyLine(line, renderState || { inPromptBlock: false, inDiffBlock: false });
+        setLastClassificationType(classification.type);
+        if (showSummary && classification.priority > 2) {
+            if (renderState) {
+                if (classification.startDiff) {
+                    renderState.inDiffBlock = true;
+                }
+                if (classification.resetDiff) {
+                    renderState.inDiffBlock = false;
+                }
+                if (classification.type === "prompt-marker-end") {
+                    renderState.inPromptBlock = false;
+                    renderState.inDiffBlock = false;
+                }
+                else if (classification.type === "prompt-marker") {
+                    renderState.inPromptBlock = true;
+                    renderState.inDiffBlock = false;
+                }
+            }
+            continue;
+        }
+        appendRenderedLine(line, output);
     }
     finalizePromptBlock();
     renderedStartIndex = windowStart;
@@ -413,12 +433,30 @@ function appendLogLine(line) {
         updateLoadOlderButton();
         return;
     }
-    if (!isSummaryMode()) {
-        appendRawLine(line, output);
+    const classification = classifyLine(line, renderState || { inPromptBlock: false, inDiffBlock: false });
+    const showSummary = isSummaryMode();
+    setLastClassificationType(classification.type);
+    if (showSummary && classification.priority > 2) {
+        if (renderState) {
+            if (classification.type === "prompt-marker-end") {
+                renderState.inPromptBlock = false;
+                renderState.inDiffBlock = false;
+            }
+            else if (classification.type === "prompt-marker") {
+                renderState.inPromptBlock = true;
+                renderState.inDiffBlock = false;
+            }
+        }
+        renderedEndIndex = rawLogLines.length;
+        if (output.childElementCount > CONSTANTS.UI.MAX_LOG_LINES_IN_DOM) {
+            output.firstElementChild?.remove();
+        }
+        renderedStartIndex = Math.max(0, renderedEndIndex - output.childElementCount);
+        updateLoadOlderButton();
+        publish("logs:line", line);
+        return;
     }
-    else {
-        appendRenderedLine(line, output);
-    }
+    appendRenderedLine(line, output);
     renderedEndIndex = rawLogLines.length;
     if (output.childElementCount > CONSTANTS.UI.MAX_LOG_LINES_IN_DOM) {
         output.firstElementChild?.remove();
