@@ -11,6 +11,7 @@ from ..adapter import (
     EffortCallback,
     ModelCallback,
     PageCallback,
+    PrFlowStartCallback,
     QuestionCancelCallback,
     QuestionOptionCallback,
     ResumeCallback,
@@ -69,6 +70,9 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
     elif isinstance(parsed, ReviewCommitCallback):
         if key:
             await handlers._handle_review_commit_callback(key, callback, parsed)
+    elif isinstance(parsed, PrFlowStartCallback):
+        if key:
+            await handlers._handle_pr_flow_start_callback(key, callback, parsed)
     elif isinstance(parsed, CancelCallback):
         if key:
             if parsed.kind == "interrupt":

@@ -38,7 +38,7 @@ from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import _normalize_update_target, _spawn_update_process
 from ....core.utils import canonicalize_path, resolve_opencode_binary
-from ....integrations.github.service import GitHubService
+from ....integrations.github.service import GitHubError, GitHubService
 from ....manifest import load_manifest
 from ...app_server.client import (
     CodexAppServerClient,
@@ -49,6 +49,7 @@ from ...app_server.client import (
 from ..adapter import (
     CompactCallback,
     InlineButton,
+    PrFlowStartCallback,
     TelegramCallbackQuery,
     TelegramCommand,
     TelegramMessage,
@@ -6829,6 +6830,139 @@ class TelegramCommandHandlers:
         if pr_url:
             lines.append(f"PR: {pr_url}")
         return "\n".join(lines)
+
+    async def _handle_github_issue_url(
+        self, message: TelegramMessage, key: str, slug: str, number: int
+    ) -> None:
+        if key is None:
+            return
+
+        record = self._router.get_topic(key)
+        if record is None or not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                self._with_conversation_id(
+                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        try:
+            from pathlib import Path
+
+            service = GitHubService(Path(record.workspace_path), self._raw_config)
+            issue_ref = f"{slug}#{number}"
+            service.validate_issue_same_repo(issue_ref)
+        except GitHubError as exc:
+            await self._send_message(
+                message.chat_id,
+                str(exc),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        await self._offer_pr_flow_start(message, record, slug, number)
+
+    async def _offer_pr_flow_start(
+        self,
+        message: TelegramMessage,
+        record: "TelegramTopicRecord",
+        slug: str,
+        number: int,
+    ) -> None:
+        from ..adapter import (
+            InlineButton,
+            build_inline_keyboard,
+            encode_cancel_callback,
+            encode_pr_flow_start_callback,
+        )
+
+        keyboard = build_inline_keyboard(
+            [
+                [
+                    InlineButton(
+                        f"Create PR for #{number}",
+                        encode_pr_flow_start_callback(slug, number),
+                    ),
+                    InlineButton(
+                        "Cancel",
+                        encode_cancel_callback("pr_flow_offer"),
+                    ),
+                ]
+            ]
+        )
+        await self._send_message(
+            message.chat_id,
+            f"Detected GitHub issue: {slug}#{number}\n"
+            f"Start PR flow to create a PR?",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            reply_markup=keyboard,
+        )
+
+    async def _handle_pr_flow_start_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: PrFlowStartCallback,
+    ) -> None:
+        from ..adapter import TelegramMessage
+
+        await self._answer_callback(callback)
+        record = self._router.get_topic(key)
+        if record is None or not record.workspace_path:
+            return
+
+        issue_ref = f"{parsed.slug}#{parsed.number}"
+        payload = {"mode": "issue", "issue": issue_ref}
+        payload["source"] = "telegram"
+        source_meta: dict[str, Any] = {}
+        if callback.chat_id is not None:
+            source_meta["chat_id"] = callback.chat_id
+        if callback.thread_id is not None:
+            source_meta["thread_id"] = callback.thread_id
+        if source_meta:
+            payload["source_meta"] = source_meta
+
+        message = TelegramMessage(
+            update_id=callback.update_id,
+            message_id=callback.message_id or 0,
+            chat_id=callback.chat_id or 0,
+            thread_id=callback.thread_id,
+            from_user_id=callback.from_user_id,
+            text="",
+            date=None,
+            is_topic_message=False,
+        )
+
+        try:
+            data = await self._pr_flow_request(
+                record,
+                method="POST",
+                path="/api/github/pr_flow/start",
+                payload=payload,
+            )
+            flow = data.get("flow") if isinstance(data, dict) else data
+        except Exception as exc:
+            detail = _format_httpx_exception(exc) or str(exc)
+            await self._send_message(
+                message.chat_id,
+                f"PR flow error: {detail}",
+                thread_id=message.thread_id,
+                reply_to=callback.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            self._format_pr_flow_status(flow),
+            thread_id=message.thread_id,
+            reply_to=callback.message_id,
+        )
 
     async def _handle_pr(
         self, message: TelegramMessage, args: str, runtime: Any
