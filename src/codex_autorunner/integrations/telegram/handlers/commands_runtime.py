@@ -464,6 +464,49 @@ def _format_httpx_exception(exc: Exception) -> Optional[str]:
     return None
 
 
+def _format_media_batch_failure(
+    *,
+    image_disabled: int,
+    file_disabled: int,
+    image_too_large: int,
+    file_too_large: int,
+    image_download_failed: int,
+    file_download_failed: int,
+    image_save_failed: int,
+    file_save_failed: int,
+    unsupported: int,
+    max_image_bytes: int,
+    max_file_bytes: int,
+) -> str:
+    base = "Failed to process any media in the batch."
+    details: list[str] = []
+    if image_disabled:
+        details.append(f"{image_disabled} image(s) skipped (image handling disabled).")
+    if file_disabled:
+        details.append(f"{file_disabled} file(s) skipped (file handling disabled).")
+    if image_too_large:
+        details.append(
+            f"{image_too_large} image(s) too large (max {max_image_bytes} bytes)."
+        )
+    if file_too_large:
+        details.append(
+            f"{file_too_large} file(s) too large (max {max_file_bytes} bytes)."
+        )
+    if image_download_failed:
+        details.append(f"{image_download_failed} image(s) failed to download.")
+    if file_download_failed:
+        details.append(f"{file_download_failed} file(s) failed to download.")
+    if image_save_failed:
+        details.append(f"{image_save_failed} image(s) failed to save.")
+    if file_save_failed:
+        details.append(f"{file_save_failed} file(s) failed to save.")
+    if unsupported:
+        details.append(f"{unsupported} item(s) had unsupported media types.")
+    if not details:
+        return base
+    return f"{base}\n" + "\n".join(f"- {line}" for line in details)
+
+
 def _extract_opencode_session_path(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -2981,9 +3024,25 @@ class TelegramCommandHandlers:
         saved_image_paths: list[Path] = []
         saved_file_info: list[tuple[str, str, int]] = []
         failed_count = 0
+        max_image_bytes = self._config.media.max_image_bytes
+        max_file_bytes = self._config.media.max_file_bytes
+        image_disabled = 0
+        file_disabled = 0
+        image_too_large = 0
+        file_too_large = 0
+        image_download_failed = 0
+        file_download_failed = 0
+        image_save_failed = 0
+        file_save_failed = 0
+        unsupported_count = 0
 
         for msg in sorted_messages:
             image_candidate = message_handlers.select_image_candidate(msg)
+            file_candidate = message_handlers.select_file_candidate(msg)
+            if not image_candidate and not file_candidate:
+                unsupported_count += 1
+                failed_count += 1
+                continue
             if image_candidate:
                 if not self._config.media.images:
                     await self._send_message(
@@ -2992,6 +3051,7 @@ class TelegramCommandHandlers:
                         thread_id=msg.thread_id,
                         reply_to=msg.message_id,
                     )
+                    image_disabled += 1
                     failed_count += 1
                     continue
                 try:
@@ -3008,25 +3068,27 @@ class TelegramCommandHandlers:
                         message_id=msg.message_id,
                         exc=exc,
                     )
+                    image_download_failed += 1
                     failed_count += 1
                     continue
-                max_bytes = self._config.media.max_image_bytes
-                if file_size and file_size > max_bytes:
+                if file_size and file_size > max_image_bytes:
                     await self._send_message(
                         msg.chat_id,
-                        f"Image too large (max {max_bytes} bytes).",
+                        f"Image too large (max {max_image_bytes} bytes).",
                         thread_id=msg.thread_id,
                         reply_to=msg.message_id,
                     )
+                    image_too_large += 1
                     failed_count += 1
                     continue
-                if len(data) > max_bytes:
+                if len(data) > max_image_bytes:
                     await self._send_message(
                         msg.chat_id,
-                        f"Image too large (max {max_bytes} bytes).",
+                        f"Image too large (max {max_image_bytes} bytes).",
                         thread_id=msg.thread_id,
                         reply_to=msg.message_id,
                     )
+                    image_too_large += 1
                     failed_count += 1
                     continue
                 try:
@@ -3044,10 +3106,10 @@ class TelegramCommandHandlers:
                         message_id=msg.message_id,
                         exc=exc,
                     )
+                    image_save_failed += 1
                     failed_count += 1
                     continue
 
-            file_candidate = message_handlers.select_file_candidate(msg)
             if file_candidate:
                 if not self._config.media.files:
                     await self._send_message(
@@ -3056,6 +3118,7 @@ class TelegramCommandHandlers:
                         thread_id=msg.thread_id,
                         reply_to=msg.message_id,
                     )
+                    file_disabled += 1
                     failed_count += 1
                     continue
                 try:
@@ -3072,25 +3135,27 @@ class TelegramCommandHandlers:
                         message_id=msg.message_id,
                         exc=exc,
                     )
+                    file_download_failed += 1
                     failed_count += 1
                     continue
-                max_bytes = self._config.media.max_file_bytes
-                if file_size is not None and file_size > max_bytes:
+                if file_size is not None and file_size > max_file_bytes:
                     await self._send_message(
                         msg.chat_id,
-                        f"File too large (max {max_bytes} bytes).",
+                        f"File too large (max {max_file_bytes} bytes).",
                         thread_id=msg.thread_id,
                         reply_to=msg.message_id,
                     )
+                    file_too_large += 1
                     failed_count += 1
                     continue
-                if len(data) > max_bytes:
+                if len(data) > max_file_bytes:
                     await self._send_message(
                         msg.chat_id,
-                        f"File too large (max {max_bytes} bytes).",
+                        f"File too large (max {max_file_bytes} bytes).",
                         thread_id=msg.thread_id,
                         reply_to=msg.message_id,
                     )
+                    file_too_large += 1
                     failed_count += 1
                     continue
                 try:
@@ -3123,13 +3188,47 @@ class TelegramCommandHandlers:
                         message_id=msg.message_id,
                         exc=exc,
                     )
+                    file_save_failed += 1
                     failed_count += 1
                     continue
 
         if not saved_image_paths and not saved_file_info:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.media_batch.empty",
+                chat_id=first_msg.chat_id,
+                thread_id=first_msg.thread_id,
+                media_group_id=first_msg.media_group_id,
+                message_ids=[m.message_id for m in sorted_messages],
+                failed_count=failed_count,
+                image_disabled=image_disabled,
+                file_disabled=file_disabled,
+                image_too_large=image_too_large,
+                file_too_large=file_too_large,
+                image_download_failed=image_download_failed,
+                file_download_failed=file_download_failed,
+                image_save_failed=image_save_failed,
+                file_save_failed=file_save_failed,
+                unsupported_count=unsupported_count,
+                max_image_bytes=max_image_bytes,
+                max_file_bytes=max_file_bytes,
+            )
             await self._send_message(
                 first_msg.chat_id,
-                "Failed to process any media in the batch.",
+                _format_media_batch_failure(
+                    image_disabled=image_disabled,
+                    file_disabled=file_disabled,
+                    image_too_large=image_too_large,
+                    file_too_large=file_too_large,
+                    image_download_failed=image_download_failed,
+                    file_download_failed=file_download_failed,
+                    image_save_failed=image_save_failed,
+                    file_save_failed=file_save_failed,
+                    unsupported=unsupported_count,
+                    max_image_bytes=max_image_bytes,
+                    max_file_bytes=max_file_bytes,
+                ),
                 thread_id=first_msg.thread_id,
                 reply_to=first_msg.message_id,
             )
