@@ -483,6 +483,28 @@ async def test_request_retries_on_rate_limit(monkeypatch: pytest.MonkeyPatch) ->
     assert sleeps and sleeps[0] >= 0.9
 
 
+@pytest.mark.anyio
+async def test_download_file_uses_file_base_url() -> None:
+    requested_urls: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        return httpx.Response(200, content=b"ok")
+
+    transport = httpx.MockTransport(handler)
+    http_client = httpx.AsyncClient(transport=transport)
+    client = TelegramBotClient("test-token", client=http_client)
+    try:
+        payload = await client.download_file("photos/file_1.jpg")
+    finally:
+        await client.close()
+
+    assert payload == b"ok"
+    assert requested_urls == [
+        "https://api.telegram.org/file/bottest-token/photos/file_1.jpg"
+    ]
+
+
 def test_callback_encoding_and_parsing() -> None:
     approval = encode_approval_callback("accept", "req1")
     parsed = parse_callback_data(approval)
