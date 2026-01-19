@@ -82,21 +82,16 @@ class TelegramRuntimeHelpers:
                 raise AppServerUnavailableError(
                     f"App-server unavailable after {max_attempts} attempts"
                 )
-            elapsed = time.monotonic() - started_at
-            if elapsed >= timeout:
-                raise AppServerUnavailableError(
-                    f"App-server unavailable after {timeout:.1f}s"
-                )
             try:
                 return await self._app_server_supervisor.get_client(workspace_root)
             except Exception as exc:
                 self._log_app_server_start_failure(workspace_root, exc)
-                remaining = timeout - elapsed
-                if remaining <= 0:
+                elapsed = time.monotonic() - started_at
+                if elapsed >= timeout:
                     raise AppServerUnavailableError(
                         f"App-server unavailable after {timeout:.1f}s"
                     ) from exc
-                sleep_time = min(delay, remaining)
+                sleep_time = min(delay, timeout - elapsed)
                 await asyncio.sleep(sleep_time)
                 delay = min(delay * 2, APP_SERVER_START_BACKOFF_MAX_SECONDS)
 

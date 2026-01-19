@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Union, cast
 
 from ...core.circuit_breaker import CircuitBreaker
-from ...core.exceptions import CodexError, PermanentError, TransientError
+from ...core.exceptions import (
+    CircuitOpenError,
+    CodexError,
+    PermanentError,
+    TransientError,
+)
 from ...core.logging_utils import log_event, sanitize_log_value
 from ...core.retry import retry_transient
 
@@ -1145,6 +1150,9 @@ class CodexAppServerClient:
                 delay_seconds=round(delay, 2),
             )
         except CodexAppServerDisconnected:
+            raise
+        except CircuitOpenError:
+            await asyncio.sleep(60.0)
             raise
         except Exception as exc:
             next_delay = min(
