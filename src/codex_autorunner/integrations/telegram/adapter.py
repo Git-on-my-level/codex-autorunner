@@ -1086,7 +1086,7 @@ class TelegramBotClient:
     ) -> None:
         self._bot_token = bot_token
         self._base_url = "https://api.telegram.org"
-        self._file_base_url = "https://api.telegram.org"
+        self._file_base_url = f"https://api.telegram.org/file/bot{bot_token}"
         self._logger = logger or logging.getLogger(__name__)
         if client is None:
             self._client = httpx.AsyncClient(timeout=timeout_seconds)
@@ -1301,7 +1301,8 @@ class TelegramBotClient:
     async def download_file(
         self, file_path: str, max_size_bytes: int = 50 * 1024 * 1024
     ) -> bytes:
-        url = f"{self._file_base_url}/bot{self._bot_token}/{file_path}"
+        safe_path = file_path.lstrip("/")
+        url = f"{self._file_base_url}/{safe_path}"
         log_event(
             self._logger, logging.INFO, "telegram.file.download", file_path=file_path
         )
