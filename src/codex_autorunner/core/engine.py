@@ -16,6 +16,7 @@ from typing import IO, Any, Iterator, Optional
 
 import yaml
 
+from ..agents.opencode.logging import OpenCodeEventFormatter
 from ..agents.opencode.runtime import (
     build_turn_id,
     collect_opencode_output,
@@ -63,10 +64,9 @@ from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
     RepoNotFoundError,
     atomic_write,
+    build_opencode_supervisor,
     ensure_executable,
     find_repo_root,
-    resolve_executable,
-    resolve_opencode_binary,
 )
 
 
@@ -131,9 +131,11 @@ class Engine:
         self._app_server_threads = AppServerThreadRegistry(
             default_app_server_threads_path(self.repo_root)
         )
+        self._app_server_threads_lock = threading.Lock()
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         self._app_server_event_formatter = AppServerEventFormatter()
+        self._opencode_event_formatter = OpenCodeEventFormatter()
         self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
@@ -339,9 +341,12 @@ class Engine:
             and telemetry.thread_id
             and isinstance(telemetry.token_total, dict)
         ):
-            baseline = self._find_thread_token_baseline(
-                thread_id=telemetry.thread_id, run_id=run_id
-            )
+            baseline = None
+            # OpenCode reports per-turn totals, so skip cross-run deltas.
+            if selected_agent != "opencode":
+                baseline = self._find_thread_token_baseline(
+                    thread_id=telemetry.thread_id, run_id=run_id
+                )
             delta = self._compute_token_delta(baseline, telemetry.token_total)
             run_updates["token_usage"] = {
                 "delta": delta,
@@ -645,6 +650,7 @@ class Engine:
         with self._run_telemetry_lock:
             self._run_telemetry = RunTelemetry(run_id=run_id)
         self._app_server_event_formatter.reset()
+        self._opencode_event_formatter.reset()
 
     def _update_run_telemetry(self, run_id: int, **updates: Any) -> None:
         with self._run_telemetry_lock:
@@ -1053,31 +1059,34 @@ class Engine:
             sandbox_policy = "dangerFullAccess"
         try:
             client = await supervisor.get_client(self.repo_root)
-            thread_id = self._app_server_threads.get_thread_id("autorunner")
-            thread_info: Optional[dict[str, Any]] = None
-            if thread_id:
-                try:
-                    resume_result = await client.thread_resume(thread_id)
-                    resumed = resume_result.get("id")
-                    if isinstance(resumed, str) and resumed:
-                        thread_id = resumed
-                        self._app_server_threads.set_thread_id("autorunner", thread_id)
-                    if isinstance(resume_result, dict):
-                        thread_info = resume_result
-                except CodexAppServerError:
-                    self._app_server_threads.reset_thread("autorunner")
-                    thread_id = None
-            if not thread_id:
-                thread = await client.thread_start(str(self.repo_root))
-                thread_id = thread.get("id")
-                if not isinstance(thread_id, str) or not thread_id:
-                    self.log_line(
-                        run_id, "error: app-server did not return a thread id"
-                    )
-                    return 1
-                self._app_server_threads.set_thread_id("autorunner", thread_id)
-                if isinstance(thread, dict):
-                    thread_info = thread
+            with self._app_server_threads_lock:
+                thread_id = self._app_server_threads.get_thread_id("autorunner")
+                thread_info: Optional[dict[str, Any]] = None
+                if thread_id:
+                    try:
+                        resume_result = await client.thread_resume(thread_id)
+                        resumed = resume_result.get("id")
+                        if isinstance(resumed, str) and resumed:
+                            thread_id = resumed
+                            self._app_server_threads.set_thread_id(
+                                "autorunner", thread_id
+                            )
+                        if isinstance(resume_result, dict):
+                            thread_info = resume_result
+                    except CodexAppServerError:
+                        self._app_server_threads.reset_thread("autorunner")
+                        thread_id = None
+                if not thread_id:
+                    thread = await client.thread_start(str(self.repo_root))
+                    thread_id = thread.get("id")
+                    if not isinstance(thread_id, str) or not thread_id:
+                        self.log_line(
+                            run_id, "error: app-server did not return a thread id"
+                        )
+                        return 1
+                    self._app_server_threads.set_thread_id("autorunner", thread_id)
+                    if isinstance(thread, dict):
+                        thread_info = thread
             if thread_id:
                 self._update_run_telemetry(run_id, thread_id=thread_id)
             turn_kwargs: dict[str, Any] = {}
@@ -1223,19 +1232,6 @@ class Engine:
                 "app-server supervisor close failed: %s", exc
             )
 
-    def _command_available(self, command: list[str]) -> bool:
-        if not command:
-            return False
-        entry = str(command[0]).strip()
-        if not entry:
-            return False
-        if os.path.sep in entry or (os.path.altsep and os.path.altsep in entry):
-            path = Path(entry)
-            if not path.is_absolute():
-                path = self.repo_root / path
-            return path.is_file() and os.access(path, os.X_OK)
-        return resolve_executable(entry) is not None
-
     def _build_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
         config = self.config.app_server
         opencode_command = self.config.agent_serve_command("opencode")
@@ -1245,53 +1241,24 @@ class Engine:
         except ConfigError:
             opencode_binary = None
 
-        command = list(opencode_command or [])
-        if not command and opencode_binary:
-            command = [
-                opencode_binary,
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ]
+        supervisor = build_opencode_supervisor(
+            opencode_command=opencode_command,
+            opencode_binary=opencode_binary,
+            workspace_root=self.repo_root,
+            logger=self._app_server_logger,
+            request_timeout=config.request_timeout,
+            max_handles=config.max_handles,
+            idle_ttl_seconds=config.idle_ttl_seconds,
+            base_env=None,
+        )
 
-        resolved_source = None
-        if opencode_command:
-            resolved_source = opencode_command[0]
-        elif opencode_binary:
-            resolved_source = opencode_binary
-        resolved_binary = resolve_opencode_binary(resolved_source)
-        if command:
-            if resolved_binary:
-                command[0] = resolved_binary
-        elif resolved_binary:
-            command = [
-                resolved_binary,
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ]
-
-        if not command or not self._command_available(command):
+        if supervisor is None:
             self._app_server_logger.info(
                 "OpenCode command unavailable; skipping opencode supervisor."
             )
             return None
 
-        username = os.environ.get("OPENCODE_SERVER_USERNAME")
-        password = os.environ.get("OPENCODE_SERVER_PASSWORD")
-        return OpenCodeSupervisor(
-            command,
-            logger=self._app_server_logger,
-            request_timeout=config.request_timeout,
-            max_handles=config.max_handles,
-            idle_ttl_seconds=config.idle_ttl_seconds,
-            username=username if username and password else None,
-            password=password if username and password else None,
-        )
+        return supervisor
 
     def _ensure_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
         if self._opencode_supervisor is None:
@@ -1413,21 +1380,22 @@ class Engine:
             self.log_line(run_id, f"error: opencode backend unavailable: {exc}")
             return 1
 
-        key = "autorunner.opencode"
-        thread_id = self._app_server_threads.get_thread_id(key)
-        if thread_id:
-            try:
-                await client.get_session(thread_id)
-            except Exception:
-                self._app_server_threads.reset_thread(key)
-                thread_id = None
-        if not thread_id:
-            session = await client.create_session(directory=str(self.repo_root))
-            thread_id = extract_session_id(session, allow_fallback_id=True)
-            if not isinstance(thread_id, str) or not thread_id:
-                self.log_line(run_id, "error: opencode did not return a session id")
-                return 1
-            self._app_server_threads.set_thread_id(key, thread_id)
+        with self._app_server_threads_lock:
+            key = "autorunner.opencode"
+            thread_id = self._app_server_threads.get_thread_id(key)
+            if thread_id:
+                try:
+                    await client.get_session(thread_id)
+                except Exception:
+                    self._app_server_threads.reset_thread(key)
+                    thread_id = None
+            if not thread_id:
+                session = await client.create_session(directory=str(self.repo_root))
+                thread_id = extract_session_id(session, allow_fallback_id=True)
+                if not isinstance(thread_id, str) or not thread_id:
+                    self.log_line(run_id, "error: opencode did not return a session id")
+                    return 1
+                self._app_server_threads.set_thread_id(key, thread_id)
 
         model_payload = split_model_id(model)
         missing_env = await opencode_missing_env(
@@ -1469,13 +1437,28 @@ class Engine:
         permission_policy = map_approval_policy_to_permission(
             state.autorunner_approval_policy, default="allow"
         )
+
+        async def _opencode_part_handler(
+            part_type: str, part: dict[str, Any], delta_text: Optional[str]
+        ) -> None:
+            if part_type == "usage" and isinstance(part, dict):
+                for line in self._opencode_event_formatter.format_usage(part):
+                    self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
+            else:
+                for line in self._opencode_event_formatter.format_part(
+                    part_type, part, delta_text
+                ):
+                    self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
+
         output_task = asyncio.create_task(
             collect_opencode_output(
                 client,
                 session_id=thread_id,
                 workspace_path=str(self.repo_root),
                 permission_policy=permission_policy,
+                question_policy="auto_first_option",
                 should_stop=active.interrupt_event.is_set,
+                part_handler=_opencode_part_handler,
             )
         )
         prompt_task = asyncio.create_task(

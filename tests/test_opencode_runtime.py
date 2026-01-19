@@ -75,6 +75,60 @@ async def test_collect_output_session_error() -> None:
     assert output.error == "boom"
 
 
+@pytest.mark.anyio
+async def test_collect_output_auto_replies_question() -> None:
+    replies = []
+
+    async def _reply(request_id: str, answers: list[list[str]]) -> None:
+        replies.append((request_id, answers))
+
+    events = [
+        SSEEvent(
+            event="question.asked",
+            data='{"sessionID":"s1","properties":{"id":"q1","questions":[{"text":"Continue?",'
+            '"options":[{"label":"Yes"},{"label":"No"}]}]}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        question_policy="auto_first_option",
+        reply_question=_reply,
+    )
+    assert output.text == ""
+    assert replies == [("q1", [["Yes"]])]
+
+
+@pytest.mark.anyio
+async def test_collect_output_question_deduplicates() -> None:
+    replies = []
+
+    async def _reply(request_id: str, answers: list[list[str]]) -> None:
+        replies.append((request_id, answers))
+
+    events = [
+        SSEEvent(
+            event="question.asked",
+            data='{"sessionID":"s1","properties":{"id":"q1","questions":[{"text":"Continue?",'
+            '"options":[{"label":"Yes"},{"label":"No"}]}]}}',
+        ),
+        SSEEvent(
+            event="question.asked",
+            data='{"sessionID":"s1","properties":{"id":"q1","questions":[{"text":"Continue?",'
+            '"options":[{"label":"Yes"},{"label":"No"}]}]}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        question_policy="auto_first_option",
+        reply_question=_reply,
+    )
+    assert len(replies) == 1
+
+
 def test_parse_message_response() -> None:
     payload = {
         "info": {"id": "turn-1", "error": "bad auth"},

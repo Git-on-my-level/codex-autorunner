@@ -13,8 +13,6 @@ from codex_autorunner.integrations.telegram.constants import (
 from codex_autorunner.integrations.telegram.dispatch import _dispatch_message
 from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
-    TopicQueue,
-    TopicRuntime,
     TopicRouter,
 )
 
@@ -121,6 +119,7 @@ class _ServiceStub:
     def _wrap_topic_work(self, key: str, work):
         async def wrapped():
             return await work()
+
         return wrapped
 
 
@@ -151,7 +150,6 @@ async def test_fast_ack_sent_when_topic_has_current_turn() -> None:
     store = SimpleNamespace(_topics=topics)
 
     router = TopicRouter(store)
-    records = {"10:11": _record("thread-1")}
     handler = _ServiceStub(router)
 
     runtime = router.runtime_for("10:11")
@@ -186,7 +184,6 @@ async def test_fast_ack_sent_when_topic_queue_has_depth() -> None:
     store = SimpleNamespace(_topics=topics)
 
     router = TopicRouter(store)
-    records = {"10:11": _record("thread-1")}
     handler = _ServiceStub(router)
 
     runtime = router.runtime_for("10:11")
@@ -221,7 +218,6 @@ async def test_fast_ack_not_sent_when_topic_is_idle() -> None:
     store = SimpleNamespace(_topics=topics)
 
     router = TopicRouter(store)
-    records = {"10:11": _record("thread-1")}
     handler = _ServiceStub(router)
 
     message = _message(message_id=1, thread_id=11)

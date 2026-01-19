@@ -320,13 +320,64 @@
                   <a id="pr-flow-log-link" class="github-link muted">Workflow log</a>
                   <a id="pr-flow-final-link" class="github-link muted">Final report</a>
                 </div>
-              </div>
-              <p id="github-note" class="muted small">–</p>
-            </div>
-          </div>
-        </section>
+               </div>
+               <p id="github-note" class="muted small">–</p>
+             </div>
+           </div>
 
-        <section id="docs" class="panel">
+           <div class="card review-card" id="review-card">
+             <div class="card-header">
+               <span class="label">Review</span>
+               <span id="review-status-pill" class="pill pill-idle">–</span>
+             </div>
+             <div class="review-grid">
+               <div class="review-row">
+                 <span class="muted">Run ID</span>
+                 <span id="review-run-id" class="review-mono">–</span>
+               </div>
+               <div class="review-row">
+                 <span class="muted">Started</span>
+                 <span id="review-started" class="review-mono">–</span>
+               </div>
+               <div class="review-row">
+                 <span class="muted">Finished</span>
+                 <span id="review-finished" class="review-mono">–</span>
+               </div>
+             </div>
+             <div class="review-controls">
+               <div class="review-inputs">
+                 <div class="review-input-row">
+                   <label class="muted" for="review-agent">Agent</label>
+                   <input id="review-agent" type="text" value="opencode" spellcheck="false" />
+                 </div>
+                 <div class="review-input-row">
+                   <label class="muted" for="review-model">Model</label>
+                   <input id="review-model" type="text" value="zai-coding-plan/glm-4.7" spellcheck="false" />
+                 </div>
+                 <div class="review-input-row">
+                   <label class="muted" for="review-reasoning">Reasoning</label>
+                   <input id="review-reasoning" type="text" placeholder="auto" spellcheck="false" />
+                 </div>
+                 <div class="review-input-row">
+                   <label class="muted" for="review-timeout">Timeout (s)</label>
+                   <input id="review-timeout" type="number" min="60" placeholder="auto" spellcheck="false" />
+                 </div>
+               </div>
+               <div class="review-buttons">
+                 <button id="review-start" class="primary sm">Start</button>
+                 <button id="review-stop" class="ghost sm">Stop</button>
+                 <button id="review-reset" class="ghost sm">Reset</button>
+               </div>
+             </div>
+             <div class="review-artifacts">
+               <a id="review-final-link" class="review-link muted">Final report</a>
+               <a id="review-log-link" class="review-link muted">Log</a>
+               <a id="review-scratchpad-link" class="review-link muted">Scratchpad</a>
+             </div>
+           </div>
+         </section>
+
+         <section id="docs" class="panel">
           <div class="doc-nav">
             <button class="chip active" data-doc="todo">TODO</button>
             <button class="chip" data-doc="progress">PROGRESS</button>

@@ -322,80 +322,81 @@ def iter_token_events(
         last_totals: Optional[TokenTotals] = None
 
         try:
-            lines = session_path.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            continue
+            with open(session_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        record = json.loads(line)
+                    except Exception:
+                        continue
 
-        for line in lines:
-            try:
-                record = json.loads(line)
-            except Exception:
-                continue
+                    rec_type = record.get("type")
+                    payload = record.get("payload", {}) or {}
+                    if rec_type == "session_meta":
+                        cwd_val = payload.get("cwd")
+                        session_cwd = Path(cwd_val).resolve() if cwd_val else None
+                        session_model = payload.get("model") or payload.get(
+                            "model_provider"
+                        )
+                        continue
 
-            rec_type = record.get("type")
-            payload = record.get("payload", {}) or {}
-            if rec_type == "session_meta":
-                cwd_val = payload.get("cwd")
-                session_cwd = Path(cwd_val).resolve() if cwd_val else None
-                session_model = payload.get("model") or payload.get("model_provider")
-                continue
+                    if rec_type != "event_msg" or payload.get("type") != "token_count":
+                        continue
 
-            if rec_type != "event_msg" or payload.get("type") != "token_count":
-                continue
+                    info = payload.get("info") or {}
+                    total_usage = info.get("total_token_usage")
+                    last_usage = info.get("last_token_usage")
+                    if not total_usage and not last_usage:
+                        # No usable token data; still track rate limits but skip usage.
+                        last_totals = last_totals
+                        rate_limits = payload.get("rate_limits")
+                        ts = record.get("timestamp")
+                        if ts and rate_limits:
+                            timestamp = _parse_timestamp(ts)
+                            if since and timestamp < since:
+                                continue
+                            if until and timestamp > until:
+                                continue
+                            yield TokenEvent(
+                                timestamp=timestamp,
+                                session_path=session_path,
+                                cwd=session_cwd,
+                                model=session_model,
+                                totals=last_totals or TokenTotals(),
+                                delta=TokenTotals(),
+                                rate_limits=rate_limits,
+                                agent=CODEX_AGENT_ID,
+                            )
+                        continue
 
-            info = payload.get("info") or {}
-            total_usage = info.get("total_token_usage")
-            last_usage = info.get("last_token_usage")
-            if not total_usage and not last_usage:
-                # No usable token data; still track rate limits but skip usage.
-                last_totals = last_totals
-                rate_limits = payload.get("rate_limits")
-                ts = record.get("timestamp")
-                if ts and rate_limits:
-                    timestamp = _parse_timestamp(ts)
+                    totals = _coerce_totals(total_usage or last_usage)
+                    delta = (
+                        _coerce_totals(last_usage)
+                        if last_usage
+                        else totals.diff(last_totals or TokenTotals())
+                    )
+                    last_totals = totals
+
+                    timestamp_raw = record.get("timestamp")
+                    if not timestamp_raw:
+                        continue
+                    timestamp = _parse_timestamp(timestamp_raw)
                     if since and timestamp < since:
                         continue
                     if until and timestamp > until:
                         continue
+
                     yield TokenEvent(
                         timestamp=timestamp,
                         session_path=session_path,
                         cwd=session_cwd,
                         model=session_model,
-                        totals=last_totals or TokenTotals(),
-                        delta=TokenTotals(),
-                        rate_limits=rate_limits,
+                        totals=totals,
+                        delta=delta,
+                        rate_limits=payload.get("rate_limits"),
                         agent=CODEX_AGENT_ID,
                     )
-                continue
-
-            totals = _coerce_totals(total_usage or last_usage)
-            delta = (
-                _coerce_totals(last_usage)
-                if last_usage
-                else totals.diff(last_totals or TokenTotals())
-            )
-            last_totals = totals
-
-            timestamp_raw = record.get("timestamp")
-            if not timestamp_raw:
-                continue
-            timestamp = _parse_timestamp(timestamp_raw)
-            if since and timestamp < since:
-                continue
-            if until and timestamp > until:
-                continue
-
-            yield TokenEvent(
-                timestamp=timestamp,
-                session_path=session_path,
-                cwd=session_cwd,
-                model=session_model,
-                totals=totals,
-                delta=delta,
-                rate_limits=payload.get("rate_limits"),
-                agent=CODEX_AGENT_ID,
-            )
+        except Exception:
+            pass
 
 
 def iter_opencode_events(
@@ -411,7 +412,8 @@ def iter_opencode_events(
     for repo_root in sorted({path.resolve() for path in repo_roots}):
         for session_path in _iter_opencode_session_files(repo_root):
             try:
-                payload = json.loads(session_path.read_text(encoding="utf-8"))
+                with open(session_path, "r", encoding="utf-8") as f:
+                    payload = json.loads(f.read())
             except Exception:
                 continue
 

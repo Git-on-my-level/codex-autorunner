@@ -1,9 +1,22 @@
 import json
+import logging
 import os
 import shlex
 import shutil
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence, cast
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+)
+
+if TYPE_CHECKING:
+    from ..agents.opencode.supervisor import OpenCodeSupervisor
 
 
 class RepoNotFoundError(Exception):
@@ -131,3 +144,122 @@ def resolve_opencode_binary(raw_command: Optional[str] = None) -> Optional[str]:
     if not parts:
         return None
     return resolve_executable(parts[0])
+
+
+def infer_home_from_workspace(workspace_root: Union[Path, str]) -> Optional[Path]:
+    """
+    Infer the user's home directory from a workspace path.
+
+    Handles:
+    - macOS with /Users/username
+    - Linux with /home/username
+    - macOS with /System/Volumes/Data/Users/username (Docker/WSL/Parallels)
+
+    Returns None if the path doesn't match expected patterns.
+    """
+    resolved = Path(workspace_root).resolve()
+    parts = resolved.parts
+    if (
+        len(parts) >= 6
+        and parts[0] == os.path.sep
+        and parts[1] == "System"
+        and parts[2] == "Volumes"
+        and parts[3] == "Data"
+        and parts[4] == "Users"
+    ):
+        return Path(parts[0]) / parts[1] / parts[2] / parts[3] / parts[4] / parts[5]
+    if (
+        len(parts) >= 3
+        and parts[0] == os.path.sep
+        and parts[1]
+        in (
+            "Users",
+            "home",
+        )
+    ):
+        return Path(parts[0]) / parts[1] / parts[2]
+    return None
+
+
+def build_opencode_supervisor(
+    *,
+    opencode_command: Optional[Sequence[str]] = None,
+    opencode_binary: Optional[str] = None,
+    workspace_root: Optional[Path] = None,
+    logger: Optional["logging.Logger"] = None,
+    request_timeout: Optional[float] = None,
+    max_handles: Optional[int] = None,
+    idle_ttl_seconds: Optional[float] = None,
+    base_env: Optional[MutableMapping[str, str]] = None,
+) -> Optional["OpenCodeSupervisor"]:
+    """
+    Unified factory for building OpenCodeSupervisor instances.
+
+    Centralizes:
+    - Binary/serve-command resolution
+    - Auth (username/password) sourcing from env
+    - Request timeout / max handles / idle TTL behavior
+    """
+    command = list(opencode_command or [])
+    if not command and opencode_binary:
+        command = [
+            opencode_binary,
+            "serve",
+            "--hostname",
+            "127.0.0.1",
+            "--port",
+            "0",
+        ]
+
+    resolved_source = None
+    if opencode_command:
+        resolved_source = opencode_command[0]
+    elif opencode_binary:
+        resolved_source = opencode_binary
+    resolved_binary = resolve_opencode_binary(resolved_source)
+
+    if not command:
+        return None
+
+    if resolved_binary:
+        command[0] = resolved_binary
+
+    if not _command_available(command, workspace_root=workspace_root, env=base_env):
+        return None
+
+    if base_env is None:
+        base_env = os.environ
+    username = base_env.get("OPENCODE_SERVER_USERNAME")
+    password = base_env.get("OPENCODE_SERVER_PASSWORD")
+
+    from ..agents.opencode.supervisor import OpenCodeSupervisor
+
+    return OpenCodeSupervisor(
+        command,
+        logger=logger,
+        request_timeout=request_timeout,
+        max_handles=max_handles,
+        idle_ttl_seconds=idle_ttl_seconds,
+        username=username if username and password else None,
+        password=password if username and password else None,
+        base_env=base_env,
+    )
+
+
+def _command_available(
+    command: Sequence[str],
+    *,
+    workspace_root: Optional[Path],
+    env: Optional[MutableMapping[str, str]] = None,
+) -> bool:
+    if not command or workspace_root is None:
+        return False
+    entry = str(command[0]).strip()
+    if not entry:
+        return False
+    if os.path.sep in entry or (os.path.altsep and os.path.altsep in entry):
+        path = Path(entry)
+        if not path.is_absolute():
+            path = workspace_root / path
+        return path.is_file() and os.access(path, os.X_OK)
+    return resolve_executable(entry, env=env) is not None

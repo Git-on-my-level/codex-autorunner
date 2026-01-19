@@ -117,16 +117,21 @@ async def log_stream(
     log_path: Path,
     heartbeat_interval: float = 15.0,
     shutdown_event: Optional[asyncio.Event] = None,
+    max_seconds: float = 60.0,
 ):
     """SSE stream generator for log file tailing."""
     if not log_path.exists():
         yield "data: log file not found\n\n"
         return
     last_emit_at = time.monotonic()
+    start_time = time.monotonic()
     with log_path.open("r", encoding="utf-8") as f:
         f.seek(0, 2)
         while True:
             if shutdown_event is not None and shutdown_event.is_set():
+                return
+            if time.monotonic() - start_time > max_seconds:
+                yield "event: timeout\ndata: Stream timeout exceeded\n\n"
                 return
             line = f.readline()
             if line:
@@ -193,17 +198,22 @@ async def state_stream(
     logger=None,
     heartbeat_interval: float = 15.0,
     shutdown_event: Optional[asyncio.Event] = None,
+    max_seconds: float = 60.0,
 ):
     """SSE stream generator for state updates."""
     last_payload = None
     last_error_log_at = 0.0
     last_emit_at = time.monotonic()
+    start_time = time.monotonic()
     terminal_idle_timeout_seconds = engine.config.terminal_idle_timeout_seconds
     codex_model = engine.config.codex_model or extract_flag_value(
         engine.config.codex_args, "--model"
     )
     while True:
         if shutdown_event is not None and shutdown_event.is_set():
+            return
+        if time.monotonic() - start_time > max_seconds:
+            yield "event: timeout\ndata: Stream timeout exceeded\n\n"
             return
         emitted = False
         try:

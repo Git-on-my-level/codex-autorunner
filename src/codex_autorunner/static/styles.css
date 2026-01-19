@@ -1472,6 +1472,81 @@ button.icon-btn {
   gap: 10px;
 }
 
+/* Review card */
+.review-card .review-grid {
+  display: grid;
+  gap: 8px;
+  margin: 10px 6px;
+}
+
+.review-card .review-row {
+  display: grid;
+  grid-template-columns: 50px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.review-card .review-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 12px;
+}
+
+.review-card .review-link {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-card .review-controls {
+  margin-top: 10px;
+}
+
+.review-card .review-inputs {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.review-card .review-input-row {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.review-card .review-inputs input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.review-card .review-inputs input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.review-card .review-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.review-card .review-artifacts {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 12px;
+}
+
+.review-card .review-artifacts .review-link {
+  flex: 1;
+}
+
 /* Docs nav */
 .doc-nav {
   display: flex;

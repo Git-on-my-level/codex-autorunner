@@ -5,7 +5,6 @@ import collections
 import json
 import logging
 import os
-import shlex
 import socket
 import time
 from pathlib import Path
@@ -20,7 +19,9 @@ from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
-from ...core.utils import resolve_executable, resolve_opencode_binary
+from ...core.utils import (
+    build_opencode_supervisor,
+)
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
 from ...manifest import load_manifest
 from ...voice import VoiceConfig, VoiceService
@@ -51,6 +52,7 @@ from .constants import (
     MODEL_PENDING_TTL_SECONDS,
     OVERSIZE_WARNING_TTL_SECONDS,
     PENDING_APPROVAL_TTL_SECONDS,
+    PENDING_QUESTION_TTL_SECONDS,
     PROGRESS_STREAM_TTL_SECONDS,
     REASONING_BUFFER_TTL_SECONDS,
     SELECTION_STATE_TTL_SECONDS,
@@ -65,6 +67,7 @@ from .handlers.approvals import TelegramApprovalHandlers
 from .handlers.commands import build_command_specs
 from .handlers.commands_runtime import TelegramCommandHandlers
 from .handlers.messages import _CoalescedBuffer
+from .handlers.questions import TelegramQuestionHandlers
 from .handlers.selections import TelegramSelectionHandlers
 from .helpers import (
     ModelOption,
@@ -88,34 +91,12 @@ from .types import (
     CompactState,
     ModelPickerState,
     PendingApproval,
+    PendingQuestion,
     ReviewCommitSelectionState,
     SelectionState,
     TurnContext,
 )
 from .voice import TelegramVoiceManager
-
-
-def _parse_command(raw: Optional[str]) -> list[str]:
-    if not raw:
-        return []
-    try:
-        return [part for part in shlex.split(raw) if part]
-    except ValueError:
-        return []
-
-
-def _command_available(command: list[str], *, workspace_root: Path) -> bool:
-    if not command:
-        return False
-    entry = str(command[0]).strip()
-    if not entry:
-        return False
-    if os.path.sep in entry or (os.path.altsep and os.path.altsep in entry):
-        path = Path(entry)
-        if not path.is_absolute():
-            path = workspace_root / path
-        return path.is_file() and os.access(path, os.X_OK)
-    return resolve_executable(entry) is not None
 
 
 def _build_opencode_supervisor(
@@ -124,37 +105,20 @@ def _build_opencode_supervisor(
     logger: logging.Logger,
 ) -> Optional[OpenCodeSupervisor]:
     raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
-    command = _parse_command(raw_command)
     opencode_binary = config.agent_binaries.get("opencode")
-    if not command and opencode_binary:
-        command = [
-            opencode_binary,
-            "serve",
-            "--hostname",
-            "127.0.0.1",
-            "--port",
-            "0",
-        ]
-    resolved_source = None
-    if command:
-        resolved_source = command[0]
-    elif opencode_binary:
-        resolved_source = opencode_binary
-    resolved_binary = resolve_opencode_binary(resolved_source)
-    if command:
-        if resolved_binary:
-            command[0] = resolved_binary
-    else:
-        if resolved_binary:
-            command = [
-                resolved_binary,
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ]
-    if not command or not _command_available(command, workspace_root=config.root):
+
+    supervisor = build_opencode_supervisor(
+        opencode_command=[raw_command] if raw_command else None,
+        opencode_binary=opencode_binary,
+        workspace_root=config.root,
+        logger=logger,
+        request_timeout=None,
+        max_handles=config.app_server_max_handles,
+        idle_ttl_seconds=config.app_server_idle_ttl_seconds,
+        base_env=None,
+    )
+
+    if supervisor is None:
         log_event(
             logger,
             logging.INFO,
@@ -162,16 +126,8 @@ def _build_opencode_supervisor(
             reason="command_missing",
         )
         return None
-    username = os.environ.get("OPENCODE_SERVER_USERNAME")
-    password = os.environ.get("OPENCODE_SERVER_PASSWORD")
-    return OpenCodeSupervisor(
-        command,
-        logger=logger,
-        max_handles=config.app_server_max_handles,
-        idle_ttl_seconds=config.app_server_idle_ttl_seconds,
-        username=username if username and password else None,
-        password=password if username and password else None,
-    )
+
+    return supervisor
 
 
 class TelegramBotService(
@@ -179,6 +135,7 @@ class TelegramBotService(
     TelegramMessageTransport,
     TelegramNotificationHandlers,
     TelegramApprovalHandlers,
+    TelegramQuestionHandlers,
     TelegramSelectionHandlers,
     TelegramCommandHandlers,
 ):
@@ -253,6 +210,7 @@ class TelegramBotService(
         self._turn_progress_heartbeat_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
+        self._pending_questions: dict[str, PendingQuestion] = {}
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
         self._update_options: dict[str, SelectionState] = {}
@@ -887,6 +845,8 @@ class TelegramBotService(
                 self._model_pending.pop(key, None)
             elif cache_name == "pending_approvals":
                 self._pending_approvals.pop(key, None)
+            elif cache_name == "pending_questions":
+                self._pending_questions.pop(key, None)
 
     async def _cache_cleanup_loop(self) -> None:
         interval = max(CACHE_CLEANUP_INTERVAL_SECONDS, 1.0)
@@ -943,6 +903,9 @@ class TelegramBotService(
             )
             self._evict_expired_cache_entries(
                 "pending_approvals", PENDING_APPROVAL_TTL_SECONDS
+            )
+            self._evict_expired_cache_entries(
+                "pending_questions", PENDING_QUESTION_TTL_SECONDS
             )
             now = time.monotonic()
             expired_placeholders = []

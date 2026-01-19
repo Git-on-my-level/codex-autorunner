@@ -370,3 +370,22 @@ class SystemUpdateCheckResponse(ResponseModel):
     message: str
     local_commit: Optional[str] = None
     remote_commit: Optional[str] = None
+
+
+class ReviewStartRequest(Payload):
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
+    max_wallclock_seconds: Optional[int] = Field(
+        default=None,
+        validation_alias=AliasChoices("max_wallclock_seconds", "maxWallclockSeconds"),
+    )
+
+
+class ReviewStatusResponse(ResponseModel):
+    review: Dict[str, Any]
+
+
+class ReviewControlResponse(ResponseModel):
+    status: str
+    detail: Optional[str] = None

@@ -119,9 +119,7 @@ async def _dispatch_message(
             await handlers._handle_message(message)
             return
         runtime = handlers._router.runtime_for(context.topic_key)
-        is_busy = (
-            runtime.current_turn_id is not None or runtime.queue.pending() > 0
-        )
+        is_busy = runtime.current_turn_id is not None or runtime.queue.pending() > 0
         if is_busy:
             placeholder_id = await handlers._send_placeholder(
                 message.chat_id,
@@ -160,6 +158,7 @@ _ROUTES: tuple[tuple[str, DispatchRoute], ...] = (
 
 async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
     from ...core.state import now_iso
+
     context = _build_context(handlers, update)
     conversation_id = None
     if context.chat_id is not None:

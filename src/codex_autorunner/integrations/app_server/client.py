@@ -122,6 +122,7 @@ class CodexAppServerClient:
         self._stderr_task: Optional[asyncio.Task] = None
         self._start_lock: Optional[asyncio.Lock] = None
         self._write_lock: Optional[asyncio.Lock] = None
+        self._data_lock: Optional[asyncio.Lock] = None
         self._pending: Dict[int, asyncio.Future[Any]] = {}
         self._pending_methods: Dict[int, str] = {}
         self._turns: Dict[TurnKey, _TurnState] = {}
@@ -300,7 +301,7 @@ class CodexAppServerClient:
         self, turn_id: str, *, thread_id: Optional[str] = None
     ) -> Any:
         if thread_id is None:
-            _key, state = self._find_turn_state(turn_id, thread_id=None)
+            _key, state = await self._find_turn_state(turn_id, thread_id=None)
             if state is None or not state.thread_id:
                 raise CodexAppServerProtocolError(
                     f"Unknown thread id for turn {turn_id}"
@@ -316,7 +317,7 @@ class CodexAppServerClient:
         thread_id: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> TurnResult:
-        key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+        key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
         if state is None:
             raise CodexAppServerProtocolError(
                 f"Unknown turn id {turn_id} (thread {thread_id})"
@@ -421,11 +422,16 @@ class CodexAppServerClient:
         *,
         timeout: Optional[float] = None,
     ) -> Any:
+        self._ensure_locks()
+        data_lock = self._data_lock
+        if data_lock is None:
+            raise CodexAppServerProtocolError("data lock unavailable")
         request_id = self._next_request_id()
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Any] = loop.create_future()
-        self._pending[request_id] = future
-        self._pending_methods[request_id] = method
+        async with data_lock:
+            self._pending[request_id] = future
+            self._pending_methods[request_id] = method
         log_event(
             self._logger,
             logging.INFO,
@@ -447,8 +453,9 @@ class CodexAppServerClient:
                 future.cancel()
             raise
         finally:
-            self._pending.pop(request_id, None)
-            self._pending_methods.pop(request_id, None)
+            async with data_lock:
+                self._pending.pop(request_id, None)
+                self._pending_methods.pop(request_id, None)
 
     async def _send_message(self, message: Dict[str, Any]) -> None:
         if not self._process or not self._process.stdin:
@@ -494,6 +501,8 @@ class CodexAppServerClient:
             self._start_lock = asyncio.Lock()
         if self._write_lock is None:
             self._write_lock = asyncio.Lock()
+        if self._data_lock is None:
+            self._data_lock = asyncio.Lock()
 
     def _ensure_disconnect_event(self) -> asyncio.Event:
         if self._disconnected is None:
@@ -701,8 +710,13 @@ class CodexAppServerClient:
         req_id = message.get("id")
         if not isinstance(req_id, int):
             return
-        future = self._pending.pop(req_id, None)
-        method = self._pending_methods.pop(req_id, None)
+        self._ensure_locks()
+        data_lock = self._data_lock
+        if data_lock is None:
+            raise CodexAppServerProtocolError("data lock unavailable")
+        async with data_lock:
+            future = self._pending.pop(req_id, None)
+            method = self._pending_methods.pop(req_id, None)
         if future is None:
             return
         if future.cancelled():
@@ -803,7 +817,7 @@ class CodexAppServerClient:
                 handled = True
                 return
             thread_id = _extract_thread_id_for_turn(params)
-            _key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+            _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
             if state is None:
                 if thread_id:
                     state = self._ensure_turn_state(turn_id, thread_id)
@@ -817,7 +831,7 @@ class CodexAppServerClient:
                 handled = True
                 return
             thread_id = _extract_thread_id_for_turn(params)
-            _key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+            _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
             if state is None:
                 if thread_id:
                     state = self._ensure_turn_state(turn_id, thread_id)
@@ -831,7 +845,7 @@ class CodexAppServerClient:
                 handled = True
                 return
             thread_id = _extract_thread_id_for_turn(params)
-            _key, state = self._find_turn_state(turn_id, thread_id=thread_id)
+            _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
             if state is None:
                 if thread_id:
                     state = self._ensure_turn_state(turn_id, thread_id)
@@ -852,14 +866,19 @@ class CodexAppServerClient:
                     exc=exc,
                 )
 
-    def _find_turn_state(
+    async def _find_turn_state(
         self, turn_id: str, *, thread_id: Optional[str]
     ) -> tuple[Optional[TurnKey], Optional[_TurnState]]:
-        key = _turn_key(thread_id, turn_id)
-        if key is not None:
-            state = self._turns.get(key)
-            if state is not None:
-                return key, state
+        self._ensure_locks()
+        data_lock = self._data_lock
+        if data_lock is None:
+            raise CodexAppServerProtocolError("data lock unavailable")
+        async with data_lock:
+            key = _turn_key(thread_id, turn_id)
+            if key is not None:
+                state = self._turns.get(key)
+                if state is not None:
+                    return key, state
         matches = [
             (candidate_key, state)
             for candidate_key, state in self._turns.items()

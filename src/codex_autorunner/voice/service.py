@@ -57,7 +57,6 @@ class VoiceService:
             "sample_rate": self.config.sample_rate,
             "warn_on_remote_api": self.config.warn_on_remote_api,
             "has_api_key": has_api_key,
-            "api_key_env": api_key_env,
             "push_to_talk": {
                 "max_ms": self.config.push_to_talk.max_ms,
                 "silence_auto_stop_ms": self.config.push_to_talk.silence_auto_stop_ms,

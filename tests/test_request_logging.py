@@ -75,7 +75,13 @@ def test_heavy_endpoint_logs_response_size() -> None:
 
         async def __call__(self, scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
-            await send({"type": "http.response.body", "body": b"test response content", "more_body": False})
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": b"test response content",
+                    "more_body": False,
+                }
+            )
 
     app = _DummyAppWithSize(logger)
     middleware = RequestIdMiddleware(app)

@@ -314,14 +314,20 @@ class ActiveSession:
         self.subscribers.discard(q)
 
     def close(self):
-        self._disable_writer()
+        try:
+            self._disable_writer()
+        except Exception:
+            pass
         self._pending_input.clear()
         if not self.pty.closed:
             try:
                 self.loop.remove_reader(self.pty.fd)
             except Exception:
                 pass
-            self.pty.terminate()
+            try:
+                self.pty.terminate()
+            except Exception:
+                pass
         for queue in list(self.subscribers):
             try:
                 queue.put_nowait(None)

@@ -10,6 +10,8 @@ from codex_autorunner.integrations.telegram.adapter import (
     CancelCallback,
     CompactCallback,
     PageCallback,
+    QuestionCancelCallback,
+    QuestionOptionCallback,
     ResumeCallback,
     ReviewCommitCallback,
     TelegramAllowlist,
@@ -22,6 +24,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     allowlist_allows,
     build_approval_keyboard,
     build_bind_keyboard,
+    build_question_keyboard,
     build_resume_keyboard,
     build_review_commit_keyboard,
     build_update_keyboard,
@@ -31,6 +34,8 @@ from codex_autorunner.integrations.telegram.adapter import (
     encode_cancel_callback,
     encode_compact_callback,
     encode_page_callback,
+    encode_question_cancel_callback,
+    encode_question_option_callback,
     encode_resume_callback,
     encode_review_commit_callback,
     encode_update_callback,
@@ -199,6 +204,27 @@ def test_parse_update_callback() -> None:
     assert parsed.callback.chat_id == 123
     assert parsed.callback.thread_id == 88
     assert parsed.message is None
+
+
+def test_parse_question_option_callback() -> None:
+    data = encode_question_option_callback("req:1", 2, 3)
+    parsed = parse_callback_data(data)
+    assert parsed == QuestionOptionCallback(
+        request_id="req:1",
+        question_index=2,
+        option_index=3,
+    )
+
+
+def test_parse_question_cancel_callback() -> None:
+    data = encode_question_cancel_callback("req:1")
+    parsed = parse_callback_data(data)
+    assert parsed == QuestionCancelCallback(request_id="req:1")
+
+
+def test_build_question_keyboard() -> None:
+    keyboard = build_question_keyboard("req:1", question_index=0, options=["Yes"])
+    assert keyboard["inline_keyboard"][0][0]["callback_data"].startswith("qopt:")
 
 
 def test_parse_update_photo_caption() -> None:

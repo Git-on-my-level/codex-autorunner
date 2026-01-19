@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from ...core.logging_utils import log_event
-from ...core.utils import subprocess_env
+from ...core.utils import infer_home_from_workspace, subprocess_env
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import OpenCodeClient
 
@@ -46,6 +45,7 @@ class OpenCodeSupervisor:
         idle_ttl_seconds: Optional[float] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        base_env: Optional[Mapping[str, str]] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._logger = logger or logging.getLogger(__name__)
@@ -53,6 +53,7 @@ class OpenCodeSupervisor:
         self._max_handles = max_handles
         self._idle_ttl_seconds = idle_ttl_seconds
         self._auth = (username, password) if username and password else None
+        self._base_env = base_env
         self._handles: dict[str, OpenCodeHandle] = {}
         self._lock = asyncio.Lock()
 
@@ -219,8 +220,8 @@ class OpenCodeSupervisor:
             raise
 
     def _build_opencode_env(self, workspace_root: Path) -> dict[str, str]:
-        env = subprocess_env()
-        inferred_home = self._infer_home_from_workspace(workspace_root)
+        env = subprocess_env(base_env=self._base_env)
+        inferred_home = infer_home_from_workspace(workspace_root)
         if inferred_home is None:
             return env
         inferred_auth = inferred_home / ".local" / "share" / "opencode" / "auth.json"
@@ -240,21 +241,6 @@ class OpenCodeSupervisor:
             auth_path=str(inferred_auth),
         )
         return env
-
-    def _infer_home_from_workspace(self, workspace_root: Path) -> Optional[Path]:
-        resolved = workspace_root.resolve()
-        parts = resolved.parts
-        if (
-            len(parts) >= 3
-            and parts[0] == os.path.sep
-            and parts[1]
-            in (
-                "Users",
-                "home",
-            )
-        ):
-            return Path(parts[0]) / parts[1] / parts[2]
-        return None
 
     def _opencode_auth_path_for_env(self, env: dict[str, str]) -> Optional[Path]:
         data_home = env.get("XDG_DATA_HOME")

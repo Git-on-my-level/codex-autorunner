@@ -16,6 +16,7 @@ TRUNCATION_MARKER = "...[truncated]"
 DOC_CHAT_APP_SERVER_TEMPLATE = """You are an autonomous coding assistant helping maintain the work docs for this repository.
 
 Instructions:
+- This run is non-interactive. Do not ask the user questions. If unsure, make reasonable assumptions and proceed.
 - Use the base doc content below. Drafts (if present) are the authoritative base.
 - You may inspect the repo and update the work docs listed when needed.
 - If you update docs, edit the files directly. If no changes are needed, do not edit files.
@@ -105,6 +106,7 @@ Work docs (read from disk as needed):
 - SUMMARY: {summary_path}
 
 Instructions:
+- This run is non-interactive. Do not ask the user questions. If unsure, make reasonable assumptions and proceed.
 - Work through TODO items from top to bottom.
 - Prefer fixing issues over documenting them.
 - Keep TODO/PROGRESS/OPINIONS/SPEC/SUMMARY in sync.

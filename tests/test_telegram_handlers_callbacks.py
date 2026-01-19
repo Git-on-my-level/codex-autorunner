@@ -4,6 +4,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramCallbackQuery,
     encode_bind_callback,
     encode_compact_callback,
+    encode_question_option_callback,
     encode_resume_callback,
 )
 from codex_autorunner.integrations.telegram.handlers.callbacks import handle_callback
@@ -43,6 +44,11 @@ class _HandlerStub:
             await self._answer_callback(_callback, "Selection expired")
             return
         self.calls.append(("compact", key, parsed))
+
+    async def _handle_question_callback(
+        self, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("question", parsed))
 
 
 @pytest.mark.anyio
@@ -137,3 +143,20 @@ async def test_handle_callback_compact_selection_ok() -> None:
     assert handlers.calls[0][0] == "compact"
     assert handlers.calls[0][1] == key
     assert handlers.calls[0][2] is not None
+
+
+@pytest.mark.anyio
+async def test_handle_callback_question() -> None:
+    handlers = _HandlerStub()
+    callback = TelegramCallbackQuery(
+        update_id=5,
+        callback_id="cb5",
+        from_user_id=6,
+        data=encode_question_option_callback("req-1", 0, 1),
+        message_id=9,
+        chat_id=33,
+        thread_id=34,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls
+    assert handlers.calls[0][0] == "question"

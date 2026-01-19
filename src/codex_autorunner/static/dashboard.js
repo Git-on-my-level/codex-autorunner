@@ -6,6 +6,7 @@ import { loadState, startRun, stopRun, resumeRun, killRun, resetRun, startStateP
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { initAgentControls } from "./agentControls.js";
+import { initReview } from "./review.js";
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 let pendingSummaryOpen = false;
 const usageChartState = {
@@ -644,6 +645,7 @@ function openSummaryDoc() {
 export function initDashboard() {
     initSettings();
     initUsageChartControls();
+    initReview();
     const agentSelect = document.getElementById("dashboard-agent-select");
     const modelSelect = document.getElementById("dashboard-model-select");
     const reasoningSelect = document.getElementById("dashboard-reasoning-select");

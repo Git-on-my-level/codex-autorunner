@@ -30,6 +30,11 @@ def test_repo_openapi_contract_has_core_paths(repo) -> None:
         "/api/terminal/image": {"post"},
         "/api/voice/config": {"get"},
         "/api/voice/transcribe": {"post"},
+        "/api/review/status": {"get"},
+        "/api/review/start": {"post"},
+        "/api/review/stop": {"post"},
+        "/api/review/reset": {"post"},
+        "/api/review/artifact": {"get"},
     }
 
     for path, methods in expected.items():

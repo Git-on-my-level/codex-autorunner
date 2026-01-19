@@ -46,7 +46,9 @@ from ..core.usage import (
     get_hub_usage_summary_cached,
     parse_iso_datetime,
 )
-from ..core.utils import resolve_executable, resolve_opencode_binary
+from ..core.utils import (
+    build_opencode_supervisor,
+)
 from ..housekeeping import run_housekeeping_once
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
@@ -261,25 +263,6 @@ def _parse_command(raw: Optional[str]) -> list[str]:
         return []
 
 
-def _command_available(
-    command: list[str],
-    *,
-    workspace_root: Path,
-    env: Optional[Mapping[str, str]] = None,
-) -> bool:
-    if not command:
-        return False
-    entry = str(command[0]).strip()
-    if not entry:
-        return False
-    if os.path.sep in entry or (os.path.altsep and os.path.altsep in entry):
-        path = Path(entry)
-        if not path.is_absolute():
-            path = workspace_root / path
-        return path.is_file() and os.access(path, os.X_OK)
-    return resolve_executable(entry, env=env) is not None
-
-
 def _build_opencode_supervisor(
     config: AppServerConfig,
     *,
@@ -289,57 +272,23 @@ def _build_opencode_supervisor(
     logger: logging.Logger,
     env: Mapping[str, str],
 ) -> tuple[Optional[OpenCodeSupervisor], Optional[float]]:
-    command = list(opencode_command or [])
-    if not command and opencode_binary:
-        command = [
-            opencode_binary,
-            "serve",
-            "--hostname",
-            "127.0.0.1",
-            "--port",
-            "0",
-        ]
-    resolved_source = None
-    if opencode_command:
-        resolved_source = opencode_command[0]
-    elif opencode_binary:
-        resolved_source = opencode_binary
-    resolved_binary = resolve_opencode_binary(resolved_source)
-    if command:
-        if resolved_binary:
-            command[0] = resolved_binary
-    else:
-        if resolved_binary:
-            command = [
-                resolved_binary,
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ]
-    if not command or not _command_available(
-        command,
+    supervisor = build_opencode_supervisor(
+        opencode_command=opencode_command,
+        opencode_binary=opencode_binary,
         workspace_root=workspace_root,
-        env=env,
-    ):
+        logger=logger,
+        request_timeout=config.request_timeout,
+        max_handles=config.max_handles,
+        idle_ttl_seconds=config.idle_ttl_seconds,
+        base_env=env,
+    )
+    if supervisor is None:
         safe_log(
             logger,
             logging.INFO,
             "OpenCode command unavailable; skipping opencode supervisor.",
         )
         return None, None
-    username = env.get("OPENCODE_SERVER_USERNAME")
-    password = env.get("OPENCODE_SERVER_PASSWORD")
-    supervisor = OpenCodeSupervisor(
-        command,
-        logger=logger,
-        request_timeout=config.request_timeout,
-        max_handles=config.max_handles,
-        idle_ttl_seconds=config.idle_ttl_seconds,
-        username=username if username and password else None,
-        password=password if username and password else None,
-    )
     return supervisor, _app_server_prune_interval(config.idle_ttl_seconds)
 
 
@@ -493,6 +442,7 @@ def _build_app_context(
         app_server_threads=app_server_threads,
         app_server_events=app_server_events,
         opencode_supervisor=opencode_supervisor,
+        env=env,
     )
     spec_ingest = SpecIngestService(
         engine,
@@ -500,6 +450,7 @@ def _build_app_context(
         app_server_threads=app_server_threads,
         app_server_events=app_server_events,
         opencode_supervisor=opencode_supervisor,
+        env=env,
     )
     snapshot_service = SnapshotService(
         engine,

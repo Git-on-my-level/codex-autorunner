@@ -137,6 +137,18 @@ class ApprovalCallback:
 
 
 @dataclass(frozen=True)
+class QuestionOptionCallback:
+    request_id: str
+    question_index: int
+    option_index: int
+
+
+@dataclass(frozen=True)
+class QuestionCancelCallback:
+    request_id: str
+
+
+@dataclass(frozen=True)
 class ResumeCallback:
     thread_id: str
 
@@ -174,6 +186,12 @@ class UpdateConfirmCallback:
 @dataclass(frozen=True)
 class ReviewCommitCallback:
     sha: str
+
+
+@dataclass(frozen=True)
+class PrFlowStartCallback:
+    slug: str
+    number: int
 
 
 @dataclass(frozen=True)
@@ -589,6 +607,20 @@ def encode_approval_callback(decision: str, request_id: str) -> str:
     return data
 
 
+def encode_question_option_callback(
+    request_id: str, question_index: int, option_index: int
+) -> str:
+    data = f"qopt:{question_index}:{option_index}:{request_id}"
+    _validate_callback_data(data)
+    return data
+
+
+def encode_question_cancel_callback(request_id: str) -> str:
+    data = f"qcancel:{request_id}"
+    _validate_callback_data(data)
+    return data
+
+
 def encode_resume_callback(thread_id: str) -> str:
     data = f"resume:{thread_id}"
     _validate_callback_data(data)
@@ -649,6 +681,12 @@ def encode_page_callback(kind: str, page: int) -> str:
     return data
 
 
+def encode_pr_flow_start_callback(slug: str, number: int) -> str:
+    data = f"pr_flow_start:{slug}#{number}"
+    _validate_callback_data(data)
+    return data
+
+
 def encode_compact_callback(action: str) -> str:
     data = f"compact:{action}"
     _validate_callback_data(data)
@@ -660,6 +698,8 @@ def parse_callback_data(
 ) -> Optional[
     Union[
         ApprovalCallback,
+        QuestionOptionCallback,
+        QuestionCancelCallback,
         ResumeCallback,
         BindCallback,
         AgentCallback,
@@ -668,6 +708,7 @@ def parse_callback_data(
         UpdateCallback,
         UpdateConfirmCallback,
         ReviewCommitCallback,
+        PrFlowStartCallback,
         CancelCallback,
         CompactCallback,
         PageCallback,
@@ -681,6 +722,24 @@ def parse_callback_data(
         if not decision or not sep or not request_id:
             return None
         return ApprovalCallback(decision=decision, request_id=request_id)
+    if data.startswith("qopt:"):
+        _, _, rest = data.partition(":")
+        question_raw, sep, rest = rest.partition(":")
+        option_raw, sep2, request_id = rest.partition(":")
+        if not question_raw or not sep or not option_raw or not sep2 or not request_id:
+            return None
+        if not question_raw.isdigit() or not option_raw.isdigit():
+            return None
+        return QuestionOptionCallback(
+            request_id=request_id,
+            question_index=int(question_raw),
+            option_index=int(option_raw),
+        )
+    if data.startswith("qcancel:"):
+        _, _, request_id = data.partition(":")
+        if not request_id:
+            return None
+        return QuestionCancelCallback(request_id=request_id)
     if data.startswith("resume:"):
         _, _, thread_id = data.partition(":")
         if not thread_id:
@@ -721,6 +780,16 @@ def parse_callback_data(
         if not sha:
             return None
         return ReviewCommitCallback(sha=sha)
+    if data.startswith("pr_flow_start:"):
+        _, _, rest = data.partition(":")
+        if not rest:
+            return None
+        if "#" not in rest:
+            return None
+        slug, _, number_str = rest.partition("#")
+        if not slug or not number_str or not number_str.isdigit():
+            return None
+        return PrFlowStartCallback(slug=slug, number=int(number_str))
     if data.startswith("cancel:"):
         _, _, kind = data.partition(":")
         if not kind:
@@ -758,6 +827,29 @@ def build_approval_keyboard(
             InlineButton(
                 "Accept session", encode_approval_callback("accept_session", request_id)
             ),
+        )
+    return build_inline_keyboard(rows)
+
+
+def build_question_keyboard(
+    request_id: str,
+    *,
+    question_index: int,
+    options: Sequence[str],
+    include_cancel: bool = True,
+) -> dict[str, Any]:
+    rows = [
+        [
+            InlineButton(
+                label,
+                encode_question_option_callback(request_id, question_index, index),
+            )
+        ]
+        for index, label in enumerate(options)
+    ]
+    if include_cancel:
+        rows.append(
+            [InlineButton("Cancel", encode_question_cancel_callback(request_id))]
         )
     return build_inline_keyboard(rows)
 
@@ -930,8 +1022,9 @@ class TelegramBotClient:
         logger: Optional[logging.Logger] = None,
         client: Optional[httpx.AsyncClient] = None,
     ) -> None:
-        self._base_url = f"https://api.telegram.org/bot{bot_token}"
-        self._file_base_url = f"https://api.telegram.org/file/bot{bot_token}"
+        self._bot_token = bot_token
+        self._base_url = "https://api.telegram.org"
+        self._file_base_url = "https://api.telegram.org"
         self._logger = logger or logging.getLogger(__name__)
         if client is None:
             self._client = httpx.AsyncClient(timeout=timeout_seconds)
@@ -1142,15 +1235,49 @@ class TelegramBotClient:
         result = await self._request("setMyCommands", payload)
         return bool(result) if isinstance(result, bool) else False
 
-    async def download_file(self, file_path: str) -> bytes:
-        url = f"{self._file_base_url}/{file_path}"
+    async def download_file(
+        self, file_path: str, max_size_bytes: int = 50 * 1024 * 1024
+    ) -> bytes:
+        url = f"{self._file_base_url}/bot{self._bot_token}/{file_path}"
         log_event(
             self._logger, logging.INFO, "telegram.file.download", file_path=file_path
         )
         try:
             response = await self._client.get(url)
             response.raise_for_status()
+            content_length = response.headers.get("content-length")
+            if content_length:
+                try:
+                    file_size = int(content_length)
+                    if file_size > max_size_bytes:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.file.too_large",
+                            file_path=file_path,
+                            size=file_size,
+                            max_size=max_size_bytes,
+                        )
+                        raise TelegramAPIError(
+                            f"File too large: {file_size} bytes (max {max_size_bytes})"
+                        )
+                except ValueError:
+                    pass
+            if len(response.content) > max_size_bytes:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.file.too_large",
+                    file_path=file_path,
+                    size=len(response.content),
+                    max_size=max_size_bytes,
+                )
+                raise TelegramAPIError(
+                    f"File too large: {len(response.content)} bytes (max {max_size_bytes})"
+                )
             return response.content
+        except TelegramAPIError:
+            raise
         except Exception as exc:
             log_event(
                 self._logger,
@@ -1274,7 +1401,7 @@ class TelegramBotClient:
         return result if isinstance(result, dict) else {}
 
     async def _request(self, method: str, payload: dict[str, Any]) -> Any:
-        url = f"{self._base_url}/{method}"
+        url = f"{self._base_url}/bot{self._bot_token}/{method}"
 
         async def send() -> httpx.Response:
             return await self._client.post(url, json=payload)
@@ -1284,7 +1411,7 @@ class TelegramBotClient:
     async def _request_multipart(
         self, method: str, data: dict[str, Any], files: dict[str, Any]
     ) -> Any:
-        url = f"{self._base_url}/{method}"
+        url = f"{self._base_url}/bot{self._bot_token}/{method}"
 
         async def send() -> httpx.Response:
             return await self._client.post(url, data=data, files=files)

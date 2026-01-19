@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Optional
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    MutableMapping,
+    Optional,
+)
 
+from ...core.logging_utils import log_event
+from ...core.utils import infer_home_from_workspace
 from .events import SSEEvent
 
 PermissionDecision = str
 PermissionHandler = Callable[[str, dict[str, Any]], Awaitable[PermissionDecision]]
+QuestionHandler = Callable[[str, dict[str, Any]], Awaitable[Optional[list[list[str]]]]]
 PartHandler = Callable[[str, dict[str, Any], Optional[str]], Awaitable[None]]
 
 PERMISSION_ALLOW = "allow"
@@ -177,6 +188,139 @@ def _extract_permission_request(payload: Any) -> tuple[Optional[str], dict[str, 
     return None, {}
 
 
+def _normalize_question_policy(policy: Optional[str]) -> str:
+    if not policy:
+        return "ignore"
+    normalized = policy.strip().lower()
+    if normalized in ("auto_first_option", "auto_first", "first", "first_option"):
+        return "auto_first_option"
+    if normalized in ("auto_unanswered", "unanswered", "empty"):
+        return "auto_unanswered"
+    if normalized in ("reject", "deny", "cancel"):
+        return "reject"
+    if normalized in ("ignore", "none"):
+        return "ignore"
+    return "ignore"
+
+
+def _normalize_questions(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    questions: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            questions.append(item)
+        elif isinstance(item, str):
+            questions.append({"text": item})
+    return questions
+
+
+def _extract_question_request(payload: Any) -> tuple[Optional[str], dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None, {}
+    properties = payload.get("properties")
+    base = properties if isinstance(properties, dict) else payload
+    if not isinstance(base, dict):
+        base = payload
+    request_id = None
+    for container in (base, payload):
+        if not isinstance(container, dict):
+            continue
+        for key in ("id", "requestID", "requestId"):
+            value = container.get(key)
+            if isinstance(value, str) and value:
+                request_id = value
+                break
+        if request_id:
+            break
+    questions = None
+    for container in (base, payload):
+        if not isinstance(container, dict):
+            continue
+        candidate = container.get("questions")
+        if isinstance(candidate, list):
+            questions = candidate
+            break
+    normalized = _normalize_questions(questions)
+    props = dict(base)
+    props["questions"] = normalized
+    return request_id, props
+
+
+def _extract_question_option_label(option: Any) -> Optional[str]:
+    if isinstance(option, str):
+        return option.strip() or None
+    if isinstance(option, dict):
+        for key in ("label", "text", "value", "name", "id"):
+            value = option.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _extract_question_options(question: dict[str, Any]) -> list[str]:
+    for key in ("options", "choices"):
+        raw = question.get(key)
+        if isinstance(raw, list):
+            options = []
+            for option in raw:
+                label = _extract_question_option_label(option)
+                if label:
+                    options.append(label)
+            return options
+    return []
+
+
+def _auto_answers_for_questions(
+    questions: list[dict[str, Any]], policy: str
+) -> list[list[str]]:
+    if policy == "auto_unanswered":
+        return [[] for _ in questions]
+    answers: list[list[str]] = []
+    for question in questions:
+        options = _extract_question_options(question)
+        if options:
+            answers.append([options[0]])
+        else:
+            answers.append([])
+    return answers
+
+
+def _normalize_question_answers(
+    answers: Any, *, question_count: int
+) -> list[list[str]]:
+    if not isinstance(answers, list):
+        normalized: list[list[str]] = []
+    elif answers and all(isinstance(item, str) for item in answers):
+        normalized = [[item for item in answers if isinstance(item, str)]]
+    else:
+        normalized = []
+        for item in answers:
+            if isinstance(item, list):
+                normalized.append([entry for entry in item if isinstance(entry, str)])
+            elif isinstance(item, str):
+                normalized.append([item])
+            else:
+                normalized.append([])
+    if question_count <= 0:
+        return normalized
+    if len(normalized) < question_count:
+        normalized.extend([[] for _ in range(question_count - len(normalized))])
+    return normalized[:question_count]
+
+
+def _summarize_question_answers(answers: list[list[str]]) -> list[str]:
+    summary: list[str] = []
+    for answer in answers:
+        if not answer:
+            summary.append("")
+        elif len(answer) == 1:
+            summary.append(answer[0])
+        else:
+            summary.append(", ".join(answer))
+    return summary
+
+
 def format_permission_prompt(payload: dict[str, Any]) -> str:
     lines = ["Approval required"]
     reason = payload.get("reason") or payload.get("message") or payload.get("detail")
@@ -279,6 +423,23 @@ def _extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
     return None
 
 
+def _extract_usage_details(usage: dict[str, Any]) -> dict[str, int]:
+    details: dict[str, int] = {}
+    input_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_INPUT_KEYS)
+    if input_tokens is not None:
+        details["inputTokens"] = input_tokens
+    cached_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_CACHED_KEYS)
+    if cached_tokens is not None:
+        details["cachedInputTokens"] = cached_tokens
+    output_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_OUTPUT_KEYS)
+    if output_tokens is not None:
+        details["outputTokens"] = output_tokens
+    reasoning_tokens = _extract_usage_field(usage, _OPENCODE_USAGE_REASONING_KEYS)
+    if reasoning_tokens is not None:
+        details["reasoningTokens"] = reasoning_tokens
+    return details
+
+
 def _extract_context_window(
     payload: Any, usage: Optional[dict[str, Any]]
 ) -> Optional[int]:
@@ -308,6 +469,8 @@ async def opencode_missing_env(
     client: Any,
     workspace_root: str,
     model_payload: Optional[dict[str, str]],
+    *,
+    env: Optional[MutableMapping[str, str]] = None,
 ) -> list[str]:
     if not model_payload:
         return []
@@ -337,10 +500,18 @@ async def opencode_missing_env(
         missing = [
             key
             for key in env_keys
-            if isinstance(key, str) and key and not os.getenv(key)
+            if isinstance(key, str) and key and not _get_env_value(key, env)
         ]
         return missing
     return []
+
+
+def _get_env_value(
+    key: str, env: Optional[MutableMapping[str, str]] = None
+) -> Optional[str]:
+    if env is not None:
+        return env.get(key)
+    return os.getenv(key)
 
 
 def _provider_has_auth(provider_id: str, workspace_root: str) -> bool:
@@ -362,38 +533,13 @@ def _find_opencode_auth_path(workspace_root: str) -> Optional[Path]:
     if not data_home:
         home = os.getenv("HOME")
         if not home:
-            inferred = _infer_home_from_workspace(workspace_root)
+            inferred = infer_home_from_workspace(workspace_root)
             if inferred is None:
                 return None
             data_home = str(inferred / ".local" / "share")
         else:
             data_home = str(Path(home) / ".local" / "share")
     return Path(data_home) / "opencode" / "auth.json"
-
-
-def _infer_home_from_workspace(workspace_root: str) -> Optional[Path]:
-    resolved = Path(workspace_root).resolve()
-    parts = resolved.parts
-    if (
-        len(parts) >= 6
-        and parts[0] == os.path.sep
-        and parts[1] == "System"
-        and parts[2] == "Volumes"
-        and parts[3] == "Data"
-        and parts[4] == "Users"
-    ):
-        return Path(parts[0]) / parts[1] / parts[2] / parts[3] / parts[4] / parts[5]
-    if (
-        len(parts) >= 3
-        and parts[0] == os.path.sep
-        and parts[1]
-        in (
-            "Users",
-            "home",
-        )
-    ):
-        return Path(parts[0]) / parts[1] / parts[2]
-    return None
 
 
 async def collect_opencode_output_from_events(
@@ -403,8 +549,12 @@ async def collect_opencode_output_from_events(
     progress_session_ids: Optional[set[str]] = None,
     permission_policy: str = PERMISSION_ALLOW,
     permission_handler: Optional[PermissionHandler] = None,
+    question_policy: str = "ignore",
+    question_handler: Optional[QuestionHandler] = None,
     should_stop: Optional[Callable[[], bool]] = None,
     respond_permission: Optional[Callable[[str, str], Awaitable[None]]] = None,
+    reply_question: Optional[Callable[[str, list[list[str]]], Awaitable[None]]] = None,
+    reject_question: Optional[Callable[[str], Awaitable[None]]] = None,
     part_handler: Optional[PartHandler] = None,
 ) -> OpenCodeTurnOutput:
     text_parts: list[str] = []
@@ -417,6 +567,9 @@ async def collect_opencode_output_from_events(
     pending_text: dict[str, list[str]] = {}
     last_usage_total: Optional[int] = None
     last_context_window: Optional[int] = None
+    seen_question_request_ids: set[tuple[str, str]] = set()
+    normalized_question_policy = _normalize_question_policy(question_policy)
+    logger = logging.getLogger(__name__)
 
     def _message_id_from_info(info: Any) -> Optional[str]:
         if not isinstance(info, dict):
@@ -507,6 +660,120 @@ async def collect_opencode_output_from_events(
         elif event_session_id not in progress_session_ids:
             continue
         is_primary_session = event_session_id == session_id
+        if event.event == "question.asked":
+            request_id, props = _extract_question_request(payload)
+            questions = props.get("questions") if isinstance(props, dict) else []
+            question_count = len(questions) if isinstance(questions, list) else 0
+            log_event(
+                logger,
+                logging.INFO,
+                "opencode.question.asked",
+                request_id=request_id,
+                question_count=question_count,
+                session_id=event_session_id,
+            )
+            if not request_id:
+                continue
+            dedupe_key = (event_session_id, request_id)
+            if dedupe_key in seen_question_request_ids:
+                continue
+            seen_question_request_ids.add(dedupe_key)
+            if question_handler is not None:
+                try:
+                    answers = await question_handler(request_id, props)
+                except Exception as exc:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "opencode.question.auto_reply_failed",
+                        request_id=request_id,
+                        session_id=event_session_id,
+                        exc=exc,
+                    )
+                    if reject_question is not None:
+                        try:
+                            await reject_question(request_id)
+                        except Exception:
+                            pass
+                    continue
+                if answers is None:
+                    if reject_question is not None:
+                        try:
+                            await reject_question(request_id)
+                        except Exception:
+                            pass
+                    continue
+                normalized_answers = _normalize_question_answers(
+                    answers, question_count=question_count
+                )
+                if reply_question is not None:
+                    try:
+                        await reply_question(request_id, normalized_answers)
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            "opencode.question.replied",
+                            request_id=request_id,
+                            question_count=question_count,
+                            session_id=event_session_id,
+                            mode="handler",
+                        )
+                    except Exception as exc:
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            "opencode.question.auto_reply_failed",
+                            request_id=request_id,
+                            session_id=event_session_id,
+                            exc=exc,
+                        )
+                continue
+            if normalized_question_policy == "ignore":
+                continue
+            if normalized_question_policy == "reject":
+                if reject_question is not None:
+                    try:
+                        await reject_question(request_id)
+                    except Exception as exc:
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            "opencode.question.auto_reply_failed",
+                            request_id=request_id,
+                            session_id=event_session_id,
+                            exc=exc,
+                        )
+                continue
+            auto_answers = _auto_answers_for_questions(
+                questions if isinstance(questions, list) else [],
+                normalized_question_policy,
+            )
+            normalized_answers = _normalize_question_answers(
+                auto_answers, question_count=question_count
+            )
+            if reply_question is not None:
+                try:
+                    await reply_question(request_id, normalized_answers)
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "opencode.question.auto_replied",
+                        request_id=request_id,
+                        question_count=question_count,
+                        session_id=event_session_id,
+                        policy=normalized_question_policy,
+                        answers=_summarize_question_answers(normalized_answers),
+                    )
+                except Exception as exc:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "opencode.question.auto_reply_failed",
+                        request_id=request_id,
+                        session_id=event_session_id,
+                        exc=exc,
+                    )
+            continue
         if event.event == "permission.asked":
             request_id, props = _extract_permission_request(payload)
             if request_id and respond_permission is not None:
@@ -611,6 +878,7 @@ async def collect_opencode_output_from_events(
                 if usage is not None:
                     total_tokens = _extract_total_tokens(usage)
                     context_window = _extract_context_window(payload, usage)
+                    usage_details = _extract_usage_details(usage)
                     if (
                         total_tokens != last_usage_total
                         or context_window != last_context_window
@@ -620,6 +888,8 @@ async def collect_opencode_output_from_events(
                         usage_snapshot: dict[str, Any] = {}
                         if total_tokens is not None:
                             usage_snapshot["totalTokens"] = total_tokens
+                        if usage_details:
+                            usage_snapshot.update(usage_details)
                         if context_window is not None:
                             usage_snapshot["modelContextWindow"] = context_window
                         if usage_snapshot:
@@ -642,11 +912,19 @@ async def collect_opencode_output(
     progress_session_ids: Optional[set[str]] = None,
     permission_policy: str = PERMISSION_ALLOW,
     permission_handler: Optional[PermissionHandler] = None,
+    question_policy: str = "ignore",
+    question_handler: Optional[QuestionHandler] = None,
     should_stop: Optional[Callable[[], bool]] = None,
     part_handler: Optional[PartHandler] = None,
 ) -> OpenCodeTurnOutput:
     async def _respond(request_id: str, reply: str) -> None:
         await client.respond_permission(request_id=request_id, reply=reply)
+
+    async def _reply_question(request_id: str, answers: list[list[str]]) -> None:
+        await client.reply_question(request_id, answers=answers)
+
+    async def _reject_question(request_id: str) -> None:
+        await client.reject_question(request_id)
 
     return await collect_opencode_output_from_events(
         client.stream_events(directory=workspace_path),
@@ -654,8 +932,12 @@ async def collect_opencode_output(
         progress_session_ids=progress_session_ids,
         permission_policy=permission_policy,
         permission_handler=permission_handler,
+        question_policy=question_policy,
+        question_handler=question_handler,
         should_stop=should_stop,
         respond_permission=_respond,
+        reply_question=_reply_question,
+        reject_question=_reject_question,
         part_handler=part_handler,
     )
 
@@ -676,5 +958,6 @@ __all__ = [
     "opencode_missing_env",
     "parse_message_response",
     "PartHandler",
+    "QuestionHandler",
     "split_model_id",
 ]
