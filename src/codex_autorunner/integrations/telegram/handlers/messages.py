@@ -18,8 +18,11 @@ from ..adapter import (
     parse_command,
 )
 from ..config import TelegramMediaCandidate
+from ..constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .questions import handle_custom_text_input
 
+COALESCE_LONG_MESSAGE_WINDOW_SECONDS = 6.0
+COALESCE_LONG_MESSAGE_THRESHOLD = TELEGRAM_MAX_MESSAGE_LENGTH - 256
 MEDIA_BATCH_WINDOW_SECONDS = 1.0
 IMAGE_CONTENT_TYPES = {
     "image/png": ".png",
@@ -41,6 +44,8 @@ class _CoalescedBuffer:
     topic_key: str
     placeholder_id: Optional[int] = None
     task: Optional[asyncio.Task[None]] = None
+    last_received_at: float = 0.0
+    last_part_len: int = 0
 
 
 @dataclass
@@ -397,6 +402,7 @@ async def buffer_coalesced_message(
     lock = handlers._coalesce_locks.setdefault(key, asyncio.Lock())
     drop_placeholder = False
     async with lock:
+        now = time.monotonic()
         buffer = handlers._coalesced_buffers.get(key)
         if buffer is None:
             buffer = _CoalescedBuffer(
@@ -404,10 +410,14 @@ async def buffer_coalesced_message(
                 parts=[text],
                 topic_key=topic_key,
                 placeholder_id=placeholder_id,
+                last_received_at=now,
+                last_part_len=len(text),
             )
             handlers._coalesced_buffers[key] = buffer
         else:
             buffer.parts.append(text)
+            buffer.last_received_at = now
+            buffer.last_part_len = len(text)
             if placeholder_id is not None:
                 if buffer.placeholder_id is None:
                     buffer.placeholder_id = placeholder_id
@@ -431,6 +441,21 @@ async def coalesce_flush_after(handlers: Any, key: str, window_seconds: float) -
     except asyncio.CancelledError:
         return
     try:
+        while True:
+            buffer = handlers._coalesced_buffers.get(key)
+            if buffer is None:
+                return
+            if buffer.last_part_len >= COALESCE_LONG_MESSAGE_THRESHOLD:
+                elapsed = time.monotonic() - buffer.last_received_at
+                long_window = max(window_seconds, COALESCE_LONG_MESSAGE_WINDOW_SECONDS)
+                remaining = long_window - elapsed
+                if remaining > 0:
+                    try:
+                        await asyncio.sleep(remaining)
+                    except asyncio.CancelledError:
+                        return
+                    continue
+            break
         await flush_coalesced_key(handlers, key)
     except Exception as exc:
         log_event(
