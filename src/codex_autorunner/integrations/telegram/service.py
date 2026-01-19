@@ -265,10 +265,10 @@ class TelegramBotService(
         self._command_specs = build_command_specs(self)
         self._instance_lock_path: Optional[Path] = None
 
-    def _housekeeping_roots(self) -> list[Path]:
+    async def _housekeeping_roots(self) -> list[Path]:
         roots: set[Path] = set()
         try:
-            state = self._store.load()
+            state = await self._store.load()
             for record in state.topics.values():
                 if isinstance(record.workspace_path, str) and record.workspace_path:
                     roots.add(Path(record.workspace_path).expanduser().resolve())
@@ -295,10 +295,10 @@ class TelegramBotService(
             roots.add(self._config.root.resolve())
         return sorted(roots)
 
-    def _gather_workspace_roots(self) -> list[Path]:
+    async def _gather_workspace_roots(self) -> list[Path]:
         roots: set[Path] = set()
         try:
-            state = self._store.load()
+            state = await self._store.load()
             for record in state.topics.values():
                 if isinstance(record.workspace_path, str) and record.workspace_path:
                     roots.add(Path(record.workspace_path).expanduser().resolve())
@@ -312,7 +312,7 @@ class TelegramBotService(
         return sorted(roots)
 
     async def _prewarm_workspace_clients(self) -> None:
-        workspace_roots = self._gather_workspace_roots()
+        workspace_roots = await self._gather_workspace_roots()
         if not workspace_roots:
             log_event(
                 self._logger,
@@ -377,7 +377,7 @@ class TelegramBotService(
         interval = max(config.interval_seconds, 1)
         while True:
             try:
-                roots = self._housekeeping_roots()
+                roots = await self._housekeeping_roots()
                 if roots:
                     await asyncio.to_thread(
                         run_housekeeping_for_roots,
@@ -523,7 +523,7 @@ class TelegramBotService(
             await self._restore_pending_approvals()
             await self._outbox_manager.restore()
             await self._voice_manager.restore()
-            self._prime_poller_offset()
+            await self._prime_poller_offset()
             self._outbox_task = asyncio.create_task(self._outbox_manager.run_loop())
             self._voice_task = asyncio.create_task(self._voice_manager.run_loop())
             self._housekeeping_task = asyncio.create_task(self._housekeeping_loop())
@@ -571,7 +571,7 @@ class TelegramBotService(
                         timeout=self._config.poll_timeout_seconds
                     )
                     if self._poller.offset is not None:
-                        self._record_poll_offset(updates)
+                        await self._record_poll_offset(updates)
                 except Exception as exc:
                     log_event(
                         self._logger,
@@ -733,8 +733,8 @@ class TelegramBotService(
                 order_changed=diff.order_changed,
             )
 
-    def _prime_poller_offset(self) -> None:
-        last_update_id = self._store.get_last_update_id_global()
+    async def _prime_poller_offset(self) -> None:
+        last_update_id = await self._store.get_last_update_id_global()
         if not isinstance(last_update_id, int) or isinstance(last_update_id, bool):
             return
         offset = last_update_id + 1
@@ -747,14 +747,14 @@ class TelegramBotService(
             poller_offset=offset,
         )
 
-    def _record_poll_offset(self, updates: Sequence[TelegramUpdate]) -> None:
+    async def _record_poll_offset(self, updates: Sequence[TelegramUpdate]) -> None:
         offset = self._poller.offset
         if offset is None:
             return
         last_update_id = offset - 1
         if last_update_id < 0:
             return
-        stored = self._store.update_last_update_id_global(last_update_id)
+        stored = await self._store.update_last_update_id_global(last_update_id)
         if updates:
             max_update_id = max(update.update_id for update in updates)
         log_event(
@@ -945,8 +945,8 @@ class TelegramBotService(
         chat_id: int,
         thread_id: Optional[int],
     ) -> None:
-        key = self._resolve_topic_key(chat_id, thread_id)
-        record = self._router.get_topic(key)
+        key = await self._resolve_topic_key(chat_id, thread_id)
+        record = await self._router.get_topic(key)
         if record and record.agent == "opencode":
             session_id = record.active_thread_id
             workspace_path = record.workspace_path
@@ -1072,8 +1072,8 @@ class TelegramBotService(
     def _coalesce_key_for_topic(self, key: str, user_id: Optional[int]) -> str:
         return message_handlers.coalesce_key_for_topic(self, key, user_id)
 
-    def _coalesce_key(self, message: TelegramMessage) -> str:
-        return message_handlers.coalesce_key(self, message)
+    async def _coalesce_key(self, message: TelegramMessage) -> str:
+        return await message_handlers.coalesce_key(self, message)
 
     async def _buffer_coalesced_message(
         self,
@@ -1141,14 +1141,14 @@ class TelegramBotService(
     ) -> str:
         return _with_conversation_id(message, chat_id=chat_id, thread_id=thread_id)
 
-    def _should_process_update(self, key: str, update_id: int) -> bool:
+    async def _should_process_update(self, key: str, update_id: int) -> bool:
         if not isinstance(update_id, int):
             return True
         if isinstance(update_id, bool):
             return True
         last_id = self._last_update_ids.get(key)
         if last_id is None:
-            record = self._store.get_topic(key)
+            record = await self._store.get_topic(key)
             last_id = record.last_update_id if record else None
             if isinstance(last_id, int) and not isinstance(last_id, bool):
                 self._last_update_ids[key] = last_id
@@ -1157,10 +1157,10 @@ class TelegramBotService(
         if isinstance(last_id, int) and update_id <= last_id:
             return False
         self._last_update_ids[key] = update_id
-        self._maybe_persist_update_id(key, update_id)
+        await self._maybe_persist_update_id(key, update_id)
         return True
 
-    def _maybe_persist_update_id(self, key: str, update_id: int) -> None:
+    async def _maybe_persist_update_id(self, key: str, update_id: int) -> None:
         now = time.monotonic()
         last_persisted = self._last_update_persisted_at.get(key, 0.0)
         if (now - last_persisted) < UPDATE_ID_PERSIST_INTERVAL_SECONDS:
@@ -1169,7 +1169,7 @@ class TelegramBotService(
         def apply(record: "TelegramTopicRecord") -> None:
             record.last_update_id = update_id
 
-        self._store.update_topic(key, apply)
+        await self._store.update_topic(key, apply)
         self._last_update_persisted_at[key] = now
 
     async def _handle_callback(self, callback: TelegramCallbackQuery) -> None:

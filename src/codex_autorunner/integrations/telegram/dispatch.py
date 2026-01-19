@@ -32,7 +32,7 @@ class DispatchContext:
 DispatchRoute = Callable[[Any, TelegramUpdate, DispatchContext], Awaitable[None]]
 
 
-def _build_context(handlers: Any, update: TelegramUpdate) -> DispatchContext:
+async def _build_context(handlers: Any, update: TelegramUpdate) -> DispatchContext:
     chat_id = None
     user_id = None
     thread_id = None
@@ -47,14 +47,14 @@ def _build_context(handlers: Any, update: TelegramUpdate) -> DispatchContext:
         message_id = update.message.message_id
         is_topic = update.message.is_topic_message
         is_edited = update.message.is_edited
-        key = handlers._resolve_topic_key(chat_id, thread_id)
+        key = await handlers._resolve_topic_key(chat_id, thread_id)
     elif update.callback:
         chat_id = update.callback.chat_id
         user_id = update.callback.from_user_id
         thread_id = update.callback.thread_id
         message_id = update.callback.message_id
         if chat_id is not None:
-            key = handlers._resolve_topic_key(chat_id, thread_id)
+            key = await handlers._resolve_topic_key(chat_id, thread_id)
     return DispatchContext(
         chat_id=chat_id,
         user_id=user_id,
@@ -140,7 +140,7 @@ _ROUTES: tuple[tuple[str, DispatchRoute], ...] = (
 async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
     from ...core.state import now_iso
 
-    context = _build_context(handlers, update)
+    context = await _build_context(handlers, update)
     conversation_id = None
     if context.chat_id is not None:
         try:
@@ -167,7 +167,9 @@ async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
         if (
             update.update_id is not None
             and context.topic_key
-            and not handlers._should_process_update(context.topic_key, update.update_id)
+            and not await handlers._should_process_update(
+                context.topic_key, update.update_id
+            )
         ):
             log_event(
                 handlers._logger,

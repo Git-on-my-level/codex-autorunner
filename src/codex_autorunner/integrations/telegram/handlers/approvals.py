@@ -22,7 +22,7 @@ from ..types import PendingApproval
 
 class TelegramApprovalHandlers:
     async def _restore_pending_approvals(self) -> None:
-        state = self._store.load()
+        state = await self._store.load()
         if not state.pending_approvals:
             return
         grouped: dict[tuple[int, int | None], list[PendingApprovalRecord]] = {}
@@ -35,7 +35,7 @@ class TelegramApprovalHandlers:
                 age = _approval_age_seconds(record.created_at)
                 age_label = f"{age}s" if isinstance(age, int) else "unknown age"
                 items.append(f"{record.request_id} ({age_label})")
-                self._store.clear_pending_approval(record.request_id)
+                await self._store.clear_pending_approval(record.request_id)
             message = (
                 "Cleared stale approval requests from a previous session. "
                 "Re-run the request or use /interrupt if the turn is still active.\n"
@@ -83,7 +83,7 @@ class TelegramApprovalHandlers:
             created_at=created_at,
             topic_key=ctx.topic_key,
         )
-        self._store.upsert_pending_approval(approval_record)
+        await self._store.upsert_pending_approval(approval_record)
         log_event(
             self._logger,
             logging.INFO,
@@ -102,7 +102,7 @@ class TelegramApprovalHandlers:
                 "telegram.approval.callback_too_long",
                 request_id=request_id,
             )
-            self._store.clear_pending_approval(request_id)
+            await self._store.clear_pending_approval(request_id)
             return "cancel"
         payload_text, parse_mode = self._prepare_outgoing_text(
             prompt,
@@ -132,7 +132,7 @@ class TelegramApprovalHandlers:
                 thread_id=ctx.thread_id,
                 exc=exc,
             )
-            self._store.clear_pending_approval(request_id)
+            await self._store.clear_pending_approval(request_id)
             try:
                 await self._send_message(
                     ctx.chat_id,
@@ -147,7 +147,7 @@ class TelegramApprovalHandlers:
         message_id = response.get("message_id") if isinstance(response, dict) else None
         if isinstance(message_id, int):
             approval_record.message_id = message_id
-            self._store.upsert_pending_approval(approval_record)
+            await self._store.upsert_pending_approval(approval_record)
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ApprovalDecision] = loop.create_future()
         pending = PendingApproval(
@@ -171,7 +171,7 @@ class TelegramApprovalHandlers:
             )
         except asyncio.TimeoutError:
             self._pending_approvals.pop(request_id, None)
-            self._store.clear_pending_approval(request_id)
+            await self._store.clear_pending_approval(request_id)
             runtime.pending_request_id = None
             log_event(
                 self._logger,
@@ -193,14 +193,14 @@ class TelegramApprovalHandlers:
             return "cancel"
         except asyncio.CancelledError:
             self._pending_approvals.pop(request_id, None)
-            self._store.clear_pending_approval(request_id)
+            await self._store.clear_pending_approval(request_id)
             runtime.pending_request_id = None
             raise
 
     async def _handle_approval_callback(
         self, callback: TelegramCallbackQuery, parsed: ApprovalCallback
     ) -> None:
-        self._store.clear_pending_approval(parsed.request_id)
+        await self._store.clear_pending_approval(parsed.request_id)
         pending = self._pending_approvals.pop(parsed.request_id, None)
         if pending is None:
             await self._answer_callback(callback, "Approval already handled")
@@ -215,7 +215,9 @@ class TelegramApprovalHandlers:
         elif pending.topic_key:
             runtime_key = pending.topic_key
         else:
-            runtime_key = self._resolve_topic_key(pending.chat_id, pending.thread_id)
+            runtime_key = await self._resolve_topic_key(
+                pending.chat_id, pending.thread_id
+            )
         runtime = self._router.runtime_for(runtime_key)
         runtime.pending_request_id = None
         log_event(

@@ -65,7 +65,7 @@ tradeoffs involved.
 
 ## Data at rest and logs
 
-- Per-topic state is stored in `.codex-autorunner/telegram_state.json`, including
+- Per-topic state is stored in `.codex-autorunner/telegram_state.sqlite3`, including
   workspace paths, thread IDs, and preview snippets.
 - Logs include chat IDs, user IDs, and event metadata; review your log retention
   and access controls accordingly.

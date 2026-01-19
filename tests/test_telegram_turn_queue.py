@@ -75,10 +75,10 @@ class _RouterStub:
     def __init__(self, records: dict[str, TelegramTopicRecord]) -> None:
         self._records = records
 
-    def get_topic(self, key: str) -> Optional[TelegramTopicRecord]:
+    async def get_topic(self, key: str) -> Optional[TelegramTopicRecord]:
         return self._records.get(key)
 
-    def set_active_thread(
+    async def set_active_thread(
         self, chat_id: int, thread_id: Optional[int], active_thread_id: Optional[str]
     ) -> Optional[TelegramTopicRecord]:
         record = self._records.get(f"{chat_id}:{thread_id}")
@@ -86,7 +86,7 @@ class _RouterStub:
             record.active_thread_id = active_thread_id
         return record
 
-    def update_topic(
+    async def update_topic(
         self, chat_id: int, thread_id: Optional[int], apply: object
     ) -> None:
         record = self._records.get(f"{chat_id}:{thread_id}")
@@ -126,7 +126,7 @@ class _HandlerStub(TelegramCommandHandlers):
         self._edit_calls: list[tuple[int, str]] = []
         self._placeholder_events = placeholder_events or {}
 
-    def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+    async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return f"{chat_id}:{thread_id}"
 
     def _ensure_turn_semaphore(self) -> asyncio.Semaphore:
@@ -135,7 +135,14 @@ class _HandlerStub(TelegramCommandHandlers):
     async def _client_for_workspace(self, _workspace_path: str) -> _ClientStub:
         return self._client
 
-    def _find_thread_conflict(self, _thread_id: str, *, key: str) -> Optional[str]:
+    async def _find_thread_conflict(
+        self, _thread_id: str, *, key: str
+    ) -> Optional[str]:
+        return None
+
+    async def _refresh_workspace_id(
+        self, _key: str, _record: TelegramTopicRecord
+    ) -> Optional[str]:
         return None
 
     async def _handle_thread_conflict(self, *_args: object, **_kwargs: object) -> None:

@@ -60,6 +60,7 @@ from .locks import (
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
 from .prompt import build_final_summary_prompt
+from .run_index import RunIndexStore
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
     RepoNotFoundError,
@@ -120,10 +121,9 @@ class Engine:
         self.repo_root = self.config.root
         self.docs = DocsManager(self.config)
         self.notifier = NotificationManager(self.config)
-        self.state_path = self.repo_root / ".codex-autorunner" / "state.json"
+        self.state_path = self.repo_root / ".codex-autorunner" / "state.sqlite3"
         self.log_path = self.config.log.path
-        self.run_index_path = self.repo_root / ".codex-autorunner" / "run_index.json"
-        self._run_index_lock = threading.Lock()
+        self._run_index_store = RunIndexStore(self.state_path)
         self.lock_path = self.repo_root / ".codex-autorunner" / "lock"
         self.stop_path = self.repo_root / ".codex-autorunner" / "stop"
         self._active_global_handler: Optional[RotatingFileHandler] = None
@@ -725,44 +725,10 @@ class Engine:
             self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
 
     def _load_run_index(self) -> dict[str, dict]:
-        with self._run_index_lock:
-            if not self.run_index_path.exists():
-                return {}
-            try:
-                raw = self.run_index_path.read_text(encoding="utf-8")
-                data = json.loads(raw)
-                if isinstance(data, dict):
-                    return data
-            except Exception:
-                pass
-            return {}
-
-    def _save_run_index(self, index: dict[str, dict]) -> None:
-        with self._run_index_lock:
-            try:
-                self.run_index_path.parent.mkdir(parents=True, exist_ok=True)
-                payload = json.dumps(index, ensure_ascii=True, indent=2)
-                atomic_write(self.run_index_path, f"{payload}\n")
-            except Exception:
-                pass
+        return self._run_index_store.load_all()
 
     def _merge_run_index_entry(self, run_id: int, updates: dict[str, Any]) -> None:
-        index = self._load_run_index()
-        key = str(run_id)
-        entry = index.get(key, {})
-        if not isinstance(entry, dict):
-            entry = {}
-        if isinstance(updates.get("artifacts"), dict):
-            existing_artifacts = entry.get("artifacts")
-            merged_artifacts = (
-                dict(existing_artifacts) if isinstance(existing_artifacts, dict) else {}
-            )
-            merged_artifacts.update(updates["artifacts"])
-            updates = dict(updates)
-            updates["artifacts"] = merged_artifacts
-        entry.update(updates)
-        index[key] = entry
-        self._save_run_index(index)
+        self._run_index_store.merge_entry(run_id, updates)
 
     def _update_run_index(
         self,
@@ -771,22 +737,14 @@ class Engine:
         offset: Optional[tuple[int, int]],
         exit_code: Optional[int],
     ) -> None:
-        index = self._load_run_index()
-        key = str(run_id)
-        entry = index.get(key, {})
-        if marker == "start":
-            entry["start_offset"] = offset[0] if offset else None
-            entry["started_at"] = now_iso()
-            entry["log_path"] = str(self.log_path)
-            entry["run_log_path"] = str(self._run_log_path(run_id))
-        elif marker == "end":
-            entry["end_offset"] = offset[1] if offset else None
-            entry["finished_at"] = now_iso()
-            entry["exit_code"] = exit_code
-            entry.setdefault("log_path", str(self.log_path))
-            entry.setdefault("run_log_path", str(self._run_log_path(run_id)))
-        index[key] = entry
-        self._save_run_index(index)
+        self._run_index_store.update_marker(
+            run_id,
+            marker,
+            offset,
+            exit_code,
+            log_path=str(self.log_path),
+            run_log_path=str(self._run_log_path(run_id)),
+        )
 
     def _list_from_counts(self, source: list[str], counts: Counter[str]) -> list[str]:
         if not source or not counts:

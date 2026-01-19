@@ -757,7 +757,7 @@ class HubSupervisor:
         if not repo:
             raise ValueError(f"Repo {repo_id} not found in manifest")
         repo_root = (self.hub_config.root / repo.path).resolve()
-        state_path = repo_root / ".codex-autorunner" / "state.json"
+        state_path = repo_root / ".codex-autorunner" / "state.sqlite3"
         if not allow_uninitialized and not state_path.exists():
             raise ValueError(f"Repo {repo_id} is not initialized")
         if not state_path.exists():
@@ -779,7 +779,7 @@ class HubSupervisor:
         records: List[DiscoveryRecord] = []
         for entry in manifest.repos:
             repo_path = (self.hub_config.root / entry.path).resolve()
-            initialized = (repo_path / ".codex-autorunner" / "state.json").exists()
+            initialized = (repo_path / ".codex-autorunner" / "state.sqlite3").exists()
             records.append(
                 DiscoveryRecord(
                     repo=entry,
@@ -819,7 +819,7 @@ class HubSupervisor:
         lock_status = read_lock_status(lock_path)
 
         runner_state: Optional[RunnerState] = None
-        state_path = repo_path / ".codex-autorunner" / "state.json"
+        state_path = repo_path / ".codex-autorunner" / "state.sqlite3"
         if record.initialized and state_path.exists():
             runner_state = load_state(state_path)
 

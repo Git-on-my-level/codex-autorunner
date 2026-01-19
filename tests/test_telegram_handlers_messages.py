@@ -270,26 +270,30 @@ async def test_audio_message_bypasses_coalescing_like_voice(
     mock_buffer_media.assert_not_called()
 
 
-def test_media_batch_key_with_media_group() -> None:
-    handlers = types.SimpleNamespace(
-        _resolve_topic_key=lambda chat_id, thread_id: f"chat:{chat_id}:thread:{thread_id}",
-    )
+@pytest.mark.anyio
+async def test_media_batch_key_with_media_group() -> None:
+    async def _resolve_topic_key(chat_id: int, thread_id: int) -> str:
+        return f"chat:{chat_id}:thread:{thread_id}"
+
+    handlers = types.SimpleNamespace(_resolve_topic_key=_resolve_topic_key)
     message = _message(
         media_group_id="mg123",
         photos=(TelegramPhotoSize("p1", None, 10, 10, 100),),
     )
-    key = media_batch_key(handlers, message)
+    key = await media_batch_key(handlers, message)
     assert key == "chat:3:thread:4:user:5:mg:mg123"
 
 
-def test_media_batch_key_without_media_group() -> None:
-    handlers = types.SimpleNamespace(
-        _resolve_topic_key=lambda chat_id, thread_id: f"chat:{chat_id}:thread:{thread_id}",
-    )
+@pytest.mark.anyio
+async def test_media_batch_key_without_media_group() -> None:
+    async def _resolve_topic_key(chat_id: int, thread_id: int) -> str:
+        return f"chat:{chat_id}:thread:{thread_id}"
+
+    handlers = types.SimpleNamespace(_resolve_topic_key=_resolve_topic_key)
     message = _message(
         photos=(TelegramPhotoSize("p1", None, 10, 10, 100),),
     )
-    key = media_batch_key(handlers, message)
+    key = await media_batch_key(handlers, message)
     assert key == "chat:3:thread:4:user:5:burst"
 
 

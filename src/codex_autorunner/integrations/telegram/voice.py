@@ -65,7 +65,7 @@ class TelegramVoiceManager:
         self._lock = asyncio.Lock()
 
     async def restore(self) -> None:
-        records = self._store.list_pending_voice()
+        records = await self._store.list_pending_voice()
         if not records:
             return
         log_event(
@@ -80,7 +80,7 @@ class TelegramVoiceManager:
         while True:
             await asyncio.sleep(VOICE_RETRY_INTERVAL_SECONDS)
             try:
-                records = self._store.list_pending_voice()
+                records = await self._store.list_pending_voice()
                 if records:
                     await self._flush(records)
             except Exception as exc:
@@ -92,7 +92,7 @@ class TelegramVoiceManager:
                 )
 
     async def attempt(self, record_id: str) -> bool:
-        record = self._store.get_pending_voice(record_id)
+        record = await self._store.get_pending_voice(record_id)
         if record is None:
             return False
         if not self._ready_for_attempt(record):
@@ -101,7 +101,7 @@ class TelegramVoiceManager:
             return False
         inflight_id = record.record_id
         try:
-            current_record = self._store.get_pending_voice(record.record_id)
+            current_record = await self._store.get_pending_voice(record.record_id)
             if current_record is None:
                 return False
             if not self._ready_for_attempt(current_record):
@@ -114,7 +114,7 @@ class TelegramVoiceManager:
         finally:
             await self._clear_inflight(inflight_id)
         if done:
-            self._store.delete_pending_voice(record.record_id)
+            await self._store.delete_pending_voice(record.record_id)
         return done
 
     async def _flush(self, records: list[PendingVoiceRecord]) -> None:
@@ -155,7 +155,7 @@ class TelegramVoiceManager:
             await self._deliver_transcript(record, record.transcript_text)
             self._remove_voice_file(record)
             return True
-        path = self._resolve_voice_download_path(record)
+        path = await self._resolve_voice_download_path(record)
         if path is None:
             data, file_path, file_size = await self._download_file(record.file_id)
             if file_size and file_size > max_bytes:
@@ -180,7 +180,7 @@ class TelegramVoiceManager:
                 record.file_size = file_size
             else:
                 record.file_size = len(data)
-            self._store.update_pending_voice(record)
+            await self._store.update_pending_voice(record)
         data = path.read_bytes()
         try:
             result = await self._voice_service.transcribe_async(
@@ -235,7 +235,7 @@ class TelegramVoiceManager:
             text_len=len(transcript),
         )
         record.transcript_text = combined
-        self._store.update_pending_voice(record)
+        await self._store.update_pending_voice(record)
         await self._deliver_transcript(record, combined)
         self._remove_voice_file(record)
         return True
@@ -252,7 +252,7 @@ class TelegramVoiceManager:
         record.last_attempt_at = now_iso()
         delay = self._retry_delay(record.attempts, retry_after=retry_after)
         record.next_attempt_at = _format_future_time(delay)
-        self._store.update_pending_voice(record)
+        await self._store.update_pending_voice(record)
         log_event(
             self._logger,
             logging.WARNING,
@@ -272,7 +272,7 @@ class TelegramVoiceManager:
             )
             if progress_id is not None:
                 record.progress_message_id = progress_id
-                self._store.update_pending_voice(record)
+                await self._store.update_pending_voice(record)
         if record.attempts >= VOICE_MAX_ATTEMPTS:
             await self._give_up(
                 record,
@@ -294,7 +294,7 @@ class TelegramVoiceManager:
                 reply_to=record.message_id,
             )
         self._remove_voice_file(record)
-        self._store.delete_pending_voice(record.record_id)
+        await self._store.delete_pending_voice(record.record_id)
         log_event(
             self._logger,
             logging.WARNING,
@@ -336,7 +336,7 @@ class TelegramVoiceManager:
             delay += random.uniform(0, jitter)
         return delay
 
-    def _resolve_voice_download_path(
+    async def _resolve_voice_download_path(
         self, record: PendingVoiceRecord
     ) -> Optional[Path]:
         if not record.download_path:
@@ -345,7 +345,7 @@ class TelegramVoiceManager:
         if path.exists():
             return path
         record.download_path = None
-        self._store.update_pending_voice(record)
+        await self._store.update_pending_voice(record)
         return None
 
     def _persist_voice_payload(
