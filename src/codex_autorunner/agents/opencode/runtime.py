@@ -6,7 +6,14 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    MutableMapping,
+    Optional,
+)
 
 from ...core.logging_utils import log_event
 from ...core.utils import infer_home_from_workspace
@@ -463,7 +470,7 @@ async def opencode_missing_env(
     workspace_root: str,
     model_payload: Optional[dict[str, str]],
     *,
-    env: Optional[Mapping[str, str]] = None,
+    env: Optional[MutableMapping[str, str]] = None,
 ) -> list[str]:
     if not model_payload:
         return []
@@ -499,7 +506,9 @@ async def opencode_missing_env(
     return []
 
 
-def _get_env_value(key: str, env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+def _get_env_value(
+    key: str, env: Optional[MutableMapping[str, str]] = None
+) -> Optional[str]:
     if env is not None:
         return env.get(key)
     return os.getenv(key)

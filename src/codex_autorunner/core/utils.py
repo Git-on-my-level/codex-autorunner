@@ -4,7 +4,16 @@ import os
 import shlex
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Mapping, Optional, Sequence, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+)
 
 if TYPE_CHECKING:
     from ..agents.opencode.supervisor import OpenCodeSupervisor
@@ -181,7 +190,7 @@ def build_opencode_supervisor(
     request_timeout: Optional[float] = None,
     max_handles: Optional[int] = None,
     idle_ttl_seconds: Optional[float] = None,
-    base_env: Optional[Mapping[str, str]] = None,
+    base_env: Optional[MutableMapping[str, str]] = None,
 ) -> Optional["OpenCodeSupervisor"]:
     """
     Unified factory for building OpenCodeSupervisor instances.
@@ -209,23 +218,13 @@ def build_opencode_supervisor(
         resolved_source = opencode_binary
     resolved_binary = resolve_opencode_binary(resolved_source)
 
-    if command:
-        if resolved_binary:
-            command[0] = resolved_binary
-    else:
-        if resolved_binary:
-            command = [
-                resolved_binary,
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ]
+    if not command:
+        return None
 
-    if workspace_root is not None and not _command_available(
-        command, workspace_root=workspace_root, env=base_env
-    ):
+    if resolved_binary:
+        command[0] = resolved_binary
+
+    if not _command_available(command, workspace_root=workspace_root, env=base_env):
         return None
 
     if base_env is None:
@@ -250,11 +249,10 @@ def build_opencode_supervisor(
 def _command_available(
     command: Sequence[str],
     *,
-    workspace_root: Path,
-    env: Optional[Mapping[str, str]] = None,
+    workspace_root: Optional[Path],
+    env: Optional[MutableMapping[str, str]] = None,
 ) -> bool:
-    """Check if a command is available in the given workspace."""
-    if not command:
+    if not command or workspace_root is None:
         return False
     entry = str(command[0]).strip()
     if not entry:

@@ -6,7 +6,7 @@ import threading
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, MutableMapping, Optional
 
 from .agents.opencode.runtime import (
     PERMISSION_ALLOW,
@@ -90,7 +90,7 @@ class SpecIngestService:
         app_server_threads: Optional[AppServerThreadRegistry] = None,
         app_server_events: Optional[AppServerEventBuffer] = None,
         opencode_supervisor: Optional[OpenCodeSupervisor] = None,
-        env: Optional[Mapping[str, str]] = None,
+        env: Optional[MutableMapping[str, str]] = None,
     ) -> None:
         self.engine = engine
         self._env = env

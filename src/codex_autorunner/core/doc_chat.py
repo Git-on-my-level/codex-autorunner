@@ -16,7 +16,7 @@ from typing import (
     Awaitable,
     Callable,
     Dict,
-    Mapping,
+    MutableMapping,
     Optional,
     Tuple,
 )
@@ -174,7 +174,7 @@ class DocChatService:
         app_server_threads: Optional[AppServerThreadRegistry] = None,
         app_server_events: Optional[AppServerEventBuffer] = None,
         opencode_supervisor: Optional[OpenCodeSupervisor] = None,
-        env: Optional[Mapping[str, str]] = None,
+        env: Optional[MutableMapping[str, str]] = None,
     ):
         self.engine = engine
         self._env = env
