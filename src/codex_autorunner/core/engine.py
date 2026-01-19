@@ -339,9 +339,12 @@ class Engine:
             and telemetry.thread_id
             and isinstance(telemetry.token_total, dict)
         ):
-            baseline = self._find_thread_token_baseline(
-                thread_id=telemetry.thread_id, run_id=run_id
-            )
+            baseline = None
+            # OpenCode reports per-turn totals, so skip cross-run deltas.
+            if selected_agent != "opencode":
+                baseline = self._find_thread_token_baseline(
+                    thread_id=telemetry.thread_id, run_id=run_id
+                )
             delta = self._compute_token_delta(baseline, telemetry.token_total)
             run_updates["token_usage"] = {
                 "delta": delta,
