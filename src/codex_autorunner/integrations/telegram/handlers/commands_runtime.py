@@ -1479,30 +1479,8 @@ class TelegramCommandHandlers:
                 failure_message, None, transcript_message_id, transcript_text
             )
         turn_handle = None
-        turn_semaphore = self._ensure_turn_semaphore()
-        queued = turn_semaphore.locked()
-        placeholder_text = PLACEHOLDER_TEXT
-        if queued:
-            placeholder_text = QUEUED_PLACEHOLDER_TEXT
         turn_started_at: Optional[float] = None
         turn_elapsed_seconds: Optional[float] = None
-        if placeholder_id is None and send_placeholder:
-            placeholder_id = await self._send_placeholder(
-                message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                text=placeholder_text,
-            )
-            log_event(
-                self._logger,
-                logging.INFO,
-                "telegram.placeholder.sent",
-                topic_key=key,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                placeholder_id=placeholder_id,
-                placeholder_sent_at=now_iso(),
-            )
         if record.active_thread_id:
             conflict_key = await self._find_thread_conflict(
                 record.active_thread_id,
@@ -1580,6 +1558,28 @@ class TelegramCommandHandlers:
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 message_id=message.message_id,
+            )
+        turn_semaphore = self._ensure_turn_semaphore()
+        queued = turn_semaphore.locked()
+        placeholder_text = PLACEHOLDER_TEXT
+        if queued:
+            placeholder_text = QUEUED_PLACEHOLDER_TEXT
+        if placeholder_id is None and send_placeholder:
+            placeholder_id = await self._send_placeholder(
+                message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                text=placeholder_text,
+            )
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.placeholder.sent",
+                topic_key=key,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                placeholder_id=placeholder_id,
+                placeholder_sent_at=now_iso(),
             )
         agent = self._effective_agent(record)
         if agent == "opencode":
