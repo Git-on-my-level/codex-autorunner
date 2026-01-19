@@ -7,7 +7,7 @@ from codex_autorunner.core.state import (
 
 
 def test_state_session_registry_roundtrip(tmp_path):
-    state_path = tmp_path / "state.json"
+    state_path = tmp_path / "state.sqlite3"
     record = SessionRecord(
         repo_path="/tmp/example",
         created_at="2025-01-01T00:00:00Z",

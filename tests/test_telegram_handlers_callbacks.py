@@ -18,7 +18,7 @@ class _HandlerStub:
         self._compact_pending: dict[str, CompactState] = {}
         self.calls: list[tuple[str, object]] = []
 
-    def _resolve_topic_key(self, chat_id: int, thread_id: object) -> str:
+    async def _resolve_topic_key(self, chat_id: int, thread_id: object) -> str:
         return f"{chat_id}:{thread_id}"
 
     async def _answer_callback(
@@ -70,7 +70,7 @@ async def test_handle_callback_resume_selection_expired() -> None:
 @pytest.mark.anyio
 async def test_handle_callback_resume_selection_ok() -> None:
     handlers = _HandlerStub()
-    key = handlers._resolve_topic_key(10, 11)
+    key = await handlers._resolve_topic_key(10, 11)
     handlers._resume_options[key] = SelectionState(items=[("thread_1", "One")])
     callback = TelegramCallbackQuery(
         update_id=1,
@@ -88,7 +88,7 @@ async def test_handle_callback_resume_selection_ok() -> None:
 @pytest.mark.anyio
 async def test_handle_callback_bind_selection_ok() -> None:
     handlers = _HandlerStub()
-    key = handlers._resolve_topic_key(12, None)
+    key = await handlers._resolve_topic_key(12, None)
     handlers._bind_options[key] = SelectionState(items=[("repo_1", "Repo")])
     callback = TelegramCallbackQuery(
         update_id=2,
@@ -122,7 +122,7 @@ async def test_handle_callback_compact_selection_expired() -> None:
 @pytest.mark.anyio
 async def test_handle_callback_compact_selection_ok() -> None:
     handlers = _HandlerStub()
-    key = handlers._resolve_topic_key(20, 21)
+    key = await handlers._resolve_topic_key(20, 21)
     handlers._compact_pending[key] = CompactState(
         summary_text="summary",
         display_text="summary",

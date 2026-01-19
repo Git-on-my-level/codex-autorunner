@@ -20,7 +20,7 @@ Repo root:
     TODO.md, PROGRESS.md, OPINIONS.md, SPEC.md, SUMMARY.md
     SNAPSHOT.md, snapshot_state.json
     config.yml (generated)
-    state.json, codex-autorunner.log, codex-server.log, lock
+    state.sqlite3, codex-autorunner.log, codex-server.log, lock
     prompt.txt (optional template)
 Hub additions:
   .codex-autorunner/manifest.yml, hub_state.json, codex-autorunner-hub.log

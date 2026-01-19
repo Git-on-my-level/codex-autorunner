@@ -52,7 +52,7 @@ def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
     entry = next(r for r in records if r.repo.id == "demo")
     assert entry.added_to_manifest is True
     assert entry.initialized is True
-    assert (repo_dir / ".codex-autorunner" / "state.json").exists()
+    assert (repo_dir / ".codex-autorunner" / "state.sqlite3").exists()
     assert not (repo_dir / ".codex-autorunner" / "config.yml").exists()
     gitignore = (repo_dir / ".codex-autorunner" / ".gitignore").read_text(
         encoding="utf-8"

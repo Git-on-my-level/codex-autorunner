@@ -223,7 +223,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 {"type": "all_group_chats", "language_code": ""},
             ],
         },
-        "state_file": ".codex-autorunner/telegram_state.json",
+        "state_file": ".codex-autorunner/telegram_state.sqlite3",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
         "app_server": {
@@ -446,7 +446,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
                 {"type": "all_group_chats", "language_code": ""},
             ],
         },
-        "state_file": ".codex-autorunner/telegram_state.json",
+        "state_file": ".codex-autorunner/telegram_state.sqlite3",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
         "app_server": {
@@ -1206,7 +1206,7 @@ def derive_repo_config(
 def _resolve_repo_root(start: Path) -> Path:
     search_dir = start.resolve() if start.is_dir() else start.resolve().parent
     for current in [search_dir] + list(search_dir.parents):
-        if (current / ".codex-autorunner" / "state.json").exists():
+        if (current / ".codex-autorunner" / "state.sqlite3").exists():
             return current
         if (current / ".git").exists():
             return current

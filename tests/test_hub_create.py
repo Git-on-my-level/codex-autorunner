@@ -52,7 +52,7 @@ def test_hub_create_repo_cli(tmp_path: Path):
 
     repo_dir = hub_root / "workspace" / "demo"
     assert (repo_dir / ".git").exists()
-    assert (repo_dir / ".codex-autorunner" / "state.json").exists()
+    assert (repo_dir / ".codex-autorunner" / "state.sqlite3").exists()
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     assert manifest["repos"][0]["id"] == "demo"
@@ -110,7 +110,7 @@ def test_hub_clone_repo_cli(tmp_path: Path):
 
     repo_dir = hub_root / "workspace" / "cloned"
     assert (repo_dir / ".git").exists()
-    assert (repo_dir / ".codex-autorunner" / "state.json").exists()
+    assert (repo_dir / ".codex-autorunner" / "state.sqlite3").exists()
 
 
 def test_hub_clone_repo_rejects_duplicate_id(tmp_path: Path):

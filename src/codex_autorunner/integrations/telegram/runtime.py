@@ -20,12 +20,13 @@ from .constants import (
 )
 from .rendering import _format_telegram_html, _format_telegram_markdown
 from .state import TOPIC_ROOT, parse_topic_key
+from .state import topic_key as build_topic_key
 from .types import TurnContext
 
 
 class TelegramRuntimeHelpers:
-    def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
-        return self._router.resolve_key(chat_id, thread_id)
+    async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+        return await self._router.resolve_key(chat_id, thread_id)
 
     def _canonical_workspace_root(
         self, workspace_path: Optional[str]
@@ -43,12 +44,12 @@ class TelegramRuntimeHelpers:
             return None
         return workspace_id_for_path(root)
 
-    def _refresh_workspace_id(self, key: str, record) -> Optional[str]:
+    async def _refresh_workspace_id(self, key: str, record) -> Optional[str]:
         if record.workspace_id or not record.workspace_path:
             return record.workspace_id
         workspace_id = self._workspace_id_for_path(record.workspace_path)
         if workspace_id:
-            self._store.update_topic(
+            await self._store.update_topic(
                 key, lambda stored: setattr(stored, "workspace_id", workspace_id)
             )
             record.workspace_id = workspace_id
@@ -219,7 +220,7 @@ class TelegramRuntimeHelpers:
         resolved_key = topic_key
         if not resolved_key:
             try:
-                resolved_key = self._resolve_topic_key(chat_id, thread_id)
+                resolved_key = build_topic_key(chat_id, thread_id)
             except Exception:
                 resolved_key = None
         scope = None
@@ -228,13 +229,6 @@ class TelegramRuntimeHelpers:
                 _, _, scope = parse_topic_key(resolved_key)
             except Exception:
                 scope = None
-        record = None
-        if workspace_path is None or codex_thread_id is None:
-            record = self._router.get_topic(resolved_key) if resolved_key else None
-        if workspace_path is None and record is not None:
-            workspace_path = record.workspace_path
-        if codex_thread_id is None and record is not None:
-            codex_thread_id = record.active_thread_id
         parts = [f"chat={chat_id}"]
         thread_label = str(thread_id) if thread_id is not None else TOPIC_ROOT
         parts.append(f"thread={thread_label}")

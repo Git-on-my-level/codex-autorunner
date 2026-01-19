@@ -182,7 +182,7 @@ telegram_bot:
         language_code: ""
       - type: all_group_chats
         language_code: ""
-  state_file: .codex-autorunner/telegram_state.json
+  state_file: .codex-autorunner/telegram_state.sqlite3
   # Optional env var that contains the full app-server command.
   app_server_command_env: CAR_TELEGRAM_APP_SERVER_COMMAND
   app_server_command:

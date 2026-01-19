@@ -32,7 +32,7 @@ async def test_update_dedupe_skips_frequent_persist(
         )
         calls: list[int] = []
 
-        def fake_update_topic(_key, _apply):  # type: ignore[no-untyped-def]
+        async def fake_update_topic(_key, _apply):  # type: ignore[no-untyped-def]
             calls.append(1)
 
         monkeypatch.setattr(
@@ -40,7 +40,7 @@ async def test_update_dedupe_skips_frequent_persist(
             lambda: now,
         )
         service._store.update_topic = fake_update_topic  # type: ignore[assignment]
-        service._should_process_update(key, 11)
+        await service._should_process_update(key, 11)
         assert not calls
     finally:
         await service._bot.close()
@@ -69,7 +69,7 @@ async def test_update_dedupe_persists_after_interval(
         )
         calls: list[int] = []
 
-        def fake_update_topic(_key, _apply):  # type: ignore[no-untyped-def]
+        async def fake_update_topic(_key, _apply):  # type: ignore[no-untyped-def]
             calls.append(1)
 
         monkeypatch.setattr(
@@ -77,7 +77,7 @@ async def test_update_dedupe_persists_after_interval(
             lambda: now,
         )
         service._store.update_topic = fake_update_topic  # type: ignore[assignment]
-        service._should_process_update(key, 11)
+        await service._should_process_update(key, 11)
         assert len(calls) == 1
     finally:
         await service._bot.close()

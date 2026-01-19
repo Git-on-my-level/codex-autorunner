@@ -69,17 +69,17 @@ class _RouterStub:
     def __init__(self, record: TelegramTopicRecord) -> None:
         self._record = record
 
-    def get_topic(self, _key: str) -> Optional[TelegramTopicRecord]:
+    async def get_topic(self, _key: str) -> Optional[TelegramTopicRecord]:
         return self._record
 
-    def set_active_thread(
+    async def set_active_thread(
         self, _chat_id: int, _thread_id: Optional[int], active_thread_id: Optional[str]
     ) -> Optional[TelegramTopicRecord]:
         if active_thread_id is None:
             self._record.active_thread_id = None
         return self._record
 
-    def update_topic(
+    async def update_topic(
         self, _chat_id: int, _thread_id: Optional[int], apply: object
     ) -> Optional[TelegramTopicRecord]:
         if callable(apply):
@@ -124,13 +124,17 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
         self._deleted: list[int] = []
         self._placeholder_counter = 200
 
-    def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+    async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return f"{chat_id}:{thread_id}"
 
-    def _refresh_workspace_id(self, _key: str, _record: TelegramTopicRecord) -> None:
+    async def _refresh_workspace_id(
+        self, _key: str, _record: TelegramTopicRecord
+    ) -> None:
         return None
 
-    def _find_thread_conflict(self, _thread_id: str, *, key: str) -> Optional[str]:
+    async def _find_thread_conflict(
+        self, _thread_id: str, *, key: str
+    ) -> Optional[str]:
         return None
 
     async def _handle_thread_conflict(self, *_args: object, **_kwargs: object) -> None:

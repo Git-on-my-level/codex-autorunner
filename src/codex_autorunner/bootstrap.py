@@ -10,6 +10,7 @@ from .core.config import (
     ConfigError,
     resolve_hub_config_data,
 )
+from .core.state import RunnerState, save_state
 from .core.utils import atomic_write
 from .manifest import load_manifest
 
@@ -107,12 +108,9 @@ def seed_repo_files(
     if not gitignore_path.exists() or force:
         gitignore_path.write_text(GITIGNORE_CONTENT, encoding="utf-8")
 
-    state_path = ca_dir / "state.json"
+    state_path = ca_dir / "state.sqlite3"
     if not state_path.exists() or force:
-        atomic_write(
-            state_path,
-            '{\n  "last_run_id": null,\n  "status": "idle",\n  "last_exit_code": null,\n  "last_run_started_at": null,\n  "last_run_finished_at": null,\n  "runner_pid": null\n}\n',
-        )
+        save_state(state_path, RunnerState(None, "idle", None, None, None))
 
     log_path = ca_dir / "codex-autorunner.log"
     if not log_path.exists() or force:

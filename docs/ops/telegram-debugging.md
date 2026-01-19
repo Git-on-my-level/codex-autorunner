@@ -30,7 +30,7 @@ If you see `app_server.turn.completed` but no `telegram.turn.completed`, the bot
 ## Outbox Checks
 
 - Inspect the outbox:
-  - `.codex-autorunner/telegram_state.json` -> `outbox` entries.
+  - `sqlite3 .codex-autorunner/telegram_state.sqlite3 "select record_id, chat_id, thread_id, created_at, updated_at from telegram_outbox order by created_at desc limit 20;"`
 - If outbox is empty but no delivery was logged, the response was never enqueued (upstream failure).
 
 ## Common Failure Patterns

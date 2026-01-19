@@ -467,7 +467,7 @@ def usage(
     except RepoNotFoundError:
         repo_root = None
 
-    if repo_root and (repo_root / ".codex-autorunner" / "state.json").exists():
+    if repo_root and (repo_root / ".codex-autorunner" / "state.sqlite3").exists():
         engine = _require_repo_config(repo, hub)
     else:
         try:

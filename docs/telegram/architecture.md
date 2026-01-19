@@ -46,7 +46,7 @@ messages.
 
 ## State and persistence
 
-Per-chat/topic state is stored in `.codex-autorunner/telegram_state.json` and
+Per-chat/topic state is stored in `.codex-autorunner/telegram_state.sqlite3` and
 records the workspace binding, active thread id, and approval mode. Each forum
 topic (or chat root when topics are disabled) has its own routing key.
 

@@ -33,7 +33,7 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
         return
     key = None
     if callback.chat_id is not None:
-        key = handlers._resolve_topic_key(callback.chat_id, callback.thread_id)
+        key = await handlers._resolve_topic_key(callback.chat_id, callback.thread_id)
     if isinstance(parsed, ApprovalCallback):
         await handlers._handle_approval_callback(callback, parsed)
     elif isinstance(parsed, (QuestionOptionCallback, QuestionCancelCallback)):

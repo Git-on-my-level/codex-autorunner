@@ -117,7 +117,7 @@ class TelegramSelectionHandlers:
             await self._answer_callback(callback, "Selection expired")
             return
         self._agent_options.pop(key, None)
-        record = self._router.ensure_topic(callback.chat_id, callback.thread_id)
+        record = await self._router.ensure_topic(callback.chat_id, callback.thread_id)
         current = self._effective_agent(record)
         desired = parsed.agent
         if desired == "opencode" and not self._opencode_available():
@@ -134,7 +134,9 @@ class TelegramSelectionHandlers:
                 key, callback, f"Agent already set to {current}."
             )
             return
-        note = self._apply_agent_change(callback.chat_id, callback.thread_id, desired)
+        note = await self._apply_agent_change(
+            callback.chat_id, callback.thread_id, desired
+        )
         await self._answer_callback(callback, "Agent set")
         await self._finalize_selection(
             key,
@@ -237,7 +239,7 @@ class TelegramSelectionHandlers:
         self._model_options.pop(key, None)
         if not option.efforts:
             chat_id, thread_id = _split_topic_key(key)
-            self._router.update_topic(
+            await self._router.update_topic(
                 chat_id,
                 thread_id,
                 lambda record: _set_model_overrides(
@@ -281,7 +283,7 @@ class TelegramSelectionHandlers:
             return
         self._model_pending.pop(key, None)
         chat_id, thread_id = _split_topic_key(key)
-        self._router.update_topic(
+        await self._router.update_topic(
             chat_id,
             thread_id,
             lambda record: _set_model_overrides(

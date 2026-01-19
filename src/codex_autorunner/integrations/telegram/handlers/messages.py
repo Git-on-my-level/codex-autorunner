@@ -110,7 +110,7 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
     if has_media and not should_bypass:
         if handlers._config.media.batch_uploads and has_batchable_media(message):
             if handlers._config.media.enabled:
-                topic_key = handlers._resolve_topic_key(
+                topic_key = await handlers._resolve_topic_key(
                     message.chat_id, message.thread_id
                 )
                 await _clear_pending_options(handlers, topic_key, message)
@@ -164,7 +164,7 @@ async def handle_edited_message(
         if placeholder_id is not None:
             await handlers._delete_message(message.chat_id, placeholder_id)
         return
-    key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
+    key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
     runtime = handlers._router.runtime_for(key)
     turn_key = runtime.current_turn_key
     if not turn_key:
@@ -221,11 +221,10 @@ async def handle_message_inner(
         if placeholder_id is not None:
             await handlers._delete_message(message.chat_id, placeholder_id)
 
-    key = (
-        topic_key
-        if isinstance(topic_key, str) and topic_key
-        else handlers._resolve_topic_key(message.chat_id, message.thread_id)
-    )
+    if isinstance(topic_key, str) and topic_key:
+        key = topic_key
+    else:
+        key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
     runtime = handlers._router.runtime_for(key)
 
     if text and handlers._handle_pending_resume(key, text):
@@ -381,8 +380,8 @@ def coalesce_key_for_topic(handlers: Any, key: str, user_id: Optional[int]) -> s
     return f"{key}:user:{user_id}"
 
 
-def coalesce_key(handlers: Any, message: TelegramMessage) -> str:
-    key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
+async def coalesce_key(handlers: Any, message: TelegramMessage) -> str:
+    key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
     return coalesce_key_for_topic(handlers, key, message.from_user_id)
 
 
@@ -393,7 +392,7 @@ async def buffer_coalesced_message(
     *,
     placeholder_id: Optional[int] = None,
 ) -> None:
-    topic_key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
+    topic_key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
     key = coalesce_key_for_topic(handlers, topic_key, message.from_user_id)
     lock = handlers._coalesce_locks.setdefault(key, asyncio.Lock())
     drop_placeholder = False
@@ -444,7 +443,7 @@ async def coalesce_flush_after(handlers: Any, key: str, window_seconds: float) -
 
 
 async def flush_coalesced_message(handlers: Any, message: TelegramMessage) -> None:
-    await flush_coalesced_key(handlers, coalesce_key(handlers, message))
+    await flush_coalesced_key(handlers, await coalesce_key(handlers, message))
 
 
 async def flush_coalesced_key(handlers: Any, key: str) -> None:
@@ -569,8 +568,8 @@ def has_batchable_media(message: TelegramMessage) -> bool:
     return bool(message.photos or message.document)
 
 
-def media_batch_key(handlers: Any, message: TelegramMessage) -> str:
-    topic_key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
+async def media_batch_key(handlers: Any, message: TelegramMessage) -> str:
+    topic_key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
     user_id = message.from_user_id
     if message.media_group_id:
         return f"{topic_key}:user:{user_id}:mg:{message.media_group_id}"
@@ -585,8 +584,8 @@ async def buffer_media_batch(
 ) -> None:
     if not has_batchable_media(message):
         return
-    topic_key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
-    key = media_batch_key(handlers, message)
+    topic_key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
+    key = await media_batch_key(handlers, message)
     lock = handlers._media_batch_locks.setdefault(key, asyncio.Lock())
     drop_placeholder = False
     async with lock:
@@ -706,8 +705,8 @@ async def handle_media_message(
             reply_to=message.message_id,
         )
         return
-    key = handlers._resolve_topic_key(message.chat_id, message.thread_id)
-    record = handlers._router.get_topic(key)
+    key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
+    record = await handlers._router.get_topic(key)
     if record is None or not record.workspace_path:
         await handlers._send_message(
             message.chat_id,

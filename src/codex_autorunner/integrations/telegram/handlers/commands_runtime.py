@@ -537,7 +537,7 @@ class TelegramCommandHandlers:
             reply_to=message.message_id,
         )
 
-    def _apply_agent_change(
+    async def _apply_agent_change(
         self,
         chat_id: int,
         thread_id: Optional[int],
@@ -554,7 +554,7 @@ class TelegramCommandHandlers:
                 record.effort = None
             record.model = DEFAULT_AGENT_MODELS.get(desired)
 
-        self._router.update_topic(chat_id, thread_id, apply)
+        await self._router.update_topic(chat_id, thread_id, apply)
         if not self._agent_supports_resume(desired):
             return " (resume not supported)"
         return ""
@@ -562,9 +562,9 @@ class TelegramCommandHandlers:
     async def _handle_agent(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
-        record = self._router.ensure_topic(message.chat_id, message.thread_id)
+        record = await self._router.ensure_topic(message.chat_id, message.thread_id)
         current = self._effective_agent(record)
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         self._agent_options.pop(key, None)
         argv = self._parse_command_args(args)
         if not argv:
@@ -636,7 +636,9 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        note = self._apply_agent_change(message.chat_id, message.thread_id, desired)
+        note = await self._apply_agent_change(
+            message.chat_id, message.thread_id, desired
+        )
         await self._send_message(
             message.chat_id,
             f"Agent set to {desired}{note}.",
@@ -662,7 +664,7 @@ class TelegramCommandHandlers:
             thread_id=message.thread_id,
             message_id=message.message_id,
         )
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         spec = self._command_specs.get(name)
         if spec is None:
             self._resume_options.pop(key, None)
@@ -778,7 +780,7 @@ class TelegramCommandHandlers:
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
-                return self._router.set_active_thread(
+                return await self._router.set_active_thread(
                     message.chat_id, message.thread_id, None
                 )
             workspace_root = self._canonical_workspace_root(record.workspace_path)
@@ -789,7 +791,7 @@ class TelegramCommandHandlers:
                 await client.get_session(record.active_thread_id)
                 return record
             except Exception:
-                return self._router.set_active_thread(
+                return await self._router.set_active_thread(
                     message.chat_id, message.thread_id, None
                 )
         if not self._agent_supports_resume(agent):
@@ -852,7 +854,7 @@ class TelegramCommandHandlers:
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return self._router.set_active_thread(
+            return await self._router.set_active_thread(
                 message.chat_id, message.thread_id, None
             )
         try:
@@ -866,7 +868,7 @@ class TelegramCommandHandlers:
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return self._router.set_active_thread(
+            return await self._router.set_active_thread(
                 message.chat_id, message.thread_id, None
             )
         if not _paths_compatible(workspace_root, resumed_root):
@@ -887,15 +889,15 @@ class TelegramCommandHandlers:
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return self._router.set_active_thread(
+            return await self._router.set_active_thread(
                 message.chat_id, message.thread_id, None
             )
-        return self._apply_thread_result(
+        return await self._apply_thread_result(
             message.chat_id, message.thread_id, result, active_thread_id=thread_id
         )
 
-    def _find_thread_conflict(self, thread_id: str, *, key: str) -> Optional[str]:
-        return self._store.find_active_thread(thread_id, exclude_key=key)
+    async def _find_thread_conflict(self, thread_id: str, *, key: str) -> Optional[str]:
+        return await self._store.find_active_thread(thread_id, exclude_key=key)
 
     async def _handle_thread_conflict(
         self,
@@ -920,7 +922,7 @@ class TelegramCommandHandlers:
             reply_to=message.message_id,
         )
 
-    def _apply_thread_result(
+    async def _apply_thread_result(
         self,
         chat_id: int,
         thread_id: Optional[int],
@@ -1004,13 +1006,13 @@ class TelegramCommandHandlers:
             ):
                 record.sandbox_policy = info["sandbox_policy"]
 
-        return self._router.update_topic(chat_id, thread_id, apply)
+        return await self._router.update_topic(chat_id, thread_id, apply)
 
     async def _require_bound_record(
         self, message: TelegramMessage, *, prompt: Optional[str] = None
     ) -> Optional["TelegramTopicRecord"]:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        record = self._router.get_topic(key)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
@@ -1019,7 +1021,7 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return None
-        self._refresh_workspace_id(key, record)
+        await self._refresh_workspace_id(key, record)
         return record
 
     async def _ensure_thread_id(
@@ -1027,10 +1029,12 @@ class TelegramCommandHandlers:
     ) -> Optional[str]:
         thread_id = record.active_thread_id
         if thread_id:
-            key = self._resolve_topic_key(message.chat_id, message.thread_id)
-            conflict_key = self._find_thread_conflict(thread_id, key=key)
+            key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+            conflict_key = await self._find_thread_conflict(thread_id, key=key)
             if conflict_key:
-                self._router.set_active_thread(message.chat_id, message.thread_id, None)
+                await self._router.set_active_thread(
+                    message.chat_id, message.thread_id, None
+                )
                 await self._handle_thread_conflict(message, thread_id, conflict_key)
                 return None
             verified = await self._verify_active_thread(message, record)
@@ -1106,7 +1110,7 @@ class TelegramCommandHandlers:
                     rollout_path=record.rollout_path,
                 )
 
-            self._router.update_topic(message.chat_id, message.thread_id, apply)
+            await self._router.update_topic(message.chat_id, message.thread_id, apply)
             return session_id
         try:
             client = await self._client_for_workspace(record.workspace_path)
@@ -1148,7 +1152,7 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return None
-        self._apply_thread_result(
+        await self._apply_thread_result(
             message.chat_id,
             message.thread_id,
             thread,
@@ -1295,7 +1299,7 @@ class TelegramCommandHandlers:
             response=response_text,
         )
         if response_sent:
-            key = self._resolve_topic_key(message.chat_id, message.thread_id)
+            key = await self._resolve_topic_key(message.chat_id, message.thread_id)
             log_event(
                 self._logger,
                 logging.INFO,
@@ -1406,8 +1410,8 @@ class TelegramCommandHandlers:
         send_failure_response: bool = True,
         placeholder_id: Optional[int] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        record = record or self._router.get_topic(key)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = record or await self._router.get_topic(key)
         if record is None or not record.workspace_path:
             failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
             if send_failure_response:
@@ -1446,12 +1450,14 @@ class TelegramCommandHandlers:
                 placeholder_sent_at=now_iso(),
             )
         if record.active_thread_id:
-            conflict_key = self._find_thread_conflict(
+            conflict_key = await self._find_thread_conflict(
                 record.active_thread_id,
                 key=key,
             )
             if conflict_key:
-                self._router.set_active_thread(message.chat_id, message.thread_id, None)
+                await self._router.set_active_thread(
+                    message.chat_id, message.thread_id, None
+                )
                 await self._handle_thread_conflict(
                     message,
                     record.active_thread_id,
@@ -1639,17 +1645,17 @@ class TelegramCommandHandlers:
                             rollout_path=record.rollout_path,
                         )
 
-                    record = self._router.update_topic(
+                    record = await self._router.update_topic(
                         message.chat_id, message.thread_id, apply
                     )
                 else:
-                    record = self._router.set_active_thread(
+                    record = await self._router.set_active_thread(
                         message.chat_id, message.thread_id, thread_id
                     )
                 user_preview = _preview_from_text(
                     prompt_text, RESUME_PREVIEW_USER_LIMIT
                 )
-                self._router.update_topic(
+                await self._router.update_topic(
                     message.chat_id,
                     message.thread_id,
                     lambda record: _set_thread_summary(
@@ -2175,7 +2181,7 @@ class TelegramCommandHandlers:
                 finally:
                     turn_semaphore.release()
                 if pending_seed:
-                    self._router.update_topic(
+                    await self._router.update_topic(
                         message.chat_id,
                         message.thread_id,
                         _clear_pending_compact_seed,
@@ -2205,7 +2211,7 @@ class TelegramCommandHandlers:
                     assistant_preview = _preview_from_text(
                         output, RESUME_PREVIEW_ASSISTANT_LIMIT
                     )
-                    self._router.update_topic(
+                    await self._router.update_topic(
                         message.chat_id,
                         message.thread_id,
                         lambda record: _set_thread_summary(
@@ -2360,21 +2366,21 @@ class TelegramCommandHandlers:
                         transcript_message_id,
                         transcript_text,
                     )
-                record = self._apply_thread_result(
+                record = await self._apply_thread_result(
                     message.chat_id,
                     message.thread_id,
                     thread,
                     active_thread_id=thread_id,
                 )
             else:
-                record = self._router.set_active_thread(
+                record = await self._router.set_active_thread(
                     message.chat_id, message.thread_id, thread_id
                 )
             if thread_id:
                 user_preview = _preview_from_text(
                     prompt_text, RESUME_PREVIEW_USER_LIMIT
                 )
-                self._router.update_topic(
+                await self._router.update_topic(
                     message.chat_id,
                     message.thread_id,
                     lambda record: _set_thread_summary(
@@ -2488,7 +2494,7 @@ class TelegramCommandHandlers:
                     **turn_kwargs,
                 )
                 if pending_seed:
-                    self._router.update_topic(
+                    await self._router.update_topic(
                         message.chat_id,
                         message.thread_id,
                         _clear_pending_compact_seed,
@@ -2627,7 +2633,7 @@ class TelegramCommandHandlers:
                 response, RESUME_PREVIEW_ASSISTANT_LIMIT
             )
             if assistant_preview:
-                self._router.update_topic(
+                await self._router.update_topic(
                     message.chat_id,
                     message.thread_id,
                     lambda record: _set_thread_summary(
@@ -3011,7 +3017,7 @@ class TelegramCommandHandlers:
             workspace_path=record.workspace_path,
             created_at=now_iso(),
         )
-        self._store.enqueue_pending_voice(pending)
+        await self._store.enqueue_pending_voice(pending)
         log_event(
             self._logger,
             logging.INFO,
@@ -3091,7 +3097,7 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         try:
             file_path_local = self._save_inbox_file(
                 record.workspace_path,
@@ -3161,8 +3167,10 @@ class TelegramCommandHandlers:
             )
             return
         first_msg = messages[0]
-        topic_key = self._resolve_topic_key(first_msg.chat_id, first_msg.thread_id)
-        record = self._router.get_topic(topic_key)
+        topic_key = await self._resolve_topic_key(
+            first_msg.chat_id, first_msg.thread_id
+        )
+        record = await self._router.get_topic(topic_key)
         if record is None or not record.workspace_path:
             await self._send_message(
                 first_msg.chat_id,
@@ -3529,7 +3537,7 @@ class TelegramCommandHandlers:
                 thread_id=record.thread_id,
                 reply_to=record.message_id,
             )
-            self._store.update_pending_voice(record)
+            await self._store.update_pending_voice(record)
         if record.transcript_message_id is None:
             raise RuntimeError("Failed to send voice transcript message")
         await self._update_voice_progress_message(record, "Voice note transcribed.")
@@ -3543,7 +3551,7 @@ class TelegramCommandHandlers:
             date=None,
             is_topic_message=record.thread_id is not None,
         )
-        key = self._resolve_topic_key(record.chat_id, record.thread_id)
+        key = await self._resolve_topic_key(record.chat_id, record.thread_id)
         runtime = self._router.runtime_for(key)
         if self._config.concurrency.per_topic_queue:
             await runtime.queue.enqueue(
@@ -3849,7 +3857,10 @@ class TelegramCommandHandlers:
             or not self._config.media.files
         ):
             return
-        key = topic_key or self._resolve_topic_key(chat_id, thread_id)
+        if topic_key:
+            key = topic_key
+        else:
+            key = await self._resolve_topic_key(chat_id, thread_id)
         pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)
         if not pending_dir.exists():
             return
@@ -3895,7 +3906,7 @@ class TelegramCommandHandlers:
             await self._answer_callback(callback, "Cancel unavailable")
             return
         runtime = self._router.runtime_for(
-            self._resolve_topic_key(callback.chat_id, callback.thread_id)
+            await self._resolve_topic_key(callback.chat_id, callback.thread_id)
         )
         await self._answer_callback(callback, "Stopping...")
         await self._process_interrupt(
@@ -3916,7 +3927,7 @@ class TelegramCommandHandlers:
         message_id: Optional[int],
     ) -> None:
         turn_id = runtime.current_turn_id
-        key = self._resolve_topic_key(chat_id, thread_id)
+        key = await self._resolve_topic_key(chat_id, thread_id)
         if (
             turn_id
             and runtime.interrupt_requested
@@ -3953,7 +3964,7 @@ class TelegramCommandHandlers:
             pending = self._pending_approvals.pop(request_id, None)
             if pending and not pending.future.done():
                 pending.future.set_result("cancel")
-            self._store.clear_pending_approval(request_id)
+            await self._store.clear_pending_approval(request_id)
         for request_id in pending_question_ids:
             pending = self._pending_questions.pop(request_id, None)
             if pending and not pending.future.done():
@@ -3969,9 +3980,9 @@ class TelegramCommandHandlers:
             queued_turn_cancelled = True
         queued_cancelled = runtime.queue.cancel_pending()
         if not turn_id:
-            pending_records = self._store.pending_approvals_for_key(key)
+            pending_records = await self._store.pending_approvals_for_key(key)
             if pending_records:
-                self._store.clear_pending_approvals_for_key(key)
+                await self._store.clear_pending_approvals_for_key(key)
                 runtime.pending_request_id = None
             pending_count = len(pending_records) if pending_records else 0
             pending_count += len(pending_request_ids)
@@ -4049,7 +4060,7 @@ class TelegramCommandHandlers:
             runtime.interrupt_turn_id = turn_id
             self._spawn_task(
                 self._interrupt_timeout_check(
-                    self._resolve_topic_key(chat_id, thread_id),
+                    key,
                     turn_id,
                     response_message_id,
                 )
@@ -4065,7 +4076,7 @@ class TelegramCommandHandlers:
         )
 
     async def _handle_bind(self, message: TelegramMessage, args: str) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         if not args:
             options = self._list_manifest_repos()
             if not options:
@@ -4106,8 +4117,8 @@ class TelegramCommandHandlers:
         workspace_path, resolved_repo_id = resolved
         chat_id, thread_id = _split_topic_key(key)
         scope = self._topic_scope_id(resolved_repo_id, workspace_path)
-        self._router.set_topic_scope(chat_id, thread_id, scope)
-        self._router.bind_topic(
+        await self._router.set_topic_scope(chat_id, thread_id, scope)
+        await self._router.bind_topic(
             chat_id,
             thread_id,
             workspace_path,
@@ -4116,7 +4127,7 @@ class TelegramCommandHandlers:
         )
         workspace_id = self._workspace_id_for_path(workspace_path)
         if workspace_id:
-            self._router.update_topic(
+            await self._router.update_topic(
                 chat_id,
                 thread_id,
                 lambda record: setattr(record, "workspace_id", workspace_id),
@@ -4144,8 +4155,8 @@ class TelegramCommandHandlers:
             return
         workspace_path, repo_id = resolved
         scope = self._topic_scope_id(repo_id, workspace_path)
-        self._router.set_topic_scope(message.chat_id, message.thread_id, scope)
-        self._router.bind_topic(
+        await self._router.set_topic_scope(message.chat_id, message.thread_id, scope)
+        await self._router.bind_topic(
             message.chat_id,
             message.thread_id,
             workspace_path,
@@ -4154,7 +4165,7 @@ class TelegramCommandHandlers:
         )
         workspace_id = self._workspace_id_for_path(workspace_path)
         if workspace_id:
-            self._router.update_topic(
+            await self._router.update_topic(
                 message.chat_id,
                 message.thread_id,
                 lambda record: setattr(record, "workspace_id", workspace_id),
@@ -4168,8 +4179,8 @@ class TelegramCommandHandlers:
         )
 
     async def _handle_new(self, message: TelegramMessage) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        record = self._router.get_topic(key)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
@@ -4242,7 +4253,7 @@ class TelegramCommandHandlers:
                     rollout_path=record.rollout_path,
                 )
 
-            self._router.update_topic(message.chat_id, message.thread_id, apply)
+            await self._router.update_topic(message.chat_id, message.thread_id, apply)
             thread_id = session_id
         else:
             try:
@@ -4285,7 +4296,7 @@ class TelegramCommandHandlers:
                     reply_to=message.message_id,
                 )
                 return
-            self._apply_thread_result(
+            await self._apply_thread_result(
                 message.chat_id, message.thread_id, thread, active_thread_id=thread_id
             )
         effort_label = (
@@ -4328,7 +4339,7 @@ class TelegramCommandHandlers:
         local_thread_topics: dict[str, set[str]] = {}
         store_state = None
         if show_unscoped:
-            store_state = self._store.load()
+            store_state = await self._store.load()
             (
                 local_thread_ids,
                 local_previews,
@@ -4410,7 +4421,7 @@ class TelegramCommandHandlers:
         )
 
     async def _handle_resume(self, message: TelegramMessage, args: str) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         argv = self._parse_command_args(args)
         trimmed = args.strip()
         show_unscoped = False
@@ -4442,7 +4453,7 @@ class TelegramCommandHandlers:
             else:
                 await self._resume_thread_by_id(key, trimmed)
                 return
-        record = self._router.get_topic(key)
+        record = await self._router.get_topic(key)
         if record is not None:
             agent = self._effective_agent(record)
             if not self._agent_supports_resume(agent):
@@ -4510,7 +4521,7 @@ class TelegramCommandHandlers:
         local_previews: dict[str, str] = {}
         local_thread_topics: dict[str, set[str]] = {}
         if show_unscoped:
-            store_state = self._store.load()
+            store_state = await self._store.load()
             local_thread_ids, local_previews, local_thread_topics = (
                 _local_workspace_threads(
                     store_state, record.workspace_path, current_key=key
@@ -4623,7 +4634,7 @@ class TelegramCommandHandlers:
             )
             if refreshed:
                 if show_unscoped:
-                    store_state = self._store.load()
+                    store_state = await self._store.load()
                     local_thread_ids, local_previews, local_thread_topics = (
                         _local_workspace_threads(
                             store_state, record.workspace_path, current_key=key
@@ -4637,7 +4648,7 @@ class TelegramCommandHandlers:
                         if cached_preview:
                             local_previews.setdefault(thread_id, cached_preview)
                 else:
-                    record = self._router.get_topic(key) or record
+                    record = await self._router.get_topic(key) or record
         items: list[tuple[str, str]] = []
         button_labels: dict[str, str] = {}
         seen_item_ids: set[str] = set()
@@ -4806,9 +4817,9 @@ class TelegramCommandHandlers:
             )
             if keys:
                 for key in keys:
-                    self._store.update_topic(key, apply)
+                    await self._store.update_topic(key, apply)
             elif default_topic_key:
-                self._store.update_topic(default_topic_key, apply)
+                await self._store.update_topic(default_topic_key, apply)
             else:
                 continue
             refreshed.add(thread_id)
@@ -4855,7 +4866,7 @@ class TelegramCommandHandlers:
     ) -> None:
         chat_id, thread_id_val = _split_topic_key(key)
         self._resume_options.pop(key, None)
-        record = self._router.get_topic(key)
+        record = await self._router.get_topic(key)
         if record is not None and self._effective_agent(record) == "opencode":
             await self._resume_opencode_thread_by_id(key, thread_id, callback=callback)
             return
@@ -4981,7 +4992,7 @@ class TelegramCommandHandlers:
                 ),
             )
             return
-        conflict_key = self._find_thread_conflict(thread_id, key=key)
+        conflict_key = await self._find_thread_conflict(thread_id, key=key)
         if conflict_key:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
@@ -5002,7 +5013,7 @@ class TelegramCommandHandlers:
                 conflict_topic=conflict_key,
             )
             return
-        updated_record = self._apply_thread_result(
+        updated_record = await self._apply_thread_result(
             chat_id,
             thread_id_val,
             result,
@@ -5027,7 +5038,7 @@ class TelegramCommandHandlers:
     ) -> None:
         chat_id, thread_id_val = _split_topic_key(key)
         self._resume_options.pop(key, None)
-        record = self._router.get_topic(key)
+        record = await self._router.get_topic(key)
         if record is None or not record.workspace_path:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
@@ -5118,7 +5129,7 @@ class TelegramCommandHandlers:
                     ),
                 )
                 return
-        conflict_key = self._find_thread_conflict(thread_id, key=key)
+        conflict_key = await self._find_thread_conflict(thread_id, key=key)
         if conflict_key:
             await self._answer_callback(callback, "Resume aborted")
             await self._finalize_selection(
@@ -5155,7 +5166,7 @@ class TelegramCommandHandlers:
                 rollout_path=record.rollout_path,
             )
 
-        updated_record = self._router.update_topic(chat_id, thread_id_val, apply)
+        updated_record = await self._router.update_topic(chat_id, thread_id_val, apply)
         await self._answer_callback(callback, "Resumed thread")
         summary = None
         if updated_record is not None:
@@ -5178,9 +5189,9 @@ class TelegramCommandHandlers:
     async def _handle_status(
         self, message: TelegramMessage, _args: str = "", runtime: Optional[Any] = None
     ) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        record = self._router.ensure_topic(message.chat_id, message.thread_id)
-        self._refresh_workspace_id(key, record)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.ensure_topic(message.chat_id, message.thread_id)
+        await self._refresh_workspace_id(key, record)
         if runtime is None:
             runtime = self._router.runtime_for(key)
         approval_policy, sandbox_policy = self._effective_policies(record)
@@ -5201,7 +5212,7 @@ class TelegramCommandHandlers:
             f"Approval policy: {approval_policy or 'default'}",
             f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
         ]
-        pending = self._store.pending_approvals_for_key(key)
+        pending = await self._store.pending_approvals_for_key(key)
         if pending:
             lines.append(f"Pending approvals: {len(pending)}")
             if len(pending) == 1:
@@ -5272,7 +5283,7 @@ class TelegramCommandHandlers:
         record = await self._require_bound_record(message)
         if not record:
             return
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         inbox_dir = self._files_inbox_dir(record.workspace_path, key)
         pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)
         sent_dir = self._files_outbox_sent_dir(record.workspace_path, key)
@@ -5447,8 +5458,8 @@ class TelegramCommandHandlers:
     async def _handle_debug(
         self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
     ) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
-        record = self._router.get_topic(key)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
         scope = None
         try:
             chat_id, thread_id, scope = parse_topic_key(key)
@@ -5469,7 +5480,7 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        self._refresh_workspace_id(key, record)
+        await self._refresh_workspace_id(key, record)
         workspace_path = record.workspace_path or "unbound"
         canonical_path = "unbound"
         if record.workspace_path:
@@ -5504,7 +5515,7 @@ class TelegramCommandHandlers:
     async def _handle_ids(
         self, message: TelegramMessage, _args: str = "", _runtime: Optional[Any] = None
     ) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         lines = [
             f"Chat ID: {message.chat_id}",
             f"Thread ID: {message.thread_id or 'none'}",
@@ -5545,7 +5556,7 @@ class TelegramCommandHandlers:
         self, message: TelegramMessage, args: str, _runtime: Optional[Any] = None
     ) -> None:
         argv = self._parse_command_args(args)
-        record = self._router.ensure_topic(message.chat_id, message.thread_id)
+        record = await self._router.ensure_topic(message.chat_id, message.thread_id)
         if not argv:
             approval_policy, sandbox_policy = self._effective_policies(record)
             await self._send_message(
@@ -5576,8 +5587,10 @@ class TelegramCommandHandlers:
             return
         mode = argv[0].lower()
         if mode in ("yolo", "off", "disable", "disabled"):
-            self._router.set_approval_mode(message.chat_id, message.thread_id, "yolo")
-            self._router.update_topic(
+            await self._router.set_approval_mode(
+                message.chat_id, message.thread_id, "yolo"
+            )
+            await self._router.update_topic(
                 message.chat_id,
                 message.thread_id,
                 lambda record: _clear_policy_overrides(record),
@@ -5590,8 +5603,10 @@ class TelegramCommandHandlers:
             )
             return
         if mode in ("safe", "on", "enable", "enabled"):
-            self._router.set_approval_mode(message.chat_id, message.thread_id, "safe")
-            self._router.update_topic(
+            await self._router.set_approval_mode(
+                message.chat_id, message.thread_id, "safe"
+            )
+            await self._router.update_topic(
                 message.chat_id,
                 message.thread_id,
                 lambda record: _clear_policy_overrides(record),
@@ -5608,7 +5623,7 @@ class TelegramCommandHandlers:
             preset = _normalize_approval_preset(argv[1])
         if preset:
             approval_policy, sandbox_policy = APPROVAL_PRESETS[preset]
-            self._router.update_topic(
+            await self._router.update_topic(
                 message.chat_id,
                 message.thread_id,
                 lambda record: _set_policy_overrides(
@@ -5630,7 +5645,7 @@ class TelegramCommandHandlers:
         approval_policy = argv[0] if argv[0] in APPROVAL_POLICY_VALUES else None
         if approval_policy:
             sandbox_policy = argv[1] if len(argv) > 1 else None
-            self._router.update_topic(
+            await self._router.update_topic(
                 message.chat_id,
                 message.thread_id,
                 lambda record: _set_policy_overrides(
@@ -5659,10 +5674,10 @@ class TelegramCommandHandlers:
     async def _handle_model(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         self._model_options.pop(key, None)
         self._model_pending.pop(key, None)
-        record = self._router.get_topic(key)
+        record = await self._router.get_topic(key)
         agent = self._effective_agent(record)
         supports_effort = self._agent_supports_effort(agent)
         list_params = {
@@ -5850,7 +5865,7 @@ class TelegramCommandHandlers:
             )
             return
         if argv[0].lower() in ("clear", "reset"):
-            self._router.update_topic(
+            await self._router.update_topic(
                 message.chat_id,
                 message.thread_id,
                 lambda record: _set_model_overrides(record, None, clear_effort=True),
@@ -5892,7 +5907,7 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        self._router.update_topic(
+        await self._router.update_topic(
             message.chat_id,
             message.thread_id,
             lambda record: _set_model_overrides(
@@ -6039,10 +6054,11 @@ class TelegramCommandHandlers:
                 turn_key = self._turn_key(thread_id, turn_handle.turn_id)
                 runtime.current_turn_id = turn_handle.turn_id
                 runtime.current_turn_key = turn_key
+                topic_key = await self._resolve_topic_key(
+                    message.chat_id, message.thread_id
+                )
                 ctx = TurnContext(
-                    topic_key=self._resolve_topic_key(
-                        message.chat_id, message.thread_id
-                    ),
+                    topic_key=topic_key,
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                     codex_thread_id=thread_id,
@@ -6136,7 +6152,7 @@ class TelegramCommandHandlers:
                 response, RESUME_PREVIEW_ASSISTANT_LIMIT
             )
             if assistant_preview:
-                self._router.update_topic(
+                await self._router.update_topic(
                     message.chat_id,
                     message.thread_id,
                     lambda record: _set_thread_summary(
@@ -6316,7 +6332,7 @@ class TelegramCommandHandlers:
                     rollout_path=record.rollout_path,
                 )
 
-            self._router.update_topic(message.chat_id, message.thread_id, apply)
+            await self._router.update_topic(message.chat_id, message.thread_id, apply)
         agent = self._effective_agent(record)
         log_event(
             self._logger,
@@ -6423,10 +6439,11 @@ class TelegramCommandHandlers:
                     turn_id = build_turn_id(review_session_id)
                     runtime.current_turn_id = turn_id
                     runtime.current_turn_key = (review_session_id, turn_id)
+                    topic_key = await self._resolve_topic_key(
+                        message.chat_id, message.thread_id
+                    )
                     ctx = TurnContext(
-                        topic_key=self._resolve_topic_key(
-                            message.chat_id, message.thread_id
-                        ),
+                        topic_key=topic_key,
                         chat_id=message.chat_id,
                         thread_id=message.thread_id,
                         codex_thread_id=review_session_id,
@@ -6856,7 +6873,7 @@ class TelegramCommandHandlers:
                 output, RESUME_PREVIEW_ASSISTANT_LIMIT
             )
             if assistant_preview:
-                self._router.update_topic(
+                await self._router.update_topic(
                     message.chat_id,
                     message.thread_id,
                     lambda record: _set_thread_summary(
@@ -6952,7 +6969,7 @@ class TelegramCommandHandlers:
         record = await self._require_bound_record(message)
         if not record:
             return
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         raw_args = args.strip()
         delivery = "inline"
         if raw_args:
@@ -7202,7 +7219,7 @@ class TelegramCommandHandlers:
         if key is None:
             return
 
-        record = self._router.get_topic(key)
+        record = await self._router.get_topic(key)
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
@@ -7279,7 +7296,7 @@ class TelegramCommandHandlers:
         from ..adapter import TelegramMessage
 
         await self._answer_callback(callback)
-        record = self._router.get_topic(key)
+        record = await self._router.get_topic(key)
         if record is None or not record.workspace_path:
             return
 
@@ -7571,7 +7588,7 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         items: list[tuple[str, str]] = []
         subjects: dict[str, str] = {}
         for sha, subject in commits:
@@ -8283,14 +8300,14 @@ class TelegramCommandHandlers:
             thread_id=message.thread_id,
             codex_thread_id=new_thread_id,
         )
-        record = self._apply_thread_result(
+        record = await self._apply_thread_result(
             message.chat_id,
             message.thread_id,
             thread,
             active_thread_id=new_thread_id,
         )
         seed_text = self._build_compact_seed_prompt(summary_text)
-        record = self._router.update_topic(
+        record = await self._router.update_topic(
             message.chat_id,
             message.thread_id,
             lambda record: _set_pending_compact_seed(record, seed_text, new_thread_id),
@@ -8324,7 +8341,7 @@ class TelegramCommandHandlers:
         record = await self._require_bound_record(message)
         if not record:
             return
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         if not record.active_thread_id:
             await self._send_message(
                 message.chat_id,
@@ -8333,9 +8350,13 @@ class TelegramCommandHandlers:
                 reply_to=message.message_id,
             )
             return
-        conflict_key = self._find_thread_conflict(record.active_thread_id, key=key)
+        conflict_key = await self._find_thread_conflict(
+            record.active_thread_id, key=key
+        )
         if conflict_key:
-            self._router.set_active_thread(message.chat_id, message.thread_id, None)
+            await self._router.set_active_thread(
+                message.chat_id, message.thread_id, None
+            )
             await self._handle_thread_conflict(
                 message,
                 record.active_thread_id,
@@ -8473,7 +8494,7 @@ class TelegramCommandHandlers:
             summary_len=len(state.summary_text),
         )
         self._compact_pending.pop(key, None)
-        record = self._router.get_topic(key)
+        record = await self._router.get_topic(key)
         if record is None or not record.workspace_path:
             await self._answer_callback(callback, "Selection expired")
             return
@@ -8560,9 +8581,8 @@ class TelegramCommandHandlers:
     async def _handle_rollout(
         self, message: TelegramMessage, _args: str, _runtime: Any
     ) -> None:
-        record = self._router.get_topic(
-            self._resolve_topic_key(message.chat_id, message.thread_id)
-        )
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
         if record is None or not record.active_thread_id or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
@@ -8643,7 +8663,7 @@ class TelegramCommandHandlers:
             entry = _find_thread_entry(threads, record.active_thread_id)
             rollout_path = _extract_rollout_path(entry) if entry else None
         if rollout_path:
-            self._router.update_topic(
+            await self._router.update_topic(
                 message.chat_id,
                 message.thread_id,
                 lambda record: _set_rollout_path(record, rollout_path),
@@ -8756,7 +8776,7 @@ class TelegramCommandHandlers:
         *,
         prompt: str = UPDATE_PICKER_PROMPT,
     ) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         state = SelectionState(items=list(UPDATE_TARGET_OPTIONS))
         keyboard = self._build_update_keyboard(state)
         self._update_options[key] = state
@@ -8786,7 +8806,7 @@ class TelegramCommandHandlers:
         return bool(self._turn_contexts)
 
     async def _prompt_update_confirmation(self, message: TelegramMessage) -> None:
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         self._update_confirm_options[key] = True
         self._touch_cache_timestamp("update_confirm_options", key)
         await self._send_message(
@@ -9037,7 +9057,7 @@ class TelegramCommandHandlers:
                 prompt="Unknown update target. Select update target (buttons below).",
             )
             return
-        key = self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         self._update_options.pop(key, None)
         await self._start_update(
             chat_id=message.chat_id,

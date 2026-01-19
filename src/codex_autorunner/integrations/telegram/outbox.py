@@ -43,7 +43,7 @@ class TelegramOutboxManager:
         self._lock = asyncio.Lock()
 
     async def restore(self) -> None:
-        records = self._store.list_outbox()
+        records = await self._store.list_outbox()
         if not records:
             return
         log_event(
@@ -58,7 +58,7 @@ class TelegramOutboxManager:
         while True:
             await asyncio.sleep(OUTBOX_RETRY_INTERVAL_SECONDS)
             try:
-                records = self._store.list_outbox()
+                records = await self._store.list_outbox()
                 if records:
                     await self._flush(records)
             except Exception as exc:
@@ -73,7 +73,7 @@ class TelegramOutboxManager:
         self,
         record: OutboxRecord,
     ) -> bool:
-        self._store.enqueue_outbox(record)
+        await self._store.enqueue_outbox(record)
         log_event(
             self._logger,
             logging.INFO,
@@ -85,7 +85,7 @@ class TelegramOutboxManager:
         for delay in OUTBOX_IMMEDIATE_RETRY_DELAYS:
             if await self._attempt_send(record):
                 return True
-            current = self._store.get_outbox(record.record_id)
+            current = await self._store.get_outbox(record.record_id)
             if current is None:
                 return False
             if current.attempts >= OUTBOX_MAX_ATTEMPTS:
@@ -106,7 +106,7 @@ class TelegramOutboxManager:
                         thread_id=record.thread_id,
                         attempts=record.attempts,
                     )
-                    self._store.delete_outbox(record.record_id)
+                    await self._store.delete_outbox(record.record_id)
                     if record.placeholder_message_id is not None:
                         await self._edit_message_text(
                             record.chat_id,
@@ -117,7 +117,7 @@ class TelegramOutboxManager:
                 await self._attempt_send(record)
 
     async def _attempt_send(self, record: OutboxRecord) -> bool:
-        current = self._store.get_outbox(record.record_id)
+        current = await self._store.get_outbox(record.record_id)
         if current is None:
             return False
         record = current
@@ -135,7 +135,7 @@ class TelegramOutboxManager:
                 record.attempts += 1
                 record.last_error = str(exc)[:500]
                 record.last_attempt_at = now_iso()
-                self._store.update_outbox(record)
+                await self._store.update_outbox(record)
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -149,7 +149,7 @@ class TelegramOutboxManager:
                 return False
             finally:
                 await self._clear_inflight(record.record_id)
-            self._store.delete_outbox(record.record_id)
+            await self._store.delete_outbox(record.record_id)
             if record.placeholder_message_id is not None:
                 await self._delete_message(
                     record.chat_id, record.placeholder_message_id

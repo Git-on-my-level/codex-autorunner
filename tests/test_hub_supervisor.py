@@ -135,7 +135,7 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
     assert resp.status_code == 200
     assert b'id="hub-shell"' in resp.content
 
-    assert (repo_dir / ".codex-autorunner" / "state.json").exists()
+    assert (repo_dir / ".codex-autorunner" / "state.sqlite3").exists()
     assert not (repo_dir / ".codex-autorunner" / "config.yml").exists()
 
     state_resp = client.get("/repos/demo/api/state")
@@ -328,7 +328,7 @@ def test_hub_clone_repo_endpoint(tmp_path: Path):
     assert payload["id"] == "cloned"
     repo_dir = hub_root / "cloned"
     assert (repo_dir / ".git").exists()
-    assert (repo_dir / ".codex-autorunner" / "state.json").exists()
+    assert (repo_dir / ".codex-autorunner" / "state.sqlite3").exists()
 
 
 def test_hub_remove_repo_with_worktrees(tmp_path: Path):

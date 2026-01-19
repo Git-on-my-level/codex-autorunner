@@ -6,7 +6,7 @@ from codex_autorunner.core.state import state_lock
 
 
 def test_state_lock_blocks_until_release(tmp_path: Path) -> None:
-    state_path = tmp_path / "state.json"
+    state_path = tmp_path / "state.sqlite3"
     entered = threading.Event()
     ready = threading.Event()
 

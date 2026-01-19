@@ -57,7 +57,7 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
 
     def _record_repo(repo_entry: ManifestRepo, *, added: bool) -> None:
         repo_path = (hub_config.root / repo_entry.path).resolve()
-        initialized = (repo_path / ".codex-autorunner" / "state.json").exists()
+        initialized = (repo_path / ".codex-autorunner" / "state.sqlite3").exists()
         init_error: Optional[str] = None
         if hub_config.auto_init_missing and repo_path.exists() and not initialized:
             try:
@@ -142,7 +142,7 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
         if root_entry.id not in seen_ids:
             _record_repo(root_entry, added=False)
     else:
-        state_path = hub_config.root / ".codex-autorunner" / "state.json"
+        state_path = hub_config.root / ".codex-autorunner" / "state.sqlite3"
         root_is_repo = state_path.exists()
         if not root_is_repo and hub_config.repos_root.resolve() == root_resolved:
             root_is_repo = (hub_config.root / ".git").exists()
@@ -176,7 +176,9 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
                 absolute_path=repo_path,
                 added_to_manifest=False,
                 exists_on_disk=repo_path.exists(),
-                initialized=(repo_path / ".codex-autorunner" / "state.json").exists(),
+                initialized=(
+                    repo_path / ".codex-autorunner" / "state.sqlite3"
+                ).exists(),
                 init_error=None,
             )
         )
