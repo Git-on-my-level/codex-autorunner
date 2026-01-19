@@ -134,7 +134,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         engine = request.app.state.engine
         shutdown_event = getattr(request.app.state, "shutdown_event", None)
         return StreamingResponse(
-            log_stream(engine.log_path, shutdown_event=shutdown_event, max_seconds=60.0),
+            log_stream(
+                engine.log_path, shutdown_event=shutdown_event, max_seconds=60.0
+            ),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
@@ -376,7 +378,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 ):
                     repo_to_session[_session_key(repo_path, agent)] = session_id
                     _mark_dirty()
-                await _maybe_persist_sessions(force=True)
+                _maybe_persist_sessions(force=True)
 
         if attach_only and active_session:
             active_session.refresh_alt_screen_state()
@@ -439,7 +441,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         break
                     await ws.send_bytes(data)
                     if session_id:
-                        await _touch_session(session_id)
+                        _touch_session(session_id)
             except Exception:
                 safe_log(logger, logging.WARNING, "Terminal PTY to WS bridge failed")
 
@@ -468,7 +470,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         active_session.write_input(msg["bytes"])
                         active_session.mark_input_activity()
                         if session_id:
-                            await _touch_session(session_id)
+                            _touch_session(session_id)
                         continue
                     text = msg.get("text")
                     if not text:
@@ -540,7 +542,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                             json.dumps({"type": "ack", "id": input_id, "ok": True})
                         )
                         if session_id:
-                            await _touch_session(session_id)
+                            _touch_session(session_id)
                     elif payload.get("type") == "ping":
                         ws_input_message_count += 1
                         if ws_input_message_count > MAX_MESSAGES_PER_WINDOW:
@@ -552,7 +554,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                             ws_rate_limit_window_start = now
                         await ws.send_text(json.dumps({"type": "pong"}))
                         if session_id:
-                            await _touch_session(session_id)
+                            _touch_session(session_id)
             except WebSocketDisconnect:
                 pass
             except Exception:
@@ -560,22 +562,16 @@ def build_base_routes(static_dir: Path) -> APIRouter:
 
         forward_task = asyncio.create_task(pty_to_ws())
         input_task = asyncio.create_task(ws_to_pty())
-        try:
-            done, pending = await asyncio.wait(
-                [forward_task, input_task], return_when=asyncio.FIRST_COMPLETED
-            )
-            for task in done:
-                try:
-                    task.result()
-                except Exception:
-                    safe_log(logger, logging.WARNING, "Terminal websocket task failed")
-        finally:
-            forward_task.cancel()
-            input_task.cancel()
+        done, pending = await asyncio.wait(
+            [forward_task, input_task], return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in done:
             try:
-                await asyncio.gather(forward_task, input_task, return_exceptions=False)
+                task.result()
             except Exception:
-                pass
+                safe_log(logger, logging.WARNING, "Terminal websocket task failed")
+        forward_task.cancel()
+        input_task.cancel()
 
         if active_session:
             active_session.remove_subscriber(queue)
@@ -603,8 +599,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         app.state.repo_to_session = repo_to_session
                         _mark_dirty()
             if session_id:
-                await _touch_session(session_id)
-            await _maybe_persist_sessions(force=True)
+                _touch_session(session_id)
+            _maybe_persist_sessions(force=True)
 
         try:
             await ws.close()

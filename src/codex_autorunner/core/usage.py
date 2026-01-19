@@ -334,7 +334,9 @@ def iter_token_events(
                     if rec_type == "session_meta":
                         cwd_val = payload.get("cwd")
                         session_cwd = Path(cwd_val).resolve() if cwd_val else None
-                        session_model = payload.get("model") or payload.get("model_provider")
+                        session_model = payload.get("model") or payload.get(
+                            "model_provider"
+                        )
                         continue
 
                     if rec_type != "event_msg" or payload.get("type") != "token_count":

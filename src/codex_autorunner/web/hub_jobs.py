@@ -69,7 +69,9 @@ class HubJobManager:
                 1 for job in self._jobs.values() if job.status == "running"
             )
             if running_count >= self._max_concurrent_jobs:
-                raise Exception(f"Too many concurrent jobs: {running_count} (max {self._max_concurrent_jobs})")
+                raise Exception(
+                    f"Too many concurrent jobs: {running_count} (max {self._max_concurrent_jobs})"
+                )
         job_id = uuid.uuid4().hex
         job = HubJob(job_id=job_id, kind=kind, status="queued", created_at=now_iso())
         async with self._lock:

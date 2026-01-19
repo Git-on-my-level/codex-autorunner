@@ -2052,6 +2052,10 @@ export class TerminalManager {
      * Clean up WebSocket connection
      */
     _teardownSocket() {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         if (this.socket) {
             this.socket.onclose = null;
             this.socket.onerror = null;
@@ -2496,6 +2500,13 @@ export class TerminalManager {
         if (this.voiceKeyActive) {
             this.voiceKeyActive = false;
             this.voiceController?.stop();
+        }
+        this.voiceController?.cleanup?.();
+        this.mobileVoiceController?.cleanup?.();
+        this.textVoiceController?.cleanup?.();
+        if (this.inputDisposable) {
+            this.inputDisposable.dispose();
+            this.inputDisposable = null;
         }
     }
     // ==================== TEXT INPUT PANEL ====================

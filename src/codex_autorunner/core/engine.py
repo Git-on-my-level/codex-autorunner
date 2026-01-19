@@ -1063,7 +1063,9 @@ class Engine:
                         resumed = resume_result.get("id")
                         if isinstance(resumed, str) and resumed:
                             thread_id = resumed
-                            self._app_server_threads.set_thread_id("autorunner", thread_id)
+                            self._app_server_threads.set_thread_id(
+                                "autorunner", thread_id
+                            )
                         if isinstance(resume_result, dict):
                             thread_info = resume_result
                     except CodexAppServerError:
