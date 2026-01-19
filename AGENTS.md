@@ -28,6 +28,29 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 - serve (API/UI)
 - hub: `car hub serve|scan|create` (worktrees via UI/API)
 
+## Path Resolution
+
+All config paths follow consistent resolution rules:
+
+- **Relative paths**: resolved to repo root
+  - Example: `.codex-autorunner/TODO.md` → `/repo/root/.codex-autorunner/TODO.md`
+
+- **Home directory expansion**: `~` expands to user's home directory
+  - Example: `~/.codex-autorunner/workspaces` → `/home/user/.codex-autorunner/workspaces`
+  - Supported for: `app_server.state_root`, `static_assets.cache_root`, `housekeeping.rules.*.path`
+
+- **Absolute paths**: allowed only for agent binaries/commands
+  - `agents.<agent>.binary` - can use absolute paths
+  - `agents.<agent>.serve_command` - can use absolute paths
+  - Rejected for: `docs.*`, `log.*`, `server_log.*`, `housekeeping.rules.*.path`
+
+- **Prohibited patterns**:
+  - `..` segments are rejected at load time (security)
+  - Empty or whitespace-only paths are rejected
+  - Paths resolving outside repo root are rejected (except ~ expansion)
+
+For detailed documentation, see [Path Resolution](docs/configuration/path-resolution.md).
+
 ## Python venv
 - Always use the project venv (`.venv/bin/python`) for running Python and tests.
 
