@@ -544,6 +544,7 @@ class TelegramBotService(
                 media_enabled=self._config.media.enabled,
                 media_images=self._config.media.images,
                 media_voice=self._config.media.voice,
+                app_server_turn_timeout_seconds=self._config.app_server_turn_timeout_seconds,
                 poller_offset=self._poller.offset,
             )
             try:

@@ -82,6 +82,9 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - Turns failing:
   - Check `telegram.turn.failed` and `app_server.*` logs.
   - Verify the Codex app-server is installed and in `telegram_bot.app_server_command` or `CAR_TELEGRAM_APP_SERVER_COMMAND`.
+- Turns hanging:
+  - Look for `telegram.turn.timeout` in the hub log.
+  - Adjust `telegram_bot.app_server.turn_timeout_seconds` if longer turns are expected.
 - App-server disconnect loops:
   - Look for repeated `app_server.disconnected` or `telegram.app_server.start_failed` events.
   - Confirm the `codex app-server` binary is healthy/compatible with this autorunner build.
