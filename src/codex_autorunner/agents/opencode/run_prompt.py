@@ -9,6 +9,7 @@ from typing import Awaitable, Callable, Optional
 
 from .runtime import (
     PERMISSION_ALLOW,
+    OpenCodeTurnOutput,
     build_turn_id,
     collect_opencode_output,
     extract_session_id,
@@ -83,7 +84,25 @@ async def run_opencode_prompt(
 
     stopped = False
     timed_out = False
-    output_result = None
+    output_result: Optional[OpenCodeTurnOutput] = None
+
+    stop_task = None
+    if should_stop is not None:
+
+        async def _wait_for_stop() -> bool:
+            while True:
+                if should_stop():
+                    return True
+                await asyncio.sleep(0.2)
+
+        stop_task = asyncio.create_task(_wait_for_stop())
+
+    async def _abort_session(reason: str) -> None:
+        try:
+            await client.abort(session_id)
+        except Exception as exc:
+            if logger is not None:
+                logger.warning(f"OpenCode abort failed ({reason}): {exc}")
 
     permission_policy = config.permission_policy or PERMISSION_ALLOW
     output_task = asyncio.create_task(
@@ -106,31 +125,99 @@ async def run_opencode_prompt(
     timeout_task = asyncio.create_task(asyncio.sleep(config.timeout_seconds))
 
     try:
-        try:
-            await prompt_task
-        except Exception as exc:
-            if logger is not None:
-                logger.error(f"OpenCode prompt failed: {exc}")
-            output_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await output_task
-            raise RuntimeError(f"OpenCode prompt failed: {exc}") from exc
 
-        tasks = {output_task, timeout_task}
-        done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        async def _finish_output(
+            ignore_errors: bool,
+        ) -> Optional[OpenCodeTurnOutput]:
+            if output_task.done():
+                try:
+                    return await output_task
+                except Exception as exc:
+                    if not ignore_errors:
+                        raise
+                    if logger is not None:
+                        logger.warning(f"OpenCode output failed after interrupt: {exc}")
+                    return None
 
-        if timeout_task in done:
-            output_task.add_done_callback(lambda task: task.exception())
-            timed_out = True
-            if logger is not None:
-                logger.warning("OpenCode prompt timed out")
+            grace_seconds = max(0, config.interrupt_grace_seconds or 0)
+            if grace_seconds <= 0:
+                output_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await output_task
+                return None
 
-        output_result = await output_task
+            try:
+                return await asyncio.wait_for(output_task, timeout=grace_seconds)
+            except asyncio.TimeoutError:
+                output_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await output_task
+                if logger is not None:
+                    logger.warning("OpenCode output did not stop within grace period")
+                return None
+            except Exception as exc:
+                if not ignore_errors:
+                    raise
+                if logger is not None:
+                    logger.warning(f"OpenCode output failed after interrupt: {exc}")
+                return None
+
+        tasks = {output_task, prompt_task, timeout_task}
+        if stop_task is not None:
+            tasks.add(stop_task)
+
+        while True:
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+
+            if output_task in done:
+                output_result = await output_task
+                if should_stop is not None and should_stop():
+                    stopped = True
+                break
+
+            if stop_task is not None and stop_task in done:
+                stopped = True
+                if logger is not None:
+                    logger.info("OpenCode prompt stopped")
+                await _abort_session("stop")
+                output_result = await _finish_output(ignore_errors=True)
+                break
+
+            if timeout_task in done:
+                timed_out = True
+                if logger is not None:
+                    logger.warning("OpenCode prompt timed out")
+                await _abort_session("timeout")
+                output_result = await _finish_output(ignore_errors=True)
+                break
+
+            if prompt_task in done:
+                try:
+                    await prompt_task
+                except Exception as exc:
+                    if logger is not None:
+                        logger.error(f"OpenCode prompt failed: {exc}")
+                    output_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await output_task
+                    raise RuntimeError(f"OpenCode prompt failed: {exc}") from exc
+                tasks.discard(prompt_task)
+                tasks = pending
 
     finally:
         timeout_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await timeout_task
+        if stop_task is not None:
+            stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+        if not prompt_task.done():
+            prompt_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await prompt_task
         if opencode_turn_started:
             try:
                 await supervisor.mark_turn_finished(Path(config.workspace_root))

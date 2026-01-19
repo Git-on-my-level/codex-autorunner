@@ -411,6 +411,44 @@ class ReviewService:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(self._state_path, json.dumps(state, indent=2) + "\n")
 
+    def _workflow_log_path(
+        self, state: Optional[dict[str, Any]] = None
+    ) -> Optional[Path]:
+        if state is None:
+            state = self._load_state()
+        if not isinstance(state, dict):
+            return None
+        run_dir = state.get("run_dir")
+        if not run_dir:
+            return None
+        return Path(run_dir) / "review.log"
+
+    def _ensure_workflow_log(self, state: dict[str, Any]) -> None:
+        log_path = self._workflow_log_path(state)
+        if log_path is None or log_path.exists():
+            return
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            started_at = state.get("started_at") or now_iso()
+            run_id = state.get("id") or "unknown"
+            log_path.write_text(
+                f"[{started_at}] Review run {run_id} started\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _append_workflow_log(self, message: str) -> None:
+        log_path = self._workflow_log_path()
+        if log_path is None:
+            return
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{now_iso()}] {message}\n")
+        except Exception:
+            pass
+
     def _initialize_state(self, *, payload: dict[str, Any]) -> dict[str, Any]:
         config = self._repo_config()
         review_cfg = config.raw.get("review") or {}
@@ -447,6 +485,7 @@ class ReviewService:
         state["final_output_path"] = final_output_path.as_posix()
         state["started_at"] = now_iso()
         state["updated_at"] = now_iso()
+        self._ensure_workflow_log(state)
         return state
 
     def _run_review(self, run_id: str) -> None:
@@ -478,8 +517,10 @@ class ReviewService:
             "{{scratchpad_dir}}", str(scratchpad_dir)
         ).replace("{{final_output_path}}", str(final_output_path))
 
-        max_seconds = state.get("max_wallclock_seconds") or REVIEW_TIMEOUT_SECONDS
-        timeout_seconds = max(max_seconds, REVIEW_TIMEOUT_SECONDS)
+        max_seconds = state.get("max_wallclock_seconds")
+        timeout_seconds = (
+            max_seconds if max_seconds is not None else REVIEW_TIMEOUT_SECONDS
+        )
 
         config = OpenCodeRunConfig(
             agent=state["agent"],
@@ -564,3 +605,4 @@ class ReviewService:
 
     def _log(self, message: str) -> None:
         self._logger.info(f"Review: {message}")
+        self._append_workflow_log(message)

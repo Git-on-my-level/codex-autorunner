@@ -14,6 +14,7 @@ import {
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { initAgentControls } from "./agentControls.js";
+import { initReview } from "./review.js";
 
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 let pendingSummaryOpen = false;
@@ -802,6 +803,7 @@ function openSummaryDoc(): void {
 export function initDashboard(): void {
   initSettings();
   initUsageChartControls();
+  initReview();
   const agentSelect = document.getElementById("dashboard-agent-select") as HTMLSelectElement | null;
   const modelSelect = document.getElementById("dashboard-model-select") as HTMLSelectElement | null;
   const reasoningSelect = document.getElementById(
