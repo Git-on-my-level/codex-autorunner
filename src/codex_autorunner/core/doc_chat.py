@@ -10,7 +10,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Mapping, Optional, Tuple
 
 from ..agents.opencode.runtime import (
     PERMISSION_ALLOW,
@@ -165,8 +165,10 @@ class DocChatService:
         app_server_threads: Optional[AppServerThreadRegistry] = None,
         app_server_events: Optional[AppServerEventBuffer] = None,
         opencode_supervisor: Optional[OpenCodeSupervisor] = None,
+        env: Optional[Mapping[str, str]] = None,
     ):
         self.engine = engine
+        self._env = env
         self._recent_summary_cache: Optional[str] = None
         self._drafts_path = (
             self.engine.repo_root / ".codex-autorunner" / DOC_CHAT_STATE_NAME
@@ -1070,7 +1072,7 @@ class DocChatService:
             prompt = self._build_app_server_prompt(request, docs)
             model_payload = split_model_id(request.model)
             missing_env = await opencode_missing_env(
-                client, str(self.engine.repo_root), model_payload
+                client, str(self.engine.repo_root), model_payload, env=self._env
             )
             if missing_env:
                 provider_id = model_payload.get("providerID") if model_payload else None

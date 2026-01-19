@@ -6,7 +6,7 @@ import threading
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from .agents.opencode.runtime import (
     PERMISSION_ALLOW,
@@ -90,8 +90,10 @@ class SpecIngestService:
         app_server_threads: Optional[AppServerThreadRegistry] = None,
         app_server_events: Optional[AppServerEventBuffer] = None,
         opencode_supervisor: Optional[OpenCodeSupervisor] = None,
+        env: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.engine = engine
+        self._env = env
         self._app_server_supervisor = app_server_supervisor
         self._app_server_threads = app_server_threads or AppServerThreadRegistry(
             default_app_server_threads_path(self.engine.repo_root)
@@ -587,7 +589,7 @@ class SpecIngestService:
 
         model_payload = split_model_id(model)
         missing_env = await opencode_missing_env(
-            client, str(self.engine.repo_root), model_payload
+            client, str(self.engine.repo_root), model_payload, env=self._env
         )
         if missing_env:
             provider_id = model_payload.get("providerID") if model_payload else None

@@ -6,9 +6,10 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional
 
 from ...core.logging_utils import log_event
+from ...core.utils import infer_home_from_workspace
 from .events import SSEEvent
 
 PermissionDecision = str
@@ -461,6 +462,8 @@ async def opencode_missing_env(
     client: Any,
     workspace_root: str,
     model_payload: Optional[dict[str, str]],
+    *,
+    env: Optional[Mapping[str, str]] = None,
 ) -> list[str]:
     if not model_payload:
         return []
@@ -490,10 +493,16 @@ async def opencode_missing_env(
         missing = [
             key
             for key in env_keys
-            if isinstance(key, str) and key and not os.getenv(key)
+            if isinstance(key, str) and key and not _get_env_value(key, env)
         ]
         return missing
     return []
+
+
+def _get_env_value(key: str, env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    if env is not None:
+        return env.get(key)
+    return os.getenv(key)
 
 
 def _provider_has_auth(provider_id: str, workspace_root: str) -> bool:
@@ -515,38 +524,13 @@ def _find_opencode_auth_path(workspace_root: str) -> Optional[Path]:
     if not data_home:
         home = os.getenv("HOME")
         if not home:
-            inferred = _infer_home_from_workspace(workspace_root)
+            inferred = infer_home_from_workspace(workspace_root)
             if inferred is None:
                 return None
             data_home = str(inferred / ".local" / "share")
         else:
             data_home = str(Path(home) / ".local" / "share")
     return Path(data_home) / "opencode" / "auth.json"
-
-
-def _infer_home_from_workspace(workspace_root: str) -> Optional[Path]:
-    resolved = Path(workspace_root).resolve()
-    parts = resolved.parts
-    if (
-        len(parts) >= 6
-        and parts[0] == os.path.sep
-        and parts[1] == "System"
-        and parts[2] == "Volumes"
-        and parts[3] == "Data"
-        and parts[4] == "Users"
-    ):
-        return Path(parts[0]) / parts[1] / parts[2] / parts[3] / parts[4] / parts[5]
-    if (
-        len(parts) >= 3
-        and parts[0] == os.path.sep
-        and parts[1]
-        in (
-            "Users",
-            "home",
-        )
-    ):
-        return Path(parts[0]) / parts[1] / parts[2]
-    return None
 
 
 async def collect_opencode_output_from_events(

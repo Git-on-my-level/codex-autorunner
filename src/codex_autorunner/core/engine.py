@@ -63,6 +63,7 @@ from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
     RepoNotFoundError,
     atomic_write,
+    build_opencode_supervisor,
     ensure_executable,
     find_repo_root,
     resolve_executable,
@@ -1230,19 +1231,6 @@ class Engine:
                 "app-server supervisor close failed: %s", exc
             )
 
-    def _command_available(self, command: list[str]) -> bool:
-        if not command:
-            return False
-        entry = str(command[0]).strip()
-        if not entry:
-            return False
-        if os.path.sep in entry or (os.path.altsep and os.path.altsep in entry):
-            path = Path(entry)
-            if not path.is_absolute():
-                path = self.repo_root / path
-            return path.is_file() and os.access(path, os.X_OK)
-        return resolve_executable(entry) is not None
-
     def _build_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
         config = self.config.app_server
         opencode_command = self.config.agent_serve_command("opencode")
@@ -1252,53 +1240,24 @@ class Engine:
         except ConfigError:
             opencode_binary = None
 
-        command = list(opencode_command or [])
-        if not command and opencode_binary:
-            command = [
-                opencode_binary,
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ]
+        supervisor = build_opencode_supervisor(
+            opencode_command=opencode_command,
+            opencode_binary=opencode_binary,
+            workspace_root=self.repo_root,
+            logger=self._app_server_logger,
+            request_timeout=config.request_timeout,
+            max_handles=config.max_handles,
+            idle_ttl_seconds=config.idle_ttl_seconds,
+            base_env=None,
+        )
 
-        resolved_source = None
-        if opencode_command:
-            resolved_source = opencode_command[0]
-        elif opencode_binary:
-            resolved_source = opencode_binary
-        resolved_binary = resolve_opencode_binary(resolved_source)
-        if command:
-            if resolved_binary:
-                command[0] = resolved_binary
-        elif resolved_binary:
-            command = [
-                resolved_binary,
-                "serve",
-                "--hostname",
-                "127.0.0.1",
-                "--port",
-                "0",
-            ]
-
-        if not command or not self._command_available(command):
+        if supervisor is None:
             self._app_server_logger.info(
                 "OpenCode command unavailable; skipping opencode supervisor."
             )
             return None
 
-        username = os.environ.get("OPENCODE_SERVER_USERNAME")
-        password = os.environ.get("OPENCODE_SERVER_PASSWORD")
-        return OpenCodeSupervisor(
-            command,
-            logger=self._app_server_logger,
-            request_timeout=config.request_timeout,
-            max_handles=config.max_handles,
-            idle_ttl_seconds=config.idle_ttl_seconds,
-            username=username if username and password else None,
-            password=password if username and password else None,
-        )
+        return supervisor
 
     def _ensure_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
         if self._opencode_supervisor is None:
