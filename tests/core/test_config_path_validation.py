@@ -23,7 +23,9 @@ class TestDocsPathValidation:
                 "summary": ".codex-autorunner/SUMMARY.md",
             },
         }
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -42,7 +44,9 @@ docs:
     def test_invalid_absolute_docs_path(self, tmp_path):
         """Absolute paths in docs are rejected."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -59,7 +63,9 @@ docs:
     def test_invalid_dotdot_docs_path(self, tmp_path):
         """Paths with .. in docs are rejected."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -76,7 +82,9 @@ docs:
     def test_invalid_home_expansion_docs_path(self, tmp_path):
         """Home expansion in docs is rejected."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -100,7 +108,9 @@ class TestAppServerPathValidation:
     def test_valid_relative_state_root(self, tmp_path):
         """Valid relative state_root is accepted."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -118,7 +128,9 @@ app_server:
     def test_valid_home_expansion_state_root(self, tmp_path):
         """Home expansion in state_root is accepted."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -134,7 +146,9 @@ app_server:
     def test_invalid_absolute_state_root(self, tmp_path):
         """Absolute state_root is rejected."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -151,7 +165,9 @@ app_server:
     def test_invalid_dotdot_state_root(self, tmp_path):
         """State_root with .. is rejected."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -172,7 +188,9 @@ class TestStaticAssetsPathValidation:
     def test_valid_relative_cache_root(self, tmp_path):
         """Valid relative cache_root is accepted."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -190,7 +208,9 @@ static_assets:
     def test_valid_home_expansion_cache_root(self, tmp_path):
         """Home expansion in cache_root is accepted."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -210,7 +230,9 @@ class TestHousekeepingPathValidation:
     def test_valid_relative_housekeeping_path(self, tmp_path):
         """Valid relative housekeeping paths are accepted."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -228,7 +250,9 @@ housekeeping:
     def test_valid_home_expansion_housekeeping_path(self, tmp_path):
         """Home expansion in housekeeping paths is accepted."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -249,7 +273,9 @@ housekeeping:
     def test_invalid_absolute_housekeeping_path(self, tmp_path):
         """Absolute housekeeping paths are rejected."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -269,7 +295,9 @@ housekeeping:
     def test_invalid_dotdot_housekeeping_path(self, tmp_path):
         """Housekeeping paths with .. are rejected."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2
@@ -289,7 +317,9 @@ housekeeping:
     def test_valid_dotdot_in_home_expansion_housekeeping(self, tmp_path):
         """.. segments in home expansion are rejected for housekeeping."""
         repo_root = Path(tmp_path)
-        config_path = repo_root / ".codex-autorunner" / "config.yml"
+        config_dir = repo_root / ".codex-autorunner"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
         config_path.write_text(
             """
 version: 2

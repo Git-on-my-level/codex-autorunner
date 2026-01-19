@@ -18,9 +18,12 @@ class ConfigPathError(Exception):
         super().__init__(message)
         self.path = path
         self.resolved = resolved
+        self.scope = scope
 
     def __str__(self) -> str:
         msg = super().__str__()
+        if self.scope:
+            msg = f"{self.scope}: {msg}"
         if self.path:
             msg = f"{msg} (path: {self.path})"
         if self.resolved:
@@ -61,15 +64,18 @@ def resolve_config_path(
     Raises:
         ConfigPathError: If path is invalid
     """
-    value_str = str(value).strip()
+    value_str = str(value)
+    stripped = value_str.strip()
 
     if not value_str:
         raise ConfigPathError("Path cannot be empty", path=value_str, scope=scope)
 
-    if value_str.isspace():
+    if stripped and not stripped:
         raise ConfigPathError(
             "Path cannot be whitespace only", path=value_str, scope=scope
         )
+
+    value_str = stripped
 
     path = Path(value_str)
 
@@ -89,14 +95,13 @@ def resolve_config_path(
                 path=value_str,
                 scope=scope,
             )
-        resolved = path.expanduser().resolve()
-        if not allow_dotdot and ".." in resolved.parts:
+        if not allow_dotdot and ".." in path.parts:
             raise ConfigPathError(
                 "Path contains '..' segments",
                 path=value_str,
-                resolved=resolved,
                 scope=scope,
             )
+        resolved = path.expanduser().resolve()
         return resolved
 
     if not allow_dotdot and ".." in path.parts:
@@ -108,7 +113,7 @@ def resolve_config_path(
 
     resolved = (repo_root / path).resolve()
 
-    if not allow_home and not resolved.is_relative_to(repo_root):
+    if not allow_home and not allow_dotdot and not resolved.is_relative_to(repo_root):
         raise ConfigPathError(
             "Path resolves outside repo root",
             path=value_str,

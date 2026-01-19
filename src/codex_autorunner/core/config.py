@@ -1961,7 +1961,7 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
                     raise ConfigError(
                         f"housekeeping.rules[{idx}].path must be relative or start with '~'"
                     )
-                if ".." in path.parts and not str(path).startswith("~"):
+                if ".." in path.parts:
                     raise ConfigError(
                         f"housekeeping.rules[{idx}].path must not contain '..' segments"
                     )
