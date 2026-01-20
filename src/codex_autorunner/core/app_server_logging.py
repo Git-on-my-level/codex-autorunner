@@ -69,9 +69,11 @@ def _extract_error_message(params: Any) -> str:
 class AppServerEventFormatter:
     def __init__(self) -> None:
         self._thinking_items: set[str] = set()
+        self._reasoning_buffers: dict[str, str] = {}
 
     def reset(self) -> None:
         self._thinking_items.clear()
+        self._reasoning_buffers.clear()
 
     def format_event(self, message: Any) -> list[str]:
         if not isinstance(message, dict):
@@ -93,15 +95,22 @@ class AppServerEventFormatter:
             ):
                 lines.append("thinking")
                 self._thinking_items.add(item_id)
-            for line in delta.splitlines() or [""]:
-                if line:
-                    lines.append(f"**{line}**")
-                else:
-                    lines.append("")
+            if isinstance(item_id, str) and item_id:
+                buffer = self._reasoning_buffers.get(item_id, "")
+                self._reasoning_buffers[item_id] = f"{buffer}{delta}"
             return lines
 
         if method == "item/reasoning/summaryPartAdded":
-            return []
+            if isinstance(item_id, str) and item_id:
+                str_item_id = item_id
+                buffer = self._reasoning_buffers.get(str_item_id, "")
+                self._reasoning_buffers[str_item_id] = ""
+                for line in buffer.splitlines():
+                    if line:
+                        lines.append(f"**{line}**")
+                    else:
+                        lines.append("")
+            return lines
 
         if method in ("turn/completed", "error"):
             self.reset()
@@ -134,6 +143,15 @@ class AppServerEventFormatter:
                 if files:
                     lines.append("file update")
                     lines.extend([f"M {path}" for path in files])
+            elif item_type == "reasoning":
+                if isinstance(item_id, str) and item_id:
+                    buffer = self._reasoning_buffers.get(item_id, "")
+                    self._reasoning_buffers.pop(item_id, None)
+                    for line in buffer.splitlines():
+                        if line:
+                            lines.append(f"**{line}**")
+                        else:
+                            lines.append("")
             elif item_type == "tool":
                 tool_name = item.get("name") or item.get("tool") or item.get("id")
                 if isinstance(tool_name, str) and tool_name:
