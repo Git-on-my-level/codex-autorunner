@@ -287,6 +287,7 @@ def init(
 def status(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
 ):
     """Show autorunner status."""
     engine = _require_repo_config(repo, hub)
@@ -301,6 +302,51 @@ def status(
     opencode_record = (
         state.sessions.get(opencode_session_id) if opencode_session_id else None
     )
+
+    if output_json:
+        hub_config_path = _resolve_hub_config_path_for_cli(engine.repo_root, hub)
+        payload = {
+            "repo": str(engine.repo_root),
+            "hub": (
+                str(hub_config_path.parent.parent.resolve())
+                if hub_config_path
+                else None
+            ),
+            "status": state.status,
+            "last_run_id": state.last_run_id,
+            "last_exit_code": state.last_exit_code,
+            "last_run_started_at": state.last_run_started_at,
+            "last_run_finished_at": state.last_run_finished_at,
+            "runner_pid": state.runner_pid,
+            "session_id": session_id,
+            "session_record": (
+                {
+                    "repo_path": session_record.repo_path,
+                    "created_at": session_record.created_at,
+                    "last_seen_at": session_record.last_seen_at,
+                    "status": session_record.status,
+                    "agent": session_record.agent,
+                }
+                if session_record
+                else None
+            ),
+            "opencode_session_id": opencode_session_id,
+            "opencode_record": (
+                {
+                    "repo_path": opencode_record.repo_path,
+                    "created_at": opencode_record.created_at,
+                    "last_seen_at": opencode_record.last_seen_at,
+                    "status": opencode_record.status,
+                    "agent": opencode_record.agent,
+                }
+                if opencode_record
+                else None
+            ),
+            "outstanding_todos": len(outstanding),
+        }
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
     typer.echo(f"Repo: {engine.repo_root}")
     typer.echo(f"Status: {state.status}")
     typer.echo(f"Last run id: {state.last_run_id}")
