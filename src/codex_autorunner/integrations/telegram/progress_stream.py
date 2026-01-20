@@ -192,27 +192,40 @@ def render_progress_text(
             actions = [thinking_action]
         elif len(actions) > tracker.max_actions:
             actions = actions[-tracker.max_actions :]
-    lines = [header]
+    blocks: list[list[str]] = []
     for action in actions:
+        block: list[str]
         if action is thinking_action:
-            if len(lines) > 1 and lines[-1] != "":
-                lines.append("")
-            icon = "🧠"
-            lines.append(f"{icon} {action.text}")
+            block = [f"🧠 {action.text}"]
+            if blocks:
+                block.insert(0, "")
         elif action.subagent_label and action.label == "thinking":
-            if len(lines) > 1 and lines[-1] != "":
-                lines.append("")
-            lines.append(f"--- {action.subagent_label} thinking ---")
-            lines.append(action.text or "...")
-            lines.append("---")
+            block = [
+                "---",
+                f"🤖 {action.subagent_label} thinking",
+                action.text or "...",
+                "---",
+            ]
+            if blocks:
+                block.insert(0, "")
         else:
             icon = STATUS_ICONS.get(action.status, STATUS_ICONS["running"])
-            lines.append(f"{icon} {action.label}: {action.text}")
+            block = [f"{icon} {action.label}: {action.text}"]
+        blocks.append(block)
+
+    def _render_lines(action_blocks: list[list[str]]) -> list[str]:
+        lines: list[str] = [header]
+        for block in action_blocks:
+            lines.extend(block)
+        return lines
+
+    lines = _render_lines(blocks)
     message = "\n".join(lines)
     if len(message) <= max_length:
         return message
-    while len(lines) > 1 and len("\n".join(lines)) > max_length:
-        lines.pop(1)
+    while blocks and len("\n".join(_render_lines(blocks))) > max_length:
+        blocks.pop(0)
+    lines = _render_lines(blocks)
     message = "\n".join(lines)
     if len(message) <= max_length:
         return message

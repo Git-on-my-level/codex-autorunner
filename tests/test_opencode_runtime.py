@@ -192,6 +192,69 @@ async def test_collect_output_skips_reasoning_when_type_missing_on_delta() -> No
 
 
 @pytest.mark.anyio
+async def test_collect_output_emits_usage_from_properties_info_tokens() -> None:
+    seen: list[dict[str, int]] = []
+
+    async def _part_handler(part_type: str, part: dict[str, int], delta_text):
+        if part_type == "usage":
+            seen.append(part)
+
+    events = [
+        SSEEvent(
+            event="message.updated",
+            data=(
+                '{"sessionID":"s1","properties":{"info":{"tokens":'
+                '{"input":10,"output":5,"reasoning":2,"cache":{"read":1}},'
+                '"modelContextWindow":2000}}}'
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        part_handler=_part_handler,
+    )
+    assert output.text == ""
+    assert len(seen) == 1
+    usage = seen[0]
+    assert usage["totalTokens"] == 18
+    assert usage["inputTokens"] == 10
+    assert usage["cachedInputTokens"] == 1
+    assert usage["outputTokens"] == 5
+    assert usage["reasoningTokens"] == 2
+    assert usage["modelContextWindow"] == 2000
+
+
+@pytest.mark.anyio
+async def test_collect_output_skips_usage_for_non_primary_session() -> None:
+    seen: list[dict[str, int]] = []
+
+    async def _part_handler(part_type: str, part: dict[str, int], delta_text):
+        if part_type == "usage":
+            seen.append(part)
+
+    events = [
+        SSEEvent(
+            event="message.updated",
+            data=(
+                '{"sessionID":"s2","properties":{"info":{"tokens":'
+                '{"input":3,"output":4}}}}'
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        progress_session_ids={"s1", "s2"},
+        part_handler=_part_handler,
+    )
+    assert output.text == ""
+    assert seen == []
+
+
+@pytest.mark.anyio
 async def test_collect_output_uses_completed_text_when_no_parts() -> None:
     events = [
         SSEEvent(
