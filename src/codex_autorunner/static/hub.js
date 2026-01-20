@@ -67,7 +67,7 @@ function loadSessionCache(key, maxAgeMs) {
     }
 }
 function formatRunSummary(repo) {
-    if (!repo.initialzed)
+    if (!repo.initialized)
         return "Not initialized";
     if (!repo.exists_on_disk)
         return "Missing on disk";
@@ -79,7 +79,7 @@ function formatRunSummary(repo) {
     return `#${repo.last_run_id}${exit}`;
 }
 function formatLastActivity(repo) {
-    if (!repo.initialzed)
+    if (!repo.initialized)
         return "";
     const time = repo.last_run_finished_at || repo.last_run_started_at;
     if (!time)
@@ -685,11 +685,11 @@ function buildActions(repo) {
     else if (!missing && repo.init_error) {
         actions.push({
             key: "init",
-            label: repo.initialzed ? "Re-init" : "Init",
+            label: repo.initialized ? "Re-init" : "Init",
             kind: "primary",
         });
     }
-    else if (!missing && !repo.initialzed) {
+    else if (!missing && !repo.initialized) {
         actions.push({ key: "init", label: "Init", kind: "primary" });
     }
     if (!missing && kind === "base") {
@@ -869,7 +869,7 @@ function renderRepos(repos) {
         const lockBadge = repo.lock_status && repo.lock_status !== "unlocked"
             ? `<span class="pill pill-small pill-warn">${escapeHtml(repo.lock_status.replace("_", " "))}</span>`
             : "";
-        const initBadge = !repo.initialzed
+        const initBadge = !repo.initialized
             ? '<span class="pill pill-small pill-warn">uninit</span>'
             : "";
         let noteText = "";
