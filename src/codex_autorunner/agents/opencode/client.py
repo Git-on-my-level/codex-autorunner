@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, AsyncIterator, Optional
@@ -217,6 +218,41 @@ class OpenCodeClient:
                 )
             raise
 
+    async def prompt_async(
+        self,
+        session_id: str,
+        *,
+        message: str,
+        agent: Optional[str] = None,
+        model: Optional[dict[str, str]] = None,
+        variant: Optional[str] = None,
+    ) -> Any:
+        payload: dict[str, Any] = {
+            "parts": [{"type": "text", "text": message}],
+        }
+        if agent:
+            payload["agent"] = agent
+        if model:
+            payload["model"] = model
+        if variant:
+            payload["variant"] = variant
+        try:
+            return await self._request(
+                "POST",
+                f"/session/{session_id}/prompt_async",
+                json_body=payload,
+                expect_json=False,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (404, 405):
+                return await self._request(
+                    "POST",
+                    f"/session/{session_id}/message",
+                    json_body=payload,
+                    expect_json=True,
+                )
+            raise
+
     async def send_command(
         self,
         session_id: str,
@@ -304,25 +340,35 @@ class OpenCodeClient:
         )
 
     async def stream_events(
-        self, *, directory: Optional[str] = None
+        self,
+        *,
+        directory: Optional[str] = None,
+        ready_event: Optional[asyncio.Event] = None,
     ) -> AsyncIterator[SSEEvent]:
         params = self._dir_params(directory)
-        async with self._client.stream("GET", "/event", params=params) as response:
-            response.raise_for_status()
-            async for sse in parse_sse_lines(response.aiter_lines()):
-                event_type = sse.event
-                try:
-                    payload = json.loads(sse.data) if sse.data else None
-                    if isinstance(payload, dict) and "type" in payload:
-                        event_type = str(payload["type"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-                yield SSEEvent(
-                    event=event_type,
-                    data=sse.data,
-                    id=sse.id,
-                    retry=sse.retry,
-                )
+        try:
+            async with self._client.stream("GET", "/event", params=params) as response:
+                response.raise_for_status()
+                if ready_event is not None:
+                    ready_event.set()
+                async for sse in parse_sse_lines(response.aiter_lines()):
+                    event_type = sse.event
+                    try:
+                        payload = json.loads(sse.data) if sse.data else None
+                        if isinstance(payload, dict) and "type" in payload:
+                            event_type = str(payload["type"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    yield SSEEvent(
+                        event=event_type,
+                        data=sse.data,
+                        id=sse.id,
+                        retry=sse.retry,
+                    )
+        except Exception:
+            if ready_event is not None and not ready_event.is_set():
+                ready_event.set()
+            raise
 
 
 __all__ = ["OpenCodeClient", "OpenCodeProtocolError"]

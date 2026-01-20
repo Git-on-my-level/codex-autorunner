@@ -61,6 +61,27 @@ def _coerce_opencode_providers(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _iter_provider_models(models_raw: Any) -> list[tuple[str, dict[str, Any]]]:
+    models: list[tuple[str, dict[str, Any]]] = []
+    if isinstance(models_raw, dict):
+        for model_id, model in models_raw.items():
+            if isinstance(model_id, str) and model_id:
+                if isinstance(model, dict):
+                    models.append((model_id, model))
+                else:
+                    models.append((model_id, {"id": model_id}))
+        return models
+    if isinstance(models_raw, list):
+        for entry in models_raw:
+            if isinstance(entry, dict):
+                model_id = entry.get("id") or entry.get("modelID")
+                if isinstance(model_id, str) and model_id:
+                    models.append((model_id, entry))
+            elif isinstance(entry, str) and entry:
+                models.append((entry, {"id": entry}))
+    return models
+
+
 def _build_opencode_model_catalog(payload: Any) -> ModelCatalog:
     from ..agents.types import ModelSpec
 
@@ -85,12 +106,8 @@ def _build_opencode_model_catalog(payload: Any) -> ModelCatalog:
         provider_id = provider.get("id") or provider.get("providerID")
         if not isinstance(provider_id, str) or not provider_id:
             continue
-        models_map = provider.get("models")
-        if not isinstance(models_map, dict):
-            continue
-        for model_id, model in models_map.items():
-            if not isinstance(model_id, str) or not isinstance(model, dict):
-                continue
+        models_raw = provider.get("models")
+        for model_id, model in _iter_provider_models(models_raw):
             model_name = model.get("name") or model.get("id") or model_id
             display_name = (
                 model_name if isinstance(model_name, str) and model_name else model_id

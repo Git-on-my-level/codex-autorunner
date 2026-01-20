@@ -23,10 +23,12 @@ from typing import (
 
 from ..agents.opencode.runtime import (
     PERMISSION_ALLOW,
+    OpenCodeTurnOutput,
     build_turn_id,
     collect_opencode_output,
     extract_session_id,
     opencode_missing_env,
+    parse_message_response,
     split_model_id,
 )
 from ..agents.opencode.supervisor import OpenCodeSupervisor
@@ -1102,6 +1104,7 @@ class DocChatService:
                 on_turn_start=on_turn_start,
             )
             permission_policy = PERMISSION_ALLOW
+            ready_event = asyncio.Event()
             output_task = asyncio.create_task(
                 collect_opencode_output(
                     client,
@@ -1110,10 +1113,13 @@ class DocChatService:
                     permission_policy=permission_policy,
                     question_policy="auto_first_option",
                     should_stop=active.interrupt_event.is_set,
+                    ready_event=ready_event,
                 )
             )
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(ready_event.wait(), timeout=2.0)
             prompt_task = asyncio.create_task(
-                client.prompt(
+                client.prompt_async(
                     thread_id,
                     message=prompt,
                     model=model_payload,
@@ -1123,8 +1129,9 @@ class DocChatService:
             timeout_task = asyncio.create_task(asyncio.sleep(DOC_CHAT_TIMEOUT_SECONDS))
             interrupt_task = asyncio.create_task(active.interrupt_event.wait())
             try:
+                prompt_response = None
                 try:
-                    await prompt_task
+                    prompt_response = await prompt_task
                 except Exception as exc:
                     active.interrupt_event.set()
                     output_task.cancel()
@@ -1162,6 +1169,14 @@ class DocChatService:
                             "turn_id": turn_id,
                         }
                 output_result = await output_task
+                if output_result.text or output_result.error:
+                    pass
+                elif prompt_response is not None:
+                    fallback = parse_message_response(prompt_response)
+                    if fallback.text:
+                        output_result = OpenCodeTurnOutput(
+                            text=fallback.text, error=fallback.error
+                        )
             finally:
                 self._clear_active_turn(turn_id)
                 timeout_task.cancel()

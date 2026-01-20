@@ -14,6 +14,7 @@ from .runtime import (
     collect_opencode_output,
     extract_session_id,
     opencode_missing_env,
+    parse_message_response,
     split_model_id,
 )
 from .supervisor import OpenCodeSupervisor
@@ -105,6 +106,7 @@ async def run_opencode_prompt(
                 logger.warning(f"OpenCode abort failed ({reason}): {exc}")
 
     permission_policy = config.permission_policy or PERMISSION_ALLOW
+    ready_event = asyncio.Event()
     output_task = asyncio.create_task(
         collect_opencode_output(
             client,
@@ -112,10 +114,13 @@ async def run_opencode_prompt(
             workspace_path=config.workspace_root,
             permission_policy=permission_policy,
             should_stop=should_stop,
+            ready_event=ready_event,
         )
     )
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(ready_event.wait(), timeout=2.0)
     prompt_task = asyncio.create_task(
-        client.prompt(
+        client.prompt_async(
             session_id,
             message=config.prompt,
             model=model_payload,
@@ -226,6 +231,17 @@ async def run_opencode_prompt(
 
     output_text = output_result.text if output_result else ""
     output_error = output_result.error if output_result else None
+    if prompt_task.done() and not output_text:
+        try:
+            prompt_response = prompt_task.result()
+        except Exception:
+            prompt_response = None
+        if prompt_response is not None:
+            fallback = parse_message_response(prompt_response)
+            if fallback.text:
+                output_text = fallback.text
+            if fallback.error and not output_error:
+                output_error = fallback.error
 
     return OpenCodeRunResult(
         session_id=session_id,

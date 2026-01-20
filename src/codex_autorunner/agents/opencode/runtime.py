@@ -15,6 +15,8 @@ from typing import (
     Optional,
 )
 
+import httpx
+
 from ...core.logging_utils import log_event
 from ...core.utils import infer_home_from_workspace
 from .events import SSEEvent
@@ -27,6 +29,10 @@ PartHandler = Callable[[str, dict[str, Any], Optional[str]], Awaitable[None]]
 PERMISSION_ALLOW = "allow"
 PERMISSION_DENY = "deny"
 PERMISSION_ASK = "ask"
+
+OPENCODE_PERMISSION_ONCE = "once"
+OPENCODE_PERMISSION_ALWAYS = "always"
+OPENCODE_PERMISSION_REJECT = "reject"
 
 _OPENCODE_USAGE_TOTAL_KEYS = ("totalTokens", "total_tokens", "total")
 _OPENCODE_USAGE_INPUT_KEYS = (
@@ -359,6 +365,53 @@ def map_approval_policy_to_permission(
     return default
 
 
+def _normalize_permission_decision(decision: Any) -> str:
+    decision_norm = str(decision or "").strip().lower()
+    if decision_norm in (
+        "always",
+        "accept_session",
+        "accept-session",
+        "allow_session",
+        "allow-session",
+        "session",
+        "session_allow",
+    ):
+        return OPENCODE_PERMISSION_ALWAYS
+    if decision_norm in (
+        "allow",
+        "approved",
+        "approve",
+        "accept",
+        "accepted",
+        "yes",
+        "y",
+        "ok",
+        "okay",
+        "true",
+        "1",
+    ):
+        return OPENCODE_PERMISSION_ONCE
+    if decision_norm in (
+        "deny",
+        "reject",
+        "decline",
+        "declined",
+        "cancel",
+        "no",
+        "n",
+        "false",
+        "0",
+    ):
+        return OPENCODE_PERMISSION_REJECT
+    return OPENCODE_PERMISSION_REJECT
+
+
+def _permission_policy_reply(policy: str) -> str:
+    if policy == PERMISSION_ALLOW:
+        return OPENCODE_PERMISSION_ONCE
+    return OPENCODE_PERMISSION_REJECT
+
+
 def _coerce_int(value: Any) -> Optional[int]:
     if isinstance(value, bool):
         return None
@@ -508,6 +561,27 @@ def _extract_context_window(
     return None
 
 
+def _extract_status_type(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for container in (
+        payload,
+        payload.get("status"),
+        payload.get("info"),
+        payload.get("properties"),
+    ):
+        if not isinstance(container, dict):
+            continue
+        status = container.get("status") if container is payload else container
+        if isinstance(status, dict):
+            value = status.get("type") or status.get("status")
+        else:
+            value = status
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 async def opencode_missing_env(
     client: Any,
     workspace_root: str,
@@ -613,6 +687,7 @@ async def collect_opencode_output_from_events(
     last_context_window: Optional[int] = None
     part_types: dict[str, str] = {}
     seen_question_request_ids: set[tuple[str, str]] = set()
+    logged_permission_errors: set[str] = set()
     normalized_question_policy = _normalize_question_policy(question_policy)
     logger = logging.getLogger(__name__)
 
@@ -822,26 +897,59 @@ async def collect_opencode_output_from_events(
         if event.event == "permission.asked":
             request_id, props = _extract_permission_request(payload)
             if request_id and respond_permission is not None:
-                reply = PERMISSION_DENY
-                if permission_policy == PERMISSION_ALLOW:
-                    reply = PERMISSION_ALLOW
-                elif (
+                if (
                     permission_policy == PERMISSION_ASK
                     and permission_handler is not None
                 ):
                     try:
                         decision = await permission_handler(request_id, props)
                     except Exception:
-                        decision = "reject"
-                    decision_norm = str(decision or "").strip().lower()
-                    if decision_norm in ("allow", "approved", "approve"):
-                        reply = PERMISSION_ALLOW
-                    elif decision_norm in ("deny", "reject", "cancel"):
-                        reply = PERMISSION_DENY
+                        decision = OPENCODE_PERMISSION_REJECT
+                    reply = _normalize_permission_decision(decision)
+                else:
+                    reply = _permission_policy_reply(permission_policy)
                 try:
                     await respond_permission(request_id, reply)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    status_code = None
+                    body_preview = None
+                    if isinstance(exc, httpx.HTTPStatusError):
+                        status_code = exc.response.status_code
+                        body_preview = (exc.response.text or "").strip()[:200] or None
+                        if (
+                            status_code is not None
+                            and 400 <= status_code < 500
+                            and request_id not in logged_permission_errors
+                        ):
+                            logged_permission_errors.add(request_id)
+                            log_event(
+                                logger,
+                                logging.ERROR,
+                                "opencode.permission.reply_failed",
+                                request_id=request_id,
+                                reply=reply,
+                                status_code=status_code,
+                                body_preview=body_preview,
+                                session_id=event_session_id,
+                            )
+                    else:
+                        log_event(
+                            logger,
+                            logging.ERROR,
+                            "opencode.permission.reply_failed",
+                            request_id=request_id,
+                            reply=reply,
+                            session_id=event_session_id,
+                            exc=exc,
+                        )
+                    if is_primary_session:
+                        detail = body_preview or _extract_error_text(payload)
+                        error = "OpenCode permission reply failed"
+                        if status_code is not None:
+                            error = f"{error} ({status_code})"
+                        if detail:
+                            error = f"{error}: {detail}"
+                        break
         if event.event == "session.error":
             if is_primary_session:
                 error = _extract_error_text(payload) or "OpenCode session error"
@@ -967,7 +1075,10 @@ async def collect_opencode_output_from_events(
                             usage_snapshot["modelContextWindow"] = context_window
                         if usage_snapshot:
                             await part_handler("usage", usage_snapshot, None)
-        if event.event == "session.idle":
+        if event.event == "session.idle" or (
+            event.event == "session.status"
+            and (_extract_status_type(payload) or "").lower() == "idle"
+        ):
             if not is_primary_session:
                 continue
             if not text_parts and pending_text:
@@ -995,6 +1106,7 @@ async def collect_opencode_output(
     question_policy: str = "ignore",
     question_handler: Optional[QuestionHandler] = None,
     should_stop: Optional[Callable[[], bool]] = None,
+    ready_event: Optional[Any] = None,
     part_handler: Optional[PartHandler] = None,
 ) -> OpenCodeTurnOutput:
     async def _respond(request_id: str, reply: str) -> None:
@@ -1007,7 +1119,7 @@ async def collect_opencode_output(
         await client.reject_question(request_id)
 
     return await collect_opencode_output_from_events(
-        client.stream_events(directory=workspace_path),
+        client.stream_events(directory=workspace_path, ready_event=ready_event),
         session_id=session_id,
         progress_session_ids=progress_session_ids,
         permission_policy=permission_policy,

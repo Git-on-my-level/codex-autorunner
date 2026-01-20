@@ -27,6 +27,20 @@ class _FakeOpenCodeClient:
         }
 
 
+class _FakeOpenCodeListClient:
+    async def providers(self, directory: Optional[str] = None) -> dict[str, object]:
+        return {
+            "providers": [
+                {
+                    "id": "provider",
+                    "models": [
+                        {"id": "model-a", "limit": {"context": 4096}},
+                    ],
+                }
+            ]
+        }
+
+
 @pytest.mark.anyio
 async def test_opencode_context_cache_scoped_by_workspace() -> None:
     handler = TelegramCommandHandlers()
@@ -44,3 +58,17 @@ async def test_opencode_context_cache_scoped_by_workspace() -> None:
 
     assert context_a == 1000
     assert context_b == 2000
+
+
+@pytest.mark.anyio
+async def test_opencode_context_window_from_list_models() -> None:
+    handler = TelegramCommandHandlers()
+    client = _FakeOpenCodeListClient()
+    model_payload = {"providerID": "provider", "modelID": "model-a"}
+    workspace = Path("/tmp/workspace_list")
+
+    context = await handler._resolve_opencode_model_context_window(
+        client, workspace, model_payload
+    )
+
+    assert context == 4096

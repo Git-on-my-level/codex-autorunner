@@ -18,11 +18,13 @@ import yaml
 
 from ..agents.opencode.logging import OpenCodeEventFormatter
 from ..agents.opencode.runtime import (
+    OpenCodeTurnOutput,
     build_turn_id,
     collect_opencode_output,
     extract_session_id,
     map_approval_policy_to_permission,
     opencode_missing_env,
+    parse_message_response,
     split_model_id,
 )
 from ..agents.opencode.supervisor import OpenCodeSupervisor, OpenCodeSupervisorError
@@ -1408,6 +1410,7 @@ class Engine:
                 ):
                     self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
 
+        ready_event = asyncio.Event()
         output_task = asyncio.create_task(
             collect_opencode_output(
                 client,
@@ -1417,10 +1420,13 @@ class Engine:
                 question_policy="auto_first_option",
                 should_stop=active.interrupt_event.is_set,
                 part_handler=_opencode_part_handler,
+                ready_event=ready_event,
             )
         )
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(ready_event.wait(), timeout=2.0)
         prompt_task = asyncio.create_task(
-            client.prompt(
+            client.prompt_async(
                 thread_id,
                 message=prompt,
                 model=model_payload,
@@ -1505,6 +1511,12 @@ class Engine:
                     self._last_run_interrupted = active.interrupted
                     return 0
             output_result = await output_task
+            if not output_result.text and not output_result.error:
+                fallback = parse_message_response(prompt_response)
+                if fallback.text:
+                    output_result = OpenCodeTurnOutput(
+                        text=fallback.text, error=fallback.error
+                    )
         finally:
             stop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

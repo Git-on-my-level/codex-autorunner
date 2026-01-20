@@ -231,6 +231,8 @@ def build_opencode_supervisor(
         base_env = os.environ
     username = base_env.get("OPENCODE_SERVER_USERNAME")
     password = base_env.get("OPENCODE_SERVER_PASSWORD")
+    if password and not username:
+        username = "opencode"
 
     from ..agents.opencode.supervisor import OpenCodeSupervisor
 
@@ -240,8 +242,8 @@ def build_opencode_supervisor(
         request_timeout=request_timeout,
         max_handles=max_handles,
         idle_ttl_seconds=idle_ttl_seconds,
-        username=username if username and password else None,
-        password=password if username and password else None,
+        username=username if password else None,
+        password=password if password else None,
         base_env=base_env,
     )
 

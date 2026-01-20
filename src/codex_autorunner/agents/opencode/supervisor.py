@@ -52,7 +52,9 @@ class OpenCodeSupervisor:
         self._request_timeout = request_timeout
         self._max_handles = max_handles
         self._idle_ttl_seconds = idle_ttl_seconds
-        self._auth = (username, password) if username and password else None
+        if password and not username:
+            username = "opencode"
+        self._auth = (username, password) if password else None
         self._base_env = base_env
         self._handles: dict[str, OpenCodeHandle] = {}
         self._lock = asyncio.Lock()

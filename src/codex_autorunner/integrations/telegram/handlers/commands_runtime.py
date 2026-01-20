@@ -23,12 +23,14 @@ from ....agents.opencode.harness import OpenCodeHarness
 from ....agents.opencode.runtime import (
     PERMISSION_ALLOW,
     PERMISSION_ASK,
+    OpenCodeTurnOutput,
     build_turn_id,
     collect_opencode_output,
     extract_session_id,
     format_permission_prompt,
     map_approval_policy_to_permission,
     opencode_missing_env,
+    parse_message_response,
     split_model_id,
 )
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
@@ -867,22 +869,33 @@ class TelegramCommandHandlers:
             if pid != provider_id:
                 continue
             models = provider.get("models")
+            model_entry = None
             if isinstance(models, dict):
-                model = models.get(model_id)
-                if isinstance(model, dict):
-                    limit = model.get("limit") or model.get("limits")
-                    if isinstance(limit, dict):
-                        for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                            value = _coerce_int(limit.get(key))
-                            if value is not None and value > 0:
-                                context_window = value
-                                break
-                    if context_window is None:
-                        for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                            value = _coerce_int(model.get(key))
-                            if value is not None and value > 0:
-                                context_window = value
-                                break
+                candidate = models.get(model_id)
+                if isinstance(candidate, dict):
+                    model_entry = candidate
+            elif isinstance(models, list):
+                for entry in models:
+                    if not isinstance(entry, dict):
+                        continue
+                    entry_id = entry.get("id") or entry.get("modelID")
+                    if entry_id == model_id:
+                        model_entry = entry
+                        break
+            if isinstance(model_entry, dict):
+                limit = model_entry.get("limit") or model_entry.get("limits")
+                if isinstance(limit, dict):
+                    for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                        value = _coerce_int(limit.get(key))
+                        if value is not None and value > 0:
+                            context_window = value
+                            break
+                if context_window is None:
+                    for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                        value = _coerce_int(model_entry.get(key))
+                        if value is not None and value > 0:
+                            context_window = value
+                            break
             if context_window is None:
                 limit = provider.get("limit") or provider.get("limits")
                 if isinstance(limit, dict):
@@ -2375,6 +2388,7 @@ class TelegramCommandHandlers:
                                         )
                             await self._schedule_progress_edit(turn_key)
 
+                        ready_event = asyncio.Event()
                         output_task = asyncio.create_task(
                             collect_opencode_output(
                                 opencode_client,
@@ -2390,17 +2404,20 @@ class TelegramCommandHandlers:
                                 question_handler=_question_handler,
                                 should_stop=_should_stop,
                                 part_handler=_handle_opencode_part,
+                                ready_event=ready_event,
                             )
                         )
+                        with suppress(asyncio.TimeoutError):
+                            await asyncio.wait_for(ready_event.wait(), timeout=2.0)
                         prompt_task = asyncio.create_task(
-                            opencode_client.prompt(
+                            opencode_client.prompt_async(
                                 thread_id,
                                 message=prompt_text,
                                 model=model_payload,
                             )
                         )
                         try:
-                            await prompt_task
+                            prompt_response = await prompt_task
                         except Exception as exc:
                             output_task.cancel()
                             with suppress(asyncio.CancelledError):
@@ -2430,6 +2447,12 @@ class TelegramCommandHandlers:
                         with suppress(asyncio.CancelledError):
                             await timeout_task
                         output_result = await output_task
+                        if not output_result.text and not output_result.error:
+                            fallback = parse_message_response(prompt_response)
+                            if fallback.text:
+                                output_result = OpenCodeTurnOutput(
+                                    text=fallback.text, error=fallback.error
+                                )
                         turn_elapsed_seconds = time.monotonic() - turn_started_at
                     finally:
                         if opencode_turn_started:
@@ -7097,6 +7120,7 @@ class TelegramCommandHandlers:
                                     )
                         await self._schedule_progress_edit(turn_key)
 
+                    ready_event = asyncio.Event()
                     output_task = asyncio.create_task(
                         collect_opencode_output(
                             opencode_client,
@@ -7111,8 +7135,11 @@ class TelegramCommandHandlers:
                             ),
                             should_stop=_should_stop,
                             part_handler=_handle_opencode_part,
+                            ready_event=ready_event,
                         )
                     )
+                    with suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(ready_event.wait(), timeout=2.0)
                     command_task = asyncio.create_task(
                         opencode_client.send_command(
                             review_session_id,
