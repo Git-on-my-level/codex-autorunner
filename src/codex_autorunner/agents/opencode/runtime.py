@@ -143,6 +143,32 @@ def extract_turn_id(session_id: str, payload: Any) -> str:
     return build_turn_id(session_id)
 
 
+def _extract_model_ids(payload: Any) -> tuple[Optional[str], Optional[str]]:
+    if not isinstance(payload, dict):
+        return None, None
+    for container in (payload, payload.get("properties"), payload.get("info")):
+        if not isinstance(container, dict):
+            continue
+        provider_id = (
+            container.get("providerID")
+            or container.get("providerId")
+            or container.get("provider_id")
+        )
+        model_id = (
+            container.get("modelID")
+            or container.get("modelId")
+            or container.get("model_id")
+        )
+        if (
+            isinstance(provider_id, str)
+            and provider_id
+            and isinstance(model_id, str)
+            and model_id
+        ):
+            return provider_id, model_id
+    return None, None
+
+
 def parse_message_response(payload: Any) -> OpenCodeMessageResult:
     if not isinstance(payload, dict):
         return OpenCodeMessageResult(text="")
@@ -451,6 +477,20 @@ def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]
         cached_read = _coerce_int(cache.get("read"))
         if cached_read is not None:
             usage["cachedInputTokens"] = cached_read
+        cached_write = _coerce_int(cache.get("write"))
+        if cached_write is not None:
+            usage["cacheWriteTokens"] = cached_write
+    if "totalTokens" not in usage:
+        components = [
+            usage.get("inputTokens"),
+            usage.get("outputTokens"),
+            usage.get("reasoningTokens"),
+            usage.get("cachedInputTokens"),
+            usage.get("cacheWriteTokens"),
+        ]
+        numeric = [value for value in components if isinstance(value, int)]
+        if numeric:
+            usage["totalTokens"] = sum(numeric)
     return usage or None
 
 
@@ -1077,6 +1117,11 @@ async def collect_opencode_output_from_events(
                         last_usage_total = total_tokens
                         last_context_window = context_window
                         usage_snapshot: dict[str, Any] = {}
+                        provider_id, model_id = _extract_model_ids(payload)
+                        if provider_id:
+                            usage_snapshot["providerID"] = provider_id
+                        if model_id:
+                            usage_snapshot["modelID"] = model_id
                         if total_tokens is not None:
                             usage_snapshot["totalTokens"] = total_tokens
                         if usage_details:
