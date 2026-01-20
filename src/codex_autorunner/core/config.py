@@ -1,6 +1,7 @@
 import dataclasses
 import ipaddress
 import json
+import logging
 import os
 import shlex
 from os import PathLike
@@ -11,6 +12,8 @@ import yaml
 
 from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
 from .path_utils import ConfigPathError, resolve_config_path
+
+logger = logging.getLogger("codex_autorunner.core.config")
 
 DOTENV_AVAILABLE = True
 try:
@@ -1094,9 +1097,8 @@ def load_dotenv_for_root(root: Path) -> None:
                 # Prefer repo-local .env over inherited process env to avoid stale keys
                 # (common when running via launchd/daemon or with a global shell export).
                 load_dotenv(dotenv_path=candidate, override=True)
-    except Exception:
-        # Never fail config loading due to dotenv issues.
-        pass
+    except OSError as exc:
+        logger.debug("Failed to load .env file: %s", exc)
 
 
 def _parse_dotenv_fallback(path: Path) -> Dict[str, str]:

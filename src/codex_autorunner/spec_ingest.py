@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import difflib
+import logging
 import re
 import threading
 from contextlib import asynccontextmanager, contextmanager
@@ -38,6 +39,8 @@ from .core.patch_utils import (
 from .core.utils import atomic_write
 from .integrations.app_server.client import CodexAppServerError
 from .integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+
+logger = logging.getLogger("codex_autorunner.spec_ingest")
 
 SPEC_INGEST_TIMEOUT_SECONDS = 240
 SPEC_INGEST_INTERRUPT_GRACE_SECONDS = 10
@@ -257,8 +260,8 @@ class SpecIngestService:
             )
         except asyncio.TimeoutError:
             pass
-        except Exception:
-            pass
+        except (OSError, RuntimeError) as exc:
+            logger.debug("Failed to abort spec ingest turn: %s", exc)
 
     async def interrupt(self) -> Dict[str, str]:
         active = self._get_active_turn()
@@ -450,8 +453,8 @@ class SpecIngestService:
                 await self._app_server_events.register_turn(
                     handle.thread_id, handle.turn_id
                 )
-            except Exception:
-                pass
+            except (OSError, KeyError, ValueError, RuntimeError) as exc:
+                logger.debug("Failed to register turn: %s", exc)
 
         turn_task = asyncio.create_task(handle.wait(timeout=None))
         timeout_task = asyncio.create_task(asyncio.sleep(SPEC_INGEST_TIMEOUT_SECONDS))
@@ -577,7 +580,8 @@ class SpecIngestService:
         if thread_id:
             try:
                 await client.get_session(thread_id)
-            except Exception:
+            except (OSError, KeyError, ValueError) as exc:
+                logger.debug("OpenCode session not found, resetting thread: %s", exc)
                 self._app_server_threads.reset_thread(key)
                 thread_id = None
         if not thread_id:

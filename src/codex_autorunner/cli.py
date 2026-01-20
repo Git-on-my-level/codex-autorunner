@@ -51,6 +51,8 @@ from .server import create_hub_app
 from .spec_ingest import SpecIngestError, SpecIngestService, clear_work_docs
 from .voice import VoiceConfig
 
+logger = logging.getLogger("codex_autorunner.cli")
+
 app = typer.Typer(add_completion=False)
 hub_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
@@ -115,14 +117,16 @@ def _resolve_repo_api_path(repo_root: Path, hub: Optional[Path], path: str) -> s
                 manifest_value = hub_cfg.get("manifest")
                 if isinstance(manifest_value, str) and manifest_value.strip():
                     manifest_rel = manifest_value.strip()
-    except Exception:
+    except (OSError, yaml.YAMLError, KeyError, ValueError) as exc:
+        logger.debug("Failed to read hub config for manifest: %s", exc)
         manifest_rel = None
     manifest_path = hub_root / (manifest_rel or ".codex-autorunner/manifest.yml")
     if not manifest_path.exists():
         return path
     try:
         manifest = load_manifest(manifest_path, hub_root)
-    except Exception:
+    except (OSError, ValueError, KeyError) as exc:
+        logger.debug("Failed to load manifest: %s", exc)
         return path
     repo_root = repo_root.resolve()
     for entry in manifest.repos:
@@ -341,7 +345,15 @@ def sessions(
     source = "server"
     try:
         payload = _request_json("GET", url, token_env=config.server_auth_token_env)
-    except Exception:
+    except (
+        httpx.HTTPError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        OSError,
+    ) as exc:
+        logger.debug(
+            "Failed to fetch sessions from server, falling back to state: %s", exc
+        )
         state = load_state(engine.state_path)
         payload = {
             "sessions": [
@@ -407,8 +419,15 @@ def stop_session(
         stopped_id = response.get("session_id", payload.get("session_id", ""))
         typer.echo(f"Stopped session {stopped_id}")
         return
-    except Exception:
-        pass
+    except (
+        httpx.HTTPError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        OSError,
+    ) as exc:
+        logger.debug(
+            "Failed to stop session via server, falling back to state: %s", exc
+        )
 
     with state_lock(engine.state_path):
         state = load_state(engine.state_path)
@@ -568,8 +587,8 @@ def run(
         if engine:
             try:
                 engine.release_lock()
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to release lock in run command: %s", exc)
 
 
 @app.command()
@@ -591,8 +610,8 @@ def once(
         if engine:
             try:
                 engine.release_lock()
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to release lock in once command: %s", exc)
 
 
 @app.command()
@@ -650,8 +669,8 @@ def resume(
         if engine:
             try:
                 engine.release_lock()
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to release lock in resume command: %s", exc)
 
 
 @app.command()
