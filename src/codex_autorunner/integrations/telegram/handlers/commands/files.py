@@ -12,9 +12,11 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
-from ...adapter import TelegramMediaCandidate, TelegramMessage
+from ...adapter import TelegramMessage
+from ...config import TelegramMediaCandidate
 from ...helpers import _path_within
-from ..handlers import messages as message_handlers
+from .. import messages as message_handlers
+from .shared import SharedHelpers
 
 if TYPE_CHECKING:
     from ...state import PendingVoiceRecord, TelegramTopicRecord
@@ -56,14 +58,12 @@ def _sanitize_error_detail(detail: str, *, limit: int = 200) -> str:
     return cleaned
 
 
-class FilesCommands:
+class FilesCommands(SharedHelpers):
 
     def _format_telegram_download_error(self, exc: Exception) -> Optional[str]:
         for current in _iter_exception_chain(exc):
             if isinstance(current, Exception):
-                from .....core.utils import _format_httpx_exception
-
-                detail = _format_httpx_exception(current)
+                detail = self._format_httpx_exception(current)
                 if detail:
                     return _sanitize_error_detail(detail)
                 message = str(current).strip()

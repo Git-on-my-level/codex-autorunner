@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
+from contextlib import suppress
 from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -40,6 +42,7 @@ from ...adapter import (
     build_inline_keyboard,
     encode_cancel_callback,
 )
+from ...config import AppServerUnavailableError
 from ...constants import (
     MAX_TOPIC_THREAD_HISTORY,
     OPENCODE_TURN_TIMEOUT_SECONDS,
@@ -47,9 +50,9 @@ from ...constants import (
     QUEUED_PLACEHOLDER_TEXT,
     RESUME_PREVIEW_ASSISTANT_LIMIT,
     REVIEW_COMMIT_PICKER_PROMPT,
+    TurnKey,
 )
 from ...helpers import (
-    _build_opencode_token_usage,
     _compact_preview,
     _compose_agent_response,
     _compose_interrupt_response,
@@ -63,12 +66,10 @@ from ...helpers import (
     is_interrupt_status,
 )
 from ...types import ReviewCommitSelectionState, TurnContext
+from ..commands_runtime import _build_opencode_token_usage
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
-
-
-OPENCODE_TURN_TIMEOUT_SECONDS = 300
 
 
 def _opencode_review_arguments(target: dict[str, Any]) -> str:
@@ -1855,40 +1856,6 @@ class GitHubCommands:
         if exit_code not in (None, 0) and not stdout.strip():
             return []
         return _parse_review_commit_log(stdout)
-
-
-def _build_opencode_token_usage(part: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Build token usage from OpenCode usage part."""
-    if not isinstance(part, dict):
-        return None
-    usage = part.get("usage")
-    if not isinstance(usage, dict):
-        return None
-    result: dict[str, Any] = {}
-    for key in ("inputTokens", "input_tokens", "promptTokens"):
-        if key in usage:
-            result["prompt_tokens"] = usage[key]
-            break
-    for key in ("outputTokens", "output_tokens", "completionTokens"):
-        if key in usage:
-            result["completion_tokens"] = usage[key]
-            break
-    for key in (
-        "cacheWriteTokens",
-        "cache_write_tokens",
-        "cacheReadTokens",
-        "cache_read_tokens",
-    ):
-        if key in usage:
-            result["cache_read_write_tokens"] = usage[key]
-            break
-    for key in ("totalTokens", "total_tokens"):
-        if key in usage:
-            result["total_tokens"] = usage[key]
-            break
-    if not result:
-        return None
-    return result
 
 
 def _format_opencode_exception(exc: Exception) -> Optional[str]:

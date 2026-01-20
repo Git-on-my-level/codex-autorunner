@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 from .....agents.opencode.runtime import extract_session_id
@@ -41,6 +42,7 @@ from ...helpers import (
     _format_rate_limits,
     _format_resume_summary,
     _format_sandbox_policy,
+    _format_thread_preview,
     _format_token_usage,
     _local_workspace_threads,
     _page_slice,

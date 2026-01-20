@@ -1,6 +1,18 @@
+import asyncio
 from typing import Any, Optional
 
-from codex_autorunner.integrations.telegram.handlers import TelegramMessage
+from ....app_server.client import CodexAppServerError
+from ...adapter import TelegramMessage
+from ...config import AppServerUnavailableError
+from ...constants import APPROVAL_POLICY_VALUES, APPROVAL_PRESETS
+from ...helpers import (
+    _clear_policy_overrides,
+    _extract_rate_limits,
+    _format_persist_note,
+    _format_sandbox_policy,
+    _normalize_approval_preset,
+    _set_policy_overrides,
+)
 
 
 class ApprovalsCommands:

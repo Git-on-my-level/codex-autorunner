@@ -1,30 +1,20 @@
 from __future__ import annotations
 
-import asyncio
-import httpx
-import json
 import logging
 import re
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from .....agents.opencode.client import OpenCodeProtocolError
-from .....agents.opencode.supervisor import OpenCodeSupervisorError
 from .....core.logging_utils import log_event
-from .....core.utils import resolve_opencode_binary
-from .....manifest import load_manifest
-from ....app_server.client import CodexAppServerClient
+from .....core.injected_context import wrap_injected_context
 from ...adapter import (
-    TelegramCallbackQuery,
     TelegramMessage,
 )
-from ...constants import MAX_MENTION_BYTES, WHISPER_TRANSCRIPT_DISCLAIMER
-
+from ...constants import WHISPER_TRANSCRIPT_DISCLAIMER
 
 PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
-PROMPT_CONTEXT_HINT = (
+PROMPT_CONTEXT_HINT = wrap_injected_context(
     "If the user asks to write a prompt, put the prompt in a ```code block```."
 )
 OUTBOX_CONTEXT_RE = re.compile(
@@ -78,7 +68,7 @@ class ExecutionCommands:
             return prompt
         if "voice" in prompt.lower() or "transcript" in prompt.lower():
             return prompt
-        return f"{prompt}\n\n{WHISPER_TRANSCRIPT_DISCLAIMER}"
+        return f"{prompt}\n\n{wrap_injected_context(WHISPER_TRANSCRIPT_DISCLAIMER)}"
 
     async def _maybe_inject_github_context(
         self, message: TelegramMessage, prompt: str
