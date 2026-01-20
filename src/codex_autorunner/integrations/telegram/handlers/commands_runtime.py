@@ -2425,7 +2425,7 @@ class TelegramCommandHandlers:
                                             turn_id=turn_id,
                                             thread_id=thread_id,
                                         )
-                            await self._schedule_progress_edit(turn_key)
+                            self._spawn_task(self._schedule_progress_edit(turn_key))
 
                         ready_event = asyncio.Event()
                         output_task = asyncio.create_task(

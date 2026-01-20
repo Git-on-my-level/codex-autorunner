@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -34,6 +36,16 @@ OPENCODE_PERMISSION_ONCE = "once"
 OPENCODE_PERMISSION_ALWAYS = "always"
 OPENCODE_PERMISSION_REJECT = "reject"
 
+_OPENCODE_STREAM_STALL_TIMEOUT_SECONDS = 60.0
+_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS = (0.5, 1.0, 2.0, 5.0, 10.0)
+_OPENCODE_IDLE_STATUS_VALUES = {
+    "idle",
+    "done",
+    "completed",
+    "complete",
+    "finished",
+    "success",
+}
 _OPENCODE_USAGE_TOTAL_KEYS = ("totalTokens", "total_tokens", "total")
 _OPENCODE_USAGE_INPUT_KEYS = (
     "inputTokens",
@@ -622,6 +634,12 @@ def _extract_status_type(payload: Any) -> Optional[str]:
     return None
 
 
+def _status_is_idle(status_type: Optional[str]) -> bool:
+    if not status_type:
+        return False
+    return status_type.strip().lower() in _OPENCODE_IDLE_STATUS_VALUES
+
+
 async def opencode_missing_env(
     client: Any,
     workspace_root: str,
@@ -700,7 +718,7 @@ def _find_opencode_auth_path(workspace_root: str) -> Optional[Path]:
 
 
 async def collect_opencode_output_from_events(
-    events: AsyncIterator[SSEEvent],
+    events: Optional[AsyncIterator[SSEEvent]] = None,
     *,
     session_id: str,
     progress_session_ids: Optional[set[str]] = None,
@@ -713,6 +731,9 @@ async def collect_opencode_output_from_events(
     reply_question: Optional[Callable[[str, list[list[str]]], Awaitable[None]]] = None,
     reject_question: Optional[Callable[[str], Awaitable[None]]] = None,
     part_handler: Optional[PartHandler] = None,
+    event_stream_factory: Optional[Callable[[], AsyncIterator[SSEEvent]]] = None,
+    session_fetcher: Optional[Callable[[], Awaitable[Any]]] = None,
+    stall_timeout_seconds: Optional[float] = _OPENCODE_STREAM_STALL_TIMEOUT_SECONDS,
 ) -> OpenCodeTurnOutput:
     text_parts: list[str] = []
     part_lengths: dict[str, int] = {}
@@ -803,9 +824,103 @@ async def collect_opencode_output_from_events(
                 text_parts.extend(pending)
         pending_text.clear()
 
-    async for event in events:
+    stream_factory = event_stream_factory
+    if events is None and stream_factory is None:
+        raise ValueError("events or event_stream_factory must be provided")
+
+    def _new_stream() -> AsyncIterator[SSEEvent]:
+        if stream_factory is not None:
+            return stream_factory()
+        if events is None:
+            raise ValueError("events or event_stream_factory must be provided")
+        return events
+
+    async def _close_stream(iterator: AsyncIterator[SSEEvent]) -> None:
+        aclose = getattr(iterator, "aclose", None)
+        if aclose is None:
+            return
+        with suppress(Exception):
+            await aclose()
+
+    stream_iter = _new_stream().__aiter__()
+    last_event_at = time.monotonic()
+    last_primary_completion_at: Optional[float] = None
+    reconnect_attempts = 0
+    can_reconnect = (
+        event_stream_factory is not None and stall_timeout_seconds is not None
+    )
+
+    while True:
         if should_stop is not None and should_stop():
             break
+        try:
+            if can_reconnect and stall_timeout_seconds is not None:
+                event = await asyncio.wait_for(
+                    stream_iter.__anext__(), timeout=stall_timeout_seconds
+                )
+            else:
+                event = await stream_iter.__anext__()
+        except StopAsyncIteration:
+            break
+        except asyncio.TimeoutError:
+            now = time.monotonic()
+            status_type = None
+            if session_fetcher is not None:
+                try:
+                    payload = await session_fetcher()
+                    status_type = _extract_status_type(payload)
+                except Exception as exc:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "opencode.session.poll_failed",
+                        session_id=session_id,
+                        exc=exc,
+                    )
+            if _status_is_idle(status_type):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "opencode.stream.stalled.session_idle",
+                    session_id=session_id,
+                    status_type=status_type,
+                    idle_seconds=now - last_event_at,
+                )
+                if not text_parts and pending_text:
+                    _flush_all_pending_text()
+                break
+            if last_primary_completion_at is not None:
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "opencode.stream.stalled.after_completion",
+                    session_id=session_id,
+                    status_type=status_type,
+                    idle_seconds=now - last_event_at,
+                )
+            if not can_reconnect:
+                break
+            backoff_index = min(
+                reconnect_attempts,
+                len(_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS) - 1,
+            )
+            backoff = _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS[backoff_index]
+            reconnect_attempts += 1
+            log_event(
+                logger,
+                logging.WARNING,
+                "opencode.stream.stalled.reconnecting",
+                session_id=session_id,
+                idle_seconds=now - last_event_at,
+                backoff_seconds=backoff,
+                status_type=status_type,
+                attempts=reconnect_attempts,
+            )
+            await _close_stream(stream_iter)
+            await asyncio.sleep(backoff)
+            stream_iter = _new_stream().__aiter__()
+            continue
+        last_event_at = time.monotonic()
         raw = event.data or ""
         try:
             payload = json.loads(raw) if raw else {}
@@ -1150,13 +1265,15 @@ async def collect_opencode_output_from_events(
                             await part_handler("usage", usage_snapshot, None)
         if event.event == "session.idle" or (
             event.event == "session.status"
-            and (_extract_status_type(payload) or "").lower() == "idle"
+            and _status_is_idle(_extract_status_type(payload))
         ):
             if not is_primary_session:
                 continue
             if not text_parts and pending_text:
                 _flush_all_pending_text()
             break
+        if event.event == "message.completed" and is_primary_session:
+            last_primary_completion_at = time.monotonic()
 
     if not text_parts and fallback_message is not None:
         msg_id, role, text = fallback_message
@@ -1194,8 +1311,14 @@ async def collect_opencode_output(
     async def _reject_question(request_id: str) -> None:
         await client.reject_question(request_id)
 
+    def _stream_factory() -> AsyncIterator[SSEEvent]:
+        return client.stream_events(directory=workspace_path, ready_event=ready_event)
+
+    async def _fetch_session() -> Any:
+        return await client.get_session(session_id)
+
     return await collect_opencode_output_from_events(
-        client.stream_events(directory=workspace_path, ready_event=ready_event),
+        None,
         session_id=session_id,
         progress_session_ids=progress_session_ids,
         permission_policy=permission_policy,
@@ -1207,6 +1330,8 @@ async def collect_opencode_output(
         reply_question=_reply_question,
         reject_question=_reject_question,
         part_handler=part_handler,
+        event_stream_factory=_stream_factory,
+        session_fetcher=_fetch_session,
     )
 
 

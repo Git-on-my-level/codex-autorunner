@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Iterable, Optional
 
 import httpx
 
@@ -344,31 +344,45 @@ class OpenCodeClient:
         *,
         directory: Optional[str] = None,
         ready_event: Optional[asyncio.Event] = None,
+        paths: Optional[Iterable[str]] = None,
     ) -> AsyncIterator[SSEEvent]:
         params = self._dir_params(directory)
-        try:
-            async with self._client.stream("GET", "/event", params=params) as response:
-                response.raise_for_status()
-                if ready_event is not None:
-                    ready_event.set()
-                async for sse in parse_sse_lines(response.aiter_lines()):
-                    event_type = sse.event
-                    try:
-                        payload = json.loads(sse.data) if sse.data else None
-                        if isinstance(payload, dict) and "type" in payload:
-                            event_type = str(payload["type"])
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                    yield SSEEvent(
-                        event=event_type,
-                        data=sse.data,
-                        id=sse.id,
-                        retry=sse.retry,
-                    )
-        except Exception:
-            if ready_event is not None and not ready_event.is_set():
-                ready_event.set()
-            raise
+        event_paths = list(paths) if paths else ["/global/event", "/event"]
+        last_error: Optional[BaseException] = None
+        for path in event_paths:
+            try:
+                async with self._client.stream("GET", path, params=params) as response:
+                    response.raise_for_status()
+                    if ready_event is not None:
+                        ready_event.set()
+                    async for sse in parse_sse_lines(response.aiter_lines()):
+                        event_type = sse.event
+                        try:
+                            payload = json.loads(sse.data) if sse.data else None
+                            if isinstance(payload, dict) and "type" in payload:
+                                event_type = str(payload["type"])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                        yield SSEEvent(
+                            event=event_type,
+                            data=sse.data,
+                            id=sse.id,
+                            retry=sse.retry,
+                        )
+                return
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                status_code = exc.response.status_code
+                if status_code in (404, 405):
+                    continue
+                raise
+            except Exception as exc:
+                last_error = exc
+                raise
+        if ready_event is not None and not ready_event.is_set():
+            ready_event.set()
+        if last_error is not None:
+            raise last_error
 
 
 __all__ = ["OpenCodeClient", "OpenCodeProtocolError"]
