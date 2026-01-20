@@ -6,7 +6,7 @@ from typing import Optional
 
 import pytest
 
-import codex_autorunner.integrations.telegram.handlers.commands_runtime as commands_runtime
+import codex_autorunner.integrations.telegram.handlers.commands.github as github_commands
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.integrations.telegram.adapter import TelegramMessage
 from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
@@ -319,10 +319,10 @@ async def test_telegram_review_opencode_sends_command(
         return []
 
     monkeypatch.setattr(
-        commands_runtime, "collect_opencode_output", _fake_collect_opencode_output
+        github_commands, "collect_opencode_output", _fake_collect_opencode_output
     )
     monkeypatch.setattr(
-        commands_runtime, "opencode_missing_env", _fake_opencode_missing_env
+        github_commands, "opencode_missing_env", _fake_opencode_missing_env
     )
 
     await handler._handle_review(_message(), "", runtime)

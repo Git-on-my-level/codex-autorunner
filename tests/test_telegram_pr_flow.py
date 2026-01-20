@@ -5,7 +5,7 @@ from typing import Optional
 import httpx
 import pytest
 
-import codex_autorunner.integrations.telegram.handlers.commands_runtime as commands_runtime
+import codex_autorunner.integrations.telegram.handlers.commands.github as github_commands
 from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
 )
@@ -32,7 +32,7 @@ def test_pr_flow_api_base_repo_mode_builds_base(
         server_base_path="/car",
         server_auth_token_env=None,
     )
-    monkeypatch.setattr(commands_runtime, "load_repo_config", lambda *_a, **_k: config)
+    monkeypatch.setattr(github_commands, "load_repo_config", lambda *_a, **_k: config)
     record = _record(workspace_path="/tmp/workspace")
     base, headers = handler._pr_flow_api_base(record)
     assert base == "http://localhost:8123/car"
@@ -50,7 +50,7 @@ def test_pr_flow_api_base_hub_mode_includes_repo_prefix(
         server_auth_token_env="CAR_AUTH",
     )
     monkeypatch.setenv("CAR_AUTH", "token-123")
-    monkeypatch.setattr(commands_runtime, "load_hub_config", lambda *_a, **_k: config)
+    monkeypatch.setattr(github_commands, "load_hub_config", lambda *_a, **_k: config)
     record = _record(repo_id="repo-1")
     base, headers = handler._pr_flow_api_base(record)
     assert base == "https://example.com/hub/repos/repo-1"
@@ -67,7 +67,7 @@ async def test_pr_flow_request_dispatches(monkeypatch: pytest.MonkeyPatch) -> No
         server_auth_token_env="CAR_AUTH",
     )
     monkeypatch.setenv("CAR_AUTH", "token-456")
-    monkeypatch.setattr(commands_runtime, "load_repo_config", lambda *_a, **_k: config)
+    monkeypatch.setattr(github_commands, "load_repo_config", lambda *_a, **_k: config)
     record = _record(workspace_path="/tmp/workspace")
     calls: list[tuple[str, str, object, object]] = []
 
@@ -97,7 +97,7 @@ async def test_pr_flow_request_dispatches(monkeypatch: pytest.MonkeyPatch) -> No
                 request=request,
             )
 
-    monkeypatch.setattr(commands_runtime.httpx, "AsyncClient", _ClientStub)
+    monkeypatch.setattr(github_commands.httpx, "AsyncClient", _ClientStub)
 
     payload = {"mode": "issue", "issue": "123"}
     data = await handler._pr_flow_request(

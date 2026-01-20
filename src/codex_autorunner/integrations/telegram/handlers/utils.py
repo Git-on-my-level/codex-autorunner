@@ -70,6 +70,20 @@ def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]
         cached_read = _coerce_int(cache.get("read"))
         if cached_read is not None:
             usage["cachedInputTokens"] = cached_read
+        cached_write = _coerce_int(cache.get("write"))
+        if cached_write is not None:
+            usage["cacheWriteTokens"] = cached_write
+    if "totalTokens" not in usage:
+        components = [
+            usage.get("inputTokens"),
+            usage.get("outputTokens"),
+            usage.get("reasoningTokens"),
+            usage.get("cachedInputTokens"),
+            usage.get("cacheWriteTokens"),
+        ]
+        numeric = [value for value in components if isinstance(value, int)]
+        if numeric:
+            usage["totalTokens"] = sum(numeric)
     return usage or None
 
 

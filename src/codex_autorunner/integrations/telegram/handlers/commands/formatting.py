@@ -10,7 +10,7 @@ from ...helpers import _compact_preview
 class FormattingHelpers:
     def _prepare_compact_summary_delivery(
         self, summary_text: str
-    ) -> tuple[str, bytes | None]:
+    ) -> tuple[str, Optional[bytes]]:
         summary_text = summary_text.strip() or "(no summary)"
         if len(summary_text) <= TELEGRAM_MAX_MESSAGE_LENGTH:
             return summary_text, None
