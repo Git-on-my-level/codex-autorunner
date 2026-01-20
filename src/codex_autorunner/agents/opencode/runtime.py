@@ -1060,8 +1060,26 @@ async def collect_opencode_output_from_events(
                 resolved_role = role
                 if resolved_role is None and msg_id:
                     resolved_role = message_roles.get(msg_id)
-                if message_result.text and resolved_role != "user":
-                    fallback_message = (msg_id, resolved_role, message_result.text)
+                if message_result.text:
+                    if resolved_role == "assistant" or resolved_role is None:
+                        fallback_message = (msg_id, resolved_role, message_result.text)
+                        if resolved_role is None:
+                            log_event(
+                                logger,
+                                logging.DEBUG,
+                                "opencode.message.completed.role_missing",
+                                session_id=event_session_id,
+                                message_id=msg_id,
+                            )
+                    else:
+                        log_event(
+                            logger,
+                            logging.DEBUG,
+                            "opencode.message.completed.ignored",
+                            session_id=event_session_id,
+                            message_id=msg_id,
+                            role=resolved_role,
+                        )
                 if message_result.error and not error:
                     error = message_result.error
             if part_handler is not None and is_primary_session:
@@ -1097,7 +1115,10 @@ async def collect_opencode_output_from_events(
 
     if not text_parts and fallback_message is not None:
         msg_id, role, text = fallback_message
-        if role != "user":
+        resolved_role = role
+        if resolved_role is None and msg_id:
+            resolved_role = message_roles.get(msg_id)
+        if resolved_role == "assistant":
             _append_text_for_message(msg_id, text)
             if pending_text:
                 _flush_all_pending_text()
