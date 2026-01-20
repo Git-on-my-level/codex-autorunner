@@ -4,6 +4,8 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramCallbackQuery,
     encode_bind_callback,
     encode_compact_callback,
+    encode_question_custom_callback,
+    encode_question_done_callback,
     encode_question_option_callback,
     encode_resume_callback,
 )
@@ -156,6 +158,40 @@ async def test_handle_callback_question() -> None:
         message_id=9,
         chat_id=33,
         thread_id=34,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls
+    assert handlers.calls[0][0] == "question"
+
+
+@pytest.mark.anyio
+async def test_handle_callback_question_custom() -> None:
+    handlers = _HandlerStub()
+    callback = TelegramCallbackQuery(
+        update_id=6,
+        callback_id="cb6",
+        from_user_id=7,
+        data=encode_question_custom_callback("req-2"),
+        message_id=10,
+        chat_id=35,
+        thread_id=36,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls
+    assert handlers.calls[0][0] == "question"
+
+
+@pytest.mark.anyio
+async def test_handle_callback_question_done() -> None:
+    handlers = _HandlerStub()
+    callback = TelegramCallbackQuery(
+        update_id=7,
+        callback_id="cb7",
+        from_user_id=8,
+        data=encode_question_done_callback("req-3"),
+        message_id=11,
+        chat_id=37,
+        thread_id=38,
     )
     await handle_callback(handlers, callback)
     assert handlers.calls
