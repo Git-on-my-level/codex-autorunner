@@ -282,6 +282,69 @@ async def test_collect_output_uses_completed_text_when_no_parts() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_ignores_completed_text_when_role_missing() -> None:
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":null},'
+            '"parts":[{"type":"text","text":"User prompt"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == ""
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_uses_completed_text_after_role_update() -> None:
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":null},'
+            '"parts":[{"type":"text","text":"Hello"}]}',
+        ),
+        SSEEvent(
+            event="message.updated",
+            data='{"sessionID":"s1","info":{"id":"m1","role":"assistant"}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Hello"
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_drops_user_completed_when_role_missing() -> None:
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"u1","role":null},'
+            '"parts":[{"type":"text","text":"User prompt"}]}',
+        ),
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"a1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"Assistant response"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Assistant response"
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_dedupes_completed_before_part_updates() -> None:
     events = [
         SSEEvent(
