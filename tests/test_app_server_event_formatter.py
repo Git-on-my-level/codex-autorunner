@@ -201,3 +201,52 @@ async def test_thinking_multiline_deltas() -> None:
 
     lines = formatter.format_event(part_added_msg)
     assert lines == ["**Line 1**", "**Line 2**", "**Line 3**"]
+
+
+@pytest.mark.anyio
+async def test_thinking_deltas_without_itemid_emit_immediately() -> None:
+    formatter = AppServerEventFormatter()
+
+    # Delta without itemId - should emit immediately
+    delta_msg = {
+        "method": "item/reasoning/summaryTextDelta",
+        "params": {
+            "turnId": "turn-6",
+            "delta": "This has no itemId",
+        },
+    }
+
+    lines = formatter.format_event(delta_msg)
+    assert lines == ["thinking", "**This has no itemId**"]
+
+
+@pytest.mark.anyio
+async def test_thinking_deltas_with_null_itemid_emit_immediately() -> None:
+    formatter = AppServerEventFormatter()
+
+    # Delta with null itemId - should emit immediately
+    delta_msg = {
+        "method": "item/reasoning/summaryTextDelta",
+        "params": {
+            "itemId": None,
+            "turnId": "turn-7",
+            "delta": "This has null itemId",
+        },
+    }
+
+    lines = formatter.format_event(delta_msg)
+    assert lines == ["thinking", "**This has null itemId**"]
+
+
+@pytest.mark.anyio
+async def test_thinking_part_added_without_itemid() -> None:
+    formatter = AppServerEventFormatter()
+
+    # summaryPartAdded without itemId should not crash
+    part_added_msg = {
+        "method": "item/reasoning/summaryPartAdded",
+        "params": {"turnId": "turn-8"},
+    }
+
+    lines = formatter.format_event(part_added_msg)
+    assert lines == []

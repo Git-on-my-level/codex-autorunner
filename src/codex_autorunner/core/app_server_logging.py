@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
@@ -88,23 +88,26 @@ class AppServerEventFormatter:
             delta = params.get("delta")
             if not isinstance(delta, str) or not delta:
                 return []
-            if (
-                isinstance(item_id, str)
-                and item_id
-                and item_id not in self._thinking_items
-            ):
+            has_valid_item_id = isinstance(item_id, str) and item_id
+            if has_valid_item_id and item_id not in self._thinking_items:
                 lines.append("thinking")
-                self._thinking_items.add(item_id)
-            if isinstance(item_id, str) and item_id:
-                buffer = self._reasoning_buffers.get(item_id, "")
-                self._reasoning_buffers[item_id] = f"{buffer}{delta}"
+                self._thinking_items.add(cast(str, item_id))
+            if has_valid_item_id:
+                buffer = self._reasoning_buffers.get(cast(str, item_id), "")
+                self._reasoning_buffers[cast(str, item_id)] = f"{buffer}{delta}"
+            else:
+                lines.append("thinking")
+                for line in delta.splitlines() or [""]:
+                    if line:
+                        lines.append(f"**{line}**")
+                    else:
+                        lines.append("")
             return lines
 
         if method == "item/reasoning/summaryPartAdded":
             if isinstance(item_id, str) and item_id:
-                str_item_id = item_id
-                buffer = self._reasoning_buffers.get(str_item_id, "")
-                self._reasoning_buffers[str_item_id] = ""
+                buffer = self._reasoning_buffers.get(item_id, "")
+                self._reasoning_buffers[item_id] = ""
                 for line in buffer.splitlines():
                     if line:
                         lines.append(f"**{line}**")
