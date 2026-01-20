@@ -37,6 +37,7 @@ Reference docs in `docs/` (e.g., configuration, operations, debugging).
 
 ## GitHub CLI
 - Use the `gh` CLI for GitHub interactions whenever possible.
+- Prefer `gh pr create --body-file` (or a here-doc) to preserve PR body newlines.
 
 ## Git commits
 - Use a 30 second (or longer) timeout for `git commit` commands so pre-commit hooks can finish.
