@@ -6,15 +6,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from .....core.logging_utils import log_event
 from .....core.injected_context import wrap_injected_context
+from .....core.logging_utils import log_event
 from ...adapter import (
     TelegramMessage,
 )
 from ...constants import WHISPER_TRANSCRIPT_DISCLAIMER
 
 PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
-PROMPT_CONTEXT_HINT = wrap_injected_context(
+PROMPT_CONTEXT_HINT = (
     "If the user asks to write a prompt, put the prompt in a ```code block```."
 )
 OUTBOX_CONTEXT_RE = re.compile(
@@ -99,7 +99,7 @@ class ExecutionCommands:
         """Inject prompt context if user asks for a prompt."""
         if not PROMPT_CONTEXT_RE.search(text):
             return prompt
-        return f"{prompt}\n\n{PROMPT_CONTEXT_HINT}"
+        return f"{prompt}\n\n{wrap_injected_context(PROMPT_CONTEXT_HINT)}"
 
     def _maybe_inject_car_context(self, prompt: str, text: str) -> str:
         """Inject CAR context if user asks about CAR documents."""
