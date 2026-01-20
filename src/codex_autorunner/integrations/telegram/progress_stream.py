@@ -188,6 +188,15 @@ def render_progress_text(
                 lines.append("")
             icon = "🧠"
             lines.append(f"{icon} {action.text}")
+        elif action.label.startswith("@") and action.text.startswith("thinking"):
+            if len(lines) > 1 and lines[-1] != "":
+                lines.append("")
+            thinking_text = action.text
+            if thinking_text.lower().startswith("thinking:"):
+                thinking_text = thinking_text.split(":", 1)[1].strip()
+            lines.append(f"--- {action.label} thinking ---")
+            lines.append(thinking_text or "...")
+            lines.append("---")
         else:
             icon = STATUS_ICONS.get(action.status, STATUS_ICONS["running"])
             lines.append(f"{icon} {action.label}: {action.text}")

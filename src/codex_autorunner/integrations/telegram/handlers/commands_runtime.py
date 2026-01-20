@@ -360,6 +360,29 @@ _OPENCODE_CONTEXT_WINDOW_KEYS = (
     "maxTokens",
     "max_tokens",
 )
+_OPENCODE_MODEL_CONTEXT_KEYS = ("context",) + _OPENCODE_CONTEXT_WINDOW_KEYS
+
+
+def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
+    usage: dict[str, Any] = {}
+    total_tokens = _coerce_int(tokens.get("total"))
+    if total_tokens is not None:
+        usage["totalTokens"] = total_tokens
+    input_tokens = _coerce_int(tokens.get("input"))
+    if input_tokens is not None:
+        usage["inputTokens"] = input_tokens
+    output_tokens = _coerce_int(tokens.get("output"))
+    if output_tokens is not None:
+        usage["outputTokens"] = output_tokens
+    reasoning_tokens = _coerce_int(tokens.get("reasoning"))
+    if reasoning_tokens is not None:
+        usage["reasoningTokens"] = reasoning_tokens
+    cache = tokens.get("cache")
+    if isinstance(cache, dict):
+        cached_read = _coerce_int(cache.get("read"))
+        if cached_read is not None:
+            usage["cachedInputTokens"] = cached_read
+    return usage or None
 
 
 def _extract_opencode_usage_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -374,6 +397,11 @@ def _extract_opencode_usage_payload(payload: dict[str, Any]) -> dict[str, Any]:
         usage = payload.get(key)
         if isinstance(usage, dict):
             return usage
+    tokens = payload.get("tokens")
+    if isinstance(tokens, dict):
+        flattened = _flatten_opencode_tokens(tokens)
+        if flattened:
+            return flattened
     return payload
 
 
@@ -791,6 +819,74 @@ class TelegramCommandHandlers:
         if not binary:
             return False
         return resolve_opencode_binary(binary) is not None
+
+    async def _resolve_opencode_model_context_window(
+        self,
+        opencode_client: Any,
+        workspace_root: Path,
+        model_payload: Optional[dict[str, str]],
+    ) -> Optional[int]:
+        if not model_payload:
+            return None
+        provider_id = model_payload.get("providerID")
+        model_id = model_payload.get("modelID")
+        if not provider_id or not model_id:
+            return None
+        cache: Optional[dict[str, Optional[int]]] = getattr(
+            self, "_opencode_model_context_cache", None
+        )
+        if cache is None:
+            cache = {}
+            self._opencode_model_context_cache = cache
+        cache_key = f"{provider_id}/{model_id}"
+        if cache_key in cache:
+            return cache[cache_key]
+        try:
+            payload = await opencode_client.providers(directory=str(workspace_root))
+        except Exception:
+            return None
+        providers: list[dict[str, Any]] = []
+        if isinstance(payload, dict):
+            raw_providers = payload.get("providers")
+            if isinstance(raw_providers, list):
+                providers = [
+                    entry for entry in raw_providers if isinstance(entry, dict)
+                ]
+        elif isinstance(payload, list):
+            providers = [entry for entry in payload if isinstance(entry, dict)]
+        context_window = None
+        for provider in providers:
+            pid = provider.get("id") or provider.get("providerID")
+            if pid != provider_id:
+                continue
+            models = provider.get("models")
+            if isinstance(models, dict):
+                model = models.get(model_id)
+                if isinstance(model, dict):
+                    limit = model.get("limit") or model.get("limits")
+                    if isinstance(limit, dict):
+                        for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                            value = _coerce_int(limit.get(key))
+                            if value is not None and value > 0:
+                                context_window = value
+                                break
+                    if context_window is None:
+                        for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                            value = _coerce_int(model.get(key))
+                            if value is not None and value > 0:
+                                context_window = value
+                                break
+            if context_window is None:
+                limit = provider.get("limit") or provider.get("limits")
+                if isinstance(limit, dict):
+                    for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                        value = _coerce_int(limit.get(key))
+                        if value is not None and value > 0:
+                            context_window = value
+                            break
+            break
+        cache[cache_key] = context_window
+        return context_window
 
     async def _fetch_model_list(
         self,
@@ -2011,12 +2107,16 @@ class TelegramCommandHandlers:
                         reasoning_buffers: dict[str, str] = {}
                         watched_session_ids = {thread_id}
                         subagent_labels: dict[str, str] = {}
+                        opencode_context_window: Optional[int] = None
+                        context_window_resolved = False
 
                         async def _handle_opencode_part(
                             part_type: str,
                             part: dict[str, Any],
                             delta_text: Optional[str],
                         ) -> None:
+                            nonlocal opencode_context_window
+                            nonlocal context_window_resolved
                             if turn_key is None:
                                 return
                             tracker = self._turn_progress_trackers.get(turn_key)
@@ -2235,16 +2335,34 @@ class TelegramCommandHandlers:
                                 )
                                 if token_usage:
                                     if is_primary_session:
+                                        if (
+                                            "modelContextWindow" not in token_usage
+                                            and not context_window_resolved
+                                        ):
+                                            opencode_context_window = await self._resolve_opencode_model_context_window(
+                                                opencode_client,
+                                                workspace_root,
+                                                model_payload,
+                                            )
+                                            context_window_resolved = True
+                                        if (
+                                            "modelContextWindow" not in token_usage
+                                            and isinstance(opencode_context_window, int)
+                                            and opencode_context_window > 0
+                                        ):
+                                            token_usage["modelContextWindow"] = (
+                                                opencode_context_window
+                                            )
                                         self._cache_token_usage(
                                             token_usage,
                                             turn_id=turn_id,
                                             thread_id=thread_id,
                                         )
-                                    await self._note_progress_context_usage(
-                                        token_usage,
-                                        turn_id=turn_id,
-                                        thread_id=thread_id,
-                                    )
+                                        await self._note_progress_context_usage(
+                                            token_usage,
+                                            turn_id=turn_id,
+                                            thread_id=thread_id,
+                                        )
                             await self._schedule_progress_edit(turn_key)
 
                         output_task = asyncio.create_task(
@@ -2351,6 +2469,11 @@ class TelegramCommandHandlers:
                             rollout_path=record.rollout_path,
                         ),
                     )
+                token_usage = (
+                    self._token_usage_by_turn.get(turn_id) if turn_id else None
+                )
+                if token_usage is None and thread_id:
+                    token_usage = self._token_usage_by_thread.get(thread_id)
                 return _TurnRunResult(
                     record=record,
                     thread_id=thread_id,
@@ -2358,7 +2481,7 @@ class TelegramCommandHandlers:
                     response=output or "No response.",
                     placeholder_id=placeholder_id,
                     elapsed_seconds=turn_elapsed_seconds,
-                    token_usage=None,
+                    token_usage=token_usage,
                     transcript_message_id=transcript_message_id,
                     transcript_text=transcript_text,
                 )
@@ -6710,12 +6833,16 @@ class TelegramCommandHandlers:
                     reasoning_buffers: dict[str, str] = {}
                     watched_session_ids = {review_session_id}
                     subagent_labels: dict[str, str] = {}
+                    opencode_context_window: Optional[int] = None
+                    context_window_resolved = False
 
                     async def _handle_opencode_part(
                         part_type: str,
                         part: dict[str, Any],
                         delta_text: Optional[str],
                     ) -> None:
+                        nonlocal opencode_context_window
+                        nonlocal context_window_resolved
                         if turn_key is None:
                             return
                         tracker = self._turn_progress_trackers.get(turn_key)
@@ -6932,16 +7059,34 @@ class TelegramCommandHandlers:
                             )
                             if token_usage:
                                 if is_primary_session:
+                                    if (
+                                        "modelContextWindow" not in token_usage
+                                        and not context_window_resolved
+                                    ):
+                                        opencode_context_window = await self._resolve_opencode_model_context_window(
+                                            opencode_client,
+                                            workspace_root,
+                                            model_payload,
+                                        )
+                                        context_window_resolved = True
+                                    if (
+                                        "modelContextWindow" not in token_usage
+                                        and isinstance(opencode_context_window, int)
+                                        and opencode_context_window > 0
+                                    ):
+                                        token_usage["modelContextWindow"] = (
+                                            opencode_context_window
+                                        )
                                     self._cache_token_usage(
                                         token_usage,
                                         turn_id=turn_id,
                                         thread_id=review_session_id,
                                     )
-                                await self._note_progress_context_usage(
-                                    token_usage,
-                                    turn_id=turn_id,
-                                    thread_id=review_session_id,
-                                )
+                                    await self._note_progress_context_usage(
+                                        token_usage,
+                                        turn_id=turn_id,
+                                        thread_id=review_session_id,
+                                    )
                         await self._schedule_progress_edit(turn_key)
 
                     output_task = asyncio.create_task(
