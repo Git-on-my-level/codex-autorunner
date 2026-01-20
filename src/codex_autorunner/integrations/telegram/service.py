@@ -209,6 +209,7 @@ class TelegramBotService(
         self._turn_progress_updated_at: dict[TurnKey, float] = {}
         self._turn_progress_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._turn_progress_heartbeat_tasks: dict[TurnKey, asyncio.Task[None]] = {}
+        self._turn_progress_locks: dict[TurnKey, asyncio.Lock] = {}
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._pending_questions: dict[str, PendingQuestion] = {}

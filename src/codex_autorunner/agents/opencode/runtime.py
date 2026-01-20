@@ -850,136 +850,182 @@ async def collect_opencode_output_from_events(
         event_stream_factory is not None and stall_timeout_seconds is not None
     )
 
-    while True:
-        if should_stop is not None and should_stop():
-            break
-        try:
-            if can_reconnect and stall_timeout_seconds is not None:
-                event = await asyncio.wait_for(
-                    stream_iter.__anext__(), timeout=stall_timeout_seconds
-                )
-            else:
-                event = await stream_iter.__anext__()
-        except StopAsyncIteration:
-            break
-        except asyncio.TimeoutError:
-            now = time.monotonic()
-            status_type = None
-            if session_fetcher is not None:
-                try:
-                    payload = await session_fetcher()
-                    status_type = _extract_status_type(payload)
-                except Exception as exc:
+    try:
+        while True:
+            if should_stop is not None and should_stop():
+                break
+            try:
+                if can_reconnect and stall_timeout_seconds is not None:
+                    event = await asyncio.wait_for(
+                        stream_iter.__anext__(), timeout=stall_timeout_seconds
+                    )
+                else:
+                    event = await stream_iter.__anext__()
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                now = time.monotonic()
+                status_type = None
+                if session_fetcher is not None:
+                    try:
+                        payload = await session_fetcher()
+                        status_type = _extract_status_type(payload)
+                    except Exception as exc:
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            "opencode.session.poll_failed",
+                            session_id=session_id,
+                            exc=exc,
+                        )
+                if _status_is_idle(status_type):
                     log_event(
                         logger,
-                        logging.WARNING,
-                        "opencode.session.poll_failed",
+                        logging.INFO,
+                        "opencode.stream.stalled.session_idle",
                         session_id=session_id,
-                        exc=exc,
+                        status_type=status_type,
+                        idle_seconds=now - last_event_at,
                     )
-            if _status_is_idle(status_type):
-                log_event(
-                    logger,
-                    logging.INFO,
-                    "opencode.stream.stalled.session_idle",
-                    session_id=session_id,
-                    status_type=status_type,
-                    idle_seconds=now - last_event_at,
-                )
-                if not text_parts and pending_text:
-                    _flush_all_pending_text()
-                break
-            if last_primary_completion_at is not None:
-                log_event(
-                    logger,
-                    logging.INFO,
-                    "opencode.stream.stalled.after_completion",
-                    session_id=session_id,
-                    status_type=status_type,
-                    idle_seconds=now - last_event_at,
-                )
-            if not can_reconnect:
-                break
-            backoff_index = min(
-                reconnect_attempts,
-                len(_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS) - 1,
-            )
-            backoff = _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS[backoff_index]
-            reconnect_attempts += 1
-            log_event(
-                logger,
-                logging.WARNING,
-                "opencode.stream.stalled.reconnecting",
-                session_id=session_id,
-                idle_seconds=now - last_event_at,
-                backoff_seconds=backoff,
-                status_type=status_type,
-                attempts=reconnect_attempts,
-            )
-            await _close_stream(stream_iter)
-            await asyncio.sleep(backoff)
-            stream_iter = _new_stream().__aiter__()
-            continue
-        last_event_at = time.monotonic()
-        raw = event.data or ""
-        try:
-            payload = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            payload = {}
-        event_session_id = extract_session_id(payload)
-        if not event_session_id:
-            continue
-        if progress_session_ids is None:
-            if event_session_id != session_id:
-                continue
-        elif event_session_id not in progress_session_ids:
-            continue
-        is_primary_session = event_session_id == session_id
-        if event.event == "question.asked":
-            request_id, props = _extract_question_request(payload)
-            questions = props.get("questions") if isinstance(props, dict) else []
-            question_count = len(questions) if isinstance(questions, list) else 0
-            log_event(
-                logger,
-                logging.INFO,
-                "opencode.question.asked",
-                request_id=request_id,
-                question_count=question_count,
-                session_id=event_session_id,
-            )
-            if not request_id:
-                continue
-            dedupe_key = (event_session_id, request_id)
-            if dedupe_key in seen_question_request_ids:
-                continue
-            seen_question_request_ids.add(dedupe_key)
-            if question_handler is not None:
-                try:
-                    answers = await question_handler(request_id, props)
-                except Exception as exc:
+                    if not text_parts and pending_text:
+                        _flush_all_pending_text()
+                    break
+                if last_primary_completion_at is not None:
                     log_event(
                         logger,
-                        logging.WARNING,
-                        "opencode.question.auto_reply_failed",
-                        request_id=request_id,
-                        session_id=event_session_id,
-                        exc=exc,
+                        logging.INFO,
+                        "opencode.stream.stalled.after_completion",
+                        session_id=session_id,
+                        status_type=status_type,
+                        idle_seconds=now - last_event_at,
                     )
+                if not can_reconnect:
+                    break
+                backoff_index = min(
+                    reconnect_attempts,
+                    len(_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS) - 1,
+                )
+                backoff = _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS[backoff_index]
+                reconnect_attempts += 1
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "opencode.stream.stalled.reconnecting",
+                    session_id=session_id,
+                    idle_seconds=now - last_event_at,
+                    backoff_seconds=backoff,
+                    status_type=status_type,
+                    attempts=reconnect_attempts,
+                )
+                await _close_stream(stream_iter)
+                await asyncio.sleep(backoff)
+                stream_iter = _new_stream().__aiter__()
+                continue
+            last_event_at = time.monotonic()
+            raw = event.data or ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            event_session_id = extract_session_id(payload)
+            if not event_session_id:
+                continue
+            if progress_session_ids is None:
+                if event_session_id != session_id:
+                    continue
+            elif event_session_id not in progress_session_ids:
+                continue
+            is_primary_session = event_session_id == session_id
+            if event.event == "question.asked":
+                request_id, props = _extract_question_request(payload)
+                questions = props.get("questions") if isinstance(props, dict) else []
+                question_count = len(questions) if isinstance(questions, list) else 0
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "opencode.question.asked",
+                    request_id=request_id,
+                    question_count=question_count,
+                    session_id=event_session_id,
+                )
+                if not request_id:
+                    continue
+                dedupe_key = (event_session_id, request_id)
+                if dedupe_key in seen_question_request_ids:
+                    continue
+                seen_question_request_ids.add(dedupe_key)
+                if question_handler is not None:
+                    try:
+                        answers = await question_handler(request_id, props)
+                    except Exception as exc:
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            "opencode.question.auto_reply_failed",
+                            request_id=request_id,
+                            session_id=event_session_id,
+                            exc=exc,
+                        )
+                        if reject_question is not None:
+                            try:
+                                await reject_question(request_id)
+                            except Exception:
+                                pass
+                        continue
+                    if answers is None:
+                        if reject_question is not None:
+                            try:
+                                await reject_question(request_id)
+                            except Exception:
+                                pass
+                        continue
+                    normalized_answers = _normalize_question_answers(
+                        answers, question_count=question_count
+                    )
+                    if reply_question is not None:
+                        try:
+                            await reply_question(request_id, normalized_answers)
+                            log_event(
+                                logger,
+                                logging.INFO,
+                                "opencode.question.replied",
+                                request_id=request_id,
+                                question_count=question_count,
+                                session_id=event_session_id,
+                                mode="handler",
+                            )
+                        except Exception as exc:
+                            log_event(
+                                logger,
+                                logging.WARNING,
+                                "opencode.question.auto_reply_failed",
+                                request_id=request_id,
+                                session_id=event_session_id,
+                                exc=exc,
+                            )
+                    continue
+                if normalized_question_policy == "ignore":
+                    continue
+                if normalized_question_policy == "reject":
                     if reject_question is not None:
                         try:
                             await reject_question(request_id)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            log_event(
+                                logger,
+                                logging.WARNING,
+                                "opencode.question.auto_reply_failed",
+                                request_id=request_id,
+                                session_id=event_session_id,
+                                exc=exc,
+                            )
                     continue
-                if answers is None:
-                    if reject_question is not None:
-                        try:
-                            await reject_question(request_id)
-                        except Exception:
-                            pass
-                    continue
+                auto_answers = _auto_answers_for_questions(
+                    questions if isinstance(questions, list) else [],
+                    normalized_question_policy,
+                )
                 normalized_answers = _normalize_question_answers(
-                    answers, question_count=question_count
+                    auto_answers, question_count=question_count
                 )
                 if reply_question is not None:
                     try:
@@ -987,11 +1033,12 @@ async def collect_opencode_output_from_events(
                         log_event(
                             logger,
                             logging.INFO,
-                            "opencode.question.replied",
+                            "opencode.question.auto_replied",
                             request_id=request_id,
                             question_count=question_count,
                             session_id=event_session_id,
-                            mode="handler",
+                            policy=normalized_question_policy,
+                            answers=_summarize_question_answers(normalized_answers),
                         )
                     except Exception as exc:
                         log_event(
@@ -1003,277 +1050,245 @@ async def collect_opencode_output_from_events(
                             exc=exc,
                         )
                 continue
-            if normalized_question_policy == "ignore":
-                continue
-            if normalized_question_policy == "reject":
-                if reject_question is not None:
+            if event.event == "permission.asked":
+                request_id, props = _extract_permission_request(payload)
+                if request_id and respond_permission is not None:
+                    if (
+                        permission_policy == PERMISSION_ASK
+                        and permission_handler is not None
+                    ):
+                        try:
+                            decision = await permission_handler(request_id, props)
+                        except Exception:
+                            decision = OPENCODE_PERMISSION_REJECT
+                        reply = _normalize_permission_decision(decision)
+                    else:
+                        reply = _permission_policy_reply(permission_policy)
                     try:
-                        await reject_question(request_id)
+                        await respond_permission(request_id, reply)
                     except Exception as exc:
-                        log_event(
-                            logger,
-                            logging.WARNING,
-                            "opencode.question.auto_reply_failed",
-                            request_id=request_id,
-                            session_id=event_session_id,
-                            exc=exc,
-                        )
-                continue
-            auto_answers = _auto_answers_for_questions(
-                questions if isinstance(questions, list) else [],
-                normalized_question_policy,
-            )
-            normalized_answers = _normalize_question_answers(
-                auto_answers, question_count=question_count
-            )
-            if reply_question is not None:
-                try:
-                    await reply_question(request_id, normalized_answers)
-                    log_event(
-                        logger,
-                        logging.INFO,
-                        "opencode.question.auto_replied",
-                        request_id=request_id,
-                        question_count=question_count,
-                        session_id=event_session_id,
-                        policy=normalized_question_policy,
-                        answers=_summarize_question_answers(normalized_answers),
-                    )
-                except Exception as exc:
-                    log_event(
-                        logger,
-                        logging.WARNING,
-                        "opencode.question.auto_reply_failed",
-                        request_id=request_id,
-                        session_id=event_session_id,
-                        exc=exc,
-                    )
-            continue
-        if event.event == "permission.asked":
-            request_id, props = _extract_permission_request(payload)
-            if request_id and respond_permission is not None:
-                if (
-                    permission_policy == PERMISSION_ASK
-                    and permission_handler is not None
-                ):
-                    try:
-                        decision = await permission_handler(request_id, props)
-                    except Exception:
-                        decision = OPENCODE_PERMISSION_REJECT
-                    reply = _normalize_permission_decision(decision)
-                else:
-                    reply = _permission_policy_reply(permission_policy)
-                try:
-                    await respond_permission(request_id, reply)
-                except Exception as exc:
-                    status_code = None
-                    body_preview = None
-                    if isinstance(exc, httpx.HTTPStatusError):
-                        status_code = exc.response.status_code
-                        body_preview = (exc.response.text or "").strip()[:200] or None
-                        if (
-                            status_code is not None
-                            and 400 <= status_code < 500
-                            and request_id not in logged_permission_errors
-                        ):
-                            logged_permission_errors.add(request_id)
+                        status_code = None
+                        body_preview = None
+                        if isinstance(exc, httpx.HTTPStatusError):
+                            status_code = exc.response.status_code
+                            body_preview = (exc.response.text or "").strip()[
+                                :200
+                            ] or None
+                            if (
+                                status_code is not None
+                                and 400 <= status_code < 500
+                                and request_id not in logged_permission_errors
+                            ):
+                                logged_permission_errors.add(request_id)
+                                log_event(
+                                    logger,
+                                    logging.ERROR,
+                                    "opencode.permission.reply_failed",
+                                    request_id=request_id,
+                                    reply=reply,
+                                    status_code=status_code,
+                                    body_preview=body_preview,
+                                    session_id=event_session_id,
+                                )
+                        else:
                             log_event(
                                 logger,
                                 logging.ERROR,
                                 "opencode.permission.reply_failed",
                                 request_id=request_id,
                                 reply=reply,
-                                status_code=status_code,
-                                body_preview=body_preview,
                                 session_id=event_session_id,
+                                exc=exc,
                             )
-                    else:
-                        log_event(
-                            logger,
-                            logging.ERROR,
-                            "opencode.permission.reply_failed",
-                            request_id=request_id,
-                            reply=reply,
-                            session_id=event_session_id,
-                            exc=exc,
-                        )
-                    if is_primary_session:
-                        detail = body_preview or _extract_error_text(payload)
-                        error = "OpenCode permission reply failed"
-                        if status_code is not None:
-                            error = f"{error} ({status_code})"
-                        if detail:
-                            error = f"{error}: {detail}"
-                        break
-        if event.event == "session.error":
-            if is_primary_session:
-                error = _extract_error_text(payload) or "OpenCode session error"
-                break
-            continue
-        if event.event in ("message.updated", "message.completed"):
-            if is_primary_session:
-                msg_id, role = _register_message_role(payload)
-                if role == "assistant":
-                    _flush_pending_text(msg_id)
-        if event.event == "message.part.updated":
-            properties = (
-                payload.get("properties") if isinstance(payload, dict) else None
-            )
-            if isinstance(properties, dict):
-                part = properties.get("part")
-                delta = properties.get("delta")
-            else:
-                part = payload.get("part")
-                delta = payload.get("delta")
-            part_dict = part if isinstance(part, dict) else None
-            part_with_session = None
-            if isinstance(part_dict, dict):
-                part_with_session = dict(part_dict)
-                part_with_session["sessionID"] = event_session_id
-            part_type = part_dict.get("type") if part_dict else None
-            part_ignored = bool(part_dict.get("ignored")) if part_dict else False
-            part_message_id = _message_id_from_part(part_dict)
-            part_id = None
-            if part_dict:
-                part_id = part_dict.get("id") or part_dict.get("partId")
-                if isinstance(part_id, str) and part_id and isinstance(part_type, str):
-                    part_types[part_id] = part_type
-                elif (
-                    isinstance(part_id, str)
-                    and part_id
-                    and not isinstance(part_type, str)
-                    and part_id in part_types
-                ):
-                    part_type = part_types[part_id]
-            if isinstance(delta, dict):
-                delta_text = delta.get("text")
-            elif isinstance(delta, str):
-                delta_text = delta
-            else:
-                delta_text = None
-            if isinstance(delta_text, str) and delta_text:
-                if part_type == "reasoning":
-                    if part_handler and part_dict:
+                        if is_primary_session:
+                            detail = body_preview or _extract_error_text(payload)
+                            error = "OpenCode permission reply failed"
+                            if status_code is not None:
+                                error = f"{error} ({status_code})"
+                            if detail:
+                                error = f"{error}: {detail}"
+                            break
+            if event.event == "session.error":
+                if is_primary_session:
+                    error = _extract_error_text(payload) or "OpenCode session error"
+                    break
+                continue
+            if event.event in ("message.updated", "message.completed"):
+                if is_primary_session:
+                    msg_id, role = _register_message_role(payload)
+                    if role == "assistant":
+                        _flush_pending_text(msg_id)
+            if event.event == "message.part.updated":
+                properties = (
+                    payload.get("properties") if isinstance(payload, dict) else None
+                )
+                if isinstance(properties, dict):
+                    part = properties.get("part")
+                    delta = properties.get("delta")
+                else:
+                    part = payload.get("part")
+                    delta = payload.get("delta")
+                part_dict = part if isinstance(part, dict) else None
+                part_with_session = None
+                if isinstance(part_dict, dict):
+                    part_with_session = dict(part_dict)
+                    part_with_session["sessionID"] = event_session_id
+                part_type = part_dict.get("type") if part_dict else None
+                part_ignored = bool(part_dict.get("ignored")) if part_dict else False
+                part_message_id = _message_id_from_part(part_dict)
+                part_id = None
+                if part_dict:
+                    part_id = part_dict.get("id") or part_dict.get("partId")
+                    if (
+                        isinstance(part_id, str)
+                        and part_id
+                        and isinstance(part_type, str)
+                    ):
+                        part_types[part_id] = part_type
+                    elif (
+                        isinstance(part_id, str)
+                        and part_id
+                        and not isinstance(part_type, str)
+                        and part_id in part_types
+                    ):
+                        part_type = part_types[part_id]
+                if isinstance(delta, dict):
+                    delta_text = delta.get("text")
+                elif isinstance(delta, str):
+                    delta_text = delta
+                else:
+                    delta_text = None
+                if isinstance(delta_text, str) and delta_text:
+                    if part_type == "reasoning":
+                        if part_handler and part_dict:
+                            await part_handler(
+                                "reasoning", part_with_session or part_dict, delta_text
+                            )
+                    elif part_type in (None, "text") and not part_ignored:
+                        if not is_primary_session:
+                            continue
+                        _append_text_for_message(part_message_id, delta_text)
+                        # Update dedupe bookkeeping for text deltas to prevent re-adding later
+                        if isinstance(part_dict, dict):
+                            part_id = part_dict.get("id") or part_dict.get("partId")
+                            text = part_dict.get("text")
+                            if (
+                                isinstance(part_id, str)
+                                and part_id
+                                and isinstance(text, str)
+                            ):
+                                part_lengths[part_id] = len(text)
+                            elif isinstance(text, str):
+                                last_full_text = text
+                        if part_handler and part_dict:
+                            await part_handler(
+                                "text", part_with_session or part_dict, delta_text
+                            )
+                    elif part_handler and part_dict and part_type:
                         await part_handler(
-                            "reasoning", part_with_session or part_dict, delta_text
+                            part_type, part_with_session or part_dict, delta_text
                         )
-                elif part_type in (None, "text") and not part_ignored:
+                elif (
+                    isinstance(part_dict, dict)
+                    and part_type in (None, "text")
+                    and not part_ignored
+                ):
                     if not is_primary_session:
                         continue
-                    _append_text_for_message(part_message_id, delta_text)
-                    # Update dedupe bookkeeping for text deltas to prevent re-adding later
-                    if isinstance(part_dict, dict):
+                    text = part_dict.get("text")
+                    if isinstance(text, str) and text:
                         part_id = part_dict.get("id") or part_dict.get("partId")
-                        text = part_dict.get("text")
-                        if (
-                            isinstance(part_id, str)
-                            and part_id
-                            and isinstance(text, str)
-                        ):
-                            part_lengths[part_id] = len(text)
-                        elif isinstance(text, str):
+                        if isinstance(part_id, str) and part_id:
+                            last_len = part_lengths.get(part_id, 0)
+                            if len(text) > last_len:
+                                _append_text_for_message(
+                                    part_message_id, text[last_len:]
+                                )
+                                part_lengths[part_id] = len(text)
+                        else:
+                            if last_full_text and text.startswith(last_full_text):
+                                _append_text_for_message(
+                                    part_message_id, text[len(last_full_text) :]
+                                )
+                            elif text != last_full_text:
+                                _append_text_for_message(part_message_id, text)
                             last_full_text = text
-                    if part_handler and part_dict:
-                        await part_handler(
-                            "text", part_with_session or part_dict, delta_text
-                        )
                 elif part_handler and part_dict and part_type:
-                    await part_handler(
-                        part_type, part_with_session or part_dict, delta_text
-                    )
-            elif (
-                isinstance(part_dict, dict)
-                and part_type in (None, "text")
-                and not part_ignored
-            ):
-                if not is_primary_session:
-                    continue
-                text = part_dict.get("text")
-                if isinstance(text, str) and text:
-                    part_id = part_dict.get("id") or part_dict.get("partId")
-                    if isinstance(part_id, str) and part_id:
-                        last_len = part_lengths.get(part_id, 0)
-                        if len(text) > last_len:
-                            _append_text_for_message(part_message_id, text[last_len:])
-                            part_lengths[part_id] = len(text)
-                    else:
-                        if last_full_text and text.startswith(last_full_text):
-                            _append_text_for_message(
-                                part_message_id, text[len(last_full_text) :]
+                    await part_handler(part_type, part_with_session or part_dict, None)
+            if event.event in ("message.completed", "message.updated"):
+                message_result = parse_message_response(payload)
+                msg_id = None
+                role = None
+                if is_primary_session:
+                    msg_id, role = _register_message_role(payload)
+                    resolved_role = role
+                    if resolved_role is None and msg_id:
+                        resolved_role = message_roles.get(msg_id)
+                    if message_result.text:
+                        if resolved_role == "assistant" or resolved_role is None:
+                            fallback_message = (
+                                msg_id,
+                                resolved_role,
+                                message_result.text,
                             )
-                        elif text != last_full_text:
-                            _append_text_for_message(part_message_id, text)
-                        last_full_text = text
-            elif part_handler and part_dict and part_type:
-                await part_handler(part_type, part_with_session or part_dict, None)
-        if event.event in ("message.completed", "message.updated"):
-            message_result = parse_message_response(payload)
-            msg_id = None
-            role = None
-            if is_primary_session:
-                msg_id, role = _register_message_role(payload)
-                resolved_role = role
-                if resolved_role is None and msg_id:
-                    resolved_role = message_roles.get(msg_id)
-                if message_result.text:
-                    if resolved_role == "assistant" or resolved_role is None:
-                        fallback_message = (msg_id, resolved_role, message_result.text)
-                        if resolved_role is None:
+                            if resolved_role is None:
+                                log_event(
+                                    logger,
+                                    logging.DEBUG,
+                                    "opencode.message.completed.role_missing",
+                                    session_id=event_session_id,
+                                    message_id=msg_id,
+                                )
+                        else:
                             log_event(
                                 logger,
                                 logging.DEBUG,
-                                "opencode.message.completed.role_missing",
+                                "opencode.message.completed.ignored",
                                 session_id=event_session_id,
                                 message_id=msg_id,
+                                role=resolved_role,
                             )
-                    else:
-                        log_event(
-                            logger,
-                            logging.DEBUG,
-                            "opencode.message.completed.ignored",
-                            session_id=event_session_id,
-                            message_id=msg_id,
-                            role=resolved_role,
-                        )
-                if message_result.error and not error:
-                    error = message_result.error
-            if part_handler is not None and is_primary_session:
-                usage = _extract_usage_payload(payload)
-                if usage is not None:
-                    total_tokens = _extract_total_tokens(usage)
-                    context_window = _extract_context_window(payload, usage)
-                    usage_details = _extract_usage_details(usage)
-                    if (
-                        total_tokens != last_usage_total
-                        or context_window != last_context_window
-                    ):
-                        last_usage_total = total_tokens
-                        last_context_window = context_window
-                        usage_snapshot: dict[str, Any] = {}
-                        provider_id, model_id = _extract_model_ids(payload)
-                        if provider_id:
-                            usage_snapshot["providerID"] = provider_id
-                        if model_id:
-                            usage_snapshot["modelID"] = model_id
-                        if total_tokens is not None:
-                            usage_snapshot["totalTokens"] = total_tokens
-                        if usage_details:
-                            usage_snapshot.update(usage_details)
-                        if context_window is not None:
-                            usage_snapshot["modelContextWindow"] = context_window
-                        if usage_snapshot:
-                            await part_handler("usage", usage_snapshot, None)
-        if event.event == "session.idle" or (
-            event.event == "session.status"
-            and _status_is_idle(_extract_status_type(payload))
-        ):
-            if not is_primary_session:
-                continue
-            if not text_parts and pending_text:
-                _flush_all_pending_text()
-            break
-        if event.event == "message.completed" and is_primary_session:
-            last_primary_completion_at = time.monotonic()
+                    if message_result.error and not error:
+                        error = message_result.error
+                if part_handler is not None and is_primary_session:
+                    usage = _extract_usage_payload(payload)
+                    if usage is not None:
+                        total_tokens = _extract_total_tokens(usage)
+                        context_window = _extract_context_window(payload, usage)
+                        usage_details = _extract_usage_details(usage)
+                        if (
+                            total_tokens != last_usage_total
+                            or context_window != last_context_window
+                        ):
+                            last_usage_total = total_tokens
+                            last_context_window = context_window
+                            usage_snapshot: dict[str, Any] = {}
+                            provider_id, model_id = _extract_model_ids(payload)
+                            if provider_id:
+                                usage_snapshot["providerID"] = provider_id
+                            if model_id:
+                                usage_snapshot["modelID"] = model_id
+                            if total_tokens is not None:
+                                usage_snapshot["totalTokens"] = total_tokens
+                            if usage_details:
+                                usage_snapshot.update(usage_details)
+                            if context_window is not None:
+                                usage_snapshot["modelContextWindow"] = context_window
+                            if usage_snapshot:
+                                await part_handler("usage", usage_snapshot, None)
+            if event.event == "session.idle" or (
+                event.event == "session.status"
+                and _status_is_idle(_extract_status_type(payload))
+            ):
+                if not is_primary_session:
+                    continue
+                if not text_parts and pending_text:
+                    _flush_all_pending_text()
+                break
+            if event.event == "message.completed" and is_primary_session:
+                last_primary_completion_at = time.monotonic()
+    finally:
+        await _close_stream(stream_iter)
 
     if not text_parts and fallback_message is not None:
         msg_id, role, text = fallback_message
