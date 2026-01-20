@@ -139,6 +139,13 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
 
 
 def should_bypass_topic_queue(handlers: Any, message: TelegramMessage) -> bool:
+    for pending in handlers._pending_questions.values():
+        if (
+            pending.awaiting_custom_input
+            and pending.chat_id == message.chat_id
+            and (pending.thread_id is None or pending.thread_id == message.thread_id)
+        ):
+            return True
     _raw_text, text_candidate, entities = _message_text_candidate(message)
     if not text_candidate:
         return False
