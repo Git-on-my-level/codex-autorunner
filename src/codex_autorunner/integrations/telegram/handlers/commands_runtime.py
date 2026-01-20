@@ -384,6 +384,20 @@ def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]
         cached_read = _coerce_int(cache.get("read"))
         if cached_read is not None:
             usage["cachedInputTokens"] = cached_read
+        cached_write = _coerce_int(cache.get("write"))
+        if cached_write is not None:
+            usage["cacheWriteTokens"] = cached_write
+    if "totalTokens" not in usage:
+        components = [
+            usage.get("inputTokens"),
+            usage.get("outputTokens"),
+            usage.get("reasoningTokens"),
+            usage.get("cachedInputTokens"),
+            usage.get("cacheWriteTokens"),
+        ]
+        numeric = [value for value in components if isinstance(value, int)]
+        if numeric:
+            usage["totalTokens"] = sum(numeric)
     return usage or None
 
 
@@ -414,6 +428,23 @@ def _extract_opencode_usage_value(
         value = _coerce_int(payload.get(key))
         if value is not None:
             return value
+    return None
+
+
+def _extract_model_ids_from_part(part: Any) -> Optional[dict[str, str]]:
+    if not isinstance(part, dict):
+        return None
+    provider_id = (
+        part.get("providerID") or part.get("providerId") or part.get("provider_id")
+    )
+    model_id = part.get("modelID") or part.get("modelId") or part.get("model_id")
+    if (
+        isinstance(provider_id, str)
+        and provider_id.strip()
+        and isinstance(model_id, str)
+        and model_id.strip()
+    ):
+        return {"providerID": provider_id, "modelID": model_id}
     return None
 
 
@@ -2342,30 +2373,125 @@ class TelegramCommandHandlers:
                                             "done",
                                             item_id=scoped_patch_id,
                                         )
-                            elif part_type == "agent":
-                                agent_name = part.get("name") or "agent"
-                                tracker.add_action("agent", str(agent_name), "done")
-                            elif part_type == "step-start":
-                                tracker.add_action("step", "started", "update")
-                            elif part_type == "step-finish":
-                                reason = part.get("reason") or "finished"
-                                tracker.add_action("step", str(reason), "done")
-                            elif part_type == "usage":
-                                token_usage = (
-                                    _build_opencode_token_usage(part)
-                                    if isinstance(part, dict)
-                                    else None
-                                )
+                                    elif part_type == "agent":
+                                        agent_name = part.get("name") or "agent"
+                                        tracker.add_action(
+                                            "agent", str(agent_name), "done"
+                                        )
+                                    elif part_type == "step-start":
+                                        tracker.add_action("step", "started", "update")
+                                    elif part_type == "step-finish":
+                                        reason = part.get("reason") or "finished"
+                                        tracker.add_action("step", str(reason), "done")
+                                    elif part_type == "usage":
+                                        token_usage = (
+                                            _build_opencode_token_usage(part)
+                                            if isinstance(part, dict)
+                                            else None
+                                        )
+                            if token_usage:
+                                if is_primary_session:
+                                    if (
+                                        "modelContextWindow" not in token_usage
+                                        and not context_window_resolved
+                                    ):
+                                        context_model_payload = (
+                                            model_payload
+                                            or _extract_model_ids_from_part(part)
+                                        )
+                                        opencode_context_window = await self._resolve_opencode_model_context_window(
+                                            opencode_client,
+                                            workspace_root,
+                                            context_model_payload,
+                                        )
+                                        context_window_resolved = True
+                                    if (
+                                        "modelContextWindow" not in token_usage
+                                        and isinstance(opencode_context_window, int)
+                                        and opencode_context_window > 0
+                                    ):
+                                        token_usage["modelContextWindow"] = (
+                                            opencode_context_window
+                                        )
+                                    self._cache_token_usage(
+                                        token_usage,
+                                        turn_id=turn_id,
+                                        thread_id=thread_id,
+                                    )
+                                    await self._note_progress_context_usage(
+                                        token_usage,
+                                        turn_id=turn_id,
+                                        thread_id=thread_id,
+                                    )
                                 if token_usage:
                                     if is_primary_session:
                                         if (
                                             "modelContextWindow" not in token_usage
                                             and not context_window_resolved
                                         ):
+                                            context_model_payload = (
+                                                model_payload
+                                                or _extract_model_ids_from_part(part)
+                                            )
                                             opencode_context_window = await self._resolve_opencode_model_context_window(
                                                 opencode_client,
                                                 workspace_root,
-                                                model_payload,
+                                                context_model_payload,
+                                            )
+                                            context_window_resolved = True
+                                        if (
+                                            "modelContextWindow" not in token_usage
+                                            and isinstance(opencode_context_window, int)
+                                            and opencode_context_window > 0
+                                        ):
+                                            token_usage["modelContextWindow"] = (
+                                                opencode_context_window
+                                            )
+                                        self._cache_token_usage(
+                                            token_usage,
+                                            turn_id=turn_id,
+                                            thread_id=thread_id,
+                                        )
+                                        await self._note_progress_context_usage(
+                                            token_usage,
+                                            turn_id=turn_id,
+                                            thread_id=thread_id,
+                                        )
+                                if token_usage:
+                                    if is_primary_session:
+                                        if (
+                                            "modelContextWindow" not in token_usage
+                                            and not context_window_resolved
+                                        ):
+                                            context_model_payload = model_payload
+                                            if (
+                                                not context_model_payload
+                                                and isinstance(part, dict)
+                                            ):
+                                                provider_id = (
+                                                    part.get("providerID")
+                                                    or part.get("providerId")
+                                                    or part.get("provider_id")
+                                                )
+                                                model_id = (
+                                                    part.get("modelID")
+                                                    or part.get("modelId")
+                                                    or part.get("model_id")
+                                                )
+                                                if (
+                                                    isinstance(provider_id, str)
+                                                    and provider_id
+                                                    and isinstance(model_id, str)
+                                                    and model_id
+                                                ):
+                                                    context_model_payload = {
+                                                        "providerID": provider_id,
+                                                        "modelID": model_id,
+                                                    }
+                                            opencode_context_window = await self._resolve_opencode_model_context_window(
+                                                opencode_client,
+                                                workspace_root,
+                                                context_model_payload,
                                             )
                                             context_window_resolved = True
                                         if (
@@ -7094,10 +7220,14 @@ class TelegramCommandHandlers:
                                         "modelContextWindow" not in token_usage
                                         and not context_window_resolved
                                     ):
+                                        context_model_payload = (
+                                            model_payload
+                                            or _extract_model_ids_from_part(part)
+                                        )
                                         opencode_context_window = await self._resolve_opencode_model_context_window(
                                             opencode_client,
                                             workspace_root,
-                                            model_payload,
+                                            context_model_payload,
                                         )
                                         context_window_resolved = True
                                     if (
@@ -7657,8 +7787,7 @@ class TelegramCommandHandlers:
         )
         await self._send_message(
             message.chat_id,
-            f"Detected GitHub issue: {slug}#{number}\n"
-            f"Start PR flow to create a PR?",
+            f"Detected GitHub issue: {slug}#{number}\nStart PR flow to create a PR?",
             thread_id=message.thread_id,
             reply_to=message.message_id,
             reply_markup=keyboard,

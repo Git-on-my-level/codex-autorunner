@@ -518,7 +518,7 @@ def _format_tui_token_usage(token_usage: Optional[dict[str, Any]]) -> Optional[s
     if isinstance(context_window, int) and context_window > 0:
         remaining = max(context_window - total_tokens, 0)
         percent = round(remaining / context_window * 100)
-        parts.append(f"{percent}% left")
+        parts.append(f"ctx {percent}%")
     return " ".join(parts)
 
 
