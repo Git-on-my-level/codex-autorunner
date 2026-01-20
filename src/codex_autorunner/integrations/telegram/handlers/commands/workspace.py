@@ -1,30 +1,24 @@
 from __future__ import annotations
 
 import logging
-import shlex
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
-from ....agents.opencode.runtime import extract_session_id
-from ....core.logging_utils import log_event
-from ....core.state import now_iso
-from ....core.utils import canonicalize_path, resolve_opencode_binary
-from ....core.injected_context import wrap_injected_context
-from ....manifest import load_manifest
-from ...app_server.client import (
+from .....agents.opencode.runtime import extract_session_id
+from .....core.logging_utils import log_event
+from .....core.state import now_iso
+from .....core.utils import canonicalize_path, resolve_opencode_binary
+from .....manifest import load_manifest
+from ....app_server.client import (
     CodexAppServerClient,
-    CodexAppServerDisconnected,
-    CodexAppServerError,
 )
-from ..adapter import (
+from ...adapter import (
     TelegramCallbackQuery,
     TelegramMessage,
 )
-from ..config import AppServerUnavailableError
-from ..constants import (
+from ...config import AppServerUnavailableError
+from ...constants import (
     AGENT_PICKER_PROMPT,
-    APPROVAL_MODE_YOLO,
     BIND_PICKER_PROMPT,
-    COMMAND_DISABLED_TEMPLATE,
     DEFAULT_AGENT,
     DEFAULT_AGENT_MODELS,
     DEFAULT_PAGE_SIZE,
@@ -35,7 +29,7 @@ from ..constants import (
     THREAD_LIST_MAX_PAGES,
     VALID_AGENT_VALUES,
 )
-from ..helpers import (
+from ...helpers import (
     _approval_age_seconds,
     _coerce_thread_list,
     _extract_first_user_preview,
@@ -58,11 +52,11 @@ from ..helpers import (
     _thread_summary_preview,
     _with_conversation_id,
 )
-from ..state import normalize_agent, topic_key
-from ..types import SelectionState
+from ...state import APPROVAL_MODE_YOLO, normalize_agent
+from ...types import SelectionState
 
 if TYPE_CHECKING:
-    from ..state import TelegramTopicRecord
+    from ...state import TelegramTopicRecord
 
 
 def _extract_opencode_session_path(payload: Any) -> Optional[str]:
@@ -85,7 +79,7 @@ def _extract_opencode_session_path(payload: Any) -> Optional[str]:
 
 
 class WorkspaceCommands:
-    
+
     async def _apply_agent_change(
         self,
         chat_id: int,
@@ -225,6 +219,7 @@ class WorkspaceCommands:
 
     def _opencode_available(self) -> bool:
         from os import getenv
+
         raw_command = getenv("CAR_OPENCODE_COMMAND")
         if resolve_opencode_binary(raw_command):
             return True
@@ -244,15 +239,18 @@ class WorkspaceCommands:
         if agent == "opencode":
             supervisor = getattr(self, "_opencode_supervisor", None)
             if supervisor is None:
-                from ....agents.opencode.supervisor import OpenCodeSupervisorError
+                from .....agents.opencode.supervisor import OpenCodeSupervisorError
+
                 raise OpenCodeSupervisorError("OpenCode backend is not configured")
             workspace_root = self._canonical_workspace_root(
                 record.workspace_path if record else None
             )
             if workspace_root is None:
-                from ....agents.opencode.supervisor import OpenCodeSupervisorError
+                from .....agents.opencode.supervisor import OpenCodeSupervisorError
+
                 raise OpenCodeSupervisorError("OpenCode workspace is unavailable")
-            from ....agents.opencode.harness import OpenCodeHarness
+            from .....agents.opencode.harness import OpenCodeHarness
+
             harness = OpenCodeHarness(supervisor)
             catalog = await harness.model_catalog(workspace_root)
             return [

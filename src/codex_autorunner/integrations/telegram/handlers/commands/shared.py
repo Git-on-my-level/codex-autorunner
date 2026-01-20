@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
-from ....agents.opencode.client import OpenCodeProtocolError
-from ....agents.opencode.supervisor import OpenCodeSupervisorError
-from ..adapter import InlineButton, build_inline_keyboard, encode_cancel_callback
+from .....agents.opencode.client import OpenCodeProtocolError
+from .....agents.opencode.supervisor import OpenCodeSupervisorError
+from ...adapter import InlineButton, build_inline_keyboard, encode_cancel_callback
 
 if TYPE_CHECKING:
     pass
@@ -55,7 +55,9 @@ class SharedHelpers:
                 payload = None
             if isinstance(payload, dict):
                 detail = (
-                    payload.get("detail") or payload.get("message") or payload.get("error")
+                    payload.get("detail")
+                    or payload.get("message")
+                    or payload.get("error")
                 )
                 if isinstance(detail, str) and detail:
                     return detail

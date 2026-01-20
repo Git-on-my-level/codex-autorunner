@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Optional
 
-from ....core.logging_utils import log_event
+from .....core.logging_utils import log_event
 from ...constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ...helpers import _compact_preview
 
