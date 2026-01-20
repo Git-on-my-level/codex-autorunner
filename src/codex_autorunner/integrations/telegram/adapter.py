@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence, Union
 import httpx
 
 from ...core.circuit_breaker import CircuitBreaker
-from ...core.exceptions import TransientError
+from ...core.exceptions import CodexError, PermanentError, TransientError
 from ...core.logging_utils import log_event
 from ...core.retry import retry_transient
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
@@ -26,14 +26,31 @@ INTERRUPT_ALIASES = {
 }
 
 
-class TelegramAPIError(TransientError):
+class TelegramAPIError(CodexError):
     """Raised when the Telegram Bot API returns an error."""
 
-    def __init__(self, message: str, *, retry_after: Optional[int] = None) -> None:
-        super().__init__(
-            message, user_message="Telegram API error. Retrying with backoff..."
-        )
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after: Optional[int] = None,
+        user_message: Optional[str] = None,
+    ) -> None:
+        if user_message is None:
+            user_message = "Telegram API error. Retrying with backoff..."
+        super().__init__(message, user_message=user_message)
         self.retry_after = retry_after
+
+
+class TelegramTransientError(TelegramAPIError, TransientError):
+    """Retryable Telegram API error."""
+
+
+class TelegramPermanentError(TelegramAPIError, PermanentError):
+    """Non-retryable Telegram API error."""
+
+    recoverable = PermanentError.recoverable
+    severity = PermanentError.severity
 
 
 @dataclass(frozen=True)
@@ -1322,8 +1339,9 @@ class TelegramBotClient:
                             size=file_size,
                             max_size=max_size_bytes,
                         )
-                        raise TelegramAPIError(
-                            f"File too large: {file_size} bytes (max {max_size_bytes})"
+                        raise TelegramPermanentError(
+                            f"File too large: {file_size} bytes (max {max_size_bytes})",
+                            user_message="Telegram file too large.",
                         )
                 except ValueError:
                     pass
@@ -1336,8 +1354,9 @@ class TelegramBotClient:
                     size=len(response.content),
                     max_size=max_size_bytes,
                 )
-                raise TelegramAPIError(
-                    f"File too large: {len(response.content)} bytes (max {max_size_bytes})"
+                raise TelegramPermanentError(
+                    f"File too large: {len(response.content)} bytes (max {max_size_bytes})",
+                    user_message="Telegram file too large.",
                 )
             return response.content
         except TelegramAPIError:
@@ -1350,7 +1369,10 @@ class TelegramBotClient:
                 file_path=file_path,
                 exc=exc,
             )
-            raise TelegramAPIError("Telegram file download failed") from exc
+            raise TelegramTransientError(
+                "Telegram file download failed",
+                user_message="Telegram file download failed. Retrying...",
+            ) from exc
 
     async def send_message_chunks(
         self,
@@ -1492,26 +1514,98 @@ class TelegramBotClient:
                 response = await send()
                 response.raise_for_status()
                 payload = response.json()
-            except Exception as exc:
+            except httpx.HTTPStatusError as exc:
                 retry_after = _extract_retry_after_seconds(exc)
+                status_code = exc.response.status_code
                 if retry_after is not None:
-                    raise TelegramAPIError(
-                        "Telegram request failed", retry_after=retry_after
-                    ) from exc
+                    await self._apply_rate_limit(method, retry_after)
                 log_event(
                     self._logger,
                     logging.WARNING,
                     "telegram.request.failed",
                     method=method,
+                    status_code=status_code,
+                    retry_after=retry_after,
                     exc=exc,
                 )
-                raise TelegramAPIError("Telegram request failed") from exc
+                if status_code == 429 or retry_after is not None or status_code >= 500:
+                    raise TelegramTransientError(
+                        "Telegram request failed",
+                        retry_after=retry_after,
+                    ) from exc
+                raise TelegramPermanentError(
+                    "Telegram request failed",
+                    user_message="Telegram API error.",
+                ) from exc
+            except httpx.RequestError as exc:
+                retry_after = _extract_retry_after_seconds(exc)
+                if retry_after is not None:
+                    await self._apply_rate_limit(method, retry_after)
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.request.failed",
+                    method=method,
+                    retry_after=retry_after,
+                    exc=exc,
+                )
+                raise TelegramTransientError(
+                    "Telegram request failed",
+                    retry_after=retry_after,
+                ) from exc
+            except Exception as exc:
+                retry_after = _extract_retry_after_seconds(exc)
+                if retry_after is not None:
+                    await self._apply_rate_limit(method, retry_after)
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.request.failed",
+                    method=method,
+                    retry_after=retry_after,
+                    exc=exc,
+                )
+                raise TelegramTransientError(
+                    "Telegram request failed",
+                    retry_after=retry_after,
+                ) from exc
             if not isinstance(payload, dict) or not payload.get("ok"):
                 description = (
                     payload.get("description") if isinstance(payload, dict) else None
                 )
                 retry_after = self._retry_after_from_payload(payload)
-                raise TelegramAPIError(
+                if isinstance(payload, dict):
+                    error_code = payload.get("error_code")
+                else:
+                    error_code = None
+                if not isinstance(error_code, int) or isinstance(error_code, bool):
+                    error_code = None
+                if retry_after is not None:
+                    await self._apply_rate_limit(method, retry_after)
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.request.failed",
+                    method=method,
+                    error_code=error_code,
+                    retry_after=retry_after,
+                    description=description,
+                )
+                if (
+                    error_code == 429
+                    or retry_after is not None
+                    or (error_code is not None and error_code >= 500)
+                ):
+                    raise TelegramTransientError(
+                        description or "Telegram API returned error",
+                        retry_after=retry_after,
+                    )
+                if error_code is not None and 400 <= error_code < 500:
+                    raise TelegramPermanentError(
+                        description or "Telegram API returned error",
+                        user_message="Telegram API error.",
+                    )
+                raise TelegramTransientError(
                     description or "Telegram API returned error",
                     retry_after=retry_after,
                 )

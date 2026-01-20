@@ -2587,7 +2587,7 @@ class TelegramCommandHandlers:
                     transcript_message_id,
                     transcript_text,
                 )
-                turn_key: Optional[TurnKey] = None
+            turn_key: Optional[TurnKey] = None
             try:
                 queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
                 log_event(

@@ -283,7 +283,7 @@ class TelegramMessageTransport:
                             message_thread_id=thread_id,
                             reply_to_message_id=reply_to if idx == 0 else None,
                             reply_markup=reply_markup if idx == 0 else None,
-                            parse_mode="HTML",
+                            parse_mode=used_mode,
                         )
                     return
                 if overflow_mode == "trim":
