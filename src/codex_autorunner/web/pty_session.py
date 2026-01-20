@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import fcntl
+import logging
 import os
 import select
 import struct
@@ -9,6 +10,8 @@ import time
 from typing import Dict, Optional
 
 from ptyprocess import PtyProcess
+
+logger = logging.getLogger("codex_autorunner.web.pty_session")
 
 REPLAY_END = object()
 
@@ -52,13 +55,13 @@ class PTYSession:
         self.last_active = time.time()
 
     def _set_nonblocking(self) -> None:
-        """Ensure PTY IO doesn't block the event loop."""
+        """Ensure PTY IO doesn't block event loop."""
         try:
             flags = fcntl.fcntl(self.fd, fcntl.F_GETFL)
             if not (flags & os.O_NONBLOCK):
                 fcntl.fcntl(self.fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-        except Exception:
-            pass
+        except (OSError, IOError) as exc:
+            logger.debug("Failed to set PTY to non-blocking mode: %s", exc)
 
     def resize(self, cols: int, rows: int) -> None:
         if self.closed:
@@ -116,8 +119,8 @@ class PTYSession:
             return
         try:
             self.proc.terminate(force=True)
-        except Exception:
-            pass
+        except (OSError, IOError) as exc:
+            logger.debug("Failed to terminate PTY process: %s", exc)
         self.closed = True
 
 
@@ -183,7 +186,8 @@ class ActiveSession:
         try:
             self.loop.add_writer(self.pty.fd, self._flush_pending_input)
             self._writer_active = True
-        except Exception:
+        except (OSError, IOError) as exc:
+            logger.debug("Failed to enable PTY writer: %s", exc)
             self._writer_active = False
 
     def _disable_writer(self) -> None:
@@ -191,8 +195,8 @@ class ActiveSession:
             return
         try:
             self.loop.remove_writer(self.pty.fd)
-        except Exception:
-            pass
+        except (OSError, IOError) as exc:
+            logger.debug("Failed to disable PTY writer: %s", exc)
         self._writer_active = False
 
     def _flush_pending_input(self) -> None:
@@ -252,7 +256,10 @@ class ActiveSession:
                     try:
                         queue.put_nowait(data)
                     except asyncio.QueueFull:
-                        pass
+                        logger.debug(
+                            "Subscriber queue full, dropping data for session %s",
+                            self.id,
+                        )
             else:
                 self.close()
         except OSError:
@@ -316,18 +323,18 @@ class ActiveSession:
     def close(self):
         try:
             self._disable_writer()
-        except Exception:
-            pass
+        except (OSError, IOError) as exc:
+            logger.debug("Failed to disable writer during close: %s", exc)
         self._pending_input.clear()
         if not self.pty.closed:
             try:
                 self.loop.remove_reader(self.pty.fd)
-            except Exception:
-                pass
+            except (OSError, IOError) as exc:
+                logger.debug("Failed to remove reader during close: %s", exc)
             try:
                 self.pty.terminate()
-            except Exception:
-                pass
+            except (OSError, IOError) as exc:
+                logger.debug("Failed to terminate PTY during close: %s", exc)
         for queue in list(self.subscribers):
             try:
                 queue.put_nowait(None)

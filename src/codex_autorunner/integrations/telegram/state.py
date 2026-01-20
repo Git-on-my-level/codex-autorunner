@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from urllib.parse import quote, unquote
 
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
+
+logger = logging.getLogger("codex_autorunner.integrations.telegram.state")
 
 STATE_VERSION = 5
 TOPIC_ROOT = "root"
@@ -1668,7 +1671,8 @@ class TelegramStateStore:
             return []
         try:
             chat_id, thread_id, scope = parse_topic_key(key)
-        except Exception:
+        except (ValueError, KeyError) as exc:
+            logger.debug("Failed to parse topic key '%s': %s", key, exc)
             return []
         conn = self._connection_sync()
         allow_legacy = False
@@ -1708,7 +1712,8 @@ class TelegramStateStore:
             return
         try:
             chat_id, thread_id, scope = parse_topic_key(key)
-        except Exception:
+        except (ValueError, KeyError) as exc:
+            logger.debug("Failed to parse topic key '%s': %s", key, exc)
             return
         conn = self._connection_sync()
         base_scope = self._get_topic_scope_by_ids(conn, chat_id, thread_id)

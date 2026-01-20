@@ -144,9 +144,11 @@ class Engine:
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
         try:
             ensure_about_car_file(self.config)
-        except Exception:
+        except (OSError, IOError) as exc:
             # Never fail Engine creation due to a best-effort helper doc.
-            pass
+            self._app_server_logger.debug(
+                "Best-effort ABOUT_CAR.md creation failed: %s", exc
+            )
 
     @staticmethod
     def from_cwd(repo: Optional[Path] = None) -> "Engine":
@@ -251,7 +253,8 @@ class Engine:
         """Return True if SUMMARY.md contains the finalization marker."""
         try:
             text = self.docs.read_doc("summary")
-        except Exception:
+        except (FileNotFoundError, OSError) as exc:
+            self._app_server_logger.debug("Failed to read SUMMARY.md: %s", exc)
             return False
         return SUMMARY_FINALIZED_MARKER in (text or "")
 
@@ -263,7 +266,10 @@ class Engine:
         path = self.config.doc_path("summary")
         try:
             existing = path.read_text(encoding="utf-8") if path.exists() else ""
-        except Exception:
+        except (FileNotFoundError, OSError) as exc:
+            self._app_server_logger.debug(
+                "Failed to read SUMMARY.md for stamping: %s", exc
+            )
             existing = ""
         if SUMMARY_FINALIZED_MARKER in existing:
             return
@@ -295,7 +301,8 @@ class Engine:
         """
         try:
             todo_before = self.docs.read_doc("todo")
-        except Exception:
+        except (FileNotFoundError, OSError) as exc:
+            self._app_server_logger.debug("Failed to read TODO.md before run: %s", exc)
             todo_before = ""
         state = load_state(self.state_path)
         selected_agent = (state.autorunner_agent_override or "codex").strip().lower()
@@ -327,7 +334,8 @@ class Engine:
 
         try:
             todo_after = self.docs.read_doc("todo")
-        except Exception:
+        except (FileNotFoundError, OSError) as exc:
+            self._app_server_logger.debug("Failed to read TODO.md after run: %s", exc)
             todo_after = ""
         todo_delta = self._compute_todo_attribution(todo_before, todo_after)
         todo_snapshot = self._build_todo_snapshot(todo_before, todo_after)
@@ -363,7 +371,10 @@ class Engine:
                         telemetry.plan, ensure_ascii=True, indent=2, default=str
                     )
                 )
-            except Exception:
+            except (TypeError, ValueError) as exc:
+                self._app_server_logger.debug(
+                    "Failed to serialize plan to JSON: %s", exc
+                )
                 plan_content = json.dumps(
                     {"plan": str(telemetry.plan)}, ensure_ascii=True, indent=2
                 )
@@ -426,7 +437,10 @@ class Engine:
         if run_log.exists():
             try:
                 text = run_log.read_text(encoding="utf-8")
-            except Exception:
+            except (FileNotFoundError, OSError) as exc:
+                self._app_server_logger.debug(
+                    "Failed to read previous run log: %s", exc
+                )
                 text = ""
             if text:
                 lines = [
@@ -475,7 +489,8 @@ class Engine:
         if run_log.exists():
             try:
                 return run_log.read_text(encoding="utf-8")
-            except Exception:
+            except (FileNotFoundError, OSError) as exc:
+                self._app_server_logger.debug("Failed to read run log block: %s", exc)
                 return None
         if index_entry:
             block = self._read_log_range(index_entry)
@@ -520,7 +535,10 @@ class Engine:
                     if printing:
                         buf.append(line)
                 return "\n".join(buf) if buf else None
-        except Exception:
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            self._app_server_logger.debug(
+                "Failed to read full log for run block: %s", exc
+            )
             return None
         return None
 
@@ -544,8 +562,10 @@ class Engine:
             try:
                 self._active_run_log.write(line)
                 self._active_run_log.flush()
-            except Exception:
-                pass
+            except (OSError, IOError) as exc:
+                self._app_server_logger.warning(
+                    "Failed to write to active run log: %s", exc
+                )
         else:
             run_log = self._run_log_path(run_id)
             self._ensure_run_log_dir()
@@ -573,8 +593,10 @@ class Engine:
             try:
                 self._active_run_log.write(f"{text}\n")
                 self._active_run_log.flush()
-            except Exception:
-                pass
+            except (OSError, IOError) as exc:
+                self._app_server_logger.warning(
+                    "Failed to write marker to active run log: %s", exc
+                )
         else:
             self._ensure_run_log_dir()
             run_log = self._run_log_path(run_id)
@@ -591,7 +613,10 @@ class Engine:
                     f.write(f"{text}\n")
                     f.flush()
                     return (start, f.tell())
-            except Exception:
+            except (OSError, IOError) as exc:
+                self._app_server_logger.warning(
+                    "Failed to write global log line: %s", exc
+                )
                 return None
         handler = self._active_global_handler
         record = logging.LogRecord(
@@ -614,7 +639,8 @@ class Engine:
             handler.flush()
             end_offset = handler.stream.tell()
             return (start_offset, end_offset)
-        except Exception:
+        except (OSError, IOError, RuntimeError) as exc:
+            self._app_server_logger.warning("Failed to emit log via handler: %s", exc)
             return None
         finally:
             handler.release()
@@ -643,8 +669,10 @@ class Engine:
                 self._active_run_log = None
                 try:
                     handler.close()
-                except Exception:
-                    pass
+                except (OSError, IOError) as exc:
+                    self._app_server_logger.debug(
+                        "Failed to close run log handler: %s", exc
+                    )
 
     def _start_run_telemetry(self, run_id: int) -> None:
         with self._run_telemetry_lock:
@@ -826,7 +854,10 @@ class Engine:
         for key, entry in index.items():
             try:
                 entry_id = int(key)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as exc:
+                self._app_server_logger.debug(
+                    "Failed to parse run index key '%s': %s", key, exc
+                )
                 continue
             if entry_id >= run_id:
                 continue
@@ -918,7 +949,8 @@ class Engine:
         try:
             start_offset = int(start)
             end_offset = int(end)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            self._app_server_logger.debug("Failed to parse log range offsets: %s", exc)
             return None
         if end_offset < start_offset:
             return None
@@ -933,7 +965,8 @@ class Engine:
                 f.seek(start_offset)
                 data = f.read(end_offset - start_offset)
             return data.decode("utf-8", errors="replace")
-        except Exception:
+        except (FileNotFoundError, OSError) as exc:
+            self._app_server_logger.debug("Failed to read log range: %s", exc)
             return None
 
     def _build_app_server_prompt(self, prev_output: Optional[str]) -> str:
@@ -1344,7 +1377,12 @@ class Engine:
             if thread_id:
                 try:
                     await client.get_session(thread_id)
-                except Exception:
+                except Exception as exc:
+                    self._app_server_logger.debug(
+                        "Failed to get existing opencode session '%s': %s",
+                        thread_id,
+                        exc,
+                    )
                     self._app_server_threads.reset_thread(key)
                     thread_id = None
             if not thread_id:
@@ -1613,18 +1651,20 @@ class Engine:
                     break
                 await asyncio.sleep(self.config.runner_sleep_seconds)
         except Exception as exc:
-            # Never silently die: persist the reason to the agent log and surface in state.
+            # Never silently die: persist's reason to agent log and surface in state.
             try:
                 self.log_line(run_id, f"FATAL: run_loop crashed: {exc!r}")
                 tb = traceback.format_exc()
                 for line in tb.splitlines():
                     self.log_line(run_id, f"traceback: {line}")
-            except Exception:
-                pass
+            except (OSError, IOError) as exc:
+                self._app_server_logger.error("Failed to log run_loop crash: %s", exc)
             try:
                 self._update_state("error", run_id, 1, finished=True)
-            except Exception:
-                pass
+            except (OSError, IOError) as exc:
+                self._app_server_logger.error(
+                    "Failed to update state after run_loop crash: %s", exc
+                )
         finally:
             await self._close_app_server_supervisor()
             await self._close_opencode_supervisor()
@@ -1720,12 +1760,25 @@ def _strip_log_prefixes(text: str) -> str:
 
 def _read_tail_text(path: Path, *, max_bytes: int) -> str:
     """
-    Read at most the last `max_bytes` bytes from a UTF-8-ish text file.
+    Read at most last `max_bytes` bytes from a UTF-8-ish text file.
     Returns decoded text with errors replaced.
     """
+    logger = logging.getLogger("codex_autorunner.engine")
     try:
         size = path.stat().st_size
-    except OSError:
+    except OSError as exc:
+        logger.debug("Failed to stat log file for tail read: %s", exc)
+        return ""
+    if size <= 0:
+        return ""
+    try:
+        with path.open("rb") as f:
+            if size > max_bytes:
+                f.seek(-max_bytes, os.SEEK_END)
+            data = f.read()
+        return data.decode("utf-8", errors="replace")
+    except (FileNotFoundError, OSError, IOError) as exc:
+        logger.debug("Failed to read tail of log file: %s", exc)
         return ""
     if size <= 0:
         return ""
@@ -1786,9 +1839,11 @@ def _append_check(
 
 
 def _parse_manifest_version(manifest_path: Path) -> Optional[int]:
+    logger = logging.getLogger("codex_autorunner.engine")
     try:
         raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-    except Exception:
+    except (FileNotFoundError, OSError, yaml.YAMLError) as exc:
+        logger.debug("Failed to parse manifest version: %s", exc)
         return None
     if not isinstance(raw, dict):
         return None
@@ -1797,9 +1852,11 @@ def _parse_manifest_version(manifest_path: Path) -> Optional[int]:
 
 
 def _manifest_has_worktrees(manifest_path: Path) -> bool:
+    logger = logging.getLogger("codex_autorunner.engine")
     try:
         raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-    except Exception:
+    except (FileNotFoundError, OSError, yaml.YAMLError) as exc:
+        logger.debug("Failed to parse manifest for worktrees: %s", exc)
         return False
     if not isinstance(raw, dict):
         return False
