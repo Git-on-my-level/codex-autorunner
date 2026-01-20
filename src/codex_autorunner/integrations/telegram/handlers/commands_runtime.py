@@ -832,15 +832,17 @@ class TelegramCommandHandlers:
         model_id = model_payload.get("modelID")
         if not provider_id or not model_id:
             return None
-        cache: Optional[dict[str, Optional[int]]] = getattr(
+        cache: Optional[dict[str, dict[str, Optional[int]]]] = getattr(
             self, "_opencode_model_context_cache", None
         )
         if cache is None:
             cache = {}
             self._opencode_model_context_cache = cache
+        workspace_key = str(workspace_root)
+        workspace_cache = cache.setdefault(workspace_key, {})
         cache_key = f"{provider_id}/{model_id}"
-        if cache_key in cache:
-            return cache[cache_key]
+        if cache_key in workspace_cache:
+            return workspace_cache[cache_key]
         try:
             payload = await opencode_client.providers(directory=str(workspace_root))
         except Exception:
@@ -885,7 +887,7 @@ class TelegramCommandHandlers:
                             context_window = value
                             break
             break
-        cache[cache_key] = context_window
+        workspace_cache[cache_key] = context_window
         return context_window
 
     async def _fetch_model_list(
@@ -1999,6 +2001,8 @@ class TelegramCommandHandlers:
                             turn_started_at=now_iso(),
                         )
                         turn_id = build_turn_id(thread_id)
+                        if thread_id:
+                            self._token_usage_by_thread.pop(thread_id, None)
                         runtime.current_turn_id = turn_id
                         runtime.current_turn_key = (thread_id, turn_id)
                         ctx = TurnContext(
@@ -2155,18 +2159,19 @@ class TelegramCommandHandlers:
                                             subagent_labels.setdefault(
                                                 session_id, subagent_label
                                             )
-                                        label_text = f"thinking: {preview}"
                                         if not tracker.update_action_by_item_id(
                                             buffer_key,
-                                            label_text,
+                                            preview,
                                             "update",
-                                            label=subagent_label,
+                                            label="thinking",
+                                            subagent_label=subagent_label,
                                         ):
                                             tracker.add_action(
-                                                subagent_label,
-                                                label_text,
+                                                "thinking",
+                                                preview,
                                                 "update",
                                                 item_id=buffer_key,
+                                                subagent_label=subagent_label,
                                             )
                             elif part_type == "tool":
                                 tool_id = part.get("callID") or part.get("id")
@@ -2472,8 +2477,6 @@ class TelegramCommandHandlers:
                 token_usage = (
                     self._token_usage_by_turn.get(turn_id) if turn_id else None
                 )
-                if token_usage is None and thread_id:
-                    token_usage = self._token_usage_by_thread.get(thread_id)
                 return _TurnRunResult(
                     record=record,
                     thread_id=thread_id,
@@ -2948,8 +2951,6 @@ class TelegramCommandHandlers:
         )
         turn_id = turn_handle.turn_id if turn_handle else None
         token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
-        if token_usage is None and thread_id:
-            token_usage = self._token_usage_by_thread.get(thread_id)
         return _TurnRunResult(
             record=record,
             thread_id=thread_id,
@@ -6523,8 +6524,6 @@ class TelegramCommandHandlers:
         )
         turn_id = turn_handle.turn_id if turn_handle else None
         token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
-        if token_usage is None and thread_id:
-            token_usage = self._token_usage_by_thread.get(thread_id)
         metrics = self._format_turn_metrics_text(token_usage, turn_elapsed_seconds)
         metrics_mode = self._metrics_mode()
         response_text = response
@@ -6759,6 +6758,7 @@ class TelegramCommandHandlers:
                         return
                     turn_started_at = time.monotonic()
                     turn_id = build_turn_id(review_session_id)
+                    self._token_usage_by_thread.pop(review_session_id, None)
                     runtime.current_turn_id = turn_id
                     runtime.current_turn_key = (review_session_id, turn_id)
                     topic_key = await self._resolve_topic_key(
@@ -6881,18 +6881,19 @@ class TelegramCommandHandlers:
                                         subagent_labels.setdefault(
                                             session_id, subagent_label
                                         )
-                                    label_text = f"thinking: {preview}"
                                     if not tracker.update_action_by_item_id(
                                         buffer_key,
-                                        label_text,
+                                        preview,
                                         "update",
-                                        label=subagent_label,
+                                        label="thinking",
+                                        subagent_label=subagent_label,
                                     ):
                                         tracker.add_action(
-                                            subagent_label,
-                                            label_text,
+                                            "thinking",
+                                            preview,
                                             "update",
                                             item_id=buffer_key,
+                                            subagent_label=subagent_label,
                                         )
                         elif part_type == "tool":
                             tool_id = part.get("callID") or part.get("id")
@@ -7238,8 +7239,6 @@ class TelegramCommandHandlers:
             turn_id=turn_id,
         )
         token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
-        if token_usage is None and review_session_id:
-            token_usage = self._token_usage_by_thread.get(review_session_id)
         metrics = self._format_turn_metrics_text(token_usage, turn_elapsed_seconds)
         metrics_mode = self._metrics_mode()
         response_text = output or "No response."

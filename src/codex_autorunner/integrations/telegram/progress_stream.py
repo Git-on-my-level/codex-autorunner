@@ -36,6 +36,7 @@ class ProgressAction:
     text: str
     status: str
     item_id: Optional[str] = None
+    subagent_label: Optional[str] = None
 
 
 @dataclass
@@ -72,12 +73,19 @@ class TurnProgressTracker:
         item_id: Optional[str] = None,
         track_output: bool = False,
         track_thinking: bool = False,
+        subagent_label: Optional[str] = None,
     ) -> None:
         normalized = _normalize_text(text)
         if not normalized:
             return
         self.actions.append(
-            ProgressAction(label=label, text=normalized, status=status, item_id=item_id)
+            ProgressAction(
+                label=label,
+                text=normalized,
+                status=status,
+                item_id=item_id,
+                subagent_label=subagent_label,
+            )
         )
         self.step += 1
         if len(self.actions) > 100:
@@ -113,6 +121,7 @@ class TurnProgressTracker:
         status: str,
         *,
         label: Optional[str] = None,
+        subagent_label: Optional[str] = None,
     ) -> bool:
         if not item_id:
             return False
@@ -120,6 +129,8 @@ class TurnProgressTracker:
             if action.item_id == item_id:
                 if label:
                     action.label = label
+                if subagent_label:
+                    action.subagent_label = subagent_label
                 self.update_action(index, text, status)
                 return True
         return False
@@ -188,14 +199,11 @@ def render_progress_text(
                 lines.append("")
             icon = "🧠"
             lines.append(f"{icon} {action.text}")
-        elif action.label.startswith("@") and action.text.startswith("thinking"):
+        elif action.subagent_label and action.label == "thinking":
             if len(lines) > 1 and lines[-1] != "":
                 lines.append("")
-            thinking_text = action.text
-            if thinking_text.lower().startswith("thinking:"):
-                thinking_text = thinking_text.split(":", 1)[1].strip()
-            lines.append(f"--- {action.label} thinking ---")
-            lines.append(thinking_text or "...")
+            lines.append(f"--- {action.subagent_label} thinking ---")
+            lines.append(action.text or "...")
             lines.append("---")
         else:
             icon = STATUS_ICONS.get(action.status, STATUS_ICONS["running"])
