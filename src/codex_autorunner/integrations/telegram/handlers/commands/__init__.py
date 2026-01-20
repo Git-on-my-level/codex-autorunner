@@ -8,10 +8,12 @@ from .execution import ExecutionCommands
 from .files import FilesCommands
 from .formatting import FormattingHelpers
 from .github import GitHubCommands
+from .shared import SharedHelpers
 from .voice import VoiceCommands
 from .workspace import WorkspaceCommands
 
 __all__ = [
+    "SharedHelpers",
     "WorkspaceCommands",
     "GitHubCommands",
     "FilesCommands",

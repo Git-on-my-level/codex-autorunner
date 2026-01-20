@@ -66,7 +66,7 @@ from ...helpers import (
     is_interrupt_status,
 )
 from ...types import ReviewCommitSelectionState, TurnContext
-from ..commands_runtime import _build_opencode_token_usage
+from ..utils import _build_opencode_token_usage
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
