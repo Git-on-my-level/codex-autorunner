@@ -8,6 +8,31 @@ _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _MARKDOWN_ESCAPE_RE = re.compile(r"([_*\[\]\(\)`])")
 _MARKDOWN_V2_ESCAPE_RE = re.compile(r"([_*\[\]\(\)~`>#+\-=|{}.!\\])")
+_REASONING_PREFIX_RE = re.compile(
+    r"^(?:\[reasoning\]|reasoning:|thinking:|thought:)\s*", re.IGNORECASE
+)
+
+
+def _clean_reasoning_from_output(text: str) -> str:
+    lines = text.split("\n")
+    cleaned_lines: list[str] = []
+    in_code_block = False
+
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            cleaned_lines.append(line)
+            continue
+        if in_code_block:
+            cleaned_lines.append(line)
+            continue
+        if _REASONING_PREFIX_RE.match(stripped):
+            continue
+        cleaned_lines.append(line)
+
+    result = "\n".join(cleaned_lines)
+    return result.strip()
 
 
 def _format_telegram_html(text: str) -> str:

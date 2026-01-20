@@ -18,7 +18,11 @@ from .constants import (
     TELEGRAM_MAX_MESSAGE_LENGTH,
     TurnKey,
 )
-from .rendering import _format_telegram_html, _format_telegram_markdown
+from .rendering import (
+    _clean_reasoning_from_output,
+    _format_telegram_html,
+    _format_telegram_markdown,
+)
 from .state import TOPIC_ROOT, parse_topic_key
 from .types import TurnContext
 
@@ -280,11 +284,12 @@ class TelegramRuntimeHelpers:
         parse_mode = self._config.parse_mode
         if not parse_mode:
             return text, None
+        cleaned = _clean_reasoning_from_output(text)
         if parse_mode == "HTML":
-            return _format_telegram_html(text), parse_mode
+            return _format_telegram_html(cleaned), parse_mode
         if parse_mode in ("Markdown", "MarkdownV2"):
-            return _format_telegram_markdown(text, parse_mode), parse_mode
-        return text, parse_mode
+            return _format_telegram_markdown(cleaned), parse_mode
+        return cleaned, parse_mode
 
     def _prepare_message(self, text: str) -> tuple[str, Optional[str]]:
         rendered, parse_mode = self._render_message(text)

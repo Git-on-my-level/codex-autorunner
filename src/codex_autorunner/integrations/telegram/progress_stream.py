@@ -36,6 +36,7 @@ class ProgressAction:
     text: str
     status: str
     item_id: Optional[str] = None
+    is_subagent_thinking: bool = False
 
 
 @dataclass
@@ -72,12 +73,19 @@ class TurnProgressTracker:
         item_id: Optional[str] = None,
         track_output: bool = False,
         track_thinking: bool = False,
+        is_subagent_thinking: bool = False,
     ) -> None:
         normalized = _normalize_text(text)
         if not normalized:
             return
         self.actions.append(
-            ProgressAction(label=label, text=normalized, status=status, item_id=item_id)
+            ProgressAction(
+                label=label,
+                text=normalized,
+                status=status,
+                item_id=item_id,
+                is_subagent_thinking=is_subagent_thinking,
+            )
         )
         self.step += 1
         if len(self.actions) > 100:
@@ -124,7 +132,23 @@ class TurnProgressTracker:
                 return True
         return False
 
-    def note_thinking(self, text: str) -> None:
+    def note_thinking(self, text: str, *, subagent_label: Optional[str] = None) -> None:
+        if subagent_label:
+            if self.last_thinking_index is not None:
+                index = self.last_thinking_index
+                if 0 <= index < len(self.actions):
+                    action = self.actions[index]
+                    if action.label == subagent_label:
+                        self.update_action(index, text, "update")
+                        return
+            self.add_action(
+                subagent_label,
+                text,
+                "update",
+                track_thinking=True,
+                is_subagent_thinking=True,
+            )
+            return
         if self.last_thinking_index is None:
             self.add_action("thinking", text, "update", track_thinking=True)
             return
@@ -188,6 +212,11 @@ def render_progress_text(
                 lines.append("")
             icon = "🧠"
             lines.append(f"{icon} {action.text}")
+        elif action.is_subagent_thinking:
+            if len(lines) > 1 and lines[-1] != "":
+                lines.append("")
+            icon = "🧠"
+            lines.append(f"{icon} [{action.label}] {action.text}")
         else:
             icon = STATUS_ICONS.get(action.status, STATUS_ICONS["running"])
             lines.append(f"{icon} {action.label}: {action.text}")

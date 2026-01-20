@@ -1921,19 +1921,9 @@ class TelegramCommandHandlers:
                                             subagent_labels.setdefault(
                                                 session_id, subagent_label
                                             )
-                                        label_text = f"thinking: {preview}"
-                                        if not tracker.update_action_by_item_id(
-                                            buffer_key,
-                                            label_text,
-                                            "update",
-                                            label=subagent_label,
-                                        ):
-                                            tracker.add_action(
-                                                subagent_label,
-                                                label_text,
-                                                "update",
-                                                item_id=buffer_key,
-                                            )
+                                        tracker.note_thinking(
+                                            preview, subagent_label=subagent_label
+                                        )
                             elif part_type == "tool":
                                 tool_id = part.get("callID") or part.get("id")
                                 tool_name = (
