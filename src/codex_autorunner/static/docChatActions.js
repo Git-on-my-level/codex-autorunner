@@ -191,12 +191,8 @@ export async function applyPatch(kind = getActiveDoc()) {
             await applyDocUpdateFromChat(kind, applied.content, { force: true });
         }
         const latest = state.history[0];
-        if (latest) {
+        if (latest)
             latest.status = "done";
-            if (latest.drafts) {
-                delete latest.drafts[kind];
-            }
-        }
         flash("Draft applied");
     }
     catch (err) {
