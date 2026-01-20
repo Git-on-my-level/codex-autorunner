@@ -52,10 +52,6 @@ function renderState(state) {
     if (runnerPidEl) {
         runnerPidEl.textContent = `Runner pid: ${state.runner_pid ?? "–"}`;
     }
-    const modelEl = document.getElementById("runner-model");
-    if (modelEl) {
-        modelEl.textContent = state.codex_model || "auto";
-    }
     const summaryBtn = document.getElementById("open-summary");
     if (summaryBtn) {
         const done = Number(state.outstanding_count ?? NaN) === 0;
