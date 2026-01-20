@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, MutableMapping, Optional
 
+import httpx
+
 from .agents.opencode.runtime import (
     PERMISSION_ALLOW,
     build_turn_id,
@@ -260,7 +262,7 @@ class SpecIngestService:
             )
         except asyncio.TimeoutError:
             pass
-        except (OSError, RuntimeError) as exc:
+        except (OSError, RuntimeError, httpx.HTTPError) as exc:
             logger.debug("Failed to abort spec ingest turn: %s", exc)
 
     async def interrupt(self) -> Dict[str, str]:
@@ -453,7 +455,7 @@ class SpecIngestService:
                 await self._app_server_events.register_turn(
                     handle.thread_id, handle.turn_id
                 )
-            except (OSError, KeyError, ValueError, RuntimeError) as exc:
+            except (KeyError, TypeError, RuntimeError) as exc:
                 logger.debug("Failed to register turn: %s", exc)
 
         turn_task = asyncio.create_task(handle.wait(timeout=None))
@@ -580,7 +582,7 @@ class SpecIngestService:
         if thread_id:
             try:
                 await client.get_session(thread_id)
-            except (OSError, KeyError, ValueError) as exc:
+            except (OSError, KeyError, ValueError, httpx.HTTPError) as exc:
                 logger.debug("OpenCode session not found, resetting thread: %s", exc)
                 self._app_server_threads.reset_thread(key)
                 thread_id = None
