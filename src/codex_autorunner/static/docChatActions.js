@@ -191,8 +191,12 @@ export async function applyPatch(kind = getActiveDoc()) {
             await applyDocUpdateFromChat(kind, applied.content, { force: true });
         }
         const latest = state.history[0];
-        if (latest)
+        if (latest) {
             latest.status = "done";
+            if (latest.drafts) {
+                delete latest.drafts[kind];
+            }
+        }
         flash("Draft applied");
     }
     catch (err) {
@@ -220,6 +224,9 @@ export async function discardPatch(kind = getActiveDoc()) {
         const latest = state.history[0];
         if (latest) {
             latest.status = latest.status === "running" ? "done" : latest.status;
+            if (latest.drafts) {
+                delete latest.drafts[kind];
+            }
         }
         flash("Draft discarded");
     }
