@@ -23,5 +23,5 @@ def test_render_progress_text_subagent_thinking_block() -> None:
     tracker.note_thinking("Parent thinking")
     rendered = render_progress_text(tracker, max_length=2000, now=0.0)
     assert "🧠 Parent thinking" in rendered
-    assert "--- @subagent thinking ---" in rendered
+    assert "🤖 @subagent thinking" in rendered
     assert "Subagent planning" in rendered
