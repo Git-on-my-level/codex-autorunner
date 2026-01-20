@@ -1,0 +1,71 @@
+{
+  "RepoSnapshot": {
+    "properties": {
+      "id": {"type": "string"},
+      "path": {"type": "string"},
+      "display_name": {"type": "string"},
+      "enabled": {"type": "boolean"},
+      "auto_run": {"type": "boolean"},
+      "kind": {"type": "string", "enum": ["base", "worktree"]},
+      "worktree_of": {"type": ["null", "string"]},
+      "branch": {"type": ["null", "string"]},
+      "exists_on_disk": {"type": "boolean"},
+      "is_clean": {"type": ["null", "boolean"]},
+      "initialized": {"type": "boolean"},
+      "init_error": {"type": ["null", "string"]},
+      "status": {
+        "type": "string",
+        "enum": [
+          "uninitialized",
+          "initializing",
+          "idle",
+          "running",
+          "error",
+          "locked",
+          "missing",
+          "init_error"
+        ]
+      },
+      "lock_status": {
+        "type": "string",
+        "enum": ["unlocked", "locked_alive", "locked_stale"]
+      },
+      "last_run_id": {"type": ["null", "integer"]},
+      "last_run_started_at": {"type": ["null", "string"]},
+      "last_run_finished_at": {"type": ["null", "string"]},
+      "last_exit_code": {"type": ["null", "integer"]},
+      "runner_pid": {"type": ["null", "integer"]},
+      "mounted": {"type": "boolean"},
+      "mount_error": {"type": ["null", "string"]}
+    },
+    "required": [
+      "id",
+      "path",
+      "display_name",
+      "enabled",
+      "auto_run",
+      "kind",
+      "worktree_of",
+      "branch",
+      "exists_on_disk",
+      "is_clean",
+      "initialized",
+      "init_error",
+      "status",
+      "lock_status",
+      "last_run_id",
+      "last_run_started_at",
+      "last_run_finished_at",
+      "last_exit_code",
+      "runner_pid",
+      "mounted"
+    ]
+  },
+  "HubState": {
+    "properties": {
+      "last_scan_at": {"type": ["null", "string"]},
+      "repos": {"type": "array", "items": {"$ref": "RepoSnapshot"}}
+    },
+    "required": ["last_scan_at", "repos"]
+  }
+}

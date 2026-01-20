@@ -13,21 +13,26 @@ import { HUB_BASE } from "./env.js";
 
 interface HubRepo {
   id: string;
+  path: string;
   display_name: string;
-  initialized?: boolean;
+  enabled: boolean;
+  auto_run: boolean;
+  kind: "base" | "worktree";
+  worktree_of: string | null;
+  branch: string | null;
   exists_on_disk: boolean;
+  is_clean: boolean | null;
+  initialized: boolean;
+  init_error: string | null;
   status: string;
-  last_run_id?: number | null;
-  last_exit_code?: number | null;
-  last_run_started_at?: string | null;
-  last_run_finished_at?: string | null;
+  lock_status: string;
+  last_run_id: number | null;
+  last_exit_code: number | null;
+  last_run_started_at: string | null;
+  last_run_finished_at: string | null;
+  runner_pid: number | null;
+  mounted: boolean;
   mount_error?: string | null;
-  init_error?: string | null;
-  mounted?: boolean;
-  kind?: "base" | "worktree";
-  worktree_of?: string;
-  is_clean?: boolean;
-  lock_status?: string;
 }
 
 interface HubData {
