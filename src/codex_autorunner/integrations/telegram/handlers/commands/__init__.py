@@ -3,6 +3,7 @@
 This package contains focused modules for handling different categories of Telegram commands.
 """
 
+from ..commands_spec import CommandSpec, build_command_specs
 from .approvals import ApprovalsCommands
 from .execution import ExecutionCommands
 from .files import FilesCommands
@@ -21,4 +22,6 @@ __all__ = [
     "ExecutionCommands",
     "ApprovalsCommands",
     "FormattingHelpers",
+    "CommandSpec",
+    "build_command_specs",
 ]
