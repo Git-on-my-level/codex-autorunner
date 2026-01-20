@@ -191,6 +191,47 @@ async def test_collect_output_skips_reasoning_when_type_missing_on_delta() -> No
     assert "think" not in output.text.lower()
 
 
+@pytest.mark.anyio
+async def test_collect_output_uses_completed_text_when_no_parts() -> None:
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"Hello"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Hello"
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_dedupes_completed_before_part_updates() -> None:
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"Hello"}]}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"Hello"},'
+            '"part":{"id":"p1","messageId":"m1","type":"text","text":"Hello"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Hello"
+    assert output.error is None
+
+
 def test_parse_message_response() -> None:
     payload = {
         "info": {"id": "turn-1", "error": "bad auth"},

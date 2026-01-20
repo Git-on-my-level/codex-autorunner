@@ -608,6 +608,7 @@ async def collect_opencode_output_from_events(
     message_roles_seen = False
     last_role_seen: Optional[str] = None
     pending_text: dict[str, list[str]] = {}
+    fallback_message: Optional[tuple[Optional[str], Optional[str], str]] = None
     last_usage_total: Optional[int] = None
     last_context_window: Optional[int] = None
     part_types: dict[str, str] = {}
@@ -938,8 +939,11 @@ async def collect_opencode_output_from_events(
             role = None
             if is_primary_session:
                 msg_id, role = _register_message_role(payload)
-                if message_result.text and not text_parts and role != "user":
-                    _append_text_for_message(msg_id, message_result.text)
+                resolved_role = role
+                if resolved_role is None and msg_id:
+                    resolved_role = message_roles.get(msg_id)
+                if message_result.text and resolved_role != "user":
+                    fallback_message = (msg_id, resolved_role, message_result.text)
                 if message_result.error and not error:
                     error = message_result.error
             if part_handler is not None and is_primary_session:
@@ -969,6 +973,13 @@ async def collect_opencode_output_from_events(
             if not text_parts and pending_text:
                 _flush_all_pending_text()
             break
+
+    if not text_parts and fallback_message is not None:
+        msg_id, role, text = fallback_message
+        if role != "user":
+            _append_text_for_message(msg_id, text)
+            if pending_text:
+                _flush_all_pending_text()
 
     return OpenCodeTurnOutput(text="".join(text_parts).strip(), error=error)
 
