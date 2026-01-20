@@ -811,6 +811,11 @@ class TelegramCommandHandlers:
     def _agent_supports_resume(self, agent: str) -> bool:
         return agent in ("codex", "opencode")
 
+    def _agent_rate_limit_source(self, agent: str) -> Optional[str]:
+        if agent == "codex":
+            return "app_server"
+        return None
+
     def _opencode_available(self) -> bool:
         raw_command = getenv("CAR_OPENCODE_COMMAND")
         if resolve_opencode_binary(raw_command):
@@ -5536,7 +5541,7 @@ class TelegramCommandHandlers:
         if record.active_thread_id:
             token_usage = self._token_usage_by_thread.get(record.active_thread_id)
             lines.extend(_format_token_usage(token_usage))
-        rate_limits = await self._read_rate_limits(record.workspace_path)
+        rate_limits = await self._read_rate_limits(record.workspace_path, agent=agent)
         lines.extend(_format_rate_limits(rate_limits))
         if not record.workspace_path:
             lines.append("Use /bind <repo_id> or /bind <path>.")
@@ -5842,8 +5847,10 @@ class TelegramCommandHandlers:
         )
 
     async def _read_rate_limits(
-        self, workspace_path: Optional[str]
+        self, workspace_path: Optional[str], *, agent: str
     ) -> Optional[dict[str, Any]]:
+        if self._agent_rate_limit_source(agent) != "app_server":
+            return None
         try:
             client = await self._client_for_workspace(workspace_path)
         except AppServerUnavailableError:
