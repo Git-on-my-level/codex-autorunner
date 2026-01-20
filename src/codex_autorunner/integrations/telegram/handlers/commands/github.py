@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
+from contextlib import suppress
 from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
-from ....agents.opencode.runtime import (
+from .....agents.opencode.runtime import (
     PERMISSION_ALLOW,
     PERMISSION_ASK,
     build_turn_id,
@@ -23,18 +25,16 @@ from ....agents.opencode.runtime import (
     opencode_missing_env,
     split_model_id,
 )
-from ....core.config import load_hub_config, load_repo_config
-from ....core.logging_utils import log_event
-from ....core.state import now_iso
-from ....core.utils import canonicalize_path
-from ....integrations.github.service import GitHubError, GitHubService
-from ....manifest import load_manifest
-from ...app_server.client import (
-    CodexAppServerClient,
+from .....core.config import load_hub_config, load_repo_config
+from .....core.logging_utils import log_event
+from .....core.state import now_iso
+from .....core.utils import canonicalize_path
+from .....integrations.github.service import GitHubError, GitHubService
+from .....manifest import load_manifest
+from ....app_server.client import (
     CodexAppServerDisconnected,
-    _normalize_sandbox_policy,
 )
-from ..adapter import (
+from ...adapter import (
     InlineButton,
     PrFlowStartCallback,
     TelegramCallbackQuery,
@@ -42,16 +42,17 @@ from ..adapter import (
     build_inline_keyboard,
     encode_cancel_callback,
 )
-from ..constants import (
+from ...config import AppServerUnavailableError
+from ...constants import (
     MAX_TOPIC_THREAD_HISTORY,
     OPENCODE_TURN_TIMEOUT_SECONDS,
     PLACEHOLDER_TEXT,
     QUEUED_PLACEHOLDER_TEXT,
-    REVIEW_COMMIT_PICKER_PROMPT,
     RESUME_PREVIEW_ASSISTANT_LIMIT,
+    REVIEW_COMMIT_PICKER_PROMPT,
+    TurnKey,
 )
-from ..helpers import (
-    _build_opencode_token_usage,
+from ...helpers import (
     _compact_preview,
     _compose_agent_response,
     _compose_interrupt_response,
@@ -64,13 +65,11 @@ from ..helpers import (
     _with_conversation_id,
     is_interrupt_status,
 )
-from ..types import ReviewCommitSelectionState, TurnContext
+from ...types import ReviewCommitSelectionState, TurnContext
+from ..utils import _build_opencode_token_usage
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
-
-
-OPENCODE_TURN_TIMEOUT_SECONDS = 300
 
 
 def _opencode_review_arguments(target: dict[str, Any]) -> str:
@@ -1473,7 +1472,7 @@ class GitHubCommands:
         slug: str,
         number: int,
     ) -> None:
-        from ..adapter import (
+        from ...adapter import (
             InlineButton,
             build_inline_keyboard,
             encode_cancel_callback,
@@ -1509,7 +1508,7 @@ class GitHubCommands:
         callback: TelegramCallbackQuery,
         parsed: PrFlowStartCallback,
     ) -> None:
-        from ..adapter import TelegramMessage
+        from ...adapter import TelegramMessage
 
         await self._answer_callback(callback)
         record = await self._router.get_topic(key)
@@ -1859,39 +1858,10 @@ class GitHubCommands:
         return _parse_review_commit_log(stdout)
 
 
-def _build_opencode_token_usage(part: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Build token usage from OpenCode usage part."""
-    if not isinstance(part, dict):
-        return None
-    usage = part.get("usage")
-    if not isinstance(usage, dict):
-        return None
-    result: dict[str, Any] = {}
-    for key in ("inputTokens", "input_tokens", "promptTokens"):
-        if key in usage:
-            result["prompt_tokens"] = usage[key]
-            break
-    for key in ("outputTokens", "output_tokens", "completionTokens"):
-        if key in usage:
-            result["completion_tokens"] = usage[key]
-            break
-    for key in ("cacheWriteTokens", "cache_write_tokens", "cacheReadTokens", "cache_read_tokens"):
-        if key in usage:
-            result["cache_read_write_tokens"] = usage[key]
-            break
-    for key in ("totalTokens", "total_tokens"):
-        if key in usage:
-            result["total_tokens"] = usage[key]
-            break
-    if not result:
-        return None
-    return result
-
-
 def _format_opencode_exception(exc: Exception) -> Optional[str]:
     """Format OpenCode exceptions for user-friendly error messages."""
-    from ....agents.opencode.supervisor import OpenCodeSupervisorError
-    from ....agents.opencode.client import OpenCodeProtocolError
+    from .....agents.opencode.client import OpenCodeProtocolError
+    from .....agents.opencode.supervisor import OpenCodeSupervisorError
 
     if isinstance(exc, OpenCodeSupervisorError):
         detail = str(exc).strip()

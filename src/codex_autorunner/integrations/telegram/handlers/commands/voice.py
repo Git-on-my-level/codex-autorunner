@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Optional
 
-from ....core.logging_utils import log_event
+from .....core.logging_utils import log_event
 from ...adapter import TelegramMessage
 from ...constants import PLACEHOLDER_TEXT
-from ..state import PendingVoiceRecord
+from ...state import PendingVoiceRecord
 
 if TYPE_CHECKING:
     pass

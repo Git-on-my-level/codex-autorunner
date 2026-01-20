@@ -30,7 +30,7 @@ from .constants import (
     TRACE_MESSAGE_TOKENS,
     VALID_REASONING_EFFORTS,
 )
-from .handlers.commands import CommandSpec
+from .handlers.commands_spec import CommandSpec
 from .state import TelegramState, TelegramTopicRecord, ThreadSummary, topic_key
 
 

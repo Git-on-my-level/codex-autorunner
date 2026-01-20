@@ -9,16 +9,17 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
-from ....core.logging_utils import log_event
-from ....core.state import now_iso
-from ....core.injected_context import wrap_injected_context
-from ..adapter import TelegramMediaCandidate, TelegramMessage
-from ..config import AppServerUnavailableError
-from ..handlers import messages as message_handlers
-from ..helpers import _path_within
+from .....core.injected_context import wrap_injected_context
+from .....core.logging_utils import log_event
+from .....core.state import now_iso
+from ...adapter import TelegramMessage
+from ...config import TelegramMediaCandidate
+from ...helpers import _path_within
+from .. import messages as message_handlers
+from .shared import SharedHelpers
 
 if TYPE_CHECKING:
-    from ..state import TelegramTopicRecord, PendingVoiceRecord
+    from ...state import PendingVoiceRecord, TelegramTopicRecord
 
 
 FILES_HINT_TEMPLATE = (
@@ -57,13 +58,12 @@ def _sanitize_error_detail(detail: str, *, limit: int = 200) -> str:
     return cleaned
 
 
-class FilesCommands:
-    
+class FilesCommands(SharedHelpers):
+
     def _format_telegram_download_error(self, exc: Exception) -> Optional[str]:
         for current in _iter_exception_chain(exc):
             if isinstance(current, Exception):
-                from ....core.utils import _format_httpx_exception
-                detail = _format_httpx_exception(current)
+                detail = self._format_httpx_exception(current)
                 if detail:
                     return _sanitize_error_detail(detail)
                 message = str(current).strip()
@@ -71,7 +71,9 @@ class FilesCommands:
                     return _sanitize_error_detail(message)
         return None
 
-    def _format_download_failure_response(self, kind: str, detail: Optional[str]) -> str:
+    def _format_download_failure_response(
+        self, kind: str, detail: Optional[str]
+    ) -> str:
         base = f"Failed to download {kind}."
         if detail:
             return f"{base} Reason: {detail}"
@@ -97,7 +99,9 @@ class FilesCommands:
         base = "Failed to process any media in the batch."
         details: list[str] = []
         if image_disabled:
-            details.append(f"{image_disabled} image(s) skipped (image handling disabled).")
+            details.append(
+                f"{image_disabled} image(s) skipped (image handling disabled)."
+            )
         if file_disabled:
             details.append(f"{file_disabled} file(s) skipped (file handling disabled).")
         if image_too_large:
@@ -1129,6 +1133,7 @@ class FilesCommands:
             except OSError:
                 continue
             from datetime import datetime
+
             mtime = datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds")
             lines.append(
                 f"- {path.name} ({self._format_bytes(stats.st_size)}, {mtime})"
