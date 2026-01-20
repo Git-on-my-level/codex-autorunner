@@ -161,9 +161,9 @@ def _extract_model_ids(payload: Any) -> tuple[Optional[str], Optional[str]]:
         )
         if (
             isinstance(provider_id, str)
-            and provider_id
+            and provider_id.strip()
             and isinstance(model_id, str)
-            and model_id
+            and model_id.strip()
         ):
             return provider_id, model_id
     return None, None

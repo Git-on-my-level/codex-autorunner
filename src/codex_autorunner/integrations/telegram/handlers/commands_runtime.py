@@ -431,6 +431,23 @@ def _extract_opencode_usage_value(
     return None
 
 
+def _extract_model_ids_from_part(part: Any) -> Optional[dict[str, str]]:
+    if not isinstance(part, dict):
+        return None
+    provider_id = (
+        part.get("providerID") or part.get("providerId") or part.get("provider_id")
+    )
+    model_id = part.get("modelID") or part.get("modelId") or part.get("model_id")
+    if (
+        isinstance(provider_id, str)
+        and provider_id.strip()
+        and isinstance(model_id, str)
+        and model_id.strip()
+    ):
+        return {"providerID": provider_id, "modelID": model_id}
+    return None
+
+
 def _build_opencode_token_usage(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
     usage_payload = _extract_opencode_usage_payload(payload)
     total_tokens = _extract_opencode_usage_value(
@@ -2376,31 +2393,10 @@ class TelegramCommandHandlers:
                                             "modelContextWindow" not in token_usage
                                             and not context_window_resolved
                                         ):
-                                            context_model_payload = model_payload
-                                            if (
-                                                not context_model_payload
-                                                and isinstance(part, dict)
-                                            ):
-                                                provider_id = (
-                                                    part.get("providerID")
-                                                    or part.get("providerId")
-                                                    or part.get("provider_id")
-                                                )
-                                                model_id = (
-                                                    part.get("modelID")
-                                                    or part.get("modelId")
-                                                    or part.get("model_id")
-                                                )
-                                                if (
-                                                    isinstance(provider_id, str)
-                                                    and provider_id
-                                                    and isinstance(model_id, str)
-                                                    and model_id
-                                                ):
-                                                    context_model_payload = {
-                                                        "providerID": provider_id,
-                                                        "modelID": model_id,
-                                                    }
+                                            context_model_payload = (
+                                                model_payload
+                                                or _extract_model_ids_from_part(part)
+                                            )
                                             opencode_context_window = await self._resolve_opencode_model_context_window(
                                                 opencode_client,
                                                 workspace_root,
@@ -7133,30 +7129,10 @@ class TelegramCommandHandlers:
                                         "modelContextWindow" not in token_usage
                                         and not context_window_resolved
                                     ):
-                                        context_model_payload = model_payload
-                                        if not context_model_payload and isinstance(
-                                            part, dict
-                                        ):
-                                            provider_id = (
-                                                part.get("providerID")
-                                                or part.get("providerId")
-                                                or part.get("provider_id")
-                                            )
-                                            model_id = (
-                                                part.get("modelID")
-                                                or part.get("modelId")
-                                                or part.get("model_id")
-                                            )
-                                            if (
-                                                isinstance(provider_id, str)
-                                                and provider_id
-                                                and isinstance(model_id, str)
-                                                and model_id
-                                            ):
-                                                context_model_payload = {
-                                                    "providerID": provider_id,
-                                                    "modelID": model_id,
-                                                }
+                                        context_model_payload = (
+                                            model_payload
+                                            or _extract_model_ids_from_part(part)
+                                        )
                                         opencode_context_window = await self._resolve_opencode_model_context_window(
                                             opencode_client,
                                             workspace_root,
