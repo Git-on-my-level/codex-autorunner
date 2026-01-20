@@ -134,6 +134,7 @@ def test_should_bypass_topic_queue_for_interrupt() -> None:
     handlers = types.SimpleNamespace(
         _bot_username="CodexBot",
         _command_specs={},
+        _pending_questions={},
     )
     message = _message(text="^C")
     assert should_bypass_topic_queue(handlers, message) is True
@@ -149,6 +150,7 @@ def test_should_bypass_topic_queue_for_allow_during_turn() -> None:
     handlers = types.SimpleNamespace(
         _bot_username="CodexBot",
         _command_specs={"status": spec},
+        _pending_questions={},
     )
     message = _message(
         text="/status",
@@ -167,12 +169,28 @@ def test_should_not_bypass_topic_queue_without_allow_during_turn() -> None:
     handlers = types.SimpleNamespace(
         _bot_username="CodexBot",
         _command_specs={"new": spec},
+        _pending_questions={},
     )
     message = _message(
         text="/new",
         entities=(TelegramMessageEntity("bot_command", 0, len("/new")),),
     )
     assert should_bypass_topic_queue(handlers, message) is False
+
+
+def test_should_bypass_topic_queue_for_custom_answer() -> None:
+    pending = types.SimpleNamespace(
+        awaiting_custom_input=True,
+        chat_id=3,
+        thread_id=4,
+    )
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _command_specs={},
+        _pending_questions={"req-1": pending},
+    )
+    message = _message(text="Purple")
+    assert should_bypass_topic_queue(handlers, message) is True
 
 
 def test_has_batchable_media_with_photos() -> None:

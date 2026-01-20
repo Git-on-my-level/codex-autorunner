@@ -125,12 +125,12 @@ async def _dispatch_message(
     if message is None:
         return
     if context.topic_key:
-        await handlers._maybe_send_queued_placeholder(
-            message, topic_key=context.topic_key
-        )
         if handlers._should_bypass_topic_queue(message):
             await handlers._handle_message(message)
             return
+        await handlers._maybe_send_queued_placeholder(
+            message, topic_key=context.topic_key
+        )
         handlers._enqueue_topic_work(
             context.topic_key,
             lambda: handlers._handle_message(message),
