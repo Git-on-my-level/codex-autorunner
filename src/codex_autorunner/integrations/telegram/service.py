@@ -765,8 +765,7 @@ class TelegramBotService(
         if last_update_id < 0:
             return
         stored = await self._store.update_last_update_id_global(last_update_id)
-        if updates:
-            max_update_id = max(update.update_id for update in updates)
+        max_update_id = max((update.update_id for update in updates), default=None)
         log_event(
             self._logger,
             logging.INFO,
@@ -1158,7 +1157,18 @@ class TelegramBotService(
             return True
         last_id = self._last_update_ids.get(key)
         if last_id is None:
-            record = await self._store.get_topic(key)
+            record = None
+            try:
+                record = await self._store.get_topic(key)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.update_id.load.failed",
+                    exc=exc,
+                    topic_key=key,
+                    update_id=update_id,
+                )
             last_id = record.last_update_id if record else None
             if isinstance(last_id, int) and not isinstance(last_id, bool):
                 self._last_update_ids[key] = last_id
@@ -1167,7 +1177,17 @@ class TelegramBotService(
         if isinstance(last_id, int) and update_id <= last_id:
             return False
         self._last_update_ids[key] = update_id
-        await self._maybe_persist_update_id(key, update_id)
+        try:
+            await self._maybe_persist_update_id(key, update_id)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.update_id.persist.failed",
+                exc=exc,
+                topic_key=key,
+                update_id=update_id,
+            )
         return True
 
     async def _maybe_persist_update_id(self, key: str, update_id: int) -> None:
