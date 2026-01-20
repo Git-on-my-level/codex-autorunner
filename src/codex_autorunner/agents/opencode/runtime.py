@@ -379,6 +379,28 @@ def _extract_usage_field(
     return None
 
 
+def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
+    usage: dict[str, Any] = {}
+    total_tokens = _coerce_int(tokens.get("total"))
+    if total_tokens is not None:
+        usage["totalTokens"] = total_tokens
+    input_tokens = _coerce_int(tokens.get("input"))
+    if input_tokens is not None:
+        usage["inputTokens"] = input_tokens
+    output_tokens = _coerce_int(tokens.get("output"))
+    if output_tokens is not None:
+        usage["outputTokens"] = output_tokens
+    reasoning_tokens = _coerce_int(tokens.get("reasoning"))
+    if reasoning_tokens is not None:
+        usage["reasoningTokens"] = reasoning_tokens
+    cache = tokens.get("cache")
+    if isinstance(cache, dict):
+        cached_read = _coerce_int(cache.get("read"))
+        if cached_read is not None:
+            usage["cachedInputTokens"] = cached_read
+    return usage or None
+
+
 def _extract_usage_payload(payload: Any) -> Optional[dict[str, Any]]:
     if not isinstance(payload, dict):
         return None
@@ -407,6 +429,11 @@ def _extract_usage_payload(payload: Any) -> Optional[dict[str, Any]]:
             usage = container.get(key)
             if isinstance(usage, dict):
                 return usage
+        tokens = container.get("tokens")
+        if isinstance(tokens, dict):
+            flattened = _flatten_opencode_tokens(tokens)
+            if flattened:
+                return flattened
     return None
 
 
@@ -583,6 +610,7 @@ async def collect_opencode_output_from_events(
     pending_text: dict[str, list[str]] = {}
     last_usage_total: Optional[int] = None
     last_context_window: Optional[int] = None
+    part_types: dict[str, str] = {}
     seen_question_request_ids: set[tuple[str, str]] = set()
     normalized_question_policy = _normalize_question_policy(question_policy)
     logger = logging.getLogger(__name__)
@@ -841,6 +869,18 @@ async def collect_opencode_output_from_events(
             part_type = part_dict.get("type") if part_dict else None
             part_ignored = bool(part_dict.get("ignored")) if part_dict else False
             part_message_id = _message_id_from_part(part_dict)
+            part_id = None
+            if part_dict:
+                part_id = part_dict.get("id") or part_dict.get("partId")
+                if isinstance(part_id, str) and part_id and isinstance(part_type, str):
+                    part_types[part_id] = part_type
+                elif (
+                    isinstance(part_id, str)
+                    and part_id
+                    and not isinstance(part_type, str)
+                    and part_id in part_types
+                ):
+                    part_type = part_types[part_id]
             if isinstance(delta, dict):
                 delta_text = delta.get("text")
             elif isinstance(delta, str):
@@ -859,7 +899,10 @@ async def collect_opencode_output_from_events(
                         continue
                     _append_text_for_message(part_message_id, delta_text)
                 elif part_type == "reasoning":
-                    pass
+                    if part_handler and part_dict:
+                        await part_handler(
+                            "reasoning", part_with_session or part_dict, delta_text
+                        )
                 elif part_handler and part_dict and part_type:
                     await part_handler(
                         part_type, part_with_session or part_dict, delta_text
@@ -899,7 +942,7 @@ async def collect_opencode_output_from_events(
                     _append_text_for_message(msg_id, message_result.text)
                 if message_result.error and not error:
                     error = message_result.error
-            if part_handler is not None:
+            if part_handler is not None and is_primary_session:
                 usage = _extract_usage_payload(payload)
                 if usage is not None:
                     total_tokens = _extract_total_tokens(usage)

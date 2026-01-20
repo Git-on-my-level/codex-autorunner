@@ -231,6 +231,13 @@ class TelegramNotificationHandlers:
         self._turn_progress_rendered.pop(turn_key, None)
         self._turn_progress_updated_at.pop(turn_key, None)
         self._touch_cache_timestamp("progress_trackers", turn_key)
+        pending_context_usage: dict[tuple[str, str], int] = getattr(
+            self, "_pending_context_usage", {}
+        )
+        if pending_context_usage:
+            pending_value = pending_context_usage.pop(turn_key, None)
+            if pending_value is not None:
+                tracker.set_context_usage_percent(pending_value)
         if ctx:
             chat_id = ctx.chat_id
             thread_id = ctx.thread_id
@@ -258,6 +265,11 @@ class TelegramNotificationHandlers:
         self._turn_progress_trackers.pop(turn_key, None)
         self._turn_progress_rendered.pop(turn_key, None)
         self._turn_progress_updated_at.pop(turn_key, None)
+        pending_context_usage: dict[tuple[str, str], int] = getattr(
+            self, "_pending_context_usage", {}
+        )
+        if pending_context_usage:
+            pending_context_usage.pop(turn_key, None)
         task = self._turn_progress_tasks.pop(turn_key, None)
         if task and not task.done():
             task.cancel()
@@ -296,6 +308,13 @@ class TelegramNotificationHandlers:
             return
         tracker = self._turn_progress_trackers.get(turn_key)
         if tracker is None:
+            pending_context_usage: dict[tuple[str, str], int] = getattr(
+                self, "_pending_context_usage", None
+            )
+            if pending_context_usage is None:
+                pending_context_usage = {}
+                self._pending_context_usage = pending_context_usage
+            pending_context_usage[turn_key] = percent
             return
         tracker.set_context_usage_percent(percent)
         await self._schedule_progress_edit(turn_key)

@@ -29,3 +29,25 @@ def test_build_opencode_token_usage_with_components() -> None:
         },
         "modelContextWindow": 1000,
     }
+
+
+def test_build_opencode_token_usage_from_tokens_payload() -> None:
+    usage = _build_opencode_token_usage(
+        {
+            "tokens": {
+                "input": 12,
+                "output": 7,
+                "reasoning": 3,
+                "cache": {"read": 2},
+            }
+        }
+    )
+    assert usage == {
+        "last": {
+            "totalTokens": 24,
+            "inputTokens": 12,
+            "cachedInputTokens": 2,
+            "outputTokens": 7,
+            "reasoningTokens": 3,
+        }
+    }

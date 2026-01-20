@@ -166,6 +166,31 @@ async def test_collect_output_filters_reasoning_and_includes_legacy_none_type() 
     assert output.error is None
 
 
+@pytest.mark.anyio
+async def test_collect_output_skips_reasoning_when_type_missing_on_delta() -> None:
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"think"},"part":{"type":"reasoning","id":"r1","text":"think"}}}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":" more"},"part":{"id":"r1","text":"think more"}}}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"Hello"},"part":{"type":"text","text":"Hello"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Hello"
+    assert "think" not in output.text.lower()
+
+
 def test_parse_message_response() -> None:
     payload = {
         "info": {"id": "turn-1", "error": "bad auth"},
