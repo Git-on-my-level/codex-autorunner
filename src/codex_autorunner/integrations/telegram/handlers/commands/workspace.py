@@ -1355,7 +1355,9 @@ class WorkspaceCommands:
                     if isinstance(entry.get("id"), str)
                 }
                 candidates = filtered + [
-                    entry for entry in unscoped_entries if entry.get("id") not in seen_ids
+                    entry
+                    for entry in unscoped_entries
+                    if entry.get("id") not in seen_ids
                 ]
             if not candidates and not local_thread_ids:
                 if unscoped_entries and not saw_path:
@@ -1422,7 +1424,9 @@ class WorkspaceCommands:
             refreshed = await self._refresh_thread_summaries(
                 client,
                 missing_ids,
-                topic_keys_by_thread=local_thread_topics if args.show_unscoped else None,
+                topic_keys_by_thread=(
+                    local_thread_topics if args.show_unscoped else None
+                ),
                 default_topic_key=key,
             )
             if refreshed:
@@ -1510,9 +1514,11 @@ class WorkspaceCommands:
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 stored_count=len(record.thread_ids),
-                listed_count=len(entries_by_id)
-                if not args.show_unscoped
-                else len(thread_data.threads),
+                listed_count=(
+                    len(entries_by_id)
+                    if not args.show_unscoped
+                    else len(thread_data.threads)
+                ),
                 missing_ids=missing_ids[:RESUME_MISSING_IDS_LOG_LIMIT],
                 list_failed=thread_data.list_failed,
             )

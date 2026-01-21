@@ -825,7 +825,9 @@ class FilesCommands(SharedHelpers):
         outbox_dir = self._files_outbox_pending_dir(
             context.record.workspace_path, context.topic_key
         )
-        topic_dir = self._files_topic_dir(context.record.workspace_path, context.topic_key)
+        topic_dir = self._files_topic_dir(
+            context.record.workspace_path, context.topic_key
+        )
         hint = wrap_injected_context(
             FILES_HINT_TEMPLATE.format(
                 inbox=str(inbox_dir),

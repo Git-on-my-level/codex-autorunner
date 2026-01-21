@@ -7,8 +7,8 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass
 from contextlib import suppress
+from dataclasses import dataclass
 from os import getenv
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -318,7 +318,11 @@ class GitHubCommands:
                 max_parallel_turns=self._config.concurrency.max_parallel_turns,
                 per_topic_queue=self._config.concurrency.per_topic_queue,
             )
-            if queued and placeholder_id is not None and placeholder_text != PLACEHOLDER_TEXT:
+            if (
+                queued
+                and placeholder_id is not None
+                and placeholder_text != PLACEHOLDER_TEXT
+            ):
                 await self._edit_message_text(
                     message.chat_id,
                     placeholder_id,
@@ -816,7 +820,11 @@ class GitHubCommands:
                 max_parallel_turns=self._config.concurrency.max_parallel_turns,
                 per_topic_queue=self._config.concurrency.per_topic_queue,
             )
-            if queued and placeholder_id is not None and placeholder_text != PLACEHOLDER_TEXT:
+            if (
+                queued
+                and placeholder_id is not None
+                and placeholder_text != PLACEHOLDER_TEXT
+            ):
                 await self._edit_message_text(
                     message.chat_id,
                     placeholder_id,
@@ -832,7 +840,9 @@ class GitHubCommands:
                     model_payload,
                 )
                 if missing_env:
-                    provider_id = model_payload.get("providerID") if model_payload else None
+                    provider_id = (
+                        model_payload.get("providerID") if model_payload else None
+                    )
                     failure_message = (
                         "OpenCode provider "
                         f"{provider_id or 'selected'} requires env vars: "
@@ -1009,10 +1019,13 @@ class GitHubCommands:
                         ):
                             metadata = state.get("metadata")
                             if isinstance(metadata, dict):
-                                child_session_id = metadata.get("sessionId") or metadata.get(
-                                    "sessionID"
-                                )
-                                if isinstance(child_session_id, str) and child_session_id:
+                                child_session_id = metadata.get(
+                                    "sessionId"
+                                ) or metadata.get("sessionID")
+                                if (
+                                    isinstance(child_session_id, str)
+                                    and child_session_id
+                                ):
                                     watched_session_ids.add(child_session_id)
                                     child_label = None
                                     input_payload = state.get("input")
@@ -1020,7 +1033,10 @@ class GitHubCommands:
                                         child_label = input_payload.get(
                                             "subagent_type"
                                         ) or input_payload.get("subagentType")
-                                    if isinstance(child_label, str) and child_label.strip():
+                                    if (
+                                        isinstance(child_label, str)
+                                        and child_label.strip()
+                                    ):
                                         child_label = child_label.strip()
                                         if not child_label.startswith("@"):
                                             child_label = f"@{child_label}"

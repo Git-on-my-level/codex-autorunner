@@ -114,9 +114,7 @@ class ApprovalsCommands:
         )
         await self._send_message(
             message.chat_id,
-            _format_persist_note(
-                f"Approval mode set to {mode}.", persist=persist
-            ),
+            _format_persist_note(f"Approval mode set to {mode}.", persist=persist),
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
