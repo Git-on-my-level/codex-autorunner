@@ -159,9 +159,9 @@ class TelegramNotificationHandlers:
             item_id = _coerce_id(params.get("itemId"))
             if not item_id:
                 return
-            buffer = self._reasoning_buffers.get(item_id, "")
-            buffer = f"{buffer}\n\n"
-            self._reasoning_buffers[item_id] = buffer
+            coalescer = self._reasoning_buffers.get(item_id)
+            if coalescer:
+                coalescer.add("\n\n")
             self._touch_cache_timestamp("reasoning_buffers", item_id)
             return
         if method == "item/completed":
