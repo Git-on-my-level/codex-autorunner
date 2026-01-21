@@ -99,6 +99,30 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "stop_after_runs": None,
         "max_wallclock_seconds": None,
         "no_progress_threshold": 3,
+        "review": {
+            "enabled": False,
+            "trigger": {
+                "on_todos_complete": True,
+                "on_no_progress_stop": True,
+                "on_max_runs_stop": True,
+                "on_stop_requested": False,
+                "on_error_exit": False,
+            },
+            "agent": None,
+            "model": None,
+            "reasoning": None,
+            "max_wallclock_seconds": None,
+            "context": {
+                "primary_docs": ["spec", "progress"],
+                "include_docs": ["todo", "summary"],
+                "include_last_run_artifacts": True,
+                "max_doc_chars": 20000,
+            },
+            "artifacts": {
+                "attach_to_last_run_index": True,
+                "write_to_review_runs_dir": True,
+            },
+        },
     },
     "git": {
         "auto_commit": False,
