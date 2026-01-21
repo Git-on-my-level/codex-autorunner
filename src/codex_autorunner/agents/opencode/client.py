@@ -480,7 +480,9 @@ class OpenCodeClient:
         last_error: Optional[BaseException] = None
         for path in event_paths:
             try:
-                async with self._client.stream("GET", path, params=params) as response:
+                async with self._client.stream(
+                    "GET", path, params=params, timeout=None
+                ) as response:
                     response.raise_for_status()
                     if ready_event is not None:
                         ready_event.set()

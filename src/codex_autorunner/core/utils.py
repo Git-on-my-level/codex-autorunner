@@ -187,7 +187,7 @@ def build_opencode_supervisor(
     opencode_binary: Optional[str] = None,
     workspace_root: Optional[Path] = None,
     logger: Optional["logging.Logger"] = None,
-    request_timeout: Optional[float] = None,
+    request_timeout: Optional[float] = 30.0,
     max_handles: Optional[int] = None,
     idle_ttl_seconds: Optional[float] = None,
     base_env: Optional[MutableMapping[str, str]] = None,
