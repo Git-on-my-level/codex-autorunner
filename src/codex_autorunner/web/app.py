@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import shlex
+import threading
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -934,11 +935,13 @@ def create_app(
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
     _apply_app_context(app, context)
     app.add_middleware(GZipMiddleware, minimum_size=500)
-    app.mount(
-        "/static",
-        CacheStaticFiles(directory=context.static_dir),
-        name="static",
+    static_files = CacheStaticFiles(directory=context.static_dir)
+    app.state.static_files = static_files
+    app.state.static_assets_lock = threading.Lock()
+    app.state.hub_static_assets = (
+        hub_config.static_assets if hub_config is not None else None
     )
+    app.mount("/static", static_files, name="static")
     # Route handlers
     app.include_router(build_repo_router(context.static_dir))
 
@@ -975,11 +978,11 @@ def create_hub_app(
     app = FastAPI(redirect_slashes=False)
     _apply_hub_context(app, context)
     app.add_middleware(GZipMiddleware, minimum_size=500)
-    app.mount(
-        "/static",
-        CacheStaticFiles(directory=context.static_dir),
-        name="static",
-    )
+    static_files = CacheStaticFiles(directory=context.static_dir)
+    app.state.static_files = static_files
+    app.state.static_assets_lock = threading.Lock()
+    app.state.hub_static_assets = None
+    app.mount("/static", static_files, name="static")
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
     repo_apps: dict[str, ASGIApp] = {}

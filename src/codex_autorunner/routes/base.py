@@ -24,6 +24,7 @@ from ..core.state import SessionRecord, load_state, now_iso, persist_session_reg
 from ..web.pty_session import REPLAY_END, ActiveSession, PTYSession
 from ..web.schemas import StateResponse, VersionResponse
 from ..web.static_assets import index_response_headers, render_index_html
+from ..web.static_refresh import refresh_static_assets
 from .shared import (
     SSE_HEADERS,
     build_codex_terminal_cmd,
@@ -43,12 +44,17 @@ def build_base_routes(static_dir: Path) -> APIRouter:
 
     @router.get("/", include_in_schema=False)
     def index(request: Request):
-        index_path = static_dir / "index.html"
+        active_static = getattr(request.app.state, "static_dir", static_dir)
+        index_path = active_static / "index.html"
+        if not index_path.exists():
+            if refresh_static_assets(request.app):
+                active_static = request.app.state.static_dir
+                index_path = active_static / "index.html"
         if not index_path.exists():
             raise HTTPException(
                 status_code=500, detail="Static UI assets missing; reinstall package"
             )
-        html = render_index_html(static_dir, request.app.state.asset_version)
+        html = render_index_html(active_static, request.app.state.asset_version)
         return HTMLResponse(html, headers=index_response_headers())
 
     @router.get("/api/state", response_model=StateResponse)
