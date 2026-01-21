@@ -71,7 +71,7 @@ def validate_todo_markdown(content: str) -> List[str]:
     errors: List[str] = []
     if content is None:
         return ["TODO is missing"]
-    lines = content.splitlines()
+    lines = list(_iter_meaningful_lines(content))
     meaningful = [
         line for line in lines if line.strip() and not line.lstrip().startswith("#")
     ]
