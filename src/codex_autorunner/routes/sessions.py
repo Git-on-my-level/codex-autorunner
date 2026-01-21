@@ -126,13 +126,17 @@ def build_sessions_routes() -> APIRouter:
             normalized_repo_path = repo_path.strip()
             if normalized_repo_path:
                 raw_path = Path(normalized_repo_path)
-                if raw_path.is_absolute():
-                    resolved = raw_path.resolve()
-                else:
-                    resolved = (repo_root / raw_path).resolve()
                 try:
+                    # Always resolve paths with respect to the configured repo_root
+                    if raw_path.is_absolute():
+                        # Reject absolute paths that are not under repo_root
+                        resolved = raw_path.resolve()
+                    else:
+                        resolved = (repo_root / raw_path).resolve()
+                    # Ensure the resolved path is contained within repo_root
                     resolved.relative_to(repo_root)
-                except ValueError:
+                except (OSError, RuntimeError, ValueError):
+                    # On any resolution or containment failure, treat as invalid
                     normalized_repo_path = ""
                 else:
                     normalized_repo_path = str(resolved)
