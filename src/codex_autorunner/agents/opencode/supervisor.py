@@ -52,6 +52,7 @@ class OpenCodeSupervisor:
         password: Optional[str] = None,
         base_env: Optional[Mapping[str, str]] = None,
         base_url: Optional[str] = None,
+        subagent_models: Optional[Mapping[str, str]] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._logger = logger or logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class OpenCodeSupervisor:
         self._auth = (username, password) if password else None
         self._base_env = base_env
         self._base_url = base_url
+        self._subagent_models = subagent_models or {}
         self._handles: dict[str, OpenCodeHandle] = {}
         self._lock = asyncio.Lock()
 
@@ -113,6 +115,34 @@ class OpenCodeSupervisor:
             if handle.active_turns > 0:
                 handle.active_turns -= 1
             handle.last_used_at = time.monotonic()
+
+    async def ensure_subagent_config(
+        self,
+        workspace_root: Path,
+        agent_id: str,
+        model: Optional[str] = None,
+    ) -> None:
+        """Ensure subagent agent config file exists with correct model.
+
+        Args:
+            workspace_root: Path to workspace root
+            agent_id: Agent ID to configure (e.g., "subagent")
+            model: Optional model override (defaults to subagent_models if not provided)
+        """
+        if model is None:
+            model = self._subagent_models.get(agent_id)
+        if not model:
+            return
+
+        from .agent_config import ensure_agent_config
+
+        await ensure_agent_config(
+            workspace_root=workspace_root,
+            agent_id=agent_id,
+            model=model,
+            title=agent_id,
+            description=f"Subagent for {agent_id} tasks",
+        )
 
     async def _close_handle(self, handle: OpenCodeHandle, *, reason: str) -> None:
         try:

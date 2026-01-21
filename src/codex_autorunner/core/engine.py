@@ -67,6 +67,7 @@ from .locks import (
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
 from .prompt import build_final_summary_prompt
+from .review_context import build_spec_progress_review_context
 from .run_index import RunIndexStore
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
@@ -147,6 +148,7 @@ class Engine:
         self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
+        self._last_telemetry_update_time: float = 0.0
         self._last_run_interrupted = False
         self._lock_handle: Optional[FileLock] = None
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
@@ -588,11 +590,34 @@ class Engine:
             with run_log.open("a", encoding="utf-8") as f:
                 f.write(line)
 
+    def _emit_event(self, run_id: int, event: str, **payload: Any) -> None:
+        import json as _json
+
+        event_data = {
+            "ts": timestamp(),
+            "event": event,
+            "run_id": run_id,
+        }
+        if payload:
+            event_data.update(payload)
+        events_path = self._events_log_path(run_id)
+        self._ensure_run_log_dir()
+        try:
+            with events_path.open("a", encoding="utf-8") as f:
+                f.write(_json.dumps(event_data) + "\n")
+        except (OSError, IOError) as exc:
+            self._app_server_logger.warning(
+                "Failed to write event to events log: %s", exc
+            )
+
     def _ensure_log_path(self) -> None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _run_log_path(self, run_id: int) -> Path:
         return self.log_path.parent / "runs" / f"run-{run_id}.log"
+
+    def _events_log_path(self, run_id: int) -> Path:
+        return self.log_path.parent / "runs" / f"run-{run_id}.events.jsonl"
 
     def _ensure_run_log_dir(self) -> None:
         (self.log_path.parent / "runs").mkdir(parents=True, exist_ok=True)
@@ -603,6 +628,9 @@ class Engine:
         suffix = ""
         if marker == "end":
             suffix = f" (code {exit_code})"
+            self._emit_event(run_id, "run.finished", exit_code=exit_code)
+        elif marker == "start":
+            self._emit_event(run_id, "run.started")
         text = f"=== run {run_id} {marker}{suffix} ==="
         offset = self._emit_global_line(text)
         if self._active_run_log is not None:
@@ -719,6 +747,41 @@ class Engine:
                 return
             self._run_telemetry = None
 
+    def _maybe_update_run_index_telemetry(
+        self, run_id: int, min_interval_seconds: float = 3.0
+    ) -> None:
+        import time as _time
+
+        now = _time.time()
+        if now - self._last_telemetry_update_time < min_interval_seconds:
+            return
+        telemetry = self._snapshot_run_telemetry(run_id)
+        if telemetry is None:
+            return
+        if telemetry.thread_id and isinstance(telemetry.token_total, dict):
+            with state_lock(self.state_path):
+                state = load_state(self.state_path)
+                selected_agent = (
+                    (state.autorunner_agent_override or "codex").strip().lower()
+                )
+            baseline = None
+            if selected_agent != "opencode":
+                baseline = self._find_thread_token_baseline(
+                    thread_id=telemetry.thread_id, run_id=run_id
+                )
+            delta = self._compute_token_delta(baseline, telemetry.token_total)
+            self._merge_run_index_entry(
+                run_id,
+                {
+                    "token_usage": {
+                        "delta": delta,
+                        "thread_total_before": baseline,
+                        "thread_total_after": telemetry.token_total,
+                    }
+                },
+            )
+            self._last_telemetry_update_time = now
+
     async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
         if not isinstance(message, dict):
             return
@@ -753,6 +816,8 @@ class Engine:
                     total = token_usage.get("total") or token_usage.get("totals")
                     if isinstance(total, dict):
                         telemetry.token_total = total
+                        self._maybe_update_run_index_telemetry(run_id)
+                        self._emit_event(run_id, "token.updated", token_total=total)
             if method == "turn/plan/updated":
                 telemetry.plan = params.get("plan") if "plan" in params else params
             if method == "turn/diff/updated":
@@ -770,6 +835,90 @@ class Engine:
 
     def _load_run_index(self) -> dict[str, dict]:
         return self._run_index_store.load_all()
+
+    def reconcile_run_index(self) -> None:
+        """Best-effort: mark stale runs that still look 'running' in the run index.
+
+        The Runs UI considers a run "running" when both `finished_at` and `exit_code`
+        are missing. If the runner process was killed or crashed, the `end` marker is
+        never written, so the entry stays "running" forever. This method uses the
+        runner state + lock pid as the authoritative signal for whether a run can
+        still be active, then forces stale entries to a finished/error state.
+        """
+        try:
+            state = load_state(self.state_path)
+        except Exception:
+            return
+
+        active_pid: Optional[int] = None
+        pid = state.runner_pid
+        if pid and process_alive(pid):
+            active_pid = pid
+        else:
+            info = read_lock_info(self.lock_path)
+            if info.pid and process_alive(info.pid):
+                active_pid = info.pid
+
+        active_run_id: Optional[int] = None
+        if (
+            active_pid is not None
+            and state.status == "running"
+            and state.last_run_id is not None
+        ):
+            active_run_id = int(state.last_run_id)
+
+        now = now_iso()
+        try:
+            index = self._run_index_store.load_all()
+        except Exception:
+            return
+
+        for key, entry in index.items():
+            try:
+                run_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(entry, dict):
+                continue
+            if run_id <= 0:
+                continue
+
+            if active_run_id is not None and run_id == active_run_id:
+                continue
+
+            if entry.get("reconciled_at") is not None:
+                continue
+
+            finished_at = entry.get("finished_at")
+            exit_code = entry.get("exit_code")
+
+            if isinstance(finished_at, str) and finished_at:
+                continue
+            if exit_code is not None:
+                continue
+
+            inferred_exit: int
+            if state.last_run_id == run_id and state.last_exit_code is not None:
+                inferred_exit = int(state.last_exit_code)
+            else:
+                inferred_exit = 1
+
+            try:
+                self._run_index_store.merge_entry(
+                    run_id,
+                    {
+                        "finished_at": now,
+                        "exit_code": inferred_exit,
+                        "reconciled_at": now,
+                        "reconciled_reason": (
+                            "runner_active"
+                            if active_pid is not None
+                            else "runner_inactive"
+                        ),
+                    },
+                )
+            except Exception:
+                continue
 
     def _merge_run_index_entry(self, run_id: int, updates: dict[str, Any]) -> None:
         self._run_index_store.merge_entry(run_id, updates)
@@ -1089,6 +1238,7 @@ class Engine:
                 reasoning=effective_effort,
                 approval_mode=approval_policy,
                 sandbox_policy=sandbox_policy,
+                should_stop=stop_event.is_set,
             )
             if result.get("status") != "completed":
                 self.log_line(
@@ -1348,6 +1498,9 @@ class Engine:
         except ConfigError:
             opencode_binary = None
 
+        agent_config = self.config.agents.get("opencode")
+        subagent_models = agent_config.subagent_models if agent_config else None
+
         supervisor = build_opencode_supervisor(
             opencode_command=opencode_command,
             opencode_binary=opencode_binary,
@@ -1357,6 +1510,7 @@ class Engine:
             max_handles=config.max_handles,
             idle_ttl_seconds=config.idle_ttl_seconds,
             base_env=None,
+            subagent_models=subagent_models,
         )
 
         if supervisor is None:
@@ -1742,6 +1896,7 @@ class Engine:
         no_progress_count = 0
         last_outstanding_count = len(self.docs.todos()[0])
         last_done_count = len(self.docs.todos()[1])
+        exit_reason: Optional[str] = None
 
         try:
             while True:
@@ -1750,6 +1905,7 @@ class Engine:
                     self._update_state(
                         "idle", run_id - 1, last_exit_code, finished=True
                     )
+                    exit_reason = "stop_requested"
                     break
                 if self.config.runner_max_wallclock_seconds is not None:
                     if (
@@ -1759,6 +1915,7 @@ class Engine:
                         self._update_state(
                             "idle", run_id - 1, state.last_exit_code, finished=True
                         )
+                        exit_reason = "max_wallclock_seconds"
                         break
 
                 if self.todos_done():
@@ -1767,12 +1924,16 @@ class Engine:
                             run_id, external_stop_flag=external_stop_flag
                         )
                         last_exit_code = exit_code
+                        exit_reason = (
+                            "error_exit" if exit_code != 0 else "todos_complete"
+                        )
                     else:
                         current = load_state(self.state_path)
                         last_exit_code = current.last_exit_code
                         self._update_state(
                             "idle", run_id - 1, last_exit_code, finished=True
                         )
+                        exit_reason = "todos_complete"
                     break
 
                 prev_output = self.extract_prev_output(run_id - 1)
@@ -1784,6 +1945,7 @@ class Engine:
                 last_exit_code = exit_code
 
                 if exit_code != 0:
+                    exit_reason = "error_exit"
                     break
 
                 # Check for no progress across runs
@@ -1831,6 +1993,7 @@ class Engine:
                             exit_code,
                             finished=True,
                         )
+                        exit_reason = "no_progress_threshold"
                         break
                 else:
                     no_progress_count = 0
@@ -1844,19 +2007,23 @@ class Engine:
                         run_id + 1, external_stop_flag=external_stop_flag
                     )
                     last_exit_code = exit_code
+                    exit_reason = "error_exit" if exit_code != 0 else "todos_complete"
                     break
 
                 if target_runs is not None and run_id >= target_runs:
+                    exit_reason = "stop_after_runs"
                     break
 
                 run_id += 1
                 if self._should_stop(external_stop_flag):
                     self.clear_stop_request()
                     self._update_state("idle", run_id - 1, exit_code, finished=True)
+                    exit_reason = "stop_requested"
                     break
                 await asyncio.sleep(self.config.runner_sleep_seconds)
         except Exception as exc:
             # Never silently die: persist's reason to agent log and surface in state.
+            exit_reason = exit_reason or "error_exit"
             try:
                 self.log_line(run_id, f"FATAL: run_loop crashed: {exc!r}")
                 tb = traceback.format_exc()
@@ -1871,10 +2038,151 @@ class Engine:
                     "Failed to update state after run_loop crash: %s", exc
                 )
         finally:
+            try:
+                await self._maybe_run_end_review(
+                    exit_reason=exit_reason or "unknown",
+                    last_exit_code=last_exit_code,
+                )
+            except Exception as exc:
+                self._app_server_logger.warning("End-of-run review failed: %s", exc)
             await self._close_app_server_supervisor()
             await self._close_opencode_supervisor()
         # IMPORTANT: lock ownership is managed by the caller (CLI/Hub/Server runner).
         # Engine.run_loop must never unconditionally mutate the lock file.
+
+    async def _maybe_run_end_review(
+        self, *, exit_reason: str, last_exit_code: Optional[int]
+    ) -> None:
+        runner_cfg = self.config.raw.get("runner") or {}
+        review_cfg = runner_cfg.get("review")
+        if not isinstance(review_cfg, dict) or not review_cfg.get("enabled"):
+            return
+
+        trigger_cfg = review_cfg.get("trigger") or {}
+        reason_key_map = {
+            "todos_complete": "on_todos_complete",
+            "no_progress_threshold": "on_no_progress_stop",
+            "stop_after_runs": "on_max_runs_stop",
+            # Share the max-runs trigger for wallclock cutoffs to avoid extra config flags.
+            "max_wallclock_seconds": "on_max_runs_stop",
+            "stop_requested": "on_stop_requested",
+            "error_exit": "on_error_exit",
+        }
+        trigger_key = reason_key_map.get(exit_reason)
+        if not trigger_key or not trigger_cfg.get(trigger_key, False):
+            return
+
+        state = load_state(self.state_path)
+        last_run_id = state.last_run_id
+        if last_run_id is None:
+            return
+
+        top_review_cfg = self.config.raw.get("review") or {}
+        agent = review_cfg.get("agent") or top_review_cfg.get("agent") or "opencode"
+        model = review_cfg.get("model") or top_review_cfg.get("model")
+        reasoning = review_cfg.get("reasoning") or top_review_cfg.get("reasoning")
+        max_wallclock_seconds = review_cfg.get("max_wallclock_seconds")
+        if max_wallclock_seconds is None:
+            max_wallclock_seconds = top_review_cfg.get("max_wallclock_seconds")
+
+        context_cfg = review_cfg.get("context") or {}
+        primary_docs = context_cfg.get("primary_docs") or ["spec", "progress"]
+        include_docs = context_cfg.get("include_docs") or []
+        include_last_run_artifacts = bool(
+            context_cfg.get("include_last_run_artifacts", True)
+        )
+        max_doc_chars = context_cfg.get("max_doc_chars", 20000)
+        try:
+            max_doc_chars = int(max_doc_chars)
+        except (TypeError, ValueError):
+            max_doc_chars = 20000
+
+        context_md = build_spec_progress_review_context(
+            self,
+            exit_reason=exit_reason,
+            last_run_id=last_run_id,
+            last_exit_code=last_exit_code,
+            max_doc_chars=max_doc_chars,
+            primary_docs=primary_docs,
+            include_docs=include_docs,
+            include_last_run_artifacts=include_last_run_artifacts,
+        )
+
+        payload: dict[str, Any] = {
+            "agent": agent,
+            "model": model,
+            "reasoning": reasoning,
+            "max_wallclock_seconds": max_wallclock_seconds,
+        }
+        payload = {k: v for k, v in payload.items() if v is not None}
+
+        opencode_supervisor: Optional[OpenCodeSupervisor] = None
+        app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+
+        if agent == "codex":
+            if not self.config.app_server.command:
+                self._app_server_logger.info(
+                    "Skipping end-of-run review: codex backend not configured"
+                )
+                return
+
+            def _env_builder(
+                workspace_root: Path, _workspace_id: str, state_dir: Path
+            ) -> dict[str, str]:
+                state_dir.mkdir(parents=True, exist_ok=True)
+                return build_app_server_env(
+                    self.config.app_server.command,
+                    workspace_root,
+                    state_dir,
+                    logger=self._app_server_logger,
+                    event_prefix="review",
+                )
+
+            app_server_supervisor = self._ensure_app_server_supervisor(_env_builder)
+        else:
+            opencode_supervisor = self._ensure_opencode_supervisor()
+            if opencode_supervisor is None:
+                self._app_server_logger.info(
+                    "Skipping end-of-run review: opencode backend not configured"
+                )
+                return
+
+        from .review import ReviewService
+
+        review_service = ReviewService(
+            self,
+            opencode_supervisor=opencode_supervisor,
+            app_server_supervisor=app_server_supervisor,
+            logger=self._app_server_logger,
+        )
+        result_state = await review_service.run_blocking_async(
+            payload=payload,
+            prompt_kind="spec_progress",
+            seed_context_files={"AUTORUNNER_CONTEXT.md": context_md},
+            ignore_repo_busy=True,
+        )
+
+        review_id = result_state.get("id")
+        artifacts_cfg = review_cfg.get("artifacts") or {}
+        attach = bool(artifacts_cfg.get("attach_to_last_run_index", True))
+        if attach:
+            artifacts_update: dict[str, str] = {}
+            final_report = result_state.get("final_output_path")
+            scratch_bundle = result_state.get("scratchpad_bundle_path")
+            if isinstance(final_report, str) and final_report:
+                artifacts_update["final_review_report_path"] = final_report
+            if isinstance(scratch_bundle, str) and scratch_bundle:
+                artifacts_update["final_review_scratchpad_bundle_path"] = scratch_bundle
+            if artifacts_update:
+                self._merge_run_index_entry(
+                    last_run_id,
+                    {"artifacts": artifacts_update},
+                )
+        if review_id:
+            self.log_line(
+                last_run_id,
+                f"info: end-of-run review completed (review_id={review_id})",
+            )
 
     def run_loop(
         self,

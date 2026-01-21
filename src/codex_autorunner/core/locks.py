@@ -93,13 +93,6 @@ def assess_lock(
             pid=None,
             host=info.host,
         )
-    if require_host_match and info.host and info.host != socket.gethostname():
-        return LockAssessment(
-            freeable=False,
-            reason="Lock belongs to another host.",
-            pid=pid,
-            host=info.host,
-        )
     if not process_alive(pid):
         return LockAssessment(
             freeable=True,
@@ -111,6 +104,13 @@ def assess_lock(
         return LockAssessment(
             freeable=True,
             reason="Lock pid is a zombie process; safe to clear.",
+            pid=pid,
+            host=info.host,
+        )
+    if require_host_match and info.host and info.host != socket.gethostname():
+        return LockAssessment(
+            freeable=False,
+            reason="Lock belongs to another host.",
             pid=pid,
             host=info.host,
         )

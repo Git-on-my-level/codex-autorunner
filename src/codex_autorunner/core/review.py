@@ -120,7 +120,11 @@ For each bucket:
 
 ### 3) Launch One Subagent Per Bucket
 
-For each bucket, launch a subagent using the template below. Each agent should write results back into the scratchpad (or return them for aggregation).
+For each bucket, launch a subagent using the template below.
+
+**IMPORTANT**: Use the "subagent" agent type. Do NOT specify model in the prompt.
+- The subagent agent is pre-configured with GLM-4.7-FlashX
+- This avoids concurrency throttling while maintaining full GLM-4.7 for the coordinator
 
 Subagent prompt template:
 
@@ -241,6 +245,99 @@ Stop digging deeper when:
 * You've covered key trust boundaries and invariants
 * You can clearly name the top systemic risks and fix directions
 """
+REVIEW_PROMPT_SPEC_PROGRESS = """# Autorunner Final Review (Spec + Progress Focus)
+
+You are coordinating a multi-agent review immediately after an autorunner loop completes. The goal is to validate work against SPEC.md and PROGRESS.md, not to suggest generic code style fixes.
+
+## Required Scratchpad + Output
+
+* Scratchpad dir: {{scratchpad_dir}}
+* Final report (single source of truth): {{final_output_path}}
+* Required scratchpad files:
+  * {{scratchpad_dir}}/AUTORUNNER_CONTEXT.md (read this first)
+  * {{scratchpad_dir}}/REVIEW_CONTEXT.md
+  * {{scratchpad_dir}}/BUCKETS.md
+  * {{scratchpad_dir}}/FINDINGS_RAW.md
+  * {{scratchpad_dir}}/PRUNE_A.md
+  * {{scratchpad_dir}}/PRUNE_B.md
+  * (Optional) {{scratchpad_dir}}/PRUNE_C.md
+
+## Source of Truth + Focus
+
+* Read AUTORUNNER_CONTEXT.md first. It contains the exit reason, SPEC.md, PROGRESS.md, optional TODO/SUMMARY, and the last-run artifacts (output/diff/plan excerpts).
+* Treat SPEC.md + PROGRESS.md as contracts: extract explicit requirements, promised validation steps, and open questions.
+* Derive must-hold invariants directly from SPEC (not generic guesses).
+* Buckets should be anchored to spec sections mapped to implementation areas, plus any recently changed/critical modules from AUTORUNNER_CONTEXT.md.
+
+## North Star
+
+* Spec compliance and claim verification over style.
+* High-signal risks and regressions that would violate SPEC/PROGRESS commitments.
+* Trackable output that can be turned into TODO items.
+
+## Phase 0: Setup (Coordinator)
+
+Prepare scratchpad files under {{scratchpad_dir}} (see list above).
+
+## Phase 1: Discovery (Coordinator)
+
+1) Read AUTORUNNER_CONTEXT.md and summarize:
+   * Project shape and runtime assumptions
+   * SPEC requirements + invariants
+   * PROGRESS claims + validation evidence
+   * Open questions/gaps
+2) Define buckets in BUCKETS.md:
+   * Buckets by review dimension + code areas (spec sections → code paths)
+   * Include any critical/changed modules surfaced in the last run artifacts
+
+## Phase 2: Parallel Bucket Reviews (Subagents)
+
+Launch subagents by review dimension:
+* Spec compliance agent: requirement → evidence mapping.
+* Progress verification agent: PROGRESS claims → repo/tests evidence.
+* Risk & regression agent: likely failure modes introduced by recent changes.
+* Optional: Test adequacy agent if tests are in-scope.
+
+Each subagent must read AUTORUNNER_CONTEXT.md and BUCKETS.md first and write findings back to the scratchpad.
+
+## Phase 3: Aggregate (Coordinator)
+
+Collect subagent outputs into FINDINGS_RAW.md. Deduplicate and normalize to the shared output contract.
+
+## Phase 4: Prune (Independent Agents)
+
+Run 2–3 pruning passes (PRUNE_A.md, PRUNE_B.md, optional PRUNE_C.md) to drop speculative or low-impact items. Keep credible security issues, regressions, data loss/corruption risks, and systemic failures.
+
+## Phase 5: Final Synthesis (Coordinator)
+
+Create the final report at {{final_output_path}} with this structure:
+
+## Spec-to-Implementation Matrix
+| Spec item | Status (met/partial/missing) | Evidence | Notes |
+
+## Progress Claim Verification
+- Claim: ... (cite PROGRESS.md section)
+  - Verified by: ...
+  - Not verified because: ...
+
+## Findings (prioritized)
+### Critical
+...
+### High
+...
+### Medium
+...
+
+## Follow-ups (copy/paste into TODO)
+- [ ] ...
+- [ ] ...
+
+Add a short "Systemic Patterns" section if helpful. Keep severity/likelihood/confidence/evidence/impact/fix direction for each finding.
+
+## Stop Conditions
+
+Stop when spec coverage is complete, progress claims are validated or refuted, and additional digging yields only low-impact or duplicate issues.
+"""
 
 
 class ReviewError(Exception):
@@ -284,6 +381,7 @@ def _default_state() -> dict[str, Any]:
         "finished_at": None,
         "scratchpad_bundle_path": None,
         "last_error": None,
+        "prompt_kind": "code",
     }
 
 
@@ -359,6 +457,73 @@ class ReviewService:
             finally:
                 if not thread_started:
                     self._release_lock()
+
+    async def run_blocking_async(
+        self,
+        *,
+        payload: dict[str, Any],
+        prompt_kind: str,
+        seed_context_files: Optional[dict[str, str]] = None,
+        ignore_repo_busy: bool = False,
+    ) -> dict[str, Any]:
+        with self._thread_lock:
+            state = self.status()
+            if state.get("status") in ("running", "stopping"):
+                raise ReviewBusyError("Review already running", status_code=409)
+            busy_reason = self.engine.repo_busy_reason()
+            if busy_reason and not ignore_repo_busy:
+                raise ReviewConflictError(
+                    f"Cannot start review: {busy_reason}", status_code=409
+                )
+            self._acquire_lock()
+            try:
+                state = self._initialize_state(payload=payload, prompt_kind=prompt_kind)
+                self._stop_event.clear()
+                state["worker_id"] = uuid.uuid4().hex
+                state["worker_pid"] = os.getpid()
+                state["worker_started_at"] = now_iso()
+                self._save_state(state)
+                self._log(f"Started review run {state['id']} (blocking)")
+            except Exception:
+                self._release_lock()
+                raise
+
+        scratchpad_dir = Path(state["scratchpad_dir"])
+        if seed_context_files:
+            self._write_seed_context_files(scratchpad_dir, seed_context_files)
+
+        try:
+            try:
+                await self._run_review_async(state["id"])
+            except Exception as exc:
+                self._log(f"Review run failed: {exc}")
+                failure_state = self._load_state()
+                failure_state["status"] = "failed"
+                failure_state["last_error"] = str(exc)
+                failure_state["finished_at"] = now_iso()
+                failure_state["updated_at"] = now_iso()
+                self._save_state(failure_state)
+                raise
+            return self._load_state()
+        finally:
+            self._release_lock()
+
+    def run_blocking(
+        self,
+        *,
+        payload: dict[str, Any],
+        prompt_kind: str,
+        seed_context_files: Optional[dict[str, str]] = None,
+        ignore_repo_busy: bool = False,
+    ) -> dict[str, Any]:
+        return asyncio.run(
+            self.run_blocking_async(
+                payload=payload,
+                prompt_kind=prompt_kind,
+                seed_context_files=seed_context_files,
+                ignore_repo_busy=ignore_repo_busy,
+            )
+        )
 
     def stop(self) -> dict[str, Any]:
         self._stop_event.set()
@@ -453,7 +618,34 @@ class ReviewService:
         except Exception:
             pass
 
-    def _initialize_state(self, *, payload: dict[str, Any]) -> dict[str, Any]:
+    def _render_prompt(
+        self, *, state: dict[str, Any], scratchpad_dir: Path, final_output_path: Path
+    ) -> str:
+        prompt_kind = str(state.get("prompt_kind") or "code").lower()
+        template = (
+            REVIEW_PROMPT_SPEC_PROGRESS
+            if prompt_kind == "spec_progress"
+            else REVIEW_PROMPT
+        )
+        return template.replace("{{scratchpad_dir}}", str(scratchpad_dir)).replace(
+            "{{final_output_path}}", str(final_output_path)
+        )
+
+    def _write_seed_context_files(
+        self, scratchpad_dir: Path, seed_context_files: dict[str, str]
+    ) -> None:
+        for name, content in (seed_context_files or {}).items():
+            if not isinstance(name, str) or not name:
+                continue
+            target = scratchpad_dir / name
+            try:
+                atomic_write(target, str(content) if content is not None else "")
+            except Exception as exc:
+                self._log(f"Failed to write seed context '{name}': {exc}")
+
+    def _initialize_state(
+        self, *, payload: dict[str, Any], prompt_kind: str = "code"
+    ) -> dict[str, Any]:
         config = self._repo_config()
         review_cfg = config.raw.get("review") or {}
         state = _default_state()
@@ -497,6 +689,7 @@ class ReviewService:
         state["final_output_path"] = final_output_path.as_posix()
         state["started_at"] = now_iso()
         state["updated_at"] = now_iso()
+        state["prompt_kind"] = prompt_kind or "code"
         self._ensure_workflow_log(state)
         return state
 
@@ -522,9 +715,11 @@ class ReviewService:
         scratchpad_dir = Path(state["scratchpad_dir"])
         final_output_path = Path(state["final_output_path"])
 
-        prompt = REVIEW_PROMPT.replace(
-            "{{scratchpad_dir}}", str(scratchpad_dir)
-        ).replace("{{final_output_path}}", str(final_output_path))
+        prompt = self._render_prompt(
+            state=state,
+            scratchpad_dir=scratchpad_dir,
+            final_output_path=final_output_path,
+        )
 
         max_seconds = state.get("max_wallclock_seconds")
         timeout_seconds = (
@@ -595,6 +790,18 @@ class ReviewService:
             if self._opencode_supervisor is None:
                 raise ReviewError("OpenCode backend is not configured")
 
+            repo_config = self._repo_config()
+            review_cfg = repo_config.raw.get("review") or {}
+
+            subagent_agent_id = review_cfg.get("subagent_agent")
+            subagent_model = review_cfg.get("subagent_model")
+            if subagent_agent_id:
+                await self._opencode_supervisor.ensure_subagent_config(
+                    workspace_root=self.engine.repo_root,
+                    agent_id=subagent_agent_id,
+                    model=subagent_model,
+                )
+
             config = OpenCodeRunConfig(
                 agent=agent_id,
                 model=state["model"],
@@ -630,8 +837,7 @@ class ReviewService:
 
             if opencode_result.output_error:
                 raise ReviewError(
-                    "OpenCode output collection failed: "
-                    f"{opencode_result.output_error}"
+                    f"OpenCode output collection failed: {opencode_result.output_error}"
                 )
 
         if not final_output_path.exists():

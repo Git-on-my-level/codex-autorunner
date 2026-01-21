@@ -64,6 +64,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "enabled": True,
         "agent": "opencode",
         "model": "zai-coding-plan/glm-4.7",
+        "subagent_agent": "subagent",
+        "subagent_model": "zai-coding-plan/glm-4.7-flashx",
         "reasoning": None,
         "max_wallclock_seconds": None,
     },
@@ -88,6 +90,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         },
         "opencode": {
             "binary": "opencode",
+            "subagent_models": {
+                "subagent": "zai-coding-plan/glm-4.7-flashx",
+            },
         },
     },
     "prompt": {
@@ -99,6 +104,30 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "stop_after_runs": None,
         "max_wallclock_seconds": None,
         "no_progress_threshold": 3,
+        "review": {
+            "enabled": False,
+            "trigger": {
+                "on_todos_complete": True,
+                "on_no_progress_stop": True,
+                "on_max_runs_stop": True,
+                "on_stop_requested": False,
+                "on_error_exit": False,
+            },
+            "agent": None,
+            "model": None,
+            "reasoning": None,
+            "max_wallclock_seconds": None,
+            "context": {
+                "primary_docs": ["spec", "progress"],
+                "include_docs": ["todo", "summary"],
+                "include_last_run_artifacts": True,
+                "max_doc_chars": 20000,
+            },
+            "artifacts": {
+                "attach_to_last_run_index": True,
+                "write_to_review_runs_dir": True,
+            },
+        },
     },
     "git": {
         "auto_commit": False,
@@ -397,6 +426,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         },
         "opencode": {
             "binary": "opencode",
+            "subagent_models": {
+                "subagent": "zai-coding-plan/glm-4.7-flashx",
+            },
         },
     },
     "terminal": {
@@ -681,6 +713,7 @@ class AgentConfig:
     binary: str
     serve_command: Optional[List[str]]
     base_url: Optional[str]
+    subagent_models: Optional[Dict[str, str]]
 
 
 @dataclasses.dataclass
@@ -1043,10 +1076,14 @@ def _parse_agents_config(
         if "serve_command" in agent_cfg:
             serve_command = _parse_command(agent_cfg.get("serve_command"))
         base_url = agent_cfg.get("base_url")
+        subagent_models = agent_cfg.get("subagent_models")
+        if not isinstance(subagent_models, dict):
+            subagent_models = None
         agents[str(agent_id)] = AgentConfig(
             binary=binary,
             serve_command=serve_command,
             base_url=base_url,
+            subagent_models=subagent_models,
         )
     return agents
 
@@ -1348,6 +1385,23 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
             "max_bytes": log_cfg["max_bytes"],
             "backup_count": log_cfg["backup_count"],
         }
+
+    log_path_str = log_cfg["path"]
+    try:
+        log_path = resolve_config_path(log_path_str, root, scope="log.path")
+    except ConfigPathError as exc:
+        raise ConfigError(str(exc)) from exc
+
+    server_log_path_str = str(server_log_cfg.get("path", log_cfg["path"]))
+    try:
+        server_log_path = resolve_config_path(
+            server_log_path_str,
+            root,
+            scope="server_log.path",
+        )
+    except ConfigPathError as exc:
+        raise ConfigError(str(exc)) from exc
+
     return HubConfig(
         raw=cfg,
         root=root,
@@ -1376,12 +1430,12 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         server_allowed_hosts=list(cfg["server"].get("allowed_hosts") or []),
         server_allowed_origins=list(cfg["server"].get("allowed_origins") or []),
         log=LogConfig(
-            path=root / log_cfg["path"],
+            path=log_path,
             max_bytes=int(log_cfg["max_bytes"]),
             backup_count=int(log_cfg["backup_count"]),
         ),
         server_log=LogConfig(
-            path=root / str(server_log_cfg.get("path", log_cfg["path"])),
+            path=server_log_path,
             max_bytes=int(server_log_cfg.get("max_bytes", log_cfg["max_bytes"])),
             backup_count=int(
                 server_log_cfg.get("backup_count", log_cfg["backup_count"])
@@ -1802,9 +1856,13 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     log_cfg = cfg.get("log")
     if not isinstance(log_cfg, dict):
         raise ConfigError("log section must be a mapping")
-    for key in ("path",):
-        if not isinstance(log_cfg.get(key, ""), str):
-            raise ConfigError(f"log.{key} must be a string path")
+    if "path" in log_cfg:
+        if not isinstance(log_cfg["path"], str):
+            raise ConfigError("log.path must be a string path")
+        try:
+            resolve_config_path(log_cfg["path"], root, scope="log.path")
+        except ConfigPathError as exc:
+            raise ConfigError(str(exc)) from exc
     for key in ("max_bytes", "backup_count"):
         if not isinstance(log_cfg.get(key, 0), int):
             raise ConfigError(f"log.{key} must be an integer")
@@ -1812,10 +1870,15 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     if server_log_cfg is not None and not isinstance(server_log_cfg, dict):
         raise ConfigError("server_log section must be a mapping or null")
     if isinstance(server_log_cfg, dict):
-        if "path" in server_log_cfg and not isinstance(
-            server_log_cfg.get("path", ""), str
-        ):
-            raise ConfigError("server_log.path must be a string path")
+        if "path" in server_log_cfg:
+            if not isinstance(server_log_cfg["path"], str):
+                raise ConfigError("server_log.path must be a string path")
+            try:
+                resolve_config_path(
+                    server_log_cfg["path"], root, scope="server_log.path"
+                )
+            except ConfigPathError as exc:
+                raise ConfigError(str(exc)) from exc
         for key in ("max_bytes", "backup_count"):
             if key in server_log_cfg and not isinstance(server_log_cfg.get(key), int):
                 raise ConfigError(f"server_log.{key} must be an integer")

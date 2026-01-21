@@ -236,7 +236,11 @@ class OpenCodeHarness(AgentHarness):
             session_id = extract_session_id(parsed)
             status_type = None
             if event.event == "session.status" and isinstance(parsed, dict):
-                status = parsed.get("status") or {}
+                properties = parsed.get("properties")
+                if isinstance(properties, dict):
+                    status = properties.get("status") or {}
+                else:
+                    status = parsed.get("status") or {}
                 if isinstance(status, dict):
                     status_type = status.get("type") or status.get("status")
             if (

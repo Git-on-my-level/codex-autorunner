@@ -123,6 +123,7 @@ def build_repos_routes() -> APIRouter:
             )
             save_state(engine.state_path, new_state)
         clear_stale_lock(engine.lock_path)
+        engine.reconcile_run_index()
         return {"running": manager.running}
 
     @router.post("/api/run/clear-lock", response_model=RunStatusResponse)

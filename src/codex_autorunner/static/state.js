@@ -25,7 +25,9 @@ export function startStatePolling() {
             return;
         loadState({ notify: false }).catch(() => { });
         cancelStream = streamEvents("/api/state/stream", {
-            onMessage: (data) => {
+            onMessage: (data, event) => {
+                if (event && event !== "message")
+                    return;
                 try {
                     const state = JSON.parse(data);
                     publish("state:update", state);

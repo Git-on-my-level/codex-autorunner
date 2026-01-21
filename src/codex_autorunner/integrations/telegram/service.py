@@ -118,6 +118,7 @@ def _build_opencode_supervisor(
         max_handles=config.app_server_max_handles,
         idle_ttl_seconds=config.app_server_idle_ttl_seconds,
         base_env=None,
+        subagent_models=None,
     )
 
     if supervisor is None:

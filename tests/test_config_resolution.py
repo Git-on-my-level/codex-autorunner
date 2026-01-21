@@ -183,3 +183,146 @@ def test_repo_docs_reject_parent_segments(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError):
         load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_repo_log_rejects_absolute_path(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
+    cfg["log"]["path"] = "/tmp/codex.log"
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {"mode": "hub", "repo_defaults": {"log": cfg["log"]}},
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    with pytest.raises(ConfigError, match="log.path"):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_repo_log_rejects_parent_segments(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
+    cfg["log"]["path"] = "../codex.log"
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {"mode": "hub", "repo_defaults": {"log": cfg["log"]}},
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    with pytest.raises(ConfigError, match="log.path"):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_repo_server_log_rejects_absolute_path(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
+    cfg["server_log"] = {"path": "/tmp/server.log"}
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {"mode": "hub", "repo_defaults": {"server_log": cfg["server_log"]}},
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    with pytest.raises(ConfigError, match="server_log.path"):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_repo_server_log_rejects_parent_segments(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
+    cfg["server_log"] = {"path": "../server.log"}
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {"mode": "hub", "repo_defaults": {"server_log": cfg["server_log"]}},
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    with pytest.raises(ConfigError, match="server_log.path"):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_repo_log_accepts_valid_relative_path(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "repo_defaults": {"log": {"path": ".codex-autorunner/codex.log"}},
+        },
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+    assert config.log.path.name == "codex.log"
+
+
+def test_hub_log_rejects_absolute_path(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "hub": {
+                "repos_root": "repos",
+                "worktrees_root": "worktrees",
+                "manifest": "manifest.yml",
+                "discover_depth": 1,
+                "auto_init_missing": False,
+                "log": {
+                    "path": "/tmp/codex.log",
+                    "max_bytes": 10485760,
+                    "backup_count": 5,
+                },
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError, match="log.path"):
+        load_hub_config(hub_root)
+
+
+def test_hub_server_log_rejects_parent_segments(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    _write_yaml(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "hub": {
+                "repos_root": "repos",
+                "worktrees_root": "worktrees",
+                "manifest": "manifest.yml",
+                "discover_depth": 1,
+                "auto_init_missing": False,
+                "log": {
+                    "path": ".codex-autorunner/codex.log",
+                    "max_bytes": 10485760,
+                    "backup_count": 5,
+                },
+            },
+            "server_log": {
+                "path": "../server.log",
+                "max_bytes": 10485760,
+                "backup_count": 5,
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError, match="server_log.path"):
+        load_hub_config(hub_root)

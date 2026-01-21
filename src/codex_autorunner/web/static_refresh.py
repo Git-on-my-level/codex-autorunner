@@ -8,6 +8,7 @@ from ..core.logging_utils import safe_log
 from .static_assets import (
     asset_version,
     materialize_static_assets,
+    missing_static_assets,
     require_static_assets,
 )
 
@@ -16,7 +17,8 @@ def _update_static_files(static_files: object, static_dir: Path) -> None:
     try:
         static_files.directory = static_dir
         static_files.all_directories = static_files.get_directories(  # type: ignore[attr-defined]
-            static_dir, static_files.packages  # type: ignore[attr-defined]
+            static_dir,
+            static_files.packages,  # type: ignore[attr-defined]
         )
         static_files.config_checked = False
     except Exception:
@@ -32,7 +34,7 @@ def refresh_static_assets(app: object) -> bool:
         if state is None:
             return False
         current_dir = getattr(state, "static_dir", None)
-        if isinstance(current_dir, Path) and (current_dir / "index.html").exists():
+        if isinstance(current_dir, Path) and not missing_static_assets(current_dir):
             return True
         config = getattr(state, "config", None)
         logger = getattr(state, "logger", None)
