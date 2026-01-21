@@ -35,7 +35,7 @@ from ..agents.opencode.supervisor import OpenCodeSupervisor
 from ..agents.registry import validate_agent_id
 from ..integrations.app_server.client import CodexAppServerError
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
-from .app_server_events import AppServerEventBuffer
+from .app_server_events import AppServerEventBuffer, format_sse
 from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_doc_chat_prompt
 from .app_server_threads import (
@@ -157,15 +157,6 @@ class DocChatDraftState:
             created_at=created_at,
             base_hash=base_hash,
         )
-
-
-def format_sse(event: str, data: object) -> str:
-    payload = data if isinstance(data, str) else json.dumps(data)
-    lines = payload.splitlines() or [""]
-    parts = [f"event: {event}"]
-    for line in lines:
-        parts.append(f"data: {line}")
-    return "\n".join(parts) + "\n\n"
 
 
 class DocChatService:

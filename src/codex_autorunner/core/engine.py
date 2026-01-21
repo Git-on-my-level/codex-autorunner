@@ -1056,15 +1056,14 @@ class Engine:
 
         approval_policy = state.autorunner_approval_policy or "never"
         sandbox_mode = state.autorunner_sandbox_mode or "dangerFullAccess"
-        sandbox_policy: Union[Dict[str, Any], str] = "dangerFullAccess"
         if sandbox_mode == "workspaceWrite":
-            sandbox_policy = {
+            sandbox_policy: Union[Dict[str, Any], str] = {
                 "type": "workspaceWrite",
                 "writableRoots": [str(self.repo_root)],
                 "networkAccess": bool(state.autorunner_workspace_write_network),
             }
         else:
-            sandbox_policy = "dangerFullAccess"
+            sandbox_policy = sandbox_mode
 
         stop_event = asyncio.Event()
         stop_task: Optional[asyncio.Task] = None
@@ -1157,7 +1156,7 @@ class Engine:
                 "networkAccess": bool(state.autorunner_workspace_write_network),
             }
         else:
-            sandbox_policy = "dangerFullAccess"
+            sandbox_policy = sandbox_mode
         try:
             client = await supervisor.get_client(self.repo_root)
             with self._app_server_threads_lock:
