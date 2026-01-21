@@ -115,6 +115,7 @@ class CodexTurnContext:
     turn_started_at: Optional[float]
     queued: bool
     turn_elapsed_seconds: Optional[float] = None
+    turn_slot_acquired: bool = False
 
 
 @dataclass
@@ -141,6 +142,7 @@ class OpencodeTurnContext:
     turn_started_at: Optional[float]
     turn_elapsed_seconds: Optional[float] = None
     queued: bool = False
+    turn_slot_acquired: bool = False
 
 
 class GitHubCommands:
@@ -304,6 +306,7 @@ class GitHubCommands:
             if turn_semaphore.locked():
                 turn_semaphore.release()
             return None
+        turn_slot_acquired = True
         try:
             queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
             log_event(
@@ -380,9 +383,10 @@ class GitHubCommands:
                 turn_semaphore=turn_semaphore,
                 turn_started_at=turn_started_at,
                 queued=queued,
+                turn_slot_acquired=turn_slot_acquired,
             )
         except Exception:
-            if turn_semaphore.locked():
+            if turn_slot_acquired:
                 turn_semaphore.release()
             raise
 
@@ -472,7 +476,7 @@ class GitHubCommands:
                 self._turn_contexts.pop(turn_context.turn_key, None)
                 self._clear_thinking_preview(turn_context.turn_key)
                 self._clear_turn_progress(turn_context.turn_key)
-            if turn_context.turn_semaphore.locked():
+            if turn_context.turn_slot_acquired:
                 turn_context.turn_semaphore.release()
         runtime.current_turn_id = None
         runtime.current_turn_key = None
@@ -790,6 +794,7 @@ class GitHubCommands:
             turn_semaphore=turn_semaphore,
             turn_started_at=None,
             queued=queued,
+            turn_slot_acquired=False,
         )
         queue_started_at = time.monotonic()
         acquired = await self._await_turn_slot(
@@ -804,6 +809,7 @@ class GitHubCommands:
             if turn_semaphore.locked():
                 turn_semaphore.release()
             return None, None
+        turn_context.turn_slot_acquired = True
         opencode_turn_started = False
         turn_started_at: Optional[float] = None
         try:
@@ -1311,7 +1317,7 @@ class GitHubCommands:
                 self._turn_contexts.pop(turn_context.turn_key, None)
                 self._clear_thinking_preview(turn_context.turn_key)
                 self._clear_turn_progress(turn_context.turn_key)
-            if turn_context.turn_semaphore.locked():
+            if turn_context.turn_slot_acquired:
                 turn_context.turn_semaphore.release()
         runtime.current_turn_id = None
         runtime.current_turn_key = None
