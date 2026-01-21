@@ -45,10 +45,15 @@ class AppServerEventBuffer:
     ) -> None:
         self._entries: dict[TurnKey, TurnEventEntry] = {}
         self._turn_index: dict[str, str] = {}
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
         self._max_events_per_turn = max_events_per_turn
         self._max_turns = max_turns
         self._turn_ttl_seconds = turn_ttl_seconds
+
+    def _ensure_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def register_turn(
         self,
@@ -60,7 +65,7 @@ class AppServerEventBuffer:
         if not thread_id or not turn_id:
             return
         entry = await self._ensure_entry(thread_id, turn_id)
-        async with self._lock:
+        async with self._ensure_lock():
             self._turn_index[turn_id] = thread_id
         if context:
             entry.context.update(context)
@@ -83,7 +88,7 @@ class AppServerEventBuffer:
             entry.last_event_at = time.monotonic()
             entry.condition.notify_all()
         context = dict(entry.context) if entry.context else {}
-        async with self._lock:
+        async with self._ensure_lock():
             self._turn_index[turn_id] = thread_id
             self._prune_locked()
         self._emit_log_lines(context, message)
@@ -96,7 +101,7 @@ class AppServerEventBuffer:
         heartbeat_interval: float = 15.0,
     ) -> AsyncIterator[str]:
         entry = await self._ensure_entry(thread_id, turn_id)
-        async with self._lock:
+        async with self._ensure_lock():
             entry.active_streams += 1
             self._turn_index[turn_id] = thread_id
         last_id = 0
@@ -116,12 +121,12 @@ class AppServerEventBuffer:
                     last_id = event["id"]
                     yield format_sse("app-server", event)
         finally:
-            async with self._lock:
+            async with self._ensure_lock():
                 entry.active_streams = max(0, entry.active_streams - 1)
 
     async def _ensure_entry(self, thread_id: str, turn_id: str) -> TurnEventEntry:
         key = (thread_id, turn_id)
-        async with self._lock:
+        async with self._ensure_lock():
             entry = self._entries.get(key)
             if entry is None:
                 entry = TurnEventEntry(thread_id=thread_id, turn_id=turn_id)

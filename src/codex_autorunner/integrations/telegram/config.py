@@ -12,6 +12,7 @@ from .state import APPROVAL_MODE_YOLO, normalize_approval_mode
 
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
+DEFAULT_POLL_REQUEST_TIMEOUT_SECONDS: Optional[float] = None
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
@@ -164,6 +165,7 @@ class TelegramBotConfig:
     app_server_start_max_attempts: Optional[int]
     app_server_turn_timeout_seconds: Optional[float]
     poll_timeout_seconds: int
+    poll_request_timeout_seconds: Optional[float]
     poll_allowed_updates: list[str]
     message_overflow: str
     metrics_mode: str
@@ -445,6 +447,13 @@ class TelegramBotConfig:
         poll_timeout_seconds = int(
             polling_raw.get("timeout_seconds", DEFAULT_POLL_TIMEOUT_SECONDS)
         )
+        poll_request_timeout_seconds = polling_raw.get(
+            "request_timeout_seconds", DEFAULT_POLL_REQUEST_TIMEOUT_SECONDS
+        )
+        if poll_request_timeout_seconds is not None:
+            poll_request_timeout_seconds = float(poll_request_timeout_seconds)
+            if poll_request_timeout_seconds <= 0:
+                poll_request_timeout_seconds = None
         allowed_updates = polling_raw.get("allowed_updates")
         if isinstance(allowed_updates, list):
             poll_allowed_updates = [str(item) for item in allowed_updates if item]
@@ -478,6 +487,7 @@ class TelegramBotConfig:
             app_server_start_max_attempts=app_server_start_max_attempts,
             app_server_turn_timeout_seconds=app_server_turn_timeout_seconds,
             poll_timeout_seconds=poll_timeout_seconds,
+            poll_request_timeout_seconds=poll_request_timeout_seconds,
             poll_allowed_updates=poll_allowed_updates,
             message_overflow=message_overflow,
             metrics_mode=metrics_mode,
@@ -499,6 +509,13 @@ class TelegramBotConfig:
             issues.append("app_server_command must be set")
         if self.poll_timeout_seconds <= 0:
             issues.append("poll_timeout_seconds must be greater than 0")
+        if (
+            self.poll_request_timeout_seconds is not None
+            and self.poll_request_timeout_seconds <= self.poll_timeout_seconds
+        ):
+            issues.append(
+                "poll_request_timeout_seconds must be greater than poll_timeout_seconds"
+            )
         if issues:
             raise TelegramBotConfigError("; ".join(issues))
 
