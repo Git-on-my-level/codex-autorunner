@@ -26,7 +26,7 @@ class LockAssessment:
     host: Optional[str]
 
 
-DEFAULT_RUNNER_CMD_HINTS = ("codex_autorunner.cli", "codex-autorunner")
+DEFAULT_RUNNER_CMD_HINTS = ("codex_autorunner.cli", "codex-autorunner", "car ")
 
 
 def process_alive(pid: int) -> bool:
