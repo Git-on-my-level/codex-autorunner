@@ -289,6 +289,11 @@ export async function reloadPatch(kind: DocType | null = getActiveDoc() as DocTy
         syncDocEditor(kind, { force: true });
       }
       if (!silent) flash("No pending draft");
+    } else if (
+      message.includes("Autorunner") &&
+      (message.includes("running") || message.includes("lock") || message.includes("blocked"))
+    ) {
+      if (!silent) flash(message || "Repo busy; try again later", "info");
     } else if (!silent) {
       flash(message || "Failed to load pending draft", "error");
     }
