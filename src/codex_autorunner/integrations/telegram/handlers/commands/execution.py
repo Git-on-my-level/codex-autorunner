@@ -6,7 +6,6 @@ import logging
 import math
 import re
 import secrets
-import shlex
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -79,6 +78,8 @@ from ...helpers import (
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
+
+from .shared import SharedHelpers
 
 PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
 PROMPT_CONTEXT_HINT = (
@@ -453,7 +454,7 @@ def _format_download_failure_response(kind: str, detail: Optional[str]) -> str:
     return base
 
 
-class ExecutionCommands:
+class ExecutionCommands(SharedHelpers):
     """Execution-related command handlers for Telegram integration."""
 
     def _maybe_append_whisper_disclaimer(
@@ -600,14 +601,6 @@ class ExecutionCommands:
             )
         )
         return f"{prompt_text}{separator}{injection}", True
-
-    def _parse_command_args(self, args: str) -> list[str]:
-        if not args:
-            return []
-        try:
-            return [part for part in shlex.split(args) if part]
-        except ValueError:
-            return [part for part in args.split() if part]
 
     def _effective_policies(
         self, record: "TelegramTopicRecord"

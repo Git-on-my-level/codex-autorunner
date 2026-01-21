@@ -13,9 +13,10 @@ from ...helpers import (
     _normalize_approval_preset,
     _set_policy_overrides,
 )
+from .shared import SharedHelpers
 
 
-class ApprovalsCommands:
+class ApprovalsCommands(SharedHelpers):
     async def _read_rate_limits(
         self, workspace_path: Optional[str], *, agent: str
     ) -> Optional[dict[str, Any]]:

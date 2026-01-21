@@ -71,6 +71,8 @@ from ..utils import _build_opencode_token_usage
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
 
+from .shared import SharedHelpers
+
 
 def _opencode_review_arguments(target: dict[str, Any]) -> str:
     target_type = target.get("type")
@@ -94,7 +96,7 @@ def _opencode_review_arguments(target: dict[str, Any]) -> str:
     return json.dumps(target, sort_keys=True)
 
 
-class GitHubCommands:
+class GitHubCommands(SharedHelpers):
     """GitHub/PR command handlers for Telegram integration.
 
     This class is designed to be used as a mixin in command handler classes.
@@ -1495,8 +1497,7 @@ class GitHubCommands:
         )
         await self._send_message(
             message.chat_id,
-            f"Detected GitHub issue: {slug}#{number}\n"
-            f"Start PR flow to create a PR?",
+            f"Detected GitHub issue: {slug}#{number}\nStart PR flow to create a PR?",
             thread_id=message.thread_id,
             reply_to=message.message_id,
             reply_markup=keyboard,
