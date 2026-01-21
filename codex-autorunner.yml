@@ -122,11 +122,23 @@ repo_defaults:
     backup_count: 3
 
   server_log:
-    # Path is relative to the repo root.
+    # Path is relative to repo root.
     # Example: .codex-autorunner/codex-server.log → /repo/root/.codex-autorunner/codex-server.log
     path: .codex-autorunner/codex-server.log
     max_bytes: 10000000
     backup_count: 3
+
+  review:
+    enabled: true
+    agent: opencode
+    # Model for parent coordinator agent
+    model: zai-coding-plan/glm-4.7
+    # Agent ID to use for subtasks (bucket reviews, pruning agents)
+    subagent_agent: subagent
+    # Model to use for subagents (default to model if not specified)
+    subagent_model: zai-coding-plan/glm-4.7-flashx
+    reasoning: null
+    max_wallclock_seconds: null
 
 agents:
   # Agent binaries/commands (add new agents here; do not hardcode).
@@ -134,6 +146,11 @@ agents:
     binary: codex
   opencode:
     binary: opencode
+    # Optional: map subagent agent IDs to models
+    # Example: subagent_models: { subagent: zai-coding-plan/glm-4.7-flashx }
+    # This allows different models for parent vs subagent sessions
+    subagent_models:
+      subagent: zai-coding-plan/glm-4.7-flashx
     # Optional: override the default serve command derived from binary.
     # serve_command:
     #   - /absolute/path/to/opencode
