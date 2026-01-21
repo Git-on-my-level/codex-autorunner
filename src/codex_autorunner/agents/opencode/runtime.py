@@ -82,6 +82,7 @@ _OPENCODE_CONTEXT_WINDOW_KEYS = (
     "maxTokens",
     "max_tokens",
 )
+_OPENCODE_MODEL_CONTEXT_KEYS = ("context",) + _OPENCODE_CONTEXT_WINDOW_KEYS
 
 
 @dataclass(frozen=True)
@@ -743,6 +744,7 @@ async def collect_opencode_output_from_events(
     part_handler: Optional[PartHandler] = None,
     event_stream_factory: Optional[Callable[[], AsyncIterator[SSEEvent]]] = None,
     session_fetcher: Optional[Callable[[], Awaitable[Any]]] = None,
+    provider_fetcher: Optional[Callable[[], Awaitable[Any]]] = None,
     stall_timeout_seconds: Optional[float] = _OPENCODE_STREAM_STALL_TIMEOUT_SECONDS,
 ) -> OpenCodeTurnOutput:
     text_parts: list[str] = []
@@ -761,6 +763,9 @@ async def collect_opencode_output_from_events(
     logged_permission_errors: set[str] = set()
     normalized_question_policy = _normalize_question_policy(question_policy)
     logger = logging.getLogger(__name__)
+    providers_cache: Optional[list[dict[str, Any]]] = None
+    context_window_cache: dict[str, Optional[int]] = {}
+    session_model_ids: Optional[tuple[Optional[str], Optional[str]]] = None
 
     def _message_id_from_info(info: Any) -> Optional[str]:
         if not isinstance(info, dict):
@@ -833,6 +838,94 @@ async def collect_opencode_output_from_events(
             if pending:
                 text_parts.extend(pending)
         pending_text.clear()
+
+    async def _resolve_session_model_ids() -> tuple[Optional[str], Optional[str]]:
+        nonlocal session_model_ids
+        if session_model_ids is not None:
+            return session_model_ids
+        if session_fetcher is None:
+            session_model_ids = (None, None)
+            return session_model_ids
+        try:
+            payload = await session_fetcher()
+        except Exception:
+            session_model_ids = (None, None)
+            return session_model_ids
+        session_model_ids = _extract_model_ids(payload)
+        return session_model_ids
+
+    async def _resolve_context_window_from_providers(
+        provider_id: Optional[str], model_id: Optional[str]
+    ) -> Optional[int]:
+        nonlocal providers_cache
+        if not provider_id or not model_id:
+            return None
+        cache_key = f"{provider_id}/{model_id}"
+        if cache_key in context_window_cache:
+            return context_window_cache[cache_key]
+        if provider_fetcher is None:
+            context_window_cache[cache_key] = None
+            return None
+        if providers_cache is None:
+            try:
+                payload = await provider_fetcher()
+            except Exception:
+                context_window_cache[cache_key] = None
+                return None
+            providers: list[dict[str, Any]] = []
+            if isinstance(payload, dict):
+                raw_providers = payload.get("providers")
+                if isinstance(raw_providers, list):
+                    providers = [
+                        entry for entry in raw_providers if isinstance(entry, dict)
+                    ]
+            elif isinstance(payload, list):
+                providers = [entry for entry in payload if isinstance(entry, dict)]
+            providers_cache = providers
+        context_window = None
+        for provider in providers_cache or []:
+            pid = provider.get("id") or provider.get("providerID")
+            if pid != provider_id:
+                continue
+            models = provider.get("models")
+            model_entry = None
+            if isinstance(models, dict):
+                candidate = models.get(model_id)
+                if isinstance(candidate, dict):
+                    model_entry = candidate
+            elif isinstance(models, list):
+                for entry in models:
+                    if not isinstance(entry, dict):
+                        continue
+                    entry_id = entry.get("id") or entry.get("modelID")
+                    if entry_id == model_id:
+                        model_entry = entry
+                        break
+            if isinstance(model_entry, dict):
+                limit = model_entry.get("limit") or model_entry.get("limits")
+                if isinstance(limit, dict):
+                    for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                        value = _coerce_int(limit.get(key))
+                        if value is not None and value > 0:
+                            context_window = value
+                            break
+                if context_window is None:
+                    for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                        value = _coerce_int(model_entry.get(key))
+                        if value is not None and value > 0:
+                            context_window = value
+                            break
+            if context_window is None:
+                limit = provider.get("limit") or provider.get("limits")
+                if isinstance(limit, dict):
+                    for key in _OPENCODE_MODEL_CONTEXT_KEYS:
+                        value = _coerce_int(limit.get(key))
+                        if value is not None and value > 0:
+                            context_window = value
+                            break
+            break
+        context_window_cache[cache_key] = context_window
+        return context_window
 
     stream_factory = event_stream_factory
     if events is None and stream_factory is None:
@@ -1263,8 +1356,17 @@ async def collect_opencode_output_from_events(
                 if part_handler is not None and is_primary_session:
                     usage = _extract_usage_payload(payload)
                     if usage is not None:
+                        provider_id, model_id = _extract_model_ids(payload)
+                        if not provider_id or not model_id:
+                            provider_id, model_id = await _resolve_session_model_ids()
                         total_tokens = _extract_total_tokens(usage)
                         context_window = _extract_context_window(payload, usage)
+                        if context_window is None:
+                            context_window = (
+                                await _resolve_context_window_from_providers(
+                                    provider_id, model_id
+                                )
+                            )
                         usage_details = _extract_usage_details(usage)
                         if (
                             total_tokens != last_usage_total
@@ -1273,7 +1375,6 @@ async def collect_opencode_output_from_events(
                             last_usage_total = total_tokens
                             last_context_window = context_window
                             usage_snapshot: dict[str, Any] = {}
-                            provider_id, model_id = _extract_model_ids(payload)
                             if provider_id:
                                 usage_snapshot["providerID"] = provider_id
                             if model_id:
@@ -1347,6 +1448,9 @@ async def collect_opencode_output(
                 return {"status": session_status}
         return {"status": {}}
 
+    async def _fetch_providers() -> Any:
+        return await client.providers(directory=workspace_path)
+
     return await collect_opencode_output_from_events(
         None,
         session_id=session_id,
@@ -1362,6 +1466,7 @@ async def collect_opencode_output(
         part_handler=part_handler,
         event_stream_factory=_stream_factory,
         session_fetcher=_fetch_session,
+        provider_fetcher=_fetch_providers,
     )
 
 
