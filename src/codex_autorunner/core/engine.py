@@ -751,10 +751,11 @@ class Engine:
         if telemetry is None:
             return
         if telemetry.thread_id and isinstance(telemetry.token_total, dict):
-            state = load_state(self.state_path)
-            selected_agent = (
-                (state.autorunner_agent_override or "codex").strip().lower()
-            )
+            with state_lock(self.state_path):
+                state = load_state(self.state_path)
+                selected_agent = (
+                    (state.autorunner_agent_override or "codex").strip().lower()
+                )
             baseline = None
             if selected_agent != "opencode":
                 baseline = self._find_thread_token_baseline(

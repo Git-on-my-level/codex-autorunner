@@ -165,6 +165,9 @@ def build_runs_routes() -> APIRouter:
                 thread_total = None
             return {
                 "run_id": run_id,
+                "status": "completed",
+                "thread_id": None,
+                "turn_id": None,
                 "token_delta": delta,
                 "token_total": thread_total,
                 "total_tokens": _extract_total_from_dict(delta),
@@ -174,6 +177,7 @@ def build_runs_routes() -> APIRouter:
         total_tokens = _extract_total_from_dict(token_total)
         return {
             "run_id": run_id,
+            "status": "active",
             "thread_id": telemetry.thread_id,
             "turn_id": telemetry.turn_id,
             "token_delta": None,
@@ -185,6 +189,9 @@ def build_runs_routes() -> APIRouter:
     @router.get("/api/runs/{run_id}/events/stream")
     async def stream_run_events(request: Request, run_id: int):
         engine = request.app.state.engine
+        entry = engine._load_run_index().get(str(run_id))
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=404, detail="Run not found")
         events_path = engine._events_log_path(run_id)
         shutdown_event = getattr(request.app.state, "shutdown_event", None)
         return StreamingResponse(
