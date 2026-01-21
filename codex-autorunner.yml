@@ -193,6 +193,8 @@ telegram_bot:
     idle_ttl_seconds: 28800
   polling:
     timeout_seconds: 30
+    # HTTP request timeout for getUpdates (should exceed timeout_seconds).
+    request_timeout_seconds: null
     allowed_updates:
       - message
       - edited_message

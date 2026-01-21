@@ -179,7 +179,16 @@ class TelegramBotService(
             config,
             logger=self._logger,
         )
-        self._bot = TelegramBotClient(config.bot_token or "", logger=self._logger)
+        poll_timeout = float(config.poll_timeout_seconds)
+        request_timeout = config.poll_request_timeout_seconds
+        if request_timeout is None:
+            # Keep HTTP timeout above long-poll timeout to avoid ReadTimeout churn.
+            request_timeout = max(poll_timeout + 5.0, 10.0)
+        self._bot = TelegramBotClient(
+            config.bot_token or "",
+            logger=self._logger,
+            timeout_seconds=float(request_timeout),
+        )
         self._poller = TelegramUpdatePoller(
             self._bot, allowed_updates=config.poll_allowed_updates
         )

@@ -57,6 +57,7 @@ from ...helpers import (
 )
 from ...state import APPROVAL_MODE_YOLO, normalize_agent
 from ...types import SelectionState
+from .shared import SharedHelpers
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
@@ -106,8 +107,7 @@ class ResumeThreadData:
     saw_path: bool
 
 
-class WorkspaceCommands:
-
+class WorkspaceCommands(SharedHelpers):
     async def _apply_agent_change(
         self,
         chat_id: int,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 from typing import Any, AsyncIterator, Iterable, Optional
@@ -11,6 +12,15 @@ from ...core.logging_utils import log_event
 from .events import SSEEvent, parse_sse_lines
 
 _MAX_INVALID_JSON_PREVIEW_BYTES = 512
+
+
+@dataclasses.dataclass
+class OpenCodeApiProfile:
+    """Detected OpenCode API capabilities from OpenAPI spec."""
+
+    supports_prompt_async: bool = True
+    supports_global_endpoints: bool = True
+    spec_fetched: bool = False
 
 
 class OpenCodeProtocolError(Exception):
@@ -43,9 +53,61 @@ class OpenCodeClient:
             timeout=timeout,
         )
         self._logger = logger or logging.getLogger(__name__)
+        self._api_profile: Optional[OpenCodeApiProfile] = None
+        self._api_profile_lock = asyncio.Lock()
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    async def detect_api_shape(self) -> OpenCodeApiProfile:
+        """Detect OpenCode API capabilities by fetching and parsing OpenAPI spec.
+        Results are cached for the lifetime of the client instance.
+        Thread-safe: multiple concurrent calls will wait for first detection to complete.
+        """
+        async with self._api_profile_lock:
+            if self._api_profile is not None:
+                return self._api_profile
+
+            profile = OpenCodeApiProfile()
+            try:
+                spec = await self.fetch_openapi_spec()
+                profile.spec_fetched = True
+
+                if isinstance(spec, dict):
+                    # Check if /session/{id}/prompt_async exists
+                    profile.supports_prompt_async = self.has_endpoint(
+                        spec, "post", "/session/{session_id}/prompt_async"
+                    )
+
+                    # Check if /global/* endpoints exist
+                    profile.supports_global_endpoints = self.has_endpoint(
+                        spec, "get", "/global/health"
+                    ) or self.has_endpoint(spec, "get", "/global/event")
+
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "opencode.api_shape_detected",
+                    supports_prompt_async=profile.supports_prompt_async,
+                    supports_global_endpoints=profile.supports_global_endpoints,
+                )
+            except Exception as exc:
+                self._logger.warning(
+                    "Failed to detect API shape, assuming modern OpenCode: %s", exc
+                )
+                # Default to assuming modern OpenCode with all features
+                profile.supports_prompt_async = True
+                profile.supports_global_endpoints = True
+
+            self._api_profile = profile
+            return profile
+
+    def _get_api_profile(self) -> OpenCodeApiProfile:
+        """Get API profile, detecting if needed. Synchronous for use in sync methods."""
+        if self._api_profile is None:
+            # Return default profile if not yet detected
+            return OpenCodeApiProfile()
+        return self._api_profile
 
     def _dir_params(self, directory: Optional[str]) -> dict[str, str]:
         return {"directory": directory} if directory else {}
@@ -201,22 +263,22 @@ class OpenCodeClient:
             payload["model"] = model
         if variant:
             payload["variant"] = variant
-        try:
+
+        profile = await self.detect_api_shape()
+        if profile.supports_prompt_async:
+            return await self._request(
+                "POST",
+                f"/session/{session_id}/prompt_async",
+                json_body=payload,
+                expect_json=False,
+            )
+        else:
             return await self._request(
                 "POST",
                 f"/session/{session_id}/message",
                 json_body=payload,
                 expect_json=True,
             )
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in (404, 405):
-                return await self._request(
-                    "POST",
-                    f"/session/{session_id}/prompt_async",
-                    json_body=payload,
-                    expect_json=False,
-                )
-            raise
 
     async def prompt_async(
         self,
@@ -236,22 +298,22 @@ class OpenCodeClient:
             payload["model"] = model
         if variant:
             payload["variant"] = variant
-        try:
+
+        profile = await self.detect_api_shape()
+        if profile.supports_prompt_async:
             return await self._request(
                 "POST",
                 f"/session/{session_id}/prompt_async",
                 json_body=payload,
                 expect_json=False,
             )
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in (404, 405):
-                return await self._request(
-                    "POST",
-                    f"/session/{session_id}/message",
-                    json_body=payload,
-                    expect_json=True,
-                )
-            raise
+        else:
+            return await self._request(
+                "POST",
+                f"/session/{session_id}/message",
+                json_body=payload,
+                expect_json=True,
+            )
 
     async def send_command(
         self,
@@ -339,6 +401,26 @@ class OpenCodeClient:
             "POST", f"/session/{session_id}/abort", expect_json=False
         )
 
+    async def health(self) -> Any:
+        """Check OpenCode server health using /global/health or /health endpoint."""
+        profile = await self.detect_api_shape()
+        if profile.supports_global_endpoints:
+            return await self._request("GET", "/global/health", expect_json=True)
+        else:
+            return await self._request("GET", "/health", expect_json=True)
+
+    async def dispose(self, session_id: str) -> Any:
+        """Dispose of a session using /global/dispose/{id} or /session/{id}/dispose endpoint."""
+        profile = await self.detect_api_shape()
+        if profile.supports_global_endpoints:
+            return await self._request(
+                "POST", f"/global/dispose/{session_id}", expect_json=False
+            )
+        else:
+            return await self._request(
+                "POST", f"/session/{session_id}/dispose", expect_json=False
+            )
+
     async def stream_events(
         self,
         *,
@@ -347,7 +429,17 @@ class OpenCodeClient:
         paths: Optional[Iterable[str]] = None,
     ) -> AsyncIterator[SSEEvent]:
         params = self._dir_params(directory)
-        event_paths = list(paths) if paths else ["/global/event", "/event"]
+
+        if paths is not None:
+            event_paths = list(paths)
+        else:
+            profile = await self.detect_api_shape()
+            event_paths = (
+                ["/global/event", "/event"]
+                if profile.supports_global_endpoints
+                else ["/event"]
+            )
+
         last_error: Optional[BaseException] = None
         for path in event_paths:
             try:
@@ -386,32 +478,35 @@ class OpenCodeClient:
 
     async def fetch_openapi_spec(self) -> dict[str, Any]:
         """Fetch OpenAPI spec from /doc endpoint for capability negotiation."""
-        response = await self._client.request("GET", "/doc", expect_json=True)
-        response.raise_for_status()
-        try:
-            spec = response.json() if response.content else {}
-            log_event(
-                self._logger,
-                logging.INFO,
-                "opencode.openapi.fetched",
-                paths=len(spec.get("paths", {})) if isinstance(spec, dict) else 0,
-                has_components=(
-                    "components" in spec if isinstance(spec, dict) else False
-                ),
-            )
-            return spec
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "opencode.openapi.parse_failed",
-                exc=str(exc),
-            )
-            raise OpenCodeProtocolError(
-                f"Failed to parse OpenAPI spec: {exc}",
-                status_code=response.status_code,
-                content_type=response.headers.get("content-type") if response else None,
-            ) from exc
+        async with self._client.stream("GET", "/doc") as response:
+            response.raise_for_status()
+            content = response.content
+            try:
+                spec = json.loads(content) if content else {}
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "opencode.openapi.fetched",
+                    paths=len(spec.get("paths", {})) if isinstance(spec, dict) else 0,
+                    has_components=(
+                        "components" in spec if isinstance(spec, dict) else False
+                    ),
+                )
+                return spec
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.openapi.parse_failed",
+                    exc=exc,
+                )
+                raise OpenCodeProtocolError(
+                    f"Failed to parse OpenAPI spec: {exc}",
+                    status_code=response.status_code,
+                    content_type=(
+                        response.headers.get("content-type") if response else None
+                    ),
+                ) from exc
 
     def has_endpoint(
         self, openapi_spec: dict[str, Any], method: str, path: str
@@ -428,4 +523,4 @@ class OpenCodeClient:
         return method in path_info
 
 
-__all__ = ["OpenCodeClient", "OpenCodeProtocolError"]
+__all__ = ["OpenCodeClient", "OpenCodeProtocolError", "OpenCodeApiProfile"]

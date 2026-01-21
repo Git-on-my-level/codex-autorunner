@@ -1,3 +1,7 @@
 {
-  "findings": []
+  "findings": [
+    "python:function:src/codex_autorunner/agents/execution/policy.py:143:normalize_sandbox_policy",
+    "python:function:src/codex_autorunner/agents/execution/policy.py:208:map_approval_to_permission",
+    "python:function:src/codex_autorunner/agents/execution/policy.py:244:build_codex_sandbox_policy"
+  ]
 }

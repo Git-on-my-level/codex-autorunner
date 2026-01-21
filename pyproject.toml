@@ -36,6 +36,7 @@ dev = [
   "black==25.11.0",
   "mypy>=1.10",
   "pytest>=7.0",
+  "pytest-asyncio>=0.23",
   "pytest-timeout>=2.0",
   "ruff>=0.5.0",
   "types-PyYAML",
