@@ -3,16 +3,30 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from ...core.text_delta_coalescer import TextDeltaCoalescer
+
 
 class OpenCodeEventFormatter:
     def __init__(self) -> None:
         self._seen_reasoning_parts: set[str] = set()
+        self._reasoning_coalescers: dict[str, TextDeltaCoalescer] = {}
         self._tool_last_status: dict[str, str] = {}
         self._seen_patch_hashes: set[str] = set()
         self._logger = logging.getLogger(__name__)
 
+    def flush_all_reasoning(self) -> list[str]:
+        lines: list[str] = []
+        for coalescer in self._reasoning_coalescers.values():
+            remaining = coalescer.flush_all()
+            for line in remaining:
+                if line.strip():
+                    lines.append(f"**{line.strip()}**")
+        self._reasoning_coalescers.clear()
+        return lines
+
     def reset(self) -> None:
         self._seen_reasoning_parts.clear()
+        self._reasoning_coalescers.clear()
         self._tool_last_status.clear()
         self._seen_patch_hashes.clear()
 
@@ -44,7 +58,12 @@ class OpenCodeEventFormatter:
                 lines.append("thinking")
                 self._seen_reasoning_parts.add(key)
 
-            for line in delta_text.splitlines() or [""]:
+            if key not in self._reasoning_coalescers:
+                self._reasoning_coalescers[key] = TextDeltaCoalescer()
+            coalescer = self._reasoning_coalescers[key]
+            coalescer.add(delta_text)
+            complete_lines = coalescer.flush_lines()
+            for line in complete_lines:
                 if line.strip():
                     lines.append(f"**{line.strip()}**")
         return lines

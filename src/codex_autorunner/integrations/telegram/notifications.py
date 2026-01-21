@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from ...core.state import now_iso
+from ...core.text_delta_coalescer import TextDeltaCoalescer
 from .constants import (
     PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
     STREAM_PREVIEW_PREFIX,
@@ -138,10 +139,11 @@ class TelegramNotificationHandlers:
             delta = params.get("delta")
             if not item_id or not turn_id or not isinstance(delta, str):
                 return
-            buffer = self._reasoning_buffers.get(item_id, "")
-            buffer = f"{buffer}{delta}"
-            self._reasoning_buffers[item_id] = buffer
+            if item_id not in self._reasoning_buffers:
+                self._reasoning_buffers[item_id] = TextDeltaCoalescer()
+            self._reasoning_buffers[item_id].add(delta)
             self._touch_cache_timestamp("reasoning_buffers", item_id)
+            buffer = self._reasoning_buffers[item_id].get_buffer()
             preview = _extract_first_bold_span(buffer)
             if preview:
                 if self._config.progress_stream.enabled:

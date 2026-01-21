@@ -31,6 +31,7 @@ from .....core.config import load_repo_config
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
+from .....core.text_delta_coalescer import TextDeltaCoalescer
 from .....core.utils import canonicalize_path
 from .....integrations.github.service import GitHubService
 from ....app_server.client import (
@@ -1533,7 +1534,7 @@ class ExecutionCommands(SharedHelpers):
                                 asyncio.create_task(_abort_opencode())
                             return runtime.interrupt_requested
 
-                        reasoning_buffers: dict[str, str] = {}
+                        reasoning_buffers: dict[str, TextDeltaCoalescer] = {}
                         watched_session_ids = {thread_id}
                         subagent_labels: dict[str, str] = {}
                         opencode_context_window: Optional[int] = None
@@ -1566,15 +1567,17 @@ class ExecutionCommands(SharedHelpers):
                                     part.get("id") or part.get("partId") or "reasoning"
                                 )
                                 buffer_key = f"{session_id}:{part_id}"
-                                buffer = reasoning_buffers.get(buffer_key, "")
+                                if buffer_key not in reasoning_buffers:
+                                    reasoning_buffers[buffer_key] = TextDeltaCoalescer()
+                                coalescer = reasoning_buffers[buffer_key]
                                 if delta_text:
-                                    buffer = f"{buffer}{delta_text}"
+                                    coalescer.add(delta_text)
                                 else:
                                     raw_text = part.get("text")
                                     if isinstance(raw_text, str) and raw_text:
-                                        buffer = raw_text
+                                        coalescer.add(raw_text)
+                                buffer = coalescer.get_buffer()
                                 if buffer:
-                                    reasoning_buffers[buffer_key] = buffer
                                     preview = _compact_preview(buffer, limit=240)
                                     if is_primary_session:
                                         tracker.note_thinking(preview)

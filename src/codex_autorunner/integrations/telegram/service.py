@@ -19,6 +19,7 @@ from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
+from ...core.text_delta_coalescer import TextDeltaCoalescer
 from ...core.utils import (
     build_opencode_supervisor,
 )
@@ -210,7 +211,7 @@ class TelegramBotService(
                 )
         self._turn_semaphore: Optional[asyncio.Semaphore] = None
         self._turn_contexts: dict[TurnKey, TurnContext] = {}
-        self._reasoning_buffers: dict[str, str] = {}
+        self._reasoning_buffers: dict[str, TextDeltaCoalescer] = {}
         self._turn_preview_text: dict[TurnKey, str] = {}
         self._turn_preview_updated_at: dict[TurnKey, float] = {}
         self._turn_progress_trackers: dict[TurnKey, "TurnProgressTracker"] = {}

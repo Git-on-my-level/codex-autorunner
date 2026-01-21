@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from .text_delta_coalescer import TextDeltaCoalescer
+
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -69,11 +71,11 @@ def _extract_error_message(params: Any) -> str:
 class AppServerEventFormatter:
     def __init__(self) -> None:
         self._thinking_items: set[str] = set()
-        self._reasoning_buffers: dict[str, str] = {}
+        self._reasoning_coalescers: dict[str, TextDeltaCoalescer] = {}
 
     def reset(self) -> None:
         self._thinking_items.clear()
-        self._reasoning_buffers.clear()
+        self._reasoning_coalescers.clear()
 
     def format_event(self, message: Any) -> list[str]:
         if not isinstance(message, dict):
@@ -93,8 +95,11 @@ class AppServerEventFormatter:
                 lines.append("thinking")
                 self._thinking_items.add(cast(str, item_id))
             if has_valid_item_id:
-                buffer = self._reasoning_buffers.get(cast(str, item_id), "")
-                self._reasoning_buffers[cast(str, item_id)] = f"{buffer}{delta}"
+                if item_id not in self._reasoning_coalescers:
+                    self._reasoning_coalescers[cast(str, item_id)] = (
+                        TextDeltaCoalescer()
+                    )
+                self._reasoning_coalescers[cast(str, item_id)].add(delta)
             else:
                 lines.append("thinking")
                 for line in delta.splitlines() or [""]:
@@ -105,14 +110,19 @@ class AppServerEventFormatter:
             return lines
 
         if method == "item/reasoning/summaryPartAdded":
-            if isinstance(item_id, str) and item_id:
-                buffer = self._reasoning_buffers.get(item_id, "")
-                self._reasoning_buffers[item_id] = ""
-                for line in buffer.splitlines():
+            if (
+                isinstance(item_id, str)
+                and item_id
+                and item_id in self._reasoning_coalescers
+            ):
+                coalescer = self._reasoning_coalescers[item_id]
+                buffer = coalescer.flush_all()
+                for line in buffer:
                     if line:
                         lines.append(f"**{line}**")
                     else:
                         lines.append("")
+                self._reasoning_coalescers[item_id].clear()
             return lines
 
         if method in ("turn/completed", "error"):
@@ -147,10 +157,15 @@ class AppServerEventFormatter:
                     lines.append("file update")
                     lines.extend([f"M {path}" for path in files])
             elif item_type == "reasoning":
-                if isinstance(item_id, str) and item_id:
-                    buffer = self._reasoning_buffers.get(item_id, "")
-                    self._reasoning_buffers.pop(item_id, None)
-                    for line in buffer.splitlines():
+                if (
+                    isinstance(item_id, str)
+                    and item_id
+                    and item_id in self._reasoning_coalescers
+                ):
+                    coalescer = self._reasoning_coalescers[item_id]
+                    buffer = coalescer.flush_all()
+                    self._reasoning_coalescers.pop(item_id, None)
+                    for line in buffer:
                         if line:
                             lines.append(f"**{line}**")
                         else:
