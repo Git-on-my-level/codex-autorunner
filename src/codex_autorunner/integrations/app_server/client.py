@@ -534,6 +534,7 @@ class CodexAppServerClient:
         assert self._process.stdout is not None
         buffer = bytearray()
         dropping_oversize = False
+        drain_limit_reached = False
         oversize_preview = bytearray()
         oversize_bytes_dropped = 0
         try:
@@ -544,33 +545,35 @@ class CodexAppServerClient:
                 if dropping_oversize:
                     newline_index = chunk.find(b"\n")
                     if newline_index == -1:
-                        if len(oversize_preview) < _OVERSIZE_PREVIEW_BYTES:
-                            remaining = _OVERSIZE_PREVIEW_BYTES - len(oversize_preview)
-                            oversize_preview.extend(chunk[:remaining])
-                        oversize_bytes_dropped += len(chunk)
-                        if oversize_bytes_dropped >= _MAX_OVERSIZE_DRAIN_BYTES:
-                            await self._emit_oversize_warning(
-                                bytes_dropped=oversize_bytes_dropped,
-                                preview=oversize_preview,
-                                aborted=True,
-                                drain_limit=_MAX_OVERSIZE_DRAIN_BYTES,
-                            )
-                            raise ValueError(
-                                "App-server message exceeded oversize drain limit "
-                                f"({_MAX_OVERSIZE_DRAIN_BYTES} bytes)"
-                            )
+                        if not drain_limit_reached:
+                            if len(oversize_preview) < _OVERSIZE_PREVIEW_BYTES:
+                                remaining = _OVERSIZE_PREVIEW_BYTES - len(
+                                    oversize_preview
+                                )
+                                oversize_preview.extend(chunk[:remaining])
+                            oversize_bytes_dropped += len(chunk)
+                            if oversize_bytes_dropped >= _MAX_OVERSIZE_DRAIN_BYTES:
+                                await self._emit_oversize_warning(
+                                    bytes_dropped=oversize_bytes_dropped,
+                                    preview=oversize_preview,
+                                    aborted=True,
+                                    drain_limit=_MAX_OVERSIZE_DRAIN_BYTES,
+                                )
+                                drain_limit_reached = True
                         continue
                     before = chunk[: newline_index + 1]
                     after = chunk[newline_index + 1 :]
-                    if len(oversize_preview) < _OVERSIZE_PREVIEW_BYTES:
-                        remaining = _OVERSIZE_PREVIEW_BYTES - len(oversize_preview)
-                        oversize_preview.extend(before[:remaining])
-                    oversize_bytes_dropped += len(before)
-                    await self._emit_oversize_warning(
-                        bytes_dropped=oversize_bytes_dropped,
-                        preview=oversize_preview,
-                    )
+                    if not drain_limit_reached:
+                        if len(oversize_preview) < _OVERSIZE_PREVIEW_BYTES:
+                            remaining = _OVERSIZE_PREVIEW_BYTES - len(oversize_preview)
+                            oversize_preview.extend(before[:remaining])
+                        oversize_bytes_dropped += len(before)
+                        await self._emit_oversize_warning(
+                            bytes_dropped=oversize_bytes_dropped,
+                            preview=oversize_preview,
+                        )
                     dropping_oversize = False
+                    drain_limit_reached = False
                     oversize_preview = bytearray()
                     oversize_bytes_dropped = 0
                     if not after:
