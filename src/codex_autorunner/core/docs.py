@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 from .config import Config
 
-_TODO_LINE_RE = re.compile(r"^\s*[-*]\s*\[(?P<state>[ xX])\]\s+(?P<text>.+)$")
+_TODO_LINE_RE = re.compile(r"^\s*[-*]\s*\[(?P<state>[ xX])\]\s*(?P<text>.*)$")
 
 
 def _iter_meaningful_lines(content: str):

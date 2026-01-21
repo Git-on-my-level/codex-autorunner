@@ -86,6 +86,20 @@ def test_parse_todos_supports_asterisk_bullets() -> None:
     assert done == ["Completed with asterisk"]
 
 
+def test_parse_todos_handles_empty_checkboxes() -> None:
+    content = """# TODO
+
+- [ ]
+- [x]
+- [ ] Real task
+- [x] Completed task
+"""
+    outstanding, done = parse_todos(content)
+
+    assert outstanding == ["", "Real task"]
+    assert done == ["", "Completed task"]
+
+
 def test_parse_todos_handles_inline_html_comments() -> None:
     content = """# TODO
 
