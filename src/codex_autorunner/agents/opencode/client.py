@@ -38,6 +38,32 @@ class OpenCodeProtocolError(Exception):
         self.body_preview = body_preview
 
 
+def _normalize_sse_event(event: SSEEvent) -> SSEEvent:
+    event_type = event.event
+    raw_data = event.data or ""
+    payload_obj: Optional[dict[str, Any]] = None
+    try:
+        payload_obj = json.loads(raw_data) if raw_data else None
+    except (json.JSONDecodeError, TypeError):
+        payload_obj = None
+
+    if isinstance(payload_obj, dict) and isinstance(payload_obj.get("payload"), dict):
+        payload_obj = payload_obj["payload"]
+
+    if isinstance(payload_obj, dict):
+        payload_type = payload_obj.get("type")
+        if isinstance(payload_type, str) and payload_type:
+            event_type = payload_type
+        raw_data = json.dumps(payload_obj)
+
+    return SSEEvent(
+        event=event_type,
+        data=raw_data,
+        id=event.id,
+        retry=event.retry,
+    )
+
+
 class OpenCodeClient:
     def __init__(
         self,
@@ -434,11 +460,14 @@ class OpenCodeClient:
             event_paths = list(paths)
         else:
             profile = await self.detect_api_shape()
-            event_paths = (
-                ["/global/event", "/event"]
-                if profile.supports_global_endpoints
-                else ["/event"]
-            )
+            if profile.supports_global_endpoints:
+                event_paths = (
+                    ["/event", "/global/event"]
+                    if directory
+                    else ["/global/event", "/event"]
+                )
+            else:
+                event_paths = ["/event"]
 
         last_error: Optional[BaseException] = None
         for path in event_paths:
@@ -448,19 +477,7 @@ class OpenCodeClient:
                     if ready_event is not None:
                         ready_event.set()
                     async for sse in parse_sse_lines(response.aiter_lines()):
-                        event_type = sse.event
-                        try:
-                            payload = json.loads(sse.data) if sse.data else None
-                            if isinstance(payload, dict) and "type" in payload:
-                                event_type = str(payload["type"])
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                        yield SSEEvent(
-                            event=event_type,
-                            data=sse.data,
-                            id=sse.id,
-                            retry=sse.retry,
-                        )
+                        yield _normalize_sse_event(sse)
                 return
             except httpx.HTTPStatusError as exc:
                 last_error = exc
