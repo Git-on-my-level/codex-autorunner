@@ -91,7 +91,7 @@ def _extract_model_from_frontmatter(content: str) -> Optional[str]:
     if not lines or not lines[0].startswith("---"):
         return None
 
-    for i, line in enumerate(lines[1:], start=1):
+    for _i, line in enumerate(lines[1:], start=1):
         if line.startswith("---"):
             break
         if line.startswith("model:"):

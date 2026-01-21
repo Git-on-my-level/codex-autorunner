@@ -1,6 +1,5 @@
-import asyncio
+import asyncio  # noqa: F401
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

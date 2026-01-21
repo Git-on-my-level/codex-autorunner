@@ -794,10 +794,12 @@ class ReviewService:
             review_cfg = repo_config.raw.get("review") or {}
 
             subagent_agent_id = review_cfg.get("subagent_agent")
+            subagent_model = review_cfg.get("subagent_model")
             if subagent_agent_id:
                 await self._opencode_supervisor.ensure_subagent_config(
                     workspace_root=self.engine.repo_root,
                     agent_id=subagent_agent_id,
+                    model=subagent_model,
                 )
 
             config = OpenCodeRunConfig(

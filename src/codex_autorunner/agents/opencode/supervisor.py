@@ -120,14 +120,17 @@ class OpenCodeSupervisor:
         self,
         workspace_root: Path,
         agent_id: str,
+        model: Optional[str] = None,
     ) -> None:
         """Ensure subagent agent config file exists with correct model.
 
         Args:
             workspace_root: Path to workspace root
             agent_id: Agent ID to configure (e.g., "subagent")
+            model: Optional model override (defaults to subagent_models if not provided)
         """
-        model = self._subagent_models.get(agent_id)
+        if model is None:
+            model = self._subagent_models.get(agent_id)
         if not model:
             return
 
