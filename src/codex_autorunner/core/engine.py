@@ -56,8 +56,10 @@ from .config import (
 from .docs import DocsManager, parse_todos
 from .git_utils import GitError, run_git
 from .locks import (
+    DEFAULT_RUNNER_CMD_HINTS,
     FileLock,
     FileLockBusy,
+    assess_lock,
     process_alive,
     read_lock_info,
     write_lock_info,
@@ -199,10 +201,15 @@ class Engine:
 
     def repo_busy_reason(self) -> Optional[str]:
         if self.lock_path.exists():
-            info = read_lock_info(self.lock_path)
-            pid = info.pid
+            assessment = assess_lock(
+                self.lock_path,
+                expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+            )
+            if assessment.freeable:
+                return "Autorunner lock is stale; clear it before continuing."
+            pid = assessment.pid
             if pid and process_alive(pid):
-                host = f" on {info.host}" if info.host else ""
+                host = f" on {assessment.host}" if assessment.host else ""
                 return f"Autorunner is running (pid={pid}{host}); try again later."
             return "Autorunner lock present; clear or resume before continuing."
 
@@ -1924,12 +1931,15 @@ class Engine:
             save_state(self.state_path, new_state)
 
 
-def clear_stale_lock(lock_path: Path) -> None:
-    if lock_path.exists():
-        info = read_lock_info(lock_path)
-        pid = info.pid
-        if not pid or not process_alive(pid):
-            lock_path.unlink(missing_ok=True)
+def clear_stale_lock(lock_path: Path) -> bool:
+    assessment = assess_lock(
+        lock_path,
+        expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+    )
+    if assessment.freeable:
+        lock_path.unlink(missing_ok=True)
+        return True
+    return False
 
 
 def _strip_log_prefixes(text: str) -> str:

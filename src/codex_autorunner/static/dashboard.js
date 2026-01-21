@@ -2,7 +2,7 @@ import { api, flash, statusPill, confirmModal, openModal } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";
 import { renderTodoPreview } from "./todoPreview.js";
-import { loadState, startRun, stopRun, killRun, resetRun, startStatePolling, } from "./state.js";
+import { loadState, startRun, stopRun, killRun, resetRun, clearLock, startStatePolling, } from "./state.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { initAgentControls } from "./agentControls.js";
@@ -56,6 +56,14 @@ function renderState(state) {
     if (summaryBtn) {
         const done = Number(state.outstanding_count ?? NaN) === 0;
         summaryBtn.classList.toggle("hidden", !done);
+    }
+    const clearLockBtn = document.getElementById("clear-lock");
+    if (clearLockBtn) {
+        const freeable = Boolean(state.lock_freeable);
+        clearLockBtn.classList.toggle("hidden", !freeable);
+        if (state.lock_freeable_reason) {
+            clearLockBtn.title = state.lock_freeable_reason;
+        }
     }
     const status = state.status || "idle";
     const startBtn = document.getElementById("start-run");
@@ -714,6 +722,7 @@ export function initDashboard() {
     bindAction("start-run", () => startRun(false, buildRunOverrides()));
     bindAction("stop-run", stopRun);
     bindAction("kill-run", killRun);
+    bindAction("clear-lock", clearLock);
     bindAction("reset-runner", async () => {
         const confirmed = await confirmModal("Reset runner? This will clear all logs and reset run ID to 1.");
         if (confirmed)

@@ -104,3 +104,12 @@ export async function killRun(): Promise<void | null> {
 export function resetRun(): Promise<void> {
   return runAction("/api/run/reset", null, "Runner reset complete");
 }
+
+export async function clearLock(): Promise<void | null> {
+  const confirmed = await confirmModal(
+    "Clear a stale autorunner lock? This will only succeed if the lock looks safe to remove.",
+    { confirmText: "Clear lock", cancelText: "Cancel", danger: true }
+  );
+  if (!confirmed) return null;
+  return runAction("/api/run/clear-lock", null, "Cleared stale lock");
+}

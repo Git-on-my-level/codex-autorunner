@@ -29,6 +29,7 @@ from .shared import (
     build_codex_terminal_cmd,
     build_opencode_terminal_cmd,
     log_stream,
+    resolve_lock_payload,
     resolve_runner_status,
     state_stream,
 )
@@ -57,6 +58,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         state = load_state(engine.state_path)
         outstanding, done = engine.docs.todos()
         status, runner_pid, running = resolve_runner_status(engine, state)
+        lock_payload = resolve_lock_payload(engine)
         codex_model = config.codex_model or extract_flag_value(
             config.codex_args, "--model"
         )
@@ -70,6 +72,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             "done_count": len(done),
             "running": running,
             "runner_pid": runner_pid,
+            **lock_payload,
             "terminal_idle_timeout_seconds": config.terminal_idle_timeout_seconds,
             "codex_model": codex_model or "auto",
         }

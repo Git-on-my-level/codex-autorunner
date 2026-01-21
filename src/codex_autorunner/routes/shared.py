@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Optional
 
 from ..codex_cli import apply_codex_options, extract_flag_value, supports_reasoning
-from ..core.locks import process_alive, read_lock_info
+from ..core.locks import (
+    DEFAULT_RUNNER_CMD_HINTS,
+    assess_lock,
+    process_is_active,
+    read_lock_info,
+)
 from ..core.state import load_state
 from ..core.utils import resolve_opencode_binary
 
@@ -100,10 +105,10 @@ def build_opencode_terminal_cmd(binary: str, model: Optional[str] = None) -> lis
 
 def resolve_runner_status(engine, state) -> tuple[str, Optional[int], bool]:
     pid = state.runner_pid
-    alive_pid = pid if pid and process_alive(pid) else None
+    alive_pid = pid if pid and process_is_active(pid) else None
     if alive_pid is None:
         info = read_lock_info(engine.lock_path)
-        if info.pid and process_alive(info.pid):
+        if info.pid and process_is_active(info.pid):
             alive_pid = info.pid
     running = alive_pid is not None
     status = state.status
@@ -111,6 +116,19 @@ def resolve_runner_status(engine, state) -> tuple[str, Optional[int], bool]:
         status = "idle"
     runner_pid = alive_pid if running else None
     return status, runner_pid, running
+
+
+def resolve_lock_payload(engine) -> dict[str, object]:
+    assessment = assess_lock(
+        engine.lock_path,
+        expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+    )
+    return {
+        "lock_present": engine.lock_path.exists(),
+        "lock_pid": assessment.pid,
+        "lock_freeable": assessment.freeable,
+        "lock_freeable_reason": assessment.reason,
+    }
 
 
 async def log_stream(
@@ -220,6 +238,7 @@ async def state_stream(
             state = await asyncio.to_thread(load_state, engine.state_path)
             outstanding, done = await asyncio.to_thread(engine.docs.todos)
             status, runner_pid, running = resolve_runner_status(engine, state)
+            lock_payload = resolve_lock_payload(engine)
             payload = {
                 "last_run_id": state.last_run_id,
                 "status": status,
@@ -230,6 +249,7 @@ async def state_stream(
                 "done_count": len(done),
                 "running": running,
                 "runner_pid": runner_pid,
+                **lock_payload,
                 "terminal_idle_timeout_seconds": terminal_idle_timeout_seconds,
                 "codex_model": codex_model or "auto",
             }

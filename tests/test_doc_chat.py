@@ -146,7 +146,7 @@ def test_chat_repo_lock_conflict(repo: Path):
     client = _client(repo)
     res = client.post("/api/docs/todo/chat", json={"message": "run it"})
     assert res.status_code == 409
-    assert "Autorunner is running" in res.json()["detail"]
+    assert "Autorunner lock is stale" in res.json()["detail"]
 
 
 def test_chat_busy_conflict(repo: Path, monkeypatch: pytest.MonkeyPatch):

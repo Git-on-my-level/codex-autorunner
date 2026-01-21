@@ -4,7 +4,7 @@ import threading
 from collections.abc import Callable
 
 from .engine import Engine, LockError
-from .locks import process_alive, read_lock_info
+from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive, read_lock_info
 from .runner_process import build_runner_cmd, spawn_detached
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 
@@ -88,13 +88,53 @@ class ProcessRunnerController:
     def _ensure_unlocked(self) -> None:
         if not self.engine.lock_path.exists():
             return
+        assessment = self._clear_freeable_lock()
+        if assessment.freeable:
+            return
         info = read_lock_info(self.engine.lock_path)
         pid = info.pid
         if pid and process_alive(pid):
             raise LockError(
                 f"Another autorunner is active (pid={pid}); use --force to override"
             )
+        raise LockError("Another autorunner is active; stop it before continuing")
+
+    def _clear_freeable_lock(self):
+        assessment = assess_lock(
+            self.engine.lock_path,
+            expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+        )
+        if not assessment.freeable:
+            return assessment
         self.engine.lock_path.unlink(missing_ok=True)
+        with state_lock(self.engine.state_path):
+            state = load_state(self.engine.state_path)
+            if state.status == "running" or state.runner_pid:
+                exit_code = state.last_exit_code
+                if exit_code is None:
+                    exit_code = 1
+                new_state = RunnerState(
+                    last_run_id=state.last_run_id,
+                    status="error" if state.status == "running" else state.status,
+                    last_exit_code=exit_code,
+                    last_run_started_at=state.last_run_started_at,
+                    last_run_finished_at=state.last_run_finished_at or now_iso(),
+                    autorunner_agent_override=state.autorunner_agent_override,
+                    autorunner_model_override=state.autorunner_model_override,
+                    autorunner_effort_override=state.autorunner_effort_override,
+                    autorunner_approval_policy=state.autorunner_approval_policy,
+                    autorunner_sandbox_mode=state.autorunner_sandbox_mode,
+                    autorunner_workspace_write_network=state.autorunner_workspace_write_network,
+                    runner_pid=None,
+                    sessions=state.sessions,
+                    repo_to_session=state.repo_to_session,
+                )
+                save_state(self.engine.state_path, new_state)
+        return assessment
+
+    def clear_freeable_lock(self):
+        with self._lock:
+            return self._clear_freeable_lock()
 
     def _spawn_runner(self, *, action: str, once: bool = False) -> None:
         cmd = build_runner_cmd(
