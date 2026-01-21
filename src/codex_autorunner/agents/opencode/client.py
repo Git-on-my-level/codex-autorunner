@@ -246,6 +246,14 @@ class OpenCodeClient:
     async def get_session(self, session_id: str) -> Any:
         return await self._request("GET", f"/session/{session_id}", expect_json=True)
 
+    async def session_status(self, *, directory: Optional[str] = None) -> Any:
+        return await self._request(
+            "GET",
+            "/session/status",
+            params=self._dir_params(directory),
+            expect_json=True,
+        )
+
     async def send_message(
         self,
         session_id: str,
