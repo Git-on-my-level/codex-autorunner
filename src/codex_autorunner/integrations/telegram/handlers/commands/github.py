@@ -1235,7 +1235,7 @@ class GitHubCommands(SharedHelpers):
                     )
                 )
                 try:
-                    await asyncio.wait_for(command_task, timeout=10.0)
+                    await command_task
                 except Exception as exc:
                     timeout_task.cancel()
                     with suppress(asyncio.CancelledError):

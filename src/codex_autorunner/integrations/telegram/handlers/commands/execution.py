@@ -1731,7 +1731,7 @@ class ExecutionCommands(SharedHelpers):
                         )
                     )
                     try:
-                        await asyncio.wait_for(prompt_task, timeout=10.0)
+                        await prompt_task
                         prompt_send_ms = int((time.monotonic() - prompt_sent_at) * 1000)
                         log_event(
                             self._logger,
