@@ -1727,8 +1727,15 @@ class Engine:
         target_runs = (
             stop_after_runs
             if stop_after_runs is not None
-            else self.config.runner_stop_after_runs
+            else (
+                state.runner_stop_after_runs
+                if state.runner_stop_after_runs is not None
+                else self.config.runner_stop_after_runs
+            )
         )
+        no_progress_count = 0
+        last_outstanding_count = len(self.docs.todos()[0])
+        last_done_count = len(self.docs.todos()[1])
 
         try:
             while True:
@@ -1772,6 +1779,58 @@ class Engine:
 
                 if exit_code != 0:
                     break
+
+                # Check for no progress across runs
+                current_outstanding, current_done = self.docs.todos()
+                current_outstanding_count = len(current_outstanding)
+                current_done_count = len(current_done)
+
+                # Check if there was any meaningful progress
+                has_progress = (
+                    current_outstanding_count != last_outstanding_count
+                    or current_done_count != last_done_count
+                )
+
+                # Check if there was any meaningful output (diff, files changed, etc.)
+                has_output = False
+                try:
+                    output_path = (
+                        self.repo_root
+                        / ".codex-autorunner"
+                        / "runs"
+                        / f"run-{run_id}"
+                        / "output.txt"
+                    )
+                    if output_path.exists():
+                        output_content = output_path.read_text(encoding="utf-8").strip()
+                        # Consider it output if there's meaningful text (not just empty or whitespace)
+                        has_output = len(output_content) > 100
+                except (OSError, IOError):
+                    pass
+
+                if not has_progress and not has_output:
+                    no_progress_count += 1
+                    self.log_line(
+                        run_id,
+                        f"info: no progress detected ({no_progress_count}/{self.config.runner_no_progress_threshold} runs without progress)",
+                    )
+                    if no_progress_count >= self.config.runner_no_progress_threshold:
+                        self.log_line(
+                            run_id,
+                            f"info: stopping after {no_progress_count} consecutive runs with no progress (threshold: {self.config.runner_no_progress_threshold})",
+                        )
+                        self._update_state(
+                            "idle",
+                            run_id,
+                            exit_code,
+                            finished=True,
+                        )
+                        break
+                else:
+                    no_progress_count = 0
+
+                last_outstanding_count = current_outstanding_count
+                last_done_count = current_done_count
 
                 # If TODO is now complete, run the final report job once and stop.
                 if self.todos_done() and not self.summary_finalized():

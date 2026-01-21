@@ -22,6 +22,7 @@ class RunnerState:
     autorunner_approval_policy: Optional[str] = None
     autorunner_sandbox_mode: Optional[str] = None
     autorunner_workspace_write_network: Optional[bool] = None
+    runner_stop_after_runs: Optional[int] = None
     runner_pid: Optional[int] = None
     sessions: dict[str, "SessionRecord"] = dataclasses.field(default_factory=dict)
     repo_to_session: dict[str, str] = dataclasses.field(default_factory=dict)
@@ -223,6 +224,8 @@ def _encode_overrides(state: RunnerState) -> Optional[str]:
         overrides["autorunner_workspace_write_network"] = (
             state.autorunner_workspace_write_network
         )
+    if state.runner_stop_after_runs is not None:
+        overrides["runner_stop_after_runs"] = state.runner_stop_after_runs
     if not overrides:
         return None
     return json.dumps(overrides, ensure_ascii=True)
@@ -255,6 +258,11 @@ def _apply_overrides(state: RunnerState, raw: Optional[str]) -> None:
     workspace_write_network = data.get("autorunner_workspace_write_network")
     if isinstance(workspace_write_network, bool):
         state.autorunner_workspace_write_network = workspace_write_network
+    runner_stop_after_runs = data.get("runner_stop_after_runs")
+    if isinstance(runner_stop_after_runs, int) and not isinstance(
+        runner_stop_after_runs, bool
+    ):
+        state.runner_stop_after_runs = runner_stop_after_runs
 
 
 def load_state(state_path: Path) -> RunnerState:

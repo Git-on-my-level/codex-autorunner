@@ -9,6 +9,7 @@ const ui = {
   effortSelect: document.getElementById("autorunner-effort-select") as HTMLSelectElement | null,
   approvalSelect: document.getElementById("autorunner-approval-select") as HTMLSelectElement | null,
   sandboxSelect: document.getElementById("autorunner-sandbox-select") as HTMLSelectElement | null,
+  maxRunsInput: document.getElementById("autorunner-max-runs-input") as HTMLInputElement | null,
   networkToggle: document.getElementById("autorunner-network-toggle") as HTMLInputElement | null,
   networkRow: document.getElementById("autorunner-network-row") as HTMLElement | null,
   saveBtn: document.getElementById("autorunner-settings-save") as HTMLButtonElement | null,
@@ -182,6 +183,10 @@ function renderSettings(settings: Record<string, unknown> | null): void {
       settings.autorunner_workspace_write_network
     );
   }
+  if (ui.maxRunsInput) {
+    const maxRuns = settings.runner_stop_after_runs as number | null | undefined;
+    ui.maxRunsInput.value = maxRuns ? String(maxRuns) : "";
+  }
   updateNetworkVisibility();
 }
 
@@ -198,6 +203,7 @@ async function saveSettings(): Promise<void> {
       autorunner_workspace_write_network: Boolean(
         ui.networkToggle?.checked
       ),
+      runner_stop_after_runs: ui.maxRunsInput?.value ? parseInt(ui.maxRunsInput.value, 10) : null,
     };
     const data = await api("/api/session/settings", {
       method: "POST",

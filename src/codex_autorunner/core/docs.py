@@ -4,18 +4,55 @@ from typing import List, Tuple
 
 from .config import Config
 
+_TODO_LINE_RE = re.compile(r"^\s*[-*]\s*\[(?P<state>[ xX])\]\s+(?P<text>.+)$")
+
+
+def _iter_meaningful_lines(content: str):
+    in_code_fence = False
+    in_html_comment = False
+    html_comment_pattern = re.compile(r"<!--.*?-->", re.DOTALL)
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        if stripped.startswith("```"):
+            in_code_fence = not in_code_fence
+            continue
+
+        if in_code_fence:
+            continue
+
+        if "<!--" in line:
+            if "-->" in line:
+                if html_comment_pattern.search(line):
+                    continue
+            else:
+                in_html_comment = True
+                continue
+
+        if in_html_comment:
+            if "-->" in line:
+                in_html_comment = False
+            continue
+
+        yield line
+
 
 def parse_todos(content: str) -> Tuple[List[str], List[str]]:
     outstanding: List[str] = []
     done: List[str] = []
     if not content:
         return outstanding, done
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("- [ ]"):
-            outstanding.append(stripped[5:].strip())
-        elif stripped.lower().startswith("- [x]"):
-            done.append(stripped[5:].strip())
+
+    for line in _iter_meaningful_lines(content):
+        match = _TODO_LINE_RE.match(line)
+        if match:
+            state = match.group("state")
+            text = match.group("text").strip()
+            if state in (" ",):
+                outstanding.append(text)
+            elif state in ("x", "X"):
+                done.append(text)
     return outstanding, done
 
 
