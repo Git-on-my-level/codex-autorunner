@@ -85,11 +85,14 @@ class TelegramNotificationHandlers:
                 limit_mb = max(1, byte_limit // (1024 * 1024))
             limit_text = f"{limit_mb}MB" if limit_mb else "the size limit"
             aborted = bool(params.get("aborted"))
+            inferred_method = params.get("inferredMethod")
+            inferred_thread_id = _coerce_id(params.get("threadId"))
+            inferred_turn_id = _coerce_id(params.get("turnId"))
             if aborted:
                 warning = (
-                    f"Warning: Codex output exceeded {limit_text} and kept growing, "
-                    "so CAR restarted the app-server to recover. Avoid huge stdout "
-                    "(use head/tail, filters, or redirect to a file)."
+                    f"Warning: Codex output exceeded {limit_text} and kept growing. "
+                    "CAR is dropping output until a newline to recover. Avoid huge "
+                    "stdout (use head/tail, filters, or redirect to a file)."
                 )
             else:
                 warning = (
@@ -97,6 +100,15 @@ class TelegramNotificationHandlers:
                     "keep the session alive. Avoid huge stdout (use head/tail, "
                     "filters, or redirect to a file)."
                 )
+            context_parts = []
+            if isinstance(inferred_method, str) and inferred_method:
+                context_parts.append(f"method={inferred_method}")
+            if isinstance(inferred_thread_id, str) and inferred_thread_id:
+                context_parts.append(f"thread={inferred_thread_id}")
+            if isinstance(inferred_turn_id, str) and inferred_turn_id:
+                context_parts.append(f"turn={inferred_turn_id}")
+            if context_parts:
+                warning = f"{warning} Context: {', '.join(context_parts)}."
             if len(warning) > TELEGRAM_MAX_MESSAGE_LENGTH:
                 warning = warning[: TELEGRAM_MAX_MESSAGE_LENGTH - 3].rstrip() + "..."
             await self._send_message_with_outbox(
