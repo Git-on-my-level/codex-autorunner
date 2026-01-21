@@ -107,6 +107,7 @@ class SessionSettingsRequest(Payload):
     autorunner_approval_policy: Optional[str] = None
     autorunner_sandbox_mode: Optional[str] = None
     autorunner_workspace_write_network: Optional[bool] = None
+    runner_stop_after_runs: Optional[int] = None
 
 
 class GithubIssueRequest(Payload):
@@ -201,6 +202,7 @@ class SessionSettingsResponse(ResponseModel):
     autorunner_approval_policy: Optional[str]
     autorunner_sandbox_mode: Optional[str]
     autorunner_workspace_write_network: Optional[bool]
+    runner_stop_after_runs: Optional[int]
 
 
 class VersionResponse(ResponseModel):

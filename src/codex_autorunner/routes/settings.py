@@ -34,6 +34,7 @@ def build_settings_routes() -> APIRouter:
             "autorunner_approval_policy": state.autorunner_approval_policy,
             "autorunner_sandbox_mode": state.autorunner_sandbox_mode,
             "autorunner_workspace_write_network": state.autorunner_workspace_write_network,
+            "runner_stop_after_runs": state.runner_stop_after_runs,
         }
 
     @router.post("/api/session/settings", response_model=SessionSettingsResponse)
@@ -100,6 +101,24 @@ def build_settings_routes() -> APIRouter:
                     status_code=400,
                     detail="autorunner_workspace_write_network must be a boolean",
                 )
+            runner_stop_after_runs = (
+                updates.get("runner_stop_after_runs")
+                if "runner_stop_after_runs" in updates
+                else state.runner_stop_after_runs
+            )
+            if (
+                "runner_stop_after_runs" in updates
+                and runner_stop_after_runs is not None
+                and (
+                    not isinstance(runner_stop_after_runs, int)
+                    or isinstance(runner_stop_after_runs, bool)
+                    or runner_stop_after_runs <= 0
+                )
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="runner_stop_after_runs must be a positive integer",
+                )
 
             thread_reset_required = any(
                 (
@@ -108,6 +127,7 @@ def build_settings_routes() -> APIRouter:
                     approval_policy != state.autorunner_approval_policy,
                     sandbox_mode != state.autorunner_sandbox_mode,
                     workspace_write_network != state.autorunner_workspace_write_network,
+                    runner_stop_after_runs != state.runner_stop_after_runs,
                 )
             )
             if thread_reset_required and manager.running:
@@ -128,6 +148,7 @@ def build_settings_routes() -> APIRouter:
                 autorunner_approval_policy=approval_policy,
                 autorunner_sandbox_mode=sandbox_mode,
                 autorunner_workspace_write_network=workspace_write_network,
+                runner_stop_after_runs=runner_stop_after_runs,
                 runner_pid=state.runner_pid,
                 sessions=state.sessions,
                 repo_to_session=state.repo_to_session,
@@ -142,6 +163,7 @@ def build_settings_routes() -> APIRouter:
             "autorunner_approval_policy": approval_policy,
             "autorunner_sandbox_mode": sandbox_mode,
             "autorunner_workspace_write_network": workspace_write_network,
+            "runner_stop_after_runs": runner_stop_after_runs,
         }
 
     return router
