@@ -624,13 +624,23 @@ def _extract_status_type(payload: Any) -> Optional[str]:
     ):
         if not isinstance(container, dict):
             continue
-        status = container.get("status") if container is payload else container
+        if container is payload:
+            status = container.get("status")
+        else:
+            status = container
         if isinstance(status, dict):
             value = status.get("type") or status.get("status")
         else:
             value = status
         if isinstance(value, str) and value:
             return value
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        status = properties.get("status")
+        if isinstance(status, dict):
+            value = status.get("type") or status.get("status")
+            if isinstance(value, str) and value:
+                return value
     return None
 
 
@@ -1330,7 +1340,12 @@ async def collect_opencode_output(
         return client.stream_events(directory=workspace_path, ready_event=ready_event)
 
     async def _fetch_session() -> Any:
-        return await client.get_session(session_id)
+        statuses = await client.session_status(directory=workspace_path)
+        if isinstance(statuses, dict):
+            session_status = statuses.get(session_id)
+            if isinstance(session_status, dict):
+                return {"status": session_status}
+        return {"status": {}}
 
     return await collect_opencode_output_from_events(
         None,
