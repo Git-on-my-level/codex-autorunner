@@ -839,7 +839,9 @@ class Engine:
                         "exit_code": inferred_exit,
                         "reconciled_at": now,
                         "reconciled_reason": (
-                            "runner_active" if active_pid is not None else "runner_inactive"
+                            "runner_active"
+                            if active_pid is not None
+                            else "runner_inactive"
                         ),
                     },
                 )
