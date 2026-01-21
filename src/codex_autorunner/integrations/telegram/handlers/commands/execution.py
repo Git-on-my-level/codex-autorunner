@@ -1240,6 +1240,9 @@ class ExecutionCommands(SharedHelpers):
 
             turn_key: Optional[TurnKey] = None
             turn_started_at: Optional[float] = None
+            turn_id = None
+            turn_elapsed_seconds = None
+
             try:
                 queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
                 log_event(
