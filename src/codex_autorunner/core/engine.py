@@ -764,6 +764,88 @@ class Engine:
     def _load_run_index(self) -> dict[str, dict]:
         return self._run_index_store.load_all()
 
+    def reconcile_run_index(self) -> None:
+        """Best-effort: mark stale runs that still look 'running' in the run index.
+
+        The Runs UI considers a run "running" when both `finished_at` and `exit_code`
+        are missing. If the runner process was killed or crashed, the `end` marker is
+        never written, so the entry stays "running" forever. This method uses the
+        runner state + lock pid as the authoritative signal for whether a run can
+        still be active, then forces stale entries to a finished/error state.
+        """
+        try:
+            state = load_state(self.state_path)
+        except Exception:
+            return
+
+        active_pid: Optional[int] = None
+        pid = state.runner_pid
+        if pid and process_alive(pid):
+            active_pid = pid
+        else:
+            info = read_lock_info(self.lock_path)
+            if info.pid and process_alive(info.pid):
+                active_pid = info.pid
+
+        active_run_id: Optional[int] = None
+        if (
+            active_pid is not None
+            and state.status == "running"
+            and state.last_run_id is not None
+        ):
+            active_run_id = int(state.last_run_id)
+
+        now = now_iso()
+        try:
+            index = self._run_index_store.load_all()
+        except Exception:
+            return
+
+        for key, entry in index.items():
+            try:
+                run_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(entry, dict):
+                continue
+            if run_id <= 0:
+                continue
+
+            if active_run_id is not None and run_id == active_run_id:
+                continue
+
+            if entry.get("reconciled_at") is not None:
+                continue
+
+            finished_at = entry.get("finished_at")
+            exit_code = entry.get("exit_code")
+
+            if isinstance(finished_at, str) and finished_at:
+                continue
+            if exit_code is not None:
+                continue
+
+            inferred_exit: int
+            if state.last_run_id == run_id and state.last_exit_code is not None:
+                inferred_exit = int(state.last_exit_code)
+            else:
+                inferred_exit = 1
+
+            try:
+                self._run_index_store.merge_entry(
+                    run_id,
+                    {
+                        "finished_at": now,
+                        "exit_code": inferred_exit,
+                        "reconciled_at": now,
+                        "reconciled_reason": (
+                            "runner_active" if active_pid is not None else "runner_inactive"
+                        ),
+                    },
+                )
+            except Exception:
+                continue
+
     def _merge_run_index_entry(self, run_id: int, updates: dict[str, Any]) -> None:
         self._run_index_store.merge_entry(run_id, updates)
 

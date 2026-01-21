@@ -54,6 +54,7 @@ class ProcessRunnerController:
                         repo_to_session=state.repo_to_session,
                     )
                     save_state(self.engine.state_path, new_state)
+                self.engine.reconcile_run_index()
                 return
 
             pid = state.runner_pid
@@ -84,6 +85,8 @@ class ProcessRunnerController:
                     repo_to_session=state.repo_to_session,
                 )
                 save_state(self.engine.state_path, new_state)
+
+        self.engine.reconcile_run_index()
 
     def _ensure_unlocked(self) -> None:
         if not self.engine.lock_path.exists():

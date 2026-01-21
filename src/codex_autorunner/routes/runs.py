@@ -53,6 +53,7 @@ def build_runs_routes() -> APIRouter:
     @router.get("/api/runs")
     def list_runs(request: Request, limit: int = 200):
         engine = request.app.state.engine
+        engine.reconcile_run_index()
         index = engine._load_run_index()
         entries: list[dict[str, Any]] = []
         for key, entry in index.items():
