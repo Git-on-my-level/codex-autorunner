@@ -295,6 +295,16 @@ class GitHubCommands(SharedHelpers):
             text=placeholder_text,
             reply_markup=self._interrupt_keyboard(),
         )
+        turn_context = CodexTurnContext(
+            placeholder_id=placeholder_id,
+            turn_handle=None,
+            turn_key=None,
+            turn_semaphore=turn_semaphore,
+            turn_started_at=None,
+            queued=queued,
+            turn_elapsed_seconds=None,
+            turn_slot_acquired=False,
+        )
         queue_started_at = time.monotonic()
         acquired = await self._await_turn_slot(
             turn_semaphore,
@@ -305,10 +315,8 @@ class GitHubCommands(SharedHelpers):
         )
         if not acquired:
             runtime.interrupt_requested = False
-            if turn_semaphore.locked():
-                turn_semaphore.release()
             return None
-        turn_slot_acquired = True
+        turn_context.turn_slot_acquired = True
         try:
             queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
             log_event(
@@ -339,8 +347,10 @@ class GitHubCommands(SharedHelpers):
                 delivery=delivery,
                 **setup.review_kwargs,
             )
-            turn_started_at = time.monotonic()
+            turn_context.turn_handle = turn_handle
+            turn_context.turn_started_at = time.monotonic()
             turn_key = self._turn_key(thread_id, turn_handle.turn_id)
+            turn_context.turn_key = turn_key
             runtime.current_turn_id = turn_handle.turn_id
             runtime.current_turn_key = turn_key
             topic_key = await self._resolve_topic_key(
@@ -368,7 +378,7 @@ class GitHubCommands(SharedHelpers):
                 )
                 if placeholder_id is not None:
                     await self._delete_message(message.chat_id, placeholder_id)
-                if turn_semaphore.locked():
+                if turn_context.turn_slot_acquired:
                     turn_semaphore.release()
                 return None
             await self._start_turn_progress(
@@ -378,17 +388,12 @@ class GitHubCommands(SharedHelpers):
                 model=record.model,
                 label="working",
             )
-            return CodexTurnContext(
-                placeholder_id=placeholder_id,
-                turn_handle=turn_handle,
-                turn_key=turn_key,
-                turn_semaphore=turn_semaphore,
-                turn_started_at=turn_started_at,
-                queued=queued,
-                turn_slot_acquired=turn_slot_acquired,
-            )
+            return turn_context
         except Exception:
-            if turn_slot_acquired:
+            if placeholder_id is not None:
+                with suppress(Exception):
+                    await self._delete_message(message.chat_id, placeholder_id)
+            if turn_context.turn_slot_acquired:
                 turn_semaphore.release()
             raise
 
