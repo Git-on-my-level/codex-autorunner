@@ -86,6 +86,22 @@ def test_parse_todos_supports_asterisk_bullets() -> None:
     assert done == ["Completed with asterisk"]
 
 
+def test_parse_todos_handles_inline_html_comments() -> None:
+    content = """# TODO
+
+- [ ] Real task with inline comment <!-- note to self
+- [x] Another completed task <!-- internal note
+- [ ] Task without inline comment
+"""
+    outstanding, done = parse_todos(content)
+
+    assert outstanding == [
+        "Real task with inline comment <!-- note to self",
+        "Task without inline comment",
+    ]
+    assert done == ["Another completed task <!-- internal note"]
+
+
 def test_parse_todos_complex_markdown() -> None:
     content = """# TODO
 

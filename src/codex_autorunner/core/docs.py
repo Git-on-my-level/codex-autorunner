@@ -22,7 +22,7 @@ def _iter_meaningful_lines(content: str):
         if in_code_fence:
             continue
 
-        if "<!--" in line:
+        if line.lstrip().startswith("<!--"):
             if "-->" in line:
                 if html_comment_pattern.search(line):
                     continue
