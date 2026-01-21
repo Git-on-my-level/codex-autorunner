@@ -2025,6 +2025,7 @@ class TopicRouter:
     def __init__(self, store: TelegramStateStore) -> None:
         self._store = store
         self._topics: dict[str, TopicRuntime] = {}
+        self._scope_cache: dict[str, Optional[str]] = {}
 
     def runtime_for(self, key: str) -> TopicRuntime:
         runtime = self._topics.get(key)
@@ -2035,7 +2036,11 @@ class TopicRouter:
 
     async def resolve_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         base_key = topic_key(chat_id, thread_id)
-        scope = await self._store.get_topic_scope(base_key)
+        if base_key not in self._scope_cache:
+            scope = await self._store.get_topic_scope(base_key)
+            if base_key not in self._scope_cache:
+                self._scope_cache[base_key] = scope
+        scope = self._scope_cache[base_key]
         if isinstance(scope, str) and scope:
             return topic_key(chat_id, thread_id, scope=scope)
         return base_key
@@ -2044,6 +2049,7 @@ class TopicRouter:
         self, chat_id: int, thread_id: Optional[int], scope: Optional[str]
     ) -> None:
         base_key = topic_key(chat_id, thread_id)
+        self._scope_cache[base_key] = scope
         await self._store.set_topic_scope(base_key, scope)
 
     async def topic_key(

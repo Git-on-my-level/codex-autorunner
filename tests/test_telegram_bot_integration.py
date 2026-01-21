@@ -257,7 +257,9 @@ async def test_document_message_saves_inbox(tmp_path: Path) -> None:
     try:
         await service._handle_bind(bind_message, str(repo))
         runtime = service._router.runtime_for(
-            service._router.resolve_key(message.chat_id, message.thread_id)
+            await service._router.resolve_key(
+                bind_message.chat_id, bind_message.thread_id
+            )
         )
         await service._handle_media_message(message, runtime, "")
     finally:
@@ -278,7 +280,9 @@ async def test_outbox_pending_file_sent_after_turn(tmp_path: Path) -> None:
     bind_message = build_message("/bind", message_id=10)
     try:
         await service._handle_bind(bind_message, str(repo))
-        key = service._router.resolve_key(bind_message.chat_id, bind_message.thread_id)
+        key = await service._router.resolve_key(
+            bind_message.chat_id, bind_message.thread_id
+        )
         pending_dir = service._files_outbox_pending_dir(str(repo), key)
         pending_dir.mkdir(parents=True, exist_ok=True)
         pending_file = pending_dir / "report.txt"
