@@ -1847,6 +1847,7 @@ class Engine:
                         run_id + 1, external_stop_flag=external_stop_flag
                     )
                     last_exit_code = exit_code
+                    exit_reason = "error_exit" if exit_code != 0 else "todos_complete"
                     break
 
                 if target_runs is not None and run_id >= target_runs:
