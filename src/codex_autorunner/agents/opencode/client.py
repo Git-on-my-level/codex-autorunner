@@ -101,46 +101,6 @@ class OpenCodeClient:
 
             self._api_profile = profile
             return profile
-        """
-        Detect OpenCode API capabilities by fetching and parsing OpenAPI spec.
-        Results are cached for the lifetime of the client instance.
-        """
-        if self._api_profile is not None:
-            return self._api_profile
-
-        profile = OpenCodeApiProfile()
-        try:
-            spec = await self.fetch_openapi_spec()
-            profile.spec_fetched = True
-
-            if isinstance(spec, dict):
-                # Check if /session/{id}/prompt_async exists
-                profile.supports_prompt_async = self.has_endpoint(
-                    spec, "post", "/session/{session_id}/prompt_async"
-                )
-
-                # Check if /global/* endpoints exist
-                profile.supports_global_endpoints = self.has_endpoint(
-                    spec, "get", "/global/health"
-                ) or self.has_endpoint(spec, "get", "/global/event")
-
-            log_event(
-                self._logger,
-                logging.INFO,
-                "opencode.api_shape_detected",
-                supports_prompt_async=profile.supports_prompt_async,
-                supports_global_endpoints=profile.supports_global_endpoints,
-            )
-        except Exception as exc:
-            self._logger.warning(
-                "Failed to detect API shape, assuming modern OpenCode: %s", exc
-            )
-            # Default to assuming modern OpenCode with all features
-            profile.supports_prompt_async = True
-            profile.supports_global_endpoints = True
-
-        self._api_profile = profile
-        return profile
 
     def _get_api_profile(self) -> OpenCodeApiProfile:
         """Get API profile, detecting if needed. Synchronous for use in sync methods."""
