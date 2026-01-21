@@ -13,6 +13,7 @@ from typing import Any, Optional
 from ..agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
 from ..agents.opencode.supervisor import OpenCodeSupervisor
 from ..agents.registry import has_capability, validate_agent_id
+from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from .config import RepoConfig
 from .engine import Engine
 from .locks import FileLock, FileLockBusy, FileLockError, process_alive, read_lock_info
@@ -292,10 +293,12 @@ class ReviewService:
         engine: Engine,
         *,
         opencode_supervisor: Optional[OpenCodeSupervisor] = None,
+        app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.engine = engine
         self._opencode_supervisor = opencode_supervisor
+        self._app_server_supervisor = app_server_supervisor
         self._logger = logger or logging.getLogger("codex_autorunner.review")
         self._state_path = _workflow_root(engine.repo_root) / "state.json"
         self._lock_path = (
@@ -516,9 +519,6 @@ class ReviewService:
         if state["id"] != run_id:
             return
 
-        if self._opencode_supervisor is None:
-            raise ReviewError("OpenCode backend is not configured")
-
         scratchpad_dir = Path(state["scratchpad_dir"])
         final_output_path = Path(state["final_output_path"])
 
@@ -531,43 +531,108 @@ class ReviewService:
             max_seconds if max_seconds is not None else REVIEW_TIMEOUT_SECONDS
         )
 
-        config = OpenCodeRunConfig(
-            agent=state["agent"],
-            model=state["model"],
-            reasoning=state.get("reasoning"),
-            prompt=prompt,
-            workspace_root=str(self.engine.repo_root),
-            timeout_seconds=timeout_seconds,
-            interrupt_grace_seconds=REVIEW_INTERRUPT_GRACE_SECONDS,
-            permission_policy="allow",
-        )
+        agent_id = state.get("agent") or "opencode"
+        if agent_id == "codex":
+            if self._app_server_supervisor is None:
+                raise ReviewError("Codex backend is not configured")
+            client = await self._app_server_supervisor.get_client(self.engine.repo_root)
+            thread_id = uuid.uuid4().hex
+            review_kwargs: dict[str, Any] = {}
+            if state.get("model"):
+                review_kwargs["model"] = state["model"]
+            if state.get("reasoning"):
+                review_kwargs["effort"] = state["reasoning"]
+            handle = await client.review_start(
+                thread_id=thread_id,
+                target={"type": "custom", "instructions": prompt},
+                delivery="inline",
+                cwd=str(self.engine.repo_root),
+                **review_kwargs,
+            )
 
-        result = await run_opencode_prompt(
-            self._opencode_supervisor,
-            config,
-            should_stop=self._stop_event.is_set,
-            logger=self._logger,
-        )
-
-        state["session_id"] = result.session_id
-        state["turn_id"] = result.turn_id
-        state["updated_at"] = now_iso()
-        self._save_state(state)
-
-        if result.stopped:
-            state["status"] = "stopped"
-            state["finished_at"] = now_iso()
+            state["session_id"] = thread_id
+            state["turn_id"] = handle.turn_id
             state["updated_at"] = now_iso()
             self._save_state(state)
-            return
 
-        if result.timed_out:
-            raise ReviewError("Review timed out")
-
-        if result.output_error:
-            raise ReviewError(
-                f"OpenCode output collection failed: {result.output_error}"
+            stop_task = asyncio.create_task(asyncio.to_thread(self._stop_event.wait))
+            review_task = asyncio.create_task(handle.wait(timeout=timeout_seconds))
+            done, _ = await asyncio.wait(
+                {review_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
             )
+
+            if stop_task in done:
+                try:
+                    await client.turn_interrupt(
+                        handle.turn_id, thread_id=handle.thread_id
+                    )
+                except Exception as exc:
+                    self._log(f"Review stop interrupt failed: {exc}")
+                review_task.cancel()
+                try:
+                    await review_task
+                except Exception:
+                    pass
+                state["status"] = "stopped"
+                state["finished_at"] = now_iso()
+                state["updated_at"] = now_iso()
+                self._save_state(state)
+                return
+
+            stop_task.cancel()
+            try:
+                await stop_task
+            except Exception:
+                pass
+
+            try:
+                codex_result = await review_task
+            except asyncio.TimeoutError as exc:
+                raise ReviewError("Review timed out") from exc
+            if codex_result.errors:
+                raise ReviewError(f"Codex review failed: {codex_result.errors[0]}")
+        else:
+            if self._opencode_supervisor is None:
+                raise ReviewError("OpenCode backend is not configured")
+
+            config = OpenCodeRunConfig(
+                agent=agent_id,
+                model=state["model"],
+                reasoning=state.get("reasoning"),
+                prompt=prompt,
+                workspace_root=str(self.engine.repo_root),
+                timeout_seconds=timeout_seconds,
+                interrupt_grace_seconds=REVIEW_INTERRUPT_GRACE_SECONDS,
+                permission_policy="allow",
+            )
+
+            opencode_result = await run_opencode_prompt(
+                self._opencode_supervisor,
+                config,
+                should_stop=self._stop_event.is_set,
+                logger=self._logger,
+            )
+
+            state["session_id"] = opencode_result.session_id
+            state["turn_id"] = opencode_result.turn_id
+            state["updated_at"] = now_iso()
+            self._save_state(state)
+
+            if opencode_result.stopped:
+                state["status"] = "stopped"
+                state["finished_at"] = now_iso()
+                state["updated_at"] = now_iso()
+                self._save_state(state)
+                return
+
+            if opencode_result.timed_out:
+                raise ReviewError("Review timed out")
+
+            if opencode_result.output_error:
+                raise ReviewError(
+                    "OpenCode output collection failed: "
+                    f"{opencode_result.output_error}"
+                )
 
         if not final_output_path.exists():
             raise ReviewError("Final report not found after review completed")

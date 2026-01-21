@@ -22,6 +22,9 @@ def _review(request: Request) -> ReviewService:
         engine = request.app.state.engine
         manager = ReviewService(
             engine,
+            app_server_supervisor=getattr(
+                request.app.state, "app_server_supervisor", None
+            ),
             opencode_supervisor=getattr(request.app.state, "opencode_supervisor", None),
             logger=getattr(request.app.state, "logger", None),
         )

@@ -229,6 +229,36 @@ class OpenCodeSupervisor:
                 health_info=bool(handle.health_info),
                 exc=None,
             )
+            handle.base_url = base_url
+            handle.client = OpenCodeClient(
+                base_url,
+                auth=self._auth,
+                timeout=self._request_timeout,
+                logger=self._logger,
+            )
+            try:
+                handle.openapi_spec = await handle.client.fetch_openapi_spec()
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "opencode.openapi.fetched",
+                    base_url=base_url,
+                    endpoints=(
+                        len(handle.openapi_spec.get("paths", {}))
+                        if isinstance(handle.openapi_spec, dict)
+                        else 0
+                    ),
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.openapi.fetch_failed",
+                    base_url=base_url,
+                    exc=str(exc),
+                )
+                handle.openapi_spec = {}
+            handle.started = True
         except Exception as exc:
             log_event(
                 self._logger,
@@ -297,7 +327,7 @@ class OpenCodeSupervisor:
                     exc=str(exc),
                 )
                 handle.openapi_spec = {}
-            self._start_stdout_dain(handle)
+            self._start_stdout_drain(handle)
             handle.started = True
         except Exception:
             handle.started = False
