@@ -127,13 +127,12 @@ def build_sessions_routes() -> APIRouter:
             if normalized_repo_path:
                 raw_path = Path(normalized_repo_path)
                 try:
-                    # Always resolve paths with respect to the configured repo_root
+                    # Reject absolute paths outright to prevent symlink traversal attacks
                     if raw_path.is_absolute():
-                        # Reject absolute paths that are not under repo_root
-                        resolved = raw_path.resolve()
-                    else:
-                        resolved = (repo_root / raw_path).resolve()
-                    # Ensure the resolved path is contained within repo_root
+                        raise ValueError("Absolute paths are not allowed")
+                    # Only process relative paths, join with repo_root and resolve
+                    resolved = (repo_root / raw_path).resolve()
+                    # Verify the resolved path is still under repo_root
                     resolved.relative_to(repo_root)
                 except (OSError, RuntimeError, ValueError):
                     # On any resolution or containment failure, treat as invalid
@@ -145,7 +144,6 @@ def build_sessions_routes() -> APIRouter:
                 candidates.extend(
                     [normalized_repo_path, f"{normalized_repo_path}:opencode"]
                 )
-            candidates.extend([repo_path, f"{repo_path}:opencode"])
             for key in candidates:
                 mapped = repo_to_session.get(key)
                 if mapped:
