@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import Any, Iterator, Optional
 
 from .locks import file_lock
 from .sqlite_utils import open_sqlite
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
@@ -136,6 +139,7 @@ def _load_legacy_state_json(path: Path) -> Optional[RunnerState]:
             if isinstance(payload.get("autorunner_workspace_write_network"), bool)
             else None
         ),
+        runner_stop_after_runs=_coerce_int(payload.get("runner_stop_after_runs")),
         runner_pid=_coerce_int(payload.get("runner_pid")),
     )
     sessions: dict[str, SessionRecord] = {}
@@ -271,8 +275,17 @@ def load_state(state_path: Path) -> RunnerState:
     if not state_path.exists() and legacy_path.exists():
         migrated = _load_legacy_state_json(legacy_path)
         if migrated is not None:
-            save_state(state_path, migrated)
-            return migrated
+            try:
+                save_state(state_path, migrated)
+                return migrated
+            except Exception:
+                _logger.warning(
+                    "Failed to migrate legacy state from %s to %s. The original JSON file is preserved.",
+                    legacy_path,
+                    state_path,
+                    exc_info=True,
+                )
+                raise
     with open_sqlite(state_path) as conn:
         _ensure_state_schema(conn)
         row = conn.execute(

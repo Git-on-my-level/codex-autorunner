@@ -1154,6 +1154,7 @@ class Engine:
                 reasoning=effective_effort,
                 approval_mode=approval_policy,
                 sandbox_policy=sandbox_policy,
+                should_stop=stop_event.is_set,
             )
             if result.get("status") != "completed":
                 self.log_line(

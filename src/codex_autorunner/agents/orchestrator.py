@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
 from ..core.app_server_events import AppServerEventBuffer
 from .codex.harness import CodexHarness
@@ -44,6 +44,7 @@ class AgentOrchestrator:
         approval_mode: Optional[str] = None,
         sandbox_policy: Optional[Any] = None,
         timeout_seconds: Optional[float] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -58,6 +59,7 @@ class AgentOrchestrator:
         approval_mode: Optional[str] = None,
         sandbox_policy: Optional[Any] = None,
         timeout_seconds: Optional[float] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> AsyncIterator[dict[str, Any]]:
         raise NotImplementedError
 
@@ -119,6 +121,7 @@ class CodexOrchestrator(AgentOrchestrator):
         approval_mode: Optional[str] = None,
         sandbox_policy: Optional[Any] = None,
         timeout_seconds: Optional[float] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> dict[str, Any]:
         turn_ref = await self._harness.start_turn(
             workspace_root,
@@ -166,6 +169,7 @@ class CodexOrchestrator(AgentOrchestrator):
         approval_mode: Optional[str] = None,
         sandbox_policy: Optional[Any] = None,
         timeout_seconds: Optional[float] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> AsyncIterator[dict[str, Any]]:
         turn_ref = await self._harness.start_turn(
             workspace_root,
@@ -250,6 +254,7 @@ class OpenCodeOrchestrator(AgentOrchestrator):
         approval_mode: Optional[str] = None,
         sandbox_policy: Optional[Any] = None,
         timeout_seconds: Optional[float] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> dict[str, Any]:
         turn_ref = await self._harness.start_turn(
             workspace_root,
@@ -268,7 +273,7 @@ class OpenCodeOrchestrator(AgentOrchestrator):
             workspace_path=str(workspace_root),
             permission_policy=approval_mode or "allow",
             question_policy="auto_first_option",
-            should_stop=lambda: False,
+            should_stop=should_stop or (lambda: False),
         )
 
         status = TurnStatus.COMPLETED if not output_result.error else TurnStatus.FAILED
@@ -292,6 +297,7 @@ class OpenCodeOrchestrator(AgentOrchestrator):
         approval_mode: Optional[str] = None,
         sandbox_policy: Optional[Any] = None,
         timeout_seconds: Optional[float] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> AsyncIterator[dict[str, Any]]:
         turn_ref = await self._harness.start_turn(
             workspace_root,
