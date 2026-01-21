@@ -32,12 +32,17 @@ from ....agents.opencode.runtime import (
     split_model_id,
 )
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
+from ....agents.registry import get_registered_agents, has_capability, validate_agent_id
 from ....core.config import load_hub_config, load_repo_config
 from ....core.injected_context import wrap_injected_context
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import _normalize_update_target, _spawn_update_process
-from ....core.utils import canonicalize_path, resolve_opencode_binary
+from ....core.utils import (
+    canonicalize_path,
+    resolve_executable,
+    resolve_opencode_binary,
+)
 from ....integrations.github.service import GitHubError, GitHubService
 from ....manifest import load_manifest
 from ...app_server.client import (
@@ -67,7 +72,6 @@ from ..constants import (
     COMMAND_DISABLED_TEMPLATE,
     COMPACT_SUMMARY_PROMPT,
     DEFAULT_AGENT,
-    DEFAULT_AGENT_MODELS,
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     DEFAULT_MCP_LIST_LIMIT,
     DEFAULT_MODEL_LIST_LIMIT,
@@ -75,6 +79,7 @@ from ..constants import (
     DEFAULT_UPDATE_REPO_REF,
     DEFAULT_UPDATE_REPO_URL,
     INIT_PROMPT,
+    LEGACY_DEFAULT_AGENT_MODELS,
     MAX_MENTION_BYTES,
     MAX_TOPIC_THREAD_HISTORY,
     MODEL_PICKER_PROMPT,
@@ -93,7 +98,6 @@ from ..constants import (
     THREAD_LIST_PAGE_LIMIT,
     UPDATE_PICKER_PROMPT,
     UPDATE_TARGET_OPTIONS,
-    VALID_AGENT_VALUES,
     VALID_REASONING_EFFORTS,
     WHISPER_TRANSCRIPT_DISCLAIMER,
     TurnKey,
@@ -635,7 +639,10 @@ class TelegramCommandHandlers:
             record.pending_compact_seed_thread_id = None
             if not self._agent_supports_effort(desired):
                 record.effort = None
-            record.model = DEFAULT_AGENT_MODELS.get(desired)
+            if desired in LEGACY_DEFAULT_AGENT_MODELS:
+                record.model = LEGACY_DEFAULT_AGENT_MODELS.get(desired)
+            else:
+                record.model = None
 
         await self._router.update_topic(chat_id, thread_id, apply)
         if not self._agent_supports_resume(desired):
@@ -651,19 +658,22 @@ class TelegramCommandHandlers:
         self._agent_options.pop(key, None)
         argv = self._parse_command_args(args)
         if not argv:
-            availability = "available"
-            if not self._opencode_available():
-                availability = "missing binary"
             items = []
-            for agent in ("codex", "opencode"):
-                if agent not in VALID_AGENT_VALUES:
-                    continue
-                label = agent
-                if agent == current:
+            for agent_id, descriptor in get_registered_agents().items():
+                label = descriptor.name
+                if agent_id == current:
                     label = f"{label} (current)"
-                if agent == "opencode" and availability != "available":
+
+                availability = "available"
+                if not self._agent_available(agent_id):
+                    availability = "missing binary"
                     label = f"{label} ({availability})"
-                items.append((agent, label))
+
+                items.append((agent_id, label))
+
+            if not items:
+                items.append(("codex", "Codex (fallback)"))
+
             state = SelectionState(items=items)
             keyboard = self._build_agent_keyboard(state)
             self._agent_options[key] = state
@@ -801,15 +811,23 @@ class TelegramCommandHandlers:
         return approval_policy, sandbox_policy
 
     def _effective_agent(self, record: Optional["TelegramTopicRecord"]) -> str:
-        if record and record.agent in VALID_AGENT_VALUES:
+        if record and record.agent in get_registered_agents():
             return record.agent
         return DEFAULT_AGENT
 
     def _agent_supports_effort(self, agent: str) -> bool:
-        return agent == "codex"
+        try:
+            agent_id = validate_agent_id(agent)
+        except ValueError:
+            return False
+        return has_capability(agent_id, "approvals")
 
     def _agent_supports_resume(self, agent: str) -> bool:
-        return agent in ("codex", "opencode")
+        try:
+            agent_id = validate_agent_id(agent)
+        except ValueError:
+            return False
+        return has_capability(agent_id, "threads")
 
     def _agent_rate_limit_source(self, agent: str) -> Optional[str]:
         if agent == "codex":
@@ -824,6 +842,20 @@ class TelegramCommandHandlers:
         if not binary:
             return False
         return resolve_opencode_binary(binary) is not None
+
+    def _agent_available(self, agent_id: str) -> bool:
+        """Check if an agent's binary is available."""
+        binary = self._config.agent_binaries.get(agent_id)
+        if not binary:
+            return False
+
+        if agent_id == "opencode":
+            return resolve_opencode_binary(binary) is not None
+
+        if agent_id == "codex":
+            return resolve_executable(binary) is not None
+
+        return False
 
     async def _resolve_opencode_model_context_window(
         self,
@@ -7630,8 +7662,7 @@ class TelegramCommandHandlers:
         )
         await self._send_message(
             message.chat_id,
-            f"Detected GitHub issue: {slug}#{number}\n"
-            f"Start PR flow to create a PR?",
+            f"Detected GitHub issue: {slug}#{number}\nStart PR flow to create a PR?",
             thread_id=message.thread_id,
             reply_to=message.message_id,
             reply_markup=keyboard,

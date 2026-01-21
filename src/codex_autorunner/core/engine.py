@@ -12,10 +12,11 @@ from collections import Counter
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import IO, Any, Iterator, Optional
+from typing import IO, Any, Dict, Iterator, Optional, Union
 
 import yaml
 
+from ..agents.factory import create_orchestrator
 from ..agents.opencode.logging import OpenCodeEventFormatter
 from ..agents.opencode.runtime import (
     build_turn_id,
@@ -26,6 +27,7 @@ from ..agents.opencode.runtime import (
     split_model_id,
 )
 from ..agents.opencode.supervisor import OpenCodeSupervisor, OpenCodeSupervisorError
+from ..agents.registry import validate_agent_id
 from ..integrations.app_server.client import (
     CodexAppServerError,
     _extract_thread_id,
@@ -37,6 +39,7 @@ from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
 from ..web.static_assets import missing_static_assets, resolve_static_dir
 from .about_car import ensure_about_car_file
+from .app_server_events import AppServerEventBuffer
 from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
@@ -135,6 +138,7 @@ class Engine:
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         self._app_server_event_formatter = AppServerEventFormatter()
+        self._app_server_events = AppServerEventBuffer()
         self._opencode_event_formatter = OpenCodeEventFormatter()
         self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
         self._run_telemetry_lock = threading.Lock()
@@ -299,12 +303,20 @@ class Engine:
             todo_before = ""
         state = load_state(self.state_path)
         selected_agent = (state.autorunner_agent_override or "codex").strip().lower()
+        try:
+            validated_agent = validate_agent_id(selected_agent)
+        except ValueError:
+            validated_agent = "codex"
+            self.log_line(
+                run_id,
+                f"info: unknown agent '{selected_agent}', defaulting to codex",
+            )
         self._update_state("running", run_id, None, started=True)
         self._last_run_interrupted = False
         self._start_run_telemetry(run_id)
         with self._run_log_context(run_id):
             self._write_run_marker(run_id, "start")
-            if selected_agent == "opencode":
+            if validated_agent == "opencode":
                 exit_code = await self._run_opencode_app_server_async(
                     prompt,
                     run_id,
@@ -313,11 +325,6 @@ class Engine:
                     external_stop_flag=external_stop_flag,
                 )
             else:
-                if selected_agent != "codex":
-                    self.log_line(
-                        run_id,
-                        f"info: unknown agent '{selected_agent}', defaulting to codex",
-                    )
                 exit_code = await self._run_codex_app_server_async(
                     prompt,
                     run_id,
@@ -343,7 +350,7 @@ class Engine:
         ):
             baseline = None
             # OpenCode reports per-turn totals, so skip cross-run deltas.
-            if selected_agent != "opencode":
+            if validated_agent != "opencode":
                 baseline = self._find_thread_token_baseline(
                     thread_id=telemetry.thread_id, run_id=run_id
                 )
@@ -968,6 +975,106 @@ class Engine:
                 return 1
             raise
 
+    async def _run_agent_turn_async(
+        self,
+        agent_id: str,
+        prompt: str,
+        run_id: int,
+        *,
+        external_stop_flag: Optional[threading.Event] = None,
+    ) -> int:
+        orchestrator = self._get_orchestrator(agent_id)
+        if orchestrator is None:
+            self.log_line(
+                run_id,
+                f"error: agent '{agent_id}' backend is not configured",
+            )
+            return 1
+
+        thread_key = f"autorunner.{agent_id}"
+        with state_lock(self.state_path):
+            state = load_state(self.state_path)
+        effective_model = state.autorunner_model_override or self.config.codex_model
+        effective_effort = (
+            state.autorunner_effort_override or self.config.codex_reasoning
+        )
+
+        with self._app_server_threads_lock:
+            conversation_id = self._app_server_threads.get_thread_id(thread_key)
+            if not conversation_id:
+                try:
+                    conversation_info = (
+                        await orchestrator.create_or_resume_conversation(
+                            self.repo_root, agent_id
+                        )
+                    )
+                    conversation_id = conversation_info.id
+                    self._app_server_threads.set_thread_id(thread_key, conversation_id)
+                except Exception as exc:
+                    self.log_line(
+                        run_id, f"error: failed to create conversation: {exc}"
+                    )
+                    return 1
+
+        if conversation_id:
+            self._update_run_telemetry(run_id, thread_id=conversation_id)
+
+        approval_policy = state.autorunner_approval_policy or "never"
+        sandbox_mode = state.autorunner_sandbox_mode or "dangerFullAccess"
+        sandbox_policy: Union[Dict[str, Any], str] = "dangerFullAccess"
+        if sandbox_mode == "workspaceWrite":
+            sandbox_policy = {
+                "type": "workspaceWrite",
+                "writableRoots": [str(self.repo_root)],
+                "networkAccess": bool(state.autorunner_workspace_write_network),
+            }
+        else:
+            sandbox_policy = "dangerFullAccess"
+
+        stop_event = asyncio.Event()
+
+        async def _check_stop():
+            if external_stop_flag and external_stop_flag.is_set():
+                stop_event.set()
+            if self.stop_requested():
+                stop_event.set()
+
+        if external_stop_flag:
+            asyncio.create_task(self._wait_for_stop(external_stop_flag))
+
+        try:
+            result = await orchestrator.run_turn(
+                self.repo_root,
+                conversation_id,
+                prompt,
+                model=effective_model,
+                reasoning=effective_effort,
+                approval_mode=approval_policy,
+                sandbox_policy=sandbox_policy,
+            )
+            if result.get("status") != "completed":
+                self.log_line(
+                    run_id, f"error: turn failed with status {result.get('status')}"
+                )
+                return 1
+            output = result.get("output", "")
+            if output:
+                self._log_app_server_output(run_id, output.splitlines())
+                output_path = self._write_run_artifact(run_id, "output.txt", output)
+                self._merge_run_index_entry(
+                    run_id, {"artifacts": {"output_path": str(output_path)}}
+                )
+            return 0
+        except Exception as exc:
+            self.log_line(run_id, f"error: {exc}")
+            return 1
+        finally:
+            if stop_event.is_set():
+                await orchestrator.interrupt_turn(
+                    self.repo_root, conversation_id, grace_seconds=30.0
+                )
+                self._last_run_interrupted = True
+
     async def _run_codex_app_server_async(
         self,
         prompt: str,
@@ -1232,6 +1339,22 @@ class Engine:
             await supervisor.close_all()
         except Exception as exc:
             self._app_server_logger.warning("opencode supervisor close failed: %s", exc)
+
+    def _get_orchestrator(self, agent_id: str):
+        if agent_id == "opencode":
+            opencode_sup = self._ensure_opencode_supervisor()
+            if opencode_sup is None:
+                return None
+            return create_orchestrator(agent_id, opencode_supervisor=opencode_sup)
+        else:
+            app_server_sup = self._ensure_app_server_supervisor(
+                lambda workspace_root, workspace_id, state_dir: {}
+            )
+            return create_orchestrator(
+                agent_id,
+                codex_supervisor=app_server_sup,
+                codex_events=self._app_server_events,
+            )
 
     async def _wait_for_stop(
         self, external_stop_flag: Optional[threading.Event]

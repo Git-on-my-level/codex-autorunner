@@ -164,7 +164,14 @@ function ensureAgentOptions(select) {
     agentList.forEach((agent) => {
         const option = document.createElement("option");
         option.value = agent.id;
-        option.textContent = agent.name || agent.id;
+        const label = agent.name || agent.id;
+        const version = agent.version || agent.protocol_version;
+        if (version) {
+            option.textContent = `${label} (${version})`;
+        }
+        else {
+            option.textContent = label;
+        }
         select.appendChild(option);
     });
     select.value = selected;

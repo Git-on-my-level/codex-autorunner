@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from ..agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
 from ..agents.opencode.supervisor import OpenCodeSupervisor
+from ..agents.registry import has_capability, validate_agent_id
 from .config import RepoConfig
 from .engine import Engine
 from .locks import FileLock, FileLockBusy, FileLockError, process_alive, read_lock_info
@@ -455,7 +456,15 @@ class ReviewService:
         state = _default_state()
         state["id"] = uuid.uuid4().hex[:12]
         state["status"] = "running"
-        state["agent"] = payload.get("agent") or review_cfg.get("agent") or "opencode"
+        agent_input = payload.get("agent") or review_cfg.get("agent") or "opencode"
+        try:
+            state["agent"] = validate_agent_id(agent_input)
+        except ValueError as exc:
+            raise ReviewError(
+                f"Invalid agent '{agent_input}': {exc}",
+                status_code=400,
+            ) from exc
+
         state["model"] = (
             payload.get("model") or review_cfg.get("model") or "zai-coding-plan/glm-4.7"
         )
@@ -464,9 +473,9 @@ class ReviewService:
             "max_wallclock_seconds"
         ) or review_cfg.get("max_wallclock_seconds")
 
-        if state["agent"].lower() != "opencode":
+        if not has_capability(state["agent"], "review"):
             raise ReviewError(
-                f"Agent '{state['agent']}' is not supported. Only 'opencode' is supported at this time.",
+                f"Agent '{state['agent']}' does not support review.",
                 status_code=400,
             )
 

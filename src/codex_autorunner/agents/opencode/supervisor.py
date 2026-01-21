@@ -6,14 +6,16 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
+
+import httpx
 
 from ...core.logging_utils import log_event
 from ...core.utils import infer_home_from_workspace, subprocess_env
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import OpenCodeClient
 
-_LISTENING_RE = re.compile(r"listening on (http://[^\s]+)")
+_LISTENING_RE = re.compile(r"listening on (https?://[^\s]+)")
 
 
 class OpenCodeSupervisorError(Exception):
@@ -27,6 +29,9 @@ class OpenCodeHandle:
     process: Optional[asyncio.subprocess.Process]
     client: Optional[OpenCodeClient]
     base_url: Optional[str]
+    health_info: Optional[dict[str, Any]]
+    version: Optional[str]
+    openapi_spec: Optional[dict[str, Any]]
     start_lock: asyncio.Lock
     stdout_task: Optional[asyncio.Task[None]] = None
     started: bool = False
@@ -46,6 +51,7 @@ class OpenCodeSupervisor:
         username: Optional[str] = None,
         password: Optional[str] = None,
         base_env: Optional[Mapping[str, str]] = None,
+        base_url: Optional[str] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._logger = logger or logging.getLogger(__name__)
@@ -54,6 +60,7 @@ class OpenCodeSupervisor:
         self._idle_ttl_seconds = idle_ttl_seconds
         self._auth = (username, password) if username and password else None
         self._base_env = base_env
+        self._base_url = base_url
         self._handles: dict[str, OpenCodeHandle] = {}
         self._lock = asyncio.Lock()
 
@@ -164,6 +171,9 @@ class OpenCodeSupervisor:
                 process=None,
                 client=None,
                 base_url=None,
+                health_info=None,
+                version=None,
+                openapi_spec=None,
                 start_lock=asyncio.Lock(),
                 stdout_task=None,
                 last_used_at=time.monotonic(),
@@ -182,9 +192,67 @@ class OpenCodeSupervisor:
         async with handle.start_lock:
             if handle.started and handle.process and handle.process.returncode is None:
                 return
-            await self._start_process(handle)
+            if self._base_url:
+                await self._ensure_started_base_url(handle)
+            else:
+                await self._start_process(handle)
+
+    async def _ensure_started_base_url(self, handle: OpenCodeHandle) -> None:
+        base_url = self._base_url
+        handle.health_info = None
+        handle.version = None
+
+        if not base_url:
+            return
+
+        try:
+            health_url = f"{base_url.rstrip('/')}/global/health"
+            async with httpx.AsyncClient(
+                timeout=self._request_timeout or 10.0
+            ) as client:
+                response = await client.get(health_url)
+                response.raise_for_status()
+
+            try:
+                handle.health_info = response.json() if response.content else {}
+            except Exception:
+                handle.health_info = {}
+
+            handle.version = str(handle.health_info.get("version", "unknown"))
+
+            log_event(
+                self._logger,
+                logging.INFO,
+                "opencode.health_check",
+                base_url=base_url,
+                version=handle.version,
+                health_info=bool(handle.health_info),
+                exc=None,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "opencode.health_check.failed",
+                base_url=base_url,
+                exc=exc,
+            )
+            raise OpenCodeSupervisorError(
+                f"OpenCode health check failed: {exc}"
+            ) from exc
 
     async def _start_process(self, handle: OpenCodeHandle) -> None:
+        if self._base_url:
+            handle.health_info = {}
+            handle.version = "external"
+            log_event(
+                self._logger,
+                logging.INFO,
+                "opencode.external_mode",
+                base_url=self._base_url,
+            )
+            return
+
         env = self._build_opencode_env(handle.workspace_root)
         process = await asyncio.create_subprocess_exec(
             *self._command,
@@ -207,7 +275,29 @@ class OpenCodeSupervisor:
                 timeout=self._request_timeout,
                 logger=self._logger,
             )
-            self._start_stdout_drain(handle)
+            try:
+                handle.openapi_spec = await handle.client.fetch_openapi_spec()
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "opencode.openapi.fetched",
+                    base_url=base_url,
+                    endpoints=(
+                        len(handle.openapi_spec.get("paths", {}))
+                        if isinstance(handle.openapi_spec, dict)
+                        else 0
+                    ),
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.openapi.fetch_failed",
+                    base_url=base_url,
+                    exc=str(exc),
+                )
+                handle.openapi_spec = {}
+            self._start_stdout_dain(handle)
             handle.started = True
         except Exception:
             handle.started = False

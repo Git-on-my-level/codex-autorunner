@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional, Protocol
 
-from .types import ConversationRef, ModelCatalog, TurnRef
+from .types import AgentId, ConversationRef, ModelCatalog, TurnRef
 
 
 class AgentHarness(Protocol):
-    agent_id: str
+    agent_id: AgentId
     display_name: str
 
     async def ensure_ready(self, workspace_root: Path) -> None: ...

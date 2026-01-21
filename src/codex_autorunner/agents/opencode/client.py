@@ -324,5 +324,48 @@ class OpenCodeClient:
                     retry=sse.retry,
                 )
 
+    async def fetch_openapi_spec(self) -> dict[str, Any]:
+        """Fetch OpenAPI spec from /doc endpoint for capability negotiation."""
+        response = await self._client.request("GET", "/doc", expect_json=True)
+        response.raise_for_status()
+        try:
+            spec = response.json() if response.content else {}
+            log_event(
+                self._logger,
+                logging.INFO,
+                "opencode.openapi.fetched",
+                paths=len(spec.get("paths", {})) if isinstance(spec, dict) else 0,
+                has_components=(
+                    "components" in spec if isinstance(spec, dict) else False
+                ),
+            )
+            return spec
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "opencode.openapi.parse_failed",
+                exc=str(exc),
+            )
+            raise OpenCodeProtocolError(
+                f"Failed to parse OpenAPI spec: {exc}",
+                status_code=response.status_code,
+                content_type=response.headers.get("content-type") if response else None,
+            ) from exc
+
+    def has_endpoint(
+        self, openapi_spec: dict[str, Any], method: str, path: str
+    ) -> bool:
+        """Check if endpoint is available in OpenAPI spec."""
+        if not isinstance(openapi_spec, dict):
+            return False
+        paths = openapi_spec.get("paths", {})
+        if not isinstance(paths, dict):
+            return False
+        path_info = paths.get(path)
+        if not isinstance(path_info, dict):
+            return False
+        return method in path_info
+
 
 __all__ = ["OpenCodeClient", "OpenCodeProtocolError"]

@@ -30,6 +30,7 @@ from ..agents.opencode.runtime import (
     split_model_id,
 )
 from ..agents.opencode.supervisor import OpenCodeSupervisor
+from ..agents.registry import validate_agent_id
 from ..integrations.app_server.client import CodexAppServerError
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from .app_server_events import AppServerEventBuffer
@@ -568,13 +569,20 @@ class DocChatService:
         return self._opencode_supervisor
 
     def _thread_key(self, agent: Optional[str]) -> str:
-        if (agent or "").strip().lower() == "opencode":
-            return DOC_CHAT_OPENCODE_KEY
-        return DOC_CHAT_KEY
+        try:
+            agent_id = validate_agent_id(agent or "")
+        except ValueError:
+            return DOC_CHAT_KEY
+        return DOC_CHAT_OPENCODE_KEY if agent_id == "opencode" else DOC_CHAT_KEY
 
     def _legacy_thread_id(self, agent: Optional[str]) -> Optional[str]:
-        if (agent or "").strip().lower() == "opencode":
-            return None
+        try:
+            agent_id = validate_agent_id(agent or "")
+        except ValueError:
+            pass
+        else:
+            if agent_id == "opencode":
+                return None
         try:
             threads = self._app_server_threads.load()
         except Exception:
@@ -1357,7 +1365,12 @@ class DocChatService:
         *,
         on_turn_start: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> dict:
-        if (request.agent or "").strip().lower() == "opencode":
+        try:
+            agent_id = validate_agent_id(request.agent or "")
+        except ValueError:
+            agent_id = "codex"
+
+        if agent_id == "opencode":
             if on_turn_start is None:
                 return await self._execute_opencode(request)
             return await self._execute_opencode(request, on_turn_start=on_turn_start)

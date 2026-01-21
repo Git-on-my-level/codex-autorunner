@@ -3,6 +3,7 @@ import json
 import logging
 import random
 import re
+import uuid
 from collections import deque
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
@@ -140,11 +141,11 @@ class CodexAppServerClient:
         self._start_lock: Optional[asyncio.Lock] = None
         self._write_lock: Optional[asyncio.Lock] = None
         self._data_lock: Optional[asyncio.Lock] = None
-        self._pending: Dict[int, asyncio.Future[Any]] = {}
-        self._pending_methods: Dict[int, str] = {}
+        self._pending: Dict[str, asyncio.Future[Any]] = {}
+        self._pending_methods: Dict[str, str] = {}
         self._turns: Dict[TurnKey, _TurnState] = {}
         self._pending_turns: Dict[str, _TurnState] = {}
-        self._next_id = 1
+        self._next_id: str = str(uuid.uuid4())
         self._initialized = False
         self._initializing = False
         self._closed = False
@@ -492,7 +493,7 @@ class CodexAppServerClient:
         method: Optional[str] = None,
         *,
         params: Optional[Dict[str, Any]] = None,
-        req_id: Optional[int] = None,
+        req_id: Optional[Union[int, str]] = None,
         result: Optional[Any] = None,
         error: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -509,10 +510,9 @@ class CodexAppServerClient:
             message["error"] = error
         return message
 
-    def _next_request_id(self) -> int:
-        request_id = self._next_id
-        self._next_id += 1
-        return request_id
+    def _next_request_id(self) -> str:
+        self._next_id = str(uuid.uuid4())
+        return self._next_id
 
     def _ensure_locks(self) -> None:
         if self._start_lock is None:
@@ -725,9 +725,13 @@ class CodexAppServerClient:
             await self._handle_notification(message)
 
     async def _handle_response(self, message: Dict[str, Any]) -> None:
-        req_id = message.get("id")
-        if not isinstance(req_id, int):
+        req_id_raw = message.get("id")
+
+        if not isinstance(req_id_raw, (int, str)):
             return
+
+        req_id = str(req_id_raw) if isinstance(req_id_raw, int) else req_id_raw
+
         self._ensure_locks()
         data_lock = self._data_lock
         if data_lock is None:

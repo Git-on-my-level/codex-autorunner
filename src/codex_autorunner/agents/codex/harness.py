@@ -73,7 +73,7 @@ def _coerce_reasoning_efforts(entry: dict[str, Any]) -> list[str]:
 
 
 class CodexHarness(AgentHarness):
-    agent_id: AgentId = "codex"
+    agent_id: AgentId = AgentId("codex")
     display_name = "Codex"
 
     def __init__(

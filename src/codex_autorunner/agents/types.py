@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import NewType
 
 # When adding agents, update core/config.py agents defaults + validation (config-driven).
-AgentId = Literal["codex", "opencode"]
+AgentId = NewType("AgentId", str)
 
 
 @dataclass(frozen=True)

@@ -676,6 +676,7 @@ class AppServerConfig:
 class AgentConfig:
     binary: str
     serve_command: Optional[List[str]]
+    base_url: Optional[str]
 
 
 @dataclasses.dataclass
@@ -1021,9 +1022,9 @@ def _parse_app_server_config(
 
 
 def _parse_agents_config(
-    cfg: Dict[str, Any], defaults: Dict[str, Any]
+    cfg: Optional[Dict[str, Any]], defaults: Dict[str, Any]
 ) -> Dict[str, AgentConfig]:
-    raw_agents = cfg.get("agents")
+    raw_agents = cfg.get("agents") if cfg else None
     if not isinstance(raw_agents, dict):
         raw_agents = defaults.get("agents", {})
     agents: Dict[str, AgentConfig] = {}
@@ -1036,9 +1037,11 @@ def _parse_agents_config(
         serve_command = None
         if "serve_command" in agent_cfg:
             serve_command = _parse_command(agent_cfg.get("serve_command"))
+        base_url = agent_cfg.get("base_url")
         agents[str(agent_id)] = AgentConfig(
-            binary=str(binary),
-            serve_command=serve_command if serve_command else None,
+            binary=binary,
+            serve_command=serve_command,
+            base_url=base_url,
         )
     return agents
 

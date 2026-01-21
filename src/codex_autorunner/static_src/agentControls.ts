@@ -3,6 +3,8 @@ import { api, flash } from "./utils.js";
 interface Agent {
   id: string;
   name?: string;
+  version?: string;
+  protocol_version?: string;
 }
 
 interface ModelCatalogModel {
@@ -195,14 +197,20 @@ function getLabelText(agentId: string): string {
   return entry?.name || agentId;
 }
 
-function ensureAgentOptions(select: HTMLSelectElement | null | undefined): void {
+  function ensureAgentOptions(select: HTMLSelectElement | null | undefined): void {
   if (!select) return;
   const selected = getSelectedAgent();
   select.innerHTML = "";
   agentList.forEach((agent) => {
     const option = document.createElement("option");
     option.value = agent.id;
-    option.textContent = agent.name || agent.id;
+    const label = agent.name || agent.id;
+    const version = agent.version || agent.protocol_version;
+    if (version) {
+      option.textContent = `${label} (${version})`;
+    } else {
+      option.textContent = label;
+    }
     select.appendChild(option);
   });
   select.value = selected;
