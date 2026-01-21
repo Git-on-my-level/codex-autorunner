@@ -24,6 +24,7 @@ from ..web.schemas import (
     SystemUpdateStatusResponse,
 )
 from ..web.static_assets import missing_static_assets
+from ..web.static_refresh import refresh_static_assets
 
 _pid_is_running = update_core._pid_is_running
 _system_update_worker = update_core._system_update_worker
@@ -59,6 +60,21 @@ def build_system_routes() -> APIRouter:
             )
         missing = await asyncio.to_thread(missing_static_assets, static_dir)
         if missing:
+            if refresh_static_assets(request.app):
+                static_dir = getattr(
+                    getattr(request.app, "state", None), "static_dir", None
+                )
+                if isinstance(static_dir, Path):
+                    missing = await asyncio.to_thread(missing_static_assets, static_dir)
+                else:
+                    missing = ["index.html"]
+            if not missing:
+                return {
+                    "status": "ok",
+                    "mode": mode,
+                    "base_path": base_path,
+                    "asset_version": asset_version,
+                }
             return JSONResponse(
                 {
                     "status": "error",
