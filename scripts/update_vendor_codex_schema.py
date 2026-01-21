@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 def get_codex_bin() -> str | None:
@@ -54,29 +55,37 @@ def generate_schema() -> dict:
     except FileNotFoundError:
         raise RuntimeError(f"Codex binary not found: {codex_bin}")
 
-    # Generate the schema
-    try:
-        result = subprocess.run(
-            [codex_bin, "app-server", "generate-json-schema"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("Timeout generating Codex JSON schema")
+    with TemporaryDirectory() as tmp_dir:
+        try:
+            result = subprocess.run(
+                [codex_bin, "app-server", "generate-json-schema", "--out", tmp_dir],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Timeout generating Codex JSON schema")
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Failed to generate Codex JSON schema: {result.stderr}\n{result.stdout}"
-        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Failed to generate Codex JSON schema: "
+                f"{result.stderr}\n{result.stdout}"
+            )
 
-    # Parse JSON output
-    try:
-        schema = json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(
-            f"Failed to parse Codex JSON schema: {e}\n{result.stdout[:500]}"
-        )
+        schema_path = Path(tmp_dir) / "codex_app_server_protocol.schemas.json"
+        if not schema_path.exists():
+            raise RuntimeError(
+                "Codex schema bundle not found: "
+                f"{schema_path}. Output: {result.stdout}"
+            )
+
+        try:
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"Failed to parse Codex JSON schema: {e}\n"
+                f"{schema_path.read_text(encoding='utf-8')[:500]}"
+            )
 
     return schema
 
@@ -99,8 +108,8 @@ def main() -> int:
         )
 
         print(f"✓ Updated {output_path.relative_to(repo_root)}")
-        print(f"  Schema version: {schema.get('title', 'unknown')}")
-        print(f"  Endpoints: {len(schema.get('methods', []))}")
+        print(f"  Schema title: {schema.get('title', 'unknown')}")
+        print(f"  Definitions: {len(schema.get('definitions', {}))}")
 
         return 0
     except Exception as e:

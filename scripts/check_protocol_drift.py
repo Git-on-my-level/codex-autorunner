@@ -22,6 +22,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Dict
 
 
@@ -51,25 +52,30 @@ def generate_current_codex_schema() -> dict | None:
     if not codex_bin:
         return None
 
-    try:
-        result = subprocess.run(
-            [codex_bin, "app-server", "generate-json-schema"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except subprocess.TimeoutExpired:
-        return None
-    except FileNotFoundError:
-        return None
+    with TemporaryDirectory() as tmp_dir:
+        try:
+            result = subprocess.run(
+                [codex_bin, "app-server", "generate-json-schema", "--out", tmp_dir],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        except FileNotFoundError:
+            return None
 
-    if result.returncode != 0:
-        return None
+        if result.returncode != 0:
+            return None
 
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return None
+        schema_path = Path(tmp_dir) / "codex_app_server_protocol.schemas.json"
+        if not schema_path.exists():
+            return None
+
+        try:
+            return json.loads(schema_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
 
 
 def compare_dicts(name: str, vendor: dict, current: dict) -> list[str]:
