@@ -64,6 +64,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "enabled": True,
         "agent": "opencode",
         "model": "zai-coding-plan/glm-4.7",
+        "subagent_agent": "subagent",
+        "subagent_model": "zai-coding-plan/glm-4.7-flashx",
         "reasoning": None,
         "max_wallclock_seconds": None,
     },
@@ -88,6 +90,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         },
         "opencode": {
             "binary": "opencode",
+            "subagent_models": {
+                "subagent": "zai-coding-plan/glm-4.7-flashx",
+            },
         },
     },
     "prompt": {
@@ -421,6 +426,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         },
         "opencode": {
             "binary": "opencode",
+            "subagent_models": {
+                "subagent": "zai-coding-plan/glm-4.7-flashx",
+            },
         },
     },
     "terminal": {
@@ -705,6 +713,7 @@ class AgentConfig:
     binary: str
     serve_command: Optional[List[str]]
     base_url: Optional[str]
+    subagent_models: Optional[Dict[str, str]]
 
 
 @dataclasses.dataclass
@@ -1067,10 +1076,14 @@ def _parse_agents_config(
         if "serve_command" in agent_cfg:
             serve_command = _parse_command(agent_cfg.get("serve_command"))
         base_url = agent_cfg.get("base_url")
+        subagent_models = agent_cfg.get("subagent_models")
+        if not isinstance(subagent_models, dict):
+            subagent_models = None
         agents[str(agent_id)] = AgentConfig(
             binary=binary,
             serve_command=serve_command,
             base_url=base_url,
+            subagent_models=subagent_models,
         )
     return agents
 

@@ -271,6 +271,7 @@ def _build_opencode_supervisor(
     opencode_command: Optional[list[str]],
     logger: logging.Logger,
     env: Mapping[str, str],
+    subagent_models: Optional[Mapping[str, str]] = None,
 ) -> tuple[Optional[OpenCodeSupervisor], Optional[float]]:
     supervisor = build_opencode_supervisor(
         opencode_command=opencode_command,
@@ -281,6 +282,7 @@ def _build_opencode_supervisor(
         max_handles=config.max_handles,
         idle_ttl_seconds=config.idle_ttl_seconds,
         base_env=env,
+        subagent_models=subagent_models,
     )
     if supervisor is None:
         safe_log(
@@ -428,6 +430,8 @@ def _build_app_context(
         opencode_binary = config.agent_binary("opencode")
     except ConfigError:
         opencode_binary = None
+    agent_config = config.agents.get("opencode")
+    subagent_models = agent_config.subagent_models if agent_config else None
     opencode_supervisor, opencode_prune_interval = _build_opencode_supervisor(
         config.app_server,
         workspace_root=engine.repo_root,
@@ -435,6 +439,7 @@ def _build_app_context(
         opencode_command=opencode_command,
         logger=logger,
         env=env,
+        subagent_models=subagent_models,
     )
     doc_chat = DocChatService(
         engine,

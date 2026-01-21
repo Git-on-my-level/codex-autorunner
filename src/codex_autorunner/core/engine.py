@@ -1414,6 +1414,9 @@ class Engine:
         except ConfigError:
             opencode_binary = None
 
+        agent_config = self.config.agents.get("opencode")
+        subagent_models = agent_config.subagent_models if agent_config else None
+
         supervisor = build_opencode_supervisor(
             opencode_command=opencode_command,
             opencode_binary=opencode_binary,
@@ -1423,6 +1426,7 @@ class Engine:
             max_handles=config.max_handles,
             idle_ttl_seconds=config.idle_ttl_seconds,
             base_env=None,
+            subagent_models=subagent_models,
         )
 
         if supervisor is None:

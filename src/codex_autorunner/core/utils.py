@@ -191,6 +191,7 @@ def build_opencode_supervisor(
     max_handles: Optional[int] = None,
     idle_ttl_seconds: Optional[float] = None,
     base_env: Optional[MutableMapping[str, str]] = None,
+    subagent_models: Optional[Mapping[str, str]] = None,
 ) -> Optional["OpenCodeSupervisor"]:
     """
     Unified factory for building OpenCodeSupervisor instances.
@@ -199,6 +200,7 @@ def build_opencode_supervisor(
     - Binary/serve-command resolution
     - Auth (username/password) sourcing from env
     - Request timeout / max handles / idle TTL behavior
+    - Subagent model configuration
     """
     command = list(opencode_command or [])
     if not command and opencode_binary:
@@ -245,6 +247,7 @@ def build_opencode_supervisor(
         username=username if password else None,
         password=password if password else None,
         base_env=base_env,
+        subagent_models=subagent_models,
     )
 
 

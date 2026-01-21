@@ -120,7 +120,11 @@ For each bucket:
 
 ### 3) Launch One Subagent Per Bucket
 
-For each bucket, launch a subagent using the template below. Each agent should write results back into the scratchpad (or return them for aggregation).
+For each bucket, launch a subagent using the template below.
+
+**IMPORTANT**: Use the "subagent" agent type. Do NOT specify model in the prompt.
+- The subagent agent is pre-configured with GLM-4.7-FlashX
+- This avoids concurrency throttling while maintaining full GLM-4.7 for the coordinator
 
 Subagent prompt template:
 
@@ -786,6 +790,16 @@ class ReviewService:
             if self._opencode_supervisor is None:
                 raise ReviewError("OpenCode backend is not configured")
 
+            repo_config = self._repo_config()
+            review_cfg = repo_config.raw.get("review") or {}
+
+            subagent_agent_id = review_cfg.get("subagent_agent")
+            if subagent_agent_id:
+                await self._opencode_supervisor.ensure_subagent_config(
+                    workspace_root=self.engine.repo_root,
+                    agent_id=subagent_agent_id,
+                )
+
             config = OpenCodeRunConfig(
                 agent=agent_id,
                 model=state["model"],
@@ -821,8 +835,7 @@ class ReviewService:
 
             if opencode_result.output_error:
                 raise ReviewError(
-                    "OpenCode output collection failed: "
-                    f"{opencode_result.output_error}"
+                    f"OpenCode output collection failed: {opencode_result.output_error}"
                 )
 
         if not final_output_path.exists():
