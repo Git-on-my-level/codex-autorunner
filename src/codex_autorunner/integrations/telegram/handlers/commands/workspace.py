@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
@@ -78,6 +79,31 @@ def _extract_opencode_session_path(payload: Any) -> Optional[str]:
     if isinstance(session, dict):
         return _extract_opencode_session_path(session)
     return None
+
+
+@dataclass
+class ResumeCommandArgs:
+    """Parsed /resume command options."""
+
+    trimmed: str
+    remaining: list[str]
+    show_unscoped: bool
+    refresh: bool
+
+
+@dataclass
+class ResumeThreadData:
+    """Thread listing details used to render the resume picker."""
+
+    candidates: list[dict[str, Any]]
+    entries_by_id: dict[str, dict[str, Any]]
+    local_thread_ids: list[str]
+    local_previews: dict[str, str]
+    local_thread_topics: dict[str, set[str]]
+    list_failed: bool
+    threads: list[dict[str, Any]]
+    unscoped_entries: list[dict[str, Any]]
+    saw_path: bool
 
 
 class WorkspaceCommands:
@@ -1100,6 +1126,45 @@ class WorkspaceCommands:
 
     async def _handle_resume(self, message: TelegramMessage, args: str) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        parsed_args = self._parse_resume_args(args)
+        if await self._handle_resume_shortcuts(key, message, parsed_args):
+            return
+        record = await self._router.get_topic(key)
+        record = await self._ensure_resume_record(message, record)
+        if record is None:
+            return
+        if self._effective_agent(record) == "opencode":
+            await self._handle_opencode_resume(
+                message,
+                record,
+                key=key,
+                show_unscoped=parsed_args.show_unscoped,
+                refresh=parsed_args.refresh,
+            )
+            return
+        client = await self._get_resume_client(message, record)
+        if client is None:
+            return
+        thread_data = await self._gather_resume_threads(
+            message,
+            record,
+            client,
+            key=key,
+            show_unscoped=parsed_args.show_unscoped,
+        )
+        if thread_data is None:
+            return
+        await self._render_resume_picker(
+            message,
+            record,
+            key,
+            parsed_args,
+            thread_data,
+            client,
+        )
+
+    def _parse_resume_args(self, args: str) -> ResumeCommandArgs:
+        """Parse /resume arguments into structured values."""
         argv = self._parse_command_args(args)
         trimmed = args.strip()
         show_unscoped = False
@@ -1116,6 +1181,18 @@ class WorkspaceCommands:
             remaining.append(arg)
         if argv:
             trimmed = " ".join(remaining).strip()
+        return ResumeCommandArgs(
+            trimmed=trimmed,
+            remaining=remaining,
+            show_unscoped=show_unscoped,
+            refresh=refresh,
+        )
+
+    async def _handle_resume_shortcuts(
+        self, key: str, message: TelegramMessage, args: ResumeCommandArgs
+    ) -> bool:
+        """Handle numeric or explicit thread selections before listing threads."""
+        trimmed = args.trimmed
         if trimmed.isdigit():
             state = self._resume_options.get(key)
             if state:
@@ -1124,24 +1201,18 @@ class WorkspaceCommands:
                 if 0 < choice <= len(page_items):
                     thread_id = page_items[choice - 1][0]
                     await self._resume_thread_by_id(key, thread_id)
-                    return
+                    return True
         if trimmed and not trimmed.isdigit():
-            if remaining and remaining[0].lower() in ("list", "ls"):
-                trimmed = ""
-            else:
-                await self._resume_thread_by_id(key, trimmed)
-                return
-        record = await self._router.get_topic(key)
-        if record is not None:
-            agent = self._effective_agent(record)
-            if not self._agent_supports_resume(agent):
-                await self._send_message(
-                    message.chat_id,
-                    "Resume is only supported for the codex and opencode agents. Use /agent codex or /agent opencode to switch.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
+            if args.remaining and args.remaining[0].lower() in ("list", "ls"):
+                return False
+            await self._resume_thread_by_id(key, trimmed)
+            return True
+        return False
+
+    async def _ensure_resume_record(
+        self, message: TelegramMessage, record: Optional["TelegramTopicRecord"]
+    ) -> Optional["TelegramTopicRecord"]:
+        """Validate resume preconditions and return the topic record."""
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
@@ -1149,16 +1220,22 @@ class WorkspaceCommands:
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return
-        if self._effective_agent(record) == "opencode":
-            await self._handle_opencode_resume(
-                message,
-                record,
-                key=key,
-                show_unscoped=show_unscoped,
-                refresh=refresh,
+            return None
+        agent = self._effective_agent(record)
+        if not self._agent_supports_resume(agent):
+            await self._send_message(
+                message.chat_id,
+                "Resume is only supported for the codex and opencode agents. Use /agent codex or /agent opencode to switch.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
             )
-            return
+            return None
+        return record
+
+    async def _get_resume_client(
+        self, message: TelegramMessage, record: "TelegramTopicRecord"
+    ) -> Optional[CodexAppServerClient]:
+        """Resolve the app server client for the topic workspace."""
         try:
             client = await self._client_for_workspace(record.workspace_path)
         except AppServerUnavailableError as exc:
@@ -1176,7 +1253,7 @@ class WorkspaceCommands:
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return
+            return None
         if client is None:
             await self._send_message(
                 message.chat_id,
@@ -1184,7 +1261,19 @@ class WorkspaceCommands:
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return
+            return None
+        return client
+
+    async def _gather_resume_threads(
+        self,
+        message: TelegramMessage,
+        record: "TelegramTopicRecord",
+        client: CodexAppServerClient,
+        *,
+        key: str,
+        show_unscoped: bool,
+    ) -> Optional[ResumeThreadData]:
+        """Collect local and remote threads for the resume picker."""
         if not show_unscoped and not record.thread_ids:
             await self._send_message(
                 message.chat_id,
@@ -1192,7 +1281,7 @@ class WorkspaceCommands:
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
-            return
+            return None
         threads: list[dict[str, Any]] = []
         list_failed = False
         local_thread_ids: list[str] = []
@@ -1244,7 +1333,7 @@ class WorkspaceCommands:
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
-                return
+                return None
         entries_by_id: dict[str, dict[str, Any]] = {}
         for entry in threads:
             if not isinstance(entry, dict):
@@ -1253,11 +1342,11 @@ class WorkspaceCommands:
             if isinstance(entry_id, str):
                 entries_by_id[entry_id] = entry
         candidates: list[dict[str, Any]] = []
-        unscoped: list[dict[str, Any]] = []
+        unscoped_entries: list[dict[str, Any]] = []
         saw_path = False
         if show_unscoped:
             if threads:
-                filtered, unscoped, saw_path = _partition_threads(
+                filtered, unscoped_entries, saw_path = _partition_threads(
                     threads, record.workspace_path
                 )
                 seen_ids = {
@@ -1266,10 +1355,10 @@ class WorkspaceCommands:
                     if isinstance(entry.get("id"), str)
                 }
                 candidates = filtered + [
-                    entry for entry in unscoped if entry.get("id") not in seen_ids
+                    entry for entry in unscoped_entries if entry.get("id") not in seen_ids
                 ]
             if not candidates and not local_thread_ids:
-                if unscoped and not saw_path:
+                if unscoped_entries and not saw_path:
                     await self._send_message(
                         message.chat_id,
                         _with_conversation_id(
@@ -1281,7 +1370,7 @@ class WorkspaceCommands:
                         thread_id=message.thread_id,
                         reply_to=message.message_id,
                     )
-                    return
+                    return None
                 await self._send_message(
                     message.chat_id,
                     _with_conversation_id(
@@ -1293,9 +1382,35 @@ class WorkspaceCommands:
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
-                return
+                return None
+        return ResumeThreadData(
+            candidates=candidates,
+            entries_by_id=entries_by_id,
+            local_thread_ids=local_thread_ids,
+            local_previews=local_previews,
+            local_thread_topics=local_thread_topics,
+            list_failed=list_failed,
+            threads=threads,
+            unscoped_entries=unscoped_entries,
+            saw_path=saw_path,
+        )
+
+    async def _render_resume_picker(
+        self,
+        message: TelegramMessage,
+        record: "TelegramTopicRecord",
+        key: str,
+        args: ResumeCommandArgs,
+        thread_data: ResumeThreadData,
+        client: CodexAppServerClient,
+    ) -> None:
+        """Build and send the resume picker from gathered thread data."""
+        entries_by_id = thread_data.entries_by_id
+        local_thread_ids = thread_data.local_thread_ids
+        local_previews = thread_data.local_previews
+        local_thread_topics = thread_data.local_thread_topics
         missing_ids: list[str] = []
-        if show_unscoped:
+        if args.show_unscoped:
             for thread_id in local_thread_ids:
                 if thread_id not in entries_by_id:
                     missing_ids.append(thread_id)
@@ -1303,20 +1418,22 @@ class WorkspaceCommands:
             for thread_id in record.thread_ids:
                 if thread_id not in entries_by_id:
                     missing_ids.append(thread_id)
-        if refresh and missing_ids:
+        if args.refresh and missing_ids:
             refreshed = await self._refresh_thread_summaries(
                 client,
                 missing_ids,
-                topic_keys_by_thread=local_thread_topics if show_unscoped else None,
+                topic_keys_by_thread=local_thread_topics if args.show_unscoped else None,
                 default_topic_key=key,
             )
             if refreshed:
-                if show_unscoped:
+                if args.show_unscoped:
                     store_state = await self._store.load()
-                    local_thread_ids, local_previews, local_thread_topics = (
-                        _local_workspace_threads(
-                            store_state, record.workspace_path, current_key=key
-                        )
+                    (
+                        local_thread_ids,
+                        local_previews,
+                        local_thread_topics,
+                    ) = _local_workspace_threads(
+                        store_state, record.workspace_path, current_key=key
                     )
                     for thread_id in record.thread_ids:
                         local_thread_topics.setdefault(thread_id, set()).add(key)
@@ -1330,8 +1447,8 @@ class WorkspaceCommands:
         items: list[tuple[str, str]] = []
         button_labels: dict[str, str] = {}
         seen_item_ids: set[str] = set()
-        if show_unscoped:
-            for entry in candidates:
+        if args.show_unscoped:
+            for entry in thread_data.candidates:
                 candidate_id = entry.get("id")
                 if not isinstance(candidate_id, str) or not candidate_id:
                     continue
@@ -1393,9 +1510,11 @@ class WorkspaceCommands:
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 stored_count=len(record.thread_ids),
-                listed_count=len(entries_by_id) if not show_unscoped else len(threads),
+                listed_count=len(entries_by_id)
+                if not args.show_unscoped
+                else len(thread_data.threads),
                 missing_ids=missing_ids[:RESUME_MISSING_IDS_LOG_LIMIT],
-                list_failed=list_failed,
+                list_failed=thread_data.list_failed,
             )
         if not items:
             await self._send_message(
