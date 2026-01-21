@@ -26,7 +26,7 @@ from .git_utils import (
     git_upstream_status,
     run_git,
 )
-from .locks import process_alive, read_lock_info
+from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
@@ -120,9 +120,11 @@ class HubState:
 def read_lock_status(lock_path: Path) -> LockStatus:
     if not lock_path.exists():
         return LockStatus.UNLOCKED
-    info = read_lock_info(lock_path)
-    pid = info.pid
-    if pid and process_alive(pid):
+    assessment = assess_lock(
+        lock_path,
+        expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+    )
+    if not assessment.freeable and assessment.pid and process_alive(assessment.pid):
         return LockStatus.LOCKED_ALIVE
     return LockStatus.LOCKED_STALE
 

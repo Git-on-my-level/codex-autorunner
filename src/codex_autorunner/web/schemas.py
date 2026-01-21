@@ -192,6 +192,10 @@ class StateResponse(ResponseModel):
     done_count: int
     running: bool
     runner_pid: Optional[int]
+    lock_present: bool
+    lock_pid: Optional[int]
+    lock_freeable: bool
+    lock_freeable_reason: Optional[str]
     terminal_idle_timeout_seconds: Optional[int]
     codex_model: str
 

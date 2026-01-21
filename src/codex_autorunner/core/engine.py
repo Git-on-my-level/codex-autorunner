@@ -56,8 +56,10 @@ from .config import (
 from .docs import DocsManager, parse_todos
 from .git_utils import GitError, run_git
 from .locks import (
+    DEFAULT_RUNNER_CMD_HINTS,
     FileLock,
     FileLockBusy,
+    assess_lock,
     process_alive,
     read_lock_info,
     write_lock_info,
@@ -65,6 +67,7 @@ from .locks import (
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
 from .prompt import build_final_summary_prompt
+from .review_context import build_spec_progress_review_context
 from .run_index import RunIndexStore
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .utils import (
@@ -200,10 +203,15 @@ class Engine:
 
     def repo_busy_reason(self) -> Optional[str]:
         if self.lock_path.exists():
-            info = read_lock_info(self.lock_path)
-            pid = info.pid
+            assessment = assess_lock(
+                self.lock_path,
+                expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+            )
+            if assessment.freeable:
+                return "Autorunner lock is stale; clear it before continuing."
+            pid = assessment.pid
             if pid and process_alive(pid):
-                host = f" on {info.host}" if info.host else ""
+                host = f" on {assessment.host}" if assessment.host else ""
                 return f"Autorunner is running (pid={pid}{host}); try again later."
             return "Autorunner lock present; clear or resume before continuing."
 
@@ -1799,6 +1807,7 @@ class Engine:
         no_progress_count = 0
         last_outstanding_count = len(self.docs.todos()[0])
         last_done_count = len(self.docs.todos()[1])
+        exit_reason: Optional[str] = None
 
         try:
             while True:
@@ -1807,6 +1816,7 @@ class Engine:
                     self._update_state(
                         "idle", run_id - 1, last_exit_code, finished=True
                     )
+                    exit_reason = "stop_requested"
                     break
                 if self.config.runner_max_wallclock_seconds is not None:
                     if (
@@ -1816,6 +1826,7 @@ class Engine:
                         self._update_state(
                             "idle", run_id - 1, state.last_exit_code, finished=True
                         )
+                        exit_reason = "max_wallclock_seconds"
                         break
 
                 if self.todos_done():
@@ -1824,12 +1835,16 @@ class Engine:
                             run_id, external_stop_flag=external_stop_flag
                         )
                         last_exit_code = exit_code
+                        exit_reason = (
+                            "error_exit" if exit_code != 0 else "todos_complete"
+                        )
                     else:
                         current = load_state(self.state_path)
                         last_exit_code = current.last_exit_code
                         self._update_state(
                             "idle", run_id - 1, last_exit_code, finished=True
                         )
+                        exit_reason = "todos_complete"
                     break
 
                 prev_output = self.extract_prev_output(run_id - 1)
@@ -1841,6 +1856,7 @@ class Engine:
                 last_exit_code = exit_code
 
                 if exit_code != 0:
+                    exit_reason = "error_exit"
                     break
 
                 # Check for no progress across runs
@@ -1888,6 +1904,7 @@ class Engine:
                             exit_code,
                             finished=True,
                         )
+                        exit_reason = "no_progress_threshold"
                         break
                 else:
                     no_progress_count = 0
@@ -1901,19 +1918,23 @@ class Engine:
                         run_id + 1, external_stop_flag=external_stop_flag
                     )
                     last_exit_code = exit_code
+                    exit_reason = "error_exit" if exit_code != 0 else "todos_complete"
                     break
 
                 if target_runs is not None and run_id >= target_runs:
+                    exit_reason = "stop_after_runs"
                     break
 
                 run_id += 1
                 if self._should_stop(external_stop_flag):
                     self.clear_stop_request()
                     self._update_state("idle", run_id - 1, exit_code, finished=True)
+                    exit_reason = "stop_requested"
                     break
                 await asyncio.sleep(self.config.runner_sleep_seconds)
         except Exception as exc:
             # Never silently die: persist's reason to agent log and surface in state.
+            exit_reason = exit_reason or "error_exit"
             try:
                 self.log_line(run_id, f"FATAL: run_loop crashed: {exc!r}")
                 tb = traceback.format_exc()
@@ -1928,10 +1949,151 @@ class Engine:
                     "Failed to update state after run_loop crash: %s", exc
                 )
         finally:
+            try:
+                await self._maybe_run_end_review(
+                    exit_reason=exit_reason or "unknown",
+                    last_exit_code=last_exit_code,
+                )
+            except Exception as exc:
+                self._app_server_logger.warning("End-of-run review failed: %s", exc)
             await self._close_app_server_supervisor()
             await self._close_opencode_supervisor()
         # IMPORTANT: lock ownership is managed by the caller (CLI/Hub/Server runner).
         # Engine.run_loop must never unconditionally mutate the lock file.
+
+    async def _maybe_run_end_review(
+        self, *, exit_reason: str, last_exit_code: Optional[int]
+    ) -> None:
+        runner_cfg = self.config.raw.get("runner") or {}
+        review_cfg = runner_cfg.get("review")
+        if not isinstance(review_cfg, dict) or not review_cfg.get("enabled"):
+            return
+
+        trigger_cfg = review_cfg.get("trigger") or {}
+        reason_key_map = {
+            "todos_complete": "on_todos_complete",
+            "no_progress_threshold": "on_no_progress_stop",
+            "stop_after_runs": "on_max_runs_stop",
+            # Share the max-runs trigger for wallclock cutoffs to avoid extra config flags.
+            "max_wallclock_seconds": "on_max_runs_stop",
+            "stop_requested": "on_stop_requested",
+            "error_exit": "on_error_exit",
+        }
+        trigger_key = reason_key_map.get(exit_reason)
+        if not trigger_key or not trigger_cfg.get(trigger_key, False):
+            return
+
+        state = load_state(self.state_path)
+        last_run_id = state.last_run_id
+        if last_run_id is None:
+            return
+
+        top_review_cfg = self.config.raw.get("review") or {}
+        agent = review_cfg.get("agent") or top_review_cfg.get("agent") or "opencode"
+        model = review_cfg.get("model") or top_review_cfg.get("model")
+        reasoning = review_cfg.get("reasoning") or top_review_cfg.get("reasoning")
+        max_wallclock_seconds = review_cfg.get("max_wallclock_seconds")
+        if max_wallclock_seconds is None:
+            max_wallclock_seconds = top_review_cfg.get("max_wallclock_seconds")
+
+        context_cfg = review_cfg.get("context") or {}
+        primary_docs = context_cfg.get("primary_docs") or ["spec", "progress"]
+        include_docs = context_cfg.get("include_docs") or []
+        include_last_run_artifacts = bool(
+            context_cfg.get("include_last_run_artifacts", True)
+        )
+        max_doc_chars = context_cfg.get("max_doc_chars", 20000)
+        try:
+            max_doc_chars = int(max_doc_chars)
+        except (TypeError, ValueError):
+            max_doc_chars = 20000
+
+        context_md = build_spec_progress_review_context(
+            self,
+            exit_reason=exit_reason,
+            last_run_id=last_run_id,
+            last_exit_code=last_exit_code,
+            max_doc_chars=max_doc_chars,
+            primary_docs=primary_docs,
+            include_docs=include_docs,
+            include_last_run_artifacts=include_last_run_artifacts,
+        )
+
+        payload: dict[str, Any] = {
+            "agent": agent,
+            "model": model,
+            "reasoning": reasoning,
+            "max_wallclock_seconds": max_wallclock_seconds,
+        }
+        payload = {k: v for k, v in payload.items() if v is not None}
+
+        opencode_supervisor: Optional[OpenCodeSupervisor] = None
+        app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+
+        if agent == "codex":
+            if not self.config.app_server.command:
+                self._app_server_logger.info(
+                    "Skipping end-of-run review: codex backend not configured"
+                )
+                return
+
+            def _env_builder(
+                workspace_root: Path, _workspace_id: str, state_dir: Path
+            ) -> dict[str, str]:
+                state_dir.mkdir(parents=True, exist_ok=True)
+                return build_app_server_env(
+                    self.config.app_server.command,
+                    workspace_root,
+                    state_dir,
+                    logger=self._app_server_logger,
+                    event_prefix="review",
+                )
+
+            app_server_supervisor = self._ensure_app_server_supervisor(_env_builder)
+        else:
+            opencode_supervisor = self._ensure_opencode_supervisor()
+            if opencode_supervisor is None:
+                self._app_server_logger.info(
+                    "Skipping end-of-run review: opencode backend not configured"
+                )
+                return
+
+        from .review import ReviewService
+
+        review_service = ReviewService(
+            self,
+            opencode_supervisor=opencode_supervisor,
+            app_server_supervisor=app_server_supervisor,
+            logger=self._app_server_logger,
+        )
+        result_state = await review_service.run_blocking_async(
+            payload=payload,
+            prompt_kind="spec_progress",
+            seed_context_files={"AUTORUNNER_CONTEXT.md": context_md},
+            ignore_repo_busy=True,
+        )
+
+        review_id = result_state.get("id")
+        artifacts_cfg = review_cfg.get("artifacts") or {}
+        attach = bool(artifacts_cfg.get("attach_to_last_run_index", True))
+        if attach:
+            artifacts_update: dict[str, str] = {}
+            final_report = result_state.get("final_output_path")
+            scratch_bundle = result_state.get("scratchpad_bundle_path")
+            if isinstance(final_report, str) and final_report:
+                artifacts_update["final_review_report_path"] = final_report
+            if isinstance(scratch_bundle, str) and scratch_bundle:
+                artifacts_update["final_review_scratchpad_bundle_path"] = scratch_bundle
+            if artifacts_update:
+                self._merge_run_index_entry(
+                    last_run_id,
+                    {"artifacts": artifacts_update},
+                )
+        if review_id:
+            self.log_line(
+                last_run_id,
+                f"info: end-of-run review completed (review_id={review_id})",
+            )
 
     def run_loop(
         self,
@@ -1988,12 +2150,15 @@ class Engine:
             save_state(self.state_path, new_state)
 
 
-def clear_stale_lock(lock_path: Path) -> None:
-    if lock_path.exists():
-        info = read_lock_info(lock_path)
-        pid = info.pid
-        if not pid or not process_alive(pid):
-            lock_path.unlink(missing_ok=True)
+def clear_stale_lock(lock_path: Path) -> bool:
+    assessment = assess_lock(
+        lock_path,
+        expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
+    )
+    if assessment.freeable:
+        lock_path.unlink(missing_ok=True)
+        return True
+    return False
 
 
 def _strip_log_prefixes(text: str) -> str:

@@ -2,10 +2,11 @@ import errno
 import json
 import os
 import socket
+import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Iterator, Optional
+from typing import IO, Iterable, Iterator, Optional
 
 from .utils import atomic_write
 
@@ -17,12 +18,124 @@ class LockInfo:
     host: Optional[str]
 
 
+@dataclass
+class LockAssessment:
+    freeable: bool
+    reason: Optional[str]
+    pid: Optional[int]
+    host: Optional[str]
+
+
+DEFAULT_RUNNER_CMD_HINTS = ("codex_autorunner.cli", "codex-autorunner", "car ")
+
+
 def process_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except OSError:
         return False
     return True
+
+
+def process_is_zombie(pid: int) -> bool:
+    if os.name == "nt":
+        return False
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return False
+    if result.returncode != 0:
+        return False
+    return "Z" in result.stdout.strip()
+
+
+def process_command(pid: int) -> Optional[str]:
+    if os.name == "nt":
+        return None
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    command = result.stdout.strip()
+    return command or None
+
+
+def process_is_active(pid: int) -> bool:
+    return process_alive(pid) and not process_is_zombie(pid)
+
+
+def assess_lock(
+    lock_path: Path,
+    *,
+    expected_cmd_substrings: Optional[Iterable[str]] = None,
+    require_host_match: bool = True,
+) -> LockAssessment:
+    if not lock_path.exists():
+        return LockAssessment(freeable=False, reason=None, pid=None, host=None)
+    info = read_lock_info(lock_path)
+    pid = info.pid
+    if not pid:
+        return LockAssessment(
+            freeable=True,
+            reason="Lock has no pid; safe to clear.",
+            pid=None,
+            host=info.host,
+        )
+    if require_host_match and info.host and info.host != socket.gethostname():
+        return LockAssessment(
+            freeable=False,
+            reason="Lock belongs to another host.",
+            pid=pid,
+            host=info.host,
+        )
+    if not process_alive(pid):
+        return LockAssessment(
+            freeable=True,
+            reason="Lock pid is not running; safe to clear.",
+            pid=pid,
+            host=info.host,
+        )
+    if process_is_zombie(pid):
+        return LockAssessment(
+            freeable=True,
+            reason="Lock pid is a zombie process; safe to clear.",
+            pid=pid,
+            host=info.host,
+        )
+    if expected_cmd_substrings:
+        command = process_command(pid)
+        if command is None:
+            return LockAssessment(
+                freeable=False,
+                reason="Unable to inspect lock pid command.",
+                pid=pid,
+                host=info.host,
+            )
+        if not any(fragment in command for fragment in expected_cmd_substrings):
+            return LockAssessment(
+                freeable=True,
+                reason="Lock pid command does not match autorunner; safe to clear.",
+                pid=pid,
+                host=info.host,
+            )
+    return LockAssessment(
+        freeable=False,
+        reason=None,
+        pid=pid,
+        host=info.host,
+    )
 
 
 try:

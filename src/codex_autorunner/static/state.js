@@ -25,7 +25,9 @@ export function startStatePolling() {
             return;
         loadState({ notify: false }).catch(() => { });
         cancelStream = streamEvents("/api/state/stream", {
-            onMessage: (data) => {
+            onMessage: (data, event) => {
+                if (event && event !== "message")
+                    return;
                 try {
                     const state = JSON.parse(data);
                     publish("state:update", state);
@@ -83,4 +85,10 @@ export async function killRun() {
 }
 export function resetRun() {
     return runAction("/api/run/reset", null, "Runner reset complete");
+}
+export async function clearLock() {
+    const confirmed = await confirmModal("Clear a stale autorunner lock? This will only succeed if the lock looks safe to remove.", { confirmText: "Clear lock", cancelText: "Cancel", danger: true });
+    if (!confirmed)
+        return null;
+    return runAction("/api/run/clear-lock", null, "Cleared stale lock");
 }

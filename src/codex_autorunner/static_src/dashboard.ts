@@ -8,6 +8,7 @@ import {
   stopRun,
   killRun,
   resetRun,
+  clearLock,
   startStatePolling,
 } from "./state.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
@@ -42,6 +43,10 @@ interface State {
   outstanding_count?: number | null;
   done_count?: number | null;
   runner_pid?: number | null;
+  lock_present?: boolean | null;
+  lock_pid?: number | null;
+  lock_freeable?: boolean | null;
+  lock_freeable_reason?: string | null;
 }
 
 function renderState(state: State | null): void {
@@ -83,6 +88,15 @@ function renderState(state: State | null): void {
   if (summaryBtn) {
     const done = Number(state.outstanding_count ?? NaN) === 0;
     summaryBtn.classList.toggle("hidden", !done);
+  }
+
+  const clearLockBtn = document.getElementById("clear-lock");
+  if (clearLockBtn) {
+    const freeable = Boolean(state.lock_freeable);
+    clearLockBtn.classList.toggle("hidden", !freeable);
+    if (state.lock_freeable_reason) {
+      clearLockBtn.title = state.lock_freeable_reason;
+    }
   }
   
   const status = state.status || "idle";
@@ -857,6 +871,7 @@ export function initDashboard(): void {
   bindAction("start-run", () => startRun(false, buildRunOverrides()));
   bindAction("stop-run", stopRun);
   bindAction("kill-run", killRun);
+  bindAction("clear-lock", clearLock);
   bindAction("reset-runner", async () => {
     const confirmed = await confirmModal(
       "Reset runner? This will clear all logs and reset run ID to 1."

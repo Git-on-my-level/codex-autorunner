@@ -125,6 +125,22 @@ def build_repos_routes() -> APIRouter:
         clear_stale_lock(engine.lock_path)
         return {"running": manager.running}
 
+    @router.post("/api/run/clear-lock", response_model=RunStatusResponse)
+    def clear_lock(request: Request):
+        manager = request.app.state.manager
+        logger = request.app.state.logger
+        try:
+            logger.info("run/clear-lock requested")
+        except Exception:
+            pass
+        assessment = manager.clear_freeable_lock()
+        if not assessment.freeable:
+            detail = "Lock is still active; cannot clear."
+            if assessment.pid:
+                detail = f"Lock pid {assessment.pid} is still active; cannot clear."
+            raise HTTPException(status_code=409, detail=detail)
+        return {"running": manager.running}
+
     @router.post("/api/run/resume", response_model=RunControlResponse)
     def resume_run(request: Request, payload: Optional[RunControlRequest] = None):
         manager = request.app.state.manager
