@@ -938,7 +938,9 @@ class GitHubCommands(SharedHelpers):
 
                 async def _abort_opencode() -> None:
                     try:
-                        await setup.client.abort(setup.review_session_id)
+                        await asyncio.wait_for(
+                            setup.client.abort(setup.review_session_id), timeout=10
+                        )
                     except Exception:
                         pass
 
@@ -1201,6 +1203,7 @@ class GitHubCommands(SharedHelpers):
                                 )
                     await self._schedule_progress_edit(turn_key)
 
+                ready_event = asyncio.Event()
                 output_task = asyncio.create_task(
                     collect_opencode_output(
                         setup.client,
@@ -1215,7 +1218,13 @@ class GitHubCommands(SharedHelpers):
                         ),
                         should_stop=_should_stop,
                         part_handler=_handle_opencode_part,
+                        ready_event=ready_event,
                     )
+                )
+                with suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(ready_event.wait(), timeout=2.0)
+                timeout_task = asyncio.create_task(
+                    asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
                 )
                 command_task = asyncio.create_task(
                     setup.client.send_command(
@@ -1228,13 +1237,13 @@ class GitHubCommands(SharedHelpers):
                 try:
                     await command_task
                 except Exception as exc:
+                    timeout_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await timeout_task
                     output_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await output_task
                     raise exc
-                timeout_task = asyncio.create_task(
-                    asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
-                )
                 done, _pending = await asyncio.wait(
                     {output_task, timeout_task},
                     return_when=asyncio.FIRST_COMPLETED,
@@ -1245,6 +1254,9 @@ class GitHubCommands(SharedHelpers):
                     output_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await output_task
+                    timeout_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await timeout_task
                     turn_context.turn_elapsed_seconds = (
                         time.monotonic() - turn_started_at
                         if turn_started_at is not None

@@ -1412,7 +1412,9 @@ class ExecutionCommands(SharedHelpers):
 
                     async def _abort_opencode() -> None:
                         try:
-                            await opencode_client.abort(thread_id)
+                            await asyncio.wait_for(
+                                opencode_client.abort(thread_id), timeout=10
+                            )
                         except Exception:
                             pass
 
@@ -1683,6 +1685,8 @@ class ExecutionCommands(SharedHelpers):
                                     )
                         await self._schedule_progress_edit(turn_key)
 
+                    ready_event = asyncio.Event()
+                    sse_ready_at: Optional[float] = None
                     output_task = asyncio.create_task(
                         collect_opencode_output(
                             opencode_client,
@@ -1698,10 +1702,29 @@ class ExecutionCommands(SharedHelpers):
                             question_handler=_question_handler,
                             should_stop=_should_stop,
                             part_handler=_handle_opencode_part,
+                            ready_event=ready_event,
                         )
                     )
+                    sse_ready_at = time.monotonic()
+                    with suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(ready_event.wait(), timeout=2.0)
+                    sse_ready_ms = int((time.monotonic() - sse_ready_at) * 1000)
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "telegram.opencode.sse_ready",
+                        topic_key=key,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        codex_thread_id=thread_id,
+                        sse_ready_ms=sse_ready_ms,
+                    )
+                    timeout_task = asyncio.create_task(
+                        asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
+                    )
+                    prompt_sent_at = time.monotonic()
                     prompt_task = asyncio.create_task(
-                        opencode_client.prompt(
+                        opencode_client.prompt_async(
                             thread_id,
                             message=prompt_text,
                             model=model_payload,
@@ -1709,14 +1732,26 @@ class ExecutionCommands(SharedHelpers):
                     )
                     try:
                         await prompt_task
+                        prompt_send_ms = int((time.monotonic() - prompt_sent_at) * 1000)
+                        log_event(
+                            self._logger,
+                            logging.INFO,
+                            "telegram.opencode.prompt_sent",
+                            topic_key=key,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            codex_thread_id=thread_id,
+                            prompt_send_ms=prompt_send_ms,
+                            endpoint="/session/{id}/prompt_async",
+                        )
                     except Exception as exc:
+                        timeout_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await timeout_task
                         output_task.cancel()
                         with suppress(asyncio.CancelledError):
                             await output_task
                         raise exc
-                    timeout_task = asyncio.create_task(
-                        asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
-                    )
                     done, _pending = await asyncio.wait(
                         {output_task, timeout_task},
                         return_when=asyncio.FIRST_COMPLETED,
@@ -1727,7 +1762,26 @@ class ExecutionCommands(SharedHelpers):
                         output_task.cancel()
                         with suppress(asyncio.CancelledError):
                             await output_task
+                        timeout_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await timeout_task
                         turn_elapsed_seconds = time.monotonic() - turn_started_at
+                        completion_mode = (
+                            "timeout"
+                            if not runtime.interrupt_requested
+                            else "interrupt"
+                        )
+                        log_event(
+                            self._logger,
+                            logging.INFO,
+                            "telegram.opencode.completed",
+                            topic_key=key,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            codex_thread_id=thread_id,
+                            completion_mode=completion_mode,
+                            elapsed_seconds=turn_elapsed_seconds,
+                        )
                         return _TurnRunFailure(
                             "OpenCode turn timed out.",
                             placeholder_id,
@@ -1739,6 +1793,17 @@ class ExecutionCommands(SharedHelpers):
                         await timeout_task
                     output_result = await output_task
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "telegram.opencode.completed",
+                        topic_key=key,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        codex_thread_id=thread_id,
+                        completion_mode="normal",
+                        elapsed_seconds=turn_elapsed_seconds,
+                    )
                 finally:
                     if opencode_turn_started:
                         await supervisor.mark_turn_finished(workspace_root)
