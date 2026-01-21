@@ -21,16 +21,27 @@ def _available_agents(request: Request) -> tuple[list[dict[str, str]], str]:
     default_agent: Optional[str] = None
 
     if getattr(request.app.state, "app_server_supervisor", None) is not None:
-        agents.append({"id": "codex", "name": "Codex"})
+        agents.append({"id": "codex", "name": "Codex", "protocol_version": "2.0"})
         default_agent = "codex"
 
     if getattr(request.app.state, "opencode_supervisor", None) is not None:
-        agents.append({"id": "opencode", "name": "OpenCode"})
+        supervisor = getattr(request.app.state, "opencode_supervisor", None)
+        version = None
+        if supervisor and hasattr(supervisor, "_handles"):
+            handles = supervisor._handles
+            if handles:
+                first_handle = next(iter(handles.values()), None)
+                if first_handle:
+                    version = getattr(first_handle, "version", None)
+        agent_data = {"id": "opencode", "name": "OpenCode"}
+        if version:
+            agent_data["version"] = str(version)
+        agents.append(agent_data)
         if default_agent is None:
             default_agent = "opencode"
 
     if not agents:
-        agents = [{"id": "codex", "name": "Codex"}]
+        agents = [{"id": "codex", "name": "Codex", "protocol_version": "2.0"}]
         default_agent = "codex"
 
     return agents, default_agent or "codex"

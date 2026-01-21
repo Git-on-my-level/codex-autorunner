@@ -18,32 +18,35 @@ Exit codes:
 from __future__ import annotations
 
 import json
-import os
+import logging
 import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Dict
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.protocol_utils import validate_binary_path
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
 def get_codex_bin() -> str | None:
     """Get Codex binary path from environment or PATH."""
-    codex_bin = os.environ.get("CODEX_BIN")
-    if codex_bin:
-        return codex_bin
-    from shutil import which
-
-    return which("codex")
+    try:
+        path = validate_binary_path("codex", "CODEX_BIN")
+        return str(path)
+    except RuntimeError:
+        return None
 
 
 def get_opencode_bin() -> str | None:
     """Get OpenCode binary path from environment or PATH."""
-    opencode_bin = os.environ.get("OPENCODE_BIN")
-    if opencode_bin:
-        return opencode_bin
-    from shutil import which
-
-    return which("opencode")
+    try:
+        path = validate_binary_path("opencode", "OPENCODE_BIN")
+        return str(path)
+    except RuntimeError:
+        return None
 
 
 def generate_current_codex_schema() -> dict | None:
@@ -167,8 +170,8 @@ def compare_opencode_openapi(vendor_path: Path) -> tuple[int, list[str]]:
             "Skipping OpenCode OpenAPI check",
         ]
 
-    return 0, [
-        "OpenCode OpenAPI: check not yet implemented",
+    return 1, [
+        "OpenCode drift detection not yet implemented",
         "To check manually, run: python scripts/update_vendor_opencode_openapi.py",
     ]
 

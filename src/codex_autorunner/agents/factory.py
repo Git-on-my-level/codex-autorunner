@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, cast
 
 from ..core.app_server_events import AppServerEventBuffer
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
@@ -8,21 +8,7 @@ from .codex.harness import CodexHarness
 from .opencode.harness import OpenCodeHarness
 from .opencode.supervisor import OpenCodeSupervisor
 from .orchestrator import AgentOrchestrator, CodexOrchestrator, OpenCodeOrchestrator
-
-
-def create_codex_orchestrator(
-    supervisor: WorkspaceAppServerSupervisor,
-    events: AppServerEventBuffer,
-) -> CodexOrchestrator:
-    harness = CodexHarness(supervisor, events)
-    return CodexOrchestrator(harness, events)
-
-
-def create_opencode_orchestrator(
-    supervisor: OpenCodeSupervisor,
-) -> OpenCodeOrchestrator:
-    harness = OpenCodeHarness(supervisor)
-    return OpenCodeOrchestrator(harness)
+from .registry import get_agent_descriptor
 
 
 def create_orchestrator(
@@ -31,20 +17,36 @@ def create_orchestrator(
     codex_events: Optional[AppServerEventBuffer] = None,
     opencode_supervisor: Optional[OpenCodeSupervisor] = None,
 ) -> AgentOrchestrator:
-    if agent_id == "opencode":
-        if opencode_supervisor is None:
-            raise ValueError("opencode_supervisor required for opencode agent")
-        return create_opencode_orchestrator(opencode_supervisor)
+    descriptor = get_agent_descriptor(agent_id)
+    if descriptor is None:
+        raise ValueError(f"Unknown agent: {agent_id}")
+
+    class _AppContext:
+        def __init__(
+            self,
+            app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
+            app_server_events: Optional[AppServerEventBuffer] = None,
+            opencode_supervisor: Optional[OpenCodeSupervisor] = None,
+        ):
+            self.app_server_supervisor = app_server_supervisor
+            self.app_server_events = app_server_events
+            self.opencode_supervisor = opencode_supervisor
+
+    app_ctx = _AppContext(codex_supervisor, codex_events, opencode_supervisor)
+    harness = descriptor.make_harness(app_ctx)
+
+    if agent_id == "codex":
+        if not isinstance(harness, CodexHarness):
+            raise RuntimeError(f"Expected CodexHarness but got {type(harness)}")
+        return CodexOrchestrator(harness, cast(AppServerEventBuffer, codex_events))
+    elif agent_id == "opencode":
+        if not isinstance(harness, OpenCodeHarness):
+            raise RuntimeError(f"Expected OpenCodeHarness but got {type(harness)}")
+        return OpenCodeOrchestrator(harness)
     else:
-        if codex_supervisor is None or codex_events is None:
-            raise ValueError(
-                "codex_supervisor and codex_events required for codex agent"
-            )
-        return create_codex_orchestrator(codex_supervisor, codex_events)
+        raise RuntimeError(f"No orchestrator implementation for agent: {agent_id}")
 
 
 __all__ = [
-    "create_codex_orchestrator",
-    "create_opencode_orchestrator",
     "create_orchestrator",
 ]

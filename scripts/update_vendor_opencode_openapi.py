@@ -14,21 +14,24 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import shutil
+import logging
 import subprocess
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.protocol_utils import validate_binary_path
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
-def get_opencode_bin() -> Optional[str]:
+def get_opencode_bin() -> str:
     """Get OpenCode binary path from environment or PATH."""
-    opencode_bin = os.environ.get("OPENCODE_BIN")
-    if opencode_bin:
-        return opencode_bin
-    return shutil.which("opencode")
+    path = validate_binary_path("opencode", "OPENCODE_BIN")
+    return str(path)
 
 
 async def fetch_openapi(base_url: str, timeout: float = 30.0) -> dict:
@@ -47,7 +50,7 @@ async def fetch_openapi(base_url: str, timeout: float = 30.0) -> dict:
         except json.JSONDecodeError as e:
             raise RuntimeError(
                 f"Failed to parse OpenAPI JSON: {e}\n{response.text[:500]}"
-            )
+            ) from e
 
         return spec
 
@@ -122,47 +125,37 @@ def main() -> int:
     # Create vendor/protocols directory if it doesn't exist
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
-    opencode_bin = get_opencode_bin()
-    if not opencode_bin:
-        print(
-            "Error: OpenCode binary not found. "
-            "Set OPENCODE_BIN environment variable or install opencode.",
-            file=sys.stderr,
-        )
-        return 1
-
-    async def run() -> int:
-        from tempfile import TemporaryDirectory
-
-        with TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-
-            async with opencode_server_context(tmp_path, opencode_bin) as base_url:
-                print(f"Fetching OpenAPI spec from {base_url}/doc...")
-
-                spec = await fetch_openapi(base_url)
-
-                # Write formatted JSON
-                output_path.write_text(
-                    json.dumps(spec, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
-
-                info = spec.get("info", {})
-                print(f"✓ Updated {output_path.relative_to(repo_root)}")
-                print(f"  Title: {info.get('title', 'unknown')}")
-                print(f"  Version: {info.get('version', 'unknown')}")
-                print(f"  Endpoints: {len(spec.get('paths', {}))}")
-
-                return 0
-
     try:
+        opencode_bin = get_opencode_bin()
+
+        async def run() -> int:
+            from tempfile import TemporaryDirectory
+
+            with TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+
+                async with opencode_server_context(tmp_path, opencode_bin) as base_url:
+                    print(f"Fetching OpenAPI spec from {base_url}/doc...")
+
+                    spec = await fetch_openapi(base_url)
+
+                    # Write formatted JSON
+                    output_path.write_text(
+                        json.dumps(spec, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+
+                    info = spec.get("info", {})
+                    print(f"✓ Updated {output_path.relative_to(repo_root)}")
+                    print(f"  Title: {info.get('title', 'unknown')}")
+                    print(f"  Version: {info.get('version', 'unknown')}")
+                    print(f"  Endpoints: {len(spec.get('paths', {}))}")
+
+                    return 0
+
         return asyncio.run(run())
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        import traceback
-
-        traceback.print_exc()
         return 1
 
 

@@ -58,11 +58,11 @@ jobs:
         run: |
           if [ "${{ matrix.agent }}" = "codex" ]; then
             echo "Installing Codex..."
-            npm install -g codex@latest || true
+            npm install -g codex@latest
             # Alternative: download from releases if npm unavailable
           elif [ "${{ matrix.agent }}" = "opencode" ]; then
             echo "Installing OpenCode..."
-            npm install -g opencode@latest || true
+            npm install -g opencode@latest
             # Alternative: download from releases if npm unavailable
           fi
 
@@ -70,10 +70,12 @@ jobs:
         run: |
           if [ "${{ matrix.agent }}" = "codex" ]; then
             which codex || echo "Codex not installed, will skip Codex-specific tests"
-            codex --version || echo "Cannot run codex --version"
+            codex --version
+            echo "Codex version installed: $(codex --version 2>&1)" >> $GITHUB_OUTPUT || true
           elif [ "${{ matrix.agent }}" = "opencode" ]; then
             which opencode || echo "OpenCode not installed, will skip OpenCode-specific tests"
-            opencode --version || echo "Cannot run opencode --version"
+            opencode --version
+            echo "OpenCode version installed: $(opencode --version 2>&1)" >> $GITHUB_OUTPUT || true
           fi
 
       - name: Check protocol drift
@@ -84,7 +86,7 @@ jobs:
         run: |
           # Run tier 1 smoke tests (should work without credentials)
           if which codex > /dev/null 2>&1; then
-            python -m pytest tests/test_codex_app_server_integration.py -v -k "tier1" --tb=short || true
+            python -m pytest tests/test_codex_app_server_integration.py -v -k "tier1" --tb=short
           else
             echo "Codex not installed, skipping smoke tests"
           fi
@@ -94,7 +96,7 @@ jobs:
         run: |
           # Run OpenCode integration tests
           if which opencode > /dev/null 2>&1; then
-            python -m pytest tests/test_opencode_integration.py -v --tb=short || true
+            python -m pytest tests/test_opencode_integration.py -v --tb=short
           else
             echo "OpenCode not installed, skipping integration tests"
           fi

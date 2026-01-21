@@ -13,21 +13,23 @@ snapshot for Codex integration tests and CI drift detection.
 from __future__ import annotations
 
 import json
-import os
+import logging
 import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-def get_codex_bin() -> str | None:
+from scripts.protocol_utils import validate_binary_path
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+
+def get_codex_bin() -> str:
     """Get Codex binary path from environment or PATH."""
-    codex_bin = os.environ.get("CODEX_BIN")
-    if codex_bin:
-        return codex_bin
-    from shutil import which
-
-    return which("codex")
+    path = validate_binary_path("codex", "CODEX_BIN")
+    return str(path)
 
 
 def generate_schema() -> dict:
@@ -51,9 +53,9 @@ def generate_schema() -> dict:
                 f"Codex app-server does not support generate-json-schema: {result.stderr}"
             )
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Timeout checking Codex app-server help")
+        raise RuntimeError("Timeout checking Codex app-server help") from None
     except FileNotFoundError:
-        raise RuntimeError(f"Codex binary not found: {codex_bin}")
+        raise RuntimeError(f"Codex binary not found: {codex_bin}") from None
 
     with TemporaryDirectory() as tmp_dir:
         try:
@@ -64,7 +66,7 @@ def generate_schema() -> dict:
                 timeout=60,
             )
         except subprocess.TimeoutExpired:
-            raise RuntimeError("Timeout generating Codex JSON schema")
+            raise RuntimeError("Timeout generating Codex JSON schema") from None
 
         if result.returncode != 0:
             raise RuntimeError(
@@ -75,8 +77,7 @@ def generate_schema() -> dict:
         schema_path = Path(tmp_dir) / "codex_app_server_protocol.schemas.json"
         if not schema_path.exists():
             raise RuntimeError(
-                "Codex schema bundle not found: "
-                f"{schema_path}. Output: {result.stdout}"
+                f"Codex schema bundle not found: {schema_path}. Output: {result.stdout}"
             )
 
         try:
@@ -85,7 +86,7 @@ def generate_schema() -> dict:
             raise RuntimeError(
                 f"Failed to parse Codex JSON schema: {e}\n"
                 f"{schema_path.read_text(encoding='utf-8')[:500]}"
-            )
+            ) from e
 
     return schema
 
@@ -112,7 +113,7 @@ def main() -> int:
         print(f"  Definitions: {len(schema.get('definitions', {}))}")
 
         return 0
-    except Exception as e:
+    except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 

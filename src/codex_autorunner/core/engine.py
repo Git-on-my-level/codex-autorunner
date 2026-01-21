@@ -1067,15 +1067,12 @@ class Engine:
             sandbox_policy = "dangerFullAccess"
 
         stop_event = asyncio.Event()
-
-        async def _check_stop():
-            if external_stop_flag and external_stop_flag.is_set():
-                stop_event.set()
-            if self.stop_requested():
-                stop_event.set()
+        stop_task: Optional[asyncio.Task] = None
 
         if external_stop_flag:
-            asyncio.create_task(self._wait_for_stop(external_stop_flag))
+            stop_task = asyncio.create_task(
+                self._wait_for_stop(external_stop_flag, stop_event)
+            )
 
         try:
             result = await orchestrator.run_turn(
@@ -1104,6 +1101,10 @@ class Engine:
             self.log_line(run_id, f"error: {exc}")
             return 1
         finally:
+            if stop_task is not None:
+                stop_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stop_task
             if stop_event.is_set():
                 await orchestrator.interrupt_turn(
                     self.repo_root, conversation_id, grace_seconds=30.0
@@ -1392,10 +1393,14 @@ class Engine:
             )
 
     async def _wait_for_stop(
-        self, external_stop_flag: Optional[threading.Event]
+        self,
+        external_stop_flag: Optional[threading.Event],
+        stop_event: Optional[asyncio.Event] = None,
     ) -> None:
         while not self._should_stop(external_stop_flag):
             await asyncio.sleep(AUTORUNNER_STOP_POLL_SECONDS)
+        if stop_event is not None:
+            stop_event.set()
 
     async def _wait_for_turn_with_stop(
         self,

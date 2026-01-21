@@ -7,9 +7,24 @@ Usage:
 """
 
 import argparse
-import os
+import keyword
 import sys
 from pathlib import Path
+
+
+def validate_agent_name(agent_name: str) -> str:
+    normalized = agent_name.lower().strip()
+
+    if ".." in normalized or "/" in normalized or "\\" in normalized:
+        raise ValueError("Agent name cannot contain path separators or '..'")
+
+    if not normalized.isidentifier():
+        raise ValueError(f"'{agent_name}' is not a valid Python identifier")
+
+    if normalized in keyword.kwlist:
+        raise ValueError(f"'{agent_name}' is a Python keyword and cannot be used")
+
+    return normalized
 
 
 def create_harness(agent_name: str, display_name: str) -> str:
@@ -516,12 +531,12 @@ def main():
     )
     args = parser.parse_args()
 
-    agent_name = args.agent_name.lower()
+    agent_name = validate_agent_name(args.agent_name)
     display_name = args.display_name
     output_dir = args.output_dir / agent_name
 
     if output_dir.exists():
-        print(f"Error: Directory already exists: {{output_dir}}")
+        print(f"Error: Directory already exists: {output_dir}")
         sys.exit(1)
 
     output_dir.mkdir(parents=True, exist_ok=False)
@@ -537,7 +552,7 @@ def main():
     for filename, content in files.items():
         file_path = output_dir / filename
         file_path.write_text(content)
-        print(f"Created: {{file_path}}")
+        print(f"Created: {file_path}")
 
     # Create client.py stub
     client_path = output_dir / "client.py"
@@ -618,11 +633,11 @@ class {agent_name.capitalize()}Client:
 __all__ = ["{agent_name.capitalize()}Client"]
 '''
     client_path.write_text(client_stub)
-    print(f"Created: {{client_path}}")
+    print(f"Created: {client_path}")
 
-    print(f"\nScaffolded agent: {{agent_name}}")
-    print(f"Display name: {{display_name}}")
-    print(f"Output directory: {{output_dir}}")
+    print(f"\nScaffolded agent: {agent_name}")
+    print(f"Display name: {display_name}")
+    print(f"Output directory: {output_dir}")
     print("\nNext steps:")
     print("1. Implement the client.py stub for your agent's protocol")
     print("2. Customize supervisor.py startup logic")

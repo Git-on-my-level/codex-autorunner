@@ -740,24 +740,45 @@ class CodexAppServerClient:
             future = self._pending.pop(req_id, None)
             method = self._pending_methods.pop(req_id, None)
         if future is None:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "app_server.response.unmatched",
+                request_id=req_id,
+                request_id_type=type(req_id).__name__,
+                method=method,
+            )
             return
         if future.cancelled():
             return
         if "error" in message and message["error"] is not None:
             err = message.get("error") or {}
+            error_code = err.get("code")
+            if error_code == -32600:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.response.invalid_request",
+                    request_id=req_id,
+                    request_id_type=type(req_id).__name__,
+                    method=method,
+                    error_code=error_code,
+                    error_message=err.get("message"),
+                )
             log_event(
                 self._logger,
                 logging.WARNING,
                 "app_server.response.error",
                 request_id=req_id,
+                request_id_type=type(req_id).__name__,
                 method=method,
-                error_code=err.get("code"),
+                error_code=error_code,
                 error_message=err.get("message"),
             )
             future.set_exception(
                 CodexAppServerResponseError(
                     method=method,
-                    code=err.get("code"),
+                    code=error_code,
                     message=err.get("message") or "app-server error",
                     data=err.get("data"),
                 )
@@ -768,6 +789,7 @@ class CodexAppServerClient:
             logging.INFO,
             "app_server.response",
             request_id=req_id,
+            request_id_type=type(req_id).__name__,
             method=method,
         )
         future.set_result(message.get("result"))
