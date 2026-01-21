@@ -3311,6 +3311,48 @@ label {
   height: 8px;
 }
 
+/* ========== LOG STREAM STATUS ========== */
+.log-stream-status {
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  font-size: 10px;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  font-weight: 500;
+  border: 1px solid transparent;
+  margin-left: 8px;
+}
+
+.log-stream-status.status-connecting {
+  border-color: var(--accent-2);
+  background: rgba(108, 168, 255, 0.08);
+  color: var(--accent-2);
+}
+
+.log-stream-status.status-connected {
+  border-color: var(--accent);
+  background: rgba(108, 245, 216, 0.08);
+  color: var(--accent);
+}
+
+.log-stream-status.status-reconnecting {
+  border-color: var(--accent-2);
+  background: rgba(108, 168, 255, 0.08);
+  color: var(--accent-2);
+  animation: pulse-reconnecting 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-reconnecting {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.log-stream-status.status-stopped {
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--muted);
+}
+
 /* ========== LOG LEGEND ========== */
 .log-legend {
   display: flex;

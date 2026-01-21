@@ -145,6 +145,7 @@ class Engine:
         self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
+        self._last_telemetry_update_time: float = 0.0
         self._last_run_interrupted = False
         self._lock_handle: Optional[FileLock] = None
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
@@ -581,11 +582,34 @@ class Engine:
             with run_log.open("a", encoding="utf-8") as f:
                 f.write(line)
 
+    def _emit_event(self, run_id: int, event: str, **payload: Any) -> None:
+        import json as _json
+
+        event_data = {
+            "ts": timestamp(),
+            "event": event,
+            "run_id": run_id,
+        }
+        if payload:
+            event_data.update(payload)
+        events_path = self._events_log_path(run_id)
+        self._ensure_run_log_dir()
+        try:
+            with events_path.open("a", encoding="utf-8") as f:
+                f.write(_json.dumps(event_data) + "\n")
+        except (OSError, IOError) as exc:
+            self._app_server_logger.warning(
+                "Failed to write event to events log: %s", exc
+            )
+
     def _ensure_log_path(self) -> None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _run_log_path(self, run_id: int) -> Path:
         return self.log_path.parent / "runs" / f"run-{run_id}.log"
+
+    def _events_log_path(self, run_id: int) -> Path:
+        return self.log_path.parent / "runs" / f"run-{run_id}.events.jsonl"
 
     def _ensure_run_log_dir(self) -> None:
         (self.log_path.parent / "runs").mkdir(parents=True, exist_ok=True)
@@ -596,6 +620,9 @@ class Engine:
         suffix = ""
         if marker == "end":
             suffix = f" (code {exit_code})"
+            self._emit_event(run_id, "run.finished", exit_code=exit_code)
+        elif marker == "start":
+            self._emit_event(run_id, "run.started")
         text = f"=== run {run_id} {marker}{suffix} ==="
         offset = self._emit_global_line(text)
         if self._active_run_log is not None:
@@ -712,6 +739,40 @@ class Engine:
                 return
             self._run_telemetry = None
 
+    def _maybe_update_run_index_telemetry(
+        self, run_id: int, min_interval_seconds: float = 3.0
+    ) -> None:
+        import time as _time
+
+        now = _time.time()
+        if now - self._last_telemetry_update_time < min_interval_seconds:
+            return
+        telemetry = self._snapshot_run_telemetry(run_id)
+        if telemetry is None:
+            return
+        if telemetry.thread_id and isinstance(telemetry.token_total, dict):
+            state = load_state(self.state_path)
+            selected_agent = (
+                (state.autorunner_agent_override or "codex").strip().lower()
+            )
+            baseline = None
+            if selected_agent != "opencode":
+                baseline = self._find_thread_token_baseline(
+                    thread_id=telemetry.thread_id, run_id=run_id
+                )
+            delta = self._compute_token_delta(baseline, telemetry.token_total)
+            self._merge_run_index_entry(
+                run_id,
+                {
+                    "token_usage": {
+                        "delta": delta,
+                        "thread_total_before": baseline,
+                        "thread_total_after": telemetry.token_total,
+                    }
+                },
+            )
+            self._last_telemetry_update_time = now
+
     async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
         if not isinstance(message, dict):
             return
@@ -746,6 +807,8 @@ class Engine:
                     total = token_usage.get("total") or token_usage.get("totals")
                     if isinstance(total, dict):
                         telemetry.token_total = total
+                        self._maybe_update_run_index_telemetry(run_id)
+                        self._emit_event(run_id, "token.updated", token_total=total)
             if method == "turn/plan/updated":
                 telemetry.plan = params.get("plan") if "plan" in params else params
             if method == "turn/diff/updated":

@@ -2,14 +2,16 @@
 Run telemetry routes.
 """
 
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ..core.utils import is_within
+from .shared import SSE_HEADERS, jsonl_event_stream
 
 
 def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
@@ -31,6 +33,18 @@ def _token_total(entry: dict[str, Any]) -> Optional[float]:
             value = delta.get(key)
             if isinstance(value, (int, float)):
                 return float(value)
+    return None
+
+
+def _extract_total_from_dict(token_dict: Optional[dict[str, Any]]) -> Optional[float]:
+    if token_dict is None:
+        return None
+    if not isinstance(token_dict, dict):
+        return None
+    for key in ("total_tokens", "totalTokens", "total"):
+        value = token_dict.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
     return None
 
 
@@ -133,5 +147,54 @@ def build_runs_routes() -> APIRouter:
         if not path.exists():
             raise HTTPException(status_code=404, detail="Output not found")
         return FileResponse(path, media_type="text/plain")
+
+    @router.get("/api/runs/{run_id}/telemetry")
+    def fetch_run_telemetry(request: Request, run_id: int):
+        engine = request.app.state.engine
+        telemetry = engine._snapshot_run_telemetry(run_id)
+        if telemetry is None:
+            entry = engine._load_run_index().get(str(run_id))
+            if not isinstance(entry, dict):
+                raise HTTPException(status_code=404, detail="Run not found")
+            token_usage = entry.get("token_usage")
+            if isinstance(token_usage, dict):
+                delta = token_usage.get("delta")
+                thread_total = token_usage.get("thread_total_after")
+            else:
+                delta = None
+                thread_total = None
+            return {
+                "run_id": run_id,
+                "token_delta": delta,
+                "token_total": thread_total,
+                "total_tokens": _extract_total_from_dict(delta),
+                "updated_at": None,
+            }
+        token_total = telemetry.token_total
+        total_tokens = _extract_total_from_dict(token_total)
+        return {
+            "run_id": run_id,
+            "thread_id": telemetry.thread_id,
+            "turn_id": telemetry.turn_id,
+            "token_delta": None,
+            "token_total": token_total,
+            "total_tokens": total_tokens,
+            "updated_at": time.time(),
+        }
+
+    @router.get("/api/runs/{run_id}/events/stream")
+    async def stream_run_events(request: Request, run_id: int):
+        engine = request.app.state.engine
+        events_path = engine._events_log_path(run_id)
+        shutdown_event = getattr(request.app.state, "shutdown_event", None)
+        return StreamingResponse(
+            jsonl_event_stream(
+                events_path,
+                event_name="event",
+                shutdown_event=shutdown_event,
+            ),
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
+        )
 
     return router
