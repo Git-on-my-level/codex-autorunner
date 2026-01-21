@@ -134,4 +134,46 @@ def build_runs_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="Output not found")
         return FileResponse(path, media_type="text/plain")
 
+    @router.get("/api/runs/{run_id}/final_review")
+    def fetch_final_review(request: Request, run_id: int):
+        engine = request.app.state.engine
+        entry = engine._load_run_index().get(str(run_id))
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=404, detail="Run not found")
+        artifacts = entry.get("artifacts")
+        if not isinstance(artifacts, dict):
+            raise HTTPException(status_code=404, detail="Review not found")
+        report_path = artifacts.get("final_review_report_path")
+        if not isinstance(report_path, str) or not report_path:
+            raise HTTPException(status_code=404, detail="Review not found")
+        path = Path(report_path)
+        if not is_within(engine.repo_root, path):
+            raise HTTPException(status_code=400, detail="Invalid review path")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Review not found")
+        media_type = "text/markdown" if path.suffix == ".md" else "text/plain"
+        return FileResponse(path, media_type=media_type)
+
+    @router.get("/api/runs/{run_id}/final_review_scratchpad")
+    def fetch_final_review_scratchpad(request: Request, run_id: int):
+        engine = request.app.state.engine
+        entry = engine._load_run_index().get(str(run_id))
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=404, detail="Run not found")
+        artifacts = entry.get("artifacts")
+        if not isinstance(artifacts, dict):
+            raise HTTPException(status_code=404, detail="Review scratchpad not found")
+        bundle_path = artifacts.get("final_review_scratchpad_bundle_path")
+        if not isinstance(bundle_path, str) or not bundle_path:
+            raise HTTPException(status_code=404, detail="Review scratchpad not found")
+        path = Path(bundle_path)
+        if not is_within(engine.repo_root, path):
+            raise HTTPException(status_code=400, detail="Invalid scratchpad path")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Review scratchpad not found")
+        media_type = (
+            "application/zip" if path.suffix == ".zip" else "application/octet-stream"
+        )
+        return FileResponse(path, media_type=media_type)
+
     return router
