@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence, Union
 
@@ -15,6 +16,8 @@ from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .retry import _extract_retry_after_seconds
 
 _RATE_LIMIT_BUFFER_SECONDS = 0.0
+
+_COMMAND_NAME_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 INTERRUPT_ALIASES = {
     "^c",
@@ -254,35 +257,60 @@ def parse_command(
 ) -> Optional[TelegramCommand]:
     if not text:
         return None
-    if not entities:
+
+    # Primary path: use entities if available
+    if entities:
+        command_entity = next(
+            (
+                entity
+                for entity in entities
+                if entity.type == "bot_command" and entity.offset == 0
+            ),
+            None,
+        )
+        if command_entity is not None:
+            if command_entity.length <= 1:
+                return None
+            if command_entity.length > len(text):
+                return None
+            command_text = text[: command_entity.length]
+            if not command_text.startswith("/"):
+                return None
+            command = command_text.lstrip("/")
+            tail = text[command_entity.length :].strip()
+            if not command:
+                return None
+            if "@" in command:
+                name, _, target = command.partition("@")
+                if bot_username and target.lower() != bot_username.lower():
+                    return None
+                command = name
+            return TelegramCommand(
+                name=command.lower(), args=tail.strip(), raw=text.strip()
+            )
         return None
-    command_entity = next(
-        (
-            entity
-            for entity in entities
-            if entity.type == "bot_command" and entity.offset == 0
-        ),
-        None,
-    )
-    if command_entity is None:
-        return None
-    if command_entity.length <= 1:
-        return None
-    if command_entity.length > len(text):
-        return None
-    command_text = text[: command_entity.length]
-    if not command_text.startswith("/"):
-        return None
-    command = command_text.lstrip("/")
-    tail = text[command_entity.length :].strip()
-    if not command:
-        return None
-    if "@" in command:
-        name, _, target = command.partition("@")
-        if bot_username and target.lower() != bot_username.lower():
+
+    # Fallback: simple text-based parsing when entities are missing
+    # Validates against command name regex (^[a-z0-9_]{1,32}$) to avoid false positives
+    trimmed = text.strip()
+    if trimmed.startswith("/"):
+        parts = trimmed.split(None, 1)
+        command = parts[0].lstrip("/")
+        if not command:
             return None
-        command = name
-    return TelegramCommand(name=command.lower(), args=tail.strip(), raw=text.strip())
+        if "@" in command:
+            name, _, target = command.partition("@")
+            if bot_username and target.lower() != bot_username.lower():
+                return None
+            command = name
+        if not command:
+            return None
+        if not _COMMAND_NAME_RE.fullmatch(command):
+            return None
+        args = parts[1].strip() if len(parts) > 1 else ""
+        return TelegramCommand(name=command.lower(), args=args, raw=trimmed)
+
+    return None
 
 
 def is_interrupt_alias(text: Optional[str]) -> bool:

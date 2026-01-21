@@ -92,6 +92,61 @@ def test_parse_command_requires_entity() -> None:
     assert command is None
 
 
+def test_parse_command_fallback_basic() -> None:
+    command = parse_command("/review")
+    assert command == TelegramCommand(name="review", args="", raw="/review")
+
+
+def test_parse_command_fallback_with_args() -> None:
+    command = parse_command("/review pr")
+    assert command == TelegramCommand(name="review", args="pr", raw="/review pr")
+
+
+def test_parse_command_fallback_rejects_path() -> None:
+    command = parse_command("/mnt/data/file.txt")
+    assert command is None
+
+
+def test_parse_command_fallback_username_match() -> None:
+    command = parse_command("/review@CodexBot", bot_username="CodexBot")
+    assert command == TelegramCommand(name="review", args="", raw="/review@CodexBot")
+
+
+def test_parse_command_fallback_username_mismatch() -> None:
+    command = parse_command("/review@OtherBot", bot_username="CodexBot")
+    assert command is None
+
+
+def test_parse_command_fallback_whitespace() -> None:
+    command = parse_command("  /review  pr  ")
+    assert command == TelegramCommand(name="review", args="pr", raw="/review  pr")
+
+
+def test_parse_command_fallback_rejects_hyphen() -> None:
+    command = parse_command("/foo-bar")
+    assert command is None
+
+
+def test_parse_command_fallback_rejects_question() -> None:
+    command = parse_command("/foo?")
+    assert command is None
+
+
+def test_parse_command_fallback_rejects_exclamation() -> None:
+    command = parse_command("/foo!")
+    assert command is None
+
+
+def test_parse_command_fallback_rejects_uppercase() -> None:
+    command = parse_command("/Review")
+    assert command is None
+
+
+def test_parse_command_fallback_rejects_too_long() -> None:
+    command = parse_command("/" + "a" * 33)
+    assert command is None
+
+
 def test_parse_command_requires_offset_zero() -> None:
     entities = [TelegramMessageEntity(type="bot_command", offset=1, length=len("/new"))]
     command = parse_command(" /new", entities=entities)
