@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hmac
 import logging
 import time
@@ -13,6 +14,8 @@ from ..core.config import _normalize_base_path
 from ..core.logging_utils import log_event
 from ..core.request_context import reset_request_id, set_request_id
 from .static_assets import security_headers
+
+logger = logging.getLogger("codex_autorunner.web.middleware")
 
 
 class BasePathRouterMiddleware:
@@ -225,7 +228,8 @@ class AuthTokenMiddleware:
                 padding = "=" * (-len(token) % 4)
                 try:
                     decoded = base64.urlsafe_b64decode(f"{token}{padding}")
-                except Exception:
+                except (binascii.Error, ValueError):
+                    logger.debug("Failed to decode base64 token")
                     continue
                 try:
                     return decoded.decode("utf-8").strip() or None
@@ -439,7 +443,8 @@ class SecurityHeadersMiddleware:
                     if name.lower() == b"content-type":
                         try:
                             content_type = value.decode("latin-1").lower()
-                        except Exception:
+                        except UnicodeDecodeError:
+                            logger.debug("Failed to decode content-type header")
                             content_type = None
                         break
                 if content_type and content_type.startswith("text/html"):
@@ -472,7 +477,7 @@ class RequestIdMiddleware:
             if name.lower() == self.header_bytes:
                 try:
                     candidate = value.decode("utf-8").strip()
-                except Exception:
+                except UnicodeDecodeError:
                     candidate = ""
                 if candidate:
                     return candidate

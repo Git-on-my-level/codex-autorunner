@@ -57,6 +57,9 @@ echo "Linting command resolution..."
 echo "Checking work docs..."
 "$PYTHON_BIN" scripts/check_docs.py
 
+echo "Validating hub interface contracts..."
+"$PYTHON_BIN" scripts/validate_interfaces.py
+
 echo "Type check (mypy)..."
 "$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server
 

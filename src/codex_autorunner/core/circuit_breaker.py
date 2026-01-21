@@ -97,7 +97,12 @@ class CircuitBreaker:
 
         try:
             yield
-        except Exception:
+        except Exception as exc:
+            self._logger.debug(
+                "Exception caught by circuit breaker for %s: %s",
+                self._service_name,
+                exc,
+            )
             await self._record_failure()
             raise
         else:

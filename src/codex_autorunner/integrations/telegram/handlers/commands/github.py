@@ -1,0 +1,1939 @@
+"""GitHub/PR command handlers for Telegram integration."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import time
+from contextlib import suppress
+from os import getenv
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
+
+import httpx
+
+from .....agents.opencode.runtime import (
+    PERMISSION_ALLOW,
+    PERMISSION_ASK,
+    build_turn_id,
+    collect_opencode_output,
+    extract_session_id,
+    format_permission_prompt,
+    map_approval_policy_to_permission,
+    opencode_missing_env,
+    split_model_id,
+)
+from .....core.config import load_hub_config, load_repo_config
+from .....core.logging_utils import log_event
+from .....core.state import now_iso
+from .....core.utils import canonicalize_path
+from .....integrations.github.service import GitHubError, GitHubService
+from .....manifest import load_manifest
+from ....app_server.client import (
+    CodexAppServerDisconnected,
+)
+from ...adapter import (
+    InlineButton,
+    PrFlowStartCallback,
+    TelegramCallbackQuery,
+    TelegramMessage,
+    build_inline_keyboard,
+    encode_cancel_callback,
+)
+from ...config import AppServerUnavailableError
+from ...constants import (
+    MAX_TOPIC_THREAD_HISTORY,
+    OPENCODE_TURN_TIMEOUT_SECONDS,
+    PLACEHOLDER_TEXT,
+    QUEUED_PLACEHOLDER_TEXT,
+    RESUME_PREVIEW_ASSISTANT_LIMIT,
+    REVIEW_COMMIT_PICKER_PROMPT,
+    TurnKey,
+)
+from ...helpers import (
+    _compact_preview,
+    _compose_agent_response,
+    _compose_interrupt_response,
+    _consume_raw_token,
+    _extract_command_result,
+    _format_review_commit_label,
+    _parse_review_commit_log,
+    _preview_from_text,
+    _set_thread_summary,
+    _with_conversation_id,
+    is_interrupt_status,
+)
+from ...types import ReviewCommitSelectionState, TurnContext
+from ..utils import _build_opencode_token_usage
+
+if TYPE_CHECKING:
+    from ...state import TelegramTopicRecord
+
+
+def _opencode_review_arguments(target: dict[str, Any]) -> str:
+    target_type = target.get("type")
+    if target_type == "uncommittedChanges":
+        return ""
+    if target_type == "baseBranch":
+        branch = target.get("branch")
+        if isinstance(branch, str) and branch:
+            return branch
+    if target_type == "commit":
+        sha = target.get("sha")
+        if isinstance(sha, str) and sha:
+            return sha
+    if target_type == "custom":
+        instructions = target.get("instructions")
+        if isinstance(instructions, str):
+            instructions = instructions.strip()
+            if instructions:
+                return f"uncommitted\n\n{instructions}"
+        return "uncommitted"
+    return json.dumps(target, sort_keys=True)
+
+
+class GitHubCommands:
+    """GitHub/PR command handlers for Telegram integration.
+
+    This class is designed to be used as a mixin in command handler classes.
+    All methods use `self` to access instance attributes.
+    """
+
+    async def _start_codex_review(
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        *,
+        record: TelegramTopicRecord,
+        thread_id: str,
+        target: dict[str, Any],
+        delivery: str,
+    ) -> None:
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.app_server.unavailable",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "App server unavailable; try again or check logs.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if client is None:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        agent = self._effective_agent(record)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.review.starting",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            codex_thread_id=thread_id,
+            delivery=delivery,
+            target=target.get("type"),
+            agent=agent,
+        )
+        approval_policy, sandbox_policy = self._effective_policies(record)
+        supports_effort = self._agent_supports_effort(agent)
+        review_kwargs: dict[str, Any] = {}
+        if approval_policy:
+            review_kwargs["approval_policy"] = approval_policy
+        if sandbox_policy:
+            review_kwargs["sandbox_policy"] = sandbox_policy
+        if agent:
+            review_kwargs["agent"] = agent
+        if record.model:
+            review_kwargs["model"] = record.model
+        if record.effort and supports_effort:
+            review_kwargs["effort"] = record.effort
+        if record.summary:
+            review_kwargs["summary"] = record.summary
+        if record.workspace_path:
+            review_kwargs["cwd"] = record.workspace_path
+        turn_handle = None
+        turn_key: Optional[TurnKey] = None
+        placeholder_id: Optional[int] = None
+        turn_started_at: Optional[float] = None
+        turn_elapsed_seconds: Optional[float] = None
+        queued = False
+        placeholder_text = PLACEHOLDER_TEXT
+        try:
+            turn_semaphore = self._ensure_turn_semaphore()
+            queued = turn_semaphore.locked()
+            if queued:
+                placeholder_text = QUEUED_PLACEHOLDER_TEXT
+            placeholder_id = await self._send_placeholder(
+                message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                text=placeholder_text,
+                reply_markup=self._interrupt_keyboard(),
+            )
+            queue_started_at = time.monotonic()
+            acquired = await self._await_turn_slot(
+                turn_semaphore,
+                runtime,
+                message=message,
+                placeholder_id=placeholder_id,
+                queued=queued,
+            )
+            if not acquired:
+                runtime.interrupt_requested = False
+                return
+            try:
+                queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.review.queue_wait",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    codex_thread_id=thread_id,
+                    queue_wait_ms=queue_wait_ms,
+                    queued=queued,
+                    max_parallel_turns=self._config.concurrency.max_parallel_turns,
+                    per_topic_queue=self._config.concurrency.per_topic_queue,
+                )
+                if (
+                    queued
+                    and placeholder_id is not None
+                    and placeholder_text != PLACEHOLDER_TEXT
+                ):
+                    await self._edit_message_text(
+                        message.chat_id,
+                        placeholder_id,
+                        PLACEHOLDER_TEXT,
+                    )
+                turn_handle = await client.review_start(
+                    thread_id,
+                    target=target,
+                    delivery=delivery,
+                    **review_kwargs,
+                )
+                turn_started_at = time.monotonic()
+                turn_key = self._turn_key(thread_id, turn_handle.turn_id)
+                runtime.current_turn_id = turn_handle.turn_id
+                runtime.current_turn_key = turn_key
+                topic_key = await self._resolve_topic_key(
+                    message.chat_id, message.thread_id
+                )
+                ctx = TurnContext(
+                    topic_key=topic_key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    codex_thread_id=thread_id,
+                    reply_to_message_id=message.message_id,
+                    placeholder_message_id=placeholder_id,
+                )
+                if turn_key is None or not self._register_turn_context(
+                    turn_key, turn_handle.turn_id, ctx
+                ):
+                    runtime.current_turn_id = None
+                    runtime.current_turn_key = None
+                    runtime.interrupt_requested = False
+                    await self._send_message(
+                        message.chat_id,
+                        "Turn collision detected; please retry.",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    if placeholder_id is not None:
+                        await self._delete_message(message.chat_id, placeholder_id)
+                    return
+                await self._start_turn_progress(
+                    turn_key,
+                    ctx=ctx,
+                    agent=self._effective_agent(record),
+                    model=record.model,
+                    label="working",
+                )
+                result = await self._wait_for_turn_result(
+                    client,
+                    turn_handle,
+                    timeout_seconds=self._config.app_server_turn_timeout_seconds,
+                    topic_key=topic_key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                )
+                if turn_started_at is not None:
+                    turn_elapsed_seconds = time.monotonic() - turn_started_at
+            finally:
+                turn_semaphore.release()
+        except Exception as exc:
+            if turn_handle is not None:
+                if turn_key is not None:
+                    self._turn_contexts.pop(turn_key, None)
+            runtime.current_turn_id = None
+            runtime.current_turn_key = None
+            runtime.interrupt_requested = False
+            failure_message = "Codex review failed; check logs for details."
+            reason = "review_failed"
+            if isinstance(exc, asyncio.TimeoutError):
+                failure_message = (
+                    "Codex review timed out; interrupting now. "
+                    "Please resend the review command in a moment."
+                )
+                reason = "turn_timeout"
+            elif isinstance(exc, CodexAppServerDisconnected):
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.disconnected_during_review",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    turn_id=turn_handle.turn_id if turn_handle else None,
+                )
+                failure_message = (
+                    "Codex app-server disconnected; recovering now. "
+                    "Your review did not complete. Please resend the review command in a moment."
+                )
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.review.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+                reason=reason,
+            )
+            response_sent = await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=placeholder_id,
+                response=_with_conversation_id(
+                    failure_message,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+            )
+            if response_sent:
+                await self._delete_message(message.chat_id, placeholder_id)
+            return
+        finally:
+            if turn_handle is not None:
+                if turn_key is not None:
+                    self._turn_contexts.pop(turn_key, None)
+                    self._clear_thinking_preview(turn_key)
+                    self._clear_turn_progress(turn_key)
+            runtime.current_turn_id = None
+            runtime.current_turn_key = None
+            runtime.interrupt_requested = False
+        response = _compose_agent_response(
+            result.agent_messages, errors=result.errors, status=result.status
+        )
+        if thread_id and result.agent_messages:
+            assistant_preview = _preview_from_text(
+                response, RESUME_PREVIEW_ASSISTANT_LIMIT
+            )
+            if assistant_preview:
+                await self._router.update_topic(
+                    message.chat_id,
+                    message.thread_id,
+                    lambda record: _set_thread_summary(
+                        record,
+                        thread_id,
+                        assistant_preview=assistant_preview,
+                        last_used_at=now_iso(),
+                        workspace_path=record.workspace_path,
+                        rollout_path=record.rollout_path,
+                    ),
+                )
+        turn_handle_id = turn_handle.turn_id if turn_handle else None
+        if is_interrupt_status(result.status):
+            response = _compose_interrupt_response(response)
+            if (
+                runtime.interrupt_message_id is not None
+                and runtime.interrupt_turn_id == turn_handle_id
+            ):
+                await self._edit_message_text(
+                    message.chat_id,
+                    runtime.interrupt_message_id,
+                    "Interrupted.",
+                )
+                runtime.interrupt_message_id = None
+                runtime.interrupt_turn_id = None
+            runtime.interrupt_requested = False
+        elif runtime.interrupt_turn_id == turn_handle_id:
+            if runtime.interrupt_message_id is not None:
+                await self._edit_message_text(
+                    message.chat_id,
+                    runtime.interrupt_message_id,
+                    "Interrupt requested; turn completed.",
+                )
+            runtime.interrupt_message_id = None
+            runtime.interrupt_turn_id = None
+            runtime.interrupt_requested = False
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.review.completed",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            turn_id=turn_handle.turn_id if turn_handle else None,
+            agent_message_count=len(result.agent_messages),
+            error_count=len(result.errors),
+        )
+        turn_id = turn_handle.turn_id if turn_handle else None
+        token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
+        metrics = self._format_turn_metrics_text(token_usage, turn_elapsed_seconds)
+        metrics_mode = self._metrics_mode()
+        response_text = response
+        if metrics and metrics_mode == "append_to_response":
+            response_text = f"{response_text}\n\n{metrics}"
+        response_sent = await self._deliver_turn_response(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            placeholder_id=placeholder_id,
+            response=response_text,
+        )
+        placeholder_handled = False
+        if metrics and metrics_mode == "separate":
+            await self._send_turn_metrics(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                elapsed_seconds=turn_elapsed_seconds,
+                token_usage=token_usage,
+            )
+        elif metrics and metrics_mode == "append_to_progress" and response_sent:
+            placeholder_handled = await self._append_metrics_to_placeholder(
+                message.chat_id, placeholder_id, metrics
+            )
+        if turn_id:
+            self._token_usage_by_turn.pop(turn_id, None)
+        if response_sent:
+            if not placeholder_handled:
+                await self._delete_message(message.chat_id, placeholder_id)
+        await self._flush_outbox_files(
+            record,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _start_opencode_review(
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        *,
+        record: TelegramTopicRecord,
+        thread_id: str,
+        target: dict[str, Any],
+        delivery: str,
+    ) -> None:
+        supervisor = getattr(self, "_opencode_supervisor", None)
+        if supervisor is None:
+            await self._send_message(
+                message.chat_id,
+                "OpenCode backend unavailable; install opencode or switch to /agent codex.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        workspace_root = self._canonical_workspace_root(record.workspace_path)
+        if workspace_root is None:
+            await self._send_message(
+                message.chat_id,
+                "Workspace unavailable.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        try:
+            opencode_client = await supervisor.get_client(workspace_root)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.opencode.client.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "OpenCode backend unavailable.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        review_session_id = thread_id
+        if delivery == "detached":
+            try:
+                session = await opencode_client.create_session(
+                    directory=str(workspace_root)
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.opencode.session.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Failed to start a new OpenCode thread.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            review_session_id = extract_session_id(session, allow_fallback_id=True)
+            if not review_session_id:
+                await self._send_message(
+                    message.chat_id,
+                    "Failed to start a new OpenCode thread.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+
+            def apply(record: "TelegramTopicRecord") -> None:
+                if review_session_id in record.thread_ids:
+                    record.thread_ids.remove(review_session_id)
+                record.thread_ids.insert(0, review_session_id)
+                if len(record.thread_ids) > MAX_TOPIC_THREAD_HISTORY:
+                    record.thread_ids = record.thread_ids[:MAX_TOPIC_THREAD_HISTORY]
+                _set_thread_summary(
+                    record,
+                    review_session_id,
+                    last_used_at=now_iso(),
+                    workspace_path=record.workspace_path,
+                    rollout_path=record.rollout_path,
+                )
+
+            await self._router.update_topic(message.chat_id, message.thread_id, apply)
+        agent = self._effective_agent(record)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.review.starting",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            codex_thread_id=review_session_id,
+            delivery=delivery,
+            target=target.get("type"),
+            agent=agent,
+        )
+        approval_policy, _sandbox_policy = self._effective_policies(record)
+        permission_policy = map_approval_policy_to_permission(
+            approval_policy, default=PERMISSION_ALLOW
+        )
+        review_args = _opencode_review_arguments(target)
+        turn_key: Optional[TurnKey] = None
+        placeholder_id: Optional[int] = None
+        turn_started_at: Optional[float] = None
+        turn_elapsed_seconds: Optional[float] = None
+        turn_id: Optional[str] = None
+        output_result = None
+        queued = False
+        placeholder_text = PLACEHOLDER_TEXT
+        try:
+            turn_semaphore = self._ensure_turn_semaphore()
+            queued = turn_semaphore.locked()
+            if queued:
+                placeholder_text = QUEUED_PLACEHOLDER_TEXT
+            placeholder_id = await self._send_placeholder(
+                message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                text=placeholder_text,
+                reply_markup=self._interrupt_keyboard(),
+            )
+            queue_started_at = time.monotonic()
+            acquired = await self._await_turn_slot(
+                turn_semaphore,
+                runtime,
+                message=message,
+                placeholder_id=placeholder_id,
+                queued=queued,
+            )
+            if not acquired:
+                runtime.interrupt_requested = False
+                return
+            try:
+                queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "telegram.review.queue_wait",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    codex_thread_id=review_session_id,
+                    queue_wait_ms=queue_wait_ms,
+                    queued=queued,
+                    max_parallel_turns=self._config.concurrency.max_parallel_turns,
+                    per_topic_queue=self._config.concurrency.per_topic_queue,
+                )
+                if (
+                    queued
+                    and placeholder_id is not None
+                    and placeholder_text != PLACEHOLDER_TEXT
+                ):
+                    await self._edit_message_text(
+                        message.chat_id,
+                        placeholder_id,
+                        PLACEHOLDER_TEXT,
+                    )
+                opencode_turn_started = False
+                try:
+                    await supervisor.mark_turn_started(workspace_root)
+                    opencode_turn_started = True
+                    model_payload = split_model_id(record.model)
+                    missing_env = await opencode_missing_env(
+                        opencode_client,
+                        str(workspace_root),
+                        model_payload,
+                    )
+                    if missing_env:
+                        provider_id = (
+                            model_payload.get("providerID") if model_payload else None
+                        )
+                        failure_message = (
+                            "OpenCode provider "
+                            f"{provider_id or 'selected'} requires env vars: "
+                            f"{', '.join(missing_env)}. "
+                            "Set them or switch models."
+                        )
+                        response_sent = await self._deliver_turn_response(
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                            placeholder_id=placeholder_id,
+                            response=failure_message,
+                        )
+                        if response_sent:
+                            await self._delete_message(message.chat_id, placeholder_id)
+                        return
+                    turn_started_at = time.monotonic()
+                    turn_id = build_turn_id(review_session_id)
+                    self._token_usage_by_thread.pop(review_session_id, None)
+                    runtime.current_turn_id = turn_id
+                    runtime.current_turn_key = (review_session_id, turn_id)
+                    topic_key = await self._resolve_topic_key(
+                        message.chat_id, message.thread_id
+                    )
+                    ctx = TurnContext(
+                        topic_key=topic_key,
+                        chat_id=message.chat_id,
+                        thread_id=message.thread_id,
+                        codex_thread_id=review_session_id,
+                        reply_to_message_id=message.message_id,
+                        placeholder_message_id=placeholder_id,
+                    )
+                    turn_key = self._turn_key(review_session_id, turn_id)
+                    if turn_key is None or not self._register_turn_context(
+                        turn_key, turn_id, ctx
+                    ):
+                        runtime.current_turn_id = None
+                        runtime.current_turn_key = None
+                        runtime.interrupt_requested = False
+                        await self._send_message(
+                            message.chat_id,
+                            "Turn collision detected; please retry.",
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                        )
+                        if placeholder_id is not None:
+                            await self._delete_message(message.chat_id, placeholder_id)
+                        return
+                    await self._start_turn_progress(
+                        turn_key,
+                        ctx=ctx,
+                        agent="opencode",
+                        model=record.model,
+                        label="review",
+                    )
+
+                    async def _permission_handler(
+                        request_id: str, props: dict[str, Any]
+                    ) -> str:
+                        if permission_policy != PERMISSION_ASK:
+                            return "reject"
+                        prompt = format_permission_prompt(props)
+                        decision = await self._handle_approval_request(
+                            {
+                                "id": request_id,
+                                "method": "opencode/permission/requestApproval",
+                                "params": {
+                                    "turnId": turn_id,
+                                    "threadId": review_session_id,
+                                    "prompt": prompt,
+                                },
+                            }
+                        )
+                        return decision
+
+                    abort_requested = False
+
+                    async def _abort_opencode() -> None:
+                        try:
+                            await opencode_client.abort(review_session_id)
+                        except Exception:
+                            pass
+
+                    def _should_stop() -> bool:
+                        nonlocal abort_requested
+                        if runtime.interrupt_requested and not abort_requested:
+                            abort_requested = True
+                            asyncio.create_task(_abort_opencode())
+                        return runtime.interrupt_requested
+
+                    reasoning_buffers: dict[str, str] = {}
+                    watched_session_ids = {review_session_id}
+                    subagent_labels: dict[str, str] = {}
+                    opencode_context_window: Optional[int] = None
+                    context_window_resolved = False
+
+                    async def _handle_opencode_part(
+                        part_type: str,
+                        part: dict[str, Any],
+                        delta_text: Optional[str],
+                    ) -> None:
+                        nonlocal opencode_context_window
+                        nonlocal context_window_resolved
+                        if turn_key is None:
+                            return
+                        tracker = self._turn_progress_trackers.get(turn_key)
+                        if tracker is None:
+                            return
+                        session_id = None
+                        for key in ("sessionID", "sessionId", "session_id"):
+                            value = part.get(key)
+                            if isinstance(value, str) and value:
+                                session_id = value
+                                break
+                        if not session_id:
+                            session_id = review_session_id
+                        is_primary_session = session_id == review_session_id
+                        subagent_label = subagent_labels.get(session_id)
+                        if part_type == "reasoning":
+                            part_id = (
+                                part.get("id") or part.get("partId") or "reasoning"
+                            )
+                            buffer_key = f"{session_id}:{part_id}"
+                            buffer = reasoning_buffers.get(buffer_key, "")
+                            if delta_text:
+                                buffer = f"{buffer}{delta_text}"
+                            else:
+                                raw_text = part.get("text")
+                                if isinstance(raw_text, str) and raw_text:
+                                    buffer = raw_text
+                            if buffer:
+                                reasoning_buffers[buffer_key] = buffer
+                                preview = _compact_preview(buffer, limit=240)
+                                if is_primary_session:
+                                    tracker.note_thinking(preview)
+                                else:
+                                    if not subagent_label:
+                                        subagent_label = "@subagent"
+                                        subagent_labels.setdefault(
+                                            session_id, subagent_label
+                                        )
+                                    if not tracker.update_action_by_item_id(
+                                        buffer_key,
+                                        preview,
+                                        "update",
+                                        label="thinking",
+                                        subagent_label=subagent_label,
+                                    ):
+                                        tracker.add_action(
+                                            "thinking",
+                                            preview,
+                                            "update",
+                                            item_id=buffer_key,
+                                            subagent_label=subagent_label,
+                                        )
+                        elif part_type == "tool":
+                            tool_id = part.get("callID") or part.get("id")
+                            tool_name = part.get("tool") or part.get("name") or "tool"
+                            status = None
+                            state = part.get("state")
+                            if isinstance(state, dict):
+                                status = state.get("status")
+                            label = (
+                                f"{tool_name} ({status})"
+                                if isinstance(status, str) and status
+                                else str(tool_name)
+                            )
+                            if (
+                                is_primary_session
+                                and isinstance(tool_name, str)
+                                and tool_name == "task"
+                                and isinstance(state, dict)
+                            ):
+                                metadata = state.get("metadata")
+                                if isinstance(metadata, dict):
+                                    child_session_id = metadata.get(
+                                        "sessionId"
+                                    ) or metadata.get("sessionID")
+                                    if (
+                                        isinstance(child_session_id, str)
+                                        and child_session_id
+                                    ):
+                                        watched_session_ids.add(child_session_id)
+                                        child_label = None
+                                        input_payload = state.get("input")
+                                        if isinstance(input_payload, dict):
+                                            child_label = input_payload.get(
+                                                "subagent_type"
+                                            ) or input_payload.get("subagentType")
+                                        if (
+                                            isinstance(child_label, str)
+                                            and child_label.strip()
+                                        ):
+                                            child_label = child_label.strip()
+                                            if not child_label.startswith("@"):
+                                                child_label = f"@{child_label}"
+                                            subagent_labels.setdefault(
+                                                child_session_id, child_label
+                                            )
+                                        else:
+                                            subagent_labels.setdefault(
+                                                child_session_id, "@subagent"
+                                            )
+                                detail_parts: list[str] = []
+                                title = state.get("title")
+                                if isinstance(title, str) and title.strip():
+                                    detail_parts.append(title.strip())
+                                input_payload = state.get("input")
+                                if isinstance(input_payload, dict):
+                                    description = input_payload.get("description")
+                                    if (
+                                        isinstance(description, str)
+                                        and description.strip()
+                                    ):
+                                        detail_parts.append(description.strip())
+                                summary = None
+                                if isinstance(metadata, dict):
+                                    summary = metadata.get("summary")
+                                if isinstance(summary, str) and summary.strip():
+                                    detail_parts.append(summary.strip())
+                                if detail_parts:
+                                    seen: set[str] = set()
+                                    unique_parts = [
+                                        part_text
+                                        for part_text in detail_parts
+                                        if part_text not in seen
+                                        and not seen.add(part_text)
+                                    ]
+                                    detail_text = " / ".join(unique_parts)
+                                    label = f"{label} - {_compact_preview(detail_text, limit=160)}"
+                            mapped_status = "update"
+                            if isinstance(status, str):
+                                status_lower = status.lower()
+                                if status_lower in ("completed", "done", "success"):
+                                    mapped_status = "done"
+                                elif status_lower in ("error", "failed", "fail"):
+                                    mapped_status = "fail"
+                                elif status_lower in ("pending", "running"):
+                                    mapped_status = "running"
+                            scoped_tool_id = (
+                                f"{session_id}:{tool_id}"
+                                if isinstance(tool_id, str) and tool_id
+                                else None
+                            )
+                            if is_primary_session:
+                                if not tracker.update_action_by_item_id(
+                                    scoped_tool_id,
+                                    label,
+                                    mapped_status,
+                                    label="tool",
+                                ):
+                                    tracker.add_action(
+                                        "tool",
+                                        label,
+                                        mapped_status,
+                                        item_id=scoped_tool_id,
+                                    )
+                            else:
+                                if not subagent_label:
+                                    subagent_label = "@subagent"
+                                    subagent_labels.setdefault(
+                                        session_id, subagent_label
+                                    )
+                                if not tracker.update_action_by_item_id(
+                                    scoped_tool_id,
+                                    label,
+                                    mapped_status,
+                                    label=subagent_label,
+                                ):
+                                    tracker.add_action(
+                                        subagent_label,
+                                        label,
+                                        mapped_status,
+                                        item_id=scoped_tool_id,
+                                    )
+                        elif part_type == "patch":
+                            patch_id = part.get("id") or part.get("hash")
+                            files = part.get("files")
+                            scoped_patch_id = (
+                                f"{session_id}:{patch_id}"
+                                if isinstance(patch_id, str) and patch_id
+                                else None
+                            )
+                            if isinstance(files, list) and files:
+                                summary = ", ".join(str(file) for file in files)
+                                if not tracker.update_action_by_item_id(
+                                    scoped_patch_id, summary, "done", label="files"
+                                ):
+                                    tracker.add_action(
+                                        "files",
+                                        summary,
+                                        "done",
+                                        item_id=scoped_patch_id,
+                                    )
+                            else:
+                                if not tracker.update_action_by_item_id(
+                                    scoped_patch_id, "Patch", "done", label="files"
+                                ):
+                                    tracker.add_action(
+                                        "files",
+                                        "Patch",
+                                        "done",
+                                        item_id=scoped_patch_id,
+                                    )
+                        elif part_type == "agent":
+                            agent_name = part.get("name") or "agent"
+                            tracker.add_action("agent", str(agent_name), "done")
+                        elif part_type == "step-start":
+                            tracker.add_action("step", "started", "update")
+                        elif part_type == "step-finish":
+                            reason = part.get("reason") or "finished"
+                            tracker.add_action("step", str(reason), "done")
+                        elif part_type == "usage":
+                            token_usage = (
+                                _build_opencode_token_usage(part)
+                                if isinstance(part, dict)
+                                else None
+                            )
+                            if token_usage:
+                                if is_primary_session:
+                                    if (
+                                        "modelContextWindow" not in token_usage
+                                        and not context_window_resolved
+                                    ):
+                                        opencode_context_window = await self._resolve_opencode_model_context_window(
+                                            opencode_client,
+                                            workspace_root,
+                                            model_payload,
+                                        )
+                                        context_window_resolved = True
+                                    if (
+                                        "modelContextWindow" not in token_usage
+                                        and isinstance(opencode_context_window, int)
+                                        and opencode_context_window > 0
+                                    ):
+                                        token_usage["modelContextWindow"] = (
+                                            opencode_context_window
+                                        )
+                                    self._cache_token_usage(
+                                        token_usage,
+                                        turn_id=turn_id,
+                                        thread_id=review_session_id,
+                                    )
+                                    await self._note_progress_context_usage(
+                                        token_usage,
+                                        turn_id=turn_id,
+                                        thread_id=review_session_id,
+                                    )
+                        await self._schedule_progress_edit(turn_key)
+
+                    output_task = asyncio.create_task(
+                        collect_opencode_output(
+                            opencode_client,
+                            session_id=review_session_id,
+                            workspace_path=str(workspace_root),
+                            progress_session_ids=watched_session_ids,
+                            permission_policy=permission_policy,
+                            permission_handler=(
+                                _permission_handler
+                                if permission_policy == PERMISSION_ASK
+                                else None
+                            ),
+                            should_stop=_should_stop,
+                            part_handler=_handle_opencode_part,
+                        )
+                    )
+                    command_task = asyncio.create_task(
+                        opencode_client.send_command(
+                            review_session_id,
+                            command="review",
+                            arguments=review_args,
+                            model=record.model,
+                        )
+                    )
+                    try:
+                        await command_task
+                    except Exception as exc:
+                        output_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await output_task
+                        raise exc
+                    timeout_task = asyncio.create_task(
+                        asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
+                    )
+                    done, _pending = await asyncio.wait(
+                        {output_task, timeout_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if timeout_task in done:
+                        runtime.interrupt_requested = True
+                        await _abort_opencode()
+                        output_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await output_task
+                        if turn_started_at is not None:
+                            turn_elapsed_seconds = time.monotonic() - turn_started_at
+                        failure_message = "OpenCode review timed out."
+                        response_sent = await self._deliver_turn_response(
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                            placeholder_id=placeholder_id,
+                            response=failure_message,
+                        )
+                        if response_sent:
+                            await self._delete_message(message.chat_id, placeholder_id)
+                        return
+                    timeout_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await timeout_task
+                    output_result = await output_task
+                    if turn_started_at is not None:
+                        turn_elapsed_seconds = time.monotonic() - turn_started_at
+                finally:
+                    if opencode_turn_started:
+                        await supervisor.mark_turn_finished(workspace_root)
+            finally:
+                turn_semaphore.release()
+        except Exception as exc:
+            if turn_key is not None:
+                self._turn_contexts.pop(turn_key, None)
+            runtime.current_turn_id = None
+            runtime.current_turn_key = None
+            runtime.interrupt_requested = False
+            failure_message = (
+                _format_opencode_exception(exc)
+                or "OpenCode review failed; check logs for details."
+            )
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.review.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                exc=exc,
+            )
+            response_sent = await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=placeholder_id,
+                response=_with_conversation_id(
+                    failure_message,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+            )
+            if response_sent:
+                await self._delete_message(message.chat_id, placeholder_id)
+            return
+        finally:
+            if turn_key is not None:
+                self._turn_contexts.pop(turn_key, None)
+                self._clear_thinking_preview(turn_key)
+                self._clear_turn_progress(turn_key)
+            runtime.current_turn_id = None
+            runtime.current_turn_key = None
+            runtime.interrupt_requested = False
+        if output_result is None:
+            return
+        output = output_result.text
+        if output_result.error:
+            failure_message = f"OpenCode review failed: {output_result.error}"
+            response_sent = await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=placeholder_id,
+                response=failure_message,
+            )
+            if response_sent:
+                await self._delete_message(message.chat_id, placeholder_id)
+            return
+        if output:
+            assistant_preview = _preview_from_text(
+                output, RESUME_PREVIEW_ASSISTANT_LIMIT
+            )
+            if assistant_preview:
+                await self._router.update_topic(
+                    message.chat_id,
+                    message.thread_id,
+                    lambda record: _set_thread_summary(
+                        record,
+                        review_session_id,
+                        assistant_preview=assistant_preview,
+                        last_used_at=now_iso(),
+                        workspace_path=record.workspace_path,
+                        rollout_path=record.rollout_path,
+                    ),
+                )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.review.completed",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            turn_id=turn_id,
+        )
+        token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
+        metrics = self._format_turn_metrics_text(token_usage, turn_elapsed_seconds)
+        metrics_mode = self._metrics_mode()
+        response_text = output or "No response."
+        if metrics and metrics_mode == "append_to_response":
+            response_text = f"{response_text}\n\n{metrics}"
+        response_sent = await self._deliver_turn_response(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            placeholder_id=placeholder_id,
+            response=response_text,
+        )
+        placeholder_handled = False
+        if metrics and metrics_mode == "separate":
+            await self._send_turn_metrics(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                elapsed_seconds=turn_elapsed_seconds,
+                token_usage=token_usage,
+            )
+        elif metrics and metrics_mode == "append_to_progress" and response_sent:
+            placeholder_handled = await self._append_metrics_to_placeholder(
+                message.chat_id, placeholder_id, metrics
+            )
+        if turn_id:
+            self._token_usage_by_turn.pop(turn_id, None)
+        if response_sent:
+            if not placeholder_handled:
+                await self._delete_message(message.chat_id, placeholder_id)
+        await self._flush_outbox_files(
+            record,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _start_review(
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        *,
+        record: TelegramTopicRecord,
+        thread_id: str,
+        target: dict[str, Any],
+        delivery: str,
+    ) -> None:
+        agent = self._effective_agent(record)
+        if agent == "opencode":
+            await self._start_opencode_review(
+                message,
+                runtime,
+                record=record,
+                thread_id=thread_id,
+                target=target,
+                delivery=delivery,
+            )
+            return
+        await self._start_codex_review(
+            message,
+            runtime,
+            record=record,
+            thread_id=thread_id,
+            target=target,
+            delivery=delivery,
+        )
+
+    async def _handle_review(
+        self, message: TelegramMessage, args: str, runtime: Any
+    ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        raw_args = args.strip()
+        delivery = "inline"
+        if raw_args:
+            detached_pattern = r"(^|\s)(--detached|detached)(?=\s|$)"
+            if re.search(detached_pattern, raw_args, flags=re.IGNORECASE):
+                delivery = "detached"
+                raw_args = re.sub(detached_pattern, " ", raw_args, flags=re.IGNORECASE)
+                raw_args = raw_args.strip()
+        token, remainder = _consume_raw_token(raw_args)
+        target: dict[str, Any] = {"type": "uncommittedChanges"}
+        if token:
+            keyword = token.lower()
+            if keyword == "base":
+                argv = self._parse_command_args(raw_args)
+                if len(argv) < 2:
+                    await self._send_message(
+                        message.chat_id,
+                        "Usage: /review base <branch>",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                target = {"type": "baseBranch", "branch": argv[1]}
+            elif keyword == "pr":
+                argv = self._parse_command_args(raw_args)
+                branch = argv[1] if len(argv) > 1 else "main"
+                target = {"type": "baseBranch", "branch": branch}
+            elif keyword == "commit":
+                argv = self._parse_command_args(raw_args)
+                if len(argv) < 2:
+                    await self._prompt_review_commit_picker(
+                        message, record, delivery=delivery
+                    )
+                    return
+                target = {"type": "commit", "sha": argv[1]}
+            elif keyword == "custom":
+                instructions = remainder
+                if instructions.startswith((" ", "\t")):
+                    instructions = instructions[1:]
+                if not instructions.strip():
+                    prompt_text = (
+                        "Reply with review instructions (next message will be used)."
+                    )
+                    cancel_keyboard = build_inline_keyboard(
+                        [
+                            [
+                                InlineButton(
+                                    "Cancel",
+                                    encode_cancel_callback("review-custom"),
+                                )
+                            ]
+                        ]
+                    )
+                    payload_text, parse_mode = self._prepare_message(prompt_text)
+                    response = await self._bot.send_message(
+                        message.chat_id,
+                        payload_text,
+                        message_thread_id=message.thread_id,
+                        reply_to_message_id=message.message_id,
+                        reply_markup=cancel_keyboard,
+                        parse_mode=parse_mode,
+                    )
+                    prompt_message_id = (
+                        response.get("message_id")
+                        if isinstance(response, dict)
+                        else None
+                    )
+                    self._pending_review_custom[key] = {
+                        "delivery": delivery,
+                        "message_id": prompt_message_id,
+                        "prompt_text": prompt_text,
+                    }
+                    self._touch_cache_timestamp("pending_review_custom", key)
+                    return
+                target = {"type": "custom", "instructions": instructions}
+            else:
+                instructions = raw_args.strip()
+                if instructions:
+                    target = {"type": "custom", "instructions": instructions}
+        thread_id = await self._ensure_thread_id(message, record)
+        if not thread_id:
+            return
+        await self._start_review(
+            message,
+            runtime,
+            record=record,
+            thread_id=thread_id,
+            target=target,
+            delivery=delivery,
+        )
+
+    def _resolve_pr_flow_repo_id(self, record: "TelegramTopicRecord") -> Optional[str]:
+        if record.repo_id:
+            return record.repo_id
+        if not self._hub_root or not self._manifest_path or not record.workspace_path:
+            return None
+        try:
+            manifest = load_manifest(self._manifest_path, self._hub_root)
+        except Exception:
+            return None
+        try:
+            workspace_path = canonicalize_path(Path(record.workspace_path))
+        except Exception:
+            return None
+        for repo in manifest.repos:
+            repo_path = canonicalize_path(self._hub_root / repo.path)
+            if repo_path == workspace_path:
+                return repo.id
+        return None
+
+    def _pr_flow_api_base(
+        self, record: "TelegramTopicRecord"
+    ) -> tuple[Optional[str], dict[str, str]]:
+        headers: dict[str, str] = {}
+        if self._hub_root is not None:
+            try:
+                hub_config = load_hub_config(self._hub_root)
+            except Exception:
+                return None, headers
+            host = hub_config.server_host
+            port = hub_config.server_port
+            base_path = hub_config.server_base_path
+            auth_env = hub_config.server_auth_token_env
+            repo_id = self._resolve_pr_flow_repo_id(record)
+            if not repo_id:
+                return None, headers
+            repo_prefix = f"/repos/{repo_id}"
+        else:
+            if not record.workspace_path:
+                return None, headers
+            try:
+                repo_config = load_repo_config(
+                    Path(record.workspace_path), hub_path=None
+                )
+            except Exception:
+                return None, headers
+            host = repo_config.server_host
+            port = repo_config.server_port
+            base_path = repo_config.server_base_path
+            auth_env = repo_config.server_auth_token_env
+            repo_prefix = ""
+        if isinstance(auth_env, str) and auth_env:
+            token = getenv(auth_env)
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+        if not host:
+            return None, headers
+        if host.startswith("http://") or host.startswith("https://"):
+            base = host.rstrip("/")
+        else:
+            base = f"http://{host}:{int(port)}"
+        base_path = (base_path or "").strip("/")
+        if base_path:
+            base = f"{base}/{base_path}"
+        return f"{base}{repo_prefix}", headers
+
+    async def _pr_flow_request(
+        self,
+        record: "TelegramTopicRecord",
+        *,
+        method: str,
+        path: str,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        base, headers = self._pr_flow_api_base(record)
+        if not base:
+            raise RuntimeError(
+                "PR flow cannot start: repo server base URL could not be resolved for this chat/topic."
+            )
+        url = f"{base}{path}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.request(method, url, json=payload, headers=headers)
+            res.raise_for_status()
+            data = res.json()
+            if isinstance(data, dict):
+                return data
+            return {"status": "ok", "flow": data}
+
+    def _parse_pr_flags(self, argv: list[str]) -> tuple[Optional[str], dict[str, Any]]:
+        ref: Optional[str] = None
+        flags: dict[str, Any] = {}
+        idx = 0
+        while idx < len(argv):
+            token = argv[idx]
+            if token.startswith("--"):
+                if token == "--draft":
+                    flags["draft"] = True
+                    idx += 1
+                    continue
+                if token == "--ready":
+                    flags["draft"] = False
+                    idx += 1
+                    continue
+                if token == "--base" and idx + 1 < len(argv):
+                    flags["base_branch"] = argv[idx + 1]
+                    idx += 2
+                    continue
+                if token == "--until" and idx + 1 < len(argv):
+                    until = argv[idx + 1].strip().lower()
+                    if until in ("minor", "minor_only"):
+                        flags["stop_condition"] = "minor_only"
+                    elif until in ("clean", "no_issues"):
+                        flags["stop_condition"] = "no_issues"
+                    idx += 2
+                    continue
+                if token in ("--max-cycles", "--max_cycles") and idx + 1 < len(argv):
+                    try:
+                        flags["max_cycles"] = int(argv[idx + 1])
+                    except ValueError:
+                        pass
+                    idx += 2
+                    continue
+                if token in ("--max-runs", "--max_runs") and idx + 1 < len(argv):
+                    try:
+                        flags["max_implementation_runs"] = int(argv[idx + 1])
+                    except ValueError:
+                        pass
+                    idx += 2
+                    continue
+                if token in ("--timeout", "--timeout-seconds") and idx + 1 < len(argv):
+                    try:
+                        flags["max_wallclock_seconds"] = int(argv[idx + 1])
+                    except ValueError:
+                        pass
+                    idx += 2
+                    continue
+                idx += 1
+                continue
+            if ref is None:
+                ref = token
+            idx += 1
+        return ref, flags
+
+    def _format_pr_flow_status(self, flow: dict[str, Any]) -> str:
+        status = flow.get("status") or "unknown"
+        step = flow.get("step") or "unknown"
+        cycle = flow.get("cycle") or 0
+        pr_url = flow.get("pr_url") or ""
+        lines = [f"PR flow: {status} (step: {step}, cycle: {cycle})"]
+        if pr_url:
+            lines.append(f"PR: {pr_url}")
+        return "\n".join(lines)
+
+    async def _handle_github_issue_url(
+        self,
+        message: TelegramMessage,
+        key: str,
+        slug: str,
+        number: int,
+    ) -> None:
+        if key is None:
+            return
+
+        record = await self._router.get_topic(key)
+        if record is None or not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                self._with_conversation_id(
+                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        try:
+            from pathlib import Path
+
+            service = GitHubService(Path(record.workspace_path), self._raw_config)
+            issue_ref = f"{slug}#{number}"
+            service.validate_issue_same_repo(issue_ref)
+        except GitHubError as exc:
+            await self._send_message(
+                message.chat_id,
+                str(exc),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        await self._offer_pr_flow_start(message, record, slug, number)
+
+    async def _offer_pr_flow_start(
+        self,
+        message: TelegramMessage,
+        record: "TelegramTopicRecord",
+        slug: str,
+        number: int,
+    ) -> None:
+        from ...adapter import (
+            InlineButton,
+            build_inline_keyboard,
+            encode_cancel_callback,
+            encode_pr_flow_start_callback,
+        )
+
+        keyboard = build_inline_keyboard(
+            [
+                [
+                    InlineButton(
+                        f"Create PR for #{number}",
+                        encode_pr_flow_start_callback(slug, number),
+                    ),
+                    InlineButton(
+                        "Cancel",
+                        encode_cancel_callback("pr_flow_offer"),
+                    ),
+                ]
+            ]
+        )
+        await self._send_message(
+            message.chat_id,
+            f"Detected GitHub issue: {slug}#{number}\n"
+            f"Start PR flow to create a PR?",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            reply_markup=keyboard,
+        )
+
+    async def _handle_pr_flow_start_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: PrFlowStartCallback,
+    ) -> None:
+        from ...adapter import TelegramMessage
+
+        await self._answer_callback(callback)
+        record = await self._router.get_topic(key)
+        if record is None or not record.workspace_path:
+            return
+
+        issue_ref = f"{parsed.slug}#{parsed.number}"
+        payload = {"mode": "issue", "issue": issue_ref}
+        payload["source"] = "telegram"
+        source_meta: dict[str, Any] = {}
+        if callback.chat_id is not None:
+            source_meta["chat_id"] = callback.chat_id
+        if callback.thread_id is not None:
+            source_meta["thread_id"] = callback.thread_id
+        if source_meta:
+            payload["source_meta"] = source_meta
+
+        message = TelegramMessage(
+            update_id=callback.update_id,
+            message_id=callback.message_id or 0,
+            chat_id=callback.chat_id or 0,
+            thread_id=callback.thread_id,
+            from_user_id=callback.from_user_id,
+            text="",
+            date=None,
+            is_topic_message=False,
+        )
+
+        try:
+            data = await self._pr_flow_request(
+                record,
+                method="POST",
+                path="/api/github/pr_flow/start",
+                payload=payload,
+            )
+            flow = data.get("flow") if isinstance(data, dict) else data
+        except Exception as exc:
+            detail = _format_httpx_exception(exc) or str(exc)
+            await self._send_message(
+                message.chat_id,
+                f"PR flow error: {detail}",
+                thread_id=message.thread_id,
+                reply_to=callback.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            self._format_pr_flow_status(flow),
+            thread_id=message.thread_id,
+            reply_to=callback.message_id,
+        )
+
+    async def _handle_pr(
+        self, message: TelegramMessage, args: str, runtime: Any
+    ) -> None:
+        record = await self._require_bound_record(message)
+        if not record:
+            return
+        argv = self._parse_command_args(args)
+        if not argv:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /pr start <issueRef> | /pr fix <prRef> | /pr status | /pr stop | /pr resume | /pr collect",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        command = argv[0].lower()
+        if command == "status":
+            try:
+                data = await self._pr_flow_request(
+                    record, method="GET", path="/api/github/pr_flow/status"
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {detail}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if command == "stop":
+            try:
+                data = await self._pr_flow_request(
+                    record, method="POST", path="/api/github/pr_flow/stop", payload={}
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {detail}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if command == "resume":
+            try:
+                data = await self._pr_flow_request(
+                    record, method="POST", path="/api/github/pr_flow/resume", payload={}
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {detail}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if command == "collect":
+            try:
+                data = await self._pr_flow_request(
+                    record,
+                    method="POST",
+                    path="/api/github/pr_flow/collect",
+                    payload={},
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {detail}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if command in ("start", "implement"):
+            ref, flags = self._parse_pr_flags(argv[1:])
+            if not ref:
+                gh = GitHubService(Path(record.workspace_path))
+                issues = await asyncio.to_thread(gh.list_open_issues, limit=5)
+                if issues:
+                    lines = ["Open issues:"]
+                    for issue in issues:
+                        num = issue.get("number")
+                        title = issue.get("title") or ""
+                        lines.append(f"- #{num} {title}".strip())
+                    lines.append("Use /pr start <issueRef> to begin.")
+                    await self._send_message(
+                        message.chat_id,
+                        "\n".join(lines),
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                await self._send_message(
+                    message.chat_id,
+                    "Usage: /pr start <issueRef>",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            payload = {"mode": "issue", "issue": ref, **flags}
+            payload["source"] = "telegram"
+            payload["source_meta"] = {
+                "chat_id": message.chat_id,
+                "thread_id": message.thread_id,
+            }
+            try:
+                data = await self._pr_flow_request(
+                    record,
+                    method="POST",
+                    path="/api/github/pr_flow/start",
+                    payload=payload,
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {detail}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if command in ("fix", "pr"):
+            ref, flags = self._parse_pr_flags(argv[1:])
+            if not ref:
+                gh = GitHubService(Path(record.workspace_path))
+                prs = await asyncio.to_thread(gh.list_open_prs, limit=5)
+                if prs:
+                    lines = ["Open PRs:"]
+                    for pr in prs:
+                        num = pr.get("number")
+                        title = pr.get("title") or ""
+                        lines.append(f"- #{num} {title}".strip())
+                    lines.append("Use /pr fix <prRef> to begin.")
+                    await self._send_message(
+                        message.chat_id,
+                        "\n".join(lines),
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                await self._send_message(
+                    message.chat_id,
+                    "Usage: /pr fix <prRef>",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            payload = {"mode": "pr", "pr": ref, **flags}
+            payload["source"] = "telegram"
+            payload["source_meta"] = {
+                "chat_id": message.chat_id,
+                "thread_id": message.thread_id,
+            }
+            try:
+                data = await self._pr_flow_request(
+                    record,
+                    method="POST",
+                    path="/api/github/pr_flow/start",
+                    payload=payload,
+                )
+                flow = data.get("flow") if isinstance(data, dict) else data
+            except Exception as exc:
+                detail = _format_httpx_exception(exc) or str(exc)
+                await self._send_message(
+                    message.chat_id,
+                    f"PR flow error: {detail}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._send_message(
+                message.chat_id,
+                self._format_pr_flow_status(flow),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await self._send_message(
+            message.chat_id,
+            "Unknown /pr command. Use /pr start|fix|status|stop|resume|collect.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _prompt_review_commit_picker(
+        self,
+        message: TelegramMessage,
+        record: TelegramTopicRecord,
+        *,
+        delivery: str,
+    ) -> None:
+        commits = await self._list_recent_commits(record)
+        if not commits:
+            await self._send_message(
+                message.chat_id,
+                "No recent commits found.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        items: list[tuple[str, str]] = []
+        subjects: dict[str, str] = {}
+        for sha, subject in commits:
+            label = _format_review_commit_label(sha, subject)
+            items.append((sha, label))
+            if subject:
+                subjects[sha] = subject
+        state = ReviewCommitSelectionState(items=items, delivery=delivery)
+        self._review_commit_options[key] = state
+        self._review_commit_subjects[key] = subjects
+        self._touch_cache_timestamp("review_commit_options", key)
+        self._touch_cache_timestamp("review_commit_subjects", key)
+        keyboard = self._build_review_commit_keyboard(state)
+        await self._send_message(
+            message.chat_id,
+            self._selection_prompt(REVIEW_COMMIT_PICKER_PROMPT, state),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            reply_markup=keyboard,
+        )
+
+    async def _list_recent_commits(
+        self, record: TelegramTopicRecord
+    ) -> list[tuple[str, str]]:
+        try:
+            client = await self._client_for_workspace(record.workspace_path)
+        except AppServerUnavailableError:
+            return []
+        if client is None:
+            return []
+        command = "git log -n 50 --pretty=format:%H%x1f%s%x1e"
+        try:
+            result = await client.request(
+                "command/exec",
+                {
+                    "cwd": record.workspace_path,
+                    "command": ["bash", "-lc", command],
+                    "timeoutMs": 10000,
+                },
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.review.commit_list.failed",
+                exc=exc,
+            )
+            return []
+        stdout, _stderr, exit_code = _extract_command_result(result)
+        if exit_code not in (None, 0) and not stdout.strip():
+            return []
+        return _parse_review_commit_log(stdout)
+
+
+def _format_opencode_exception(exc: Exception) -> Optional[str]:
+    """Format OpenCode exceptions for user-friendly error messages."""
+    from .....agents.opencode.client import OpenCodeProtocolError
+    from .....agents.opencode.supervisor import OpenCodeSupervisorError
+
+    if isinstance(exc, OpenCodeSupervisorError):
+        detail = str(exc).strip()
+        if detail:
+            return f"OpenCode backend unavailable ({detail})."
+        return "OpenCode backend unavailable."
+    if isinstance(exc, OpenCodeProtocolError):
+        detail = str(exc).strip()
+        if detail:
+            return f"OpenCode protocol error: {detail}"
+        return "OpenCode protocol error."
+    if isinstance(exc, json.JSONDecodeError):
+        return "OpenCode returned invalid JSON."
+    if isinstance(exc, httpx.HTTPStatusError):
+        detail = None
+        try:
+            detail = _extract_opencode_error_detail(exc.response.json())
+        except Exception:
+            detail = None
+        if detail:
+            return f"OpenCode error: {detail}"
+        response_text = exc.response.text.strip()
+        if response_text:
+            return f"OpenCode error: {response_text}"
+        return f"OpenCode request failed (HTTP {exc.response.status_code})."
+    if isinstance(exc, httpx.RequestError):
+        detail = str(exc).strip()
+        if detail:
+            return f"OpenCode request failed: {detail}"
+        return "OpenCode request failed."
+    return None
+
+
+def _extract_opencode_error_detail(payload: Any) -> Optional[str]:
+    """Extract error detail from OpenCode response payload."""
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if isinstance(error, dict):
+        for key in ("message", "detail", "error", "reason"):
+            value = error.get(key)
+            if isinstance(value, str) and value:
+                return value
+    if isinstance(error, str) and error:
+        return error
+    for key in ("detail", "message", "reason"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _format_httpx_exception(exc: Exception) -> Optional[str]:
+    """Format httpx exceptions for user-friendly error messages."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            payload = exc.response.json()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            detail = (
+                payload.get("detail") or payload.get("message") or payload.get("error")
+            )
+            if isinstance(detail, str) and detail:
+                return detail
+        response_text = exc.response.text.strip()
+        if response_text:
+            return response_text
+        return f"Request failed (HTTP {exc.response.status_code})."
+    if isinstance(exc, httpx.RequestError):
+        detail = str(exc).strip()
+        if detail:
+            return detail
+        return "Request failed."
+    return None

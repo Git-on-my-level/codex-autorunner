@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import difflib
+import logging
 import re
 import threading
 from contextlib import asynccontextmanager, contextmanager
@@ -8,12 +9,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, MutableMapping, Optional
 
+import httpx
+
 from .agents.opencode.runtime import (
     PERMISSION_ALLOW,
+    OpenCodeTurnOutput,
     build_turn_id,
     collect_opencode_output,
     extract_session_id,
     opencode_missing_env,
+    parse_message_response,
     split_model_id,
 )
 from .agents.opencode.supervisor import OpenCodeSupervisor
@@ -38,6 +43,8 @@ from .core.patch_utils import (
 from .core.utils import atomic_write
 from .integrations.app_server.client import CodexAppServerError
 from .integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+
+logger = logging.getLogger("codex_autorunner.spec_ingest")
 
 SPEC_INGEST_TIMEOUT_SECONDS = 240
 SPEC_INGEST_INTERRUPT_GRACE_SECONDS = 10
@@ -257,8 +264,8 @@ class SpecIngestService:
             )
         except asyncio.TimeoutError:
             pass
-        except Exception:
-            pass
+        except (OSError, RuntimeError, httpx.HTTPError) as exc:
+            logger.debug("Failed to abort spec ingest turn: %s", exc)
 
     async def interrupt(self) -> Dict[str, str]:
         active = self._get_active_turn()
@@ -450,8 +457,8 @@ class SpecIngestService:
                 await self._app_server_events.register_turn(
                     handle.thread_id, handle.turn_id
                 )
-            except Exception:
-                pass
+            except (KeyError, TypeError, RuntimeError) as exc:
+                logger.debug("Failed to register turn: %s", exc)
 
         turn_task = asyncio.create_task(handle.wait(timeout=None))
         timeout_task = asyncio.create_task(asyncio.sleep(SPEC_INGEST_TIMEOUT_SECONDS))
@@ -577,7 +584,8 @@ class SpecIngestService:
         if thread_id:
             try:
                 await client.get_session(thread_id)
-            except Exception:
+            except (OSError, KeyError, ValueError, httpx.HTTPError) as exc:
+                logger.debug("OpenCode session not found, resetting thread: %s", exc)
                 self._app_server_threads.reset_thread(key)
                 thread_id = None
         if not thread_id:
@@ -604,6 +612,7 @@ class SpecIngestService:
         turn_id = build_turn_id(thread_id)
         active = self._register_active_turn(client, turn_id, thread_id)
         permission_policy = PERMISSION_ALLOW
+        ready_event = asyncio.Event()
         output_task = asyncio.create_task(
             collect_opencode_output(
                 client,
@@ -612,10 +621,13 @@ class SpecIngestService:
                 permission_policy=permission_policy,
                 question_policy="auto_first_option",
                 should_stop=active.interrupt_event.is_set,
+                ready_event=ready_event,
             )
         )
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(ready_event.wait(), timeout=2.0)
         prompt_task = asyncio.create_task(
-            client.prompt(
+            client.prompt_async(
                 thread_id,
                 message=prompt,
                 model=model_payload,
@@ -625,8 +637,9 @@ class SpecIngestService:
         timeout_task = asyncio.create_task(asyncio.sleep(SPEC_INGEST_TIMEOUT_SECONDS))
         interrupt_task = asyncio.create_task(active.interrupt_event.wait())
         try:
+            prompt_response = None
             try:
-                await prompt_task
+                prompt_response = await prompt_task
             except Exception as exc:
                 active.interrupt_event.set()
                 output_task.cancel()
@@ -649,6 +662,14 @@ class SpecIngestService:
                 if not done:
                     output_task.add_done_callback(lambda task: task.exception())
             output_result = await output_task
+            if output_result.text or output_result.error:
+                pass
+            elif prompt_response is not None:
+                fallback = parse_message_response(prompt_response)
+                if fallback.text:
+                    output_result = OpenCodeTurnOutput(
+                        text=fallback.text, error=fallback.error
+                    )
         finally:
             self._clear_active_turn(turn_id)
             timeout_task.cancel()

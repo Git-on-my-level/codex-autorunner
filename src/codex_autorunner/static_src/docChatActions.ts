@@ -244,6 +244,9 @@ export async function discardPatch(kind: DocType | null = getActiveDoc() as DocT
     const latest = state.history[0] as ChatHistoryEntry | undefined;
     if (latest) {
       latest.status = latest.status === "running" ? "done" : latest.status;
+      if (latest.drafts) {
+        delete latest.drafts[kind];
+      }
     }
     flash("Draft discarded");
   } catch (err) {

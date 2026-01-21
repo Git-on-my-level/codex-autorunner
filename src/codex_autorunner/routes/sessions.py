@@ -2,6 +2,7 @@
 Terminal session registry routes.
 """
 
+import logging
 import time
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from ..web.schemas import (
     SessionStopResponse,
 )
 
+logger = logging.getLogger("codex_autorunner.routes.sessions")
+
 
 def _relative_repo_path(repo_path: str, repo_root: Path) -> str:
     path = Path(repo_path)
@@ -22,7 +25,8 @@ def _relative_repo_path(repo_path: str, repo_root: Path) -> str:
     try:
         rel = path.resolve().relative_to(repo_root)
         return rel.as_posix() or "."
-    except Exception:
+    except ValueError as exc:
+        logger.debug("Failed to resolve relative path: %s", exc)
         return path.name
 
 

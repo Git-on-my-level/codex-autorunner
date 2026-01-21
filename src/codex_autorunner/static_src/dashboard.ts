@@ -42,7 +42,6 @@ interface State {
   outstanding_count?: number | null;
   done_count?: number | null;
   runner_pid?: number | null;
-  codex_model?: string | null;
 }
 
 function renderState(state: State | null): void {
@@ -80,11 +79,6 @@ function renderState(state: State | null): void {
   if (runnerPidEl) {
     runnerPidEl.textContent = `Runner pid: ${state.runner_pid ?? "–"}`;
   }
-  const modelEl = document.getElementById("runner-model");
-  if (modelEl) {
-    modelEl.textContent = state.codex_model || "auto";
-  }
-
   const summaryBtn = document.getElementById("open-summary");
   if (summaryBtn) {
     const done = Number(state.outstanding_count ?? NaN) === 0;

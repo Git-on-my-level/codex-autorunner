@@ -1,11 +1,14 @@
 import copy
 import dataclasses
 import json
+import logging
 import os
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
+
+logger = logging.getLogger("codex_autorunner.core.usage")
 
 
 class UsageError(Exception):
@@ -137,7 +140,8 @@ _OPENCODE_USAGE_KEYS = {
 def _coerce_opencode_int(value: Any) -> int:
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        logger.debug("Failed to coerce int from %r: %s", value, exc)
         return 0
 
 
@@ -326,7 +330,10 @@ def iter_token_events(
                 for line in f:
                     try:
                         record = json.loads(line)
-                    except Exception:
+                    except json.JSONDecodeError as exc:
+                        logger.debug(
+                            "Failed to parse JSON line in %s: %s", session_path, exc
+                        )
                         continue
 
                     rec_type = record.get("type")
@@ -395,8 +402,8 @@ def iter_token_events(
                         rate_limits=payload.get("rate_limits"),
                         agent=CODEX_AGENT_ID,
                     )
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError, KeyError, ValueError) as exc:
+            logger.debug("Failed to process session file %s: %s", session_path, exc)
 
 
 def iter_opencode_events(
@@ -414,14 +421,16 @@ def iter_opencode_events(
             try:
                 with open(session_path, "r", encoding="utf-8") as f:
                     payload = json.loads(f.read())
-            except Exception:
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.debug("Failed to read session file %s: %s", session_path, exc)
                 continue
 
             try:
                 mtime = datetime.fromtimestamp(
                     session_path.stat().st_mtime, tz=timezone.utc
                 )
-            except Exception:
+            except OSError as exc:
+                logger.debug("Failed to get mtime for %s: %s", session_path, exc)
                 mtime = datetime.now(timezone.utc)
 
             top_model = payload.get("model") if isinstance(payload, dict) else None
@@ -651,7 +660,8 @@ def _parse_bucket_label(value: str, bucket: str) -> Optional[datetime]:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
-    except Exception:
+    except (ValueError, TypeError) as exc:
+        logger.debug("Failed to parse timestamp %r: %s", value, exc)
         return None
 
 
@@ -679,7 +689,8 @@ def _rate_limits_pos_key(pos: Optional[Dict[str, Any]]) -> Optional[Tuple[str, i
     file_val = str(pos.get("file") or "")
     try:
         index_val = int(pos.get("index", 0) or 0)
-    except Exception:
+    except (TypeError, ValueError) as exc:
+        logger.debug("Failed to parse rate limits index: %s", exc)
         index_val = 0
     return (file_val, index_val)
 
@@ -749,7 +760,8 @@ class UsageSeriesCache:
             payload.setdefault("summary", {}).setdefault("by_cwd", {})
             self._cache = payload
             return payload
-        except Exception:
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            logger.debug("Failed to load usage cache: %s", exc)
             self._cache = {
                 "version": 3,
                 "files": {},
@@ -777,7 +789,8 @@ class UsageSeriesCache:
             file_state = files.get(path_key)
             try:
                 size = session_path.stat().st_size
-            except Exception:
+            except OSError as exc:
+                logger.debug("Failed to stat session file %s: %s", session_path, exc)
                 continue
             if not file_state:
                 return True
@@ -913,7 +926,10 @@ class UsageSeriesCache:
                 offset = int(file_state.get("offset", 0) or 0)
                 try:
                     size = session_path.stat().st_size
-                except Exception:
+                except OSError as exc:
+                    logger.debug(
+                        "Failed to stat session file %s: %s", session_path, exc
+                    )
                     continue
                 if size < offset:
                     offset = 0
@@ -967,7 +983,13 @@ class UsageSeriesCache:
                 handle.seek(offset)
                 data = handle.read()
                 new_offset = handle.tell()
-        except Exception:
+        except OSError as exc:
+            logger.debug(
+                "Failed to read session file %s at offset %d: %s",
+                session_path,
+                offset,
+                exc,
+            )
             return state
 
         if not data:
@@ -976,7 +998,10 @@ class UsageSeriesCache:
 
         try:
             text = data.decode("utf-8")
-        except Exception:
+        except UnicodeDecodeError as exc:
+            logger.debug(
+                "Failed to decode session file %s as UTF-8: %s", session_path, exc
+            )
             text = data.decode("utf-8", errors="ignore")
         lines = text.splitlines()
 
@@ -996,7 +1021,8 @@ class UsageSeriesCache:
         for line in lines:
             try:
                 record = json.loads(line)
-            except Exception:
+            except json.JSONDecodeError as exc:
+                logger.debug("Failed to parse JSON line in %s: %s", session_path, exc)
                 continue
 
             rec_type = record.get("type")
@@ -1260,7 +1286,8 @@ class UsageSeriesCache:
         for cwd, entry in rollups.items():
             try:
                 cwd_path = Path(cwd)
-            except Exception:
+            except (TypeError, ValueError, OSError) as exc:
+                logger.debug("Failed to create Path from cwd %r: %s", cwd, exc)
                 continue
             if cwd_path != repo_root and repo_root not in cwd_path.parents:
                 continue
@@ -1305,7 +1332,8 @@ class UsageSeriesCache:
         for cwd, entry in rollups.items():
             try:
                 cwd_path = Path(cwd)
-            except Exception:
+            except (TypeError, ValueError, OSError) as exc:
+                logger.debug("Failed to create Path from cwd %r: %s", cwd, exc)
                 cwd_path = None
             repo_id = _match_repo(cwd_path)
             if repo_id is None:
@@ -1353,7 +1381,8 @@ class UsageSeriesCache:
         for cwd, cwd_data in rollups.items():
             try:
                 cwd_path = Path(cwd)
-            except Exception:
+            except (TypeError, ValueError, OSError) as exc:
+                logger.debug("Failed to create Path from cwd %r: %s", cwd, exc)
                 continue
             if cwd_path != repo_root and repo_root not in cwd_path.parents:
                 continue
@@ -1446,7 +1475,8 @@ class UsageSeriesCache:
             bucket_union.update(bucket_rollups)
             try:
                 cwd_path = Path(cwd)
-            except Exception:
+            except (TypeError, ValueError, OSError) as exc:
+                logger.debug("Failed to create Path from cwd %r: %s", cwd, exc)
                 cwd_path = None
 
             if segment == "none":

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
@@ -69,9 +69,11 @@ def _extract_error_message(params: Any) -> str:
 class AppServerEventFormatter:
     def __init__(self) -> None:
         self._thinking_items: set[str] = set()
+        self._reasoning_buffers: dict[str, str] = {}
 
     def reset(self) -> None:
         self._thinking_items.clear()
+        self._reasoning_buffers.clear()
 
     def format_event(self, message: Any) -> list[str]:
         if not isinstance(message, dict):
@@ -86,22 +88,32 @@ class AppServerEventFormatter:
             delta = params.get("delta")
             if not isinstance(delta, str) or not delta:
                 return []
-            if (
-                isinstance(item_id, str)
-                and item_id
-                and item_id not in self._thinking_items
-            ):
+            has_valid_item_id = isinstance(item_id, str) and item_id
+            if has_valid_item_id and item_id not in self._thinking_items:
                 lines.append("thinking")
-                self._thinking_items.add(item_id)
-            for line in delta.splitlines() or [""]:
-                if line:
-                    lines.append(f"**{line}**")
-                else:
-                    lines.append("")
+                self._thinking_items.add(cast(str, item_id))
+            if has_valid_item_id:
+                buffer = self._reasoning_buffers.get(cast(str, item_id), "")
+                self._reasoning_buffers[cast(str, item_id)] = f"{buffer}{delta}"
+            else:
+                lines.append("thinking")
+                for line in delta.splitlines() or [""]:
+                    if line:
+                        lines.append(f"**{line}**")
+                    else:
+                        lines.append("")
             return lines
 
         if method == "item/reasoning/summaryPartAdded":
-            return []
+            if isinstance(item_id, str) and item_id:
+                buffer = self._reasoning_buffers.get(item_id, "")
+                self._reasoning_buffers[item_id] = ""
+                for line in buffer.splitlines():
+                    if line:
+                        lines.append(f"**{line}**")
+                    else:
+                        lines.append("")
+            return lines
 
         if method in ("turn/completed", "error"):
             self.reset()
@@ -134,6 +146,15 @@ class AppServerEventFormatter:
                 if files:
                     lines.append("file update")
                     lines.extend([f"M {path}" for path in files])
+            elif item_type == "reasoning":
+                if isinstance(item_id, str) and item_id:
+                    buffer = self._reasoning_buffers.get(item_id, "")
+                    self._reasoning_buffers.pop(item_id, None)
+                    for line in buffer.splitlines():
+                        if line:
+                            lines.append(f"**{line}**")
+                        else:
+                            lines.append("")
             elif item_type == "tool":
                 tool_name = item.get("name") or item.get("tool") or item.get("id")
                 if isinstance(tool_name, str) and tool_name:

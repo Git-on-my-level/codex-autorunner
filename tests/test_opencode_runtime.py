@@ -14,6 +14,12 @@ async def _iter_events(events):
 
 @pytest.mark.anyio
 async def test_collect_output_uses_delta() -> None:
+    seen_deltas: list[str] = []
+
+    async def _part_handler(part_type: str, part: dict[str, str], delta_text):
+        if part_type == "text" and delta_text:
+            seen_deltas.append(delta_text)
+
     events = [
         SSEEvent(
             event="message.part.updated",
@@ -30,8 +36,11 @@ async def test_collect_output_uses_delta() -> None:
     output = await collect_opencode_output_from_events(
         _iter_events(events),
         session_id="s1",
+        part_handler=_part_handler,
     )
+    # Deltas are added to final output (for progress) and sent to part_handler
     assert output.text == "Hello world"
+    assert seen_deltas == ["Hello ", "world"]
     assert output.error is None
 
 
@@ -273,6 +282,69 @@ async def test_collect_output_uses_completed_text_when_no_parts() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_ignores_completed_text_when_role_missing() -> None:
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":null},'
+            '"parts":[{"type":"text","text":"User prompt"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == ""
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_uses_completed_text_after_role_update() -> None:
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":null},'
+            '"parts":[{"type":"text","text":"Hello"}]}',
+        ),
+        SSEEvent(
+            event="message.updated",
+            data='{"sessionID":"s1","info":{"id":"m1","role":"assistant"}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Hello"
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_drops_user_completed_when_role_missing() -> None:
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"u1","role":null},'
+            '"parts":[{"type":"text","text":"User prompt"}]}',
+        ),
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"a1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"Assistant response"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Assistant response"
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_dedupes_completed_before_part_updates() -> None:
     events = [
         SSEEvent(
@@ -292,6 +364,50 @@ async def test_collect_output_dedupes_completed_before_part_updates() -> None:
         session_id="s1",
     )
     assert output.text == "Hello"
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_does_not_duplicate_when_final_part_update_has_no_delta() -> (
+    None
+):
+    seen_deltas: list[str] = []
+
+    async def _part_handler(part_type: str, part: dict[str, str], delta_text):
+        if part_type == "text" and delta_text:
+            seen_deltas.append(delta_text)
+
+    events = [
+        # Delta updates for a text part
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"Hello "},'
+            '"part":{"id":"p1","type":"text","text":"Hello "}}}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"world!"},'
+            '"part":{"id":"p1","type":"text","text":"Hello world!"}}}',
+        ),
+        # Final part update with full text, no delta (with time.end)
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"part":{"id":"p1","type":"text",'
+            '"text":"Hello world!","time":{"end":"2024-01-01T00:00:00Z"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        part_handler=_part_handler,
+    )
+    # Deltas are sent to part_handler
+    assert seen_deltas == ["Hello ", "world!"]
+    # Final output contains the text exactly once (from deltas), not duplicated
+    # The final non-delta update doesn't re-add the text because dedupe bookkeeping
+    # was updated during delta processing
+    assert output.text == "Hello world!"
     assert output.error is None
 
 

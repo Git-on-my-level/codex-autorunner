@@ -13,22 +13,26 @@ import { HUB_BASE } from "./env.js";
 
 interface HubRepo {
   id: string;
+  path: string;
   display_name: string;
-  initialzed?: boolean;
-  initialized?: boolean;
+  enabled: boolean;
+  auto_run: boolean;
+  kind: "base" | "worktree";
+  worktree_of: string | null;
+  branch: string | null;
   exists_on_disk: boolean;
+  is_clean: boolean | null;
+  initialized: boolean;
+  init_error: string | null;
   status: string;
-  last_run_id?: number | null;
-  last_exit_code?: number | null;
-  last_run_started_at?: string | null;
-  last_run_finished_at?: string | null;
+  lock_status: string;
+  last_run_id: number | null;
+  last_exit_code: number | null;
+  last_run_started_at: string | null;
+  last_run_finished_at: string | null;
+  runner_pid: number | null;
+  mounted: boolean;
   mount_error?: string | null;
-  init_error?: string | null;
-  mounted?: boolean;
-  kind?: "base" | "worktree";
-  worktree_of?: string;
-  is_clean?: boolean;
-  lock_status?: string;
 }
 
 interface HubData {
@@ -181,7 +185,7 @@ function loadSessionCache<T>(key: string, maxAgeMs: number): T | null {
 }
 
 function formatRunSummary(repo: HubRepo): string {
-  if (!repo.initialzed) return "Not initialized";
+  if (!repo.initialized) return "Not initialized";
   if (!repo.exists_on_disk) return "Missing on disk";
   if (!repo.last_run_id) return "No runs yet";
   const exit =
@@ -192,7 +196,7 @@ function formatRunSummary(repo: HubRepo): string {
 }
 
 function formatLastActivity(repo: HubRepo): string {
-  if (!repo.initialzed) return "";
+  if (!repo.initialized) return "";
   const time = repo.last_run_finished_at || repo.last_run_started_at;
   if (!time) return "";
   return formatTimeCompact(time);
@@ -893,10 +897,10 @@ function buildActions(repo: HubRepo): RepoAction[] {
   } else if (!missing && repo.init_error) {
     actions.push({
       key: "init",
-      label: repo.initialzed ? "Re-init" : "Init",
+      label: repo.initialized ? "Re-init" : "Init",
       kind: "primary",
     });
-  } else if (!missing && !repo.initialzed) {
+  } else if (!missing && !repo.initialized) {
     actions.push({ key: "init", label: "Init", kind: "primary" });
   }
   if (!missing && kind === "base") {
@@ -1092,7 +1096,7 @@ function renderRepos(repos: HubRepo[]): void {
             repo.lock_status.replace("_", " ")
           )}</span>`
         : "";
-    const initBadge = !repo.initialzed
+    const initBadge = !repo.initialized
       ? '<span class="pill pill-small pill-warn">uninit</span>'
       : "";
 

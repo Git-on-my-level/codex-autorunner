@@ -8,6 +8,8 @@ from typing import Any, Mapping, Optional, OrderedDict
 from .config import LogConfig
 from .request_context import get_conversation_id, get_request_id
 
+logger = logging.getLogger("codex_autorunner.core.logging_utils")
+
 _MAX_CACHED_LOGGERS = 64
 _LOGGER_CACHE: "OrderedDict[str, logging.Logger]" = collections.OrderedDict()
 _REDACTED_VALUE = "<redacted>"
@@ -60,10 +62,10 @@ def setup_rotating_logger(name: str, log_config: LogConfig) -> logging.Logger:
             for h in list(evicted.handlers):
                 try:
                     h.close()
-                except Exception:
+                except (OSError, ValueError):
                     pass
             evicted.handlers.clear()
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             pass
     return logger
 
@@ -81,12 +83,12 @@ def safe_log(
         if args:
             try:
                 formatted = message % args
-            except Exception:
+            except (TypeError, ValueError):
                 formatted = f"{message} {' '.join(str(arg) for arg in args)}"
         if exc is not None:
             formatted = f"{formatted}: {exc}"
         logger.log(level, formatted, exc_info=exc_info)
-    except Exception:
+    except (OSError, TypeError, ValueError, RuntimeError):
         pass
 
 
@@ -115,7 +117,7 @@ def log_event(
     try:
         message = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
         logger.log(level, message)
-    except Exception:
+    except (TypeError, ValueError, OverflowError, RuntimeError):
         pass
 
 

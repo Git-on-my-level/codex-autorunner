@@ -58,6 +58,7 @@ export interface ChatHistoryEntry {
   viewing?: string;
   targets?: string[];
   updated?: string[];
+  drafts?: Record<string, unknown>;
 }
 
 export interface ChatState {

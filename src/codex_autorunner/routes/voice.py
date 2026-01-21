@@ -3,11 +3,14 @@ Voice transcription and configuration routes.
 """
 
 import asyncio
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from ..voice import VoiceService, VoiceServiceError
+
+logger = logging.getLogger("codex_autorunner.routes.voice")
 
 
 def build_voice_routes() -> APIRouter:
@@ -41,7 +44,8 @@ def build_voice_routes() -> APIRouter:
                 return VoiceService(
                     voice_config, logger=request.app.state.logger
                 ).config_payload()
-            except Exception:
+            except (ValueError, TypeError, OSError) as exc:
+                logger.debug("Failed to create VoiceService for config: %s", exc)
                 return {
                     "enabled": False,
                     "provider": voice_config.provider,

@@ -51,6 +51,8 @@ from .server import create_hub_app
 from .spec_ingest import SpecIngestError, SpecIngestService, clear_work_docs
 from .voice import VoiceConfig
 
+logger = logging.getLogger("codex_autorunner.cli")
+
 app = typer.Typer(add_completion=False)
 hub_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
@@ -115,14 +117,16 @@ def _resolve_repo_api_path(repo_root: Path, hub: Optional[Path], path: str) -> s
                 manifest_value = hub_cfg.get("manifest")
                 if isinstance(manifest_value, str) and manifest_value.strip():
                     manifest_rel = manifest_value.strip()
-    except Exception:
+    except (OSError, yaml.YAMLError, KeyError, ValueError) as exc:
+        logger.debug("Failed to read hub config for manifest: %s", exc)
         manifest_rel = None
     manifest_path = hub_root / (manifest_rel or ".codex-autorunner/manifest.yml")
     if not manifest_path.exists():
         return path
     try:
         manifest = load_manifest(manifest_path, hub_root)
-    except Exception:
+    except (OSError, ValueError, KeyError) as exc:
+        logger.debug("Failed to load manifest: %s", exc)
         return path
     repo_root = repo_root.resolve()
     for entry in manifest.repos:
@@ -287,6 +291,7 @@ def init(
 def status(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
 ):
     """Show autorunner status."""
     engine = _require_repo_config(repo, hub)
@@ -301,6 +306,51 @@ def status(
     opencode_record = (
         state.sessions.get(opencode_session_id) if opencode_session_id else None
     )
+
+    if output_json:
+        hub_config_path = _resolve_hub_config_path_for_cli(engine.repo_root, hub)
+        payload = {
+            "repo": str(engine.repo_root),
+            "hub": (
+                str(hub_config_path.parent.parent.resolve())
+                if hub_config_path
+                else None
+            ),
+            "status": state.status,
+            "last_run_id": state.last_run_id,
+            "last_exit_code": state.last_exit_code,
+            "last_run_started_at": state.last_run_started_at,
+            "last_run_finished_at": state.last_run_finished_at,
+            "runner_pid": state.runner_pid,
+            "session_id": session_id,
+            "session_record": (
+                {
+                    "repo_path": session_record.repo_path,
+                    "created_at": session_record.created_at,
+                    "last_seen_at": session_record.last_seen_at,
+                    "status": session_record.status,
+                    "agent": session_record.agent,
+                }
+                if session_record
+                else None
+            ),
+            "opencode_session_id": opencode_session_id,
+            "opencode_record": (
+                {
+                    "repo_path": opencode_record.repo_path,
+                    "created_at": opencode_record.created_at,
+                    "last_seen_at": opencode_record.last_seen_at,
+                    "status": opencode_record.status,
+                    "agent": opencode_record.agent,
+                }
+                if opencode_record
+                else None
+            ),
+            "outstanding_todos": len(outstanding),
+        }
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
     typer.echo(f"Repo: {engine.repo_root}")
     typer.echo(f"Status: {state.status}")
     typer.echo(f"Last run id: {state.last_run_id}")
@@ -341,7 +391,15 @@ def sessions(
     source = "server"
     try:
         payload = _request_json("GET", url, token_env=config.server_auth_token_env)
-    except Exception:
+    except (
+        httpx.HTTPError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        OSError,
+    ) as exc:
+        logger.debug(
+            "Failed to fetch sessions from server, falling back to state: %s", exc
+        )
         state = load_state(engine.state_path)
         payload = {
             "sessions": [
@@ -407,8 +465,15 @@ def stop_session(
         stopped_id = response.get("session_id", payload.get("session_id", ""))
         typer.echo(f"Stopped session {stopped_id}")
         return
-    except Exception:
-        pass
+    except (
+        httpx.HTTPError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        OSError,
+    ) as exc:
+        logger.debug(
+            "Failed to stop session via server, falling back to state: %s", exc
+        )
 
     with state_lock(engine.state_path):
         state = load_state(engine.state_path)
@@ -568,8 +633,8 @@ def run(
         if engine:
             try:
                 engine.release_lock()
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to release lock in run command: %s", exc)
 
 
 @app.command()
@@ -591,8 +656,8 @@ def once(
         if engine:
             try:
                 engine.release_lock()
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to release lock in once command: %s", exc)
 
 
 @app.command()
@@ -650,8 +715,8 @@ def resume(
         if engine:
             try:
                 engine.release_lock()
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to release lock in resume command: %s", exc)
 
 
 @app.command()

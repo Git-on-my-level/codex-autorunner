@@ -518,9 +518,15 @@ def _build_app_context(
         )
         try:
             require_static_assets(static_dir, logger)
-        except Exception:
+        except Exception as exc:
             if static_context is not None:
                 static_context.close()
+            safe_log(
+                logger,
+                logging.WARNING,
+                "Static assets requirement check failed",
+                exc=exc,
+            )
             raise
         return static_dir, static_context
 
@@ -641,9 +647,15 @@ def _build_hub_context(
     )
     try:
         require_static_assets(static_dir, logger)
-    except Exception:
+    except Exception as exc:
         if static_context is not None:
             static_context.close()
+        safe_log(
+            logger,
+            logging.WARNING,
+            "Static assets requirement check failed",
+            exc=exc,
+        )
         raise
     return HubAppContext(
         base_path=normalized_base,
@@ -848,8 +860,13 @@ def _app_lifespan(context: AppContext):
             for ws in list(app.state.active_websockets):
                 try:
                     await ws.close(code=1012)  # 1012 = Service Restart
-                except Exception:
-                    pass
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.DEBUG,
+                        "Failed to close websocket during shutdown",
+                        exc=exc,
+                    )
             app.state.active_websockets.clear()
 
             for task in tasks:
@@ -860,8 +877,13 @@ def _app_lifespan(context: AppContext):
             if chatops is not None:
                 try:
                     await chatops.stop()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.DEBUG,
+                        "Failed to stop chatops during shutdown",
+                        exc=exc,
+                    )
             async with app.state.terminal_lock:
                 for session in app.state.terminal_sessions.values():
                     session.close()
@@ -1010,8 +1032,13 @@ def create_hub_app(
             mount_errors[prefix] = str(exc)
             try:
                 app.state.logger.warning("Repo lifespan failed for %s: %s", prefix, exc)
-            except Exception:
-                pass
+            except Exception as exc2:
+                safe_log(
+                    app.state.logger,
+                    logging.DEBUG,
+                    f"Failed to log repo lifespan failure for {prefix}",
+                    exc=exc2,
+                )
             await _unmount_repo_locked(prefix)
 
     async def _stop_repo_lifespan_locked(prefix: str) -> None:
@@ -1030,8 +1057,13 @@ def create_hub_app(
                 app.state.logger.warning(
                     "Repo lifespan shutdown failed for %s: %s", prefix, exc
                 )
-            except Exception:
-                pass
+            except Exception as exc2:
+                safe_log(
+                    app.state.logger,
+                    logging.DEBUG,
+                    f"Failed to log repo lifespan shutdown failure for {prefix}",
+                    exc=exc2,
+                )
 
     def _detach_mount_locked(prefix: str) -> None:
         mount_path = f"/repos/{prefix}"
@@ -1066,15 +1098,25 @@ def create_hub_app(
             mount_errors[prefix] = str(exc)
             try:
                 app.state.logger.warning("Cannot mount repo %s: %s", prefix, exc)
-            except Exception:
-                pass
+            except Exception as exc2:
+                safe_log(
+                    app.state.logger,
+                    logging.DEBUG,
+                    f"Failed to log mount error for {prefix}",
+                    exc=exc2,
+                )
             return False
         except Exception as exc:
             mount_errors[prefix] = str(exc)
             try:
                 app.state.logger.warning("Cannot mount repo %s: %s", prefix, exc)
-            except Exception:
-                pass
+            except Exception as exc2:
+                safe_log(
+                    app.state.logger,
+                    logging.DEBUG,
+                    f"Failed to log mount error for {prefix}",
+                    exc=exc2,
+                )
             return False
         app.mount(f"/repos/{prefix}", sub_app)
         mounted_repos.add(prefix)
@@ -1116,8 +1158,13 @@ def create_hub_app(
                         app.state.logger.warning(
                             "Cannot mount repo %s: %s", snap.id, exc
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc2:
+                        safe_log(
+                            app.state.logger,
+                            logging.DEBUG,
+                            f"Failed to log mount error for snapshot {snap.id}",
+                            exc=exc2,
+                        )
                     continue
                 except Exception as exc:
                     mount_errors[snap.id] = str(exc)
@@ -1125,8 +1172,13 @@ def create_hub_app(
                         app.state.logger.warning(
                             "Cannot mount repo %s: %s", snap.id, exc
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc2:
+                        safe_log(
+                            app.state.logger,
+                            logging.DEBUG,
+                            f"Failed to log mount error for snapshot {snap.id}",
+                            exc=exc2,
+                        )
                     continue
                 app.mount(f"/repos/{snap.id}", sub_app)
                 mounted_repos.add(snap.id)

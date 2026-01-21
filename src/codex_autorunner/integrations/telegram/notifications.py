@@ -265,6 +265,7 @@ class TelegramNotificationHandlers:
         self._turn_progress_trackers.pop(turn_key, None)
         self._turn_progress_rendered.pop(turn_key, None)
         self._turn_progress_updated_at.pop(turn_key, None)
+        self._turn_progress_locks.pop(turn_key, None)
         pending_context_usage: dict[tuple[str, str], int] = getattr(
             self, "_pending_context_usage", {}
         )
@@ -425,23 +426,25 @@ class TelegramNotificationHandlers:
         self._clear_turn_progress(turn_key)
 
     async def _schedule_progress_edit(self, turn_key: tuple[str, str]) -> None:
-        tracker = self._turn_progress_trackers.get(turn_key)
-        ctx = self._turn_contexts.get(turn_key)
-        if tracker is None or ctx is None or ctx.placeholder_message_id is None:
-            return
-        if tracker.finalized:
-            return
-        min_interval = self._config.progress_stream.min_edit_interval_seconds
-        now = time.monotonic()
-        last_updated = self._turn_progress_updated_at.get(turn_key, 0.0)
-        if (now - last_updated) >= min_interval:
-            await self._emit_progress_edit(turn_key, ctx=ctx, now=now)
-            return
-        if turn_key in self._turn_progress_tasks:
-            return
-        delay = max(min_interval - (now - last_updated), 0.0)
-        task = self._spawn_task(self._delayed_progress_edit(turn_key, delay))
-        self._turn_progress_tasks[turn_key] = task
+        lock = self._turn_progress_locks.setdefault(turn_key, asyncio.Lock())
+        async with lock:
+            tracker = self._turn_progress_trackers.get(turn_key)
+            ctx = self._turn_contexts.get(turn_key)
+            if tracker is None or ctx is None or ctx.placeholder_message_id is None:
+                return
+            if tracker.finalized:
+                return
+            min_interval = self._config.progress_stream.min_edit_interval_seconds
+            now = time.monotonic()
+            last_updated = self._turn_progress_updated_at.get(turn_key, 0.0)
+            if (now - last_updated) >= min_interval:
+                await self._emit_progress_edit(turn_key, ctx=ctx, now=now)
+                return
+            if turn_key in self._turn_progress_tasks:
+                return
+            delay = max(min_interval - (now - last_updated), 0.0)
+            task = self._spawn_task(self._delayed_progress_edit(turn_key, delay))
+            self._turn_progress_tasks[turn_key] = task
 
     async def _delayed_progress_edit(
         self, turn_key: tuple[str, str], delay: float

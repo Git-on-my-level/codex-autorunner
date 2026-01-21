@@ -220,6 +220,9 @@ export async function discardPatch(kind = getActiveDoc()) {
         const latest = state.history[0];
         if (latest) {
             latest.status = latest.status === "running" ? "done" : latest.status;
+            if (latest.drafts) {
+                delete latest.drafts[kind];
+            }
         }
         flash("Draft discarded");
     }
