@@ -157,7 +157,7 @@ model: zai-coding-plan/glm-4.7
 
     content = agent_file.read_text(encoding="utf-8")
     assert "model: zai-coding-plan/glm-4.7-flashx" in content
-    assert "model: zai-coding-plan/glm-4.7" not in content
+    assert content.count("model: zai-coding-plan/glm-4.7-flashx") == 1
 
 
 def test_supervisor_ensure_subagent_config():
