@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional
@@ -46,13 +47,16 @@ class AppServerEventBuffer:
         self._entries: dict[TurnKey, TurnEventEntry] = {}
         self._turn_index: dict[str, str] = {}
         self._lock: Optional[asyncio.Lock] = None
+        self._lock_init = threading.Lock()
         self._max_events_per_turn = max_events_per_turn
         self._max_turns = max_turns
         self._turn_ttl_seconds = turn_ttl_seconds
 
     def _ensure_lock(self) -> asyncio.Lock:
         if self._lock is None:
-            self._lock = asyncio.Lock()
+            with self._lock_init:
+                if self._lock is None:
+                    self._lock = asyncio.Lock()
         return self._lock
 
     async def register_turn(
