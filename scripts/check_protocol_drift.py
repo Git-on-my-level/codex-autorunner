@@ -17,12 +17,17 @@ Exit codes:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import subprocess
 import sys
+import time
+import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import AsyncGenerator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -154,6 +159,106 @@ def compare_codex_schema(vendor_path: Path) -> tuple[int, list[str]]:
     return 0, ["Codex schema: no drift"]
 
 
+def generate_current_opencode_openapi() -> dict | None:
+    """Generate current OpenAPI spec by running OpenCode server."""
+    opencode_bin = get_opencode_bin()
+    if not opencode_bin:
+        return None
+
+    async def fetch_openapi(base_url: str, timeout: float = 30.0) -> dict | None:
+        """Fetch OpenAPI spec from running OpenCode server."""
+        try:
+            import httpx
+        except ImportError:
+            logging.error("httpx not available, install with: pip install httpx")
+            return None
+
+        doc_url = f"{base_url.rstrip('/')}/doc"
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                response = await client.get(doc_url)
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                logging.error(f"Failed to fetch OpenAPI spec: {e}")
+                return None
+
+    @asynccontextmanager
+    async def opencode_server_context(
+        tmp_path: Path, opencode_bin: str
+    ) -> AsyncGenerator[str | None, None]:
+        """Context manager that starts and stops an OpenCode server."""
+        # Start server on random port
+        command = [opencode_bin, "serve", "--hostname", "127.0.0.1", "--port", "0"]
+
+        proc = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+
+        try:
+            # Parse stdout to get the base URL
+            base_url = None
+            start_time = time.monotonic()
+            timeout = 60.0
+            last_line = ""
+
+            while time.monotonic() - start_time < timeout:
+                line = proc.stdout.readline()
+                if not line:
+                    # Process exited
+                    if proc.stderr:
+                        stderr = proc.stderr.read()
+                        logging.error(f"OpenCode server exited: {stderr}")
+                    yield None
+                    return
+                last_line = line
+
+                # Look for URL in output (format varies)
+                # Common patterns: "http://localhost:12345", "Server started at ..."
+                if "http://" in line:
+                    # Extract URL
+                    match = re.search(r"https?://[^\s]+", line)
+                    if match:
+                        base_url = match.group(0)
+                        break
+
+            if not base_url:
+                logging.error(
+                    f"Timeout waiting for OpenCode server to start. Last output: {last_line}"
+                )
+                yield None
+                return
+
+            # Give server a moment to be ready
+            await asyncio.sleep(1.0)
+
+            yield base_url
+
+        finally:
+            # Terminate server
+            proc.terminate()
+            try:
+                proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+
+    async def run_generation() -> dict | None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            async with opencode_server_context(tmp_path, opencode_bin) as base_url:
+                if not base_url:
+                    return None
+                return await fetch_openapi(base_url)
+
+    return asyncio.run(run_generation())
+
+
 def compare_opencode_openapi(vendor_path: Path) -> tuple[int, list[str]]:
     """Compare vendor OpenAPI spec with current server spec."""
     if not vendor_path.exists():
@@ -162,18 +267,27 @@ def compare_opencode_openapi(vendor_path: Path) -> tuple[int, list[str]]:
             "Run: python scripts/update_vendor_opencode_openapi.py",
         ]
 
-    # Check if OpenCode binary is available
-    opencode_bin = get_opencode_bin()
-    if not opencode_bin:
+    vendor_spec = json.loads(vendor_path.read_text(encoding="utf-8"))
+    current_spec = generate_current_opencode_openapi()
+
+    if current_spec is None:
         return 0, [
-            "OpenCode binary not found",
+            "OpenCode binary not found or server failed to start",
             "Skipping OpenCode OpenAPI check",
         ]
 
-    return 1, [
-        "OpenCode drift detection not yet implemented",
-        "To check manually, run: python scripts/update_vendor_opencode_openapi.py",
-    ]
+    differences = compare_dicts("opencode", vendor_spec, current_spec)
+
+    if differences:
+        return 1, [
+            "OpenCode OpenAPI drift detected:",
+            *differences,
+            "",
+            "Run: python scripts/update_vendor_opencode_openapi.py",
+            "Then commit: vendor/protocols/opencode_openapi.json",
+        ]
+
+    return 0, ["OpenCode OpenAPI: no drift"]
 
 
 def main() -> int:
