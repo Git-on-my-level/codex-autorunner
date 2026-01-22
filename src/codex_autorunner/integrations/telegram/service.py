@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...core.flows import FlowStore
-from ...core.flows.models import FlowRunStatus
+from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
@@ -1057,7 +1057,8 @@ class TelegramBotService(
             history_dir = paths.handoff_history_dir
             seq = self._latest_handoff_seq(history_dir)
             if not seq:
-                return None
+                reason = self._format_ticket_flow_pause_reason(latest)
+                return latest.id, "paused", reason
             message_path = history_dir / seq / "USER_MESSAGE.md"
             try:
                 content = message_path.read_text(encoding="utf-8")
@@ -1080,6 +1081,14 @@ class TelegramBotService(
         if not seqs:
             return None
         return max(seqs)
+
+    def _format_ticket_flow_pause_reason(self, record: "FlowRunRecord") -> str:
+        state = record.state or {}
+        engine = state.get("ticket_engine") or {}
+        reason = (
+            engine.get("reason") or record.error_message or "Paused without details."
+        )
+        return f"Reason: {reason}"
 
     def _format_ticket_flow_pause_message(
         self, run_id: str, seq: str, content: str

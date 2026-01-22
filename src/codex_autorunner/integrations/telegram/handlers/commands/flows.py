@@ -92,6 +92,14 @@ class FlowCommands(SharedHelpers):
         store.close()
 
         if action == "start":
+            if latest and latest.status.is_active():
+                await self._send_message(
+                    message.chat_id,
+                    f"Ticket flow already active (run {latest.id}, status {latest.status.value}).",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
             # seed ticket if missing
             ticket_dir = repo_root / ".codex-autorunner" / "tickets"
             ticket_dir.mkdir(parents=True, exist_ok=True)
