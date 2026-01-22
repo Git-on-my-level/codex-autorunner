@@ -2,7 +2,7 @@ import logging
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -19,12 +19,11 @@ _logger = logging.getLogger(__name__)
 _active_workers: Dict[str, subprocess.Popen] = {}
 
 
-def _validate_run_id(run_id: str) -> str:
+def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
     try:
-        uuid.UUID(run_id)
+        return str(uuid.UUID(str(run_id)))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid run_id") from None
-    return run_id
 
 
 class FlowStartRequest(BaseModel):
@@ -80,16 +79,24 @@ def _get_flow_controller(repo_root: Path) -> FlowController:
 
 
 def _start_flow_worker(repo_root: Path, run_id: str) -> subprocess.Popen:
-    run_id = _validate_run_id(run_id)
-    cmd = ["python3", "-m", "codex_autorunner", "flow", "worker", "--run-id", run_id]
+    normalized_run_id = _normalize_run_id(run_id)
+    cmd = [
+        "python3",
+        "-m",
+        "codex_autorunner",
+        "flow",
+        "worker",
+        "--run-id",
+        normalized_run_id,
+    ]
     cwd = repo_root
     env = None
 
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
-    _active_workers[run_id] = proc
-    _logger.info("Started flow worker for run %s (pid=%d)", run_id, proc.pid)
+    _active_workers[normalized_run_id] = proc
+    _logger.info("Started flow worker for run %s (pid=%d)", normalized_run_id, proc.pid)
     return proc
 
 
@@ -122,7 +129,7 @@ def build_flow_routes() -> APIRouter:
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
-        run_id = _validate_run_id(str(uuid.uuid4()))
+        run_id = _normalize_run_id(uuid.uuid4())
 
         try:
             record = await controller.start_flow(
@@ -139,10 +146,10 @@ def build_flow_routes() -> APIRouter:
             raise
 
     @router.post("/{run_id}/stop", response_model=FlowStatusResponse)
-    async def stop_flow(run_id: str):
+    async def stop_flow(run_id: uuid.UUID):
         from ..core.utils import find_repo_root
 
-        run_id = _validate_run_id(run_id)
+        run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
@@ -156,10 +163,10 @@ def build_flow_routes() -> APIRouter:
         return FlowStatusResponse.from_record(record)
 
     @router.post("/{run_id}/resume", response_model=FlowStatusResponse)
-    async def resume_flow(run_id: str):
+    async def resume_flow(run_id: uuid.UUID):
         from ..core.utils import find_repo_root
 
-        run_id = _validate_run_id(run_id)
+        run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
@@ -169,10 +176,10 @@ def build_flow_routes() -> APIRouter:
         return FlowStatusResponse.from_record(record)
 
     @router.get("/{run_id}/status", response_model=FlowStatusResponse)
-    async def get_flow_status(run_id: str):
+    async def get_flow_status(run_id: uuid.UUID):
         from ..core.utils import find_repo_root
 
-        run_id = _validate_run_id(run_id)
+        run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
@@ -185,10 +192,10 @@ def build_flow_routes() -> APIRouter:
         return FlowStatusResponse.from_record(record)
 
     @router.get("/{run_id}/events")
-    async def stream_flow_events(run_id: str):
+    async def stream_flow_events(run_id: uuid.UUID):
         from ..core.utils import find_repo_root
 
-        run_id = _validate_run_id(run_id)
+        run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
