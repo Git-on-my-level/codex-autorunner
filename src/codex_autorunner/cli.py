@@ -1182,9 +1182,11 @@ def flow(
         except ValueError:
             _raise_exit("Invalid run_id format; must be a UUID")
 
-        from .core.flows import FlowController
+        from .core.flows import FlowController, FlowStore
         from .core.flows.models import FlowRunStatus
         from .flows.pr_flow import build_pr_flow_definition
+        from .flows.ticket_flow import build_ticket_flow_definition
+        from .tickets import AgentPool
 
         db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
         artifacts_root = engine.repo_root / ".codex-autorunner" / "flows"
@@ -1196,8 +1198,33 @@ def flow(
             typer.echo(f"DB path: {db_path}")
             typer.echo(f"Artifacts root: {artifacts_root}")
 
+            store = FlowStore(db_path)
+            store.initialize()
+
+            record = store.get_flow_run(run_id)
+            if not record:
+                typer.echo(f"Flow run {run_id} not found", err=True)
+                store.close()
+                raise typer.Exit(code=1)
+            store.close()
+
+            agent_pool: AgentPool | None = None
+
+            def _build_definition(flow_type: str):
+                nonlocal agent_pool
+                if flow_type == "pr_flow":
+                    return build_pr_flow_definition()
+                if flow_type == "ticket_flow":
+                    agent_pool = AgentPool(engine.config)
+                    return build_ticket_flow_definition(agent_pool=agent_pool)
+                _raise_exit(f"Unknown flow type for run {run_id}: {flow_type}")
+                return None
+
+            definition = _build_definition(record.flow_type)
+            definition.validate()
+
             controller = FlowController(
-                definition=build_pr_flow_definition(),
+                definition=definition,
                 db_path=db_path,
                 artifacts_root=artifacts_root,
             )
@@ -1221,8 +1248,17 @@ def flow(
                 "Resuming" if record.status != FlowRunStatus.PENDING else "Starting"
             )
             typer.echo(f"{action} flow run {run_id} from step: {record.current_step}")
-            final_record = await controller.run_flow(run_id)
-            typer.echo(f"Flow run {run_id} finished with status {final_record.status}")
+            try:
+                final_record = await controller.run_flow(run_id)
+                typer.echo(
+                    f"Flow run {run_id} finished with status {final_record.status}"
+                )
+            finally:
+                if agent_pool is not None:
+                    try:
+                        await agent_pool.close()
+                    except Exception:
+                        typer.echo("Failed to close agent pool cleanly", err=True)
 
         asyncio.run(_run_worker())
     else:

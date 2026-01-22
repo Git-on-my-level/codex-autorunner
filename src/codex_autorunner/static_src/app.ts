@@ -6,6 +6,7 @@ import { initDocs } from "./docs.js";
 import { initLogs } from "./logs.js";
 import { initTerminal } from "./terminal.js";
 import { initRuns } from "./runs.js";
+import { initTicketFlow } from "./tickets.js";
 import { loadState } from "./state.js";
 import { initGitHub } from "./github.js";
 import { initMobileCompact } from "./mobileCompact.js";
@@ -77,6 +78,7 @@ function initRepoShell(): void {
   initLiveUpdates();
   initRepoSettingsPanel();
   initGitHub();
+  initTicketFlow();
   initMobileCompact();
 
   loadState();

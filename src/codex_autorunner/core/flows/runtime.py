@@ -110,7 +110,7 @@ class FlowRuntime:
 
                 record = await self._execute_step(record, step_id)
 
-                if record.status.is_terminal():
+                if record.status.is_terminal() or record.status == FlowRunStatus.PAUSED:
                     break
 
                 if record.status == FlowRunStatus.RUNNING:
@@ -233,6 +233,7 @@ class FlowRuntime:
                     status=FlowRunStatus.FAILED,
                     finished_at=now,
                     error_message=outcome.error,
+                    state=record.state,
                     current_step=None,
                 )
                 if not updated:
@@ -263,6 +264,26 @@ class FlowRuntime:
                     )
                 record = updated
 
+            elif outcome.status == FlowRunStatus.PAUSED:
+                self._emit(
+                    FlowEventType.STEP_COMPLETED,
+                    record.id,
+                    data={"step_id": step_id, "status": "paused"},
+                    step_id=step_id,
+                )
+
+                updated = self.store.update_flow_run_status(
+                    run_id=record.id,
+                    status=FlowRunStatus.PAUSED,
+                    state=record.state,
+                    current_step=step_id,
+                )
+                if not updated:
+                    raise RuntimeError(
+                        f"Failed to update flow run after step {step_id}"
+                    )
+                record = updated
+
             return record
 
         except Exception as e:
@@ -280,6 +301,7 @@ class FlowRuntime:
                 status=FlowRunStatus.FAILED,
                 finished_at=now,
                 error_message=str(e),
+                state=record.state,
                 current_step=None,
             )
             if not updated:

@@ -321,6 +321,47 @@
              </div>
            </div>
 
+            <div class="card ticket-card" id="ticket-card">
+              <div class="card-header">
+                <div class="card-header-left ticket-header-left">
+                  <span class="label">Ticket Flow</span>
+                  <span id="ticket-flow-run" class="muted small ticket-mono">–</span>
+                </div>
+                <span id="ticket-flow-status" class="pill pill-idle">idle</span>
+              </div>
+              <div class="ticket-flow-actions">
+                <button id="ticket-flow-bootstrap" class="primary sm">Start Ticket Flow</button>
+                <button id="ticket-flow-resume" class="ghost sm">Resume</button>
+                <button id="ticket-flow-refresh" class="ghost sm icon-btn" title="Refresh ticket flow">↻</button>
+              </div>
+              <div class="ticket-flow-meta">
+                <div>
+                  <span class="muted">Current ticket</span>
+                  <span id="ticket-flow-current" class="ticket-mono">–</span>
+                </div>
+                <div>
+                  <span class="muted">Reason</span>
+                  <span id="ticket-flow-reason" class="ticket-mono ticket-flow-reason">–</span>
+                </div>
+              </div>
+              <div class="ticket-flow-grid">
+                <div class="ticket-panel">
+                  <div class="ticket-panel-header">
+                    <span class="muted">Tickets</span>
+                    <span id="ticket-flow-dir" class="muted small">–</span>
+                  </div>
+                  <div id="ticket-flow-tickets" class="ticket-list">Loading tickets…</div>
+                </div>
+                <div class="ticket-panel">
+                  <div class="ticket-panel-header">
+                    <span class="muted">Handoff history</span>
+                    <span id="ticket-handoff-note" class="muted small">–</span>
+                  </div>
+                  <div id="ticket-handoff-history" class="ticket-list">No messages yet.</div>
+                </div>
+              </div>
+            </div>
+
            <div class="card review-card" id="review-card">
              <div class="card-header">
                <span class="label">Review</span>
