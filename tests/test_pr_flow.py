@@ -145,7 +145,7 @@ def test_multi_line_review_comment_produces_valid_todo(tmp_path, monkeypatch) ->
     def mock_require_worktree_root(s):
         return worktree_root
 
-    def mock_log_line(s, msg):
+    def mock_log_line(msg):
         pass
 
     monkeypatch.setattr(manager, "_load_engine", mock_load_engine)

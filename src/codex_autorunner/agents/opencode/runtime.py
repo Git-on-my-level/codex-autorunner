@@ -15,6 +15,7 @@ from typing import (
     Callable,
     MutableMapping,
     Optional,
+    cast,
 )
 
 import httpx
@@ -1438,7 +1439,10 @@ async def collect_opencode_output(
         await client.reject_question(request_id)
 
     def _stream_factory() -> AsyncIterator[SSEEvent]:
-        return client.stream_events(directory=workspace_path, ready_event=ready_event)
+        return cast(
+            AsyncIterator[SSEEvent],
+            client.stream_events(directory=workspace_path, ready_event=ready_event),
+        )
 
     async def _fetch_session() -> Any:
         statuses = await client.session_status(directory=workspace_path)

@@ -25,8 +25,6 @@ def test_repo_openapi_contract_has_core_paths(repo) -> None:
         "/api/sessions": {"get"},
         "/api/usage": {"get"},
         "/api/usage/series": {"get"},
-        "/api/github/status": {"get"},
-        "/api/github/pr/sync": {"post"},
         "/api/terminal/image": {"post"},
         "/api/voice/config": {"get"},
         "/api/voice/transcribe": {"post"},

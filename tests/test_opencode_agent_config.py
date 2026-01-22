@@ -65,7 +65,7 @@ Some content
     assert result is None
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_ensure_agent_config_creates_file(tmp_path: Path):
     """Test that ensure_agent_config creates agent config file."""
     agent_dir = tmp_path / ".opencode" / "agent"
@@ -87,7 +87,7 @@ async def test_ensure_agent_config_creates_file(tmp_path: Path):
     assert "model: zai-coding-plan/glm-4.7-flashx" in content
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_ensure_agent_config_skips_if_no_model(tmp_path: Path):
     """Test that ensure_agent_config skips if model is None."""
     agent_dir = tmp_path / ".opencode" / "agent"
@@ -103,7 +103,7 @@ async def test_ensure_agent_config_skips_if_no_model(tmp_path: Path):
     assert not agent_file.exists()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_ensure_agent_config_skips_if_model_unchanged(tmp_path: Path):
     """Test that ensure_agent_config skips if model hasn't changed."""
     agent_dir = tmp_path / ".opencode" / "agent"
@@ -131,7 +131,7 @@ model: zai-coding-plan/glm-4.7-flashx
     assert content == existing_content
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_ensure_agent_config_updates_if_model_changed(tmp_path: Path):
     """Test that ensure_agent_config updates if model has changed."""
     agent_dir = tmp_path / ".opencode" / "agent"

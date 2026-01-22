@@ -1843,6 +1843,7 @@ class Engine:
                     output_result = OpenCodeTurnOutput(
                         text=fallback.text, error=fallback.error
                     )
+                    self.log_line(run_id, "info: opencode fallback message used")
         finally:
             stop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1854,6 +1855,12 @@ class Engine:
             if opencode_turn_started:
                 await supervisor.mark_turn_finished(self.repo_root)
 
+        if not output_result.text:
+            self.log_line(
+                run_id,
+                "info: opencode returned empty output (error=%s)"
+                % (output_result.error or "none"),
+            )
         output = output_result.text
         if output:
             self._log_app_server_output(run_id, [output])
@@ -1962,17 +1969,19 @@ class Engine:
                 # Check if there was any meaningful output (diff, files changed, etc.)
                 has_output = False
                 try:
-                    output_path = (
-                        self.repo_root
-                        / ".codex-autorunner"
-                        / "runs"
-                        / f"run-{run_id}"
-                        / "output.txt"
-                    )
-                    if output_path.exists():
-                        output_content = output_path.read_text(encoding="utf-8").strip()
-                        # Consider it output if there's meaningful text (not just empty or whitespace)
-                        has_output = len(output_content) > 100
+                    runs_root = self.repo_root / ".codex-autorunner" / "runs"
+                    candidate_paths = [
+                        runs_root / f"run-{run_id}.output.txt",
+                        runs_root / f"run-{run_id}" / "output.txt",
+                    ]
+                    for output_path in candidate_paths:
+                        if output_path.exists():
+                            output_content = output_path.read_text(
+                                encoding="utf-8"
+                            ).strip()
+                            # Consider it output if there's meaningful text (not just empty or whitespace)
+                            has_output = len(output_content) > 100
+                            break
                 except (OSError, IOError):
                     pass
 
