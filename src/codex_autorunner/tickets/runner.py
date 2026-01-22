@@ -7,8 +7,9 @@ from typing import Any, Optional
 from ..core.git_utils import run_git
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
+from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_frontmatter
-from .models import TicketResult, TicketRunConfig
+from .models import TicketFrontmatter, TicketResult, TicketRunConfig, normalize_requires
 from .outbox import dispatch_outbox, ensure_outbox_dirs, resolve_outbox_paths
 
 _logger = logging.getLogger(__name__)
@@ -106,18 +107,92 @@ class TicketRunner:
             state.pop("last_agent_output", None)
             state.pop("lint", None)
 
-        # Read ticket (may lint-fail).
-        ticket_doc, ticket_errors = read_ticket(current_path)
-        if ticket_errors or ticket_doc is None:
-            return self._pause(
-                state,
-                reason=(
-                    "Ticket frontmatter invalid for "
-                    f"{safe_relpath(current_path, self._workspace_root)}:\n- "
-                    + "\n- ".join(ticket_errors)
-                ),
-                current_ticket=safe_relpath(current_path, self._workspace_root),
-            )
+        # Determine lint-retry mode early. When lint state is present, we allow the
+        # agent to fix the ticket frontmatter even if the ticket is currently
+        # unparsable by the strict lint rules.
+        lint_state = state.get("lint") if isinstance(state.get("lint"), dict) else {}
+        lint_errors = (
+            lint_state.get("errors")
+            if isinstance(lint_state.get("errors"), list)
+            else []
+        )
+        lint_retries = int(lint_state.get("retries") or 0)
+        reuse_conversation_id = (
+            lint_state.get("conversation_id")
+            if isinstance(lint_state.get("conversation_id"), str)
+            else None
+        )
+
+        # Read ticket (may lint-fail). In lint-retry mode, fall back to a relaxed
+        # frontmatter parse so we can still execute an agent turn to repair the file.
+        ticket_doc = None
+        ticket_errors: list[str] = []
+        if lint_errors:
+            try:
+                raw = current_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                return self._pause(
+                    state,
+                    reason=(
+                        "Ticket unreadable during lint retry for "
+                        f"{safe_relpath(current_path, self._workspace_root)}: {exc}"
+                    ),
+                    current_ticket=safe_relpath(current_path, self._workspace_root),
+                )
+
+            data, _ = parse_markdown_frontmatter(raw)
+            agent = data.get("agent")
+            agent_id = agent.strip() if isinstance(agent, str) else None
+            if not agent_id:
+                return self._pause(
+                    state,
+                    reason=(
+                        "Cannot determine ticket agent during lint retry (missing frontmatter.agent). "
+                        "Fix the ticket frontmatter manually and resume."
+                    ),
+                    current_ticket=safe_relpath(current_path, self._workspace_root),
+                )
+
+            # Validate agent id unless it is the special pause sentinel.
+            if agent_id != "pause":
+                try:
+                    from ..agents.registry import validate_agent_id
+
+                    agent_id = validate_agent_id(agent_id)
+                except Exception as exc:
+                    return self._pause(
+                        state,
+                        reason=(
+                            "Cannot determine valid agent during lint retry for "
+                            f"{safe_relpath(current_path, self._workspace_root)}: {exc}"
+                        ),
+                        current_ticket=safe_relpath(current_path, self._workspace_root),
+                    )
+
+            requires = normalize_requires(data.get("requires"))
+            ticket_doc = type(
+                "_TicketDocForLintRetry",
+                (),
+                {
+                    "frontmatter": TicketFrontmatter(
+                        agent=agent_id,
+                        done=False,
+                        requires=requires,
+                    )
+                },
+            )()
+        else:
+            ticket_doc, ticket_errors = read_ticket(current_path)
+            if ticket_errors or ticket_doc is None:
+                return self._pause(
+                    state,
+                    reason=(
+                        "Ticket frontmatter invalid for "
+                        f"{safe_relpath(current_path, self._workspace_root)}:\n- "
+                        + "\n- ".join(ticket_errors)
+                    ),
+                    current_ticket=safe_relpath(current_path, self._workspace_root),
+                )
 
         # Built-in manual pause ticket.
         if ticket_doc.frontmatter.agent == "pause":
@@ -133,35 +208,23 @@ class TicketRunner:
                 current_ticket=safe_relpath(current_path, self._workspace_root),
             )
 
-        # Validate required input files.
-        missing = self._missing_required_inputs(ticket_doc.frontmatter.requires)
-        if missing:
-            rel_missing = [
-                safe_relpath(self._workspace_root / m, self._workspace_root)
-                for m in missing
-            ]
-            return self._pause(
-                state,
-                reason=(
-                    "Missing required input files for this ticket:\n- "
-                    + "\n- ".join(rel_missing)
-                ),
-                current_ticket=safe_relpath(current_path, self._workspace_root),
-            )
-
-        # Determine lint-retry mode.
-        lint_state = state.get("lint") if isinstance(state.get("lint"), dict) else {}
-        lint_errors = (
-            lint_state.get("errors")
-            if isinstance(lint_state.get("errors"), list)
-            else []
-        )
-        lint_retries = int(lint_state.get("retries") or 0)
-        reuse_conversation_id = (
-            lint_state.get("conversation_id")
-            if isinstance(lint_state.get("conversation_id"), str)
-            else None
-        )
+        # Validate required input files (skip during lint retry; the only goal is to
+        # repair the ticket metadata so normal orchestration can resume).
+        if not lint_errors:
+            missing = self._missing_required_inputs(ticket_doc.frontmatter.requires)
+            if missing:
+                rel_missing = [
+                    safe_relpath(self._workspace_root / m, self._workspace_root)
+                    for m in missing
+                ]
+                return self._pause(
+                    state,
+                    reason=(
+                        "Missing required input files for this ticket:\n- "
+                        + "\n- ".join(rel_missing)
+                    ),
+                    current_ticket=safe_relpath(current_path, self._workspace_root),
+                )
 
         ticket_turns = int(state.get("ticket_turns") or 0)
         prompt = self._build_prompt(
@@ -214,12 +277,9 @@ class TicketRunner:
             outbox_paths, next_seq=outbox_seq + 1
         )
         if dispatch_errors:
-            # Treat as pause: user should fix USER_MESSAGE frontmatter.
-            state["lint"] = {
-                "errors": dispatch_errors,
-                "retries": 0,
-                "conversation_id": None,
-            }
+            # Treat as pause: user should fix USER_MESSAGE frontmatter. Keep outbox
+            # lint separate from ticket frontmatter lint to avoid mixing behaviors.
+            state["outbox_lint"] = dispatch_errors
             return self._pause(
                 state,
                 reason=(
@@ -231,6 +291,7 @@ class TicketRunner:
 
         if dispatch is not None:
             state["outbox_seq"] = dispatch.seq
+            state.pop("outbox_lint", None)
 
         # Post-turn: ticket frontmatter must remain valid.
         updated_fm, fm_errors = self._recheck_ticket_frontmatter(current_path)
