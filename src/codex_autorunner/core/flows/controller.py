@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
 
@@ -11,10 +10,6 @@ from .runtime import FlowRuntime
 from .store import FlowStore
 
 _logger = logging.getLogger(__name__)
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class FlowController:
@@ -28,7 +23,6 @@ class FlowController:
         self.db_path = db_path
         self.artifacts_root = artifacts_root
         self.store = FlowStore(db_path)
-        self._active_tasks: Dict[str, asyncio.Task] = {}
         self._event_listeners: Set[Callable[[FlowEvent], None]] = set()
         self._lock = asyncio.Lock()
 
@@ -37,10 +31,6 @@ class FlowController:
         self.store.initialize()
 
     def shutdown(self) -> None:
-        for run_id, task in self._active_tasks.items():
-            if not task.done():
-                _logger.info("Cancelling active task for run %s", run_id)
-                task.cancel()
         self.store.close()
 
     async def start_flow(
@@ -50,56 +40,38 @@ class FlowController:
         initial_state: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> FlowRunRecord:
+        """Create a new flow run record without executing the flow."""
         if run_id is None:
             run_id = str(uuid.uuid4())
 
         async with self._lock:
-            if run_id in self._active_tasks:
-                raise ValueError(f"Flow run {run_id} is already active")
-
             existing = self.store.get_flow_run(run_id)
             if existing:
                 raise ValueError(f"Flow run {run_id} already exists")
 
             self._prepare_artifacts_dir(run_id)
 
-            # Create record synchronously (PENDING status)
             record = self.store.create_flow_run(
                 run_id=run_id,
                 flow_type=self.definition.flow_type,
                 input_data=input_data,
                 metadata=metadata,
-            )
-
-            # Set to RUNNING status before starting task
-            now = now_iso()
-            updated = self.store.update_flow_run_status(
-                run_id=run_id,
-                status=FlowRunStatus.RUNNING,
-                started_at=now,
                 state=initial_state or {},
+                current_step=self.definition.initial_step,
             )
-            if not updated:
-                raise RuntimeError(f"Failed to start flow run {run_id}")
-            record = updated
-
-            runtime = FlowRuntime(
-                definition=self.definition,
-                store=self.store,
-                emit_event=self._emit_event,
-            )
-
-            # Create task with initial state (record already exists and is RUNNING)
-            task = asyncio.create_task(
-                runtime.run_flow(
-                    run_id=run_id,
-                    initial_state=initial_state or {},
-                )
-            )
-            task.add_done_callback(lambda t: self._active_tasks.pop(run_id, None))
-            self._active_tasks[run_id] = task
 
             return record
+
+    async def run_flow(
+        self, run_id: str, initial_state: Optional[Dict[str, Any]] = None
+    ) -> FlowRunRecord:
+        """Run or resume a flow to completion in-process (used by workers/tests)."""
+        runtime = FlowRuntime(
+            definition=self.definition,
+            store=self.store,
+            emit_event=self._emit_event,
+        )
+        return await runtime.run_flow(run_id=run_id, initial_state=initial_state)
 
     async def stop_flow(self, run_id: str) -> FlowRunRecord:
         record = self.store.set_stop_requested(run_id, True)
@@ -107,14 +79,12 @@ class FlowController:
             raise ValueError(f"Flow run {run_id} not found")
 
         if record.status == FlowRunStatus.RUNNING:
-            if run_id in self._active_tasks:
-                task = self._active_tasks[run_id]
-                try:
-                    await asyncio.wait_for(task, timeout=30.0)
-                except asyncio.TimeoutError:
-                    _logger.warning(
-                        "Flow run %s did not stop gracefully within timeout", run_id
-                    )
+            updated = self.store.update_flow_run_status(
+                run_id=run_id,
+                status=FlowRunStatus.STOPPING,
+            )
+            if updated:
+                record = updated
 
         updated = self.store.get_flow_run(run_id)
         if not updated:
@@ -123,33 +93,17 @@ class FlowController:
 
     async def resume_flow(self, run_id: str) -> FlowRunRecord:
         async with self._lock:
-            if run_id in self._active_tasks:
-                raise ValueError(f"Flow run {run_id} is already active")
-
             record = self.store.get_flow_run(run_id)
             if not record:
                 raise ValueError(f"Flow run {run_id} not found")
 
-            if record.status not in {FlowRunStatus.STOPPED, FlowRunStatus.FAILED}:
-                raise ValueError(
-                    f"Flow run {run_id} has status {record.status}, cannot resume"
-                )
+            if record.status == FlowRunStatus.RUNNING:
+                raise ValueError(f"Flow run {run_id} is already active")
 
-            runtime = FlowRuntime(
-                definition=self.definition,
-                store=self.store,
-                emit_event=self._emit_event,
-            )
-
-            task = asyncio.create_task(runtime.resume_flow(run_id))
-            task.add_done_callback(lambda t: self._active_tasks.pop(run_id, None))
-            self._active_tasks[run_id] = task
-
-            updated_record = self.store.get_flow_run(run_id)
-            if not updated_record:
-                raise RuntimeError(f"Failed to get record for run {run_id}")
-
-            return updated_record
+            cleared = self.store.set_stop_requested(run_id, False)
+            if not cleared:
+                raise RuntimeError(f"Failed to clear stop flag for run {run_id}")
+            return cleared
 
     def get_status(self, run_id: str) -> Optional[FlowRunRecord]:
         return self.store.get_flow_run(run_id)
@@ -160,31 +114,31 @@ class FlowController:
         )
 
     async def stream_events(
-        self, run_id: str, after_timestamp: Optional[str] = None
+        self, run_id: str, after_seq: Optional[int] = None
     ) -> AsyncGenerator[FlowEvent, None]:
-        last_timestamp = after_timestamp
+        last_seq = after_seq
 
         while True:
             events = self.store.get_events(
                 run_id=run_id,
-                after_timestamp=last_timestamp,
+                after_seq=last_seq,
                 limit=100,
             )
 
             for event in events:
                 yield event
-                last_timestamp = event.timestamp
+                last_seq = event.seq
 
             record = self.store.get_flow_run(run_id)
-            if record and record.status.is_terminal():
+            if record and record.status.is_terminal() and not events:
                 break
 
             await asyncio.sleep(0.5)
 
     def get_events(
-        self, run_id: str, after_timestamp: Optional[str] = None
+        self, run_id: str, after_seq: Optional[int] = None
     ) -> list[FlowEvent]:
-        return self.store.get_events(run_id=run_id, after_timestamp=after_timestamp)
+        return self.store.get_events(run_id=run_id, after_seq=after_seq)
 
     def add_event_listener(self, listener: Callable[[FlowEvent], None]) -> None:
         self._event_listeners.add(listener)
@@ -214,22 +168,7 @@ class FlowController:
         return self.store.get_artifacts(run_id)
 
     async def stream_events_since(
-        self, run_id: str, start_timestamp: Optional[str] = None
+        self, run_id: str, start_seq: Optional[int] = None
     ) -> AsyncGenerator[FlowEvent, None]:
-        last_timestamp = start_timestamp
-
-        while True:
-            events = self.store.get_events(
-                run_id=run_id,
-                after_timestamp=last_timestamp,
-            )
-
-            for event in events:
-                yield event
-                last_timestamp = event.timestamp
-
-            record = self.store.get_flow_run(run_id)
-            if record and record.status.is_terminal():
-                break
-
-            await asyncio.sleep(0.5)
+        async for event in self.stream_events(run_id, after_seq=start_seq):
+            yield event

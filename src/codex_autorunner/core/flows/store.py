@@ -17,7 +17,8 @@ from .models import (
 
 _logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+UNSET = object()
 
 
 def now_iso() -> str:
@@ -84,7 +85,8 @@ class FlowStore:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS flow_events (
-                id TEXT PRIMARY KEY,
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT NOT NULL UNIQUE,
                 run_id TEXT NOT NULL,
                 event_type TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
@@ -113,10 +115,7 @@ class FlowStore:
             "CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status)"
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_flow_events_run_id ON flow_events(run_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_flow_events_timestamp ON flow_events(timestamp)"
+            "CREATE INDEX IF NOT EXISTS idx_flow_events_run_id ON flow_events(run_id, seq)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_artifacts_run_id ON flow_artifacts(run_id)"
@@ -144,6 +143,34 @@ class FlowStore:
     def _apply_migration(self, conn: sqlite3.Connection, version: int) -> None:
         if version == 1:
             pass
+        elif version == 2:
+            conn.execute("ALTER TABLE flow_events RENAME TO flow_events_old")
+            conn.execute(
+                """
+                CREATE TABLE flow_events (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id TEXT NOT NULL UNIQUE,
+                    run_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    step_id TEXT,
+                    FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO flow_events (id, run_id, event_type, timestamp, data, step_id)
+                SELECT id, run_id, event_type, timestamp, data, step_id
+                FROM flow_events_old
+                ORDER BY timestamp ASC
+                """
+            )
+            conn.execute("DROP TABLE flow_events_old")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flow_events_run_id ON flow_events(run_id, seq)"
+            )
 
     def create_flow_run(
         self,
@@ -151,6 +178,8 @@ class FlowStore:
         flow_type: str,
         input_data: Dict[str, Any],
         metadata: Optional[Dict[str, Any]] = None,
+        state: Optional[Dict[str, Any]] = None,
+        current_step: Optional[str] = None,
     ) -> FlowRunRecord:
         now = now_iso()
         record = FlowRunRecord(
@@ -158,7 +187,8 @@ class FlowStore:
             flow_type=flow_type,
             status=FlowRunStatus.PENDING,
             input_data=input_data,
-            state={},
+            state=state or {},
+            current_step=current_step,
             stop_requested=False,
             created_at=now,
             metadata=metadata or {},
@@ -168,9 +198,9 @@ class FlowStore:
             conn.execute(
                 """
                 INSERT INTO flow_runs (
-                    id, flow_type, status, input_data, state,
+                    id, flow_type, status, input_data, state, current_step,
                     stop_requested, created_at, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.id,
@@ -178,6 +208,7 @@ class FlowStore:
                     record.status.value,
                     json.dumps(record.input_data),
                     json.dumps(record.state),
+                    record.current_step,
                     1 if record.stop_requested else 0,
                     record.created_at,
                     json.dumps(record.metadata),
@@ -197,32 +228,32 @@ class FlowStore:
         self,
         run_id: str,
         status: FlowRunStatus,
-        current_step: Optional[str] = None,
-        state: Optional[Dict[str, Any]] = None,
-        started_at: Optional[str] = None,
-        finished_at: Optional[str] = None,
-        error_message: Optional[str] = None,
+        current_step: Any = UNSET,
+        state: Any = UNSET,
+        started_at: Any = UNSET,
+        finished_at: Any = UNSET,
+        error_message: Any = UNSET,
     ) -> Optional[FlowRunRecord]:
         updates = ["status = ?"]
         params: List[Any] = [status.value]
 
-        if current_step is not None:
+        if current_step is not UNSET:
             updates.append("current_step = ?")
             params.append(current_step)
 
-        if state is not None:
+        if state is not UNSET:
             updates.append("state = ?")
             params.append(json.dumps(state))
 
-        if started_at is not None:
+        if started_at is not UNSET:
             updates.append("started_at = ?")
             params.append(started_at)
 
-        if finished_at is not None:
+        if finished_at is not UNSET:
             updates.append("finished_at = ?")
             params.append(finished_at)
 
-        if error_message is not None:
+        if error_message is not UNSET:
             updates.append("error_message = ?")
             params.append(error_message)
 
@@ -298,14 +329,7 @@ class FlowStore:
         data: Optional[Dict[str, Any]] = None,
         step_id: Optional[str] = None,
     ) -> FlowEvent:
-        event = FlowEvent(
-            id=event_id,
-            run_id=run_id,
-            event_type=event_type,
-            timestamp=now_iso(),
-            data=data or {},
-            step_id=step_id,
-        )
+        timestamp = now_iso()
 
         with self.transaction() as conn:
             conn.execute(
@@ -314,32 +338,38 @@ class FlowStore:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    event.id,
-                    event.run_id,
-                    event.event_type.value,
-                    event.timestamp,
-                    json.dumps(event.data),
-                    event.step_id,
+                    event_id,
+                    run_id,
+                    event_type.value,
+                    timestamp,
+                    json.dumps(data or {}),
+                    step_id,
                 ),
             )
+            row = conn.execute(
+                "SELECT * FROM flow_events WHERE id = ?", (event_id,)
+            ).fetchone()
 
-        return event
+        if row is None:
+            raise RuntimeError("Failed to persist flow event")
+
+        return self._row_to_flow_event(row)
 
     def get_events(
         self,
         run_id: str,
-        after_timestamp: Optional[str] = None,
+        after_seq: Optional[int] = None,
         limit: Optional[int] = None,
     ) -> List[FlowEvent]:
         conn = self._get_conn()
         query = "SELECT * FROM flow_events WHERE run_id = ?"
         params: List[Any] = [run_id]
 
-        if after_timestamp is not None:
-            query += " AND timestamp > ?"
-            params.append(after_timestamp)
+        if after_seq is not None:
+            query += " AND seq > ?"
+            params.append(after_seq)
 
-        query += " ORDER BY timestamp ASC"
+        query += " ORDER BY seq ASC"
 
         if limit is not None:
             query += " LIMIT ?"
@@ -418,6 +448,7 @@ class FlowStore:
 
     def _row_to_flow_event(self, row: sqlite3.Row) -> FlowEvent:
         return FlowEvent(
+            seq=row["seq"],
             id=row["id"],
             run_id=row["run_id"],
             event_type=FlowEventType(row["event_type"]),

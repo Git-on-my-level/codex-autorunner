@@ -1,15 +1,9 @@
-import asyncio
 import logging
 import uuid
 from typing import Any, Callable, Dict, Optional, Set
 
 from .definition import FlowDefinition, StepFn, StepOutcome
-from .models import (
-    FlowEvent,
-    FlowEventType,
-    FlowRunRecord,
-    FlowRunStatus,
-)
+from .models import FlowEvent, FlowEventType, FlowRunRecord, FlowRunStatus
 from .store import FlowStore, now_iso
 
 _logger = logging.getLogger(__name__)
@@ -56,116 +50,49 @@ class FlowRuntime:
         if not record:
             raise RuntimeError(f"Flow run {run_id} not found")
 
-        self._emit(FlowEventType.FLOW_STARTED, run_id)
+        if record.status.is_terminal() and record.status not in {
+            FlowRunStatus.STOPPED,
+            FlowRunStatus.FAILED,
+        }:
+            return record
 
         try:
-            # Record should already be RUNNING from start_flow
-            if record.status != FlowRunStatus.RUNNING:
+            self.store.set_stop_requested(run_id, False)
+
+            if record.status == FlowRunStatus.PENDING:
+                self._emit(FlowEventType.FLOW_STARTED, run_id)
                 now = now_iso()
                 updated = self.store.update_flow_run_status(
                     run_id=run_id,
                     status=FlowRunStatus.RUNNING,
                     started_at=now,
-                    state=initial_state or {},
+                    state=initial_state if initial_state is not None else record.state,
+                    current_step=record.current_step or self.definition.initial_step,
                 )
                 if not updated:
                     raise RuntimeError(f"Failed to start flow run {run_id}")
                 record = updated
-            elif initial_state is not None:
-                # Update state if provided (for resume cases)
+            else:
+                self._emit(FlowEventType.FLOW_RESUMED, run_id)
                 updated = self.store.update_flow_run_status(
                     run_id=run_id,
-                    status=record.status,
-                    state=initial_state,
+                    status=FlowRunStatus.RUNNING,
+                    state=initial_state if initial_state is not None else record.state,
                 )
                 if updated:
                     record = updated
 
-            next_steps: Set[str] = {self.definition.initial_step}
-
-            while next_steps:
-                if record.stop_requested:
-                    self._emit(FlowEventType.FLOW_STOPPED, run_id)
-                    now = now_iso()
-                    updated = self.store.update_flow_run_status(
-                        run_id=run_id,
-                        status=FlowRunStatus.STOPPED,
-                        finished_at=now,
-                    )
-                    if not updated:
-                        raise RuntimeError(f"Failed to stop flow run {run_id}")
-                    record = updated
-                    break
-
-                step_id = next_steps.pop()
-
-                record = await self._execute_step(record, step_id)
-
-                if record.status.is_terminal():
-                    break
-
-                if record.status == FlowRunStatus.RUNNING:
-                    if not next_steps and record.current_step:
-                        next_steps = {record.current_step}
-
-            return record
-
-        except Exception as e:
-            _logger.exception("Flow run %s failed with exception", run_id)
-            self._emit(
-                FlowEventType.FLOW_FAILED,
-                run_id,
-                data={"error": str(e)},
-            )
-            now = now_iso()
-            updated = self.store.update_flow_run_status(
-                run_id=run_id,
-                status=FlowRunStatus.FAILED,
-                finished_at=now,
-                error_message=str(e),
-            )
-            if not updated:
-                raise RuntimeError(
-                    f"Failed to update flow run {run_id} to failed state"
-                ) from e
-            record = updated
-            return record
-
-    async def resume_flow(
-        self,
-        run_id: str,
-    ) -> FlowRunRecord:
-        record = self.store.get_flow_run(run_id)
-        if not record:
-            raise ValueError(f"Flow run {run_id} not found")
-
-        if record.status.is_terminal():
-            return record
-
-        if record.status != FlowRunStatus.STOPPED:
-            _logger.warning(
-                "Resuming flow run %s from status %s", run_id, record.status
-            )
-
-        self._emit(FlowEventType.FLOW_RESUMED, run_id)
-
-        try:
-            self.store.set_stop_requested(run_id, False)
-
-            now = now_iso()
-            updated = self.store.update_flow_run_status(
-                run_id=run_id,
-                status=FlowRunStatus.RUNNING,
-            )
-            if not updated:
-                raise RuntimeError(f"Failed to resume flow run {run_id}")
-            record = updated
-
             next_steps: Set[str] = set()
             if record.current_step:
-                next_steps = {record.current_step}
+                next_steps.add(record.current_step)
+            else:
+                next_steps.add(self.definition.initial_step)
 
             while next_steps:
+                latest = self.store.get_flow_run(run_id)
+                if latest:
+                    record = latest
+
                 if record.stop_requested:
                     self._emit(FlowEventType.FLOW_STOPPED, run_id)
                     now = now_iso()
@@ -361,12 +288,3 @@ class FlowRuntime:
                 ) from e
             record = updated
             return record
-
-    async def _check_stop_requested(self, run_id: str) -> bool:
-        while True:
-            record = self.store.get_flow_run(run_id)
-            if not record:
-                return False
-            if record.stop_requested:
-                return True
-            await asyncio.sleep(self._stop_check_interval)

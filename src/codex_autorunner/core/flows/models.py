@@ -52,6 +52,7 @@ class FlowRunRecord(BaseModel):
 
 
 class FlowEvent(BaseModel):
+    seq: int
     id: str
     run_id: str
     event_type: FlowEventType

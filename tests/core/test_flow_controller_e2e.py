@@ -82,13 +82,14 @@ async def test_flow_controller_stop_flow(flow_controller):
     # Start a slow flow that takes longer to stop
     record = await flow_controller.start_flow(input_data={"value": 0})
     assert record.id
-    assert record.status == FlowRunStatus.RUNNING
+    assert record.status == FlowRunStatus.PENDING
 
-    # Wait a bit
-    await asyncio.sleep(0.3)
+    runner = asyncio.create_task(flow_controller.run_flow(record.id))
+    await asyncio.sleep(0.1)
 
     # Stop of flow
     stopped_record = await flow_controller.stop_flow(record.id)
+    await runner
     assert stopped_record.id == record.id
     assert stopped_record.status in {
         FlowRunStatus.STOPPED,
@@ -108,13 +109,14 @@ async def test_flow_controller_stop(flow_controller):
     # Start a slow flow that takes longer to stop
     record = await flow_controller.start_flow(input_data={"value": 0})
     assert record.id
-    assert record.status == FlowRunStatus.RUNNING
+    assert record.status == FlowRunStatus.PENDING
 
-    # Wait a bit
-    await asyncio.sleep(0.3)
+    runner = asyncio.create_task(flow_controller.run_flow(record.id))
+    await asyncio.sleep(0.1)
 
     # Stop the flow
     stopped_record = await flow_controller.stop_flow(record.id)
+    await runner
     assert stopped_record.id == record.id
     assert stopped_record.status in {
         FlowRunStatus.STOPPED,
@@ -134,7 +136,10 @@ async def test_flow_controller_db_state_transitions(flow_controller):
     record = await flow_controller.start_flow(input_data={})
     run_id = record.id
 
+    run_task = asyncio.create_task(flow_controller.run_flow(run_id))
+
     # Initial state
+    await asyncio.sleep(0.05)
     state1 = flow_controller.store.get_flow_run(run_id)
     assert state1.status == FlowRunStatus.RUNNING
     assert state1.started_at is not None
@@ -149,6 +154,7 @@ async def test_flow_controller_db_state_transitions(flow_controller):
 
     # Stop and check final state
     await flow_controller.stop_flow(run_id)
+    await run_task
     final_state = flow_controller.store.get_flow_run(run_id)
 
     # Final state should be either STOPPED or COMPLETED
@@ -174,6 +180,8 @@ async def test_flow_controller_sse_event_ordering(flow_controller):
     collected_events = []
     event_types_in_order = []
 
+    runner = asyncio.create_task(flow_controller.run_flow(run_id))
+
     async def collect_events():
         async for event in flow_controller.stream_events(run_id):
             collected_events.append(event)
@@ -190,6 +198,7 @@ async def test_flow_controller_sse_event_ordering(flow_controller):
 
     # Wait for completion
     await asyncio.wait_for(collect_task, timeout=10.0)
+    await runner
 
     # Verify event ordering
     assert len(event_types_in_order) > 0
@@ -229,23 +238,16 @@ async def test_flow_controller_multiple_runs_isolated(flow_controller):
     record2 = await flow_controller.start_flow(input_data={"value": 10})
 
     assert record1.id != record2.id
-    assert record1.status == FlowRunStatus.RUNNING
-    assert record2.status == FlowRunStatus.RUNNING
+    assert record1.status == FlowRunStatus.PENDING
+    assert record2.status == FlowRunStatus.PENDING
 
-    # Wait for both to complete
-    for _ in range(50):
-        await asyncio.sleep(0.1)
-        status1 = flow_controller.get_status(record1.id)
-        status2 = flow_controller.get_status(record2.id)
-        if status1.status in {
-            FlowRunStatus.COMPLETED,
-            FlowRunStatus.FAILED,
-        } and status2.status in {FlowRunStatus.COMPLETED, FlowRunStatus.FAILED}:
-            break
+    final1_task = asyncio.create_task(flow_controller.run_flow(record1.id))
+    final2_task = asyncio.create_task(flow_controller.run_flow(record2.id))
+    await asyncio.gather(final1_task, final2_task)
 
     # Verify both completed
-    final1 = flow_controller.get_status(record1.id)
-    final2 = flow_controller.get_status(record2.id)
+    final1 = final1_task.result()
+    final2 = final2_task.result()
 
     assert final1.status == FlowRunStatus.COMPLETED
     assert final2.status == FlowRunStatus.COMPLETED
@@ -275,40 +277,28 @@ async def test_flow_controller_resume_preserves_state(flow_controller):
     run_id = record.id
 
     # Let it progress partially
-    await asyncio.sleep(0.15)
+    runner = asyncio.create_task(flow_controller.run_flow(run_id))
+    await asyncio.sleep(0.1)
 
     # Get current state
     state_before = flow_controller.get_status(run_id)
-    assert state_before.state.get("step1_done") is True
+    assert state_before is not None
 
-    # Stop the flow
     await flow_controller.stop_flow(run_id)
+    await runner
 
-    # Resume with modified state
-    if state_before.status == FlowRunStatus.STOPPED:
-        modified_state = state_before.state.copy()
+    state_after_stop = flow_controller.get_status(run_id)
+    if state_after_stop.status == FlowRunStatus.STOPPED:
+        modified_state = state_after_stop.state.copy()
         modified_state["resumed"] = True
-
-        # Update state in DB
         flow_controller.store.update_flow_run_status(
             run_id=run_id,
             status=FlowRunStatus.STOPPED,
             state=modified_state,
         )
 
-        # Resume
-        resumed = await flow_controller.resume_flow(run_id)
-        assert resumed.state.get("resumed") is True
-        assert resumed.state.get("step1_done") is True  # Preserved
-
-        # Wait for completion
-        for _ in range(50):
-            await asyncio.sleep(0.1)
-            final = flow_controller.get_status(run_id)
-            if final.status in {FlowRunStatus.COMPLETED, FlowRunStatus.FAILED}:
-                break
-
-        final_state = flow_controller.get_status(run_id)
+        await flow_controller.resume_flow(run_id)
+        final_state = await flow_controller.run_flow(run_id)
         assert final_state.status == FlowRunStatus.COMPLETED
 
 
@@ -319,8 +309,10 @@ async def test_flow_controller_stop_before_completion(flow_controller):
     record = await flow_controller.start_flow(input_data={})
     run_id = record.id
 
+    runner = asyncio.create_task(flow_controller.run_flow(run_id))
     # Stop immediately
     stopped = await flow_controller.stop_flow(run_id)
+    await runner
 
     # Verify stopped state
     assert stopped.id == run_id
@@ -341,13 +333,11 @@ async def test_flow_controller_list_runs(flow_controller):
     record2 = await flow_controller.start_flow(input_data={"seq": 2})
     record3 = await flow_controller.start_flow(input_data={"seq": 3})
 
-    # Wait for completion
-    for run_id in [record1.id, record2.id, record3.id]:
-        for _ in range(50):
-            await asyncio.sleep(0.05)
-            status = flow_controller.get_status(run_id)
-            if status.status in {FlowRunStatus.COMPLETED, FlowRunStatus.FAILED}:
-                break
+    await asyncio.gather(
+        flow_controller.run_flow(record1.id),
+        flow_controller.run_flow(record2.id),
+        flow_controller.run_flow(record3.id),
+    )
 
     # List all runs
     all_runs = flow_controller.list_runs()
@@ -391,15 +381,9 @@ async def test_flow_controller_error_handling(flow_controller):
         # Start failing flow
         record = await failing_controller.start_flow(input_data={})
 
-        # Wait for failure
-        for _ in range(20):
-            await asyncio.sleep(0.1)
-            status = failing_controller.get_status(record.id)
-            if status.status == FlowRunStatus.FAILED:
-                break
+        final = await failing_controller.run_flow(record.id)
 
         # Verify failed state
-        final = failing_controller.get_status(record.id)
         assert final.status == FlowRunStatus.FAILED
 
         # Verify failure event

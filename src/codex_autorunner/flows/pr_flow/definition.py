@@ -123,9 +123,14 @@ async def link_issue_or_pr_step(record, input_data: dict) -> StepOutcome:
             state.branch = branch_name
             _logger.info("Created branch for issue: %s", branch_name)
         elif state.target_type == TargetType.PR:
-            run_git(["fetch", "origin"], worktree_path)
-            run_git(["checkout", f"origin/pull/{state.pr_number}"], worktree_path)
-            state.branch = f"pr-{state.pr_number}"
+            fetch_ref = f"pull/{state.pr_number}/head"
+            local_branch = f"pr-{state.pr_number}"
+            run_git(
+                ["fetch", "origin", f"{fetch_ref}:{local_branch}"],
+                worktree_path,
+            )
+            run_git(["checkout", local_branch], worktree_path)
+            state.branch = local_branch
             _logger.info("Checked out PR branch: %s", state.branch)
         else:
             return StepOutcome.fail("No target type in state")
@@ -208,7 +213,7 @@ async def finalize_step(record, input_data: dict) -> StepOutcome:
     return StepOutcome.complete(
         output={
             "finalized": True,
-            "final_report": "PR flow completed successfully",
+            "final_report": "PR flow completed (placeholder implementation; no PR actions executed).",
         }
     )
 

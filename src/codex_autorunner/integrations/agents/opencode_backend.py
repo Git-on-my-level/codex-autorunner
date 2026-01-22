@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 from typing import Any, AsyncGenerator, Dict, Optional
@@ -31,9 +30,8 @@ class OpenCodeBackend(AgentBackend):
         self._session_id: Optional[str] = None
         self._message_count: int = 0
         self._final_messages: list[str] = []
-        self._event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
 
-    async def start_session(self) -> str:
+    async def start_session(self, target: dict, context: dict) -> str:
         result = await self._client.create_session(
             title=f"Flow session {self._message_count}",
             directory=None,
@@ -48,10 +46,12 @@ class OpenCodeBackend(AgentBackend):
         return self._session_id
 
     async def run_turn(
-        self, message: str, context: Optional[Dict[str, Any]] = None
+        self, session_id: str, message: str
     ) -> AsyncGenerator[AgentEvent, None]:
+        if session_id:
+            self._session_id = session_id
         if not self._session_id:
-            self._session_id = await self.start_session()
+            self._session_id = await self.start_session(target={}, context={})
 
         _logger.info("Sending message to session %s", self._session_id)
 
@@ -65,39 +65,12 @@ class OpenCodeBackend(AgentBackend):
         )
 
         self._message_count += 1
+        async for event in self._yield_events_until_completion():
+            yield event
 
-        session_event_received = asyncio.Event()
-
-        async def _collect_events():
-            try:
-                async for sse in self._client.stream_events(directory=None):
-                    for agent_event in self._convert_sse_to_agent_event(sse):
-                        yield agent_event
-
-                        if agent_event.event_type == AgentEventType.MESSAGE_COMPLETE:
-                            self._final_messages.append(
-                                agent_event.data.get("final_message", "")
-                            )
-                            session_event_received.set()
-                            return
-            except Exception as e:
-                _logger.warning("Error in event collection: %s", e)
-
-        task = asyncio.create_task(_collect_events())
-
-        try:
-            await asyncio.wait_for(session_event_received.wait(), timeout=600.0)
-        except asyncio.TimeoutError:
-            _logger.warning("Turn timeout, cancelling event collection")
-            task.cancel()
-
-        yield AgentEvent(
-            event_type=AgentEventType.SESSION_ENDED,
-            timestamp=now_iso(),
-            data={"reason": "turn_complete"},
-        )
-
-    async def stream_events(self) -> AsyncGenerator[AgentEvent, None]:
+    async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
+        if session_id:
+            self._session_id = session_id
         if not self._session_id:
             raise RuntimeError("Session not started. Call start_session() first.")
 
@@ -105,21 +78,40 @@ class OpenCodeBackend(AgentBackend):
             for agent_event in self._convert_sse_to_agent_event(sse):
                 yield agent_event
 
-    async def interrupt(self) -> None:
-        if self._session_id:
+    async def interrupt(self, session_id: str) -> None:
+        target_session = session_id or self._session_id
+        if target_session:
             try:
-                await self._client.abort(self._session_id)
-                _logger.info("Interrupted OpenCode session %s", self._session_id)
+                await self._client.abort(target_session)
+                _logger.info("Interrupted OpenCode session %s", target_session)
             except Exception as e:
                 _logger.warning("Failed to interrupt session: %s", e)
 
-    async def final_messages(self) -> list[str]:
+    async def final_messages(self, session_id: str) -> list[str]:
         return self._final_messages
 
     async def request_approval(
         self, description: str, context: Optional[Dict[str, Any]] = None
     ) -> bool:
         raise NotImplementedError("Approvals not implemented for OpenCodeBackend")
+
+    async def _yield_events_until_completion(self) -> AsyncGenerator[AgentEvent, None]:
+        try:
+            async for sse in self._client.stream_events(directory=None):
+                for agent_event in self._convert_sse_to_agent_event(sse):
+                    yield agent_event
+                    if agent_event.event_type in {
+                        AgentEventType.MESSAGE_COMPLETE,
+                        AgentEventType.SESSION_ENDED,
+                    }:
+                        if agent_event.event_type == AgentEventType.MESSAGE_COMPLETE:
+                            self._final_messages.append(
+                                agent_event.data.get("final_message", "")
+                            )
+                        return
+        except Exception as e:
+            _logger.warning("Error in event collection: %s", e)
+            yield AgentEvent.error(error_message=str(e))
 
     def _convert_sse_to_agent_event(self, sse: SSEEvent) -> list[AgentEvent]:
         events: list[AgentEvent] = []
@@ -163,7 +155,7 @@ class OpenCodeBackend(AgentBackend):
         elif payload_type == "sessionEnd":
             events.append(
                 AgentEvent(
-                    event_type=AgentEventType.SESSION_ENDED,
+                    type=AgentEventType.SESSION_ENDED.value,
                     timestamp=now_iso(),
                     data={"reason": payload.get("reason", "unknown")},
                 )
@@ -205,7 +197,7 @@ class OpenCodeBackend(AgentBackend):
         elif payload_type == "sessionEnd":
             events.append(
                 AgentEvent(
-                    event_type=AgentEventType.SESSION_ENDED,
+                    type=AgentEventType.SESSION_ENDED.value,
                     timestamp=now_iso(),
                     data={"reason": payload.get("reason", "unknown")},
                 )

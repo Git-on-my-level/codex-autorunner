@@ -1,8 +1,10 @@
+import json
 import logging
 import subprocess
+import sys
 import uuid
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import IO, Dict, Optional, Tuple, Union
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -16,7 +18,10 @@ from ..flows.pr_flow import build_pr_flow_definition
 
 _logger = logging.getLogger(__name__)
 
-_active_workers: Dict[str, subprocess.Popen] = {}
+_active_workers: Dict[
+    str, Tuple[subprocess.Popen, Optional[IO[bytes]], Optional[IO[bytes]]]
+] = {}
+_controller_cache: Dict[Path, FlowController] = {}
 
 
 def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
@@ -24,6 +29,39 @@ def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
         return str(uuid.UUID(str(run_id)))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid run_id") from None
+
+
+def _cleanup_worker_handle(run_id: str) -> None:
+    handle = _active_workers.pop(run_id, None)
+    if not handle:
+        return
+
+    proc, stdout, stderr = handle
+    if proc.poll() is None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+    for stream in (stdout, stderr):
+        if stream and not stream.closed:
+            try:
+                stream.flush()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+
+def _reap_dead_worker(run_id: str) -> None:
+    handle = _active_workers.get(run_id)
+    if not handle:
+        return
+    proc, *_ = handle
+    if proc.poll() is not None:
+        _cleanup_worker_handle(run_id)
 
 
 class FlowStartRequest(BaseModel):
@@ -66,6 +104,10 @@ class FlowArtifactInfo(BaseModel):
 
 
 def _get_flow_controller(repo_root: Path) -> FlowController:
+    repo_root = repo_root.resolve()
+    if repo_root in _controller_cache:
+        return _controller_cache[repo_root]
+
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     artifacts_root = repo_root / ".codex-autorunner" / "flows"
 
@@ -75,13 +117,25 @@ def _get_flow_controller(repo_root: Path) -> FlowController:
         artifacts_root=artifacts_root,
     )
     controller.initialize()
+    _controller_cache[repo_root] = controller
     return controller
 
 
 def _start_flow_worker(repo_root: Path, run_id: str) -> subprocess.Popen:
     normalized_run_id = _normalize_run_id(run_id)
+    _reap_dead_worker(normalized_run_id)
+
+    artifacts_dir = repo_root / ".codex-autorunner" / "flows" / normalized_run_id
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+    stdout_path = artifacts_dir / "worker.out.log"
+    stderr_path = artifacts_dir / "worker.err.log"
+
+    stdout_handle = open(stdout_path, "ab")
+    stderr_handle = open(stderr_path, "ab")
+
     cmd = [
-        "python3",
+        sys.executable,
         "-m",
         "codex_autorunner",
         "flow",
@@ -89,15 +143,38 @@ def _start_flow_worker(repo_root: Path, run_id: str) -> subprocess.Popen:
         "--run-id",
         normalized_run_id,
     ]
-    cwd = repo_root
-    env = None
 
     proc = subprocess.Popen(
-        cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        cmd,
+        cwd=repo_root,
+        stdout=stdout_handle,
+        stderr=stderr_handle,
     )
-    _active_workers[normalized_run_id] = proc
+    _active_workers[normalized_run_id] = (proc, stdout_handle, stderr_handle)
     _logger.info("Started flow worker for run %s (pid=%d)", normalized_run_id, proc.pid)
     return proc
+
+
+def _stop_worker(run_id: str, timeout: float = 10.0) -> None:
+    normalized_run_id = _normalize_run_id(run_id)
+    handle = _active_workers.get(normalized_run_id)
+    if not handle:
+        return
+
+    proc, *_ = handle
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _logger.warning(
+                "Worker for run %s did not exit in time, killing", normalized_run_id
+            )
+            proc.kill()
+        except Exception as exc:
+            _logger.warning("Error stopping worker %s: %s", normalized_run_id, exc)
+
+    _cleanup_worker_handle(normalized_run_id)
 
 
 def build_flow_routes() -> APIRouter:
@@ -138,7 +215,10 @@ def build_flow_routes() -> APIRouter:
                 metadata=request.metadata,
             )
 
-            _start_flow_worker(repo_root, run_id)
+            if run_id in _active_workers:
+                _logger.info("Worker already active for run %s, skipping spawn", run_id)
+            else:
+                _start_flow_worker(repo_root, run_id)
 
             return FlowStatusResponse.from_record(record)
         except Exception as e:
@@ -153,11 +233,7 @@ def build_flow_routes() -> APIRouter:
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
-        if run_id in _active_workers:
-            proc = _active_workers[run_id]
-            proc.terminate()
-            _logger.info("Terminated flow worker for run %s (pid=%d)", run_id, proc.pid)
-            del _active_workers[run_id]
+        _stop_worker(run_id)
 
         record = await controller.stop_flow(run_id)
         return FlowStatusResponse.from_record(record)
@@ -171,7 +247,11 @@ def build_flow_routes() -> APIRouter:
         controller = _get_flow_controller(repo_root)
 
         record = await controller.resume_flow(run_id)
-        _start_flow_worker(repo_root, run_id)
+        _reap_dead_worker(run_id)
+        if run_id in _active_workers:
+            _logger.info("Worker already active for run %s, skipping spawn", run_id)
+        else:
+            _start_flow_worker(repo_root, run_id)
 
         return FlowStatusResponse.from_record(record)
 
@@ -183,6 +263,8 @@ def build_flow_routes() -> APIRouter:
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
+        _reap_dead_worker(run_id)
+
         record = controller.get_status(run_id)
         if not record:
             from fastapi import HTTPException
@@ -192,7 +274,7 @@ def build_flow_routes() -> APIRouter:
         return FlowStatusResponse.from_record(record)
 
     @router.get("/{run_id}/events")
-    async def stream_flow_events(run_id: uuid.UUID):
+    async def stream_flow_events(run_id: uuid.UUID, after: Optional[int] = None):
         from ..core.utils import find_repo_root
 
         run_id = _normalize_run_id(run_id)
@@ -205,9 +287,9 @@ def build_flow_routes() -> APIRouter:
 
         async def event_stream():
             try:
-                async for event in controller.stream_events(run_id):
+                async for event in controller.stream_events(run_id, after_seq=after):
                     data = event.model_dump(mode="json")
-                    yield f"data: {data}\n\n"
+                    yield f"data: {json.dumps(data)}\n\n"
             except Exception as e:
                 _logger.exception("Error streaming events for run %s: %s", run_id, e)
                 raise

@@ -45,10 +45,10 @@ class CodexAppServerBackend(AgentBackend):
             await self._client.start()
         return self._client
 
-    async def start_session(self) -> str:
+    async def start_session(self, target: dict, context: dict) -> str:
         client = await self._ensure_client()
 
-        repo_root = self._cwd or Path.cwd()
+        repo_root = Path(context.get("workspace") or self._cwd or Path.cwd())
 
         result = await client.thread_start(str(repo_root))
         self._thread_id = result.get("id")
@@ -62,12 +62,15 @@ class CodexAppServerBackend(AgentBackend):
         return self._session_id
 
     async def run_turn(
-        self, message: str, context: Optional[Dict[str, Any]] = None
+        self, session_id: str, message: str
     ) -> AsyncGenerator[AgentEvent, None]:
         client = await self._ensure_client()
 
+        if session_id:
+            self._thread_id = session_id
+
         if not self._thread_id:
-            await self.start_session()
+            await self.start_session(target={}, context={})
 
         _logger.info(
             "Running turn on thread %s with message: %s",
@@ -96,23 +99,21 @@ class CodexAppServerBackend(AgentBackend):
             final_message="\n".join(result.agent_messages)
         )
 
-    async def stream_events(self) -> AsyncGenerator[AgentEvent, None]:
-        raise NotImplementedError(
-            "Event streaming is handled via notification_handler in CodexAppServerBackend"
-        )
+    async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
+        if False:
+            yield AgentEvent.stream_delta(content="", delta_type="noop")
 
-    async def interrupt(self) -> None:
-        if self._client and self._thread_id:
+    async def interrupt(self, session_id: str) -> None:
+        target_thread = session_id or self._thread_id
+        if self._client and target_thread:
             try:
-                await self._client.turn_interrupt(self._thread_id)
-                _logger.info("Interrupted turn on thread %s", self._thread_id)
+                await self._client.turn_interrupt(target_thread)
+                _logger.info("Interrupted turn on thread %s", target_thread)
             except Exception as e:
                 _logger.warning("Failed to interrupt turn: %s", e)
 
-    async def final_messages(self) -> list[str]:
-        raise NotImplementedError(
-            "final_messages not implemented for CodexAppServerBackend"
-        )
+    async def final_messages(self, session_id: str) -> list[str]:
+        return []
 
     async def request_approval(
         self, description: str, context: Optional[Dict[str, Any]] = None
@@ -169,19 +170,3 @@ class CodexAppServerBackend(AgentBackend):
             return AgentEvent.error(error_message=error_message)
 
         return AgentEvent.stream_delta(content="", delta_type="unknown_event")
-
-
-def description_for_approval(
-    method: str, item_type: str, request: Dict[str, Any]
-) -> str:
-    if method == "item/commandExecution/requestApproval":
-        params = request.get("params", {})
-        command = params.get("command", {}).get("name", "unknown")
-        return f"Execute command: {command}"
-
-    if method == "item/fileChange/requestApproval":
-        params = request.get("params", {})
-        file_path = params.get("path", "unknown")
-        return f"Modify file: {file_path}"
-
-    return f"Approval required for: {item_type}"

@@ -5,6 +5,7 @@ import logging
 import os
 import shlex
 import subprocess
+import uuid
 from pathlib import Path
 from typing import NoReturn, Optional
 
@@ -1176,8 +1177,13 @@ def flow(
     if action == "worker":
         if not run_id:
             _raise_exit("--run-id is required for worker command")
+        try:
+            run_id = str(uuid.UUID(str(run_id)))
+        except ValueError:
+            _raise_exit("Invalid run_id format; must be a UUID")
 
         from .core.flows import FlowController
+        from .core.flows.models import FlowRunStatus
         from .flows.pr_flow import build_pr_flow_definition
 
         db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
@@ -1202,15 +1208,21 @@ def flow(
                 typer.echo(f"Flow run {run_id} not found", err=True)
                 raise typer.Exit(code=1)
 
-            if record.status.is_terminal():
+            if record.status.is_terminal() and record.status not in {
+                FlowRunStatus.STOPPED,
+                FlowRunStatus.FAILED,
+            }:
                 typer.echo(
                     f"Flow run {run_id} already completed (status={record.status})"
                 )
                 return
 
-            typer.echo(f"Resuming flow run {run_id} from step: {record.current_step}")
-            await controller.resume_flow(run_id)
-            typer.echo(f"Flow run {run_id} completed")
+            action = (
+                "Resuming" if record.status != FlowRunStatus.PENDING else "Starting"
+            )
+            typer.echo(f"{action} flow run {run_id} from step: {record.current_step}")
+            final_record = await controller.run_flow(run_id)
+            typer.echo(f"Flow run {run_id} finished with status {final_record.status}")
 
         asyncio.run(_run_worker())
     else:

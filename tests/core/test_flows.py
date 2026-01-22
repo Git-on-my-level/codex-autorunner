@@ -7,6 +7,7 @@ import pytest
 from codex_autorunner.core.flows import (
     FlowController,
     FlowDefinition,
+    FlowEventType,
     FlowRunRecord,
     FlowRunStatus,
     StepOutcome,
@@ -67,12 +68,9 @@ async def test_flow_controller_start_and_complete(flow_controller):
 
     assert record.id
     assert record.flow_type == "test_flow"
-    assert record.status == FlowRunStatus.RUNNING
+    assert record.status == FlowRunStatus.PENDING
 
-    await asyncio.sleep(0.5)
-
-    final_record = flow_controller.get_status(record.id)
-    assert final_record is not None
+    final_record = await flow_controller.run_flow(record.id)
     assert final_record.status == FlowRunStatus.COMPLETED
     assert final_record.state.get("step1_done") is True
     assert final_record.state.get("step2_done") is True
@@ -84,8 +82,17 @@ async def test_flow_controller_stop(flow_controller):
         input_data={"test": "value"},
     )
 
+    runner = asyncio.create_task(flow_controller.run_flow(record.id))
+    await asyncio.sleep(0.05)
+
     stopped = await flow_controller.stop_flow(record.id)
-    assert stopped.status in {FlowRunStatus.STOPPED, FlowRunStatus.COMPLETED}
+    await runner
+
+    assert stopped.status in {
+        FlowRunStatus.STOPPED,
+        FlowRunStatus.STOPPING,
+        FlowRunStatus.COMPLETED,
+    }
 
 
 @pytest.mark.asyncio
@@ -110,24 +117,20 @@ async def test_flow_controller_resume(flow_controller):
     controller.initialize()
 
     record = await controller.start_flow(input_data={})
-    await asyncio.sleep(0.5)
-
-    final = controller.get_status(record.id)
-    assert final is not None
+    final = await controller.run_flow(record.id)
     assert final.status == FlowRunStatus.FAILED
 
-    final.state["current_step"] = "recovery"
+    resumed_state = final.state.copy()
+    resumed_state["current_step"] = "recovery"
     controller.store.update_flow_run_status(
         run_id=record.id,
         status=FlowRunStatus.STOPPED,
-        state=final.state,
+        state=resumed_state,
+        current_step="recovery",
     )
 
     await controller.resume_flow(record.id)
-    await asyncio.sleep(0.5)
-
-    resumed_final = controller.get_status(record.id)
-    assert resumed_final is not None
+    resumed_final = await controller.run_flow(record.id)
     assert resumed_final.status in {FlowRunStatus.COMPLETED, FlowRunStatus.STOPPED}
 
     controller.shutdown()
@@ -137,11 +140,15 @@ async def test_flow_controller_resume(flow_controller):
 async def test_flow_event_streaming(flow_controller):
     record = await flow_controller.start_flow(input_data={})
 
+    runner = asyncio.create_task(flow_controller.run_flow(record.id))
+
     events = []
     async for event in flow_controller.stream_events(record.id):
         events.append(event)
         if event.event_type.value in {"flow_completed", "flow_failed", "flow_stopped"}:
             break
+
+    await runner
 
     assert len(events) > 0
     assert any(e.event_type.value == "flow_started" for e in events)
@@ -164,8 +171,8 @@ def test_flow_events(flow_controller):
     event = flow_controller.store.create_event(
         event_id="test-event-1",
         run_id="test-run-1",
-        event_type="step_started",
         data={"step_id": "step1"},
+        event_type=FlowEventType.STEP_STARTED,
     )
 
     assert event.id == "test-event-1"

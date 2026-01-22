@@ -22,18 +22,26 @@ class AgentEventType(str, Enum):
     APPROVAL_DENIED = "approval_denied"
     SESSION_STARTED = "session_started"
     SESSION_ENDED = "session_ended"
+    SESION_STARTED = "session_started"
 
 
 @dataclass
 class AgentEvent:
-    event_type: AgentEventType
+    type: str
     timestamp: str
     data: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def event_type(self) -> AgentEventType:
+        try:
+            return AgentEventType(self.type)
+        except ValueError:
+            return AgentEventType.ERROR
 
     @classmethod
     def stream_delta(cls, content: str, delta_type: str = "text") -> "AgentEvent":
         return cls(
-            event_type=AgentEventType.STREAM_DELTA,
+            type=AgentEventType.STREAM_DELTA.value,
             timestamp=now_iso(),
             data={"content": content, "delta_type": delta_type},
         )
@@ -41,7 +49,7 @@ class AgentEvent:
     @classmethod
     def tool_call(cls, tool_name: str, tool_input: Dict[str, Any]) -> "AgentEvent":
         return cls(
-            event_type=AgentEventType.TOOL_CALL,
+            type=AgentEventType.TOOL_CALL.value,
             timestamp=now_iso(),
             data={"tool_name": tool_name, "tool_input": tool_input},
         )
@@ -51,7 +59,7 @@ class AgentEvent:
         cls, tool_name: str, result: Any, error: Optional[str] = None
     ) -> "AgentEvent":
         return cls(
-            event_type=AgentEventType.TOOL_RESULT,
+            type=AgentEventType.TOOL_RESULT.value,
             timestamp=now_iso(),
             data={"tool_name": tool_name, "result": result, "error": error},
         )
@@ -59,7 +67,7 @@ class AgentEvent:
     @classmethod
     def message_complete(cls, final_message: str) -> "AgentEvent":
         return cls(
-            event_type=AgentEventType.MESSAGE_COMPLETE,
+            type=AgentEventType.MESSAGE_COMPLETE.value,
             timestamp=now_iso(),
             data={"final_message": final_message},
         )
@@ -67,7 +75,7 @@ class AgentEvent:
     @classmethod
     def error(cls, error_message: str) -> "AgentEvent":
         return cls(
-            event_type=AgentEventType.ERROR,
+            type=AgentEventType.ERROR.value,
             timestamp=now_iso(),
             data={"error": error_message},
         )
@@ -77,7 +85,7 @@ class AgentEvent:
         cls, request_id: str, description: str, context: Optional[Dict[str, Any]] = None
     ) -> "AgentEvent":
         return cls(
-            event_type=AgentEventType.APPROVAL_REQUESTED,
+            type=AgentEventType.APPROVAL_REQUESTED.value,
             timestamp=now_iso(),
             data={
                 "request_id": request_id,
@@ -89,7 +97,7 @@ class AgentEvent:
     @classmethod
     def approval_granted(cls, request_id: str) -> "AgentEvent":
         return cls(
-            event_type=AgentEventType.APPROVAL_GRANTED,
+            type=AgentEventType.APPROVAL_GRANTED.value,
             timestamp=now_iso(),
             data={"request_id": request_id},
         )
@@ -99,28 +107,28 @@ class AgentEvent:
         cls, request_id: str, reason: Optional[str] = None
     ) -> "AgentEvent":
         return cls(
-            event_type=AgentEventType.APPROVAL_DENIED,
+            type=AgentEventType.APPROVAL_DENIED.value,
             timestamp=now_iso(),
             data={"request_id": request_id, "reason": reason},
         )
 
 
 class AgentBackend:
-    async def start_session(self) -> str:
+    async def start_session(self, target: dict, context: dict) -> str:
         raise NotImplementedError
 
     async def run_turn(
-        self, message: str, context: Optional[Dict[str, Any]] = None
+        self, session_id: str, message: str
     ) -> AsyncGenerator[AgentEvent, None]:
         raise NotImplementedError
 
-    async def stream_events(self) -> AsyncGenerator[AgentEvent, None]:
+    async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
         raise NotImplementedError
 
-    async def interrupt(self) -> None:
+    async def interrupt(self, session_id: str) -> None:
         raise NotImplementedError
 
-    async def final_messages(self) -> list[str]:
+    async def final_messages(self, session_id: str) -> list[str]:
         raise NotImplementedError
 
     async def request_approval(

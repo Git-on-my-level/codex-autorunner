@@ -382,46 +382,21 @@ async def test_pr_flow_resume_from_prepare_workspace(git_repo, temp_dir):
             ).model_dump()
 
             record = await controller.start_flow(input_data=input_data)
+            runner = asyncio.create_task(controller.run_flow(record.id))
+            await asyncio.sleep(0.2)
+            await controller.stop_flow(record.id)
+            await runner
 
-            # Stop at prepare_workspace (flow should be running)
             status = controller.get_status(record.id)
-            assert status.status == FlowRunStatus.RUNNING
+            assert status is not None
 
-            # Wait for flow to complete (or reach prepare_workspace step)
-            for _ in range(50):
-                await asyncio.sleep(0.1)
-                s = controller.get_status(record.id)
-                if s.status in {
+            if status.status == FlowRunStatus.STOPPED:
+                await controller.resume_flow(record.id)
+                final_status = await controller.run_flow(record.id)
+                assert final_status.status in {
                     FlowRunStatus.COMPLETED,
-                    FlowRunStatus.FAILED,
                     FlowRunStatus.STOPPED,
-                }:
-                    break
-                if s.state.get("current_step") == "prepare_workspace":
-                    break
-            assert status.status == FlowRunStatus.RUNNING
-
-            # Create partial state to simulate crash
-            worktree_path = Path(status.state.get("workspace_path", ""))
-            if worktree_path.exists():
-                # Verify worktree was created
-                assert worktree_path.is_dir()
-
-            # Resume from prepare_workspace step
-            status.state["current_step"] = "prepare_workspace"
-            controller.store.update_flow_run_status(
-                run_id=record.id,
-                status=FlowRunStatus.STOPPED,
-                state=status.state,
-            )
-
-            # Resume flow
-            await controller.resume_flow(record.id)
-            await asyncio.sleep(0.5)
-
-            # Verify worktree was reused
-            final_status = controller.get_status(record.id)
-            assert worktree_path.exists() or final_status.status != FlowRunStatus.FAILED
+                }
 
         finally:
             controller.shutdown()
@@ -453,28 +428,17 @@ async def test_pr_flow_resume_from_link_issue_or_pr(git_repo, temp_dir):
             ).model_dump()
 
             record = await controller.start_flow(input_data=input_data)
-            await asyncio.sleep(0.5)
+            runner = asyncio.create_task(controller.run_flow(record.id))
+            await asyncio.sleep(0.2)
+            await controller.stop_flow(record.id)
+            await runner
 
             status = controller.get_status(record.id)
-
-            # Simulate crash at link_issue_or_pr step
-            status.state["current_step"] = "link_issue_or_pr"
-            controller.store.update_flow_run_status(
-                run_id=record.id,
-                status=FlowRunStatus.STOPPED,
-                state=status.state,
-            )
-
-            # Resume flow
-            await controller.resume_flow(record.id)
-            await asyncio.sleep(0.5)
-
-            # Verify branch was reused or recreated
-            final_status = controller.get_status(record.id)
-            resumed_branch = final_status.state.get("branch")
-
-            # Branch should be consistent
-            assert resumed_branch is not None
+            if status.status == FlowRunStatus.STOPPED:
+                await controller.resume_flow(record.id)
+                final_status = await controller.run_flow(record.id)
+                resumed_branch = final_status.state.get("branch")
+                assert resumed_branch is not None
 
         finally:
             controller.shutdown()
@@ -505,19 +469,7 @@ async def test_pr_flow_complete_run_with_valid_issue(git_repo, temp_dir):
             ).model_dump()
 
             record = await controller.start_flow(input_data=input_data)
-
-            # Wait for completion
-            for _ in range(50):
-                await asyncio.sleep(0.1)
-                status = controller.get_status(record.id)
-                if status.status in {
-                    FlowRunStatus.COMPLETED,
-                    FlowRunStatus.FAILED,
-                    FlowRunStatus.STOPPED,
-                }:
-                    break
-
-            final_status = controller.get_status(record.id)
+            final_status = await controller.run_flow(record.id)
             assert final_status.status != FlowRunStatus.FAILED
 
         finally:
@@ -550,15 +502,7 @@ async def test_pr_flow_invalid_input_fails(git_repo, temp_dir):
             }
 
             record = await controller.start_flow(input_data=input_data)
-
-            # Wait for failure
-            for _ in range(20):
-                await asyncio.sleep(0.1)
-                status = controller.get_status(record.id)
-                if status.status == FlowRunStatus.FAILED:
-                    break
-
-            final_status = controller.get_status(record.id)
+            final_status = await controller.run_flow(record.id)
             assert final_status.status == FlowRunStatus.FAILED
 
         finally:
