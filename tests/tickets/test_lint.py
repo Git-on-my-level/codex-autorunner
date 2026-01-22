@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from codex_autorunner.tickets.lint import lint_ticket_frontmatter, lint_user_message_frontmatter
+from codex_autorunner.tickets.lint import (
+    lint_ticket_frontmatter,
+    lint_user_message_frontmatter,
+)
 
 
 def test_lint_ticket_frontmatter_requires_agent_and_done() -> None:

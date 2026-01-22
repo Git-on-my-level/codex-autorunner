@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.flows import FlowController, FlowDefinition, FlowRunStatus, StepOutcome
+from codex_autorunner.core.flows import (
+    FlowController,
+    FlowDefinition,
+    FlowRunStatus,
+    StepOutcome,
+)
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,9 @@ from codex_autorunner.tickets.outbox import (
 )
 
 
-def _write_user_message(path: Path, *, mode: str = "notify", body: str = "Hello", title: str | None = None) -> None:
+def _write_user_message(
+    path: Path, *, mode: str = "notify", body: str = "Hello", title: str | None = None
+) -> None:
     title_line = f"title: {title}\n" if title else ""
     content = f"---\nmode: {mode}\n{title_line}---\n\n{body}\n"
     path.write_text(content, encoding="utf-8")
@@ -60,7 +62,9 @@ def test_dispatch_outbox_archives_message_and_attachments(tmp_path: Path) -> Non
     assert errors2 == []
 
 
-def test_dispatch_outbox_invalid_user_message_frontmatter_does_not_delete(tmp_path: Path) -> None:
+def test_dispatch_outbox_invalid_user_message_frontmatter_does_not_delete(
+    tmp_path: Path,
+) -> None:
     paths = resolve_outbox_paths(
         workspace_root=tmp_path,
         runs_dir=Path(".codex-autorunner/runs"),
