@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import subprocess
 import sys
 import uuid
@@ -485,13 +486,13 @@ You are the first ticket in a new ticket_flow run.
 
         base_history = paths.handoff_history_dir.resolve()
 
-        seq_path = PurePosixPath(seq)
-        if seq_path.is_absolute() or ".." in seq_path.parts or "\\" in seq:
+        seq_clean = seq.strip()
+        if not re.fullmatch(r"[0-9]{4}", seq_clean):
             raise HTTPException(
                 status_code=400, detail="Invalid handoff history sequence"
             )
 
-        history_dir = (base_history / seq_path).resolve()
+        history_dir = (base_history / seq_clean).resolve()
         if not history_dir.is_relative_to(base_history) or not history_dir.is_dir():
             raise HTTPException(
                 status_code=404, detail=f"Handoff history not found for run {run_id}"
@@ -501,7 +502,11 @@ You are the first ticket in a new ticket_flow run.
         if file_rel.is_absolute() or ".." in file_rel.parts or "\\" in file_path:
             raise HTTPException(status_code=400, detail="Invalid handoff file path")
 
-        target = history_dir / file_rel
+        safe_parts = [part for part in file_rel.parts if part not in {"", "."}]
+        if any(not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in safe_parts):
+            raise HTTPException(status_code=400, detail="Invalid handoff file path")
+
+        target = (history_dir / Path(*safe_parts)).resolve()
         try:
             resolved = target.resolve()
         except OSError as exc:
