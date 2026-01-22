@@ -1037,32 +1037,35 @@ class TelegramBotService(
         if not db_path.exists():
             return None
         store = FlowStore(db_path)
-        store.initialize()
-        runs = store.list_flow_runs(
-            flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-        )
-        if not runs:
-            return None
-        latest = runs[0]
-        runs_dir_raw = latest.input_data.get("runs_dir")
-        runs_dir = (
-            Path(runs_dir_raw)
-            if isinstance(runs_dir_raw, str) and runs_dir_raw
-            else Path(".codex-autorunner/runs")
-        )
-        paths = resolve_outbox_paths(
-            workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
-        )
-        history_dir = paths.handoff_history_dir
-        seq = self._latest_handoff_seq(history_dir)
-        if not seq:
-            return None
-        message_path = history_dir / seq / "USER_MESSAGE.md"
         try:
-            content = message_path.read_text(encoding="utf-8")
-        except OSError:
-            return None
-        return latest.id, seq, content
+            store.initialize()
+            runs = store.list_flow_runs(
+                flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+            )
+            if not runs:
+                return None
+            latest = runs[0]
+            runs_dir_raw = latest.input_data.get("runs_dir")
+            runs_dir = (
+                Path(runs_dir_raw)
+                if isinstance(runs_dir_raw, str) and runs_dir_raw
+                else Path(".codex-autorunner/runs")
+            )
+            paths = resolve_outbox_paths(
+                workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
+            )
+            history_dir = paths.handoff_history_dir
+            seq = self._latest_handoff_seq(history_dir)
+            if not seq:
+                return None
+            message_path = history_dir / seq / "USER_MESSAGE.md"
+            try:
+                content = message_path.read_text(encoding="utf-8")
+            except OSError:
+                return None
+            return latest.id, seq, content
+        finally:
+            store.close()
 
     def _latest_handoff_seq(self, history_dir: Path) -> Optional[str]:
         if not history_dir.exists() or not history_dir.is_dir():
