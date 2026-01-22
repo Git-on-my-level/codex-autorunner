@@ -7,7 +7,6 @@ This guide explains how to add a new AI agent to Codex Autorunner (CAR).
 CAR supports multiple AI agents through a registry and capability model. Each agent is integrated via:
 - **Harness**: Low-level client wrapper for agent's protocol
 - **Supervisor**: Manages agent process lifecycle (for agents that run as subprocesses)
-- **Orchestrator**: High-level workflow operations (turn execution, streaming, etc.)
 - **Registry**: Central registration with capabilities
 
 ## Prerequisites
@@ -194,122 +193,7 @@ Reference existing implementations:
 - `src/codex_autorunner/agents/codex/` for JSON-RPC agents
 - `src/codex_autorunner/agents/opencode/` for HTTP REST agents
 
-## Step 3: Create the Orchestrator
-
-Create an orchestrator in `src/codex_autorunner/agents/<agent_name>/orchestrator.py`:
-
-```python
-from __future__ import annotations
-
-from pathlib import Path
-from typing import Any, AsyncIterator, Optional
-
-from ..orchestrator import AgentOrchestrator, TurnStatus
-from .harness import MyAgentHarness
-
-class MyAgentOrchestrator(AgentOrchestrator):
-    def __init__(self, harness: MyAgentHarness):
-        self._harness = harness
-
-    async def create_or_resume_conversation(
-        self,
-        workspace_root: Path,
-        agent_id: str,
-        *,
-        conversation_id: Optional[str] = None,
-        title: Optional[str] = None,
-    ) -> ConversationRef:
-        if conversation_id:
-            return await self._harness.resume_conversation(workspace_root, conversation_id)
-        return await self._harness.new_conversation(workspace_root, title)
-
-    async def run_turn(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        prompt: str,
-        *,
-        model: Optional[str] = None,
-        reasoning: Optional[str] = None,
-        approval_mode: Optional[str] = None,
-        sandbox_policy: Optional[Any] = None,
-        timeout_seconds: Optional[float] = None,
-    ) -> dict[str, Any]:
-        turn_ref = await self._harness.start_turn(
-            workspace_root, conversation_id, prompt, model, reasoning,
-            approval_mode=approval_mode, sandbox_policy=sandbox_policy,
-        )
-
-        # Collect output from events
-        output_lines = []
-        async for event in self._harness.stream_events(
-            workspace_root, turn_ref.conversation_id, turn_ref.turn_id
-        ):
-            # Parse event and extract output
-            output_lines.append(event.get("output", ""))
-
-        return {
-            "turn_id": turn_ref.turn_id,
-            "conversation_id": turn_ref.conversation_id,
-            "status": TurnStatus.COMPLETED,
-            "output": "\n".join(output_lines),
-        }
-
-    async def stream_turn_events(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        prompt: str,
-        *,
-        model: Optional[str] = None,
-        reasoning: Optional[str] = None,
-        approval_mode: Optional[str] = None,
-        sandbox_policy: Optional[Any] = None,
-        timeout_seconds: Optional[float] = None,
-    ) -> AsyncIterator[dict[str, Any]]:
-        turn_ref = await self._harness.start_turn(
-            workspace_root, conversation_id, prompt, model, reasoning,
-            approval_mode=approval_mode, sandbox_policy=sandbox_policy,
-        )
-        yield {"type": "turn_started", "data": {"turn_id": turn_ref.turn_id}}
-
-        async for event in self._harness.stream_events(
-            workspace_root, turn_ref.conversation_id, turn_ref.turn_id
-        ):
-            yield {"type": "event", "data": event}
-
-        yield {"type": "turn_completed", "data": {"turn_id": turn_ref.turn_id}}
-
-    async def interrupt_turn(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        turn_id: Optional[str] = None,
-        grace_seconds: float = 30.0,
-    ) -> bool:
-        await self._harness.interrupt(workspace_root, conversation_id, turn_id)
-        return True
-
-    async def start_review(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        prompt: Optional[str] = None,
-        *,
-        model: Optional[str] = None,
-        reasoning: Optional[str] = None,
-        approval_mode: Optional[str] = None,
-        sandbox_policy: Optional[Any] = None,
-        timeout_seconds: Optional[float] = None,
-    ) -> TurnRef:
-        return await self._harness.start_review(
-            workspace_root, conversation_id, prompt or "",
-            model, reasoning,
-            approval_mode=approval_mode, sandbox_policy=sandbox_policy,
-        )
-```
-
-## Step 4: Register the Agent
+## Step 3: Register the Agent
 
 Add your agent to `src/codex_autorunner/agents/registry.py`:
 
@@ -347,7 +231,7 @@ _REGISTERED_AGENTS: dict[str, AgentDescriptor] = {
 }
 ```
 
-## Step 5: Add Configuration
+## Step 4: Add Configuration
 
 Update `src/codex_autorunner/core/config.py` to include your agent in defaults:
 
@@ -362,32 +246,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
 }
 ```
 
-## Step 6: Add Factory Support (Optional)
-
-Update `src/codex_autorunner/agents/factory.py`:
-
-```python
-from .myagent.supervisor import MyAgentSupervisor
-
-def create_myagent_orchestrator(
-    supervisor: MyAgentSupervisor
-) -> MyAgentOrchestrator:
-    harness = MyAgentHarness(supervisor)
-    return MyAgentOrchestrator(harness)
-
-def create_orchestrator(
-    agent_id: str,
-    # ... other params ...
-    myagent_supervisor: Optional[MyAgentSupervisor] = None,
-) -> AgentOrchestrator:
-    if agent_id == "myagent":
-        if myagent_supervisor is None:
-            raise ValueError("myagent_supervisor required for myagent agent")
-        return create_myagent_orchestrator(myagent_supervisor)
-    # ... existing logic ...
-```
-
-## Step 7: Add Smoke Tests
+## Step 5: Add Smoke Tests
 
 Create minimal smoke tests in `tests/test_myagent_integration.py`:
 
@@ -453,7 +312,6 @@ If your agent exposes a machine-readable protocol spec:
 Before submitting, verify:
 
 - [ ] Harness implements all `AgentHarness` protocol methods
-- [ ] Orchestrator implements all `AgentOrchestrator` methods
 - [ ] Agent is registered in registry with correct capabilities
 - [ ] Configuration defaults include agent binary path
 - [ ] Smoke tests pass (binary present, no credentials required)
@@ -482,5 +340,4 @@ Before submitting, verify:
 
 - Existing implementations: `src/codex_autorunner/agents/codex/`, `src/codex_autorunner/agents/opencode/`
 - Agent harness protocol: `src/codex_autorunner/agents/base.py`
-- Orchestrator base class: `src/codex_autorunner/agents/orchestrator.py`
 - Registry: `src/codex_autorunner/agents/registry.py`
