@@ -623,9 +623,9 @@ export function initGitHub() {
             callback: loadPrFlowStatus,
             tabId: null,
             interval: CONSTANTS.UI?.AUTO_REFRESH_INTERVAL || 15000,
-        refreshOnActivation: true,
-        immediate: false,
-    });
-    startPrFlowEventStream(currentPrFlowRunId());
-}
+            refreshOnActivation: true,
+            immediate: false,
+        });
+        startPrFlowEventStream(currentPrFlowRunId());
+    }
 }

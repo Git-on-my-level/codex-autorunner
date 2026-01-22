@@ -208,9 +208,9 @@ async def test_flow_controller_sse_event_ordering(flow_controller):
     # Each step should start before completing
     assert len(step_started_indices) >= len(step_completed_indices)
     for start_idx, end_idx in zip(step_started_indices, step_completed_indices):
-        assert start_idx < end_idx, (
-            f"Step started at {start_idx} but completed at {end_idx}"
-        )
+        assert (
+            start_idx < end_idx
+        ), f"Step started at {start_idx} but completed at {end_idx}"
 
     # Verify final state
     final_record = flow_controller.get_status(run_id)

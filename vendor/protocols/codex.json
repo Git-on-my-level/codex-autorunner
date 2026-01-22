@@ -666,6 +666,30 @@
             },
             "method": {
               "enum": [
+                "skills/config/write"
+              ],
+              "title": "Skills/config/writeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SkillsConfigWriteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Skills/config/writeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "turn/start"
               ],
               "title": "Turn/startRequestMethod",
@@ -753,6 +777,31 @@
             "params"
           ],
           "title": "Model/listRequest",
+          "type": "object"
+        },
+        {
+          "description": "EXPERIMENTAL - list collaboration mode presets.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "collaborationMode/list"
+              ],
+              "title": "CollaborationMode/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/CollaborationModeListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "CollaborationMode/listRequest",
           "type": "object"
         },
         {
@@ -2009,6 +2058,12 @@
             "string",
             "null"
           ]
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -2524,6 +2579,16 @@
             "cwd": {
               "description": "Working directory that should be treated as the *root* of the session.",
               "type": "string"
+            },
+            "forked_from_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ThreadId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "history_entry_count": {
               "description": "Current number of entries in the history log.",
@@ -3113,6 +3178,39 @@
             "type"
           ],
           "title": "ExecApprovalRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "description": "Responses API call id for the associated tool call, if available.",
+              "type": "string"
+            },
+            "questions": {
+              "items": {
+                "$ref": "#/definitions/RequestUserInputQuestion"
+              },
+              "type": "array"
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "request_user_input"
+              ],
+              "title": "RequestUserInputEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "questions",
+            "type"
+          ],
+          "title": "RequestUserInputEventMsg",
           "type": "object"
         },
         {
@@ -6068,6 +6166,49 @@
         }
       ]
     },
+    "RequestUserInputQuestion": {
+      "properties": {
+        "header": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/definitions/RequestUserInputQuestionOption"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "header",
+        "id",
+        "question"
+      ],
+      "type": "object"
+    },
+    "RequestUserInputQuestionOption": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "label"
+      ],
+      "type": "object"
+    },
     "Resource": {
       "description": "A known resource that the server is capable of reading.",
       "properties": {
@@ -7775,6 +7916,31 @@
           "type": "object"
         },
         {
+          "description": "EXPERIMENTAL - Request input from the user for a tool call.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "item/tool/requestUserInput"
+              ],
+              "title": "Item/tool/requestUserInputRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ToolRequestUserInputParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Item/tool/requestUserInputRequest",
+          "type": "object"
+        },
+        {
           "description": "DEPRECATED APIs below Request to approve a patch. This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).",
           "properties": {
             "id": {
@@ -8345,6 +8511,118 @@
           "type": "string"
         }
       },
+      "type": "object"
+    },
+    "ToolRequestUserInputAnswer": {
+      "description": "EXPERIMENTAL. Captures a user's answer to a request_user_input question.",
+      "properties": {
+        "other": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "selected"
+      ],
+      "type": "object"
+    },
+    "ToolRequestUserInputOption": {
+      "description": "EXPERIMENTAL. Defines a single selectable option for request_user_input.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "label"
+      ],
+      "type": "object"
+    },
+    "ToolRequestUserInputParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "EXPERIMENTAL. Params sent with a request_user_input event.",
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/definitions/ToolRequestUserInputQuestion"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "questions",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ToolRequestUserInputParams",
+      "type": "object"
+    },
+    "ToolRequestUserInputQuestion": {
+      "description": "EXPERIMENTAL. Represents one request_user_input question and its optional options.",
+      "properties": {
+        "header": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/definitions/ToolRequestUserInputOption"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "header",
+        "id",
+        "question"
+      ],
+      "type": "object"
+    },
+    "ToolRequestUserInputResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "EXPERIMENTAL. Response payload mapping question ids to answers.",
+      "properties": {
+        "answers": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ToolRequestUserInputAnswer"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "answers"
+      ],
+      "title": "ToolRequestUserInputResponse",
       "type": "object"
     },
     "Tools": {
@@ -9303,6 +9581,174 @@
           "failed"
         ],
         "type": "string"
+      },
+      "CollaborationMode": {
+        "description": "Collaboration mode for a Codex session.",
+        "oneOf": [
+          {
+            "description": "Settings for a collaboration mode.",
+            "properties": {
+              "developer_instructions": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "plan"
+                ],
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "reasoning_effort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReasoningEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "mode",
+              "model"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Settings for a collaboration mode.",
+            "properties": {
+              "developer_instructions": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "pairprogramming"
+                ],
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "reasoning_effort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReasoningEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "mode",
+              "model"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Settings for a collaboration mode.",
+            "properties": {
+              "developer_instructions": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "execute"
+                ],
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "reasoning_effort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReasoningEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "mode",
+              "model"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Settings for a collaboration mode.",
+            "properties": {
+              "developer_instructions": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "custom"
+                ],
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "reasoning_effort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReasoningEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "mode",
+              "model"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "CollaborationModeListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - list collaboration mode presets.",
+        "title": "CollaborationModeListParams",
+        "type": "object"
+      },
+      "CollaborationModeListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - collaboration mode presets response.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/CollaborationMode"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "CollaborationModeListResponse",
+        "type": "object"
       },
       "CommandAction": {
         "oneOf": [
@@ -12405,6 +12851,9 @@
           "description": {
             "type": "string"
           },
+          "enabled": {
+            "type": "boolean"
+          },
           "interface": {
             "anyOf": [
               {
@@ -12434,6 +12883,7 @@
         },
         "required": [
           "description",
+          "enabled",
           "name",
           "path",
           "scope"
@@ -12448,6 +12898,36 @@
           "admin"
         ],
         "type": "string"
+      },
+      "SkillsConfigWriteParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "path"
+        ],
+        "title": "SkillsConfigWriteParams",
+        "type": "object"
+      },
+      "SkillsConfigWriteResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "effectiveEnabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "effectiveEnabled"
+        ],
+        "title": "SkillsConfigWriteResponse",
+        "type": "object"
       },
       "SkillsListEntry": {
         "properties": {
@@ -12662,6 +13142,11 @@
               "$ref": "#/definitions/v2/Turn"
             },
             "type": "array"
+          },
+          "updatedAt": {
+            "description": "Unix timestamp (in seconds) when the thread was last updated.",
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
@@ -12673,7 +13158,8 @@
           "path",
           "preview",
           "source",
-          "turns"
+          "turns",
+          "updatedAt"
         ],
         "type": "object"
       },
@@ -13262,6 +13748,17 @@
               "array",
               "null"
             ]
+          },
+          "sortKey": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadSortKey"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional sort key; defaults to created_at."
           }
         },
         "title": "ThreadListParams",
@@ -13506,6 +14003,13 @@
         ],
         "title": "ThreadRollbackResponse",
         "type": "object"
+      },
+      "ThreadSortKey": {
+        "enum": [
+          "created_at",
+          "updated_at"
+        ],
+        "type": "string"
       },
       "ThreadStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -14037,6 +14541,17 @@
               }
             ],
             "description": "Override the approval policy for this turn and subsequent turns."
+          },
+          "collaborationMode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/CollaborationMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "EXPERIMENTAL - set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set."
           },
           "cwd": {
             "description": "Override the working directory for this turn and subsequent turns.",

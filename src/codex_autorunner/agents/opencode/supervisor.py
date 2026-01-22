@@ -11,6 +11,7 @@ from typing import Any, Mapping, Optional, Sequence
 import httpx
 
 from ...core.logging_utils import log_event
+from ...core.supervisor_utils import evict_lru_handle_locked, pop_idle_handles_locked
 from ...core.utils import infer_home_from_workspace, subprocess_env
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import OpenCodeClient
@@ -53,12 +54,14 @@ class OpenCodeSupervisor:
         base_env: Optional[Mapping[str, str]] = None,
         base_url: Optional[str] = None,
         subagent_models: Optional[Mapping[str, str]] = None,
+        session_stall_timeout_seconds: Optional[float] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._logger = logger or logging.getLogger(__name__)
         self._request_timeout = request_timeout
         self._max_handles = max_handles
         self._idle_ttl_seconds = idle_ttl_seconds
+        self._session_stall_timeout_seconds = session_stall_timeout_seconds
         if password and not username:
             username = "opencode"
         self._auth: Optional[tuple[str, str]] = (
@@ -69,6 +72,10 @@ class OpenCodeSupervisor:
         self._subagent_models = subagent_models or {}
         self._handles: dict[str, OpenCodeHandle] = {}
         self._lock: Optional[asyncio.Lock] = None
+
+    @property
+    def session_stall_timeout_seconds(self) -> Optional[float]:
+        return self._session_stall_timeout_seconds
 
     async def get_client(self, workspace_root: Path) -> OpenCodeClient:
         canonical_root = canonical_workspace_root(workspace_root)
@@ -479,49 +486,23 @@ class OpenCodeSupervisor:
         return self._lock
 
     def _pop_idle_handles_locked(self) -> list[OpenCodeHandle]:
-        if not self._idle_ttl_seconds or self._idle_ttl_seconds <= 0:
-            return []
-        cutoff = time.monotonic() - self._idle_ttl_seconds
-        stale: list[OpenCodeHandle] = []
-        for handle in list(self._handles.values()):
-            if handle.active_turns:
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "opencode.handle.prune.skipped",
-                    reason="active_turns",
-                    workspace_id=handle.workspace_id,
-                    workspace_root=str(handle.workspace_root),
-                    active_turns=handle.active_turns,
-                )
-                continue
-            if handle.last_used_at and handle.last_used_at < cutoff:
-                self._handles.pop(handle.workspace_id, None)
-                stale.append(handle)
-        return stale
+        return pop_idle_handles_locked(
+            self._handles,
+            self._idle_ttl_seconds,
+            self._logger,
+            "opencode",
+            last_used_at_getter=lambda h: h.last_used_at,
+            should_skip_prune=lambda h: h.active_turns > 0,
+        )
 
     def _evict_lru_handle_locked(self) -> Optional[OpenCodeHandle]:
-        if not self._max_handles or self._max_handles <= 0:
-            return None
-        if len(self._handles) < self._max_handles:
-            return None
-        lru_handle = min(
-            self._handles.values(),
-            key=lambda handle: handle.last_used_at or 0.0,
-        )
-        log_event(
+        return evict_lru_handle_locked(
+            self._handles,
+            self._max_handles,
             self._logger,
-            logging.INFO,
-            "opencode.handle.evicted",
-            reason="max_handles",
-            workspace_id=lru_handle.workspace_id,
-            workspace_root=str(lru_handle.workspace_root),
-            max_handles=self._max_handles,
-            handle_count=len(self._handles),
-            last_used_at=lru_handle.last_used_at,
+            "opencode",
+            last_used_at_getter=lambda h: h.last_used_at or 0.0,
         )
-        self._handles.pop(lru_handle.workspace_id, None)
-        return lru_handle
 
 
 __all__ = ["OpenCodeHandle", "OpenCodeSupervisor", "OpenCodeSupervisorError"]

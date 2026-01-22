@@ -5,7 +5,6 @@ Tests verify that each adapter correctly implements the AgentBackend interface
 and handles the full lifecycle of session/turn operations.
 """
 
-import asyncio
 import tempfile
 from pathlib import Path
 

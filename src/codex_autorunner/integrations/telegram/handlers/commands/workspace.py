@@ -1289,10 +1289,12 @@ class WorkspaceCommands(SharedHelpers):
         local_thread_topics: dict[str, set[str]] = {}
         if show_unscoped:
             store_state = await self._store.load()
-            local_thread_ids, local_previews, local_thread_topics = (
-                _local_workspace_threads(
-                    store_state, record.workspace_path, current_key=key
-                )
+            (
+                local_thread_ids,
+                local_previews,
+                local_thread_topics,
+            ) = _local_workspace_threads(
+                store_state, record.workspace_path, current_key=key
             )
             for thread_id in record.thread_ids:
                 local_thread_topics.setdefault(thread_id, set()).add(key)

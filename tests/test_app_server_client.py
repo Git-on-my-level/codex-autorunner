@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.integrations.app_server import client as app_server_client
-from codex_autorunner.integrations.app_server.client import CodexAppServerClient
+from codex_autorunner.integrations.app_server.client import (
+    CodexAppServerClient,
+    _extract_agent_message_text,
+)
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
 
@@ -66,6 +69,17 @@ async def test_turn_error_notification(tmp_path: Path) -> None:
         assert result.errors == ["Auth required"]
     finally:
         await client.close()
+
+
+def test_extract_agent_message_text_supports_content_list() -> None:
+    item = {
+        "type": "agentMessage",
+        "content": [
+            {"type": "output_text", "text": "hello"},
+            {"type": "output_text", "text": " world"},
+        ],
+    }
+    assert _extract_agent_message_text(item) == "hello world"
 
 
 @pytest.mark.anyio
@@ -172,6 +186,27 @@ async def test_turn_interrupt(tmp_path: Path) -> None:
         await client.turn_interrupt(handle.turn_id, thread_id=handle.thread_id)
         result = await handle.wait()
         assert result.status == "interrupted"
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_turn_completed_via_resume_when_completion_missing(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("missing_turn_completed"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=0.5,
+        turn_stall_poll_interval_seconds=0.1,
+        turn_stall_recovery_min_interval_seconds=0.0,
+    )
+    try:
+        thread = await client.thread_start(str(tmp_path))
+        handle = await client.turn_start(thread["id"], "hi")
+        result = await handle.wait(timeout=5)
+        assert result.status == "completed"
+        assert result.agent_messages == ["recovered reply"]
     finally:
         await client.close()
 

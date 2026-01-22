@@ -361,149 +361,14 @@ __all__ = ["{agent_name.capitalize()}Supervisor", "{agent_name.capitalize()}Supe
 '''
 
 
-def create_orchestrator(agent_name: str, display_name: str) -> str:
-    """Generate orchestrator.py content."""
-    return f'''from __future__ import annotations
-
-from pathlib import Path
-from typing import Any, AsyncIterator, Optional
-
-from ..orchestrator import AgentOrchestrator, TurnStatus
-from .harness import {agent_name.capitalize()}Harness
-
-
-class {agent_name.capitalize()}Orchestrator(AgentOrchestrator):
-    def __init__(self, harness: {agent_name.capitalize()}Harness):
-        self._harness = harness
-
-    async def create_or_resume_conversation(
-        self,
-        workspace_root: Path,
-        agent_id: str,
-        *,
-        conversation_id: Optional[str] = None,
-        title: Optional[str] = None,
-    ) -> Any:  # ConversationRef
-        if conversation_id:
-            return await self._harness.resume_conversation(
-                workspace_root, conversation_id
-            )
-        return await self._harness.new_conversation(workspace_root, title)
-
-    async def run_turn(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        prompt: str,
-        *,
-        model: Optional[str] = None,
-        reasoning: Optional[str] = None,
-        approval_mode: Optional[str] = None,
-        sandbox_policy: Optional[Any] = None,
-        timeout_seconds: Optional[float] = None,
-    ) -> dict[str, Any]:
-        turn_ref = await self._harness.start_turn(
-            workspace_root,
-            conversation_id,
-            prompt,
-            model,
-            reasoning,
-            approval_mode=approval_mode,
-            sandbox_policy=sandbox_policy,
-        )
-
-        # Collect output from events
-        output_lines = []
-        async for event_str in self._harness.stream_events(
-            workspace_root, turn_ref.conversation_id, turn_ref.turn_id
-        ):
-            # TODO: Parse events and extract output
-            output_lines.append(event_str)
-
-        return {{
-            "turn_id": turn_ref.turn_id,
-            "conversation_id": turn_ref.conversation_id,
-            "status": TurnStatus.COMPLETED,
-            "output": "\\n".join(output_lines),
-        }}
-
-    async def stream_turn_events(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        prompt: str,
-        *,
-        model: Optional[str] = None,
-        reasoning: Optional[str] = None,
-        approval_mode: Optional[str] = None,
-        sandbox_policy: Optional[Any] = None,
-        timeout_seconds: Optional[float] = None,
-    ) -> AsyncIterator[dict[str, Any]]:
-        turn_ref = await self._harness.start_turn(
-            workspace_root,
-            conversation_id,
-            prompt,
-            model,
-            reasoning,
-            approval_mode=approval_mode,
-            sandbox_policy=sandbox_policy,
-        )
-        yield {{"type": "turn_started", "data": {{"turn_id": turn_ref.turn_id}}}}
-
-        async for event_str in self._harness.stream_events(
-            workspace_root, turn_ref.conversation_id, turn_ref.turn_id
-        ):
-            yield {{"type": "event", "data": event_str}}
-
-        yield {{"type": "turn_completed", "data": {{"turn_id": turn_ref.turn_id}}}}
-
-    async def interrupt_turn(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        turn_id: Optional[str] = None,
-        grace_seconds: float = 30.0,
-    ) -> bool:
-        await self._harness.interrupt(workspace_root, conversation_id, turn_id)
-        return True
-
-    async def start_review(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        prompt: Optional[str] = None,
-        *,
-        model: Optional[str] = None,
-        reasoning: Optional[str] = None,
-        approval_mode: Optional[str] = None,
-        sandbox_policy: Optional[Any] = None,
-        timeout_seconds: Optional[float] = None,
-    ) -> Any:  # TurnRef
-        return await self._harness.start_review(
-            workspace_root,
-            conversation_id,
-            prompt or "",
-            model,
-            reasoning,
-            approval_mode=approval_mode,
-            sandbox_policy=sandbox_policy,
-        )
-
-
-__all__ = ["{agent_name.capitalize()}Orchestrator"]
-'''
-
-
 def create_init(agent_name: str) -> str:
     """Generate __init__.py content."""
     return f'''from .harness import {agent_name.capitalize()}Harness
-from .orchestrator import {agent_name.capitalize()}Orchestrator
 from .supervisor import {agent_name.capitalize()}Supervisor, {agent_name.capitalize()}SupervisorError
 
 
 __all__ = [
     "{agent_name.capitalize()}Harness",
-    "{agent_name.capitalize()}Orchestrator",
     "{agent_name.capitalize()}Supervisor",
     "{agent_name.capitalize()}SupervisorError",
 ]
@@ -545,7 +410,6 @@ def main():
     files = {
         "harness.py": create_harness(agent_name, display_name),
         "supervisor.py": create_supervisor(agent_name, display_name),
-        "orchestrator.py": create_orchestrator(agent_name, display_name),
         "__init__.py": create_init(agent_name),
     }
 

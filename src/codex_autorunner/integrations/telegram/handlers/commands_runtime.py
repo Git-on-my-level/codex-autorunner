@@ -382,7 +382,6 @@ class TelegramCommandHandlers(
     ApprovalsCommands,
     FormattingHelpers,
 ):
-
     async def _handle_help(
         self, message: TelegramMessage, _args: str, _runtime: Any
     ) -> None:
@@ -2352,7 +2351,6 @@ class TelegramCommandHandlers(
     async def _handle_compact_callback(
         self, key: str, callback: TelegramCallbackQuery, parsed: CompactCallback
     ) -> None:
-
         async def _send_compact_status(text: str) -> bool:
             try:
                 await self._send_message(
@@ -2773,7 +2771,6 @@ Summary applied.""",
         timeout_seconds: float = 300.0,
         interval_seconds: float = 2.0,
     ) -> None:
-
         async def _watch() -> None:
             deadline = time.monotonic() + timeout_seconds
             while time.monotonic() < deadline:

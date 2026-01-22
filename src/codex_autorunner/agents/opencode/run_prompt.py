@@ -112,6 +112,7 @@ async def run_opencode_prompt(
             client,
             session_id=session_id,
             workspace_path=config.workspace_root,
+            model_payload=model_payload,
             permission_policy=permission_policy,
             should_stop=should_stop,
             ready_event=ready_event,

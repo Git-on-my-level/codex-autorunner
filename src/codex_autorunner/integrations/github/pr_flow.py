@@ -66,11 +66,18 @@ def _normalize_review_snippet(text: Optional[str], max_len: int) -> str:
 
 class PrFlowManager:
     def __init__(
-        self, repo_root: Path, config: Optional[dict[str, Any]] = None
+        self,
+        repo_root: Path,
+        config: Optional[dict[str, Any]] = None,
+        app_server_supervisor: Optional[Any] = None,
+        opencode_supervisor: Optional[Any] = None,
+        logger: Optional[logging.Logger] = None,
     ) -> None:
         self.repo_root = repo_root
         self._config = config or {}
-        self._logger = _logger
+        self._app_server_supervisor = app_server_supervisor
+        self._opencode_supervisor = opencode_supervisor
+        self._logger = logger or _logger
 
     def chatops_config(self) -> dict[str, Any]:
         cfg = self._config.get("chatops")

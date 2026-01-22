@@ -1212,6 +1212,7 @@ class GitHubCommands(SharedHelpers):
                         setup.client,
                         session_id=setup.review_session_id,
                         workspace_path=str(setup.workspace_root),
+                        model_payload=model_payload,
                         progress_session_ids=watched_session_ids,
                         permission_policy=setup.permission_policy,
                         permission_handler=(

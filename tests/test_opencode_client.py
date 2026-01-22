@@ -35,3 +35,15 @@ def test_normalize_sse_event_keeps_non_json() -> None:
     normalized = _normalize_sse_event(event)
     assert normalized.event == "message"
     assert normalized.data == "ping"
+
+
+def test_normalize_sse_event_preserves_wrapper_metadata() -> None:
+    event = SSEEvent(
+        event="message",
+        data='{"type":"session.status","sessionID":"s42","payload":{"state":"running"}}',
+    )
+    normalized = _normalize_sse_event(event)
+    payload = json.loads(normalized.data)
+    assert payload["sessionID"] == "s42"
+    assert payload.get("state") == "running"
+    assert normalized.event == "session.status"

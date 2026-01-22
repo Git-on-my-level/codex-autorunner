@@ -80,7 +80,6 @@ def test_normalize_review_snippet_mixed_whitespace() -> None:
 
 
 def test_multi_line_review_comment_produces_valid_todo(tmp_path, monkeypatch) -> None:
-
     worktree_root = tmp_path / "worktree"
     worktree_root.mkdir()
     doc_path = worktree_root / ".codex-autorunner"

@@ -8,13 +8,17 @@ causing corruption or inconsistency.
 import asyncio
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from codex_autorunner.core.flows import (
+    FlowController,
+    FlowRunRecord,
+    FlowRunStatus,
+)
 from codex_autorunner.flows.pr_flow import (
     PrFlowInput,
-    PrFlowState,
     TargetType,
     build_pr_flow_definition,
 )
@@ -22,19 +26,13 @@ from codex_autorunner.flows.pr_flow.definition import (
     _parse_issue_url,
     _parse_pr_url,
     link_issue_or_pr_step,
-    prepare_workspace_step,
     preflight_step,
+    prepare_workspace_step,
     resolve_target_step,
 )
-from codex_autorunner.core.flows import (
-    FlowController,
-    FlowDefinition,
-    FlowRunRecord,
-    FlowRunStatus,
-    StepOutcome,
-)
 
 
+@pytest.fixture
 def temp_dir():
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
@@ -458,7 +456,6 @@ async def test_pr_flow_resume_from_link_issue_or_pr(git_repo, temp_dir):
             await asyncio.sleep(0.5)
 
             status = controller.get_status(record.id)
-            branch_name = status.state.get("branch")
 
             # Simulate crash at link_issue_or_pr step
             status.state["current_step"] = "link_issue_or_pr"

@@ -3,6 +3,7 @@ import pytest
 from codex_autorunner.agents.opencode.events import SSEEvent
 from codex_autorunner.agents.opencode.runtime import (
     collect_opencode_output_from_events,
+    extract_session_id,
     parse_message_response,
 )
 
@@ -10,6 +11,11 @@ from codex_autorunner.agents.opencode.runtime import (
 async def _iter_events(events):
     for event in events:
         yield event
+
+
+def test_extract_session_id_prefers_nested_session_id() -> None:
+    payload = {"session": {"id": "session-xyz"}}
+    assert extract_session_id(payload) == "session-xyz"
 
 
 @pytest.mark.anyio
@@ -233,6 +239,50 @@ async def test_collect_output_emits_usage_from_properties_info_tokens() -> None:
     assert usage["outputTokens"] == 5
     assert usage["reasoningTokens"] == 2
     assert usage["modelContextWindow"] == 2000
+
+
+@pytest.mark.anyio
+async def test_collect_output_backfills_context_from_providers() -> None:
+    seen: list[dict[str, int]] = []
+
+    async def _part_handler(part_type: str, part: dict[str, int], delta_text):
+        if part_type == "usage":
+            seen.append(part)
+
+    events = [
+        SSEEvent(
+            event="message.updated",
+            data='{"sessionID":"s1","info":{"tokens":{"input":12,"output":3}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+
+    async def _fetch_providers():
+        return {
+            "providers": [
+                {"id": "prov", "models": {"model": {"limit": {"context": 1024}}}}
+            ]
+        }
+
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        model_payload={"providerID": "prov", "modelID": "model"},
+        part_handler=_part_handler,
+        provider_fetcher=_fetch_providers,
+    )
+    assert output.text == ""
+    assert output.error is None
+    assert seen == [
+        {
+            "providerID": "prov",
+            "modelID": "model",
+            "totalTokens": 15,
+            "inputTokens": 12,
+            "outputTokens": 3,
+            "modelContextWindow": 1024,
+        }
+    ]
 
 
 @pytest.mark.anyio

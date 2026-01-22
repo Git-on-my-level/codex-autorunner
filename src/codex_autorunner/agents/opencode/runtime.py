@@ -138,7 +138,7 @@ def extract_session_id(
                 return value
     session = payload.get("session")
     if isinstance(session, dict):
-        return extract_session_id(session, allow_fallback_id=allow_fallback_id)
+        return extract_session_id(session, allow_fallback_id=True)
     return None
 
 
@@ -677,7 +677,7 @@ async def opencode_missing_env(
         providers = [entry for entry in payload if isinstance(entry, dict)]
     for provider in providers:
         pid = provider.get("id") or provider.get("providerID")
-        if pid != provider_id:
+        if not pid or pid != provider_id:
             continue
         if _provider_has_auth(pid, workspace_root):
             return []
@@ -733,6 +733,7 @@ async def collect_opencode_output_from_events(
     events: Optional[AsyncIterator[SSEEvent]] = None,
     *,
     session_id: str,
+    model_payload: Optional[dict[str, str]] = None,
     progress_session_ids: Optional[set[str]] = None,
     permission_policy: str = PERMISSION_ALLOW,
     permission_handler: Optional[PermissionHandler] = None,
@@ -760,13 +761,16 @@ async def collect_opencode_output_from_events(
     last_usage_total: Optional[int] = None
     last_context_window: Optional[int] = None
     part_types: dict[str, str] = {}
-    seen_question_request_ids: set[tuple[str, str]] = set()
+    seen_question_request_ids: set[tuple[Optional[str], str]] = set()
     logged_permission_errors: set[str] = set()
     normalized_question_policy = _normalize_question_policy(question_policy)
     logger = logging.getLogger(__name__)
     providers_cache: Optional[list[dict[str, Any]]] = None
     context_window_cache: dict[str, Optional[int]] = {}
     session_model_ids: Optional[tuple[Optional[str], Optional[str]]] = None
+    default_model_ids = (
+        _extract_model_ids(model_payload) if isinstance(model_payload, dict) else None
+    )
 
     def _message_id_from_info(info: Any) -> Optional[str]:
         if not isinstance(info, dict):
@@ -844,15 +848,19 @@ async def collect_opencode_output_from_events(
         nonlocal session_model_ids
         if session_model_ids is not None:
             return session_model_ids
-        if session_fetcher is None:
-            session_model_ids = (None, None)
-            return session_model_ids
-        try:
-            payload = await session_fetcher()
-        except Exception:
-            session_model_ids = (None, None)
-            return session_model_ids
-        session_model_ids = _extract_model_ids(payload)
+        resolved_ids: Optional[tuple[Optional[str], Optional[str]]] = None
+        if session_fetcher is not None:
+            try:
+                payload = await session_fetcher()
+                resolved_ids = _extract_model_ids(payload)
+            except Exception:
+                resolved_ids = None
+        # If we failed to resolve model ids from the session (including the empty
+        # tuple case), fall back to the caller-provided model payload so we can
+        # still backfill usage metadata.
+        if not resolved_ids or all(value is None for value in resolved_ids):
+            resolved_ids = default_model_ids
+        session_model_ids = resolved_ids or (None, None)
         return session_model_ids
 
     async def _resolve_context_window_from_providers(
@@ -947,7 +955,7 @@ async def collect_opencode_output_from_events(
             await aclose()
 
     stream_iter = _new_stream().__aiter__()
-    last_event_at = time.monotonic()
+    last_relevant_event_at = time.monotonic()
     last_primary_completion_at: Optional[float] = None
     reconnect_attempts = 0
     can_reconnect = (
@@ -982,6 +990,7 @@ async def collect_opencode_output_from_events(
                             session_id=session_id,
                             exc=exc,
                         )
+                idle_seconds = now - last_relevant_event_at
                 if _status_is_idle(status_type):
                     log_event(
                         logger,
@@ -989,7 +998,7 @@ async def collect_opencode_output_from_events(
                         "opencode.stream.stalled.session_idle",
                         session_id=session_id,
                         status_type=status_type,
-                        idle_seconds=now - last_event_at,
+                        idle_seconds=idle_seconds,
                     )
                     if not text_parts and pending_text:
                         _flush_all_pending_text()
@@ -1001,7 +1010,7 @@ async def collect_opencode_output_from_events(
                         "opencode.stream.stalled.after_completion",
                         session_id=session_id,
                         status_type=status_type,
-                        idle_seconds=now - last_event_at,
+                        idle_seconds=idle_seconds,
                     )
                 if not can_reconnect:
                     break
@@ -1016,7 +1025,7 @@ async def collect_opencode_output_from_events(
                     logging.WARNING,
                     "opencode.stream.stalled.reconnecting",
                     session_id=session_id,
-                    idle_seconds=now - last_event_at,
+                    idle_seconds=idle_seconds,
                     backoff_seconds=backoff,
                     status_type=status_type,
                     attempts=reconnect_attempts,
@@ -1024,21 +1033,86 @@ async def collect_opencode_output_from_events(
                 await _close_stream(stream_iter)
                 await asyncio.sleep(backoff)
                 stream_iter = _new_stream().__aiter__()
+                last_relevant_event_at = now
                 continue
-            last_event_at = time.monotonic()
+            now = time.monotonic()
             raw = event.data or ""
             try:
                 payload = json.loads(raw) if raw else {}
             except json.JSONDecodeError:
                 payload = {}
             event_session_id = extract_session_id(payload)
-            if not event_session_id:
+            is_relevant = False
+            if event_session_id:
+                if progress_session_ids is None:
+                    is_relevant = event_session_id == session_id
+                else:
+                    is_relevant = event_session_id in progress_session_ids
+            if not is_relevant:
+                if (
+                    stall_timeout_seconds is not None
+                    and now - last_relevant_event_at > stall_timeout_seconds
+                ):
+                    idle_seconds = now - last_relevant_event_at
+                    last_relevant_event_at = now
+                    status_type = None
+                    if session_fetcher is not None:
+                        try:
+                            payload = await session_fetcher()
+                            status_type = _extract_status_type(payload)
+                        except Exception as exc:
+                            log_event(
+                                logger,
+                                logging.WARNING,
+                                "opencode.session.poll_failed",
+                                session_id=session_id,
+                                exc=exc,
+                            )
+                    if _status_is_idle(status_type):
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            "opencode.stream.stalled.session_idle",
+                            session_id=session_id,
+                            status_type=status_type,
+                            idle_seconds=idle_seconds,
+                        )
+                        if not text_parts and pending_text:
+                            _flush_all_pending_text()
+                        break
+                    if last_primary_completion_at is not None:
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            "opencode.stream.stalled.after_completion",
+                            session_id=session_id,
+                            status_type=status_type,
+                            idle_seconds=idle_seconds,
+                        )
+                    if not can_reconnect:
+                        break
+                    backoff_index = min(
+                        reconnect_attempts,
+                        len(_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS) - 1,
+                    )
+                    backoff = _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS[backoff_index]
+                    reconnect_attempts += 1
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "opencode.stream.stalled.reconnecting",
+                        session_id=session_id,
+                        idle_seconds=idle_seconds,
+                        backoff_seconds=backoff,
+                        status_type=status_type,
+                        attempts=reconnect_attempts,
+                    )
+                    await _close_stream(stream_iter)
+                    await asyncio.sleep(backoff)
+                    stream_iter = _new_stream().__aiter__()
                 continue
-            if progress_session_ids is None:
-                if event_session_id != session_id:
-                    continue
-            elif event_session_id not in progress_session_ids:
-                continue
+            last_relevant_event_at = now
+            reconnect_attempts = 0
             is_primary_session = event_session_id == session_id
             if event.event == "question.asked":
                 request_id, props = _extract_question_request(payload)
@@ -1420,6 +1494,7 @@ async def collect_opencode_output(
     *,
     session_id: str,
     workspace_path: str,
+    model_payload: Optional[dict[str, str]] = None,
     progress_session_ids: Optional[set[str]] = None,
     permission_policy: str = PERMISSION_ALLOW,
     permission_handler: Optional[PermissionHandler] = None,
@@ -1428,6 +1503,7 @@ async def collect_opencode_output(
     should_stop: Optional[Callable[[], bool]] = None,
     ready_event: Optional[Any] = None,
     part_handler: Optional[PartHandler] = None,
+    stall_timeout_seconds: Optional[float] = _OPENCODE_STREAM_STALL_TIMEOUT_SECONDS,
 ) -> OpenCodeTurnOutput:
     async def _respond(request_id: str, reply: str) -> None:
         await client.respond_permission(request_id=request_id, reply=reply)
@@ -1469,8 +1545,10 @@ async def collect_opencode_output(
         reject_question=_reject_question,
         part_handler=part_handler,
         event_stream_factory=_stream_factory,
+        model_payload=model_payload,
         session_fetcher=_fetch_session,
         provider_fetcher=_fetch_providers,
+        stall_timeout_seconds=stall_timeout_seconds,
     )
 
 

@@ -247,6 +247,9 @@ def _build_app_server_supervisor(
         max_handles=config.max_handles,
         idle_ttl_seconds=config.idle_ttl_seconds,
         request_timeout=config.request_timeout,
+        turn_stall_timeout_seconds=config.turn_stall_timeout_seconds,
+        turn_stall_poll_interval_seconds=config.turn_stall_poll_interval_seconds,
+        turn_stall_recovery_min_interval_seconds=config.turn_stall_recovery_min_interval_seconds,
         notification_handler=notification_handler,
         approval_handler=approval_handler,
     )
@@ -271,6 +274,7 @@ def _build_opencode_supervisor(
     logger: logging.Logger,
     env: Mapping[str, str],
     subagent_models: Optional[Mapping[str, str]] = None,
+    session_stall_timeout_seconds: Optional[float] = None,
 ) -> tuple[Optional[OpenCodeSupervisor], Optional[float]]:
     supervisor = build_opencode_supervisor(
         opencode_command=opencode_command,
@@ -280,6 +284,7 @@ def _build_opencode_supervisor(
         request_timeout=config.request_timeout,
         max_handles=config.max_handles,
         idle_ttl_seconds=config.idle_ttl_seconds,
+        session_stall_timeout_seconds=session_stall_timeout_seconds,
         base_env=env,
         subagent_models=subagent_models,
     )
@@ -439,6 +444,7 @@ def _build_app_context(
         logger=logger,
         env=env,
         subagent_models=subagent_models,
+        session_stall_timeout_seconds=config.opencode.session_stall_timeout_seconds,
     )
     doc_chat = DocChatService(
         engine,

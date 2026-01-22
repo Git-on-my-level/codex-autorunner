@@ -100,7 +100,6 @@ class MediaBatchResult:
 
 
 class FilesCommands(SharedHelpers):
-
     def _format_telegram_download_error(self, exc: Exception) -> Optional[str]:
         for current in _iter_exception_chain(exc):
             if isinstance(current, Exception):
