@@ -38,6 +38,7 @@ function initRepoShell(): void {
   registerTab("dashboard", "Dashboard");
   registerTab("docs", "Docs");
   registerTab("runs", "Runs");
+  registerTab("tickets", "Tickets");
   registerTab("logs", "Logs");
   registerTab("terminal", "Terminal");
 
@@ -48,6 +49,8 @@ function initRepoShell(): void {
       initDocs();
     } else if (tabId === "logs") {
       initLogs();
+    } else if (tabId === "tickets") {
+      initTicketFlow();
     } else if (tabId === "runs") {
       initRuns();
     }
@@ -78,7 +81,6 @@ function initRepoShell(): void {
   initLiveUpdates();
   initRepoSettingsPanel();
   initGitHub();
-  initTicketFlow();
   initMobileCompact();
 
   loadState();

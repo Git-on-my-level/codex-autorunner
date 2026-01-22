@@ -36,6 +36,7 @@ function initRepoShell() {
     registerTab("dashboard", "Dashboard");
     registerTab("docs", "Docs");
     registerTab("runs", "Runs");
+    registerTab("tickets", "Tickets");
     registerTab("logs", "Logs");
     registerTab("terminal", "Terminal");
     const initializedTabs = new Set();
@@ -47,6 +48,9 @@ function initRepoShell() {
         }
         else if (tabId === "logs") {
             initLogs();
+        }
+        else if (tabId === "tickets") {
+            initTicketFlow();
         }
         else if (tabId === "runs") {
             initRuns();
@@ -72,7 +76,6 @@ function initRepoShell() {
     initLiveUpdates();
     initRepoSettingsPanel();
     initGitHub();
-    initTicketFlow();
     initMobileCompact();
     loadState();
     const repoShell = document.getElementById("repo-shell");

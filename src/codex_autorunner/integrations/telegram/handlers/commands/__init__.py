@@ -7,6 +7,7 @@ from ..commands_spec import CommandSpec, build_command_specs
 from .approvals import ApprovalsCommands
 from .execution import ExecutionCommands
 from .files import FilesCommands
+from .flows import FlowCommands
 from .formatting import FormattingHelpers
 from .github import GitHubCommands
 from .shared import SharedHelpers
@@ -19,6 +20,7 @@ __all__ = [
     "GitHubCommands",
     "FilesCommands",
     "VoiceCommands",
+    "FlowCommands",
     "ExecutionCommands",
     "ApprovalsCommands",
     "FormattingHelpers",

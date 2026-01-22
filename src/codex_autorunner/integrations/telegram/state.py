@@ -205,6 +205,7 @@ class TelegramTopicRecord:
     rollout_path: Optional[str] = None
     approval_mode: str = APPROVAL_MODE_YOLO
     last_active_at: Optional[str] = None
+    last_ticket_handoff_seq: Optional[str] = None
 
     @classmethod
     def from_dict(
@@ -291,6 +292,11 @@ class TelegramTopicRecord:
         last_active_at = payload.get("last_active_at") or payload.get("lastActiveAt")
         if not isinstance(last_active_at, str):
             last_active_at = None
+        last_ticket_handoff_seq = payload.get("last_ticket_handoff_seq") or payload.get(
+            "lastTicketHandoffSeq"
+        )
+        if not isinstance(last_ticket_handoff_seq, str):
+            last_ticket_handoff_seq = None
         return cls(
             repo_id=repo_id,
             workspace_path=workspace_path,
@@ -310,6 +316,7 @@ class TelegramTopicRecord:
             rollout_path=rollout_path,
             approval_mode=approval_mode,
             last_active_at=last_active_at,
+            last_ticket_handoff_seq=last_ticket_handoff_seq,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -335,6 +342,7 @@ class TelegramTopicRecord:
             "rollout_path": self.rollout_path,
             "approval_mode": self.approval_mode,
             "last_active_at": self.last_active_at,
+            "last_ticket_handoff_seq": self.last_ticket_handoff_seq,
         }
 
 
@@ -673,6 +681,27 @@ class TelegramStateStore:
 
     async def get_topic(self, key: str) -> Optional[TelegramTopicRecord]:
         return await self._run(self._get_topic_sync, key)
+
+    async def list_topics(self) -> dict[str, TelegramTopicRecord]:
+        """Return all stored topics keyed by topic_key."""
+        return await self._run(self._list_topics_sync)
+
+    def _list_topics_sync(self) -> dict[str, TelegramTopicRecord]:
+        conn = self._ensure_connection()
+        cursor = conn.execute("SELECT topic_key, payload_json FROM telegram_topics")
+        topics: dict[str, TelegramTopicRecord] = {}
+        for key, payload_json in cursor.fetchall():
+            try:
+                payload = (
+                    json.loads(payload_json) if isinstance(payload_json, str) else {}
+                )
+            except Exception:
+                payload = {}
+            record = TelegramTopicRecord.from_dict(
+                payload, default_approval_mode=self._default_approval_mode
+            )
+            topics[str(key)] = record
+        return topics
 
     async def get_topic_scope(self, key: str) -> Optional[str]:
         return await self._run(self._get_topic_scope_sync, key)

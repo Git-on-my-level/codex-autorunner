@@ -98,6 +98,7 @@ from .commands import (
     ApprovalsCommands,
     ExecutionCommands,
     FilesCommands,
+    FlowCommands,
     FormattingHelpers,
     GitHubCommands,
     VoiceCommands,
@@ -376,6 +377,7 @@ def _format_media_batch_failure(
 class TelegramCommandHandlers(
     WorkspaceCommands,
     GitHubCommands,
+    FlowCommands,
     FilesCommands,
     VoiceCommands,
     ExecutionCommands,

@@ -36,6 +36,12 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             "run a code review",
             handlers._handle_review,
         ),
+        "flow": CommandSpec(
+            "flow",
+            "start/resume ticket flow runs",
+            lambda message, args, _runtime: handlers._handle_flow(message, args),
+            allow_during_turn=True,
+        ),
         "pr": CommandSpec(
             "pr",
             "run the GitHub PR flow",

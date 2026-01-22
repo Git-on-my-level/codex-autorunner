@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from .state import TelegramTopicRecord
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...core.flows import FlowStore
+from ...core.flows.models import FlowRunStatus
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
@@ -22,9 +24,11 @@ from ...core.state import now_iso
 from ...core.text_delta_coalescer import TextDeltaCoalescer
 from ...core.utils import (
     build_opencode_supervisor,
+    canonicalize_path,
 )
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
 from ...manifest import load_manifest
+from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from .adapter import (
@@ -77,6 +81,7 @@ from .helpers import (
     _read_lock_payload,
     _split_topic_key,
     _telegram_lock_path,
+    _truncate_text,
     _with_conversation_id,
 )
 from .notifications import TelegramNotificationHandlers
@@ -99,6 +104,8 @@ from .types import (
     TurnContext,
 )
 from .voice import TelegramVoiceManager
+
+TICKET_FLOW_WATCH_INTERVAL_SECONDS = 20
 
 
 def _build_opencode_supervisor(
@@ -249,6 +256,7 @@ class TelegramBotService(
         )
         self._outbox_task: Optional[asyncio.Task[None]] = None
         self._cache_cleanup_task: Optional[asyncio.Task[None]] = None
+        self._ticket_flow_watch_task: Optional[asyncio.Task[None]] = None
         self._cache_timestamps: dict[str, dict[object, float]] = {}
         self._last_update_ids: dict[str, int] = {}
         self._last_update_persisted_at: dict[str, float] = {}
@@ -540,6 +548,9 @@ class TelegramBotService(
             self._voice_task = asyncio.create_task(self._voice_manager.run_loop())
             self._housekeeping_task = asyncio.create_task(self._housekeeping_loop())
             self._cache_cleanup_task = asyncio.create_task(self._cache_cleanup_loop())
+            self._ticket_flow_watch_task = asyncio.create_task(
+                self._ticket_flow_watch_loop()
+            )
             self._spawn_task(self._prewarm_workspace_clients())
             log_event(
                 self._logger,
@@ -620,6 +631,12 @@ class TelegramBotService(
                     self._cache_cleanup_task.cancel()
                     try:
                         await self._cache_cleanup_task
+                    except asyncio.CancelledError:
+                        pass
+                if self._ticket_flow_watch_task is not None:
+                    self._ticket_flow_watch_task.cancel()
+                    try:
+                        await self._ticket_flow_watch_task
                     except asyncio.CancelledError:
                         pass
                 if self._spawned_tasks:
@@ -937,6 +954,138 @@ class TelegramBotService(
             for key in expired_placeholders:
                 self._queued_placeholder_map.pop(key, None)
                 self._queued_placeholder_timestamps.pop(key, None)
+
+    async def _ticket_flow_watch_loop(self) -> None:
+        interval = max(TICKET_FLOW_WATCH_INTERVAL_SECONDS, 1)
+        while True:
+            try:
+                await self._watch_ticket_flow_pauses()
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.ticket_flow.watch_failed",
+                    exc=exc,
+                )
+            await asyncio.sleep(interval)
+
+    async def _watch_ticket_flow_pauses(self) -> None:
+        topics = await self._store.list_topics()
+        if not topics:
+            return
+        workspace_topics: dict[Path, list[tuple[str, "TelegramTopicRecord"]]] = {}
+        for key, record in topics.items():
+            if not isinstance(record.workspace_path, str) or not record.workspace_path:
+                continue
+            workspace_root = canonicalize_path(Path(record.workspace_path))
+            workspace_topics.setdefault(workspace_root, []).append((key, record))
+
+        for workspace_root, entries in workspace_topics.items():
+            try:
+                pause = await asyncio.to_thread(
+                    self._load_ticket_flow_pause, workspace_root
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.ticket_flow.scan_failed",
+                    exc=exc,
+                    workspace_root=str(workspace_root),
+                )
+                continue
+            if pause is None:
+                continue
+            run_id, seq, content = pause
+            marker = f"{run_id}:{seq}"
+            message_text = self._format_ticket_flow_pause_message(run_id, seq, content)
+            for key, record in entries:
+                if record.last_ticket_handoff_seq == marker:
+                    continue
+                try:
+                    chat_id, thread_id, _scope = parse_topic_key(key)
+                except Exception:
+                    continue
+                try:
+                    await self._send_message_with_outbox(
+                        chat_id,
+                        message_text,
+                        thread_id=thread_id,
+                        reply_to=None,
+                    )
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.ticket_flow.notify_failed",
+                        exc=exc,
+                        topic_key=key,
+                        run_id=run_id,
+                        seq=seq,
+                    )
+                    continue
+
+                def apply(topic: "TelegramTopicRecord", value: str = marker) -> None:
+                    topic.last_ticket_handoff_seq = value
+
+                await self._store.update_topic(key, apply)
+
+    def _load_ticket_flow_pause(
+        self, workspace_root: Path
+    ) -> Optional[tuple[str, str, str]]:
+        db_path = workspace_root / ".codex-autorunner" / "flows.db"
+        if not db_path.exists():
+            return None
+        store = FlowStore(db_path)
+        store.initialize()
+        runs = store.list_flow_runs(
+            flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+        )
+        if not runs:
+            return None
+        latest = runs[0]
+        runs_dir_raw = latest.input_data.get("runs_dir")
+        runs_dir = (
+            Path(runs_dir_raw)
+            if isinstance(runs_dir_raw, str) and runs_dir_raw
+            else Path(".codex-autorunner/runs")
+        )
+        paths = resolve_outbox_paths(
+            workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
+        )
+        history_dir = paths.handoff_history_dir
+        seq = self._latest_handoff_seq(history_dir)
+        if not seq:
+            return None
+        message_path = history_dir / seq / "USER_MESSAGE.md"
+        try:
+            content = message_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        return latest.id, seq, content
+
+    def _latest_handoff_seq(self, history_dir: Path) -> Optional[str]:
+        if not history_dir.exists() or not history_dir.is_dir():
+            return None
+        seqs = [
+            child.name
+            for child in history_dir.iterdir()
+            if child.is_dir()
+            and not child.name.startswith(".")
+            and child.name.isdigit()
+        ]
+        if not seqs:
+            return None
+        return max(seqs)
+
+    def _format_ticket_flow_pause_message(
+        self, run_id: str, seq: str, content: str
+    ) -> str:
+        trimmed = _truncate_text(content.strip() or "(no handoff message)", 3000)
+        return (
+            f"Ticket flow paused (run {run_id}). Latest handoff #{seq}:\n\n"
+            f"{trimmed}\n\nUse /flow resume to continue."
+        )
 
     async def _interrupt_timeout_check(
         self, key: str, turn_id: str, message_id: int

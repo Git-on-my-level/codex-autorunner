@@ -1,1022 +1,885 @@
-<!doctype html>
+<!DOCTYPE html>
+
 <html lang="en">
-  <head>
-    <script src="static/bootstrap.js?v=__CAR_ASSET_VERSION__" data-car-bootstrap></script>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="theme-color" content="#0a0c12" />
-    <title>Codex Autorunner</title>
-  </head>
-  <body>
-    <div id="hub-shell" class="hub-shell hidden">
-      <header class="hub-hero">
-        <div class="hub-hero-text">
-          <h1>CAR Hub</h1>
-          <span id="hub-last-scan" class="pill pill-small pill-idle">–</span>
-          <span id="hub-version" class="hub-version">v–</span>
-        </div>
-        <div class="hub-hero-actions">
-          <button id="hub-new-repo" class="primary sm">+ New</button>
-          <button id="hub-scan" class="sm">Scan</button>
-          <button id="hub-refresh" class="ghost sm">Refresh</button>
-          <button id="hub-settings" class="ghost sm icon-btn" title="Settings">⚙</button>
-        </div>
-      </header>
+<head>
+<script data-car-bootstrap="" src="static/bootstrap.js?v=__CAR_ASSET_VERSION__"></script>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" name="viewport"/>
+<meta content="yes" name="apple-mobile-web-app-capable"/>
+<meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/>
+<meta content="#0a0c12" name="theme-color"/>
+<title>Codex Autorunner</title>
+</head>
+<body>
+<div class="hub-shell hidden" id="hub-shell">
+<header class="hub-hero">
+<div class="hub-hero-text">
+<h1>CAR Hub</h1>
+<span class="pill pill-small pill-idle" id="hub-last-scan">–</span>
+<span class="hub-version" id="hub-version">v–</span>
+</div>
+<div class="hub-hero-actions">
+<button class="primary sm" id="hub-new-repo">+ New</button>
+<button class="sm" id="hub-scan">Scan</button>
+<button class="ghost sm" id="hub-refresh">Refresh</button>
+<button class="ghost sm icon-btn" id="hub-settings" title="Settings">⚙</button>
+</div>
+</header>
+<section class="hub-stats">
+<div class="hub-stat">
+<div class="hub-stat-value" id="hub-count-total">–</div>
+<p class="muted small">repos</p>
+</div>
+<div class="hub-stat">
+<div class="hub-stat-value" id="hub-count-running">–</div>
+<p class="muted small">running</p>
+</div>
+<div class="hub-stat">
+<div class="hub-stat-value" id="hub-count-missing">–</div>
+<p class="muted small">missing</p>
+</div>
+</section>
+<section class="hub-usage-compact">
+<div class="hub-usage-header">
+<span class="label">Usage</span>
+<span class="hub-usage-path" id="hub-usage-meta">–</span>
+<button class="ghost sm icon-btn" id="hub-usage-refresh" title="Refresh usage">↻</button>
+</div>
+<div class="hub-usage-grid" id="hub-usage-list">Loading…</div>
+</section>
+<section class="hub-usage-chart">
+<div class="hub-usage-chart-header">
+<span class="label">Usage Trend</span>
+<div class="usage-chart-controls">
+<select aria-label="Range" class="usage-chart-select" id="hub-usage-chart-range" title="Range">
+<option value="7">1w</option>
+<option selected="" value="30">1m</option>
+<option value="90">3m</option>
+<option value="180">6m</option>
+<option value="365">1y</option>
+</select>
+<select aria-label="Group" class="usage-chart-select" id="hub-usage-chart-segment" title="Group">
+<option value="none">Total</option>
+<option value="repo">By repo</option>
+<option value="agent">By agent</option>
+</select>
+</div>
+</div>
+<div class="usage-chart-canvas hub-usage-chart-canvas" id="hub-usage-chart-canvas"></div>
+</section>
+<section class="hub-repo-panel">
+<div class="hub-panel-header">
+<span class="label">Repositories</span>
+<div class="hub-panel-actions">
+<button class="ghost sm" id="hub-quick-scan">Rescan</button>
+</div>
+</div>
+<div class="hub-repo-list" id="hub-repo-list">
+<div class="muted small">Loading…</div>
+</div>
+</section>
+</div>
+<div class="app-shell" id="repo-shell">
+<nav class="nav-bar">
+<span class="nav-brand">CAR</span>
+<div class="tabs">
+<!-- Tabs will be injected here by tabs.js -->
+</div>
+<div class="nav-actions">
+<button class="ghost sm icon-btn" id="repo-settings" title="Settings">⚙</button>
+</div>
+</nav>
+<main>
+<section class="panel active" id="dashboard">
+<div class="cards">
+<div class="card status-card">
+<div class="card-header">
+<div class="card-header-left">
+<span class="label">Runner Status</span>
+<span class="version-label" id="repo-version">v–</span>
+</div>
+<span class="pill pill-idle" id="runner-status">idle</span>
+</div>
+<div class="grid-two">
+<div>
+<p class="muted">Run ID</p>
+<p class="metric" id="last-run-id">–</p>
+</div>
+<div>
+<p class="muted">Exit</p>
+<p class="metric" id="last-exit-code">–</p>
+</div>
+<div>
+<p class="muted">Started</p>
+<p class="metric" id="last-start">–</p>
+</div>
+<div>
+<p class="muted">Finished</p>
+<p class="metric" id="last-finish">–</p>
+</div>
+<div>
+<p class="muted">TODO</p>
+<p class="metric" id="todo-count">–</p>
+</div>
+<div>
+<p class="muted">Done</p>
+<p class="metric" id="done-count">–</p>
+</div>
+</div>
+<div class="doc-agent-controls dashboard-agent-controls">
+<select id="dashboard-agent-select" title="Agent"></select>
+<select id="dashboard-model-select" title="Model"></select>
+<select id="dashboard-reasoning-select" title="Reasoning"></select>
+</div>
+<div class="actions">
+<button class="primary" id="start-run" title="Run a full autorunner iteration through all tasks">Start</button>
+<button class="ghost" id="stop-run" title="Gracefully stop the current run (safe shutdown)">Stop</button>
+<button class="danger" id="kill-run" title="Immediately terminate the run (force stop - may cause data loss)">Kill</button>
+<button class="ghost hidden" id="clear-lock" title="Clear a stale autorunner lock">Clear lock</button>
+<button class="ghost" id="reset-runner" title="Clear run state and restart fresh (destructive)">Reset</button>
+<button class="ghost icon-btn" id="refresh-state" title="Refresh state">↻</button>
+</div>
+<p class="muted small" id="runner-pid">PID: –</p>
+</div>
+<div class="card usage-card-compact">
+<div class="usage-header">
+<span class="label">Usage</span>
+<span class="usage-total-badge" id="usage-total">–</span>
+<span class="usage-events-badge" id="usage-events">–</span>
+<button class="ghost sm icon-btn" id="usage-refresh" title="Refresh usage">↻</button>
+</div>
+<div class="usage-breakdown">
+<div class="usage-stat">
+<span class="usage-stat-val" id="usage-input">–</span>
+<span class="usage-stat-lbl">in</span>
+</div>
+<div class="usage-stat usage-stat-cached">
+<span class="usage-stat-val" id="usage-cached">–</span>
+<span class="usage-stat-lbl">cached</span>
+</div>
+<div class="usage-stat">
+<span class="usage-stat-val" id="usage-output">–</span>
+<span class="usage-stat-lbl">out</span>
+</div>
+<div class="usage-stat">
+<span class="usage-stat-val" id="usage-reasoning">–</span>
+<span class="usage-stat-lbl">reason</span>
+</div>
+</div>
+<div class="usage-chart">
+<div class="usage-chart-header">
+<span class="usage-chart-title">Trend</span>
+<div class="usage-chart-controls">
+<select aria-label="Range" class="usage-chart-select" id="usage-chart-range" title="Range">
+<option value="7">1w</option>
+<option selected="" value="30">1m</option>
+<option value="90">3m</option>
+<option value="180">6m</option>
+<option value="365">1y</option>
+</select>
+<select aria-label="Group" class="usage-chart-select" id="usage-chart-segment" title="Group">
+<option value="none">Total</option>
+<option value="agent">Agent</option>
+<option value="model">Model</option>
+<option value="token_type">Token type</option>
+<option value="model_token">Model + type</option>
+</select>
+</div>
+</div>
+<div class="usage-chart-canvas" id="usage-chart-canvas"></div>
+</div>
+<div class="usage-rates-visual">
+<div class="usage-rate-row">
+<span class="usage-rate-label">Primary</span>
+<div class="usage-rate-bar-container" id="usage-rate-primary"></div>
+</div>
+<div class="usage-rate-row">
+<span class="usage-rate-label">Secondary</span>
+<div class="usage-rate-bar-container" id="usage-rate-secondary"></div>
+</div>
+</div>
+<div class="usage-footer">
+<span class="hidden" id="usage-rates">–</span>
+<span id="usage-meta">–</span>
+</div>
+</div>
+<div class="card todo-preview">
+<div class="card-header">
+<span class="label">TODO</span>
+<button class="primary sm hidden" id="open-summary" title="Open final report (SUMMARY)">Summary</button>
+<button class="ghost sm icon-btn" id="refresh-preview" title="Refresh TODO preview">↻</button>
+</div>
+<ul class="checklist" id="todo-preview-list"></ul>
+</div>
+<div class="card github-card" id="github-card">
+<div class="card-header">
+<span class="label">GitHub</span>
+<span class="pill pill-idle" id="github-status-pill">–</span>
+</div>
+<div class="github-grid">
+<div class="github-row">
+<span class="muted">Repo</span>
+<a class="github-link muted" id="github-repo-link">–</a>
+</div>
+<div class="github-row">
+<span class="muted">Branch</span>
+<span class="github-mono" id="github-branch">–</span>
+</div>
+<div class="github-row">
+<span class="muted">Issue</span>
+<a class="github-link muted" id="github-issue-link">–</a>
+</div>
+<div class="github-row">
+<span class="muted">PR</span>
+<span class="github-pr-group">
+<a class="github-link muted" id="github-pr-link">–</a>
+<button class="ghost icon-btn-inline" disabled="" id="github-open-pr-files" title="View changed files">📄</button>
+<button class="ghost icon-btn-inline" disabled="" id="github-copy-pr" title="Copy PR link">📋</button>
+</span>
+</div>
+</div>
+<div class="actions github-actions">
+<button class="primary sm" id="github-sync-pr">Sync PR</button>
+</div>
+<div class="github-flow">
+<div class="github-flow-header">
+<span class="muted">PR Flow</span>
+<span class="pill pill-idle" id="pr-flow-status">–</span>
+</div>
+<div class="github-flow-grid">
+<label class="muted" for="pr-flow-mode">Mode</label>
+<select id="pr-flow-mode">
+<option value="issue">Implement Issue → PR</option>
+<option value="pr">Fix Existing PR</option>
+</select>
+<label class="muted" for="pr-flow-ref">Issue / PR</label>
+<input autocomplete="off" id="pr-flow-ref" placeholder="#123 or https://github.com/org/repo/issues/123" spellcheck="false" type="text"/>
+<label class="muted" for="pr-flow-base">Base</label>
+<input autocomplete="off" id="pr-flow-base" placeholder="default" spellcheck="false" type="text"/>
+<label class="muted" for="pr-flow-until">Until</label>
+<select id="pr-flow-until">
+<option value="no_issues">No issues</option>
+<option value="minor_only">Minor only</option>
+</select>
+<label class="muted" for="pr-flow-cycles">Max cycles</label>
+<input id="pr-flow-cycles" min="1" placeholder="3" type="number"/>
+<label class="muted" for="pr-flow-runs">Impl runs</label>
+<input id="pr-flow-runs" min="1" placeholder="auto" type="number"/>
+<label class="muted" for="pr-flow-timeout">Timeout (s)</label>
+<input id="pr-flow-timeout" min="0" placeholder="auto" type="number"/>
+<label class="muted" for="pr-flow-draft">Draft</label>
+<input checked="" id="pr-flow-draft" type="checkbox"/>
+</div>
+<div class="actions github-flow-actions">
+<button class="primary sm" id="pr-flow-start">Start</button>
+<button class="ghost sm" id="pr-flow-stop">Stop</button>
+<button class="ghost sm" id="pr-flow-resume">Resume</button>
+</div>
+<div class="github-flow-status">
+<div class="github-flow-row">
+<span class="muted">Step</span>
+<span class="github-mono" id="pr-flow-step">–</span>
+</div>
+<div class="github-flow-row">
+<span class="muted">Cycle</span>
+<span class="github-mono" id="pr-flow-cycle">–</span>
+</div>
+<div class="github-flow-row">
+<span class="muted">Feedback</span>
+<span class="github-mono" id="pr-flow-review">–</span>
+</div>
+</div>
+<div class="github-flow-artifacts">
+<a class="github-link muted" id="pr-flow-spec-link">Spec</a>
+<a class="github-link muted" id="pr-flow-progress-link">Progress</a>
+<a class="github-link muted" id="pr-flow-patch-link">Patch diff</a>
+<a class="github-link muted" id="pr-flow-logs-link">Logs</a>
+<a class="github-link muted" id="pr-flow-final-link">Final report</a>
+</div>
+</div>
+<p class="muted small" id="github-note">–</p>
+</div>
+</div>
 
-      <section class="hub-stats">
-        <div class="hub-stat">
-          <div id="hub-count-total" class="hub-stat-value">–</div>
-          <p class="muted small">repos</p>
-        </div>
-        <div class="hub-stat">
-          <div id="hub-count-running" class="hub-stat-value">–</div>
-          <p class="muted small">running</p>
-        </div>
-        <div class="hub-stat">
-          <div id="hub-count-missing" class="hub-stat-value">–</div>
-          <p class="muted small">missing</p>
-        </div>
-      </section>
-
-      <section class="hub-usage-compact">
-        <div class="hub-usage-header">
-          <span class="label">Usage</span>
-          <span id="hub-usage-meta" class="hub-usage-path">–</span>
-          <button id="hub-usage-refresh" class="ghost sm icon-btn" title="Refresh usage">↻</button>
-        </div>
-        <div id="hub-usage-list" class="hub-usage-grid">Loading…</div>
-      </section>
-
-      <section class="hub-usage-chart">
-        <div class="hub-usage-chart-header">
-          <span class="label">Usage Trend</span>
-          <div class="usage-chart-controls">
-            <select id="hub-usage-chart-range" class="usage-chart-select" title="Range" aria-label="Range">
-              <option value="7">1w</option>
-              <option value="30" selected>1m</option>
-              <option value="90">3m</option>
-              <option value="180">6m</option>
-              <option value="365">1y</option>
-            </select>
-            <select id="hub-usage-chart-segment" class="usage-chart-select" title="Group" aria-label="Group">
-              <option value="none">Total</option>
-              <option value="repo">By repo</option>
-              <option value="agent">By agent</option>
-            </select>
-          </div>
-        </div>
-        <div id="hub-usage-chart-canvas" class="usage-chart-canvas hub-usage-chart-canvas"></div>
-      </section>
-
-      <section class="hub-repo-panel">
-        <div class="hub-panel-header">
-          <span class="label">Repositories</span>
-          <div class="hub-panel-actions">
-            <button id="hub-quick-scan" class="ghost sm">Rescan</button>
-          </div>
-        </div>
-        <div id="hub-repo-list" class="hub-repo-list">
-          <div class="muted small">Loading…</div>
-        </div>
-      </section>
-    </div>
-
-    <div id="repo-shell" class="app-shell">
-      <nav class="nav-bar">
-        <span class="nav-brand">CAR</span>
-        <div class="tabs">
-          <!-- Tabs will be injected here by tabs.js -->
-        </div>
-        <div class="nav-actions">
-          <button id="repo-settings" class="ghost sm icon-btn" title="Settings">⚙</button>
-        </div>
-      </nav>
-
-      <main>
-        <section id="dashboard" class="panel active">
-          <div class="cards">
-            <div class="card status-card">
-              <div class="card-header">
-                <div class="card-header-left">
-                  <span class="label">Runner Status</span>
-                  <span id="repo-version" class="version-label">v–</span>
-                </div>
-                <span id="runner-status" class="pill pill-idle">idle</span>
-              </div>
-              <div class="grid-two">
-                <div>
-                  <p class="muted">Run ID</p>
-                  <p id="last-run-id" class="metric">–</p>
-                </div>
-                <div>
-                  <p class="muted">Exit</p>
-                  <p id="last-exit-code" class="metric">–</p>
-                </div>
-                <div>
-                  <p class="muted">Started</p>
-                  <p id="last-start" class="metric">–</p>
-                </div>
-                <div>
-                  <p class="muted">Finished</p>
-                  <p id="last-finish" class="metric">–</p>
-                </div>
-                <div>
-                  <p class="muted">TODO</p>
-                  <p id="todo-count" class="metric">–</p>
-                </div>
-                <div>
-                  <p class="muted">Done</p>
-                  <p id="done-count" class="metric">–</p>
-                </div>
-              </div>
-              <div class="doc-agent-controls dashboard-agent-controls">
-                <select id="dashboard-agent-select" title="Agent"></select>
-                <select id="dashboard-model-select" title="Model"></select>
-                <select id="dashboard-reasoning-select" title="Reasoning"></select>
-              </div>
-              <div class="actions">
-                <button id="start-run" class="primary" title="Run a full autorunner iteration through all tasks">Start</button>
-                <button id="stop-run" class="ghost" title="Gracefully stop the current run (safe shutdown)">Stop</button>
-                <button id="kill-run" class="danger" title="Immediately terminate the run (force stop - may cause data loss)">Kill</button>
-                <button id="clear-lock" class="ghost hidden" title="Clear a stale autorunner lock">Clear lock</button>
-                <button id="reset-runner" class="ghost" title="Clear run state and restart fresh (destructive)">Reset</button>
-                <button id="refresh-state" class="ghost icon-btn" title="Refresh state">↻</button>
-              </div>
-              <p class="muted small" id="runner-pid">PID: –</p>
-            </div>
-
-            <div class="card usage-card-compact">
-              <div class="usage-header">
-                <span class="label">Usage</span>
-                <span class="usage-total-badge" id="usage-total">–</span>
-                <span class="usage-events-badge" id="usage-events">–</span>
-                <button id="usage-refresh" class="ghost sm icon-btn" title="Refresh usage">↻</button>
-              </div>
-              <div class="usage-breakdown">
-                <div class="usage-stat">
-                  <span class="usage-stat-val" id="usage-input">–</span>
-                  <span class="usage-stat-lbl">in</span>
-                </div>
-                <div class="usage-stat usage-stat-cached">
-                  <span class="usage-stat-val" id="usage-cached">–</span>
-                  <span class="usage-stat-lbl">cached</span>
-                </div>
-                <div class="usage-stat">
-                  <span class="usage-stat-val" id="usage-output">–</span>
-                  <span class="usage-stat-lbl">out</span>
-                </div>
-                <div class="usage-stat">
-                  <span class="usage-stat-val" id="usage-reasoning">–</span>
-                  <span class="usage-stat-lbl">reason</span>
-                </div>
-              </div>
-              <div class="usage-chart">
-                <div class="usage-chart-header">
-                  <span class="usage-chart-title">Trend</span>
-                  <div class="usage-chart-controls">
-                    <select id="usage-chart-range" class="usage-chart-select" title="Range" aria-label="Range">
-                      <option value="7">1w</option>
-                      <option value="30" selected>1m</option>
-                      <option value="90">3m</option>
-                      <option value="180">6m</option>
-                      <option value="365">1y</option>
-                    </select>
-                    <select id="usage-chart-segment" class="usage-chart-select" title="Group" aria-label="Group">
-                      <option value="none">Total</option>
-                      <option value="agent">Agent</option>
-                      <option value="model">Model</option>
-                      <option value="token_type">Token type</option>
-                      <option value="model_token">Model + type</option>
-                    </select>
-                  </div>
-                </div>
-                <div id="usage-chart-canvas" class="usage-chart-canvas"></div>
-              </div>
-              <div class="usage-rates-visual">
-                <div class="usage-rate-row">
-                  <span class="usage-rate-label">Primary</span>
-                  <div id="usage-rate-primary" class="usage-rate-bar-container"></div>
-                </div>
-                <div class="usage-rate-row">
-                  <span class="usage-rate-label">Secondary</span>
-                  <div id="usage-rate-secondary" class="usage-rate-bar-container"></div>
-                </div>
-              </div>
-              <div class="usage-footer">
-                <span id="usage-rates" class="hidden">–</span>
-                <span id="usage-meta">–</span>
-              </div>
-            </div>
-
-            <div class="card todo-preview">
-              <div class="card-header">
-                <span class="label">TODO</span>
-                <button id="open-summary" class="primary sm hidden" title="Open final report (SUMMARY)">Summary</button>
-                <button id="refresh-preview" class="ghost sm icon-btn" title="Refresh TODO preview">↻</button>
-              </div>
-              <ul id="todo-preview-list" class="checklist"></ul>
-            </div>
-
-            <div class="card github-card" id="github-card">
-              <div class="card-header">
-                <span class="label">GitHub</span>
-                <span id="github-status-pill" class="pill pill-idle">–</span>
-              </div>
-              <div class="github-grid">
-                <div class="github-row">
-                  <span class="muted">Repo</span>
-                  <a id="github-repo-link" class="github-link muted">–</a>
-                </div>
-                <div class="github-row">
-                  <span class="muted">Branch</span>
-                  <span id="github-branch" class="github-mono">–</span>
-                </div>
-                <div class="github-row">
-                  <span class="muted">Issue</span>
-                  <a id="github-issue-link" class="github-link muted">–</a>
-                </div>
-                <div class="github-row">
-                  <span class="muted">PR</span>
-                  <span class="github-pr-group">
-                    <a id="github-pr-link" class="github-link muted">–</a>
-                    <button id="github-open-pr-files" class="ghost icon-btn-inline" disabled title="View changed files">📄</button>
-                    <button id="github-copy-pr" class="ghost icon-btn-inline" disabled title="Copy PR link">📋</button>
-                  </span>
-                </div>
-              </div>
-              <div class="actions github-actions">
-                <button id="github-sync-pr" class="primary sm">Sync PR</button>
-              </div>
-              <div class="github-flow">
-                <div class="github-flow-header">
-                  <span class="muted">PR Flow</span>
-                  <span id="pr-flow-status" class="pill pill-idle">–</span>
-                </div>
-                <div class="github-flow-grid">
-                  <label class="muted" for="pr-flow-mode">Mode</label>
-                  <select id="pr-flow-mode">
-                    <option value="issue">Implement Issue → PR</option>
-                    <option value="pr">Fix Existing PR</option>
-                  </select>
-                  <label class="muted" for="pr-flow-ref">Issue / PR</label>
-                  <input
-                    id="pr-flow-ref"
-                    type="text"
-                    spellcheck="false"
-                    autocomplete="off"
-                    placeholder="#123 or https://github.com/org/repo/issues/123"
-                  />
-                  <label class="muted" for="pr-flow-base">Base</label>
-                  <input
-                    id="pr-flow-base"
-                    type="text"
-                    spellcheck="false"
-                    autocomplete="off"
-                    placeholder="default"
-                  />
-                  <label class="muted" for="pr-flow-until">Until</label>
-                  <select id="pr-flow-until">
-                    <option value="no_issues">No issues</option>
-                    <option value="minor_only">Minor only</option>
-                  </select>
-                  <label class="muted" for="pr-flow-cycles">Max cycles</label>
-                  <input id="pr-flow-cycles" type="number" min="1" placeholder="3" />
-                  <label class="muted" for="pr-flow-runs">Impl runs</label>
-                  <input id="pr-flow-runs" type="number" min="1" placeholder="auto" />
-                  <label class="muted" for="pr-flow-timeout">Timeout (s)</label>
-                  <input id="pr-flow-timeout" type="number" min="0" placeholder="auto" />
-                  <label class="muted" for="pr-flow-draft">Draft</label>
-                  <input id="pr-flow-draft" type="checkbox" checked />
-                </div>
-                <div class="actions github-flow-actions">
-                  <button id="pr-flow-start" class="primary sm">Start</button>
-                  <button id="pr-flow-stop" class="ghost sm">Stop</button>
-                  <button id="pr-flow-resume" class="ghost sm">Resume</button>
-                </div>
-                <div class="github-flow-status">
-                  <div class="github-flow-row">
-                    <span class="muted">Step</span>
-                    <span id="pr-flow-step" class="github-mono">–</span>
-                  </div>
-                  <div class="github-flow-row">
-                    <span class="muted">Cycle</span>
-                    <span id="pr-flow-cycle" class="github-mono">–</span>
-                  </div>
-                  <div class="github-flow-row">
-                    <span class="muted">Feedback</span>
-                    <span id="pr-flow-review" class="github-mono">–</span>
-                  </div>
-                </div>
-                <div class="github-flow-artifacts">
-                  <a id="pr-flow-spec-link" class="github-link muted">Spec</a>
-                  <a id="pr-flow-progress-link" class="github-link muted">Progress</a>
-                  <a id="pr-flow-patch-link" class="github-link muted">Patch diff</a>
-                  <a id="pr-flow-logs-link" class="github-link muted">Logs</a>
-                  <a id="pr-flow-final-link" class="github-link muted">Final report</a>
-                </div>
-               </div>
-               <p id="github-note" class="muted small">–</p>
-             </div>
-           </div>
-
-            <div class="card ticket-card" id="ticket-card">
-              <div class="card-header">
-                <div class="card-header-left ticket-header-left">
-                  <span class="label">Ticket Flow</span>
-                  <span id="ticket-flow-run" class="muted small ticket-mono">–</span>
-                </div>
-                <span id="ticket-flow-status" class="pill pill-idle">idle</span>
-              </div>
-              <div class="ticket-flow-actions">
-                <button id="ticket-flow-bootstrap" class="primary sm">Start Ticket Flow</button>
-                <button id="ticket-flow-resume" class="ghost sm">Resume</button>
-                <button id="ticket-flow-refresh" class="ghost sm icon-btn" title="Refresh ticket flow">↻</button>
-              </div>
-              <div class="ticket-flow-meta">
-                <div>
-                  <span class="muted">Current ticket</span>
-                  <span id="ticket-flow-current" class="ticket-mono">–</span>
-                </div>
-                <div>
-                  <span class="muted">Reason</span>
-                  <span id="ticket-flow-reason" class="ticket-mono ticket-flow-reason">–</span>
-                </div>
-              </div>
-              <div class="ticket-flow-grid">
-                <div class="ticket-panel">
-                  <div class="ticket-panel-header">
-                    <span class="muted">Tickets</span>
-                    <span id="ticket-flow-dir" class="muted small">–</span>
-                  </div>
-                  <div id="ticket-flow-tickets" class="ticket-list">Loading tickets…</div>
-                </div>
-                <div class="ticket-panel">
-                  <div class="ticket-panel-header">
-                    <span class="muted">Handoff history</span>
-                    <span id="ticket-handoff-note" class="muted small">–</span>
-                  </div>
-                  <div id="ticket-handoff-history" class="ticket-list">No messages yet.</div>
-                </div>
-              </div>
-            </div>
-
-           <div class="card review-card" id="review-card">
-             <div class="card-header">
-               <span class="label">Review</span>
-               <span id="review-status-pill" class="pill pill-idle">–</span>
-             </div>
-             <div class="review-grid">
-               <div class="review-row">
-                 <span class="muted">Run ID</span>
-                 <span id="review-run-id" class="review-mono">–</span>
-               </div>
-               <div class="review-row">
-                 <span class="muted">Started</span>
-                 <span id="review-started" class="review-mono">–</span>
-               </div>
-               <div class="review-row">
-                 <span class="muted">Finished</span>
-                 <span id="review-finished" class="review-mono">–</span>
-               </div>
-             </div>
-             <div class="review-controls">
-               <div class="review-inputs">
-                 <div class="review-input-row">
-                   <label class="muted" for="review-agent">Agent</label>
-                   <input id="review-agent" type="text" value="opencode" spellcheck="false" />
-                 </div>
-                 <div class="review-input-row">
-                   <label class="muted" for="review-model">Model</label>
-                   <input id="review-model" type="text" value="zai-coding-plan/glm-4.7" spellcheck="false" />
-                 </div>
-                 <div class="review-input-row">
-                   <label class="muted" for="review-reasoning">Reasoning</label>
-                   <input id="review-reasoning" type="text" placeholder="auto" spellcheck="false" />
-                 </div>
-                 <div class="review-input-row">
-                   <label class="muted" for="review-timeout">Timeout (s)</label>
-                   <input id="review-timeout" type="number" min="60" placeholder="auto" spellcheck="false" />
-                 </div>
-               </div>
-               <div class="review-buttons">
-                 <button id="review-start" class="primary sm">Start</button>
-                 <button id="review-stop" class="ghost sm">Stop</button>
-                 <button id="review-reset" class="ghost sm">Reset</button>
-               </div>
-             </div>
-             <div class="review-artifacts">
-               <a id="review-final-link" class="review-link muted">Final report</a>
-               <a id="review-log-link" class="review-link muted">Log</a>
-               <a id="review-scratchpad-link" class="review-link muted">Scratchpad</a>
-             </div>
-           </div>
-         </section>
-
-         <section id="docs" class="panel">
-          <div class="doc-nav">
-            <button class="chip active" data-doc="todo">TODO</button>
-            <button class="chip" data-doc="progress">PROGRESS</button>
-            <button class="chip" data-doc="opinions">OPINIONS</button>
-            <button class="chip" data-doc="spec">SPEC</button>
-            <button class="chip" data-doc="summary">SUMMARY</button>
-            <button class="chip" data-doc="snapshot">SNAPSHOT</button>
-            <span class="muted" id="doc-status"></span>
-          </div>
-          <div id="doc-thread-registry-banner" class="doc-banner hidden">
-            <div class="doc-banner-text">
-              <div class="doc-banner-title">
+<div class="card review-card" id="review-card">
+<div class="card-header">
+<span class="label">Review</span>
+<span class="pill pill-idle" id="review-status-pill">–</span>
+</div>
+<div class="review-grid">
+<div class="review-row">
+<span class="muted">Run ID</span>
+<span class="review-mono" id="review-run-id">–</span>
+</div>
+<div class="review-row">
+<span class="muted">Started</span>
+<span class="review-mono" id="review-started">–</span>
+</div>
+<div class="review-row">
+<span class="muted">Finished</span>
+<span class="review-mono" id="review-finished">–</span>
+</div>
+</div>
+<div class="review-controls">
+<div class="review-inputs">
+<div class="review-input-row">
+<label class="muted" for="review-agent">Agent</label>
+<input id="review-agent" spellcheck="false" type="text" value="opencode"/>
+</div>
+<div class="review-input-row">
+<label class="muted" for="review-model">Model</label>
+<input id="review-model" spellcheck="false" type="text" value="zai-coding-plan/glm-4.7"/>
+</div>
+<div class="review-input-row">
+<label class="muted" for="review-reasoning">Reasoning</label>
+<input id="review-reasoning" placeholder="auto" spellcheck="false" type="text"/>
+</div>
+<div class="review-input-row">
+<label class="muted" for="review-timeout">Timeout (s)</label>
+<input id="review-timeout" min="60" placeholder="auto" spellcheck="false" type="number"/>
+</div>
+</div>
+<div class="review-buttons">
+<button class="primary sm" id="review-start">Start</button>
+<button class="ghost sm" id="review-stop">Stop</button>
+<button class="ghost sm" id="review-reset">Reset</button>
+</div>
+</div>
+<div class="review-artifacts">
+<a class="review-link muted" id="review-final-link">Final report</a>
+<a class="review-link muted" id="review-log-link">Log</a>
+<a class="review-link muted" id="review-scratchpad-link">Scratchpad</a>
+</div>
+</div>
+</section>
+<section class="panel" id="docs">
+<div class="doc-nav">
+<button class="chip active" data-doc="todo">TODO</button>
+<button class="chip" data-doc="progress">PROGRESS</button>
+<button class="chip" data-doc="opinions">OPINIONS</button>
+<button class="chip" data-doc="spec">SPEC</button>
+<button class="chip" data-doc="summary">SUMMARY</button>
+<button class="chip" data-doc="snapshot">SNAPSHOT</button>
+<span class="muted" id="doc-status"></span>
+</div>
+<div class="doc-banner hidden" id="doc-thread-registry-banner">
+<div class="doc-banner-text">
+<div class="doc-banner-title">
                 Conversation state reset due to corrupted registry.
               </div>
-              <div id="doc-thread-registry-detail" class="doc-banner-detail muted small"></div>
-            </div>
-            <div class="doc-banner-actions">
-              <button id="doc-thread-registry-reset" class="ghost sm">Reset conversations</button>
-              <button id="doc-thread-registry-download" class="ghost sm">Download backup</button>
-            </div>
-          </div>
-          <div id="spec-issue-import" class="spec-issue-import hidden">
-            <button id="spec-issue-import-toggle" class="ghost sm">Import Issue → SPEC</button>
-            <div id="spec-issue-input-row" class="spec-issue-input-row hidden">
-              <input
-                id="spec-issue-input"
-                type="text"
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="Issue number or URL (e.g. 123 or https://github.com/org/repo/issues/123)"
-              />
-              <button id="spec-issue-import-btn" class="primary sm">Import</button>
-            </div>
-          </div>
-          <div class="doc-editor">
-            <div id="spec-ingest-patch-main" class="doc-patch-main hidden">
-              <div class="doc-patch-header">
-                <div class="doc-patch-info">
-                  <div class="muted small">Spec ingest patch</div>
-                  <div id="spec-ingest-patch-summary" class="doc-patch-summary"></div>
-                  <div class="doc-patch-legend">
-                    <span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
-                    <span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
-                  </div>
-                </div>
-                <div class="doc-patch-actions">
-                  <button id="spec-ingest-patch-apply" class="primary sm">Apply Patch</button>
-                  <button id="spec-ingest-patch-reload" class="ghost sm">Reload</button>
-                  <button id="spec-ingest-patch-discard" class="danger sm">Discard</button>
-                </div>
-              </div>
-              <div id="spec-ingest-patch-body" class="doc-patch-body">(no patch)</div>
-            </div>
-            <div id="doc-patch-main" class="doc-patch-main hidden">
-              <div class="doc-patch-header">
-                <div class="doc-patch-info">
-                  <div class="muted small">Pending draft</div>
-                  <div id="doc-patch-summary" class="doc-patch-summary"></div>
-                  <div id="doc-patch-meta" class="doc-patch-meta"></div>
-                  <div class="doc-patch-legend">
-                    <span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
-                    <span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
-                  </div>
-                </div>
-                <div class="doc-patch-actions">
-                  <button id="doc-patch-apply" class="primary sm">Apply Draft</button>
-                  <button id="doc-patch-preview" class="ghost sm" aria-pressed="false">Preview draft</button>
-                  <button id="doc-patch-reload" class="ghost sm">Reload</button>
-                  <button id="doc-patch-discard" class="danger sm">Discard</button>
-                </div>
-              </div>
-              <div id="doc-patch-body" class="doc-patch-body">(no draft)</div>
-            </div>
-            <textarea id="doc-content" spellcheck="false"></textarea>
-            <div class="doc-actions" id="doc-actions-standard">
-              <button id="save-doc" class="primary" data-short="Save">Save</button>
-              <button id="reload-doc" class="ghost" data-short="Reload">Reload</button>
-              <button id="doc-copy" class="ghost hidden" data-short="Copy">Copy</button>
-              <button id="spec-paste" class="ghost hidden" data-short="Paste">Paste</button>
-              <button id="ingest-spec" class="ghost hidden" data-short="Ingest">Ingest SPEC → Docs</button>
-              <button id="clear-docs" class="danger hidden" data-short="Clear">Clear TODO/PROGRESS/OPINIONS</button>
-            </div>
-            <div class="doc-actions hidden" id="doc-actions-snapshot">
-              <button id="snapshot-generate" class="primary" data-short="Run">Run snapshot</button>
-              <button id="snapshot-copy" class="ghost" data-short="Copy">Copy</button>
-              <button id="snapshot-refresh" class="ghost" data-short="Reload">Reload</button>
-            </div>
-            <div class="doc-chat-panel compose-panel">
-              <div class="doc-chat-compose">
-                <div class="doc-agent-controls">
-                  <select id="doc-agent-select" title="Agent"></select>
-                  <select id="doc-model-select" title="Model"></select>
-                  <select id="doc-reasoning-select" title="Reasoning"></select>
-                </div>
-                <div class="doc-chat-input-row compose-row">
-                  <textarea
-                    id="doc-chat-input"
-                    rows="1"
-                    placeholder="Chat about the work docs..."
-                    spellcheck="false"
-                    enterkeyhint="enter"
-                  ></textarea>
-                  <div class="doc-chat-input-buttons compose-buttons">
-                    <button id="doc-chat-voice" class="ghost sm voice-button" title="Hold to talk"></button>
-                    <button id="doc-chat-send" class="primary sm" title="Send">↑</button>
-                  </div>
-                </div>
-                <div class="doc-chat-meta">
-                  <div class="doc-chat-meta-left">
-                    <span class="muted small" id="doc-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for newline</span>
-                    <span class="muted small hidden voice-status" id="doc-chat-voice-status"></span>
-                  </div>
-                  <div class="doc-chat-meta-right">
-                    <button id="doc-chat-cancel" class="ghost sm hidden doc-chat-cancel-inline" title="Cancel">✕</button>
-                    <button id="doc-chat-new-thread" class="ghost sm" title="Start a new chat thread">New thread</button>
-                    <span id="doc-chat-status" class="pill pill-idle">idle</span>
-                  </div>
-                </div>
-              </div>
-              <div class="doc-chat-stream" id="doc-chat-stream">
-                <div id="doc-chat-error" class="doc-chat-error hidden"></div>
-                <div id="doc-chat-events" class="doc-chat-events hidden">
-                  <div class="doc-chat-section-header">
-                    <div class="doc-chat-section-title">
+<div class="doc-banner-detail muted small" id="doc-thread-registry-detail"></div>
+</div>
+<div class="doc-banner-actions">
+<button class="ghost sm" id="doc-thread-registry-reset">Reset conversations</button>
+<button class="ghost sm" id="doc-thread-registry-download">Download backup</button>
+</div>
+</div>
+<div class="spec-issue-import hidden" id="spec-issue-import">
+<button class="ghost sm" id="spec-issue-import-toggle">Import Issue → SPEC</button>
+<div class="spec-issue-input-row hidden" id="spec-issue-input-row">
+<input autocomplete="off" id="spec-issue-input" placeholder="Issue number or URL (e.g. 123 or https://github.com/org/repo/issues/123)" spellcheck="false" type="text"/>
+<button class="primary sm" id="spec-issue-import-btn">Import</button>
+</div>
+</div>
+<div class="doc-editor">
+<div class="doc-patch-main hidden" id="spec-ingest-patch-main">
+<div class="doc-patch-header">
+<div class="doc-patch-info">
+<div class="muted small">Spec ingest patch</div>
+<div class="doc-patch-summary" id="spec-ingest-patch-summary"></div>
+<div class="doc-patch-legend">
+<span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
+<span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
+</div>
+</div>
+<div class="doc-patch-actions">
+<button class="primary sm" id="spec-ingest-patch-apply">Apply Patch</button>
+<button class="ghost sm" id="spec-ingest-patch-reload">Reload</button>
+<button class="danger sm" id="spec-ingest-patch-discard">Discard</button>
+</div>
+</div>
+<div class="doc-patch-body" id="spec-ingest-patch-body">(no patch)</div>
+</div>
+<div class="doc-patch-main hidden" id="doc-patch-main">
+<div class="doc-patch-header">
+<div class="doc-patch-info">
+<div class="muted small">Pending draft</div>
+<div class="doc-patch-summary" id="doc-patch-summary"></div>
+<div class="doc-patch-meta" id="doc-patch-meta"></div>
+<div class="doc-patch-legend">
+<span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
+<span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
+</div>
+</div>
+<div class="doc-patch-actions">
+<button class="primary sm" id="doc-patch-apply">Apply Draft</button>
+<button aria-pressed="false" class="ghost sm" id="doc-patch-preview">Preview draft</button>
+<button class="ghost sm" id="doc-patch-reload">Reload</button>
+<button class="danger sm" id="doc-patch-discard">Discard</button>
+</div>
+</div>
+<div class="doc-patch-body" id="doc-patch-body">(no draft)</div>
+</div>
+<textarea id="doc-content" spellcheck="false"></textarea>
+<div class="doc-actions" id="doc-actions-standard">
+<button class="primary" data-short="Save" id="save-doc">Save</button>
+<button class="ghost" data-short="Reload" id="reload-doc">Reload</button>
+<button class="ghost hidden" data-short="Copy" id="doc-copy">Copy</button>
+<button class="ghost hidden" data-short="Paste" id="spec-paste">Paste</button>
+<button class="ghost hidden" data-short="Ingest" id="ingest-spec">Ingest SPEC → Docs</button>
+<button class="danger hidden" data-short="Clear" id="clear-docs">Clear TODO/PROGRESS/OPINIONS</button>
+</div>
+<div class="doc-actions hidden" id="doc-actions-snapshot">
+<button class="primary" data-short="Run" id="snapshot-generate">Run snapshot</button>
+<button class="ghost" data-short="Copy" id="snapshot-copy">Copy</button>
+<button class="ghost" data-short="Reload" id="snapshot-refresh">Reload</button>
+</div>
+<div class="doc-chat-panel compose-panel">
+<div class="doc-chat-compose">
+<div class="doc-agent-controls">
+<select id="doc-agent-select" title="Agent"></select>
+<select id="doc-model-select" title="Model"></select>
+<select id="doc-reasoning-select" title="Reasoning"></select>
+</div>
+<div class="doc-chat-input-row compose-row">
+<textarea enterkeyhint="enter" id="doc-chat-input" placeholder="Chat about the work docs..." rows="1" spellcheck="false"></textarea>
+<div class="doc-chat-input-buttons compose-buttons">
+<button class="ghost sm voice-button" id="doc-chat-voice" title="Hold to talk"></button>
+<button class="primary sm" id="doc-chat-send" title="Send">↑</button>
+</div>
+</div>
+<div class="doc-chat-meta">
+<div class="doc-chat-meta-left">
+<span class="muted small" id="doc-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for newline</span>
+<span class="muted small hidden voice-status" id="doc-chat-voice-status"></span>
+</div>
+<div class="doc-chat-meta-right">
+<button class="ghost sm hidden doc-chat-cancel-inline" id="doc-chat-cancel" title="Cancel">✕</button>
+<button class="ghost sm" id="doc-chat-new-thread" title="Start a new chat thread">New thread</button>
+<span class="pill pill-idle" id="doc-chat-status">idle</span>
+</div>
+</div>
+</div>
+<div class="doc-chat-stream" id="doc-chat-stream">
+<div class="doc-chat-error hidden" id="doc-chat-error"></div>
+<div class="doc-chat-events hidden" id="doc-chat-events">
+<div class="doc-chat-section-header">
+<div class="doc-chat-section-title">
                       Agent updates
-                      <span id="doc-chat-events-count" class="doc-chat-count">0</span>
-                    </div>
-                    <button id="doc-chat-events-toggle" class="ghost sm hidden">
+                      <span class="doc-chat-count" id="doc-chat-events-count">0</span>
+</div>
+<button class="ghost sm hidden" id="doc-chat-events-toggle">
                       Show more
                     </button>
-                  </div>
-                  <div id="doc-chat-events-list" class="doc-chat-events-list"></div>
-                </div>
-                <div class="doc-chat-section-header">
-                  <div class="doc-chat-section-title">
+</div>
+<div class="doc-chat-events-list" id="doc-chat-events-list"></div>
+</div>
+<div class="doc-chat-section-header">
+<div class="doc-chat-section-title">
                     History
-                    <span id="doc-chat-history-count" class="doc-chat-count">0</span>
-                  </div>
-                </div>
-                <div id="doc-chat-history" class="doc-chat-history"></div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="logs" class="panel">
-          <div class="inline-toolbar">
-            <label class="chip" data-short="Sum">
-              <input id="log-show-summary" type="checkbox" checked />
-              <span>Summary</span>
-            </label>
-            <label>Run <input id="log-run-id" type="number" min="1" placeholder="latest" /></label>
-            <label>Tail <input id="log-tail" type="number" min="10" value="200" /></label>
-            <button id="load-logs" class="primary sm">Load</button>
-            <button id="toggle-log-stream" class="ghost sm">Stream</button>
-            <span id="log-stream-status" class="log-stream-status"></span>
-            <label class="chip" data-short="TS">
-              <input id="log-show-timestamp" type="checkbox" checked />
-              <span>Timestamp</span>
-            </label>
-            <label class="chip" data-short="Run">
-              <input id="log-show-run" type="checkbox" />
-              <span>Run</span>
-            </label>
-          </div>
-          <div class="log-legend">
-            <span class="log-legend-item"><span class="log-legend-dot thinking"></span>Thinking</span>
-            <span class="log-legend-item"><span class="log-legend-dot exec"></span>Tool calls</span>
-            <span class="log-legend-item"><span class="log-legend-dot file"></span>File updates</span>
-            <span class="log-legend-item"><span class="log-legend-dot diff-add"></span>Added</span>
-            <span class="log-legend-item"><span class="log-legend-dot diff-del"></span>Removed</span>
-            <span class="log-legend-item"><span class="log-legend-dot output"></span>Agent output</span>
-            <span class="log-legend-item"><span class="log-legend-dot context"></span>Context</span>
-          </div>
-          <div class="log-container">
-            <button id="log-load-older" class="log-load-btn hidden" title="Load older logs">Load older</button>
-            <pre id="log-output" class="log-viewer">(no log loaded)</pre>
-            <button id="log-jump-bottom" class="log-jump-btn hidden" title="Jump to latest">↓ Latest</button>
-          </div>
-        </section>
-
-        <section id="runs" class="panel">
-          <div class="inline-toolbar runs-toolbar">
-            <button id="runs-refresh" class="primary sm">Refresh</button>
-            <label>
+                    <span class="doc-chat-count" id="doc-chat-history-count">0</span>
+</div>
+</div>
+<div class="doc-chat-history" id="doc-chat-history"></div>
+</div>
+</div>
+</div>
+</section>
+<section class="panel" id="logs">
+<div class="inline-toolbar">
+<label class="chip" data-short="Sum">
+<input checked="" id="log-show-summary" type="checkbox"/>
+<span>Summary</span>
+</label>
+<label>Run <input id="log-run-id" min="1" placeholder="latest" type="number"/></label>
+<label>Tail <input id="log-tail" min="10" type="number" value="200"/></label>
+<button class="primary sm" id="load-logs">Load</button>
+<button class="ghost sm" id="toggle-log-stream">Stream</button>
+<span class="log-stream-status" id="log-stream-status"></span>
+<label class="chip" data-short="TS">
+<input checked="" id="log-show-timestamp" type="checkbox"/>
+<span>Timestamp</span>
+</label>
+<label class="chip" data-short="Run">
+<input id="log-show-run" type="checkbox"/>
+<span>Run</span>
+</label>
+</div>
+<div class="log-legend">
+<span class="log-legend-item"><span class="log-legend-dot thinking"></span>Thinking</span>
+<span class="log-legend-item"><span class="log-legend-dot exec"></span>Tool calls</span>
+<span class="log-legend-item"><span class="log-legend-dot file"></span>File updates</span>
+<span class="log-legend-item"><span class="log-legend-dot diff-add"></span>Added</span>
+<span class="log-legend-item"><span class="log-legend-dot diff-del"></span>Removed</span>
+<span class="log-legend-item"><span class="log-legend-dot output"></span>Agent output</span>
+<span class="log-legend-item"><span class="log-legend-dot context"></span>Context</span>
+</div>
+<div class="log-container">
+<button class="log-load-btn hidden" id="log-load-older" title="Load older logs">Load older</button>
+<pre class="log-viewer" id="log-output">(no log loaded)</pre>
+<button class="log-jump-btn hidden" id="log-jump-bottom" title="Jump to latest">↓ Latest</button>
+</div>
+</section>
+<section class="panel" id="runs">
+<div class="inline-toolbar runs-toolbar">
+<button class="primary sm" id="runs-refresh">Refresh</button>
+<label>
               Attribution
               <select id="runs-attribution-mode">
-                <option value="split">Split (default)</option>
-                <option value="full">Full (upper bound)</option>
-              </select>
-            </label>
-            <label>
+<option value="split">Split (default)</option>
+<option value="full">Full (upper bound)</option>
+</select>
+</label>
+<label>
               TODO filter
-              <input id="runs-todo-search" type="text" placeholder="Search TODOs" />
-            </label>
-          </div>
-          <div class="runs-layout">
-            <div class="runs-card">
-              <div class="runs-card-header">
-                <span class="label">Runs</span>
-              </div>
-              <table class="runs-table">
-                <thead>
-                  <tr>
-                    <th>Run</th>
-                    <th>Status</th>
-                    <th>Started</th>
-                    <th>Model</th>
-                    <th>Tokens</th>
-                    <th>Completed TODOs</th>
-                  </tr>
-                </thead>
-                <tbody id="runs-table-body"></tbody>
-              </table>
-            </div>
-            <div class="runs-card">
-              <div class="runs-card-header runs-card-header-inline">
-                <span class="label">Tokens per TODO</span>
-                <span id="runs-todo-summary" class="muted small">–</span>
-              </div>
-              <div id="runs-todo-list" class="runs-todo-list">No TODOs yet.</div>
-            </div>
-          </div>
-        </section>
-
-        <section id="terminal" class="panel">
-          <div class="terminal-toolbar">
-            <div class="terminal-toolbar-row terminal-toolbar-main">
-              <span id="terminal-status" class="terminal-status muted">Disconnected</span>
-              <div class="terminal-actions">
-                <button id="terminal-connect" class="primary sm">New</button>
-                <button id="terminal-resume" class="ghost sm">Resume</button>
-                <button id="terminal-disconnect" class="ghost sm">Disconnect</button>
-              </div>
-            </div>
-            <div class="terminal-toolbar-row terminal-toolbar-config">
-              <div class="terminal-agent-controls">
-                <select id="terminal-agent-select" title="Agent"></select>
-                <select id="terminal-model-select" title="Model"></select>
-                <select id="terminal-reasoning-select" title="Reasoning"></select>
-              </div>
-              <div class="terminal-toolbar-extras">
-                <button
-                  id="terminal-text-input-toggle"
-                  class="ghost sm terminal-text-toggle"
-                  type="button"
-                  aria-controls="terminal-text-input"
-                  aria-expanded="false"
-                  title="Text input"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="7" y1="8" x2="13" y2="8"/><line x1="7" y1="16" x2="15" y2="16"/></svg>
-                  <span class="terminal-text-toggle-label">Text</span>
-                </button>
-                <div class="terminal-voice">
-                  <button id="terminal-voice" class="ghost sm voice-button" title="Hold to talk"></button>
-                  <span class="muted small hidden voice-status" id="terminal-voice-status"></span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div id="terminal-container" class="terminal-container">
-            <div class="terminal-overlay" id="terminal-overlay">
-              <p class="muted">Press New or Resume to launch the agent TUI</p>
-            </div>
-            <button id="terminal-jump-bottom" class="terminal-jump-btn hidden" title="Jump to latest">
+              <input id="runs-todo-search" placeholder="Search TODOs" type="text"/>
+</label>
+</div>
+<div class="runs-layout">
+<div class="runs-card">
+<div class="runs-card-header">
+<span class="label">Runs</span>
+</div>
+<table class="runs-table">
+<thead>
+<tr>
+<th>Run</th>
+<th>Status</th>
+<th>Started</th>
+<th>Model</th>
+<th>Tokens</th>
+<th>Completed TODOs</th>
+</tr>
+</thead>
+<tbody id="runs-table-body"></tbody>
+</table>
+</div>
+<div class="runs-card">
+<div class="runs-card-header runs-card-header-inline">
+<span class="label">Tokens per TODO</span>
+<span class="muted small" id="runs-todo-summary">–</span>
+</div>
+<div class="runs-todo-list" id="runs-todo-list">No TODOs yet.</div>
+</div>
+</div>
+</section><div class="panel" id="tickets"><h2>Tickets</h2><div class="card ticket-card" id="ticket-card">
+<div class="card-header">
+<div class="card-header-left ticket-header-left">
+<span class="label">Ticket Flow</span>
+<span class="muted small ticket-mono" id="ticket-flow-run">–</span>
+</div>
+<span class="pill pill-idle" id="ticket-flow-status">idle</span>
+</div>
+<div class="ticket-flow-actions">
+<button class="primary sm" id="ticket-flow-bootstrap">Start Ticket Flow</button>
+<button class="ghost sm" id="ticket-flow-resume">Resume</button>
+<button class="ghost sm icon-btn" id="ticket-flow-refresh" title="Refresh ticket flow">↻</button>
+</div>
+<div class="ticket-flow-meta">
+<div>
+<span class="muted">Current ticket</span>
+<span class="ticket-mono" id="ticket-flow-current">–</span>
+</div>
+<div>
+<span class="muted">Reason</span>
+<span class="ticket-mono ticket-flow-reason" id="ticket-flow-reason">–</span>
+</div>
+</div>
+<div class="ticket-flow-grid">
+<div class="ticket-panel">
+<div class="ticket-panel-header">
+<span class="muted">Tickets</span>
+<span class="muted small" id="ticket-flow-dir">–</span>
+</div>
+<div class="ticket-list" id="ticket-flow-tickets">Loading tickets…</div>
+</div>
+<div class="ticket-panel">
+<div class="ticket-panel-header">
+<span class="muted">Handoff history</span>
+<span class="muted small" id="ticket-handoff-note">–</span>
+</div>
+<div class="ticket-list" id="ticket-handoff-history">No messages yet.</div>
+</div>
+</div>
+</div></div>
+<section class="panel" id="terminal">
+<div class="terminal-toolbar">
+<div class="terminal-toolbar-row terminal-toolbar-main">
+<span class="terminal-status muted" id="terminal-status">Disconnected</span>
+<div class="terminal-actions">
+<button class="primary sm" id="terminal-connect">New</button>
+<button class="ghost sm" id="terminal-resume">Resume</button>
+<button class="ghost sm" id="terminal-disconnect">Disconnect</button>
+</div>
+</div>
+<div class="terminal-toolbar-row terminal-toolbar-config">
+<div class="terminal-agent-controls">
+<select id="terminal-agent-select" title="Agent"></select>
+<select id="terminal-model-select" title="Model"></select>
+<select id="terminal-reasoning-select" title="Reasoning"></select>
+</div>
+<div class="terminal-toolbar-extras">
+<button aria-controls="terminal-text-input" aria-expanded="false" class="ghost sm terminal-text-toggle" id="terminal-text-input-toggle" title="Text input" type="button">
+<svg fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24"><rect height="18" rx="2" width="18" x="3" y="3"></rect><line x1="7" x2="17" y1="12" y2="12"></line><line x1="7" x2="13" y1="8" y2="8"></line><line x1="7" x2="15" y1="16" y2="16"></line></svg>
+<span class="terminal-text-toggle-label">Text</span>
+</button>
+<div class="terminal-voice">
+<button class="ghost sm voice-button" id="terminal-voice" title="Hold to talk"></button>
+<span class="muted small hidden voice-status" id="terminal-voice-status"></span>
+</div>
+</div>
+</div>
+</div>
+<div class="terminal-container" id="terminal-container">
+<div class="terminal-overlay" id="terminal-overlay">
+<p class="muted">Press New or Resume to launch the agent TUI</p>
+</div>
+<button class="terminal-jump-btn hidden" id="terminal-jump-bottom" title="Jump to latest">
               ↓ Latest
             </button>
-          </div>
-          <!-- Mobile control bar - touch-friendly special keys (above text input) -->
-          <div id="terminal-mobile-controls" class="terminal-mobile-controls">
-            <div class="tmb-row">
-              <button class="tmb-key tmb-mod" data-key="ctrl" id="tmb-ctrl">Ctrl</button>
-              <button class="tmb-key tmb-mod" data-key="alt" id="tmb-alt">Alt</button>
-              <button class="tmb-key" data-seq="&#x1b;">Esc</button>
-              <button class="tmb-key" data-seq="&#x09;">Tab</button>
-              <button class="tmb-key tmb-primary" data-seq="&#x0d;">Enter</button>
-            </div>
-            <div class="tmb-row">
-              <button class="tmb-key tmb-ctrl-combo" data-ctrl="c">^C</button>
-              <button class="tmb-key tmb-ctrl-combo" data-ctrl="d">^D</button>
-              <button class="tmb-key tmb-ctrl-combo" data-ctrl="z">^Z</button>
-              <button class="tmb-key tmb-bksp" data-seq="&#x7f;">Bksp</button>
-              <button class="tmb-key tmb-arrow" data-seq="&#x1b;[D">←</button>
-              <button class="tmb-key tmb-arrow" data-seq="&#x1b;[A">↑</button>
-              <button class="tmb-key tmb-arrow" data-seq="&#x1b;[B">↓</button>
-              <button class="tmb-key tmb-arrow" data-seq="&#x1b;[C">→</button>
-            </div>
-          </div>
-          <div id="terminal-text-input" class="terminal-text-input compose-panel hidden" aria-hidden="true">
-            <label class="terminal-text-input-title" for="terminal-textarea">Text input</label>
-            <div class="terminal-text-input-row compose-row">
-              <textarea
-                id="terminal-textarea"
-                rows="2"
-                autocomplete="off"
-                autocapitalize="off"
-                spellcheck="false"
-                enterkeyhint="enter"
-                placeholder="Type or paste text/images to send to the terminal…"
-              ></textarea>
-              <div class="terminal-text-input-buttons compose-buttons">
-                <button
-                  id="terminal-text-image"
-                  class="ghost sm terminal-text-image"
-                  type="button"
-                  title="Attach image"
-                  aria-label="Attach image"
-                >Img</button>
-                <input
-                  id="terminal-text-image-input"
-                  class="hidden"
-                  type="file"
-                  accept="image/*"
-                />
-                <button
-                  id="terminal-text-voice"
-                  class="ghost sm voice-button terminal-text-voice"
-                  type="button"
-                  title="Hold to talk"
-                  data-voice-mode="waveform"
-                ></button>
-                <button
-                  id="terminal-text-send"
-                  class="primary terminal-text-send-icon"
-                  type="button"
-                  aria-label="Send"
-                >→</button>
-              </div>
-            </div>
-          </div>
-        </section>
-      </main>
-    </div>
-    <div id="toast" class="toast"></div>
-    
-    <!-- Confirmation Modal -->
-    <div id="confirm-modal" class="modal-overlay" hidden>
-      <div
-        class="modal-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="confirm-modal-title"
-        aria-describedby="confirm-modal-message"
-        tabindex="-1"
-      >
-        <span id="confirm-modal-title" class="sr-only">Confirmation</span>
-        <p id="confirm-modal-message"></p>
-        <div class="modal-actions">
-          <button id="confirm-modal-cancel" class="ghost">Cancel</button>
-          <button id="confirm-modal-ok" class="danger">Confirm</button>
-        </div>
-      </div>
-    </div>
-    
-    <!-- Input Modal -->
-    <div id="input-modal" class="modal-overlay" hidden>
-      <div
-        class="modal-dialog modal-input"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="input-modal-title"
-        aria-describedby="input-modal-message"
-        tabindex="-1"
-      >
-        <span id="input-modal-title" class="sr-only">Input</span>
-        <p id="input-modal-message"></p>
-        <input type="text" id="input-modal-input" autocomplete="off" spellcheck="false" />
-        <div class="modal-actions">
-          <button id="input-modal-cancel" class="ghost">Cancel</button>
-          <button id="input-modal-ok" class="primary">OK</button>
-        </div>
-      </div>
-    </div>
-    
-    <!-- Ingest Spec Modal -->
-    <div id="ingest-modal" class="modal-overlay" hidden>
-      <div
-        class="modal-dialog modal-ingest"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="ingest-modal-title"
-        aria-describedby="ingest-modal-message"
-        tabindex="-1"
-      >
-        <span id="ingest-modal-title" class="sr-only">Ingest Spec</span>
-        <div id="ingest-modal-content">
-          <p id="ingest-modal-message">Ready to ingest SPEC into TODO, PROGRESS, and OPINIONS?</p>
-          <div id="ingest-modal-refinement" class="ingest-modal-refinement hidden">
-            <textarea
-              id="ingest-modal-input"
-              rows="3"
-              placeholder="Refine the ingest (optional)..."
-              spellcheck="false"
-            ></textarea>
-          </div>
-        </div>
-        <div class="modal-actions">
-          <button id="ingest-modal-cancel" class="ghost">Cancel</button>
-          <button id="ingest-modal-ok" class="primary">Ingest</button>
-        </div>
-      </div>
-    </div>
-    
-    <!-- Create Repo Modal -->
-    <div id="create-repo-modal" class="modal-overlay" hidden>
-      <div
-        class="modal-dialog modal-create-repo"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="create-repo-modal-title"
-        aria-describedby="create-repo-modal-body"
-        tabindex="-1"
-      >
-        <div class="modal-header">
-          <span class="label" id="create-repo-modal-title">Create New Repository</span>
-        </div>
-        <div class="modal-body" id="create-repo-modal-body">
-          <div class="form-group">
-            <label for="create-repo-id">Repo ID <span class="required">*</span></label>
-            <input type="text" id="create-repo-id" placeholder="my-project" autocomplete="off" spellcheck="false" />
-            <span class="form-hint">Used as directory name if path not specified</span>
-          </div>
-          <div class="form-group">
-            <label for="create-repo-path">Path <span class="optional">(optional)</span></label>
-            <input type="text" id="create-repo-path" placeholder="relative/path/to/repo" autocomplete="off" spellcheck="false" />
-            <span class="form-hint">Leave empty to use repo ID as path</span>
-          </div>
-          <div class="form-group">
-            <label for="create-repo-url">Git URL <span class="optional">(optional)</span></label>
-            <input type="text" id="create-repo-url" placeholder="https://github.com/org/repo.git" autocomplete="off" spellcheck="false" />
-            <span class="form-hint">If provided, the repo will be cloned automatically</span>
-          </div>
-          <div class="form-group form-checkbox">
-            <label>
-              <input type="checkbox" id="create-repo-git" checked />
-              <span>Initialize git repository</span>
-            </label>
-          </div>
-        </div>
-        <div class="modal-actions">
-          <button id="create-repo-cancel" class="ghost">Cancel</button>
-          <button id="create-repo-submit" class="primary">Create</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Hub Settings Modal -->
-    <div id="hub-settings-modal" class="modal-overlay" hidden>
-      <div
-        class="modal-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="hub-settings-modal-title"
-        aria-describedby="hub-settings-modal-body"
-        tabindex="-1"
-      >
-        <div class="modal-header">
-          <span class="label" id="hub-settings-modal-title">Hub Settings</span>
-        </div>
-        <div class="modal-body" id="hub-settings-modal-body">
-          <p class="muted small">System-wide settings for Codex Autorunner.</p>
-          <div class="form-group">
-            <label>System Update</label>
-            <select id="hub-update-target">
-              <option value="both">Web + Telegram</option>
-              <option value="web">Web only</option>
-              <option value="telegram">Telegram only</option>
-            </select>
-            <button id="hub-update-btn" class="primary sm">Update CAR</button>
-            <span class="form-hint">Pull latest code and restart selected services</span>
-          </div>
-        </div>
-        <div class="modal-actions">
-          <button id="hub-settings-close" class="ghost">Close</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Repo Settings Modal -->
-    <div id="repo-settings-modal" class="modal-overlay" hidden>
-      <div
-        class="modal-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="repo-settings-modal-title"
-        aria-describedby="repo-settings-modal-body"
-        tabindex="-1"
-      >
-        <div class="modal-header">
-          <span class="label" id="repo-settings-modal-title">Repo Settings</span>
-        </div>
-        <div class="modal-body" id="repo-settings-modal-body">
-          <p class="muted small">Settings for the current repository session.</p>
-          <div class="form-group">
-            <label>System Update</label>
-            <select id="repo-update-target">
-              <option value="both">Web + Telegram</option>
-              <option value="web">Web only</option>
-              <option value="telegram">Telegram only</option>
-            </select>
-            <button id="repo-update-btn" class="primary sm">Update CAR</button>
-            <span class="form-hint">Pull latest code and restart selected services</span>
-          </div>
-          <div class="form-group">
-            <label>Autorunner Settings</label>
-            <div class="settings-grid">
-              <div>
-                <label for="autorunner-model-select" class="muted small">Model</label>
-                <select id="autorunner-model-select"></select>
-              </div>
-              <div>
-                <label for="autorunner-effort-select" class="muted small">Reasoning effort</label>
-                <select id="autorunner-effort-select"></select>
-              </div>
-              <div>
-                <label for="autorunner-approval-select" class="muted small">Approval policy</label>
-                <select id="autorunner-approval-select"></select>
-              </div>
-              <div>
-                <label for="autorunner-sandbox-select" class="muted small">Sandbox</label>
-                <select id="autorunner-sandbox-select"></select>
-              </div>
-              <div>
-                <label for="autorunner-max-runs-input" class="muted small">Max runs</label>
-                <input id="autorunner-max-runs-input" type="number" min="1" step="1" placeholder="Unlimited" />
-                <span class="form-hint">Maximum number of autorunner cycles (empty = unlimited)</span>
-              </div>
-            </div>
-            <div id="autorunner-network-row" class="settings-toggle-row">
-              <label class="form-checkbox">
-                <input id="autorunner-network-toggle" type="checkbox" />
-                <span>Allow network access in workspace-write mode</span>
-              </label>
-            </div>
-            <div class="settings-actions">
-              <button id="autorunner-settings-save" class="primary sm">Save settings</button>
-              <button id="autorunner-settings-reload" class="ghost sm">Reload</button>
-            </div>
-            <span id="autorunner-settings-warning" class="form-hint warning">Changing these settings starts a new autorunner conversation.</span>
-          </div>
-          <div class="form-group">
-            <label>Thread Tools</label>
-            <div id="thread-tools-list" class="thread-tools-list"></div>
-            <div class="thread-tools-actions">
-              <button id="thread-new-autorunner" class="ghost sm">New autorunner thread</button>
-              <button id="thread-archive-autorunner" class="ghost sm">Archive autorunner thread</button>
-              <button id="thread-reset-all" class="danger sm">Reset all conversations</button>
-              <button id="thread-backup-download" class="ghost sm">Download backup</button>
-            </div>
-            <span class="form-hint">Resetting conversations clears stored thread IDs and restarts chats.</span>
-          </div>
-        </div>
-        <div class="modal-actions">
-          <button id="repo-settings-close" class="ghost">Close</button>
-        </div>
-      </div>
-    </div>
-
-    <div id="run-details-modal" class="modal-overlay" hidden>
-      <div
-        class="modal-dialog run-details-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="run-details-title"
-        aria-describedby="run-details-meta"
-        tabindex="-1"
-      >
-        <div class="modal-header">
-          <span class="label" id="run-details-title">Run</span>
-        </div>
-        <div class="modal-body">
-          <div id="run-details-meta" class="muted small">–</div>
-          <div class="run-details-grid">
-            <div class="run-details-section">
-              <div class="run-details-title">Completed TODOs</div>
-              <div id="run-details-todos" class="run-details-list">–</div>
-            </div>
-            <div class="run-details-section">
-              <div class="run-details-title">Token breakdown</div>
-              <div id="run-details-tokens" class="run-details-list">–</div>
-            </div>
-          </div>
-          <div class="run-details-section">
-            <div class="run-details-title">Plan</div>
-            <pre id="run-details-plan" class="run-details-artifact">–</pre>
-          </div>
-          <div class="run-details-section">
-            <div class="run-details-title">Diff</div>
-            <pre id="run-details-diff" class="run-details-artifact">–</pre>
-          </div>
-          <div class="run-details-section">
-            <div class="run-details-title">Final output</div>
-            <pre id="run-details-output" class="run-details-artifact">–</pre>
-          </div>
-        </div>
-        <div class="modal-actions run-details-actions">
-          <a id="run-details-log" class="ghost sm" target="_blank" rel="noreferrer">Open log</a>
-          <button id="run-details-close" class="ghost">Close</button>
-        </div>
-      </div>
-    </div>
-    
-    <script src="static/loader.js?v=__CAR_ASSET_VERSION__" data-car-loader></script>
-  </body>
+</div>
+<!-- Mobile control bar - touch-friendly special keys (above text input) -->
+<div class="terminal-mobile-controls" id="terminal-mobile-controls">
+<div class="tmb-row">
+<button class="tmb-key tmb-mod" data-key="ctrl" id="tmb-ctrl">Ctrl</button>
+<button class="tmb-key tmb-mod" data-key="alt" id="tmb-alt">Alt</button>
+<button class="tmb-key" data-seq="">Esc</button>
+<button class="tmb-key" data-seq="	">Tab</button>
+<button class="tmb-key tmb-primary" data-seq="">Enter</button>
+</div>
+<div class="tmb-row">
+<button class="tmb-key tmb-ctrl-combo" data-ctrl="c">^C</button>
+<button class="tmb-key tmb-ctrl-combo" data-ctrl="d">^D</button>
+<button class="tmb-key tmb-ctrl-combo" data-ctrl="z">^Z</button>
+<button class="tmb-key tmb-bksp" data-seq="">Bksp</button>
+<button class="tmb-key tmb-arrow" data-seq="[D">←</button>
+<button class="tmb-key tmb-arrow" data-seq="[A">↑</button>
+<button class="tmb-key tmb-arrow" data-seq="[B">↓</button>
+<button class="tmb-key tmb-arrow" data-seq="[C">→</button>
+</div>
+</div>
+<div aria-hidden="true" class="terminal-text-input compose-panel hidden" id="terminal-text-input">
+<label class="terminal-text-input-title" for="terminal-textarea">Text input</label>
+<div class="terminal-text-input-row compose-row">
+<textarea autocapitalize="off" autocomplete="off" enterkeyhint="enter" id="terminal-textarea" placeholder="Type or paste text/images to send to the terminal…" rows="2" spellcheck="false"></textarea>
+<div class="terminal-text-input-buttons compose-buttons">
+<button aria-label="Attach image" class="ghost sm terminal-text-image" id="terminal-text-image" title="Attach image" type="button">Img</button>
+<input accept="image/*" class="hidden" id="terminal-text-image-input" type="file"/>
+<button class="ghost sm voice-button terminal-text-voice" data-voice-mode="waveform" id="terminal-text-voice" title="Hold to talk" type="button"></button>
+<button aria-label="Send" class="primary terminal-text-send-icon" id="terminal-text-send" type="button">→</button>
+</div>
+</div>
+</div>
+</section>
+</main>
+</div>
+<div class="toast" id="toast"></div>
+<!-- Confirmation Modal -->
+<div class="modal-overlay" hidden="" id="confirm-modal">
+<div aria-describedby="confirm-modal-message" aria-labelledby="confirm-modal-title" aria-modal="true" class="modal-dialog" role="dialog" tabindex="-1">
+<span class="sr-only" id="confirm-modal-title">Confirmation</span>
+<p id="confirm-modal-message"></p>
+<div class="modal-actions">
+<button class="ghost" id="confirm-modal-cancel">Cancel</button>
+<button class="danger" id="confirm-modal-ok">Confirm</button>
+</div>
+</div>
+</div>
+<!-- Input Modal -->
+<div class="modal-overlay" hidden="" id="input-modal">
+<div aria-describedby="input-modal-message" aria-labelledby="input-modal-title" aria-modal="true" class="modal-dialog modal-input" role="dialog" tabindex="-1">
+<span class="sr-only" id="input-modal-title">Input</span>
+<p id="input-modal-message"></p>
+<input autocomplete="off" id="input-modal-input" spellcheck="false" type="text"/>
+<div class="modal-actions">
+<button class="ghost" id="input-modal-cancel">Cancel</button>
+<button class="primary" id="input-modal-ok">OK</button>
+</div>
+</div>
+</div>
+<!-- Ingest Spec Modal -->
+<div class="modal-overlay" hidden="" id="ingest-modal">
+<div aria-describedby="ingest-modal-message" aria-labelledby="ingest-modal-title" aria-modal="true" class="modal-dialog modal-ingest" role="dialog" tabindex="-1">
+<span class="sr-only" id="ingest-modal-title">Ingest Spec</span>
+<div id="ingest-modal-content">
+<p id="ingest-modal-message">Ready to ingest SPEC into TODO, PROGRESS, and OPINIONS?</p>
+<div class="ingest-modal-refinement hidden" id="ingest-modal-refinement">
+<textarea id="ingest-modal-input" placeholder="Refine the ingest (optional)..." rows="3" spellcheck="false"></textarea>
+</div>
+</div>
+<div class="modal-actions">
+<button class="ghost" id="ingest-modal-cancel">Cancel</button>
+<button class="primary" id="ingest-modal-ok">Ingest</button>
+</div>
+</div>
+</div>
+<!-- Create Repo Modal -->
+<div class="modal-overlay" hidden="" id="create-repo-modal">
+<div aria-describedby="create-repo-modal-body" aria-labelledby="create-repo-modal-title" aria-modal="true" class="modal-dialog modal-create-repo" role="dialog" tabindex="-1">
+<div class="modal-header">
+<span class="label" id="create-repo-modal-title">Create New Repository</span>
+</div>
+<div class="modal-body" id="create-repo-modal-body">
+<div class="form-group">
+<label for="create-repo-id">Repo ID <span class="required">*</span></label>
+<input autocomplete="off" id="create-repo-id" placeholder="my-project" spellcheck="false" type="text"/>
+<span class="form-hint">Used as directory name if path not specified</span>
+</div>
+<div class="form-group">
+<label for="create-repo-path">Path <span class="optional">(optional)</span></label>
+<input autocomplete="off" id="create-repo-path" placeholder="relative/path/to/repo" spellcheck="false" type="text"/>
+<span class="form-hint">Leave empty to use repo ID as path</span>
+</div>
+<div class="form-group">
+<label for="create-repo-url">Git URL <span class="optional">(optional)</span></label>
+<input autocomplete="off" id="create-repo-url" placeholder="https://github.com/org/repo.git" spellcheck="false" type="text"/>
+<span class="form-hint">If provided, the repo will be cloned automatically</span>
+</div>
+<div class="form-group form-checkbox">
+<label>
+<input checked="" id="create-repo-git" type="checkbox"/>
+<span>Initialize git repository</span>
+</label>
+</div>
+</div>
+<div class="modal-actions">
+<button class="ghost" id="create-repo-cancel">Cancel</button>
+<button class="primary" id="create-repo-submit">Create</button>
+</div>
+</div>
+</div>
+<!-- Hub Settings Modal -->
+<div class="modal-overlay" hidden="" id="hub-settings-modal">
+<div aria-describedby="hub-settings-modal-body" aria-labelledby="hub-settings-modal-title" aria-modal="true" class="modal-dialog" role="dialog" tabindex="-1">
+<div class="modal-header">
+<span class="label" id="hub-settings-modal-title">Hub Settings</span>
+</div>
+<div class="modal-body" id="hub-settings-modal-body">
+<p class="muted small">System-wide settings for Codex Autorunner.</p>
+<div class="form-group">
+<label>System Update</label>
+<select id="hub-update-target">
+<option value="both">Web + Telegram</option>
+<option value="web">Web only</option>
+<option value="telegram">Telegram only</option>
+</select>
+<button class="primary sm" id="hub-update-btn">Update CAR</button>
+<span class="form-hint">Pull latest code and restart selected services</span>
+</div>
+</div>
+<div class="modal-actions">
+<button class="ghost" id="hub-settings-close">Close</button>
+</div>
+</div>
+</div>
+<!-- Repo Settings Modal -->
+<div class="modal-overlay" hidden="" id="repo-settings-modal">
+<div aria-describedby="repo-settings-modal-body" aria-labelledby="repo-settings-modal-title" aria-modal="true" class="modal-dialog" role="dialog" tabindex="-1">
+<div class="modal-header">
+<span class="label" id="repo-settings-modal-title">Repo Settings</span>
+</div>
+<div class="modal-body" id="repo-settings-modal-body">
+<p class="muted small">Settings for the current repository session.</p>
+<div class="form-group">
+<label>System Update</label>
+<select id="repo-update-target">
+<option value="both">Web + Telegram</option>
+<option value="web">Web only</option>
+<option value="telegram">Telegram only</option>
+</select>
+<button class="primary sm" id="repo-update-btn">Update CAR</button>
+<span class="form-hint">Pull latest code and restart selected services</span>
+</div>
+<div class="form-group">
+<label>Autorunner Settings</label>
+<div class="settings-grid">
+<div>
+<label class="muted small" for="autorunner-model-select">Model</label>
+<select id="autorunner-model-select"></select>
+</div>
+<div>
+<label class="muted small" for="autorunner-effort-select">Reasoning effort</label>
+<select id="autorunner-effort-select"></select>
+</div>
+<div>
+<label class="muted small" for="autorunner-approval-select">Approval policy</label>
+<select id="autorunner-approval-select"></select>
+</div>
+<div>
+<label class="muted small" for="autorunner-sandbox-select">Sandbox</label>
+<select id="autorunner-sandbox-select"></select>
+</div>
+<div>
+<label class="muted small" for="autorunner-max-runs-input">Max runs</label>
+<input id="autorunner-max-runs-input" min="1" placeholder="Unlimited" step="1" type="number"/>
+<span class="form-hint">Maximum number of autorunner cycles (empty = unlimited)</span>
+</div>
+</div>
+<div class="settings-toggle-row" id="autorunner-network-row">
+<label class="form-checkbox">
+<input id="autorunner-network-toggle" type="checkbox"/>
+<span>Allow network access in workspace-write mode</span>
+</label>
+</div>
+<div class="settings-actions">
+<button class="primary sm" id="autorunner-settings-save">Save settings</button>
+<button class="ghost sm" id="autorunner-settings-reload">Reload</button>
+</div>
+<span class="form-hint warning" id="autorunner-settings-warning">Changing these settings starts a new autorunner conversation.</span>
+</div>
+<div class="form-group">
+<label>Thread Tools</label>
+<div class="thread-tools-list" id="thread-tools-list"></div>
+<div class="thread-tools-actions">
+<button class="ghost sm" id="thread-new-autorunner">New autorunner thread</button>
+<button class="ghost sm" id="thread-archive-autorunner">Archive autorunner thread</button>
+<button class="danger sm" id="thread-reset-all">Reset all conversations</button>
+<button class="ghost sm" id="thread-backup-download">Download backup</button>
+</div>
+<span class="form-hint">Resetting conversations clears stored thread IDs and restarts chats.</span>
+</div>
+</div>
+<div class="modal-actions">
+<button class="ghost" id="repo-settings-close">Close</button>
+</div>
+</div>
+</div>
+<div class="modal-overlay" hidden="" id="run-details-modal">
+<div aria-describedby="run-details-meta" aria-labelledby="run-details-title" aria-modal="true" class="modal-dialog run-details-modal" role="dialog" tabindex="-1">
+<div class="modal-header">
+<span class="label" id="run-details-title">Run</span>
+</div>
+<div class="modal-body">
+<div class="muted small" id="run-details-meta">–</div>
+<div class="run-details-grid">
+<div class="run-details-section">
+<div class="run-details-title">Completed TODOs</div>
+<div class="run-details-list" id="run-details-todos">–</div>
+</div>
+<div class="run-details-section">
+<div class="run-details-title">Token breakdown</div>
+<div class="run-details-list" id="run-details-tokens">–</div>
+</div>
+</div>
+<div class="run-details-section">
+<div class="run-details-title">Plan</div>
+<pre class="run-details-artifact" id="run-details-plan">–</pre>
+</div>
+<div class="run-details-section">
+<div class="run-details-title">Diff</div>
+<pre class="run-details-artifact" id="run-details-diff">–</pre>
+</div>
+<div class="run-details-section">
+<div class="run-details-title">Final output</div>
+<pre class="run-details-artifact" id="run-details-output">–</pre>
+</div>
+</div>
+<div class="modal-actions run-details-actions">
+<a class="ghost sm" id="run-details-log" rel="noreferrer" target="_blank">Open log</a>
+<button class="ghost" id="run-details-close">Close</button>
+</div>
+</div>
+</div>
+<script data-car-loader="" src="static/loader.js?v=__CAR_ASSET_VERSION__"></script>
+</body>
 </html>
