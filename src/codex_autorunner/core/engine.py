@@ -1726,13 +1726,11 @@ class Engine:
                         text=fallback.text, error=fallback.error
                     )
                     self.log_line(run_id, "info: opencode fallback message used")
-
-            # OpenCode streams reasoning deltas at a very fine granularity (often token-level).
-            # The formatter buffers these deltas and we flush once here to avoid one log line per
-            # token/word in the web UI.
+        finally:
+            # Flush buffered reasoning deltas before cleanup, so partial reasoning is still logged
+            # even when the turn is aborted, times out, or is interrupted.
             for line in self._opencode_event_formatter.flush_all_reasoning():
                 self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
-        finally:
             stop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await stop_task
