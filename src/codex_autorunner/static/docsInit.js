@@ -101,9 +101,10 @@ export function initDocs() {
                     e.preventDefault();
                     const indent = match[1];
                     const newLine = "\n" + indent + "- [ ] ";
-                    const newValue = text.slice(0, pos) + newLine + text.slice(pos);
+                    const endOfCurrentLine = lineEnd === -1 ? text.length : lineEnd;
+                    const newValue = text.slice(0, endOfCurrentLine) + newLine + text.slice(endOfCurrentLine);
                     docContent.value = newValue;
-                    const newPos = pos + newLine.length;
+                    const newPos = endOfCurrentLine + newLine.length;
                     docContent.setSelectionRange(newPos, newPos);
                     updateDocControls();
                 }
