@@ -262,6 +262,16 @@ def build_pr_flow_definition() -> FlowDefinition:
         flow_type="pr_flow",
         initial_step="preflight",
         steps=steps,
+        name="PR Flow",
+        description="Pull request automation flow",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "issue_url": {"type": "string"},
+                "pr_url": {"type": "string"},
+                "branch": {"type": "string"},
+            },
+        },
     )
 
     definition.validate()

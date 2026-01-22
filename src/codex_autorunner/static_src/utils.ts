@@ -113,18 +113,21 @@ export function flash(message: string, type: "info" | "error" | "success" = "inf
 }
 
 export function statusPill(el: HTMLElement, status: string): void {
-  const normalized = status || "idle";
+  const normalized = (status || "idle").toLowerCase();
   el.textContent = normalized;
   el.classList.remove("pill-idle", "pill-running", "pill-error", "pill-warn");
-  const errorStates = ["error", "init_error"];
+  const errorStates = ["error", "init_error", "failed"];
   const warnStates = [
     "locked",
     "missing",
     "uninitialized",
     "initializing",
     "interrupted",
+    "paused",
+    "stopping",
+    "stopped",
   ];
-  if (normalized === "running") {
+  if (normalized === "running" || normalized === "pending") {
     el.classList.add("pill-running");
   } else if (errorStates.includes(normalized)) {
     el.classList.add("pill-error");

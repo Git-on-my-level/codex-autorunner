@@ -31,12 +31,18 @@ class StepOutcome:
         return cls(status=FlowRunStatus.COMPLETED, output=output)
 
     @classmethod
-    def fail(cls, error: str) -> "StepOutcome":
-        return cls(status=FlowRunStatus.FAILED, error=error)
+    def fail(
+        cls, error: str, output: Optional[Dict[str, Any]] = None
+    ) -> "StepOutcome":
+        return cls(status=FlowRunStatus.FAILED, error=error, output=output)
 
     @classmethod
     def stop(cls, output: Optional[Dict[str, Any]] = None) -> "StepOutcome":
         return cls(status=FlowRunStatus.STOPPED, output=output)
+
+    @classmethod
+    def pause(cls, output: Optional[Dict[str, Any]] = None) -> "StepOutcome":
+        return cls(status=FlowRunStatus.PAUSED, output=output)
 
 
 StepFn = Callable[[FlowRunRecord, Dict[str, Any]], Awaitable[StepOutcome]]
@@ -48,10 +54,17 @@ class FlowDefinition:
         flow_type: str,
         initial_step: str,
         steps: Dict[str, StepFn],
+        *,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        input_schema: Optional[Dict[str, Any]] = None,
     ):
         self.flow_type = flow_type
         self.initial_step = initial_step
         self.steps = steps
+        self.name = name or flow_type
+        self.description = description
+        self.input_schema = input_schema
 
     def validate(self) -> None:
         if self.initial_step not in self.steps:

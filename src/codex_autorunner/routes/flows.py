@@ -3,25 +3,87 @@ import logging
 import subprocess
 import sys
 import uuid
+from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import quote
 from typing import IO, Dict, Optional, Tuple, Union
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..core.flows import (
-    FlowController,
-    FlowRunRecord,
-)
+from ..core.engine import Engine
+from ..core.flows import FlowController, FlowDefinition, FlowRunRecord, FlowStore
+from ..core.utils import find_repo_root
 from ..flows.pr_flow import build_pr_flow_definition
+from ..flows.ticket_flow import build_ticket_flow_definition
+from ..tickets import AgentPool
+from ..tickets.files import list_ticket_paths, read_ticket, safe_relpath
+from ..tickets.outbox import parse_user_message, resolve_outbox_paths
 
 _logger = logging.getLogger(__name__)
 
-_active_workers: Dict[
-    str, Tuple[subprocess.Popen, Optional[IO[bytes]], Optional[IO[bytes]]]
-] = {}
-_controller_cache: Dict[Path, FlowController] = {}
+_active_workers: Dict[str, Tuple[subprocess.Popen, Optional[IO[bytes]], Optional[IO[bytes]]]] = {}
+_controller_cache: Dict[tuple[Path, str], FlowController] = {}
+_definition_cache: Dict[tuple[Path, str], FlowDefinition] = {}
+_supported_flow_types = ("ticket_flow", "pr_flow")
+
+
+def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
+    repo_root = repo_root.resolve()
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    artifacts_root = repo_root / ".codex-autorunner" / "flows"
+    return db_path, artifacts_root
+
+
+def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
+    repo_root = repo_root.resolve()
+    key = (repo_root, flow_type)
+    if key in _definition_cache:
+        return _definition_cache[key]
+
+    if flow_type == "pr_flow":
+        definition = build_pr_flow_definition()
+    elif flow_type == "ticket_flow":
+        engine = Engine(repo_root)
+        agent_pool = AgentPool(engine.config)
+        definition = build_ticket_flow_definition(agent_pool=agent_pool)
+    else:
+        raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
+
+    definition.validate()
+    _definition_cache[key] = definition
+    return definition
+
+
+def _get_flow_controller(repo_root: Path, flow_type: str) -> FlowController:
+    repo_root = repo_root.resolve()
+    key = (repo_root, flow_type)
+    if key in _controller_cache:
+        return _controller_cache[key]
+
+    db_path, artifacts_root = _flow_paths(repo_root)
+    definition = _build_flow_definition(repo_root, flow_type)
+
+    controller = FlowController(
+        definition=definition,
+        db_path=db_path,
+        artifacts_root=artifacts_root,
+    )
+    controller.initialize()
+    _controller_cache[key] = controller
+    return controller
+
+
+def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
+    db_path, _ = _flow_paths(repo_root)
+    store = FlowStore(db_path)
+    store.initialize()
+    record = store.get_flow_run(run_id)
+    store.close()
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Flow run {run_id} not found")
+    return record
 
 
 def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
@@ -103,24 +165,6 @@ class FlowArtifactInfo(BaseModel):
     metadata: Dict = Field(default_factory=dict)
 
 
-def _get_flow_controller(repo_root: Path) -> FlowController:
-    repo_root = repo_root.resolve()
-    if repo_root in _controller_cache:
-        return _controller_cache[repo_root]
-
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
-    artifacts_root = repo_root / ".codex-autorunner" / "flows"
-
-    controller = FlowController(
-        definition=build_pr_flow_definition(),
-        db_path=db_path,
-        artifacts_root=artifacts_root,
-    )
-    controller.initialize()
-    _controller_cache[repo_root] = controller
-    return controller
-
-
 def _start_flow_worker(repo_root: Path, run_id: str) -> subprocess.Popen:
     normalized_run_id = _normalize_run_id(run_id)
     _reap_dead_worker(normalized_run_id)
@@ -180,74 +224,63 @@ def _stop_worker(run_id: str, timeout: float = 10.0) -> None:
 def build_flow_routes() -> APIRouter:
     router = APIRouter(prefix="/api/flows", tags=["flows"])
 
-    @router.get("")
-    async def list_flow_definitions():
+    def _definition_info(definition: FlowDefinition) -> Dict:
         return {
-            "definitions": [
-                {
-                    "type": "pr_flow",
-                    "description": "Pull request automation flow",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "issue_url": {"type": "string"},
-                            "pr_url": {"type": "string"},
-                            "branch": {"type": "string"},
-                        },
-                    },
-                }
-            ]
+            "type": definition.flow_type,
+            "name": definition.name,
+            "description": definition.description,
+            "input_schema": definition.input_schema or {},
         }
 
-    @router.post("/pr_flow/start", response_model=FlowStatusResponse)
-    async def start_pr_flow(request: FlowStartRequest):
-        from ..core.utils import find_repo_root
+    def _resolve_outbox_for_record(record: FlowRunRecord, repo_root: Path):
+        workspace_root = Path(record.input_data.get("workspace_root") or repo_root)
+        runs_dir = Path(record.input_data.get("runs_dir") or ".codex-autorunner/runs")
+        return resolve_outbox_paths(
+            workspace_root=workspace_root, runs_dir=runs_dir, run_id=record.id
+        )
+
+    @router.get("")
+    async def list_flow_definitions():
+        repo_root = find_repo_root()
+        definitions = [
+            _definition_info(_build_flow_definition(repo_root, flow_type))
+            for flow_type in _supported_flow_types
+        ]
+        return {"definitions": definitions}
+
+    @router.get("/{flow_type}")
+    async def get_flow_definition(flow_type: str):
+        repo_root = find_repo_root()
+        if flow_type not in _supported_flow_types:
+            raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
+        definition = _build_flow_definition(repo_root, flow_type)
+        return _definition_info(definition)
+
+    @router.get("/runs", response_model=list[FlowStatusResponse])
+    async def list_runs(flow_type: Optional[str] = None):
+        repo_root = find_repo_root()
+        db_path, _ = _flow_paths(repo_root)
+        store = FlowStore(db_path)
+        store.initialize()
+        records = store.list_flow_runs(flow_type=flow_type)
+        store.close()
+        return [FlowStatusResponse.from_record(rec) for rec in records]
+
+    async def _start_flow(flow_type: str, request: FlowStartRequest) -> FlowStatusResponse:
+        if flow_type not in _supported_flow_types:
+            raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
 
         repo_root = find_repo_root()
-        controller = _get_flow_controller(repo_root)
+        controller = _get_flow_controller(repo_root, flow_type)
 
         run_id = _normalize_run_id(uuid.uuid4())
 
-        try:
-            record = await controller.start_flow(
-                input_data=request.input_data,
-                run_id=run_id,
-                metadata=request.metadata,
-            )
+        record = await controller.start_flow(
+            input_data=request.input_data,
+            run_id=run_id,
+            metadata=request.metadata,
+        )
 
-            if run_id in _active_workers:
-                _logger.info("Worker already active for run %s, skipping spawn", run_id)
-            else:
-                _start_flow_worker(repo_root, run_id)
-
-            return FlowStatusResponse.from_record(record)
-        except Exception as e:
-            _logger.exception("Failed to start PR flow: %s", e)
-            raise
-
-    @router.post("/{run_id}/stop", response_model=FlowStatusResponse)
-    async def stop_flow(run_id: uuid.UUID):
-        from ..core.utils import find_repo_root
-
-        run_id = _normalize_run_id(run_id)
-        repo_root = find_repo_root()
-        controller = _get_flow_controller(repo_root)
-
-        _stop_worker(run_id)
-
-        record = await controller.stop_flow(run_id)
-        return FlowStatusResponse.from_record(record)
-
-    @router.post("/{run_id}/resume", response_model=FlowStatusResponse)
-    async def resume_flow(run_id: uuid.UUID):
-        from ..core.utils import find_repo_root
-
-        run_id = _normalize_run_id(run_id)
-        repo_root = find_repo_root()
-        controller = _get_flow_controller(repo_root)
-
-        record = await controller.resume_flow(run_id)
-        _reap_dead_worker(run_id)
         if run_id in _active_workers:
             _logger.info("Worker already active for run %s, skipping spawn", run_id)
         else:
@@ -255,35 +288,114 @@ def build_flow_routes() -> APIRouter:
 
         return FlowStatusResponse.from_record(record)
 
-    @router.get("/{run_id}/status", response_model=FlowStatusResponse)
-    async def get_flow_status(run_id: uuid.UUID):
-        from ..core.utils import find_repo_root
+    @router.post("/{flow_type}/start", response_model=FlowStatusResponse)
+    async def start_flow(flow_type: str, request: FlowStartRequest):
+        return await _start_flow(flow_type, request)
 
+    @router.post("/ticket_flow/bootstrap", response_model=FlowStatusResponse)
+    async def bootstrap_ticket_flow(request: Optional[FlowStartRequest] = None):
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_dir.mkdir(parents=True, exist_ok=True)
+        ticket_path = ticket_dir / "TICKET-001.md"
+        flow_request = request or FlowStartRequest()
+
+        seeded = False
+        if not ticket_path.exists():
+            template = """---
+agent: codex
+done: false
+title: Bootstrap ticket plan
+goal: Create SPEC and seed follow-up tickets
+requires:
+  - .codex-autorunner/ISSUE.md
+---
+
+You are the first ticket in a new ticket_flow run.
+
+- Read `.codex-autorunner/ISSUE.md` (or ask for the issue/PR URL if missing).
+- Create or update `.codex-autorunner/SPEC.md` that captures goals, scope, risks, and constraints.
+- Break the work into additional `TICKET-00X.md` files with clear owners/goals; keep this ticket open until they exist.
+- Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/handoff/` if needed.
+- Write `USER_MESSAGE.md` with `mode: pause` summarizing the ticket plan and requesting user review before proceeding.
+"""
+            ticket_path.write_text(template, encoding="utf-8")
+            seeded = True
+
+        meta = flow_request.metadata if isinstance(flow_request.metadata, dict) else {}
+        payload = FlowStartRequest(
+            input_data=flow_request.input_data,
+            metadata=meta | {"seeded_ticket": seeded},
+        )
+        return await _start_flow("ticket_flow", payload)
+
+    @router.get("/ticket_flow/tickets")
+    async def list_ticket_files():
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        tickets = []
+        for path in list_ticket_paths(ticket_dir):
+            doc, errors = read_ticket(path)
+            rel_path = safe_relpath(path, repo_root)
+            tickets.append(
+                {
+                    "path": rel_path,
+                    "index": getattr(doc, "index", None),
+                    "frontmatter": asdict(doc.frontmatter) if doc else None,
+                    "body": doc.body if doc else None,
+                    "errors": errors,
+                }
+            )
+        return {
+            "ticket_dir": safe_relpath(ticket_dir, repo_root),
+            "tickets": tickets,
+        }
+
+    @router.post("/{run_id}/stop", response_model=FlowStatusResponse)
+    async def stop_flow(run_id: uuid.UUID):
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
-        controller = _get_flow_controller(repo_root)
+        record = _get_flow_record(repo_root, run_id)
+        controller = _get_flow_controller(repo_root, record.flow_type)
+
+        _stop_worker(run_id)
+
+        updated = await controller.stop_flow(run_id)
+        return FlowStatusResponse.from_record(updated)
+
+    @router.post("/{run_id}/resume", response_model=FlowStatusResponse)
+    async def resume_flow(run_id: uuid.UUID):
+        run_id = _normalize_run_id(run_id)
+        repo_root = find_repo_root()
+        record = _get_flow_record(repo_root, run_id)
+        controller = _get_flow_controller(repo_root, record.flow_type)
+
+        updated = await controller.resume_flow(run_id)
+        _reap_dead_worker(run_id)
+        if run_id in _active_workers:
+            _logger.info("Worker already active for run %s, skipping spawn", run_id)
+        else:
+            _start_flow_worker(repo_root, run_id)
+
+        return FlowStatusResponse.from_record(updated)
+
+    @router.get("/{run_id}/status", response_model=FlowStatusResponse)
+    async def get_flow_status(run_id: uuid.UUID):
+        run_id = _normalize_run_id(run_id)
+        repo_root = find_repo_root()
 
         _reap_dead_worker(run_id)
 
-        record = controller.get_status(run_id)
-        if not record:
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=404, detail=f"Flow run {run_id} not found")
+        record = _get_flow_record(repo_root, run_id)
 
         return FlowStatusResponse.from_record(record)
 
     @router.get("/{run_id}/events")
     async def stream_flow_events(run_id: uuid.UUID, after: Optional[int] = None):
-        from ..core.utils import find_repo_root
-
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
-        controller = _get_flow_controller(repo_root)
-
-        record = controller.get_status(run_id)
-        if not record:
-            raise HTTPException(status_code=404, detail=f"Flow run {run_id} not found")
+        record = _get_flow_record(repo_root, run_id)
+        controller = _get_flow_controller(repo_root, record.flow_type)
 
         async def event_stream():
             try:
@@ -304,20 +416,91 @@ def build_flow_routes() -> APIRouter:
             },
         )
 
+    @router.get("/{run_id}/handoff_history")
+    async def get_handoff_history(run_id: str):
+        normalized = _normalize_run_id(run_id)
+        repo_root = find_repo_root()
+        record = _get_flow_record(repo_root, normalized)
+        paths = _resolve_outbox_for_record(record, repo_root)
+
+        history_entries = []
+        history_dir = paths.handoff_history_dir
+        if history_dir.exists() and history_dir.is_dir():
+            for entry in sorted(
+                [p for p in history_dir.iterdir() if p.is_dir()],
+                key=lambda p: p.name,
+                reverse=True,
+            ):
+                msg_path = entry / "USER_MESSAGE.md"
+                message, errors = parse_user_message(msg_path) if msg_path.exists() else (None, ["USER_MESSAGE.md missing"])
+                msg_dict = asdict(message) if message else None
+                attachments = []
+                for child in sorted(entry.rglob("*")):
+                    if child.name == "USER_MESSAGE.md":
+                        continue
+                    rel = child.relative_to(entry).as_posix()
+                    if any(part.startswith(".") for part in Path(rel).parts):
+                        continue
+                    if child.is_dir():
+                        continue
+                    attachments.append(
+                        {
+                            "name": child.name,
+                            "rel_path": rel,
+                            "path": safe_relpath(child, repo_root),
+                            "size": child.stat().st_size if child.is_file() else None,
+                            "url": f"/api/flows/{normalized}/handoff_history/{entry.name}/{quote(rel)}",
+                        }
+                    )
+                history_entries.append(
+                    {
+                        "seq": entry.name,
+                        "message": msg_dict,
+                        "errors": errors,
+                        "attachments": attachments,
+                        "path": safe_relpath(entry, repo_root),
+                    }
+                )
+
+        return {"run_id": normalized, "history": history_entries}
+
+    @router.get("/{run_id}/handoff_history/{seq}/{file_path:path}")
+    async def get_handoff_file(run_id: str, seq: str, file_path: str):
+        normalized = _normalize_run_id(run_id)
+        repo_root = find_repo_root()
+        record = _get_flow_record(repo_root, normalized)
+        paths = _resolve_outbox_for_record(record, repo_root)
+        history_dir = paths.handoff_history_dir / seq
+        if not history_dir.exists() or not history_dir.is_dir():
+            raise HTTPException(
+                status_code=404, detail=f"Handoff history not found for run {run_id}"
+            )
+
+        target = history_dir / file_path
+        try:
+            resolved = target.resolve()
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        if not resolved.is_relative_to(history_dir.resolve()):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: file outside handoff history directory",
+            )
+
+        return FileResponse(resolved, filename=resolved.name)
+
     @router.get("/{run_id}/artifacts", response_model=list[FlowArtifactInfo])
     async def list_flow_artifacts(run_id: str):
-        from ..core.utils import find_repo_root
-
+        normalized = _normalize_run_id(run_id)
         repo_root = find_repo_root()
-        controller = _get_flow_controller(repo_root)
+        record = _get_flow_record(repo_root, normalized)
+        controller = _get_flow_controller(repo_root, record.flow_type)
 
-        record = controller.get_status(run_id)
-        if not record:
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=404, detail=f"Flow run {run_id} not found")
-
-        artifacts = controller.get_artifacts(run_id)
+        artifacts = controller.get_artifacts(normalized)
         return [
             FlowArtifactInfo(
                 id=art.id,
@@ -331,18 +514,12 @@ def build_flow_routes() -> APIRouter:
 
     @router.get("/{run_id}/artifact")
     async def get_flow_artifact(run_id: str, kind: Optional[str] = None):
-        from ..core.utils import find_repo_root
-
+        normalized = _normalize_run_id(run_id)
         repo_root = find_repo_root()
-        controller = _get_flow_controller(repo_root)
+        record = _get_flow_record(repo_root, normalized)
+        controller = _get_flow_controller(repo_root, record.flow_type)
 
-        record = controller.get_status(run_id)
-        if not record:
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=404, detail=f"Flow run {run_id} not found")
-
-        artifacts_root = controller.get_artifacts_dir(run_id)
+        artifacts_root = controller.get_artifacts_dir(normalized)
         if not artifacts_root:
             from fastapi import HTTPException
 
@@ -350,7 +527,7 @@ def build_flow_routes() -> APIRouter:
                 status_code=404, detail=f"Artifact directory not found for run {run_id}"
             )
 
-        artifacts = controller.get_artifacts(run_id)
+        artifacts = controller.get_artifacts(normalized)
 
         if kind:
             matching = [a for a in artifacts if a.kind == kind]

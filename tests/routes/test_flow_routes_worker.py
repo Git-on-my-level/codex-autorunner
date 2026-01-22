@@ -20,20 +20,19 @@ async def _simple_step(record, input_data):
 
 def test_flow_route_runs_worker_and_completes(tmp_path, monkeypatch):
     flow_routes._controller_cache.clear()
+    flow_routes._definition_cache.clear()
 
     definition = FlowDefinition(
-        flow_type="test_flow", initial_step="step1", steps={"step1": _simple_step}
+        flow_type="pr_flow", initial_step="step1", steps={"step1": _simple_step}
     )
     definition.validate()
 
     monkeypatch.setattr(flow_routes, "build_pr_flow_definition", lambda: definition)
-    monkeypatch.setattr(
-        "codex_autorunner.core.utils.find_repo_root", lambda: Path(tmp_path)
-    )
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
     def _fake_start_worker(repo_root: Path, run_id: str):
-        controller = flow_routes._get_flow_controller(repo_root)
-        return asyncio.create_task(controller.run_flow(run_id))
+        # Run synchronously in tests; actual worker is handled by a subprocess.
+        return None
 
     monkeypatch.setattr(flow_routes, "_start_flow_worker", _fake_start_worker)
 
@@ -46,25 +45,22 @@ def test_flow_route_runs_worker_and_completes(tmp_path, monkeypatch):
             assert resp.status_code == 200
             run_id = resp.json()["id"]
 
-            controller = flow_routes._get_flow_controller(Path(tmp_path))
+            controller = flow_routes._get_flow_controller(
+                Path(tmp_path), definition.flow_type
+            )
 
-            status = {}
-            for _ in range(50):
-                status = client.get(f"/api/flows/{run_id}/status").json()
-                if status["status"] in {
-                    FlowRunStatus.COMPLETED.value,
-                    FlowRunStatus.FAILED.value,
-                    FlowRunStatus.STOPPED.value,
-                }:
-                    break
-                time.sleep(0.05)
+            asyncio.run(controller.run_flow(run_id))
+            status = client.get(f"/api/flows/{run_id}/status").json()
 
             events = controller.get_events(run_id)
             assert any(evt.event_type == FlowEventType.FLOW_COMPLETED for evt in events)
             assert status["status"] == FlowRunStatus.COMPLETED.value
     finally:
-        controller = flow_routes._controller_cache.get(Path(tmp_path).resolve())
+        controller = flow_routes._controller_cache.get(
+            (Path(tmp_path).resolve(), definition.flow_type)
+        )
         if controller:
             controller.shutdown()
         flow_routes._controller_cache.clear()
+        flow_routes._definition_cache.clear()
         flow_routes._active_workers.clear()

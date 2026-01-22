@@ -10,6 +10,7 @@ _logger = logging.getLogger(__name__)
 class FlowRunStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     STOPPING = "stopping"
     STOPPED = "stopped"
     COMPLETED = "completed"
@@ -20,6 +21,9 @@ class FlowRunStatus(str, Enum):
 
     def is_active(self) -> bool:
         return self in {self.PENDING, self.RUNNING, self.STOPPING}
+
+    def is_paused(self) -> bool:
+        return self == self.PAUSED
 
 
 class FlowEventType(str, Enum):

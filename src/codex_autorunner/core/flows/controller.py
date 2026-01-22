@@ -130,7 +130,7 @@ class FlowController:
                 last_seq = event.seq
 
             record = self.store.get_flow_run(run_id)
-            if record and record.status.is_terminal() and not events:
+            if record and (record.status.is_terminal() or record.status.is_paused()) and not events:
                 break
 
             await asyncio.sleep(0.5)
