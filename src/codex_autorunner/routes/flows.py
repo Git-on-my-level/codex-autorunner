@@ -80,6 +80,7 @@ def _get_flow_controller(repo_root: Path) -> FlowController:
 
 
 def _start_flow_worker(repo_root: Path, run_id: str) -> subprocess.Popen:
+    run_id = _validate_run_id(run_id)
     cmd = ["python3", "-m", "codex_autorunner", "flow", "worker", "--run-id", run_id]
     cwd = repo_root
     env = None
