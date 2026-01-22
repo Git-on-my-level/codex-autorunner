@@ -236,6 +236,50 @@ async def test_collect_output_emits_usage_from_properties_info_tokens() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_backfills_context_from_providers() -> None:
+    seen: list[dict[str, int]] = []
+
+    async def _part_handler(part_type: str, part: dict[str, int], delta_text):
+        if part_type == "usage":
+            seen.append(part)
+
+    events = [
+        SSEEvent(
+            event="message.updated",
+            data='{"sessionID":"s1","info":{"tokens":{"input":12,"output":3}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+
+    async def _fetch_providers():
+        return {
+            "providers": [
+                {"id": "prov", "models": {"model": {"limit": {"context": 1024}}}}
+            ]
+        }
+
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        model_payload={"providerID": "prov", "modelID": "model"},
+        part_handler=_part_handler,
+        provider_fetcher=_fetch_providers,
+    )
+    assert output.text == ""
+    assert output.error is None
+    assert seen == [
+        {
+            "providerID": "prov",
+            "modelID": "model",
+            "totalTokens": 15,
+            "inputTokens": 12,
+            "outputTokens": 3,
+            "modelContextWindow": 1024,
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_collect_output_skips_usage_for_non_primary_session() -> None:
     seen: list[dict[str, int]] = []
 

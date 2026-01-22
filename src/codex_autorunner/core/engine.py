@@ -1624,6 +1624,7 @@ class Engine:
                 client,
                 session_id=thread_id,
                 workspace_path=str(self.repo_root),
+                model_payload=model_payload,
                 permission_policy=permission_policy,
                 question_policy="auto_first_option",
                 should_stop=active.interrupt_event.is_set,

@@ -1692,6 +1692,7 @@ class ExecutionCommands(SharedHelpers):
                             opencode_client,
                             session_id=thread_id,
                             workspace_path=str(workspace_root),
+                            model_payload=model_payload,
                             progress_session_ids=watched_session_ids,
                             permission_policy=permission_policy,
                             permission_handler=(

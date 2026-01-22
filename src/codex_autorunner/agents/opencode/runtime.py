@@ -733,6 +733,7 @@ async def collect_opencode_output_from_events(
     events: Optional[AsyncIterator[SSEEvent]] = None,
     *,
     session_id: str,
+    model_payload: Optional[dict[str, str]] = None,
     progress_session_ids: Optional[set[str]] = None,
     permission_policy: str = PERMISSION_ALLOW,
     permission_handler: Optional[PermissionHandler] = None,
@@ -767,6 +768,9 @@ async def collect_opencode_output_from_events(
     providers_cache: Optional[list[dict[str, Any]]] = None
     context_window_cache: dict[str, Optional[int]] = {}
     session_model_ids: Optional[tuple[Optional[str], Optional[str]]] = None
+    default_model_ids = (
+        _extract_model_ids(model_payload) if isinstance(model_payload, dict) else None
+    )
 
     def _message_id_from_info(info: Any) -> Optional[str]:
         if not isinstance(info, dict):
@@ -844,15 +848,19 @@ async def collect_opencode_output_from_events(
         nonlocal session_model_ids
         if session_model_ids is not None:
             return session_model_ids
-        if session_fetcher is None:
-            session_model_ids = (None, None)
-            return session_model_ids
-        try:
-            payload = await session_fetcher()
-        except Exception:
-            session_model_ids = (None, None)
-            return session_model_ids
-        session_model_ids = _extract_model_ids(payload)
+        resolved_ids: Optional[tuple[Optional[str], Optional[str]]] = None
+        if session_fetcher is not None:
+            try:
+                payload = await session_fetcher()
+                resolved_ids = _extract_model_ids(payload)
+            except Exception:
+                resolved_ids = None
+        # If we failed to resolve model ids from the session (including the empty
+        # tuple case), fall back to the caller-provided model payload so we can
+        # still backfill usage metadata.
+        if not resolved_ids or all(value is None for value in resolved_ids):
+            resolved_ids = default_model_ids
+        session_model_ids = resolved_ids or (None, None)
         return session_model_ids
 
     async def _resolve_context_window_from_providers(
@@ -1420,6 +1428,7 @@ async def collect_opencode_output(
     *,
     session_id: str,
     workspace_path: str,
+    model_payload: Optional[dict[str, str]] = None,
     progress_session_ids: Optional[set[str]] = None,
     permission_policy: str = PERMISSION_ALLOW,
     permission_handler: Optional[PermissionHandler] = None,
@@ -1469,6 +1478,7 @@ async def collect_opencode_output(
         reject_question=_reject_question,
         part_handler=part_handler,
         event_stream_factory=_stream_factory,
+        model_payload=model_payload,
         session_fetcher=_fetch_session,
         provider_fetcher=_fetch_providers,
     )
