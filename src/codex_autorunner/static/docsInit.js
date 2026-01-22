@@ -89,6 +89,26 @@ export function initDocs() {
                 updateDocControls();
             }
         });
+        docContent.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !e.isComposing && !e.shiftKey && getActiveDoc() === "todo") {
+                const text = docContent.value;
+                const pos = docContent.selectionStart;
+                const lineStart = text.lastIndexOf("\n", pos - 1) + 1;
+                const lineEnd = text.indexOf("\n", pos);
+                const currentLine = text.slice(lineStart, lineEnd === -1 ? text.length : lineEnd);
+                const match = currentLine.match(/^(\s*)- \[(x|X| )?\]/);
+                if (match) {
+                    e.preventDefault();
+                    const indent = match[1];
+                    const newLine = "\n" + indent + "- [ ] ";
+                    const newValue = text.slice(0, pos) + newLine + text.slice(pos);
+                    docContent.value = newValue;
+                    const newPos = pos + newLine.length;
+                    docContent.setSelectionRange(newPos, newPos);
+                    updateDocControls();
+                }
+            }
+        });
     }
     let suppressNextSendClick = false;
     let lastSendTapAt = 0;
