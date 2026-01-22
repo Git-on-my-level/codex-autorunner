@@ -66,11 +66,6 @@ class OpenCodeEventFormatter:
             for line in complete_lines:
                 if line.strip():
                     lines.append(f"**{line.strip()}**")
-
-            remaining = coalescer.get_buffer()
-            if remaining and remaining.strip():
-                lines.append(f"**{remaining.strip()}**")
-                coalescer.clear()
         return lines
 
     def _format_tool_part(self, part: dict[str, Any]) -> list[str]:
