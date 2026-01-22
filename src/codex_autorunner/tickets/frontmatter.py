@@ -5,7 +5,6 @@ from typing import Any, Optional, Tuple
 
 import yaml
 
-
 _FRONTMATTER_START = re.compile(r"^---\s*$")
 _FRONTMATTER_END = re.compile(r"^(---|\.\.\.)\s*$")
 

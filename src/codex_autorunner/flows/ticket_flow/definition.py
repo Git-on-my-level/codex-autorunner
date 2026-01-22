@@ -16,9 +16,15 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
     against the current ticket, and re-schedules itself until paused or complete.
     """
 
-    async def _ticket_turn_step(record: FlowRunRecord, input_data: Dict[str, Any]) -> StepOutcome:
+    async def _ticket_turn_step(
+        record: FlowRunRecord, input_data: Dict[str, Any]
+    ) -> StepOutcome:
         # Namespace all state under `ticket_engine` to avoid collisions with other flows.
-        engine_state = record.state.get("ticket_engine") if isinstance(record.state, dict) else None
+        engine_state = (
+            record.state.get("ticket_engine")
+            if isinstance(record.state, dict)
+            else None
+        )
         engine_state = dict(engine_state) if isinstance(engine_state, dict) else {}
 
         repo_root = find_repo_root()
@@ -27,7 +33,9 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
         max_total_turns = int(input_data.get("max_total_turns") or 25)
         max_lint_retries = int(input_data.get("max_lint_retries") or 3)
-        auto_commit = bool(input_data.get("auto_commit") if "auto_commit" in input_data else True)
+        auto_commit = bool(
+            input_data.get("auto_commit") if "auto_commit" in input_data else True
+        )
 
         runner = TicketRunner(
             workspace_root=workspace_root,
@@ -51,7 +59,9 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         if result.status == "paused":
             return StepOutcome.pause(output=out_state)
         if result.status == "failed":
-            return StepOutcome.fail(error=result.reason or "Ticket engine failed", output=out_state)
+            return StepOutcome.fail(
+                error=result.reason or "Ticket engine failed", output=out_state
+            )
         return StepOutcome.continue_to(next_steps={"ticket_turn"}, output=out_state)
 
     return FlowDefinition(

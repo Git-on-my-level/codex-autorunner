@@ -13,7 +13,9 @@ def _as_optional_str(value: Any) -> Optional[str]:
     return None
 
 
-def lint_ticket_frontmatter(data: dict[str, Any]) -> Tuple[Optional[TicketFrontmatter], list[str]]:
+def lint_ticket_frontmatter(
+    data: dict[str, Any],
+) -> Tuple[Optional[TicketFrontmatter], list[str]]:
     """Validate and normalize ticket frontmatter.
 
     Required keys:
@@ -50,7 +52,9 @@ def lint_ticket_frontmatter(data: dict[str, Any]) -> Tuple[Optional[TicketFrontm
     title = _as_optional_str(data.get("title"))
     goal = _as_optional_str(data.get("goal"))
 
-    requires = normalize_requires(data.get("requires") if isinstance(data, dict) else None)
+    requires = normalize_requires(
+        data.get("requires") if isinstance(data, dict) else None
+    )
 
     # Remove normalized keys from extra.
     for key in ("agent", "done", "title", "goal", "requires"):
@@ -74,7 +78,9 @@ def lint_ticket_frontmatter(data: dict[str, Any]) -> Tuple[Optional[TicketFrontm
     )
 
 
-def lint_user_message_frontmatter(data: dict[str, Any]) -> Tuple[dict[str, Any], list[str]]:
+def lint_user_message_frontmatter(
+    data: dict[str, Any],
+) -> Tuple[dict[str, Any], list[str]]:
     """Validate USER_MESSAGE.md frontmatter.
 
     Keys:

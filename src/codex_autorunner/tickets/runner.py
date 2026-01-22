@@ -96,7 +96,9 @@ class TicketRunner:
             next_path = self._find_next_ticket(ticket_paths)
             if next_path is None:
                 state["status"] = "completed"
-                return TicketResult(status="completed", state=state, reason="All tickets done.")
+                return TicketResult(
+                    status="completed", state=state, reason="All tickets done."
+                )
             current_path = next_path
             state["current_ticket"] = safe_relpath(current_path, self._workspace_root)
             # New ticket resets per-ticket state.
@@ -134,7 +136,10 @@ class TicketRunner:
         # Validate required input files.
         missing = self._missing_required_inputs(ticket_doc.frontmatter.requires)
         if missing:
-            rel_missing = [safe_relpath(self._workspace_root / m, self._workspace_root) for m in missing]
+            rel_missing = [
+                safe_relpath(self._workspace_root / m, self._workspace_root)
+                for m in missing
+            ]
             return self._pause(
                 state,
                 reason=(
@@ -146,15 +151,27 @@ class TicketRunner:
 
         # Determine lint-retry mode.
         lint_state = state.get("lint") if isinstance(state.get("lint"), dict) else {}
-        lint_errors = lint_state.get("errors") if isinstance(lint_state.get("errors"), list) else []
+        lint_errors = (
+            lint_state.get("errors")
+            if isinstance(lint_state.get("errors"), list)
+            else []
+        )
         lint_retries = int(lint_state.get("retries") or 0)
-        reuse_conversation_id = lint_state.get("conversation_id") if isinstance(lint_state.get("conversation_id"), str) else None
+        reuse_conversation_id = (
+            lint_state.get("conversation_id")
+            if isinstance(lint_state.get("conversation_id"), str)
+            else None
+        )
 
         ticket_turns = int(state.get("ticket_turns") or 0)
         prompt = self._build_prompt(
             ticket_path=current_path,
             ticket_doc=ticket_doc,
-            last_agent_output=state.get("last_agent_output") if isinstance(state.get("last_agent_output"), str) else None,
+            last_agent_output=(
+                state.get("last_agent_output")
+                if isinstance(state.get("last_agent_output"), str)
+                else None
+            ),
             outbox_paths=outbox_paths,
             lint_errors=lint_errors if lint_errors else None,
         )
@@ -180,7 +197,9 @@ class TicketRunner:
 
         # Post-turn: archive outbox if USER_MESSAGE exists.
         outbox_seq = int(state.get("outbox_seq") or 0)
-        dispatch, dispatch_errors = dispatch_outbox(outbox_paths, next_seq=outbox_seq + 1)
+        dispatch, dispatch_errors = dispatch_outbox(
+            outbox_paths, next_seq=outbox_seq + 1
+        )
         if dispatch_errors:
             # Treat as pause: user should fix USER_MESSAGE frontmatter.
             state["lint"] = {
@@ -238,7 +257,9 @@ class TicketRunner:
         # Optional: auto-commit checkpoint (best-effort).
         checkpoint_error = None
         if self._config.auto_commit:
-            checkpoint_error = self._checkpoint_git(turn=total_turns, agent=result.agent_id)
+            checkpoint_error = self._checkpoint_git(
+                turn=total_turns, agent=result.agent_id
+            )
 
         # If we dispatched a pause message, pause regardless of ticket completion.
         if dispatch is not None and dispatch.message.mode == "pause":
@@ -347,7 +368,12 @@ class TicketRunner:
             status="paused",
             state=state,
             reason=reason,
-            current_ticket=current_ticket or (state.get("current_ticket") if isinstance(state.get("current_ticket"), str) else None),
+            current_ticket=current_ticket
+            or (
+                state.get("current_ticket")
+                if isinstance(state.get("current_ticket"), str)
+                else None
+            ),
         )
 
     def _build_prompt(
@@ -361,7 +387,9 @@ class TicketRunner:
     ) -> str:
         rel_ticket = safe_relpath(ticket_path, self._workspace_root)
         rel_handoff = safe_relpath(outbox_paths.handoff_dir, self._workspace_root)
-        rel_user_msg = safe_relpath(outbox_paths.user_message_path, self._workspace_root)
+        rel_user_msg = safe_relpath(
+            outbox_paths.user_message_path, self._workspace_root
+        )
 
         header = (
             "You are running inside Codex AutoRunner (CAR) in a ticket-based workflow.\n"
@@ -377,24 +405,33 @@ class TicketRunner:
         )
 
         if lint_errors:
-            lint_block = "\n\nTicket frontmatter lint failed. Fix ONLY the ticket frontmatter to satisfy:\n- " + "\n- ".join(lint_errors) + "\n"
+            lint_block = (
+                "\n\nTicket frontmatter lint failed. Fix ONLY the ticket frontmatter to satisfy:\n- "
+                + "\n- ".join(lint_errors)
+                + "\n"
+            )
         else:
             lint_block = ""
 
         requires_block = ""
         if ticket_doc.frontmatter.requires:
-            requires_block = "\n\nRequired input files for this ticket:\n- " + "\n- ".join(ticket_doc.frontmatter.requires) + "\n"
+            requires_block = (
+                "\n\nRequired input files for this ticket:\n- "
+                + "\n- ".join(ticket_doc.frontmatter.requires)
+                + "\n"
+            )
 
         ticket_block = (
             "\n\n---\n\n"
             "TICKET CONTENT (edit this file to track progress; update frontmatter.done when complete):\n"
             f"PATH: {rel_ticket}\n"
-            "\n"
-            + ticket_path.read_text(encoding="utf-8")
+            "\n" + ticket_path.read_text(encoding="utf-8")
         )
 
         prev_block = ""
         if last_agent_output:
-            prev_block = "\n\n---\n\nPREVIOUS AGENT OUTPUT (same ticket):\n" + last_agent_output
+            prev_block = (
+                "\n\n---\n\nPREVIOUS AGENT OUTPUT (same ticket):\n" + last_agent_output
+            )
 
         return header + lint_block + requires_block + ticket_block + prev_block

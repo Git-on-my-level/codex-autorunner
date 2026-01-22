@@ -31,9 +31,7 @@ class StepOutcome:
         return cls(status=FlowRunStatus.COMPLETED, output=output)
 
     @classmethod
-    def fail(
-        cls, error: str, output: Optional[Dict[str, Any]] = None
-    ) -> "StepOutcome":
+    def fail(cls, error: str, output: Optional[Dict[str, Any]] = None) -> "StepOutcome":
         return cls(status=FlowRunStatus.FAILED, error=error, output=output)
 
     @classmethod

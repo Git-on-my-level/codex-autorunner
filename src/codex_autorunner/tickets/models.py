@@ -52,7 +52,9 @@ class TicketRunConfig:
     max_total_turns: int = 25
     max_lint_retries: int = 3
     auto_commit: bool = True
-    checkpoint_message_template: str = "CAR checkpoint: run={run_id} turn={turn} agent={agent}"
+    checkpoint_message_template: str = (
+        "CAR checkpoint: run={run_id} turn={turn} agent={agent}"
+    )
 
 
 @dataclass(frozen=True)

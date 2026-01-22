@@ -18,7 +18,9 @@ class OutboxPaths:
     user_message_path: Path
 
 
-def resolve_outbox_paths(*, workspace_root: Path, runs_dir: Path, run_id: str) -> OutboxPaths:
+def resolve_outbox_paths(
+    *, workspace_root: Path, runs_dir: Path, run_id: str
+) -> OutboxPaths:
     run_dir = workspace_root / runs_dir / run_id
     handoff_dir = run_dir / "handoff"
     handoff_history_dir = run_dir / "handoff_history"
@@ -84,10 +86,15 @@ def parse_user_message(path: Path) -> tuple[Optional[UserMessage], list[str]]:
     extra = dict(normalized)
     extra.pop("mode", None)
     extra.pop("title", None)
-    return UserMessage(mode=mode, body=body.lstrip("\n"), title=title_str, extra=extra), []
+    return (
+        UserMessage(mode=mode, body=body.lstrip("\n"), title=title_str, extra=extra),
+        [],
+    )
 
 
-def dispatch_outbox(paths: OutboxPaths, *, next_seq: int) -> tuple[Optional[OutboxDispatch], list[str]]:
+def dispatch_outbox(
+    paths: OutboxPaths, *, next_seq: int
+) -> tuple[Optional[OutboxDispatch], list[str]]:
     """Archive USER_MESSAGE.md + handoff/* into handoff_history/<seq>/.
 
     Returns (dispatch, errors). When USER_MESSAGE.md does not exist, returns (None, []).

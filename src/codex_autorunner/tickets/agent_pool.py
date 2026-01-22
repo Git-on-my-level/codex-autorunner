@@ -54,7 +54,9 @@ class AgentPool:
 
         app_server_cfg = self._config.app_server
 
-        def _env_builder(workspace_root: Path, workspace_id: str, state_dir: Path) -> dict[str, str]:
+        def _env_builder(
+            workspace_root: Path, workspace_id: str, state_dir: Path
+        ) -> dict[str, str]:
             # env is deterministic and purely derived from workspace/state dirs.
             return build_app_server_env(
                 command=app_server_cfg.command,
@@ -110,7 +112,9 @@ class AgentPool:
             subagent_models=subagent_models,
         )
         if supervisor is None:
-            raise RuntimeError("OpenCode supervisor unavailable (missing opencode command/binary).")
+            raise RuntimeError(
+                "OpenCode supervisor unavailable (missing opencode command/binary)."
+            )
         self._opencode_supervisor = supervisor
         return supervisor
 
@@ -185,7 +189,9 @@ class AgentPool:
             if not session_id:
                 raise RuntimeError("OpenCode create_session returned no session id")
 
-        prompt_response = await client.prompt_async(session_id, req.prompt, directory=directory)
+        prompt_response = await client.prompt_async(
+            session_id, req.prompt, directory=directory
+        )
         output = await collect_opencode_output(
             client,
             session_id,
@@ -198,13 +204,19 @@ class AgentPool:
             return AgentTurnResult(
                 agent_id=req.agent_id,
                 conversation_id=session_id,
-                turn_id=str(prompt_response.get("id") if isinstance(prompt_response, dict) else ""),
+                turn_id=str(
+                    prompt_response.get("id")
+                    if isinstance(prompt_response, dict)
+                    else ""
+                ),
                 text=output.text,
                 error=output.error,
             )
         return AgentTurnResult(
             agent_id=req.agent_id,
             conversation_id=session_id,
-            turn_id=str(prompt_response.get("id") if isinstance(prompt_response, dict) else ""),
+            turn_id=str(
+                prompt_response.get("id") if isinstance(prompt_response, dict) else ""
+            ),
             text=output.text,
         )

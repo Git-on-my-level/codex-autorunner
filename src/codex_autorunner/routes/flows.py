@@ -5,8 +5,8 @@ import sys
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-from urllib.parse import quote
 from typing import IO, Dict, Optional, Tuple, Union
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -23,7 +23,9 @@ from ..tickets.outbox import parse_user_message, resolve_outbox_paths
 
 _logger = logging.getLogger(__name__)
 
-_active_workers: Dict[str, Tuple[subprocess.Popen, Optional[IO[bytes]], Optional[IO[bytes]]]] = {}
+_active_workers: Dict[
+    str, Tuple[subprocess.Popen, Optional[IO[bytes]], Optional[IO[bytes]]]
+] = {}
 _controller_cache: Dict[tuple[Path, str], FlowController] = {}
 _definition_cache: Dict[tuple[Path, str], FlowDefinition] = {}
 _supported_flow_types = ("ticket_flow", "pr_flow")
@@ -252,7 +254,9 @@ def build_flow_routes() -> APIRouter:
     async def get_flow_definition(flow_type: str):
         repo_root = find_repo_root()
         if flow_type not in _supported_flow_types:
-            raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
+            raise HTTPException(
+                status_code=404, detail=f"Unknown flow type: {flow_type}"
+            )
         definition = _build_flow_definition(repo_root, flow_type)
         return _definition_info(definition)
 
@@ -266,9 +270,13 @@ def build_flow_routes() -> APIRouter:
         store.close()
         return [FlowStatusResponse.from_record(rec) for rec in records]
 
-    async def _start_flow(flow_type: str, request: FlowStartRequest) -> FlowStatusResponse:
+    async def _start_flow(
+        flow_type: str, request: FlowStartRequest
+    ) -> FlowStatusResponse:
         if flow_type not in _supported_flow_types:
-            raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
+            raise HTTPException(
+                status_code=404, detail=f"Unknown flow type: {flow_type}"
+            )
 
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root, flow_type)
@@ -432,7 +440,11 @@ You are the first ticket in a new ticket_flow run.
                 reverse=True,
             ):
                 msg_path = entry / "USER_MESSAGE.md"
-                message, errors = parse_user_message(msg_path) if msg_path.exists() else (None, ["USER_MESSAGE.md missing"])
+                message, errors = (
+                    parse_user_message(msg_path)
+                    if msg_path.exists()
+                    else (None, ["USER_MESSAGE.md missing"])
+                )
                 msg_dict = asdict(message) if message else None
                 attachments = []
                 for child in sorted(entry.rglob("*")):

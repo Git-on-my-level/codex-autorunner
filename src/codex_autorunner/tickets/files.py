@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_frontmatter
 from .models import TicketDoc, TicketFrontmatter
-
 
 _TICKET_NAME_RE = re.compile(r"^TICKET-(\d+)\.md$", re.IGNORECASE)
 
@@ -60,7 +59,9 @@ def read_ticket(path: Path) -> tuple[Optional[TicketDoc], list[str]]:
     return TicketDoc(path=path, index=idx, frontmatter=frontmatter, body=body), []
 
 
-def read_ticket_frontmatter(path: Path) -> tuple[Optional[TicketFrontmatter], list[str]]:
+def read_ticket_frontmatter(
+    path: Path,
+) -> tuple[Optional[TicketFrontmatter], list[str]]:
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
