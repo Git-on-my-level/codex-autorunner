@@ -190,6 +190,19 @@ class TicketRunner:
         state["ticket_turns"] = ticket_turns
 
         result = await self._agent_pool.run_turn(req)
+        if result.error:
+            state["last_agent_output"] = result.text
+            state["last_agent_id"] = result.agent_id
+            state["last_agent_conversation_id"] = result.conversation_id
+            state["last_agent_turn_id"] = result.turn_id
+            return self._pause(
+                state,
+                reason=(
+                    "Agent turn failed; fix the underlying issue and resume.\n"
+                    f"Error: {result.error}"
+                ),
+                current_ticket=safe_relpath(current_path, self._workspace_root),
+            )
         state["last_agent_output"] = result.text
         state["last_agent_id"] = result.agent_id
         state["last_agent_conversation_id"] = result.conversation_id

@@ -482,8 +482,22 @@ You are the first ticket in a new ticket_flow run.
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, normalized)
         paths = _resolve_outbox_for_record(record, repo_root)
-        history_dir = paths.handoff_history_dir / seq
-        if not history_dir.exists() or not history_dir.is_dir():
+
+        base_history = paths.handoff_history_dir.resolve()
+
+        seq_path = Path(seq)
+        if (
+            seq_path.is_absolute()
+            or ".." in seq_path.parts
+            or "/" in seq
+            or "\\" in seq
+        ):
+            raise HTTPException(
+                status_code=400, detail="Invalid handoff history sequence"
+            )
+
+        history_dir = (base_history / seq_path).resolve()
+        if not history_dir.is_relative_to(base_history) or not history_dir.is_dir():
             raise HTTPException(
                 status_code=404, detail=f"Handoff history not found for run {run_id}"
             )
@@ -497,7 +511,7 @@ You are the first ticket in a new ticket_flow run.
         if not resolved.exists():
             raise HTTPException(status_code=404, detail="File not found")
 
-        if not resolved.is_relative_to(history_dir.resolve()):
+        if not resolved.is_relative_to(history_dir):
             raise HTTPException(
                 status_code=403,
                 detail="Access denied: file outside handoff history directory",
