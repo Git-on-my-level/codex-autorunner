@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Dict, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,14 @@ from ..flows.pr_flow import build_pr_flow_definition
 _logger = logging.getLogger(__name__)
 
 _active_workers: Dict[str, subprocess.Popen] = {}
+
+
+def _validate_run_id(run_id: str) -> str:
+    try:
+        uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid run_id") from None
+    return run_id
 
 
 class FlowStartRequest(BaseModel):
@@ -113,7 +121,7 @@ def build_flow_routes() -> APIRouter:
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
-        run_id = str(uuid.uuid4())
+        run_id = _validate_run_id(str(uuid.uuid4()))
 
         try:
             record = await controller.start_flow(
@@ -133,6 +141,7 @@ def build_flow_routes() -> APIRouter:
     async def stop_flow(run_id: str):
         from ..core.utils import find_repo_root
 
+        run_id = _validate_run_id(run_id)
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
@@ -149,6 +158,7 @@ def build_flow_routes() -> APIRouter:
     async def resume_flow(run_id: str):
         from ..core.utils import find_repo_root
 
+        run_id = _validate_run_id(run_id)
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
@@ -161,6 +171,7 @@ def build_flow_routes() -> APIRouter:
     async def get_flow_status(run_id: str):
         from ..core.utils import find_repo_root
 
+        run_id = _validate_run_id(run_id)
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
@@ -176,13 +187,12 @@ def build_flow_routes() -> APIRouter:
     async def stream_flow_events(run_id: str):
         from ..core.utils import find_repo_root
 
+        run_id = _validate_run_id(run_id)
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root)
 
         record = controller.get_status(run_id)
         if not record:
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=404, detail=f"Flow run {run_id} not found")
 
         async def event_stream():

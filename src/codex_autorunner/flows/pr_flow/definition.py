@@ -217,13 +217,12 @@ def _parse_issue_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[i
     import re
 
     # Match github.com issue URLs, ensuring github.com is a proper domain
-    pattern = r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)"
-    match = re.search(pattern, url)
+    pattern = (
+        r"^(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)(?:/.*)?$"
+    )
+    match = re.match(pattern, url)
     if match:
-        # Double-check the URL actually contains github.com as a domain
-        # (not as a substring like not-github.com)
-        if "//github.com/" in url or "://github.com/" in url:
-            return match.group(1), match.group(2), int(match.group(3))
+        return match.group(1), match.group(2), int(match.group(3))
     return None, None, None
 
 
@@ -231,12 +230,12 @@ def _parse_pr_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[int]
     import re
 
     # Match github.com PR URLs, ensuring github.com is a proper domain
-    pattern = r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/pull/(\d+)"
-    match = re.search(pattern, url)
+    pattern = (
+        r"^(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/pull/(\d+)(?:/.*)?$"
+    )
+    match = re.match(pattern, url)
     if match:
-        # Double-check the URL actually contains github.com as a domain
-        if "//github.com/" in url or "://github.com/" in url:
-            return match.group(1), match.group(2), int(match.group(3))
+        return match.group(1), match.group(2), int(match.group(3))
     return None, None, None
 
 
