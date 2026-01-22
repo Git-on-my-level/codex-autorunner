@@ -12,11 +12,10 @@ from collections import Counter
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import IO, Any, Dict, Iterator, Optional, Union
+from typing import IO, Any, Iterator, Optional
 
 import yaml
 
-from ..agents.factory import create_orchestrator
 from ..agents.opencode.logging import OpenCodeEventFormatter
 from ..agents.opencode.runtime import (
     OpenCodeTurnOutput,
@@ -1166,107 +1165,6 @@ class Engine:
                 return 1
             raise
 
-    async def _run_agent_turn_async(
-        self,
-        agent_id: str,
-        prompt: str,
-        run_id: int,
-        *,
-        external_stop_flag: Optional[threading.Event] = None,
-    ) -> int:
-        orchestrator = self._get_orchestrator(agent_id)
-        if orchestrator is None:
-            self.log_line(
-                run_id,
-                f"error: agent '{agent_id}' backend is not configured",
-            )
-            return 1
-
-        thread_key = f"autorunner.{agent_id}"
-        with state_lock(self.state_path):
-            state = load_state(self.state_path)
-        effective_model = state.autorunner_model_override or self.config.codex_model
-        effective_effort = (
-            state.autorunner_effort_override or self.config.codex_reasoning
-        )
-
-        with self._app_server_threads_lock:
-            conversation_id = self._app_server_threads.get_thread_id(thread_key)
-            if not conversation_id:
-                try:
-                    conversation_info = (
-                        await orchestrator.create_or_resume_conversation(
-                            self.repo_root, agent_id
-                        )
-                    )
-                    conversation_id = conversation_info.id
-                    self._app_server_threads.set_thread_id(thread_key, conversation_id)
-                except Exception as exc:
-                    self.log_line(
-                        run_id, f"error: failed to create conversation: {exc}"
-                    )
-                    return 1
-
-        if conversation_id:
-            self._update_run_telemetry(run_id, thread_id=conversation_id)
-
-        approval_policy = state.autorunner_approval_policy or "never"
-        sandbox_mode = state.autorunner_sandbox_mode or "dangerFullAccess"
-        if sandbox_mode == "workspaceWrite":
-            sandbox_policy: Union[Dict[str, Any], str] = {
-                "type": "workspaceWrite",
-                "writableRoots": [str(self.repo_root)],
-                "networkAccess": bool(state.autorunner_workspace_write_network),
-            }
-        else:
-            sandbox_policy = sandbox_mode
-
-        stop_event = asyncio.Event()
-        stop_task: Optional[asyncio.Task] = None
-
-        if external_stop_flag:
-            stop_task = asyncio.create_task(
-                self._wait_for_stop(external_stop_flag, stop_event)
-            )
-
-        try:
-            result = await orchestrator.run_turn(
-                self.repo_root,
-                conversation_id,
-                prompt,
-                model=effective_model,
-                reasoning=effective_effort,
-                approval_mode=approval_policy,
-                sandbox_policy=sandbox_policy,
-                should_stop=stop_event.is_set,
-            )
-            if result.get("status") != "completed":
-                self.log_line(
-                    run_id, f"error: turn failed with status {result.get('status')}"
-                )
-                return 1
-            output = result.get("output", "")
-            if output:
-                self._log_app_server_output(run_id, output.splitlines())
-                output_path = self._write_run_artifact(run_id, "output.txt", output)
-                self._merge_run_index_entry(
-                    run_id, {"artifacts": {"output_path": str(output_path)}}
-                )
-            return 0
-        except Exception as exc:
-            self.log_line(run_id, f"error: {exc}")
-            return 1
-        finally:
-            if stop_task is not None:
-                stop_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await stop_task
-            if stop_event.is_set():
-                await orchestrator.interrupt_turn(
-                    self.repo_root, conversation_id, grace_seconds=30.0
-                )
-                self._last_run_interrupted = True
-
     async def _run_codex_app_server_async(
         self,
         prompt: str,
@@ -1535,22 +1433,6 @@ class Engine:
             await supervisor.close_all()
         except Exception as exc:
             self._app_server_logger.warning("opencode supervisor close failed: %s", exc)
-
-    def _get_orchestrator(self, agent_id: str):
-        if agent_id == "opencode":
-            opencode_sup = self._ensure_opencode_supervisor()
-            if opencode_sup is None:
-                return None
-            return create_orchestrator(agent_id, opencode_supervisor=opencode_sup)
-        else:
-            app_server_sup = self._ensure_app_server_supervisor(
-                lambda workspace_root, workspace_id, state_dir: {}
-            )
-            return create_orchestrator(
-                agent_id,
-                codex_supervisor=app_server_sup,
-                codex_events=self._app_server_events,
-            )
 
     async def _wait_for_stop(
         self,
