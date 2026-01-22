@@ -16,11 +16,12 @@ function els() {
         bootstrapBtn: document.getElementById("ticket-flow-bootstrap"),
         resumeBtn: document.getElementById("ticket-flow-resume"),
         refreshBtn: document.getElementById("ticket-flow-refresh"),
+        stopBtn: document.getElementById("ticket-flow-stop"),
     };
 }
 function setButtonsDisabled(disabled) {
-    const { bootstrapBtn, resumeBtn, refreshBtn } = els();
-    [bootstrapBtn, resumeBtn, refreshBtn].forEach((btn) => {
+    const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn } = els();
+    [bootstrapBtn, resumeBtn, refreshBtn, stopBtn].forEach((btn) => {
         if (btn)
             btn.disabled = disabled;
     });
@@ -164,6 +165,9 @@ function summarizeReason(run) {
         "");
 }
 async function loadTicketFiles() {
+    const { tickets } = els();
+    if (tickets)
+        tickets.textContent = "Loading tickets…";
     try {
         const data = (await api("/api/flows/ticket_flow/tickets"));
         renderTickets(data);
@@ -174,6 +178,9 @@ async function loadTicketFiles() {
     }
 }
 async function loadHandoffHistory(runId) {
+    const { history } = els();
+    if (history)
+        history.textContent = "Loading handoff history…";
     if (!runId) {
         renderHandoffHistory(null, null);
         return;
@@ -188,7 +195,7 @@ async function loadHandoffHistory(runId) {
     }
 }
 async function loadTicketFlow() {
-    const { status, run, current, reason, resumeBtn, bootstrapBtn } = els();
+    const { status, run, current, reason, resumeBtn, bootstrapBtn, stopBtn } = els();
     try {
         const runs = (await api("/api/flows/runs?flow_type=ticket_flow"));
         const latest = (runs && runs[0]) || null;
@@ -204,6 +211,10 @@ async function loadTicketFlow() {
             reason.textContent = summarizeReason(latest) || "–";
         if (resumeBtn) {
             resumeBtn.disabled = !latest?.id || latest.status !== "paused";
+        }
+        if (stopBtn) {
+            const stoppable = latest?.status === "running" || latest?.status === "pending";
+            stopBtn.disabled = !latest?.id || !stoppable;
         }
         if (bootstrapBtn) {
             const busy = latest?.status === "running" || latest?.status === "pending";
@@ -222,6 +233,9 @@ async function loadTicketFlow() {
 async function bootstrapTicketFlow() {
     const { bootstrapBtn } = els();
     if (!bootstrapBtn)
+        return;
+    const confirmed = window.confirm("Create TICKET-001.md (if missing) and start the ticket flow?");
+    if (!confirmed)
         return;
     setButtonsDisabled(true);
     bootstrapBtn.textContent = "Starting…";
@@ -265,8 +279,31 @@ async function resumeTicketFlow() {
         setButtonsDisabled(false);
     }
 }
+async function stopTicketFlow() {
+    const { stopBtn } = els();
+    if (!stopBtn)
+        return;
+    if (!currentRunId) {
+        flash("No ticket flow run to stop", "info");
+        return;
+    }
+    setButtonsDisabled(true);
+    stopBtn.textContent = "Stopping…";
+    try {
+        await api(`/api/flows/${currentRunId}/stop`, { method: "POST", body: {} });
+        flash("Ticket flow stopping");
+        await loadTicketFlow();
+    }
+    catch (err) {
+        flash(err.message || "Failed to stop ticket flow", "error");
+    }
+    finally {
+        stopBtn.textContent = "Stop";
+        setButtonsDisabled(false);
+    }
+}
 export function initTicketFlow() {
-    const { card, bootstrapBtn, resumeBtn, refreshBtn } = els();
+    const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn } = els();
     if (!card || card.dataset.ticketInitialized === "1")
         return;
     card.dataset.ticketInitialized = "1";
@@ -274,6 +311,8 @@ export function initTicketFlow() {
         bootstrapBtn.addEventListener("click", bootstrapTicketFlow);
     if (resumeBtn)
         resumeBtn.addEventListener("click", resumeTicketFlow);
+    if (stopBtn)
+        stopBtn.addEventListener("click", stopTicketFlow);
     if (refreshBtn)
         refreshBtn.addEventListener("click", loadTicketFlow);
     loadTicketFlow();

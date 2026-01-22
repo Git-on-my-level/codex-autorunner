@@ -7,8 +7,9 @@ import logging
 import os
 import socket
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Coroutine, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence
 
 if TYPE_CHECKING:
     from .progress_stream import TurnProgressTracker
@@ -955,6 +956,50 @@ class TelegramBotService(
                 self._queued_placeholder_map.pop(key, None)
                 self._queued_placeholder_timestamps.pop(key, None)
 
+    @staticmethod
+    def _parse_last_active(record: "TelegramTopicRecord") -> float:
+        raw = getattr(record, "last_active_at", None)
+        if isinstance(raw, str):
+            try:
+                return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+            except ValueError:
+                return float("-inf")
+        return float("-inf")
+
+    def _select_ticket_flow_topic(
+        self, entries: list[tuple[str, "TelegramTopicRecord"]]
+    ) -> Optional[tuple[str, "TelegramTopicRecord"]]:
+        if not entries:
+            return None
+
+        def score(entry: tuple[str, "TelegramTopicRecord"]) -> tuple[int, float, str]:
+            key, record = entry
+            thread_id = None
+            try:
+                _chat_id, thread_id, _scope = parse_topic_key(key)
+            except Exception:
+                thread_id = None
+            active_raw = getattr(record, "active_thread_id", None)
+            try:
+                active_thread = int(active_raw) if active_raw is not None else None
+            except (TypeError, ValueError):
+                active_thread = None
+            active_match = (
+                int(thread_id) == active_thread if thread_id is not None else False
+            )
+            return (1 if active_match else 0, self._parse_last_active(record), key)
+
+        return max(entries, key=score)
+
+    @staticmethod
+    def _set_ticket_handoff_marker(
+        value: Optional[str],
+    ) -> "Callable[[TelegramTopicRecord], None]":
+        def apply(topic: "TelegramTopicRecord") -> None:
+            topic.last_ticket_handoff_seq = value
+
+        return apply
+
     async def _ticket_flow_watch_loop(self) -> None:
         interval = max(TICKET_FLOW_WATCH_INTERVAL_SECONDS, 1)
         while True:
@@ -980,55 +1025,83 @@ class TelegramBotService(
             workspace_root = canonicalize_path(Path(record.workspace_path))
             workspace_topics.setdefault(workspace_root, []).append((key, record))
 
-        for workspace_root, entries in workspace_topics.items():
-            try:
-                pause = await asyncio.to_thread(
-                    self._load_ticket_flow_pause, workspace_root
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.ticket_flow.scan_failed",
-                    exc=exc,
-                    workspace_root=str(workspace_root),
-                )
-                continue
-            if pause is None:
-                continue
-            run_id, seq, content = pause
-            marker = f"{run_id}:{seq}"
-            message_text = self._format_ticket_flow_pause_message(run_id, seq, content)
-            for key, record in entries:
-                if record.last_ticket_handoff_seq == marker:
-                    continue
-                try:
-                    chat_id, thread_id, _scope = parse_topic_key(key)
-                except Exception:
-                    continue
-                try:
-                    await self._send_message_with_outbox(
-                        chat_id,
-                        message_text,
-                        thread_id=thread_id,
-                        reply_to=None,
-                    )
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.ticket_flow.notify_failed",
-                        exc=exc,
-                        topic_key=key,
-                        run_id=run_id,
-                        seq=seq,
-                    )
-                    continue
+        tasks = [
+            asyncio.create_task(self._notify_ticket_flow_pause(workspace_root, entries))
+            for workspace_root, entries in workspace_topics.items()
+        ]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-                def apply(topic: "TelegramTopicRecord", value: str = marker) -> None:
-                    topic.last_ticket_handoff_seq = value
+    async def _notify_ticket_flow_pause(
+        self,
+        workspace_root: Path,
+        entries: list[tuple[str, "TelegramTopicRecord"]],
+    ) -> None:
+        try:
+            pause = await asyncio.to_thread(
+                self._load_ticket_flow_pause, workspace_root
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.ticket_flow.scan_failed",
+                exc=exc,
+                workspace_root=str(workspace_root),
+            )
+            return
+        if pause is None:
+            return
+        run_id, seq, content = pause
+        marker = f"{run_id}:{seq}"
+        pending = [
+            (key, record)
+            for key, record in entries
+            if record.last_ticket_handoff_seq != marker
+        ]
+        if not pending:
+            return
+        primary = self._select_ticket_flow_topic(pending)
+        if not primary:
+            return
+        message_text = self._format_ticket_flow_pause_message(run_id, seq, content)
+        updates: list[tuple[str, Optional[str]]] = [
+            (key, record.last_ticket_handoff_seq) for key, record in pending
+        ]
+        for key, _previous in updates:
+            await self._store.update_topic(key, self._set_ticket_handoff_marker(marker))
 
-                await self._store.update_topic(key, apply)
+        primary_key, _primary_record = primary
+        try:
+            chat_id, thread_id, _scope = parse_topic_key(primary_key)
+        except Exception:
+            for key, previous in updates:
+                await self._store.update_topic(
+                    key, self._set_ticket_handoff_marker(previous)
+                )
+            return
+
+        try:
+            await self._send_message_with_outbox(
+                chat_id,
+                message_text,
+                thread_id=thread_id,
+                reply_to=None,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.ticket_flow.notify_failed",
+                exc=exc,
+                topic_key=primary_key,
+                run_id=run_id,
+                seq=seq,
+            )
+            for key, previous in updates:
+                await self._store.update_topic(
+                    key, self._set_ticket_handoff_marker(previous)
+                )
 
     def _load_ticket_flow_pause(
         self, workspace_root: Path

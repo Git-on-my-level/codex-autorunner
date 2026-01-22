@@ -44,21 +44,25 @@ def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     out = (logs_dir / "worker.stdout.log").open("ab")
     err = (logs_dir / "worker.stderr.log").open("ab")
-    subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "codex_autorunner.cli",
-            "flow",
-            "worker",
-            "--run-id",
-            run_id,
-        ],
-        cwd=str(repo_root),
-        stdout=out,
-        stderr=err,
-        start_new_session=True,
-    )
+    try:
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "codex_autorunner.cli",
+                "flow",
+                "worker",
+                "--run-id",
+                run_id,
+            ],
+            cwd=str(repo_root),
+            stdout=out,
+            stderr=err,
+            start_new_session=True,
+        )
+    finally:
+        out.close()
+        err.close()
 
 
 class FlowCommands(SharedHelpers):
@@ -86,10 +90,12 @@ class FlowCommands(SharedHelpers):
         controller = _get_ticket_controller(repo_root)
 
         store = FlowStore(_flow_paths(repo_root)[0])
-        store.initialize()
-        runs = store.list_flow_runs(flow_type="ticket_flow")
-        latest = runs[0] if runs else None
-        store.close()
+        try:
+            store.initialize()
+            runs = store.list_flow_runs(flow_type="ticket_flow")
+            latest = runs[0] if runs else None
+        finally:
+            store.close()
 
         if action == "start":
             if latest and latest.status.is_active():

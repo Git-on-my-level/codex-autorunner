@@ -47,6 +47,7 @@ function els(): {
   bootstrapBtn: HTMLButtonElement | null;
   resumeBtn: HTMLButtonElement | null;
   refreshBtn: HTMLButtonElement | null;
+  stopBtn: HTMLButtonElement | null;
 } {
   return {
     card: document.getElementById("ticket-card"),
@@ -61,12 +62,13 @@ function els(): {
     bootstrapBtn: document.getElementById("ticket-flow-bootstrap") as HTMLButtonElement | null,
     resumeBtn: document.getElementById("ticket-flow-resume") as HTMLButtonElement | null,
     refreshBtn: document.getElementById("ticket-flow-refresh") as HTMLButtonElement | null,
+    stopBtn: document.getElementById("ticket-flow-stop") as HTMLButtonElement | null,
   };
 }
 
 function setButtonsDisabled(disabled: boolean): void {
-  const { bootstrapBtn, resumeBtn, refreshBtn } = els();
-  [bootstrapBtn, resumeBtn, refreshBtn].forEach((btn) => {
+  const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn } = els();
+  [bootstrapBtn, resumeBtn, refreshBtn, stopBtn].forEach((btn) => {
     if (btn) btn.disabled = disabled;
   });
 }
@@ -227,6 +229,8 @@ function summarizeReason(run: FlowRun | null): string {
 }
 
 async function loadTicketFiles(): Promise<void> {
+  const { tickets } = els();
+  if (tickets) tickets.textContent = "Loading tickets…";
   try {
     const data = (await api("/api/flows/ticket_flow/tickets")) as {
       ticket_dir?: string;
@@ -240,6 +244,8 @@ async function loadTicketFiles(): Promise<void> {
 }
 
 async function loadHandoffHistory(runId: string | null): Promise<void> {
+  const { history } = els();
+  if (history) history.textContent = "Loading handoff history…";
   if (!runId) {
     renderHandoffHistory(null, null);
     return;
@@ -256,7 +262,7 @@ async function loadHandoffHistory(runId: string | null): Promise<void> {
 }
 
 async function loadTicketFlow(): Promise<void> {
-  const { status, run, current, reason, resumeBtn, bootstrapBtn } = els();
+  const { status, run, current, reason, resumeBtn, bootstrapBtn, stopBtn } = els();
   try {
     const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
     const latest = (runs && runs[0]) || null;
@@ -273,6 +279,11 @@ async function loadTicketFlow(): Promise<void> {
 
     if (resumeBtn) {
       resumeBtn.disabled = !latest?.id || latest.status !== "paused";
+    }
+    if (stopBtn) {
+      const stoppable =
+        latest?.status === "running" || latest?.status === "pending";
+      stopBtn.disabled = !latest?.id || !stoppable;
     }
     if (bootstrapBtn) {
       const busy = latest?.status === "running" || latest?.status === "pending";
@@ -291,6 +302,10 @@ async function loadTicketFlow(): Promise<void> {
 async function bootstrapTicketFlow(): Promise<void> {
   const { bootstrapBtn } = els();
   if (!bootstrapBtn) return;
+  const confirmed = window.confirm(
+    "Create TICKET-001.md (if missing) and start the ticket flow?"
+  );
+  if (!confirmed) return;
   setButtonsDisabled(true);
   bootstrapBtn.textContent = "Starting…";
   try {
@@ -330,13 +345,35 @@ async function resumeTicketFlow(): Promise<void> {
   }
 }
 
+async function stopTicketFlow(): Promise<void> {
+  const { stopBtn } = els();
+  if (!stopBtn) return;
+  if (!currentRunId) {
+    flash("No ticket flow run to stop", "info");
+    return;
+  }
+  setButtonsDisabled(true);
+  stopBtn.textContent = "Stopping…";
+  try {
+    await api(`/api/flows/${currentRunId}/stop`, { method: "POST", body: {} });
+    flash("Ticket flow stopping");
+    await loadTicketFlow();
+  } catch (err) {
+    flash((err as Error).message || "Failed to stop ticket flow", "error");
+  } finally {
+    stopBtn.textContent = "Stop";
+    setButtonsDisabled(false);
+  }
+}
+
 export function initTicketFlow(): void {
-  const { card, bootstrapBtn, resumeBtn, refreshBtn } = els();
+  const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn } = els();
   if (!card || card.dataset.ticketInitialized === "1") return;
   card.dataset.ticketInitialized = "1";
 
   if (bootstrapBtn) bootstrapBtn.addEventListener("click", bootstrapTicketFlow);
   if (resumeBtn) resumeBtn.addEventListener("click", resumeTicketFlow);
+  if (stopBtn) stopBtn.addEventListener("click", stopTicketFlow);
   if (refreshBtn) refreshBtn.addEventListener("click", loadTicketFlow);
 
   loadTicketFlow();
