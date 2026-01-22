@@ -23,8 +23,8 @@ class RepoNotFoundError(Exception):
     pass
 
 
-def find_repo_root(start: Path) -> Path:
-    current = start.resolve()
+def find_repo_root(start: Optional[Path] = None) -> Path:
+    current = (start or Path.cwd()).resolve()
     for parent in [current] + list(current.parents):
         if (parent / ".git").exists():
             return parent

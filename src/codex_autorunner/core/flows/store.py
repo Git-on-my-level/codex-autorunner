@@ -5,7 +5,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, cast
 
 from .models import (
     FlowArtifact,
@@ -27,15 +27,15 @@ def now_iso() -> str:
 class FlowStore:
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self._local: threading.local = threading.local()  # type: ignore[assignment]
+        self._local: threading.local = threading.local()
 
     def _get_conn(self) -> sqlite3.Connection:
         if not hasattr(self._local, "conn"):
-            self._local.conn = sqlite3.connect(  # type: ignore[assignment]
+            self._local.conn = sqlite3.connect(
                 self.db_path, check_same_thread=False, isolation_level=None
             )
             self._local.conn.row_factory = sqlite3.Row
-        return self._local.conn  # type: ignore[no-any-return]
+        return cast(sqlite3.Connection, self._local.conn)
 
     @contextmanager
     def transaction(self) -> Generator[sqlite3.Connection, None, None]:

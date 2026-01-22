@@ -1,6 +1,5 @@
 import dataclasses
 import json
-import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,8 +7,6 @@ from typing import Any, Iterator, Optional
 
 from .locks import file_lock
 from .sqlite_utils import open_sqlite
-
-_logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
@@ -98,75 +95,6 @@ class SessionRecord:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _coerce_int(value: Any) -> Optional[int]:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    return None
-
-
-def _coerce_str(value: Any) -> Optional[str]:
-    if isinstance(value, str) and value:
-        return value
-    return None
-
-
-def _load_legacy_state_json(path: Path) -> Optional[RunnerState]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    state = RunnerState(
-        last_run_id=_coerce_int(payload.get("last_run_id")),
-        status=_coerce_str(payload.get("status")) or "idle",
-        last_exit_code=_coerce_int(payload.get("last_exit_code")),
-        last_run_started_at=_coerce_str(payload.get("last_run_started_at")),
-        last_run_finished_at=_coerce_str(payload.get("last_run_finished_at")),
-        autorunner_agent_override=_coerce_str(payload.get("autorunner_agent_override")),
-        autorunner_model_override=_coerce_str(payload.get("autorunner_model_override")),
-        autorunner_effort_override=_coerce_str(
-            payload.get("autorunner_effort_override")
-        ),
-        autorunner_approval_policy=_coerce_str(
-            payload.get("autorunner_approval_policy")
-        ),
-        autorunner_sandbox_mode=_coerce_str(payload.get("autorunner_sandbox_mode")),
-        autorunner_workspace_write_network=(
-            payload.get("autorunner_workspace_write_network")
-            if isinstance(payload.get("autorunner_workspace_write_network"), bool)
-            else None
-        ),
-        runner_stop_after_runs=_coerce_int(payload.get("runner_stop_after_runs")),
-        runner_pid=_coerce_int(payload.get("runner_pid")),
-    )
-    sessions: dict[str, SessionRecord] = {}
-    sessions_payload = payload.get("sessions")
-    if isinstance(sessions_payload, dict):
-        for session_id, record_payload in sessions_payload.items():
-            if not isinstance(session_id, str) or not session_id:
-                continue
-            record = (
-                SessionRecord.from_dict(record_payload)
-                if isinstance(record_payload, dict)
-                else None
-            )
-            if record is not None:
-                sessions[session_id] = record
-    repo_to_session: dict[str, str] = {}
-    repo_payload = payload.get("repo_to_session")
-    if isinstance(repo_payload, dict):
-        for repo_key, session_id in repo_payload.items():
-            if not isinstance(repo_key, str) or not repo_key:
-                continue
-            if not isinstance(session_id, str) or not session_id:
-                continue
-            repo_to_session[repo_key] = session_id
-    state.sessions = sessions
-    state.repo_to_session = repo_to_session
-    return state
 
 
 def _ensure_state_schema(conn) -> None:
@@ -270,22 +198,6 @@ def _apply_overrides(state: RunnerState, raw: Optional[str]) -> None:
 
 
 def load_state(state_path: Path) -> RunnerState:
-    legacy_path = state_path.with_name("state.json")
-    # Legacy JSON migration (remove after old state.json is retired).
-    if not state_path.exists() and legacy_path.exists():
-        migrated = _load_legacy_state_json(legacy_path)
-        if migrated is not None:
-            try:
-                save_state(state_path, migrated)
-                return migrated
-            except Exception:
-                _logger.warning(
-                    "Failed to migrate legacy state from %s to %s. The original JSON file is preserved.",
-                    legacy_path,
-                    state_path,
-                    exc_info=True,
-                )
-                raise
     with open_sqlite(state_path) as conn:
         _ensure_state_schema(conn)
         row = conn.execute(

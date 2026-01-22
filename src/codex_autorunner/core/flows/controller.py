@@ -63,26 +63,41 @@ class FlowController:
 
             self._prepare_artifacts_dir(run_id)
 
+            # Create record synchronously (PENDING status)
+            record = self.store.create_flow_run(
+                run_id=run_id,
+                flow_type=self.definition.flow_type,
+                input_data=input_data,
+                metadata=metadata,
+            )
+
+            # Set to RUNNING status before starting task
+            now = now_iso()
+            updated = self.store.update_flow_run_status(
+                run_id=run_id,
+                status=FlowRunStatus.RUNNING,
+                started_at=now,
+                state=initial_state or {},
+            )
+            if not updated:
+                raise RuntimeError(f"Failed to start flow run {run_id}")
+            record = updated
+
             runtime = FlowRuntime(
                 definition=self.definition,
                 store=self.store,
                 emit_event=self._emit_event,
             )
 
+            # Create task with initial state (record already exists and is RUNNING)
             task = asyncio.create_task(
                 runtime.run_flow(
                     run_id=run_id,
-                    input_data=input_data,
-                    initial_state=initial_state,
-                    metadata=metadata,
+                    initial_state=initial_state or {},
                 )
             )
             task.add_done_callback(lambda t: self._active_tasks.pop(run_id, None))
             self._active_tasks[run_id] = task
-
-            record = self.store.get_flow_run(run_id)
-            if not record:
-                raise RuntimeError(f"Failed to get record for run {run_id}")
 
             return record
 

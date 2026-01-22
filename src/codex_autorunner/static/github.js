@@ -51,6 +51,7 @@ async function loadGitHubStatus() {
     const syncBtn = $("github-sync-pr");
     const openFilesBtn = $("github-open-pr-files");
     const copyPrBtn = $("github-copy-pr");
+    const card = $("github-card");
     try {
         const data = await api("/api/github/status");
         const gh = (data.gh || {});
@@ -83,6 +84,9 @@ async function loadGitHubStatus() {
             text: repo?.nameWithOwner || "–",
             title: repo?.url || "",
         });
+        if (card) {
+            card.dataset.githubRepoUrl = repo?.url || "";
+        }
         setText($("github-branch"), git.branch || "–");
         setLink($("github-issue-link"), {
             href: issue?.url,
@@ -142,13 +146,14 @@ function prFlowEls() {
         step: $("pr-flow-step"),
         cycle: $("pr-flow-cycle"),
         review: $("pr-flow-review"),
-        reviewLink: $("pr-flow-review-link"),
-        logLink: $("pr-flow-log-link"),
+        specLink: $("pr-flow-spec-link"),
+        progressLink: $("pr-flow-progress-link"),
+        patchLink: $("pr-flow-patch-link"),
+        logsLink: $("pr-flow-logs-link"),
         finalLink: $("pr-flow-final-link"),
         startBtn: $("pr-flow-start"),
         stopBtn: $("pr-flow-stop"),
         resumeBtn: $("pr-flow-resume"),
-        collectBtn: $("pr-flow-collect"),
     };
 }
 function formatMissingPrFlowElements(missing) {
@@ -172,32 +177,52 @@ function missingPrFlowElements(els) {
         ["pr-flow-step", els.step],
         ["pr-flow-cycle", els.cycle],
         ["pr-flow-review", els.review],
+        ["pr-flow-spec-link", els.specLink],
+        ["pr-flow-progress-link", els.progressLink],
+        ["pr-flow-patch-link", els.patchLink],
+        ["pr-flow-logs-link", els.logsLink],
+        ["pr-flow-final-link", els.finalLink],
         ["pr-flow-start", els.startBtn],
         ["pr-flow-stop", els.stopBtn],
         ["pr-flow-resume", els.resumeBtn],
-        ["pr-flow-collect", els.collectBtn],
     ];
     return required.filter(([, el]) => !el).map(([id]) => id);
 }
-function formatReviewSummary(summary) {
-    if (!summary)
-        return "–";
-    const total = summary.total ?? 0;
-    const major = summary.major ?? 0;
-    const minor = summary.minor ?? 0;
-    if (total === 0)
-        return "No issues";
-    return `${total} issues (${major} major, ${minor} minor)`;
+function formatCount(value) {
+    if (typeof value === "number")
+        return String(value);
+    if (typeof value === "string" && value.trim())
+        return value;
+    return "–";
 }
-function setArtifactLink(el, kind, hasValue) {
+function setFlowStatusPill(el, status) {
     if (!el)
         return;
-    if (!hasValue) {
+    const normalized = status || "idle";
+    el.textContent = normalized;
+    el.classList.remove("pill-idle", "pill-running", "pill-error", "pill-warn");
+    if (normalized === "running" || normalized === "pending") {
+        el.classList.add("pill-running");
+    }
+    else if (normalized === "failed") {
+        el.classList.add("pill-error");
+    }
+    else if (normalized === "stopping" || normalized === "stopped") {
+        el.classList.add("pill-warn");
+    }
+    else {
+        el.classList.add("pill-idle");
+    }
+}
+function setArtifactLink(el, runId, kind, hasValue) {
+    if (!el)
+        return;
+    if (!runId || !hasValue) {
         setLink(el, { href: undefined, text: el.textContent || "–" });
         return;
     }
     setLink(el, {
-        href: resolvePath(`/api/github/pr_flow/artifact?kind=${kind}`),
+        href: resolvePath(`/api/flows/${runId}/artifact?kind=${kind}`),
         text: el.textContent || kind,
         title: `Open ${kind.replace("_", " ")}`,
     });
@@ -246,31 +271,151 @@ function restoreTemporaryNote(note, previous, message) {
         note.textContent = previous;
     }
 }
+const PR_FLOW_RUN_ID_KEY = "prFlowRunId";
+let prFlowRunId = null;
+let prFlowEventStopper = null;
+function readStoredPrFlowRunId() {
+    try {
+        const stored = window.localStorage.getItem(PR_FLOW_RUN_ID_KEY);
+        if (stored && stored.trim())
+            return stored.trim();
+    }
+    catch (_err) {
+        return null;
+    }
+    return null;
+}
+function currentPrFlowRunId() {
+    if (prFlowRunId !== null)
+        return prFlowRunId;
+    prFlowRunId = readStoredPrFlowRunId();
+    return prFlowRunId;
+}
+function setPrFlowRunId(runId) {
+    prFlowRunId = runId;
+    try {
+        if (runId) {
+            window.localStorage.setItem(PR_FLOW_RUN_ID_KEY, runId);
+        }
+        else {
+            window.localStorage.removeItem(PR_FLOW_RUN_ID_KEY);
+        }
+    }
+    catch (_err) {
+        // ignore storage failures
+    }
+    const card = $("github-card");
+    if (card) {
+        card.dataset.prFlowRunId = runId || "";
+    }
+}
+function stopPrFlowEventStream() {
+    if (prFlowEventStopper) {
+        prFlowEventStopper();
+        prFlowEventStopper = null;
+    }
+}
+function startPrFlowEventStream(runId) {
+    stopPrFlowEventStream();
+    if (!runId)
+        return;
+    const note = $("github-note");
+    const stop = streamEvents(`/api/flows/${runId}/events`, {
+        onMessage: (_data, _event) => {
+            void loadPrFlowStatus();
+        },
+        onError: (err) => {
+            setTemporaryNote(note, err.message || "PR flow events unavailable");
+            if (stop)
+                stop();
+        },
+    });
+    prFlowEventStopper = stop;
+}
+function normalizePrFlowRef(ref, mode, repoUrl) {
+    const trimmed = ref.trim();
+    if (!trimmed)
+        return null;
+    if (/^https?:\/\//i.test(trimmed))
+        return trimmed;
+    const normalizedRepo = (repoUrl || "").trim().replace(/\/$/, "");
+    const number = trimmed.replace(/^#/, "");
+    if (!normalizedRepo || !/^\d+$/.test(number))
+        return null;
+    const kind = mode === "pr" ? "pull" : "issues";
+    return `${normalizedRepo}/${kind}/${number}`;
+}
+async function loadPrFlowArtifacts(runId) {
+    const els = prFlowEls();
+    const fallback = () => {
+        setArtifactLink(els.specLink, runId, "spec.md", false);
+        setArtifactLink(els.progressLink, runId, "progress.md", false);
+        setArtifactLink(els.patchLink, runId, "patch.diff", false);
+        setArtifactLink(els.logsLink, runId, "logs.jsonl", false);
+        setArtifactLink(els.finalLink, runId, "final_report.md", false);
+    };
+    if (!runId) {
+        fallback();
+        return;
+    }
+    try {
+        const data = await api(`/api/flows/${runId}/artifacts`);
+        const kinds = new Set();
+        data.forEach((entry) => {
+            if (entry && typeof entry.kind === "string") {
+                kinds.add(entry.kind);
+            }
+        });
+        setArtifactLink(els.specLink, runId, "spec.md", kinds.has("spec.md"));
+        setArtifactLink(els.progressLink, runId, "progress.md", kinds.has("progress.md"));
+        setArtifactLink(els.patchLink, runId, "patch.diff", kinds.has("patch.diff"));
+        setArtifactLink(els.logsLink, runId, "logs.jsonl", kinds.has("logs.jsonl"));
+        setArtifactLink(els.finalLink, runId, "final_report.md", kinds.has("final_report.md"));
+    }
+    catch (_err) {
+        fallback();
+    }
+}
 async function loadPrFlowStatus() {
     const els = prFlowEls();
     if (!els.statusPill)
         return;
+    const runId = currentPrFlowRunId();
+    if (!runId) {
+        setFlowStatusPill(els.statusPill, "idle");
+        setText(els.step, "–");
+        setText(els.cycle, "–");
+        setText(els.review, "–");
+        if (els.startBtn)
+            els.startBtn.disabled = false;
+        if (els.stopBtn)
+            els.stopBtn.disabled = true;
+        if (els.resumeBtn)
+            els.resumeBtn.disabled = true;
+        await loadPrFlowArtifacts(runId);
+        return;
+    }
     try {
-        const data = await api("/api/github/pr_flow/status");
-        const flow = (data.flow || {});
-        statusPill(els.statusPill, flow.status || "idle");
-        setText(els.step, flow.step || "–");
-        setText(els.cycle, flow.cycle ? String(flow.cycle) : "–");
-        setText(els.review, formatReviewSummary(flow.review_summary));
-        setArtifactLink(els.reviewLink, "review_bundle", !!flow.review_bundle_path);
-        setArtifactLink(els.logLink, "workflow_log", !!flow.workflow_log_path);
-        setArtifactLink(els.finalLink, "final_report", !!flow.final_report_path);
-        const running = flow.status === "running" || flow.status === "stopping";
+        const data = await api(`/api/flows/${runId}/status`);
+        const state = (data.state || {});
+        const status = data.status;
+        setFlowStatusPill(els.statusPill, status || "idle");
+        setText(els.step, data.current_step || "–");
+        setText(els.cycle, formatCount(state.cycle_count));
+        setText(els.review, formatCount(state.feedback_count));
+        const running = status === "running" || status === "pending" || status === "stopping";
         if (els.startBtn)
             els.startBtn.disabled = running;
         if (els.stopBtn)
             els.stopBtn.disabled = !running;
         if (els.resumeBtn)
             els.resumeBtn.disabled = running;
+        await loadPrFlowArtifacts(runId);
     }
     catch (_err) {
-        statusPill(els.statusPill, "error");
+        setFlowStatusPill(els.statusPill, "failed");
         setText(els.step, "Error");
+        await loadPrFlowArtifacts(runId);
     }
 }
 function prFlowPayload() {
@@ -281,28 +426,36 @@ function prFlowPayload() {
     const ref = (els.ref.value || "").trim();
     if (!ref)
         return null;
-    const payload = {
-        mode,
-        draft: !!els.draft?.checked,
-        base_branch: (els.base?.value || "").trim() || null,
-        stop_condition: (els.until?.value || "").trim() || null,
+    const card = $("github-card");
+    const repoUrl = card?.dataset.githubRepoUrl || null;
+    const targetUrl = normalizePrFlowRef(ref, mode, repoUrl);
+    if (!targetUrl)
+        return null;
+    const input_data = {
+        input_type: mode,
+        issue_url: mode === "issue" ? targetUrl : null,
+        pr_url: mode === "pr" ? targetUrl : null,
     };
+    const metadata = {};
+    if (ref !== targetUrl)
+        metadata.raw_ref = ref;
+    const baseBranch = (els.base?.value || "").trim();
+    if (baseBranch)
+        metadata.base_branch = baseBranch;
+    const stopCondition = (els.until?.value || "").trim();
+    if (stopCondition)
+        metadata.stop_condition = stopCondition;
     const cycles = parseInt(els.cycles?.value || "", 10);
     if (!Number.isNaN(cycles) && cycles > 0)
-        payload.max_cycles = cycles;
+        metadata.max_cycles = cycles;
     const runs = parseInt(els.runs?.value || "", 10);
     if (!Number.isNaN(runs) && runs > 0)
-        payload.max_implementation_runs = runs;
+        metadata.max_implementation_runs = runs;
     const timeout = parseInt(els.timeout?.value || "", 10);
     if (!Number.isNaN(timeout) && timeout >= 0)
-        payload.max_wallclock_seconds = timeout;
-    if (mode === "issue") {
-        payload.issue = ref;
-    }
-    else {
-        payload.pr = ref;
-    }
-    return payload;
+        metadata.max_wallclock_seconds = timeout;
+    metadata.draft = !!els.draft?.checked;
+    return Object.keys(metadata).length ? { input_data, metadata } : { input_data };
 }
 async function startPrFlow() {
     const els = prFlowEls();
@@ -311,17 +464,22 @@ async function startPrFlow() {
     setTemporaryNote(note, "PR flow: click received.");
     const payload = prFlowPayload();
     if (!payload) {
-        setTemporaryNote(note, "Provide an issue or PR reference.");
-        flash("Provide an issue or PR reference", "error");
+        setTemporaryNote(note, "Provide a valid issue or PR reference.");
+        flash("Provide a valid issue or PR reference", "error");
         return;
     }
-    const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
+    const buttons = [els.startBtn, els.stopBtn, els.resumeBtn];
     const prevDisabled = setButtonsDisabled(buttons, true);
     setButtonBusy(els.startBtn, true);
     const message = "Starting PR flow...";
     const prevNote = setTemporaryNote(note, message);
     try {
-        await api("/api/github/pr_flow/start", { method: "POST", body: payload });
+        const data = await api("/api/flows/pr_flow/start", { method: "POST", body: payload });
+        const runId = data.id;
+        if (runId) {
+            setPrFlowRunId(runId);
+            startPrFlowEventStream(runId);
+        }
         flash("PR flow started");
     }
     catch (err) {
@@ -338,13 +496,16 @@ async function stopPrFlow() {
     const note = $("github-note");
     markPrFlowClick("stop");
     setTemporaryNote(note, "PR flow: click received.");
-    const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
+    const buttons = [els.startBtn, els.stopBtn, els.resumeBtn];
     const prevDisabled = setButtonsDisabled(buttons, true);
     setButtonBusy(els.stopBtn, true);
     const message = "Stopping PR flow...";
     const prevNote = setTemporaryNote(note, message);
     try {
-        await api("/api/github/pr_flow/stop", { method: "POST", body: {} });
+        const runId = currentPrFlowRunId();
+        if (!runId)
+            throw new Error("No active PR flow run");
+        await api(`/api/flows/${runId}/stop`, { method: "POST", body: {} });
         flash("PR flow stopping");
     }
     catch (err) {
@@ -361,40 +522,21 @@ async function resumePrFlow() {
     const note = $("github-note");
     markPrFlowClick("resume");
     setTemporaryNote(note, "PR flow: click received.");
-    const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
+    const buttons = [els.startBtn, els.stopBtn, els.resumeBtn];
     const prevDisabled = setButtonsDisabled(buttons, true);
     setButtonBusy(els.resumeBtn, true);
     const message = "Resuming PR flow...";
     const prevNote = setTemporaryNote(note, message);
     try {
-        await api("/api/github/pr_flow/resume", { method: "POST", body: {} });
+        const runId = currentPrFlowRunId();
+        if (!runId)
+            throw new Error("No PR flow run to resume");
+        await api(`/api/flows/${runId}/resume`, { method: "POST", body: {} });
+        startPrFlowEventStream(runId);
         flash("PR flow resumed");
     }
     catch (err) {
         flash(err.message || "PR flow resume failed", "error");
-    }
-    finally {
-        restoreButtonsDisabled(buttons, prevDisabled);
-        restoreTemporaryNote(note, prevNote, message);
-    }
-    await loadPrFlowStatus();
-}
-async function collectPrFlow() {
-    const els = prFlowEls();
-    const note = $("github-note");
-    markPrFlowClick("collect");
-    setTemporaryNote(note, "PR flow: click received.");
-    const buttons = [els.startBtn, els.stopBtn, els.resumeBtn, els.collectBtn];
-    const prevDisabled = setButtonsDisabled(buttons, true);
-    setButtonBusy(els.collectBtn, true);
-    const message = "Collecting PR reviews...";
-    const prevNote = setTemporaryNote(note, message);
-    try {
-        await api("/api/github/pr_flow/collect", { method: "POST", body: {} });
-        flash("Review bundle updated");
-    }
-    catch (err) {
-        flash(err.message || "Review collection failed", "error");
     }
     finally {
         restoreButtonsDisabled(buttons, prevDisabled);
@@ -429,19 +571,6 @@ async function syncPr() {
         syncBtn.classList.remove("loading");
         restoreTemporaryNote(note, prevNote, message);
     }
-}
-function startPrFlowEventStream() {
-    const note = $("github-note");
-    const stop = streamEvents("/api/github/pr_flow/events", {
-        onMessage: (_data, _event) => {
-            void loadPrFlowStatus();
-        },
-        onError: (err) => {
-            setTemporaryNote(note, err.message || "PR flow events unavailable");
-            if (stop)
-                stop();
-        },
-    });
 }
 export function initGitHub() {
     const card = $("github-card");
@@ -478,8 +607,6 @@ export function initGitHub() {
             els.stopBtn.addEventListener("click", stopPrFlow);
         if (els.resumeBtn)
             els.resumeBtn.addEventListener("click", resumePrFlow);
-        if (els.collectBtn)
-            els.collectBtn.addEventListener("click", collectPrFlow);
     }
     // Initial load + auto-refresh while dashboard is active.
     loadGitHubStatus();
@@ -496,9 +623,9 @@ export function initGitHub() {
             callback: loadPrFlowStatus,
             tabId: null,
             interval: CONSTANTS.UI?.AUTO_REFRESH_INTERVAL || 15000,
-            refreshOnActivation: true,
-            immediate: false,
-        });
-        startPrFlowEventStream();
-    }
+        refreshOnActivation: true,
+        immediate: false,
+    });
+    startPrFlowEventStream(currentPrFlowRunId());
+}
 }

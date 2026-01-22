@@ -125,39 +125,6 @@ class GithubPrSyncRequest(Payload):
     mode: Optional[str] = None
 
 
-class GithubPrFlowStartRequest(Payload):
-    mode: Optional[str] = "issue"
-    issue: Optional[str] = None
-    pr: Optional[str] = None
-    draft: Optional[bool] = None
-    base_branch: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("base_branch", "baseBranch", "base")
-    )
-    stop_condition: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("stop_condition", "stopCondition", "until"),
-    )
-    max_cycles: Optional[int] = Field(
-        default=None, validation_alias=AliasChoices("max_cycles", "maxCycles")
-    )
-    max_implementation_runs: Optional[int] = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "max_implementation_runs", "maxImplementationRuns"
-        ),
-    )
-    max_wallclock_seconds: Optional[int] = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "max_wallclock_seconds", "maxWallclockSeconds", "timeout_seconds"
-        ),
-    )
-
-
-class GithubPrFlowActionRequest(Payload):
-    pass
-
-
 class SessionStopRequest(Payload):
     session_id: Optional[str] = None
     repo_path: Optional[str] = None

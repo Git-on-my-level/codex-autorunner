@@ -48,7 +48,7 @@ class AgentOrchestrator:
     ) -> dict[str, Any]:
         raise NotImplementedError
 
-    async def stream_turn_events(
+    def stream_turn_events(
         self,
         workspace_root: Path,
         conversation_id: str,

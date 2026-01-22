@@ -90,8 +90,8 @@ async def prepare_workspace_step(record, input_data: dict) -> StepOutcome:
         if worktree_path.exists():
             _logger.info("Worktree already exists, reusing: %s", worktree_path)
         else:
-            run_git(["worktree", "add", str(worktree_path), str(repo_root)], repo_root)
-            run_git(["worktree", "checkout", str(worktree_path)], repo_root)
+            # Create worktree from HEAD (current commit) to avoid branch-in-use errors
+            run_git(["worktree", "add", str(worktree_path), "HEAD"], repo_root)
             _logger.info("Created worktree: %s", worktree_path)
 
         state.workspace_path = str(worktree_path)
@@ -216,20 +216,27 @@ async def finalize_step(record, input_data: dict) -> StepOutcome:
 def _parse_issue_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
     import re
 
-    pattern = r"github\.com/([^/]+)/([^/]+)/issues/(\d+)"
+    # Match github.com issue URLs, ensuring github.com is a proper domain
+    pattern = r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)"
     match = re.search(pattern, url)
     if match:
-        return match.group(1), match.group(2), int(match.group(3))
+        # Double-check the URL actually contains github.com as a domain
+        # (not as a substring like not-github.com)
+        if "//github.com/" in url or "://github.com/" in url:
+            return match.group(1), match.group(2), int(match.group(3))
     return None, None, None
 
 
 def _parse_pr_url(url: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
     import re
 
-    pattern = r"github\.com/([^/]+)/([^/]+)/pull/(\d+)"
+    # Match github.com PR URLs, ensuring github.com is a proper domain
+    pattern = r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/pull/(\d+)"
     match = re.search(pattern, url)
     if match:
-        return match.group(1), match.group(2), int(match.group(3))
+        # Double-check the URL actually contains github.com as a domain
+        if "//github.com/" in url or "://github.com/" in url:
+            return match.group(1), match.group(2), int(match.group(3))
     return None, None, None
 
 

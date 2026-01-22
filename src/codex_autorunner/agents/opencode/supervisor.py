@@ -61,12 +61,14 @@ class OpenCodeSupervisor:
         self._idle_ttl_seconds = idle_ttl_seconds
         if password and not username:
             username = "opencode"
-        self._auth = (username, password) if password else None
+        self._auth: Optional[tuple[str, str]] = (
+            (username, password) if password and username else None
+        )
         self._base_env = base_env
         self._base_url = base_url
         self._subagent_models = subagent_models or {}
         self._handles: dict[str, OpenCodeHandle] = {}
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
 
     async def get_client(self, workspace_root: Path) -> OpenCodeClient:
         canonical_root = canonical_workspace_root(workspace_root)
@@ -79,7 +81,7 @@ class OpenCodeSupervisor:
         return handle.client
 
     async def close_all(self) -> None:
-        async with self._lock:
+        async with self._get_lock():
             handles = list(self._handles.values())
             self._handles = {}
         for handle in handles:
@@ -98,7 +100,7 @@ class OpenCodeSupervisor:
     async def mark_turn_started(self, workspace_root: Path) -> None:
         canonical_root = canonical_workspace_root(workspace_root)
         workspace_id = workspace_id_for_path(canonical_root)
-        async with self._lock:
+        async with self._get_lock():
             handle = self._handles.get(workspace_id)
             if handle is None:
                 return
@@ -108,7 +110,7 @@ class OpenCodeSupervisor:
     async def mark_turn_finished(self, workspace_root: Path) -> None:
         canonical_root = canonical_workspace_root(workspace_root)
         workspace_id = workspace_id_for_path(canonical_root)
-        async with self._lock:
+        async with self._get_lock():
             handle = self._handles.get(workspace_id)
             if handle is None:
                 return
@@ -187,7 +189,7 @@ class OpenCodeSupervisor:
     ) -> OpenCodeHandle:
         handles_to_close: list[OpenCodeHandle] = []
         evicted_id: Optional[str] = None
-        async with self._lock:
+        async with self._get_lock():
             existing = self._handles.get(workspace_id)
             if existing is not None:
                 existing.last_used_at = time.monotonic()
@@ -287,7 +289,7 @@ class OpenCodeSupervisor:
                     logging.WARNING,
                     "opencode.openapi.fetch_failed",
                     base_url=base_url,
-                    exc=str(exc),
+                    exc=exc,
                 )
                 handle.openapi_spec = {}
             handle.started = True
@@ -356,7 +358,7 @@ class OpenCodeSupervisor:
                     logging.WARNING,
                     "opencode.openapi.fetch_failed",
                     base_url=base_url,
-                    exc=str(exc),
+                    exc=exc,
                 )
                 handle.openapi_spec = {}
             self._start_stdout_drain(handle)
@@ -468,8 +470,13 @@ class OpenCodeSupervisor:
                 return match.group(1)
 
     async def _pop_idle_handles(self) -> list[OpenCodeHandle]:
-        async with self._lock:
+        async with self._get_lock():
             return self._pop_idle_handles_locked()
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     def _pop_idle_handles_locked(self) -> list[OpenCodeHandle]:
         if not self._idle_ttl_seconds or self._idle_ttl_seconds <= 0:

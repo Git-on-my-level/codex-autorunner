@@ -1,7 +1,15 @@
 {
   "findings": [
+    "python:class:src/codex_autorunner/integrations/github/chatops.py:89:GitHubChatOpsPoller",
+    "python:class:src/codex_autorunner/web/schemas.py:113:GithubIssueRequest",
+    "python:class:src/codex_autorunner/web/schemas.py:117:GithubContextRequest",
+    "python:class:src/codex_autorunner/web/schemas.py:121:GithubPrSyncRequest",
+    "python:class:src/codex_autorunner/web/schemas.py:128:GithubPrFlowStartRequest",
+    "python:class:src/codex_autorunner/web/schemas.py:157:GithubPrFlowActionRequest",
     "python:function:src/codex_autorunner/agents/execution/policy.py:143:normalize_sandbox_policy",
     "python:function:src/codex_autorunner/agents/execution/policy.py:208:map_approval_to_permission",
-    "python:function:src/codex_autorunner/agents/execution/policy.py:244:build_codex_sandbox_policy"
+    "python:function:src/codex_autorunner/agents/execution/policy.py:244:build_codex_sandbox_policy",
+    "python:function:src/codex_autorunner/integrations/agents/codex_backend.py:174:description_for_approval",
+    "python:function:src/codex_autorunner/integrations/github/service.py:257:parse_pr_input"
   ]
 }

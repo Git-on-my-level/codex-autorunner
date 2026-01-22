@@ -50,30 +50,36 @@ class FlowRuntime:
     async def run_flow(
         self,
         run_id: str,
-        input_data: Dict[str, Any],
         initial_state: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
     ) -> FlowRunRecord:
-        record = self.store.create_flow_run(
-            run_id=run_id,
-            flow_type=self.definition.flow_type,
-            input_data=input_data,
-            metadata=metadata,
-        )
+        record = self.store.get_flow_run(run_id)
+        if not record:
+            raise RuntimeError(f"Flow run {run_id} not found")
 
         self._emit(FlowEventType.FLOW_STARTED, run_id)
 
         try:
-            now = now_iso()
-            updated = self.store.update_flow_run_status(
-                run_id=run_id,
-                status=FlowRunStatus.RUNNING,
-                started_at=now,
-                state=initial_state or {},
-            )
-            if not updated:
-                raise RuntimeError(f"Failed to start flow run {run_id}")
-            record = updated
+            # Record should already be RUNNING from start_flow
+            if record.status != FlowRunStatus.RUNNING:
+                now = now_iso()
+                updated = self.store.update_flow_run_status(
+                    run_id=run_id,
+                    status=FlowRunStatus.RUNNING,
+                    started_at=now,
+                    state=initial_state or {},
+                )
+                if not updated:
+                    raise RuntimeError(f"Failed to start flow run {run_id}")
+                record = updated
+            elif initial_state is not None:
+                # Update state if provided (for resume cases)
+                updated = self.store.update_flow_run_status(
+                    run_id=run_id,
+                    status=record.status,
+                    state=initial_state,
+                )
+                if updated:
+                    record = updated
 
             next_steps: Set[str] = {self.definition.initial_step}
 
