@@ -1113,6 +1113,7 @@ class DocChatService:
                     question_policy="auto_first_option",
                     should_stop=active.interrupt_event.is_set,
                     ready_event=ready_event,
+                    stall_timeout_seconds=self.engine.config.opencode.session_stall_timeout_seconds,
                 )
             )
             with contextlib.suppress(asyncio.TimeoutError):

@@ -120,6 +120,27 @@ class OpenCodeEventFormatter:
             lines.append("exec")
             lines.append(f"tool: {tool_name}")
 
+        input_preview: Optional[str] = None
+        for key in ("input", "command", "cmd", "script"):
+            value = part.get(key)
+            if isinstance(value, str) and value.strip():
+                input_preview = value.strip()
+                break
+        if input_preview is None:
+            args = part.get("args") or part.get("arguments") or part.get("params")
+            if isinstance(args, dict):
+                for key in ("command", "cmd", "script", "input"):
+                    value = args.get(key)
+                    if isinstance(value, str) and value.strip():
+                        input_preview = value.strip()
+                        break
+            elif isinstance(args, str) and args.strip():
+                input_preview = args.strip()
+        if input_preview:
+            if len(input_preview) > 240:
+                input_preview = input_preview[:240] + "…"
+            lines.append(f"input: {input_preview}")
+
         return lines
 
     def _format_patch_part(self, part: dict[str, Any]) -> list[str]:

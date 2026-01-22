@@ -815,6 +815,9 @@ def ingest_spec_cmd(
                 max_handles=config.app_server.max_handles,
                 idle_ttl_seconds=config.app_server.idle_ttl_seconds,
                 request_timeout=config.app_server.request_timeout,
+                turn_stall_timeout_seconds=config.app_server.turn_stall_timeout_seconds,
+                turn_stall_poll_interval_seconds=config.app_server.turn_stall_poll_interval_seconds,
+                turn_stall_recovery_min_interval_seconds=config.app_server.turn_stall_recovery_min_interval_seconds,
             )
             service = SpecIngestService(engine, app_server_supervisor=supervisor)
             try:
@@ -912,6 +915,9 @@ def snapshot(
                 max_handles=config.app_server.max_handles,
                 idle_ttl_seconds=config.app_server.idle_ttl_seconds,
                 request_timeout=config.app_server.request_timeout,
+                turn_stall_timeout_seconds=config.app_server.turn_stall_timeout_seconds,
+                turn_stall_poll_interval_seconds=config.app_server.turn_stall_poll_interval_seconds,
+                turn_stall_recovery_min_interval_seconds=config.app_server.turn_stall_recovery_min_interval_seconds,
             )
             from .core.snapshot import SnapshotService
 

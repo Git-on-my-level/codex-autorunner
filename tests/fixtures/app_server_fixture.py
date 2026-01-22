@@ -26,6 +26,7 @@ class FixtureServer:
         self._pending_approvals: dict[int, str] = {}
         self._pending_interrupts: set[str] = set()
         self._instance_id = uuid.uuid4().hex[:8]
+        self._missing_turns: dict[str, str] = {}
 
     def send(self, payload: dict) -> None:
         _write_line(self._lock, payload)
@@ -217,6 +218,22 @@ class FixtureServer:
                         "result": {"id": thread_id, "preview": "refreshed preview"},
                     }
                 )
+            elif self._scenario == "missing_turn_completed":
+                turn_id = self._missing_turns.pop(thread_id, None)
+                result = {"id": thread_id}
+                if turn_id:
+                    result["turns"] = [{"id": turn_id, "status": "completed"}]
+                    result["items"] = [
+                        {
+                            "turnId": turn_id,
+                            "itemId": "item-1",
+                            "type": "agentMessage",
+                            "content": [
+                                {"type": "output_text", "text": "recovered reply"}
+                            ],
+                        }
+                    ]
+                self.send({"id": req_id, "result": result})
             else:
                 self.send({"id": req_id, "result": {"id": thread_id}})
             return
@@ -269,6 +286,22 @@ class FixtureServer:
                 return
             if self._scenario == "interrupt":
                 self._pending_interrupts.add(turn_id)
+                return
+            if self._scenario == "missing_turn_completed":
+                thread_id = params.get("threadId")
+                if isinstance(thread_id, str):
+                    self._missing_turns[thread_id] = turn_id
+                self.send(
+                    {
+                        "method": "item/agentMessage/delta",
+                        "params": {
+                            "turnId": turn_id,
+                            "threadId": thread_id,
+                            "itemId": "item-1",
+                            "delta": "recovered ",
+                        },
+                    }
+                )
                 return
             self._send_turn_completed(turn_id)
             return

@@ -53,12 +53,14 @@ class OpenCodeSupervisor:
         base_env: Optional[Mapping[str, str]] = None,
         base_url: Optional[str] = None,
         subagent_models: Optional[Mapping[str, str]] = None,
+        session_stall_timeout_seconds: Optional[float] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._logger = logger or logging.getLogger(__name__)
         self._request_timeout = request_timeout
         self._max_handles = max_handles
         self._idle_ttl_seconds = idle_ttl_seconds
+        self._session_stall_timeout_seconds = session_stall_timeout_seconds
         if password and not username:
             username = "opencode"
         self._auth: Optional[tuple[str, str]] = (
@@ -69,6 +71,10 @@ class OpenCodeSupervisor:
         self._subagent_models = subagent_models or {}
         self._handles: dict[str, OpenCodeHandle] = {}
         self._lock: Optional[asyncio.Lock] = None
+
+    @property
+    def session_stall_timeout_seconds(self) -> Optional[float]:
+        return self._session_stall_timeout_seconds
 
     async def get_client(self, workspace_root: Path) -> OpenCodeClient:
         canonical_root = canonical_workspace_root(workspace_root)

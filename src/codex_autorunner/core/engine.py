@@ -1366,6 +1366,9 @@ class Engine:
             max_handles=config.max_handles,
             idle_ttl_seconds=config.idle_ttl_seconds,
             request_timeout=config.request_timeout,
+            turn_stall_timeout_seconds=config.turn_stall_timeout_seconds,
+            turn_stall_poll_interval_seconds=config.turn_stall_poll_interval_seconds,
+            turn_stall_recovery_min_interval_seconds=config.turn_stall_recovery_min_interval_seconds,
         )
 
     def _ensure_app_server_supervisor(
@@ -1407,6 +1410,7 @@ class Engine:
             request_timeout=config.request_timeout,
             max_handles=config.max_handles,
             idle_ttl_seconds=config.idle_ttl_seconds,
+            session_stall_timeout_seconds=self.config.opencode.session_stall_timeout_seconds,
             base_env=None,
             subagent_models=subagent_models,
         )
@@ -1629,6 +1633,7 @@ class Engine:
                 should_stop=active.interrupt_event.is_set,
                 part_handler=_opencode_part_handler,
                 ready_event=ready_event,
+                stall_timeout_seconds=self.config.opencode.session_stall_timeout_seconds,
             )
         )
         with contextlib.suppress(asyncio.TimeoutError):

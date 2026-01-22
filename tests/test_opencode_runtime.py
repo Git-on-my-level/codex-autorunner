@@ -3,6 +3,7 @@ import pytest
 from codex_autorunner.agents.opencode.events import SSEEvent
 from codex_autorunner.agents.opencode.runtime import (
     collect_opencode_output_from_events,
+    extract_session_id,
     parse_message_response,
 )
 
@@ -10,6 +11,11 @@ from codex_autorunner.agents.opencode.runtime import (
 async def _iter_events(events):
     for event in events:
         yield event
+
+
+def test_extract_session_id_prefers_nested_session_id() -> None:
+    payload = {"session": {"id": "session-xyz"}}
+    assert extract_session_id(payload) == "session-xyz"
 
 
 @pytest.mark.anyio

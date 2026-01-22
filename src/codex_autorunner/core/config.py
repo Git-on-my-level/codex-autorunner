@@ -165,6 +165,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
         "turn_timeout_seconds": 28800,
+        "turn_stall_timeout_seconds": 60,
+        "turn_stall_poll_interval_seconds": 2,
+        "turn_stall_recovery_min_interval_seconds": 10,
         "request_timeout": None,
         "prompts": {
             "doc_chat": {
@@ -185,6 +188,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 "prev_run_max_chars": 3000,
             },
         },
+    },
+    "opencode": {
+        "session_stall_timeout_seconds": 60,
     },
     "server": {
         "host": "127.0.0.1",
@@ -402,6 +408,7 @@ REPO_DEFAULT_KEYS = {
     "log",
     "server_log",
     "review",
+    "opencode",
 }
 DEFAULT_REPO_DEFAULTS = {
     key: json.loads(json.dumps(DEFAULT_REPO_CONFIG[key])) for key in REPO_DEFAULT_KEYS
@@ -410,6 +417,7 @@ REPO_SHARED_KEYS = {
     "agents",
     "server",
     "app_server",
+    "opencode",
     "telegram_bot",
     "terminal",
     "static_assets",
@@ -519,6 +527,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
         "turn_timeout_seconds": 28800,
+        "turn_stall_timeout_seconds": 60,
+        "turn_stall_poll_interval_seconds": 2,
+        "turn_stall_recovery_min_interval_seconds": 10,
         "request_timeout": None,
         "prompts": {
             "doc_chat": {
@@ -539,6 +550,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
                 "prev_run_max_chars": 3000,
             },
         },
+    },
+    "opencode": {
+        "session_stall_timeout_seconds": 60,
     },
     "server": {
         "host": "127.0.0.1",
@@ -704,8 +718,16 @@ class AppServerConfig:
     max_handles: Optional[int]
     idle_ttl_seconds: Optional[int]
     turn_timeout_seconds: Optional[float]
+    turn_stall_timeout_seconds: Optional[float]
+    turn_stall_poll_interval_seconds: Optional[float]
+    turn_stall_recovery_min_interval_seconds: Optional[float]
     request_timeout: Optional[float]
     prompts: AppServerPromptsConfig
+
+
+@dataclasses.dataclass
+class OpenCodeConfig:
+    session_stall_timeout_seconds: Optional[float]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -738,6 +760,7 @@ class RepoConfig:
     git_auto_commit: bool
     git_commit_message_template: str
     app_server: AppServerConfig
+    opencode: OpenCodeConfig
     server_host: str
     server_port: int
     server_base_path: str
@@ -786,6 +809,7 @@ class HubConfig:
     update_repo_url: str
     update_repo_ref: str
     app_server: AppServerConfig
+    opencode: OpenCodeConfig
     server_host: str
     server_port: int
     server_base_path: str
@@ -1040,6 +1064,42 @@ def _parse_app_server_config(
     )
     if turn_timeout_seconds is not None and turn_timeout_seconds <= 0:
         turn_timeout_seconds = None
+    stall_timeout_raw = cfg.get(
+        "turn_stall_timeout_seconds", defaults.get("turn_stall_timeout_seconds")
+    )
+    turn_stall_timeout_seconds = (
+        float(stall_timeout_raw) if stall_timeout_raw is not None else None
+    )
+    if turn_stall_timeout_seconds is not None and turn_stall_timeout_seconds <= 0:
+        turn_stall_timeout_seconds = None
+    stall_poll_raw = cfg.get(
+        "turn_stall_poll_interval_seconds",
+        defaults.get("turn_stall_poll_interval_seconds"),
+    )
+    turn_stall_poll_interval_seconds = (
+        float(stall_poll_raw) if stall_poll_raw is not None else None
+    )
+    if (
+        turn_stall_poll_interval_seconds is not None
+        and turn_stall_poll_interval_seconds <= 0
+    ):
+        turn_stall_poll_interval_seconds = defaults.get(
+            "turn_stall_poll_interval_seconds"
+        )
+    stall_recovery_raw = cfg.get(
+        "turn_stall_recovery_min_interval_seconds",
+        defaults.get("turn_stall_recovery_min_interval_seconds"),
+    )
+    turn_stall_recovery_min_interval_seconds = (
+        float(stall_recovery_raw) if stall_recovery_raw is not None else None
+    )
+    if (
+        turn_stall_recovery_min_interval_seconds is not None
+        and turn_stall_recovery_min_interval_seconds < 0
+    ):
+        turn_stall_recovery_min_interval_seconds = defaults.get(
+            "turn_stall_recovery_min_interval_seconds"
+        )
     request_timeout_raw = cfg.get("request_timeout", defaults.get("request_timeout"))
     request_timeout = (
         float(request_timeout_raw) if request_timeout_raw is not None else None
@@ -1054,9 +1114,31 @@ def _parse_app_server_config(
         max_handles=max_handles,
         idle_ttl_seconds=idle_ttl_seconds,
         turn_timeout_seconds=turn_timeout_seconds,
+        turn_stall_timeout_seconds=turn_stall_timeout_seconds,
+        turn_stall_poll_interval_seconds=turn_stall_poll_interval_seconds,
+        turn_stall_recovery_min_interval_seconds=turn_stall_recovery_min_interval_seconds,
         request_timeout=request_timeout,
         prompts=prompts,
     )
+
+
+def _parse_opencode_config(
+    cfg: Optional[Dict[str, Any]],
+    _root: Path,
+    defaults: Optional[Dict[str, Any]],
+) -> OpenCodeConfig:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+    stall_timeout_raw = cfg.get(
+        "session_stall_timeout_seconds",
+        defaults.get("session_stall_timeout_seconds"),
+    )
+    stall_timeout_seconds = (
+        float(stall_timeout_raw) if stall_timeout_raw is not None else None
+    )
+    if stall_timeout_seconds is not None and stall_timeout_seconds <= 0:
+        stall_timeout_seconds = None
+    return OpenCodeConfig(session_stall_timeout_seconds=stall_timeout_seconds)
 
 
 def _parse_agents_config(
@@ -1332,6 +1414,9 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
             root,
             DEFAULT_REPO_CONFIG["app_server"],
         ),
+        opencode=_parse_opencode_config(
+            cfg.get("opencode"), root, DEFAULT_REPO_CONFIG.get("opencode")
+        ),
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
@@ -1421,6 +1506,9 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
             cfg.get("app_server"),
             root,
             DEFAULT_HUB_CONFIG["app_server"],
+        ),
+        opencode=_parse_opencode_config(
+            cfg.get("opencode"), root, DEFAULT_HUB_CONFIG.get("opencode")
         ),
         server_host=str(cfg["server"]["host"]),
         server_port=int(cfg["server"]["port"]),
@@ -1519,6 +1607,14 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
     ):
         if not isinstance(app_server_cfg.get("request_timeout"), (int, float)):
             raise ConfigError("app_server.request_timeout must be a number or null")
+    for key in (
+        "turn_stall_timeout_seconds",
+        "turn_stall_poll_interval_seconds",
+        "turn_stall_recovery_min_interval_seconds",
+    ):
+        if key in app_server_cfg and app_server_cfg.get(key) is not None:
+            if not isinstance(app_server_cfg.get(key), (int, float)):
+                raise ConfigError(f"app_server.{key} must be a number or null")
     prompts = app_server_cfg.get("prompts")
     if prompts is not None:
         if not isinstance(prompts, dict):
@@ -1560,6 +1656,24 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
                     raise ConfigError(
                         f"app_server.prompts.{section}.{key} must be >= {min_value}"
                     )
+
+
+def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
+    opencode_cfg = cfg.get("opencode")
+    if opencode_cfg is None:
+        return
+    if not isinstance(opencode_cfg, dict):
+        raise ConfigError("opencode section must be a mapping if provided")
+    if (
+        "session_stall_timeout_seconds" in opencode_cfg
+        and opencode_cfg.get("session_stall_timeout_seconds") is not None
+    ):
+        if not isinstance(
+            opencode_cfg.get("session_stall_timeout_seconds"), (int, float)
+        ):
+            raise ConfigError(
+                "opencode.session_stall_timeout_seconds must be a number or null"
+            )
 
 
 def _validate_agents_config(cfg: Dict[str, Any]) -> None:
@@ -1754,6 +1868,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
         raise ConfigError("server.auth_token_env must be a string if provided")
     _validate_server_security(server)
     _validate_app_server_config(cfg)
+    _validate_opencode_config(cfg)
     notifications_cfg = cfg.get("notifications")
     if notifications_cfg is not None:
         if not isinstance(notifications_cfg, dict):
@@ -1897,6 +2012,7 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
     if "repo" in cfg:
         raise ConfigError("repo section is no longer supported; use repo_defaults")
     _validate_agents_config(cfg)
+    _validate_opencode_config(cfg)
     repo_defaults = cfg.get("repo_defaults")
     if repo_defaults is not None:
         if not isinstance(repo_defaults, dict):

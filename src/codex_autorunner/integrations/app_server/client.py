@@ -3,9 +3,10 @@ import json
 import logging
 import random
 import re
+import time
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Union, cast
@@ -37,6 +38,13 @@ _MAX_OVERSIZE_DRAIN_BYTES = 100 * 1024 * 1024
 _RESTART_BACKOFF_INITIAL_SECONDS = 0.5
 _RESTART_BACKOFF_MAX_SECONDS = 30.0
 _RESTART_BACKOFF_JITTER_RATIO = 0.1
+
+# Per-turn stall detection defaults.
+_TURN_STALL_TIMEOUT_SECONDS = 60.0
+_TURN_STALL_POLL_INTERVAL_SECONDS = 2.0
+_TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS = 10.0
+_MAX_TURN_RAW_EVENTS = 200
+_INVALID_JSON_PREVIEW_BYTES = 200
 
 
 class CodexAppServerError(CodexError):
@@ -104,10 +112,15 @@ class _TurnState:
     turn_id: str
     thread_id: Optional[str]
     future: asyncio.Future["TurnResult"]
-    agent_messages: list[str]
-    errors: list[str]
-    raw_events: list[Dict[str, Any]]
+    agent_messages: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    raw_events: list[Dict[str, Any]] = field(default_factory=list)
     status: Optional[str] = None
+    last_event_at: float = field(default_factory=time.monotonic)
+    last_method: Optional[str] = None
+    recovery_attempts: int = 0
+    last_recovery_at: float = 0.0
+    agent_message_deltas: Dict[str, str] = field(default_factory=dict)
 
 
 class CodexAppServerClient:
@@ -121,6 +134,9 @@ class CodexAppServerClient:
         default_approval_decision: str = "cancel",
         auto_restart: bool = True,
         request_timeout: Optional[float] = None,
+        turn_stall_timeout_seconds: Optional[float] = _TURN_STALL_TIMEOUT_SECONDS,
+        turn_stall_poll_interval_seconds: Optional[float] = None,
+        turn_stall_recovery_min_interval_seconds: Optional[float] = None,
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
@@ -156,6 +172,34 @@ class CodexAppServerClient:
         self._restart_task: Optional[asyncio.Task] = None
         self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
         self._stderr_tail: deque[str] = deque(maxlen=5)
+        self._turn_stall_timeout_seconds: Optional[float] = turn_stall_timeout_seconds
+        if (
+            self._turn_stall_timeout_seconds is not None
+            and self._turn_stall_timeout_seconds <= 0
+        ):
+            self._turn_stall_timeout_seconds = None
+        self._turn_stall_poll_interval_seconds: float = (
+            turn_stall_poll_interval_seconds
+            if turn_stall_poll_interval_seconds is not None
+            else _TURN_STALL_POLL_INTERVAL_SECONDS
+        )
+        if (
+            self._turn_stall_poll_interval_seconds is not None
+            and self._turn_stall_poll_interval_seconds <= 0
+        ):
+            self._turn_stall_poll_interval_seconds = _TURN_STALL_POLL_INTERVAL_SECONDS
+        self._turn_stall_recovery_min_interval_seconds: float = (
+            turn_stall_recovery_min_interval_seconds
+            if turn_stall_recovery_min_interval_seconds is not None
+            else _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS
+        )
+        if (
+            self._turn_stall_recovery_min_interval_seconds is not None
+            and self._turn_stall_recovery_min_interval_seconds < 0
+        ):
+            self._turn_stall_recovery_min_interval_seconds = (
+                _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS
+            )
 
     async def start(self) -> None:
         await self._ensure_process()
@@ -346,15 +390,114 @@ class CodexAppServerClient:
                 self._turns.pop(key, None)
             return result
         timeout = timeout if timeout is not None else self._request_timeout
-        if timeout is None:
-            result = await state.future
-            if key is not None:
-                self._turns.pop(key, None)
-            return result
-        result = await asyncio.wait_for(state.future, timeout)
-        if key is not None:
-            self._turns.pop(key, None)
-        return result
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while True:
+            slice_timeout = self._turn_stall_poll_interval_seconds
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError()
+                if slice_timeout is None or slice_timeout > remaining:
+                    slice_timeout = remaining
+            try:
+                if slice_timeout is None:
+                    result = await asyncio.shield(state.future)
+                else:
+                    result = await asyncio.wait_for(
+                        asyncio.shield(state.future), timeout=slice_timeout
+                    )
+                if key is not None:
+                    self._turns.pop(key, None)
+                return result
+            except asyncio.TimeoutError:
+                pass
+
+            stall_timeout = self._turn_stall_timeout_seconds
+            idle_seconds = time.monotonic() - state.last_event_at
+            if (
+                stall_timeout is not None
+                and idle_seconds >= stall_timeout
+                and not state.future.done()
+            ):
+                await self._recover_stalled_turn(
+                    state,
+                    turn_id,
+                    thread_id=thread_id or state.thread_id,
+                    idle_seconds=idle_seconds,
+                )
+
+    async def _recover_stalled_turn(
+        self,
+        state: _TurnState,
+        turn_id: str,
+        *,
+        thread_id: Optional[str],
+        idle_seconds: float,
+    ) -> None:
+        now = time.monotonic()
+        if thread_id is None:
+            state.last_event_at = now
+            return
+        min_interval = self._turn_stall_recovery_min_interval_seconds
+        if (
+            min_interval is not None
+            and state.last_recovery_at
+            and now - state.last_recovery_at < min_interval
+        ):
+            return
+        state.last_recovery_at = now
+        state.recovery_attempts += 1
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "app_server.turn_stalled",
+            turn_id=turn_id,
+            thread_id=thread_id,
+            idle_seconds=round(idle_seconds, 2),
+            last_method=state.last_method,
+            recovery_attempts=state.recovery_attempts,
+        )
+        try:
+            resume_result = await self.thread_resume(thread_id)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.turn_recovery.failed",
+                turn_id=turn_id,
+                thread_id=thread_id,
+                idle_seconds=round(idle_seconds, 2),
+                exc=exc,
+            )
+            state.last_event_at = now
+            return
+
+        snapshot = _extract_turn_snapshot_from_resume(resume_result, turn_id)
+        if snapshot is None:
+            state.last_event_at = now
+            return
+
+        status, agent_messages, errors = snapshot
+        if agent_messages:
+            state.agent_messages = agent_messages
+        if errors:
+            state.errors.extend(errors)
+        if status:
+            state.status = status
+
+        if status and _status_is_terminal(status) and not state.future.done():
+            state.future.set_result(
+                TurnResult(
+                    turn_id=state.turn_id,
+                    agent_messages=_agent_messages_for_result(state),
+                    errors=list(state.errors),
+                    raw_events=list(state.raw_events),
+                    status=state.status,
+                )
+            )
+            return
+
+        state.last_event_at = now
 
     async def _ensure_process(self) -> None:
         async with self._circuit_breaker.call():
@@ -622,7 +765,15 @@ class CodexAppServerClient:
             return
         try:
             message = json.loads(payload)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.read.invalid_json",
+                preview=payload[:_INVALID_JSON_PREVIEW_BYTES],
+                length=len(payload),
+                exc=exc,
+            )
             return
         if not isinstance(message, dict):
             return
@@ -856,7 +1007,39 @@ class CodexAppServerClient:
         method = message.get("method")
         params = message.get("params") or {}
         handled = False
-        if method == "item/completed":
+        if isinstance(method, str):
+            turn_id_hint = _extract_turn_id(params) or _extract_turn_id(
+                params.get("turn") if isinstance(params, dict) else None
+            )
+            if turn_id_hint:
+                thread_id_hint = _extract_thread_id_for_turn(params)
+                _key, state = await self._find_turn_state(
+                    turn_id_hint, thread_id=thread_id_hint
+                )
+                if state is not None:
+                    state.last_event_at = time.monotonic()
+                    state.last_method = method
+        if method == "item/agentMessage/delta":
+            turn_id = _extract_turn_id(params)
+            if turn_id:
+                thread_id = _extract_thread_id_for_turn(params)
+                _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
+                if state is None:
+                    if thread_id:
+                        state = self._ensure_turn_state(turn_id, thread_id)
+                    else:
+                        state = self._ensure_pending_turn_state(turn_id)
+                item_id = params.get("itemId")
+                delta = params.get("delta") or params.get("text")
+                if isinstance(item_id, str) and isinstance(delta, str):
+                    state.agent_message_deltas[item_id] = (
+                        state.agent_message_deltas.get(item_id, "") + delta
+                    )
+                state.last_event_at = time.monotonic()
+                state.last_method = method
+                _record_raw_event(state, message)
+            handled = True
+        elif method == "item/completed":
             turn_id = _extract_turn_id(params) or _extract_turn_id(
                 params.get("item") if isinstance(params, dict) else None
             )
@@ -870,6 +1053,8 @@ class CodexAppServerClient:
                     state = self._ensure_turn_state(turn_id, thread_id)
                 else:
                     state = self._ensure_pending_turn_state(turn_id)
+            state.last_event_at = time.monotonic()
+            state.last_method = method
             self._apply_item_completed(state, message, params)
             handled = True
         elif method == "turn/completed":
@@ -884,6 +1069,8 @@ class CodexAppServerClient:
                     state = self._ensure_turn_state(turn_id, thread_id)
                 else:
                     state = self._ensure_pending_turn_state(turn_id)
+            state.last_event_at = time.monotonic()
+            state.last_method = method
             self._apply_turn_completed(state, message, params)
             handled = True
         elif method == "error":
@@ -898,6 +1085,8 @@ class CodexAppServerClient:
                     state = self._ensure_turn_state(turn_id, thread_id)
                 else:
                     state = self._ensure_pending_turn_state(turn_id)
+            state.last_event_at = time.monotonic()
+            state.last_method = method
             self._apply_error(state, message, params)
             handled = True
         if self._notification_handler is not None:
@@ -966,9 +1155,6 @@ class CodexAppServerClient:
             turn_id=turn_id,
             thread_id=thread_id,
             future=future,
-            agent_messages=[],
-            errors=[],
-            raw_events=[],
         )
         self._turns[key] = state
         return state
@@ -983,9 +1169,6 @@ class CodexAppServerClient:
             turn_id=turn_id,
             thread_id=None,
             future=future,
-            agent_messages=[],
-            errors=[],
-            raw_events=[],
         )
         self._pending_turns[turn_id] = state
         return state
@@ -995,10 +1178,13 @@ class CodexAppServerClient:
             target.agent_messages = list(source.agent_messages)
         else:
             target.agent_messages.extend(source.agent_messages)
+        if source.agent_message_deltas:
+            target.agent_message_deltas.update(source.agent_message_deltas)
         if not target.raw_events:
             target.raw_events = list(source.raw_events)
         else:
             target.raw_events.extend(source.raw_events)
+        _trim_raw_events(target)
         if not target.errors:
             target.errors = list(source.errors)
         else:
@@ -1010,7 +1196,7 @@ class CodexAppServerClient:
                 TurnResult(
                     turn_id=target.turn_id,
                     status=target.status,
-                    agent_messages=list(target.agent_messages),
+                    agent_messages=_agent_messages_for_result(target),
                     errors=list(target.errors),
                     raw_events=list(target.raw_events),
                 )
@@ -1037,22 +1223,17 @@ class CodexAppServerClient:
         self, state: _TurnState, message: Dict[str, Any], params: Any
     ) -> None:
         item = params.get("item") if isinstance(params, dict) else None
-        text = None
-
-        def append_message(candidate: Optional[str]) -> None:
-            if not candidate:
-                return
-            if state.agent_messages and state.agent_messages[-1] == candidate:
-                return
-            state.agent_messages.append(candidate)
+        text: Optional[str] = None
 
         if isinstance(item, dict) and item.get("type") == "agentMessage":
-            text = item.get("text")
-            if isinstance(text, str):
-                append_message(text)
+            item_id = params.get("itemId") if isinstance(params, dict) else None
+            text = _extract_agent_message_text(item)
+            if not text and isinstance(item_id, str):
+                text = state.agent_message_deltas.pop(item_id, None)
+            _append_agent_message(state.agent_messages, text)
         review_text = _extract_review_text(item)
         if review_text and review_text != text:
-            append_message(review_text)
+            _append_agent_message(state.agent_messages, review_text)
         item_type = item.get("type") if isinstance(item, dict) else None
         log_event(
             self._logger,
@@ -1061,7 +1242,7 @@ class CodexAppServerClient:
             turn_id=state.turn_id,
             item_type=item_type,
         )
-        state.raw_events.append(message)
+        _record_raw_event(state, message)
 
     def _apply_error(
         self, state: _TurnState, message: Dict[str, Any], params: Any
@@ -1084,29 +1265,35 @@ class CodexAppServerClient:
             code=error_code,
             will_retry=will_retry,
         )
-        state.raw_events.append(message)
+        _record_raw_event(state, message)
 
     def _apply_turn_completed(
         self, state: _TurnState, message: Dict[str, Any], params: Any
     ) -> None:
-        state.raw_events.append(message)
+        _record_raw_event(state, message)
         status = None
         if isinstance(params, dict):
             status = params.get("status")
-        state.status = status
+            if status is None and isinstance(params.get("turn"), dict):
+                turn_status = params["turn"].get("status")
+                if isinstance(turn_status, dict):
+                    status = turn_status.get("type") or turn_status.get("status")
+                elif isinstance(turn_status, str):
+                    status = turn_status
+        state.status = status if status is not None else state.status
         log_event(
             self._logger,
             logging.INFO,
             "app_server.turn.completed",
             turn_id=state.turn_id,
-            status=status,
+            status=state.status,
         )
         if not state.future.done():
             state.future.set_result(
                 TurnResult(
                     turn_id=state.turn_id,
                     status=state.status,
-                    agent_messages=list(state.agent_messages),
+                    agent_messages=_agent_messages_for_result(state),
                     errors=list(state.errors),
                     raw_events=list(state.raw_events),
                 )
@@ -1456,6 +1643,206 @@ def _normalize_sandbox_policy_type(raw: str) -> str:
         return raw.strip()
     canonical = _SANDBOX_POLICY_CANONICAL.get(cleaned.lower())
     return canonical or raw.strip()
+
+
+def _append_agent_message(messages: list[str], candidate: Optional[str]) -> None:
+    if not candidate:
+        return
+    if messages and messages[-1] == candidate:
+        return
+    messages.append(candidate)
+
+
+def _record_raw_event(state: _TurnState, message: Dict[str, Any]) -> None:
+    state.raw_events.append(message)
+    _trim_raw_events(state)
+
+
+def _trim_raw_events(state: _TurnState) -> None:
+    if len(state.raw_events) > _MAX_TURN_RAW_EVENTS:
+        state.raw_events = state.raw_events[-_MAX_TURN_RAW_EVENTS:]
+
+
+def _agent_message_deltas_as_list(agent_message_deltas: Dict[str, str]) -> list[str]:
+    return [
+        text for text in agent_message_deltas.values() if isinstance(text, str) and text
+    ]
+
+
+def _agent_messages_for_result(state: _TurnState) -> list[str]:
+    if state.agent_messages:
+        return list(state.agent_messages)
+    return _agent_message_deltas_as_list(state.agent_message_deltas)
+
+
+def _extract_status_value(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("type", "status", "state"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate
+    return None
+
+
+def _status_is_terminal(status: Any) -> bool:
+    normalized = _extract_status_value(status)
+    if not isinstance(normalized, str):
+        return False
+    normalized = normalized.lower()
+    return normalized in {
+        "completed",
+        "complete",
+        "done",
+        "failed",
+        "error",
+        "errored",
+        "cancelled",
+        "canceled",
+        "interrupted",
+        "stopped",
+        "success",
+        "succeeded",
+    }
+
+
+def _extract_agent_message_text(item: Any) -> Optional[str]:
+    if not isinstance(item, dict):
+        return None
+    text = item.get("text")
+    if isinstance(text, str) and text.strip():
+        return text
+    content = item.get("content")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for entry in content:
+            if not isinstance(entry, dict):
+                continue
+            entry_type = entry.get("type")
+            if entry_type not in (None, "output_text", "text", "message"):
+                continue
+            candidate = entry.get("text")
+            if isinstance(candidate, str) and candidate.strip():
+                parts.append(candidate)
+        if parts:
+            return "".join(parts)
+    return None
+
+
+def _extract_errors_from_container(container: Any) -> list[str]:
+    if not isinstance(container, dict):
+        return []
+    errors: list[str] = []
+    error_message = _extract_error_message(container)
+    if error_message:
+        errors.append(error_message)
+    raw_errors = container.get("errors")
+    if isinstance(raw_errors, list):
+        for entry in raw_errors:
+            if isinstance(entry, str) and entry.strip():
+                errors.append(entry.strip())
+            elif isinstance(entry, dict):
+                extracted = _extract_error_message(entry)
+                if extracted:
+                    errors.append(extracted)
+    return errors
+
+
+def _extract_agent_messages_from_container(
+    container: Any, target_turn_id: Optional[str]
+) -> list[str]:
+    if not isinstance(container, dict):
+        return []
+    agent_messages: list[str] = []
+    for key in ("items", "messages"):
+        entries = container.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_turn_id = _extract_turn_id(entry)
+            if entry_turn_id and target_turn_id and entry_turn_id != target_turn_id:
+                continue
+            text = _extract_agent_message_text(entry)
+            if text:
+                agent_messages.append(text)
+            elif entry.get("role") == "assistant":
+                fallback = entry.get("text")
+                if isinstance(fallback, str) and fallback.strip():
+                    agent_messages.append(fallback)
+    return agent_messages
+
+
+def _extract_turn_snapshot_from_resume(
+    payload: Any, target_turn_id: str
+) -> Optional[tuple[Optional[str], list[str], list[str]]]:
+    if not isinstance(payload, dict):
+        return None
+    status: Optional[str] = None
+    agent_messages: list[str] = []
+    errors: list[str] = []
+
+    def _collect_from_turn(turn: Any) -> bool:
+        nonlocal status
+        if not isinstance(turn, dict):
+            return False
+        if _extract_turn_id(turn) != target_turn_id:
+            return False
+        if status is None:
+            status = _extract_status_value(turn.get("status"))
+        agent_messages.extend(
+            _extract_agent_messages_from_container(turn, target_turn_id)
+        )
+        errors.extend(_extract_errors_from_container(turn))
+        return True
+
+    found = _collect_from_turn(payload)
+
+    for key in ("turns", "data", "results"):
+        turns = payload.get(key)
+        if not isinstance(turns, list):
+            continue
+        for turn in turns:
+            if _collect_from_turn(turn):
+                found = True
+
+    thread = payload.get("thread")
+    if isinstance(thread, dict):
+        thread_items = thread.get("items")
+        if isinstance(thread_items, list):
+            for item in thread_items:
+                if _extract_turn_id(item) != target_turn_id:
+                    continue
+                text = _extract_agent_message_text(item)
+                if text:
+                    agent_messages.append(text)
+        thread_turns = thread.get("turns")
+        if isinstance(thread_turns, list):
+            for turn in thread_turns:
+                if _collect_from_turn(turn):
+                    found = True
+
+    single_turn = payload.get("turn")
+    if isinstance(single_turn, dict) and _collect_from_turn(single_turn):
+        found = True
+
+    items = payload.get("items")
+    if isinstance(items, list):
+        for item in items:
+            if _extract_turn_id(item) != target_turn_id:
+                continue
+            text = _extract_agent_message_text(item)
+            if text:
+                agent_messages.append(text)
+
+    if status is None:
+        status = _extract_status_value(payload.get("status"))
+
+    if not found and not agent_messages and not errors and status is None:
+        return None
+    return status, agent_messages, errors
 
 
 __all__ = [

@@ -48,7 +48,18 @@ def _normalize_sse_event(event: SSEEvent) -> SSEEvent:
         payload_obj = None
 
     if isinstance(payload_obj, dict) and isinstance(payload_obj.get("payload"), dict):
-        payload_obj = payload_obj["payload"]
+        outer = payload_obj
+        inner = dict(outer.get("payload") or {})
+        if "type" not in inner and isinstance(outer.get("type"), str):
+            inner["type"] = outer["type"]
+        for key in ("sessionID", "sessionId", "session_id"):
+            if key in outer and key not in inner:
+                inner[key] = outer[key]
+        if "session" in outer and "session" not in inner:
+            inner["session"] = outer["session"]
+        if "properties" in outer and "properties" not in inner:
+            inner["properties"] = outer["properties"]
+        payload_obj = inner
 
     if isinstance(payload_obj, dict):
         payload_type = payload_obj.get("type")
