@@ -54,8 +54,6 @@ from ..housekeeping import run_housekeeping_once
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
-from ..integrations.github.chatops import GitHubChatOpsPoller
-from ..integrations.github.pr_flow import PrFlowManager
 from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
@@ -789,23 +787,8 @@ def _app_lifespan(context: AppContext):
 
             tasks.append(asyncio.create_task(_opencode_prune_loop()))
 
-        pr_flow_manager = getattr(app.state, "pr_flow_manager", None)
-        if pr_flow_manager is None:
-            pr_flow_manager = PrFlowManager(
-                app.state.engine.repo_root,
-                app_server_supervisor=getattr(app.state, "app_server_supervisor", None),
-                opencode_supervisor=getattr(app.state, "opencode_supervisor", None),
-                logger=getattr(app.state, "logger", None),
-            )
-            app.state.pr_flow_manager = pr_flow_manager
-        chatops = GitHubChatOpsPoller(
-            app.state.engine.repo_root,
-            pr_flow_manager,
-            logger=getattr(app.state, "logger", None),
-        )
-        app.state.pr_flow_chatops = chatops
-        if pr_flow_manager.chatops_config().get("enabled", False):
-            tasks.append(asyncio.create_task(chatops.run()))
+        # PR Flow chatops disabled during refactor - to be reimplemented
+        # TODO: Re-enable after Flow Runtime is fully integrated
 
         if (
             context.tui_idle_seconds is not None
