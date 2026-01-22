@@ -4,7 +4,7 @@ import subprocess
 import sys
 import uuid
 from dataclasses import asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import IO, Dict, Optional, Tuple, Union
 from urllib.parse import quote
 
@@ -485,13 +485,8 @@ You are the first ticket in a new ticket_flow run.
 
         base_history = paths.handoff_history_dir.resolve()
 
-        seq_path = Path(seq)
-        if (
-            seq_path.is_absolute()
-            or ".." in seq_path.parts
-            or "/" in seq
-            or "\\" in seq
-        ):
+        seq_path = PurePosixPath(seq)
+        if seq_path.is_absolute() or ".." in seq_path.parts or "\\" in seq:
             raise HTTPException(
                 status_code=400, detail="Invalid handoff history sequence"
             )
@@ -502,7 +497,11 @@ You are the first ticket in a new ticket_flow run.
                 status_code=404, detail=f"Handoff history not found for run {run_id}"
             )
 
-        target = history_dir / file_path
+        file_rel = PurePosixPath(file_path)
+        if file_rel.is_absolute() or ".." in file_rel.parts or "\\" in file_path:
+            raise HTTPException(status_code=400, detail="Invalid handoff file path")
+
+        target = history_dir / file_rel
         try:
             resolved = target.resolve()
         except OSError as exc:

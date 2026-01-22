@@ -233,6 +233,7 @@ class FlowRuntime:
                     status=FlowRunStatus.FAILED,
                     finished_at=now,
                     error_message=outcome.error,
+                    state=record.state,
                     current_step=None,
                 )
                 if not updated:
@@ -300,6 +301,7 @@ class FlowRuntime:
                 status=FlowRunStatus.FAILED,
                 finished_at=now,
                 error_message=str(e),
+                state=record.state,
                 current_step=None,
             )
             if not updated:
