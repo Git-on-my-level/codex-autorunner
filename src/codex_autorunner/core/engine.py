@@ -40,6 +40,7 @@ from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
 from ..web.static_assets import missing_static_assets, resolve_static_dir
 from .about_car import ensure_about_car_file
+from .adapter_utils import handle_agent_output
 from .app_server_events import AppServerEventBuffer
 from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_autorunner_prompt
@@ -1277,15 +1278,13 @@ class Engine:
                 supervisor=supervisor,
             )
             self._last_run_interrupted = interrupted
-            self._log_app_server_output(run_id, turn_result.agent_messages)
-            output_text = "\n\n".join(turn_result.agent_messages).strip()
-            if output_text:
-                output_path = self._write_run_artifact(
-                    run_id, "output.txt", output_text
-                )
-                self._merge_run_index_entry(
-                    run_id, {"artifacts": {"output_path": str(output_path)}}
-                )
+            handle_agent_output(
+                self._log_app_server_output,
+                self._write_run_artifact,
+                self._merge_run_index_entry,
+                run_id,
+                turn_result.agent_messages,
+            )
             if turn_result.errors:
                 for error in turn_result.errors:
                     self.log_line(run_id, f"error: {error}")
@@ -1744,17 +1743,14 @@ class Engine:
                 "info: opencode returned empty output (error=%s)"
                 % (output_result.error or "none"),
             )
-        output = output_result.text
-        if output:
-            self._log_app_server_output(run_id, [output])
-            output_text = output.strip()
-            if output_text:
-                output_path = self._write_run_artifact(
-                    run_id, "output.txt", output_text
-                )
-                self._merge_run_index_entry(
-                    run_id, {"artifacts": {"output_path": str(output_path)}}
-                )
+        if output_result.text:
+            handle_agent_output(
+                self._log_app_server_output,
+                self._write_run_artifact,
+                self._merge_run_index_entry,
+                run_id,
+                output_result.text,
+            )
         if output_result.error:
             self.log_line(
                 run_id, f"error: opencode session error: {output_result.error}"

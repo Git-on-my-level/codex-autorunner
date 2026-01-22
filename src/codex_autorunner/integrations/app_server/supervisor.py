@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence
 
 from ...core.logging_utils import log_event
+from ...core.supervisor_utils import evict_lru_handle_locked, pop_idle_handles_locked
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import ApprovalHandler, CodexAppServerClient, NotificationHandler
 
@@ -173,35 +174,19 @@ class WorkspaceAppServerSupervisor:
             return self._pop_idle_handles_locked()
 
     def _pop_idle_handles_locked(self) -> list[AppServerHandle]:
-        if not self._idle_ttl_seconds or self._idle_ttl_seconds <= 0:
-            return []
-        cutoff = time.monotonic() - self._idle_ttl_seconds
-        stale: list[AppServerHandle] = []
-        for handle in list(self._handles.values()):
-            if handle.last_used_at and handle.last_used_at < cutoff:
-                self._handles.pop(handle.workspace_id, None)
-                stale.append(handle)
-        return stale
+        return pop_idle_handles_locked(
+            self._handles,
+            self._idle_ttl_seconds,
+            self._logger,
+            "app_server",
+            last_used_at_getter=lambda h: h.last_used_at,
+        )
 
     def _evict_lru_handle_locked(self) -> Optional[AppServerHandle]:
-        if not self._max_handles or self._max_handles <= 0:
-            return None
-        if len(self._handles) < self._max_handles:
-            return None
-        lru_handle = min(
-            self._handles.values(),
-            key=lambda handle: handle.last_used_at or 0.0,
-        )
-        log_event(
+        return evict_lru_handle_locked(
+            self._handles,
+            self._max_handles,
             self._logger,
-            logging.INFO,
-            "app_server.handle.evicted",
-            reason="max_handles",
-            workspace_id=lru_handle.workspace_id,
-            workspace_root=str(lru_handle.workspace_root),
-            max_handles=self._max_handles,
-            handle_count=len(self._handles),
-            last_used_at=lru_handle.last_used_at,
+            "app_server",
+            last_used_at_getter=lambda h: h.last_used_at or 0.0,
         )
-        self._handles.pop(lru_handle.workspace_id, None)
-        return lru_handle
