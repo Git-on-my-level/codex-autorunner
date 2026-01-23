@@ -1184,7 +1184,6 @@ def flow(
 
         from .core.flows import FlowController, FlowStore
         from .core.flows.models import FlowRunStatus
-        from .flows.pr_flow import build_pr_flow_definition
         from .flows.ticket_flow import build_ticket_flow_definition
         from .tickets import AgentPool
 
@@ -1213,7 +1212,9 @@ def flow(
             def _build_definition(flow_type: str):
                 nonlocal agent_pool
                 if flow_type == "pr_flow":
-                    return build_pr_flow_definition()
+                    _raise_exit(
+                        "PR flow is no longer supported. Use ticket_flow instead."
+                    )
                 if flow_type == "ticket_flow":
                     agent_pool = AgentPool(engine.config)
                     return build_ticket_flow_definition(agent_pool=agent_pool)
