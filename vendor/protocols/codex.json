@@ -642,6 +642,30 @@
             },
             "method": {
               "enum": [
+                "thread/read"
+              ],
+              "title": "Thread/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/list"
               ],
               "title": "Skills/listRequestMethod",
@@ -1866,6 +1890,30 @@
     "CommandExecutionRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "command": {
+          "description": "The command to be executed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commandActions": {
+          "description": "Best-effort parsed command actions for friendly display.",
+          "items": {
+            "$ref": "#/definitions/v2/CommandAction"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "cwd": {
+          "description": "The command's working directory.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "itemId": {
           "type": "string"
         },
@@ -6369,6 +6417,12 @@
               },
               "type": "array"
             },
+            "end_turn": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "id": {
               "type": [
                 "string",
@@ -8161,6 +8215,9 @@
         "description": {
           "type": "string"
         },
+        "enabled": {
+          "type": "boolean"
+        },
         "interface": {
           "anyOf": [
             {
@@ -8190,6 +8247,7 @@
       },
       "required": [
         "description",
+        "enabled",
         "name",
         "path",
         "scope"
@@ -8516,13 +8574,7 @@
     "ToolRequestUserInputAnswer": {
       "description": "EXPERIMENTAL. Captures a user's answer to a request_user_input question.",
       "properties": {
-        "other": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "selected": {
+        "answers": {
           "items": {
             "type": "string"
           },
@@ -8530,7 +8582,7 @@
         }
       },
       "required": [
-        "selected"
+        "answers"
       ],
       "type": "object"
     },
@@ -10367,6 +10419,13 @@
       "ConfigReadParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "cwd": {
+            "description": "Optional working directory to resolve project config layers. If specified, return the effective config as seen from that directory (i.e., including any project layers between `cwd` and the project/repo root).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "includeLayers": {
             "default": false,
             "type": "boolean"
@@ -12176,6 +12235,12 @@
                 },
                 "type": "array"
               },
+              "end_turn": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "id": {
                 "type": [
                   "string",
@@ -13137,7 +13202,7 @@
             "description": "Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.)."
           },
           "turns": {
-            "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork` responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
+            "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
             "items": {
               "$ref": "#/definitions/v2/Turn"
             },
@@ -13723,6 +13788,13 @@
       "ThreadListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "archived": {
+            "description": "Optional archived filter; when set to true, only archived threads are returned. If false or null, only non-archived threads are returned.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "cursor": {
             "description": "Opaque pagination cursor returned by a previous call.",
             "type": [
@@ -13832,6 +13904,37 @@
           "data"
         ],
         "title": "ThreadLoadedListResponse",
+        "type": "object"
+      },
+      "ThreadReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "includeTurns": {
+            "default": false,
+            "description": "When true, include turns and their items from rollout history.",
+            "type": "boolean"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadReadParams",
+        "type": "object"
+      },
+      "ThreadReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "thread": {
+            "$ref": "#/definitions/v2/Thread"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "title": "ThreadReadResponse",
         "type": "object"
       },
       "ThreadResumeParams": {
