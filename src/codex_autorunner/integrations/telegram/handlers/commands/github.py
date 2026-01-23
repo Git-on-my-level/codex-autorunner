@@ -1227,9 +1227,11 @@ class GitHubCommands(SharedHelpers):
                 )
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(ready_event.wait(), timeout=2.0)
-                timeout_task = asyncio.create_task(
-                    asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
-                )
+                timeout_task: Optional[asyncio.Task] = None
+                if OPENCODE_TURN_TIMEOUT_SECONDS > 0:
+                    timeout_task = asyncio.create_task(
+                        asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
+                    )
                 command_task = asyncio.create_task(
                     setup.client.send_command(
                         setup.review_session_id,
@@ -1241,45 +1243,47 @@ class GitHubCommands(SharedHelpers):
                 try:
                     await command_task
                 except Exception as exc:
-                    timeout_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await timeout_task
+                    if timeout_task is not None:
+                        timeout_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await timeout_task
                     output_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await output_task
                     raise exc
-                done, _pending = await asyncio.wait(
-                    {output_task, timeout_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if timeout_task in done:
-                    runtime.interrupt_requested = True
-                    await _abort_opencode()
-                    output_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await output_task
+                if timeout_task is not None:
+                    done, _pending = await asyncio.wait(
+                        {output_task, timeout_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if timeout_task in done:
+                        runtime.interrupt_requested = True
+                        await _abort_opencode()
+                        output_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await output_task
+                        timeout_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await timeout_task
+                        turn_context.turn_elapsed_seconds = (
+                            time.monotonic() - turn_started_at
+                            if turn_started_at is not None
+                            else None
+                        )
+                        failure_message = "OpenCode review timed out."
+                        response_sent = await self._deliver_turn_response(
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                            placeholder_id=placeholder_id,
+                            response=failure_message,
+                        )
+                        if response_sent:
+                            await self._delete_message(message.chat_id, placeholder_id)
+                        return turn_context, None
                     timeout_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await timeout_task
-                    turn_context.turn_elapsed_seconds = (
-                        time.monotonic() - turn_started_at
-                        if turn_started_at is not None
-                        else None
-                    )
-                    failure_message = "OpenCode review timed out."
-                    response_sent = await self._deliver_turn_response(
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                        placeholder_id=placeholder_id,
-                        response=failure_message,
-                    )
-                    if response_sent:
-                        await self._delete_message(message.chat_id, placeholder_id)
-                    return turn_context, None
-                timeout_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await timeout_task
                 output_result = await output_task
                 elapsed = (
                     time.monotonic() - turn_started_at

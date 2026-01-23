@@ -1720,9 +1720,11 @@ class ExecutionCommands(SharedHelpers):
                         codex_thread_id=thread_id,
                         sse_ready_ms=sse_ready_ms,
                     )
-                    timeout_task = asyncio.create_task(
-                        asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
-                    )
+                    timeout_task: Optional[asyncio.Task] = None
+                    if OPENCODE_TURN_TIMEOUT_SECONDS > 0:
+                        timeout_task = asyncio.create_task(
+                            asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
+                        )
                     prompt_sent_at = time.monotonic()
                     prompt_task = asyncio.create_task(
                         opencode_client.prompt_async(
@@ -1746,52 +1748,54 @@ class ExecutionCommands(SharedHelpers):
                             endpoint="/session/{id}/prompt_async",
                         )
                     except Exception as exc:
-                        timeout_task.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await timeout_task
+                        if timeout_task is not None:
+                            timeout_task.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await timeout_task
                         output_task.cancel()
                         with suppress(asyncio.CancelledError):
                             await output_task
                         raise exc
-                    done, _pending = await asyncio.wait(
-                        {output_task, timeout_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if timeout_task in done:
-                        runtime.interrupt_requested = True
-                        await _abort_opencode()
-                        output_task.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await output_task
+                    if timeout_task is not None:
+                        done, _pending = await asyncio.wait(
+                            {output_task, timeout_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if timeout_task in done:
+                            runtime.interrupt_requested = True
+                            await _abort_opencode()
+                            output_task.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await output_task
+                            timeout_task.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await timeout_task
+                            turn_elapsed_seconds = time.monotonic() - turn_started_at
+                            completion_mode = (
+                                "timeout"
+                                if not runtime.interrupt_requested
+                                else "interrupt"
+                            )
+                            log_event(
+                                self._logger,
+                                logging.INFO,
+                                "telegram.opencode.completed",
+                                topic_key=key,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                codex_thread_id=thread_id,
+                                completion_mode=completion_mode,
+                                elapsed_seconds=turn_elapsed_seconds,
+                            )
+                            return _TurnRunFailure(
+                                "OpenCode turn timed out.",
+                                placeholder_id,
+                                transcript_message_id,
+                                transcript_text,
+                            )
                         timeout_task.cancel()
                         with suppress(asyncio.CancelledError):
                             await timeout_task
-                        turn_elapsed_seconds = time.monotonic() - turn_started_at
-                        completion_mode = (
-                            "timeout"
-                            if not runtime.interrupt_requested
-                            else "interrupt"
-                        )
-                        log_event(
-                            self._logger,
-                            logging.INFO,
-                            "telegram.opencode.completed",
-                            topic_key=key,
-                            chat_id=message.chat_id,
-                            thread_id=message.thread_id,
-                            codex_thread_id=thread_id,
-                            completion_mode=completion_mode,
-                            elapsed_seconds=turn_elapsed_seconds,
-                        )
-                        return _TurnRunFailure(
-                            "OpenCode turn timed out.",
-                            placeholder_id,
-                            transcript_message_id,
-                            transcript_text,
-                        )
-                    timeout_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await timeout_task
                     output_result = await output_task
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
                     log_event(
