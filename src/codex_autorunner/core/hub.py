@@ -759,10 +759,10 @@ class HubSupervisor:
         if not repo:
             raise ValueError(f"Repo {repo_id} not found in manifest")
         repo_root = (self.hub_config.root / repo.path).resolve()
-        state_path = repo_root / ".codex-autorunner" / "state.sqlite3"
-        if not allow_uninitialized and not state_path.exists():
+        tickets_dir = repo_root / ".codex-autorunner" / "tickets"
+        if not allow_uninitialized and not tickets_dir.exists():
             raise ValueError(f"Repo {repo_id} is not initialized")
-        if not state_path.exists():
+        if not tickets_dir.exists():
             return None
         repo_config = derive_repo_config(self.hub_config, repo_root, load_env=False)
         runner = RepoRunner(
@@ -781,7 +781,7 @@ class HubSupervisor:
         records: List[DiscoveryRecord] = []
         for entry in manifest.repos:
             repo_path = (self.hub_config.root / entry.path).resolve()
-            initialized = (repo_path / ".codex-autorunner" / "state.sqlite3").exists()
+            initialized = (repo_path / ".codex-autorunner" / "tickets").exists()
             records.append(
                 DiscoveryRecord(
                     repo=entry,
@@ -821,9 +821,8 @@ class HubSupervisor:
         lock_status = read_lock_status(lock_path)
 
         runner_state: Optional[RunnerState] = None
-        state_path = repo_path / ".codex-autorunner" / "state.sqlite3"
-        if record.initialized and state_path.exists():
-            runner_state = load_state(state_path)
+        if record.initialized:
+            runner_state = load_state(repo_path / ".codex-autorunner" / "state.sqlite3")
 
         is_clean: Optional[bool] = None
         if record.exists_on_disk and git_available(repo_path):
