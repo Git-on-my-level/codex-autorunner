@@ -10,7 +10,9 @@ from codex_autorunner.routes import base as base_routes
 from codex_autorunner.routes import flows as flow_routes
 
 
-def test_ticket_flow_runs_endpoint_returns_empty_list_on_fresh_repo(tmp_path, monkeypatch):
+def test_ticket_flow_runs_endpoint_returns_empty_list_on_fresh_repo(
+    tmp_path, monkeypatch
+):
     """Ticket-first: /api/flows/runs must not 404/500 when no runs exist."""
 
     flow_routes._controller_cache.clear()
