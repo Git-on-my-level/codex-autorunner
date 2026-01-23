@@ -112,6 +112,7 @@ class _HandlerStub(TelegramCommandHandlers):
                 per_topic_queue=False,
             ),
             app_server_turn_timeout_seconds=None,
+            agent_turn_timeout_seconds={"codex": None, "opencode": None},
         )
         self._router = _RouterStub(records)
         self._turn_semaphore = asyncio.Semaphore(max_parallel_turns)
