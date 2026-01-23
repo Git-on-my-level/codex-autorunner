@@ -71,14 +71,15 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             )
 
         flows_db = repo_root / ".codex-autorunner" / "flows.db"
-        flows_status = "skipped"
-        flows_detail = None
 
         docs_dir = repo_root / ".codex-autorunner"
         docs_status = "ok" if docs_dir.exists() else "missing"
 
         tickets_dir = repo_root / ".codex-autorunner" / "tickets"
         tickets_status = "ok" if tickets_dir.exists() else "missing"
+
+        flows_status = "ok" if tickets_dir.exists() else "missing"
+        flows_detail = None
 
         overall_status = (
             "ok" if docs_status == "ok" and tickets_status == "ok" else "degraded"

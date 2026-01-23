@@ -113,6 +113,8 @@ def _get_flow_controller(repo_root: Path, flow_type: str) -> FlowController:
 
 def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
     store = _require_flow_store(repo_root)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Flows database unavailable")
     try:
         record = store.get_flow_run(run_id)
     finally:
