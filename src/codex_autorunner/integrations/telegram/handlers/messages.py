@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from ....core.logging_utils import log_event
-from ....integrations.github.service import parse_github_url
 from ..adapter import (
     TelegramDocument,
     TelegramMessage,

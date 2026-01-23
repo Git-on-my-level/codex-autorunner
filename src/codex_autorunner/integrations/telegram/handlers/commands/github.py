@@ -28,13 +28,11 @@ from .....agents.opencode.runtime import (
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
 from .....core.text_delta_coalescer import TextDeltaCoalescer
-from .....integrations.github.service import GitHubError, GitHubService
 from ....app_server.client import (
     CodexAppServerDisconnected,
 )
 from ...adapter import (
     InlineButton,
-    TelegramCallbackQuery,
     TelegramMessage,
     build_inline_keyboard,
     encode_cancel_callback,
@@ -1559,8 +1557,6 @@ class GitHubCommands(SharedHelpers):
             delivery=delivery,
         )
 
-
-
     async def _prompt_review_commit_picker(
         self,
         message: TelegramMessage,
@@ -1686,5 +1682,3 @@ def _extract_opencode_error_detail(payload: Any) -> Optional[str]:
         if isinstance(value, str) and value:
             return value
     return None
-
-
