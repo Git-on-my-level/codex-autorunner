@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 DEFAULT_PAGE_SIZE = 10
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 TELEGRAM_CALLBACK_DATA_LIMIT = 64
@@ -22,22 +20,10 @@ TOKEN_USAGE_TURN_CACHE_LIMIT = 512
 DEFAULT_INTERRUPT_TIMEOUT_SECONDS = 30.0
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    raw = raw.strip()
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
-# Hard stop for a single OpenCode “turn” in Telegram/GitHub flows.
-# Set CAR_OPENCODE_TURN_TIMEOUT_SECONDS=0 to disable.
-OPENCODE_TURN_TIMEOUT_SECONDS = _env_float("CAR_OPENCODE_TURN_TIMEOUT_SECONDS", 28800.0)
+DEFAULT_AGENT_TURN_TIMEOUT_SECONDS = {
+    "codex": 28800.0,
+    "opencode": 28800.0,
+}
 DEFAULT_WORKSPACE_STATE_ROOT = "~/.codex-autorunner/workspaces"
 DEFAULT_AGENT = "codex"
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0

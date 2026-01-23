@@ -100,6 +100,7 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
             progress_stream=SimpleNamespace(
                 enabled=False, max_actions=0, max_output_chars=0
             ),
+            agent_turn_timeout_seconds={"codex": 28800.0, "opencode": 28800.0},
         )
         self._router = _RouterStub(record)
         self._opencode_supervisor = supervisor

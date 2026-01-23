@@ -46,7 +46,6 @@ from ...constants import (
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     MAX_MENTION_BYTES,
     MAX_TOPIC_THREAD_HISTORY,
-    OPENCODE_TURN_TIMEOUT_SECONDS,
     PLACEHOLDER_TEXT,
     QUEUED_PLACEHOLDER_TEXT,
     RESUME_PREVIEW_ASSISTANT_LIMIT,
@@ -1720,10 +1719,13 @@ class ExecutionCommands(SharedHelpers):
                         codex_thread_id=thread_id,
                         sse_ready_ms=sse_ready_ms,
                     )
+                    timeout_seconds = self._config.agent_turn_timeout_seconds.get(
+                        "opencode"
+                    )
                     timeout_task: Optional[asyncio.Task] = None
-                    if OPENCODE_TURN_TIMEOUT_SECONDS > 0:
+                    if timeout_seconds is not None and timeout_seconds > 0:
                         timeout_task = asyncio.create_task(
-                            asyncio.sleep(OPENCODE_TURN_TIMEOUT_SECONDS)
+                            asyncio.sleep(timeout_seconds)
                         )
                     prompt_sent_at = time.monotonic()
                     prompt_task = asyncio.create_task(
@@ -2230,7 +2232,9 @@ class ExecutionCommands(SharedHelpers):
                 result = await self._wait_for_turn_result(
                     client,
                     turn_handle,
-                    timeout_seconds=self._config.app_server_turn_timeout_seconds,
+                    timeout_seconds=self._config.agent_turn_timeout_seconds.get(
+                        "codex"
+                    ),
                     topic_key=key,
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,

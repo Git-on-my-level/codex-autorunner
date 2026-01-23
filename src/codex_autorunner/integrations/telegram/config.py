@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .adapter import TelegramAllowlist
+from .constants import DEFAULT_AGENT_TURN_TIMEOUT_SECONDS
 from .state import APPROVAL_MODE_YOLO, normalize_approval_mode
 
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
@@ -164,6 +165,7 @@ class TelegramBotConfig:
     app_server_start_timeout_seconds: float
     app_server_start_max_attempts: Optional[int]
     app_server_turn_timeout_seconds: Optional[float]
+    agent_turn_timeout_seconds: dict[str, Optional[float]]
     poll_timeout_seconds: int
     poll_request_timeout_seconds: Optional[float]
     poll_allowed_updates: list[str]
@@ -440,6 +442,33 @@ class TelegramBotConfig:
             if app_server_turn_timeout_seconds <= 0:
                 app_server_turn_timeout_seconds = None
 
+        agent_timeouts_raw = cfg.get("agent_timeouts")
+        has_explicit_codex_timeout = False
+        agent_timeouts: dict[str, Optional[float]] = dict(
+            DEFAULT_AGENT_TURN_TIMEOUT_SECONDS
+        )
+        if isinstance(agent_timeouts_raw, dict):
+            for key, value in agent_timeouts_raw.items():
+                if str(key) == "codex":
+                    has_explicit_codex_timeout = True
+                if value is None:
+                    agent_timeouts[str(key)] = None
+                    continue
+                try:
+                    timeout_value = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if timeout_value <= 0:
+                    agent_timeouts[str(key)] = None
+                else:
+                    agent_timeouts[str(key)] = timeout_value
+
+        if (
+            not has_explicit_codex_timeout
+            and app_server_turn_timeout_seconds is not None
+        ):
+            agent_timeouts["codex"] = app_server_turn_timeout_seconds
+
         polling_raw_value = cfg.get("polling")
         polling_raw: dict[str, Any] = (
             polling_raw_value if isinstance(polling_raw_value, dict) else {}
@@ -486,6 +515,7 @@ class TelegramBotConfig:
             app_server_start_timeout_seconds=app_server_start_timeout_seconds,
             app_server_start_max_attempts=app_server_start_max_attempts,
             app_server_turn_timeout_seconds=app_server_turn_timeout_seconds,
+            agent_turn_timeout_seconds=agent_timeouts,
             poll_timeout_seconds=poll_timeout_seconds,
             poll_request_timeout_seconds=poll_request_timeout_seconds,
             poll_allowed_updates=poll_allowed_updates,

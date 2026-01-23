@@ -270,6 +270,10 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "idle_ttl_seconds": 3600,
             "turn_timeout_seconds": 28800,
         },
+        "agent_timeouts": {
+            "codex": 28800,
+            "opencode": 28800,
+        },
         "polling": {
             "timeout_seconds": 30,
             "allowed_updates": ["message", "edited_message", "callback_query"],
@@ -2368,6 +2372,17 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             raise ConfigError(
                 "telegram_bot.app_server.turn_timeout_seconds must be a number or null"
             )
+    agent_timeouts_cfg = telegram_cfg.get("agent_timeouts")
+    if agent_timeouts_cfg is not None and not isinstance(agent_timeouts_cfg, dict):
+        raise ConfigError("telegram_bot.agent_timeouts must be a mapping if provided")
+    if isinstance(agent_timeouts_cfg, dict):
+        for _key, value in agent_timeouts_cfg.items():
+            if value is None:
+                continue
+            if not isinstance(value, (int, float)):
+                raise ConfigError(
+                    "telegram_bot.agent_timeouts values must be numbers or null"
+                )
     polling_cfg = telegram_cfg.get("polling")
     if polling_cfg is not None and not isinstance(polling_cfg, dict):
         raise ConfigError("telegram_bot.polling must be a mapping if provided")
