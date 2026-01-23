@@ -77,7 +77,12 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         docs_dir = repo_root / ".codex-autorunner"
         docs_status = "ok" if docs_dir.exists() else "missing"
 
-        overall_status = "ok" if docs_status == "ok" else "degraded"
+        tickets_dir = repo_root / ".codex-autorunner" / "tickets"
+        tickets_status = "ok" if tickets_dir.exists() else "missing"
+
+        overall_status = (
+            "ok" if docs_status == "ok" and tickets_status == "ok" else "degraded"
+        )
 
         return {
             "status": overall_status,
@@ -89,6 +94,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 "detail": flows_detail,
             },
             "docs": {"status": docs_status, "path": str(docs_dir)},
+            "tickets": {"status": tickets_status, "path": str(tickets_dir)},
         }
 
     @router.websocket("/api/terminal")

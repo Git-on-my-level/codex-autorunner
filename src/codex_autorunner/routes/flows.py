@@ -287,6 +287,12 @@ def build_flow_routes() -> APIRouter:
         ]
         return {"definitions": definitions}
 
+    @router.get("/runs", response_model=list[FlowStatusResponse])
+    async def list_runs(flow_type: Optional[str] = None):
+        repo_root = find_repo_root()
+        records = _safe_list_flow_runs(repo_root, flow_type=flow_type)
+        return [FlowStatusResponse.from_record(rec) for rec in records]
+
     @router.get("/{flow_type}")
     async def get_flow_definition(flow_type: str):
         repo_root = find_repo_root()
@@ -296,12 +302,6 @@ def build_flow_routes() -> APIRouter:
             )
         definition = _build_flow_definition(repo_root, flow_type)
         return _definition_info(definition)
-
-    @router.get("/runs", response_model=list[FlowStatusResponse])
-    async def list_runs(flow_type: Optional[str] = None):
-        repo_root = find_repo_root()
-        records = _safe_list_flow_runs(repo_root, flow_type=flow_type)
-        return [FlowStatusResponse.from_record(rec) for rec in records]
 
     async def _start_flow(
         flow_type: str, request: FlowStartRequest
