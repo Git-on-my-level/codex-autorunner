@@ -394,6 +394,14 @@ PY
 
 domain="gui/$(id -u)/${LABEL}"
 
+_require_gui_domain() {
+  local gui_domain
+  gui_domain="gui/$(id -u)"
+  if ! launchctl print "${gui_domain}" >/dev/null 2>&1; then
+    fail "No active GUI launchd session (${gui_domain}); please log into the macOS GUI or bootstrap the LaunchAgents via 'sudo launchctl bootstrap ${gui_domain} ~/Library/LaunchAgents/${LABEL}.plist' before running this refresh."
+  fi
+}
+
 _ensure_plist_uses_current_venv() {
   local desired_bin
   desired_bin="${CURRENT_VENV_LINK}/bin/codex-autorunner"
@@ -501,6 +509,7 @@ _wait_pid_exit() {
 
 _reload() {
   local pid
+  _require_gui_domain
   pid="$(_service_pid)"
   _ensure_plist_has_opencode_path
   launchctl unload -w "${PLIST_PATH}" >/dev/null 2>&1 || true
@@ -515,6 +524,7 @@ _reload() {
 
 _reload_telegram() {
   local hub_root telegram_state telegram_domain
+  _require_gui_domain
   hub_root="$(_plist_arg_value path)"
   telegram_state="$(_telegram_state "${hub_root}")"
 
