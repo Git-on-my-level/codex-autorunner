@@ -20,7 +20,7 @@ const ui = {
     threadDownload: document.getElementById("thread-backup-download"),
 };
 const DEFAULT_EFFORTS = ["low", "medium", "high"];
-function getModelId(model) {
+function setOptions(select, options, selected, placeholder) {
     if (!model || typeof model !== "object")
         return null;
     const modelObj = model;

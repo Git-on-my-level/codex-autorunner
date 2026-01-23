@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 from ..core.engine import Engine
 from ..core.flows import FlowController, FlowDefinition, FlowRunRecord, FlowStore
 from ..core.utils import find_repo_root
-from ..flows.pr_flow import build_pr_flow_definition
 from ..flows.ticket_flow import build_ticket_flow_definition
 from ..tickets import AgentPool
 from ..tickets.files import list_ticket_paths, read_ticket, safe_relpath
@@ -29,7 +28,7 @@ _active_workers: Dict[
 ] = {}
 _controller_cache: Dict[tuple[Path, str], FlowController] = {}
 _definition_cache: Dict[tuple[Path, str], FlowDefinition] = {}
-_supported_flow_types = ("ticket_flow", "pr_flow")
+_supported_flow_types = ("ticket_flow",)
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -39,7 +38,7 @@ def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
     return db_path, artifacts_root
 
 
-def _require_flow_store(repo_root: Path) -> FlowStore:
+def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
     db_path, _ = _flow_paths(repo_root)
     store = FlowStore(db_path)
     try:
@@ -47,9 +46,7 @@ def _require_flow_store(repo_root: Path) -> FlowStore:
         return store
     except Exception as exc:
         _logger.warning("Flows database unavailable at %s: %s", db_path, exc)
-        raise HTTPException(
-            status_code=404, detail="Flows database unavailable"
-        ) from exc
+        return None
 
 
 def _safe_list_flow_runs(
@@ -77,9 +74,7 @@ def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
     if key in _definition_cache:
         return _definition_cache[key]
 
-    if flow_type == "pr_flow":
-        definition = build_pr_flow_definition()
-    elif flow_type == "ticket_flow":
+    if flow_type == "ticket_flow":
         engine = Engine(repo_root)
         agent_pool = AgentPool(engine.config)
         definition = build_ticket_flow_definition(agent_pool=agent_pool)

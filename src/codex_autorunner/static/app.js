@@ -5,11 +5,8 @@ import { initDashboard } from "./dashboard.js";
 import { initDocs } from "./docs.js";
 import { initLogs } from "./logs.js";
 import { initTerminal } from "./terminal.js";
-import { initRuns } from "./runs.js";
 import { initTicketFlow } from "./tickets.js";
 import { initMessages, initMessageBell } from "./messages.js";
-import { loadState } from "./state.js";
-import { initGitHub } from "./github.js";
 import { initMobileCompact } from "./mobileCompact.js";
 import { subscribe } from "./bus.js";
 import { initRepoSettingsPanel } from "./settings.js";
@@ -54,9 +51,6 @@ async function initRepoShell() {
         }
         else if (tabId === "analytics") {
             initDashboard();
-            initGitHub();
-            void loadState({ notify: false }).catch(() => { });
-            initRuns();
             initLogs();
         }
         else if (tabId === "tickets") {

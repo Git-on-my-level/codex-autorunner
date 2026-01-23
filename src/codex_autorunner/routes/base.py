@@ -1,5 +1,5 @@
 """
-Base routes: Index, state streaming, WebSocket terminal, and logs.
+Base routes: Index, WebSocket terminal.
 """
 
 import asyncio
@@ -59,32 +59,6 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         html = render_index_html(active_static, request.app.state.asset_version)
         return HTMLResponse(html, headers=index_response_headers())
 
-    @router.get("/api/state", response_model=StateResponse)
-    def get_state(request: Request):
-        engine = request.app.state.engine
-        config = request.app.state.config
-        state = load_state(engine.state_path)
-        outstanding, done = engine.docs.todos()
-        status, runner_pid, running = resolve_runner_status(engine, state)
-        lock_payload = resolve_lock_payload(engine)
-        codex_model = config.codex_model or extract_flag_value(
-            config.codex_args, "--model"
-        )
-        return {
-            "last_run_id": state.last_run_id,
-            "status": status,
-            "last_exit_code": state.last_exit_code,
-            "last_run_started_at": state.last_run_started_at,
-            "last_run_finished_at": state.last_run_finished_at,
-            "outstanding_count": len(outstanding),
-            "done_count": len(done),
-            "running": running,
-            "runner_pid": runner_pid,
-            **lock_payload,
-            "terminal_idle_timeout_seconds": config.terminal_idle_timeout_seconds,
-            "codex_model": codex_model or "auto",
-        }
-
     @router.get("/api/version", response_model=VersionResponse)
     def get_version(request: Request):
         return {"asset_version": request.app.state.asset_version}
@@ -106,25 +80,13 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             )
 
         flows_db = repo_root / ".codex-autorunner" / "flows.db"
-        flows_status = "ok"
+        flows_status = "skipped"
         flows_detail = None
-        if flows_db.exists():
-            try:
-                store = FlowStore(flows_db)
-                store.initialize()
-                store.close()
-            except Exception as exc:
-                flows_status = "unavailable"
-                flows_detail = str(exc)
-        else:
-            flows_status = "missing"
 
         docs_dir = repo_root / ".codex-autorunner"
         docs_status = "ok" if docs_dir.exists() else "missing"
 
-        overall_status = (
-            "ok" if flows_status == "ok" and docs_status == "ok" else "degraded"
-        )
+        overall_status = "ok" if docs_status == "ok" else "degraded"
 
         return {
             "status": overall_status,
@@ -137,69 +99,6 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             },
             "docs": {"status": docs_status, "path": str(docs_dir)},
         }
-
-    @router.get("/api/state/stream")
-    async def stream_state_endpoint(request: Request):
-        engine = request.app.state.engine
-        manager = request.app.state.manager
-        shutdown_event = getattr(request.app.state, "shutdown_event", None)
-        return StreamingResponse(
-            state_stream(
-                engine,
-                manager,
-                logger=request.app.state.logger,
-                shutdown_event=shutdown_event,
-                max_seconds=60.0,
-            ),
-            media_type="text/event-stream",
-            headers=SSE_HEADERS,
-        )
-
-    @router.get("/api/logs")
-    def get_logs(
-        request: Request,
-        run_id: Optional[int] = None,
-        tail: Optional[int] = None,
-        raw: bool = False,
-    ):
-        engine = request.app.state.engine
-
-        def _build_response(
-            text: str, *, run_id: Optional[int] = None, tail: Optional[int] = None
-        ):
-            if raw:
-                return PlainTextResponse(text or "")
-            payload = {"log": text or ""}
-            if run_id is not None:
-                payload["run_id"] = run_id
-            if tail is not None:
-                payload["tail"] = tail
-            return JSONResponse(payload)
-
-        if run_id is not None:
-            block = engine.read_run_block(run_id)
-            if not block:
-                raise HTTPException(status_code=404, detail="run not found")
-            return _build_response(block, run_id=run_id)
-        if tail is not None:
-            return _build_response(engine.tail_log(tail), tail=tail)
-        state = load_state(engine.state_path)
-        if state.last_run_id is None:
-            return _build_response("")
-        block = engine.read_run_block(state.last_run_id) or ""
-        return _build_response(block, run_id=state.last_run_id)
-
-    @router.get("/api/logs/stream")
-    async def stream_logs_endpoint(request: Request):
-        engine = request.app.state.engine
-        shutdown_event = getattr(request.app.state, "shutdown_event", None)
-        return StreamingResponse(
-            log_stream(
-                engine.log_path, shutdown_event=shutdown_event, max_seconds=60.0
-            ),
-            media_type="text/event-stream",
-            headers=SSE_HEADERS,
-        )
 
     @router.websocket("/api/terminal")
     async def terminal(ws: WebSocket):

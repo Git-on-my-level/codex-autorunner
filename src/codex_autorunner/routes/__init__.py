@@ -2,14 +2,13 @@
 Modular API routes for the codex-autorunner server.
 
 This package splits monolithic api_routes.py into focused modules:
-- base: Index, state streaming, and general endpoints
+- base: Index, WebSocket terminal, and general endpoints
 - agents: Agent harness models and event streaming
 - app_server: App-server thread registry endpoints
 - docs: Document management (read/write) and chat
 - flows: Flow runtime management (start/stop/resume/status/events/artifacts)
 - messages: Inbox/message wrappers over ticket_flow handoff + reply histories
 - repos: Run control (start/stop/resume/reset)
-- runs: Run telemetry and artifacts
 - sessions: Terminal session registry endpoints
 - settings: Session settings for autorunner overrides
 - voice: Voice transcription and config
@@ -28,7 +27,6 @@ from .flows import build_flow_routes
 from .messages import build_messages_routes
 from .repos import build_repos_routes
 from .review import build_review_routes
-from .runs import build_runs_routes
 from .sessions import build_sessions_routes
 from .settings import build_settings_routes
 from .system import build_system_routes
@@ -57,7 +55,6 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     router.include_router(build_messages_routes())
     router.include_router(build_repos_routes())
     router.include_router(build_review_routes())
-    router.include_router(build_runs_routes())
     router.include_router(build_sessions_routes())
     router.include_router(build_settings_routes())
     router.include_router(build_system_routes())

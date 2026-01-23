@@ -228,12 +228,6 @@ class ReviewCommitCallback:
 
 
 @dataclass(frozen=True)
-class PrFlowStartCallback:
-    slug: str
-    number: int
-
-
-@dataclass(frozen=True)
 class CancelCallback:
     kind: str
 
@@ -786,7 +780,6 @@ def parse_callback_data(
         UpdateCallback,
         UpdateConfirmCallback,
         ReviewCommitCallback,
-        PrFlowStartCallback,
         CancelCallback,
         CompactCallback,
         PageCallback,
@@ -868,16 +861,6 @@ def parse_callback_data(
         if not sha:
             return None
         return ReviewCommitCallback(sha=sha)
-    if data.startswith("pr_flow_start:"):
-        _, _, rest = data.partition(":")
-        if not rest:
-            return None
-        if "#" not in rest:
-            return None
-        slug, _, number_str = rest.partition("#")
-        if not slug or not number_str or not number_str.isdigit():
-            return None
-        return PrFlowStartCallback(slug=slug, number=int(number_str))
     if data.startswith("cancel:"):
         _, _, kind = data.partition(":")
         if not kind:

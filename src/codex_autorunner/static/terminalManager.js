@@ -43,22 +43,6 @@ const XTERM_COLOR_MODE_DEFAULT = 0;
 const XTERM_COLOR_MODE_PALETTE_16 = 0x01000000;
 const XTERM_COLOR_MODE_PALETTE_256 = 0x02000000;
 const XTERM_COLOR_MODE_RGB = 0x03000000;
-const CAR_CONTEXT_HOOK_ID = "car_context";
-const GITHUB_CONTEXT_HOOK_ID = "github_context";
-const CAR_CONTEXT_KEYWORDS = [
-    "car",
-    "codex",
-    "todo",
-    "progress",
-    "opinions",
-    "spec",
-    "summary",
-    "autorunner",
-    "work docs",
-];
-const GITHUB_LINK_RE = /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/\d+(?:[/?#][^\s]*)?/i;
-const CAR_CONTEXT_HINT_TEXT = "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.";
-const CAR_CONTEXT_HINT = wrapInjectedContext(CAR_CONTEXT_HINT_TEXT);
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT = CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.";
 const INJECTED_CONTEXT_TAG_RE = /<injected context>/i;
@@ -359,8 +343,6 @@ export class TerminalManager {
         this.lastAltBufferActive = null;
         this.lastAltScrollbackSize = 0;
         this.transcriptResetForConnect = false;
-        this._registerTextInputHook(this._buildCarContextHook());
-        this._registerTextInputHook(this._buildGithubContextHook());
         // Bind methods that are used as callbacks
         this._handleResize = this._handleResize.bind(this);
         this._handleVoiceHotkeyDown = this._handleVoiceHotkeyDown.bind(this);
@@ -436,9 +418,6 @@ export class TerminalManager {
                 this.terminalIdleTimeoutSeconds = state.terminal_idle_timeout_seconds;
             }
         });
-        if (this.terminalIdleTimeoutSeconds === null) {
-            this._loadTerminalIdleTimeout().catch(() => { });
-        }
         // Auto-connect if session ID exists
         if (this._getSavedSessionId()) {
             this.connect({ mode: "attach" });
@@ -612,69 +591,6 @@ export class TerminalManager {
         }
         return next;
     }
-    _buildCarContextHook() {
-        return {
-            id: CAR_CONTEXT_HOOK_ID,
-            apply: ({ text, manager }) => {
-                if (!text || !text.trim())
-                    return null;
-                if (manager._hasTextInputHookFired(CAR_CONTEXT_HOOK_ID))
-                    return null;
-                const lowered = text.toLowerCase();
-                const hit = CAR_CONTEXT_KEYWORDS.some((kw) => lowered.includes(kw));
-                if (!hit)
-                    return null;
-                if (lowered.includes("about_car.md"))
-                    return null;
-                if (text.includes(CAR_CONTEXT_HINT_TEXT) ||
-                    text.includes(CAR_CONTEXT_HINT)) {
-                    return null;
-                }
-                manager._markTextInputHookFired(CAR_CONTEXT_HOOK_ID);
-                const injection = wrapInjectedContextIfNeeded(CAR_CONTEXT_HINT);
-                const separator = text.endsWith("\n") ? "\n" : "\n\n";
-                return { text: `${text}${separator}${injection}` };
-            },
-        };
-    }
-    _buildGithubContextHook() {
-        return {
-            id: GITHUB_CONTEXT_HOOK_ID,
-            apply: async ({ text }) => {
-                if (!text || !text.trim())
-                    return null;
-                const match = text.match(GITHUB_LINK_RE);
-                if (!match)
-                    return null;
-                try {
-                    const res = await api("/api/github/context", {
-                        method: "POST",
-                        body: { url: match[0] },
-                    });
-                    if (!res || typeof res !== "object")
-                        return null;
-                    const injection = wrapInjectedContextIfNeeded(res.hint);
-                    const separator = text.endsWith("\n") ? "\n" : "\n\n";
-                    return { text: `${text}${separator}${injection}` };
-                }
-                catch (_err) {
-                    return null;
-                }
-            },
-        };
-    }
-    async _loadTerminalIdleTimeout() {
-        try {
-            const data = await api(CONSTANTS.API.STATE_ENDPOINT);
-            if (data &&
-                typeof data === "object" && data !== null && "terminal_idle_timeout_seconds" in data) {
-                this.terminalIdleTimeoutSeconds = data.terminal_idle_timeout_seconds;
-            }
-        }
-        catch (_err) {
-            // ignore
-        }
-    }
     _getSessionStorageKey() {
         return `${SESSION_STORAGE_PREFIX}${this._getRepoStorageKey()}`;
     }
@@ -751,9 +667,6 @@ export class TerminalManager {
     }
     _setCurrentSessionId(sessionId) {
         this.currentSessionId = sessionId || null;
-        if (this.currentSessionId) {
-            this._migrateTextInputHookSession(CAR_CONTEXT_HOOK_ID, this.currentSessionId);
-        }
         this._renderStatus();
     }
     /**

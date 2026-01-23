@@ -1,5 +1,4 @@
 import { api, confirmModal, flash, getUrlParams, updateUrlParams } from "./utils.js";
-import { loadState } from "./state.js";
 import { publish } from "./bus.js";
 import { renderTodoPreview } from "./todoPreview.js";
 import { docButtons, docActionsUI, specIssueUI, specIngestUI, chatUI, } from "./docsElements.js";
@@ -213,7 +212,6 @@ export async function saveDoc() {
         publish("docs:updated", { kind: getActiveDoc(), content });
         if (getActiveDoc() === "todo") {
             renderTodoPreview(content);
-            await loadState({ notify: false });
         }
     }
     catch (err) {

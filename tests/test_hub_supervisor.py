@@ -138,11 +138,6 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
     assert (repo_dir / ".codex-autorunner" / "state.sqlite3").exists()
     assert not (repo_dir / ".codex-autorunner" / "config.yml").exists()
 
-    state_resp = client.get("/repos/demo/api/state")
-    assert state_resp.status_code == 200
-    state = state_resp.json()
-    assert state["status"] == "idle"
-
 
 def test_hub_mount_enters_repo_lifespan(tmp_path: Path):
     hub_root = tmp_path / "hub"
@@ -254,9 +249,6 @@ def test_hub_init_endpoint_mounts_repo(tmp_path: Path):
     assert init_payload["initialized"] is True
     assert init_payload["mounted"] is True
     assert init_payload.get("mount_error") is None
-
-    state_resp = client.get("/repos/demo/api/state")
-    assert state_resp.status_code == 200
 
 
 def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

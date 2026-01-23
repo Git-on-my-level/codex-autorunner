@@ -139,25 +139,6 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "sync_commit_mode": "auto",  # none|auto|always
         # Bounds the agentic sync step in GitHubService.sync_pr (seconds).
         "sync_agent_timeout_seconds": 1800,
-        "pr_flow": {
-            "enabled": True,
-            "max_cycles": 3,
-            "stop_condition": "no_issues",
-            "max_implementation_runs": None,
-            "max_wallclock_seconds": None,
-            "review": {
-                "include_codex": True,
-                "include_github": True,
-                "include_checks": True,
-            },
-            "chatops": {
-                "enabled": False,
-                "poll_interval_seconds": 60,
-                "allow_users": [],
-                "allow_associations": [],
-                "ignore_bots": True,
-            },
-        },
     },
     "app_server": {
         "command": ["codex", "app-server"],

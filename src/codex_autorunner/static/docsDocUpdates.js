@@ -1,5 +1,4 @@
 import { confirmModal, flash } from "./utils.js";
-import { loadState } from "./state.js";
 import { publish } from "./bus.js";
 import { renderTodoPreview } from "./todoPreview.js";
 import { getActiveDoc, docsState, hasDraft, isDraftPreview, } from "./docsState.js";
@@ -32,7 +31,6 @@ export async function applyDocUpdateFromChat(kind, content, { force = false } = 
     publish("docs:updated", { kind, content });
     if (kind === "todo") {
         renderTodoPreview(content);
-        loadState({ notify: false }).catch(() => { });
     }
     return true;
 }
@@ -58,5 +56,4 @@ export function applySpecIngestDocs(payload) {
     publish("docs:updated", { kind: "opinions", content: docsState.docsCache.opinions });
     publish("docs:updated", { kind: "spec", content: docsState.docsCache.spec });
     publish("docs:updated", { kind: "summary", content: docsState.docsCache.summary });
-    loadState({ notify: false }).catch(() => { });
 }
