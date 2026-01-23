@@ -39,6 +39,15 @@
 <p class="muted small">missing</p>
 </div>
 </section>
+<section class="hub-inbox">
+<div class="hub-panel-header">
+<span class="label">Inbox</span>
+<div class="hub-panel-actions">
+<button class="ghost sm" id="hub-inbox-refresh">Refresh</button>
+</div>
+</div>
+<div class="hub-inbox-list" id="hub-inbox-list">Loading…</div>
+</section>
 <section class="hub-usage-compact">
 <div class="hub-usage-header">
 <span class="label">Usage</span>
@@ -86,6 +95,10 @@
 <!-- Tabs will be injected here by tabs.js -->
 </div>
 <div class="nav-actions">
+<button class="ghost sm icon-btn inbox-btn" id="repo-inbox-btn" title="Inbox">
+🔔
+<span class="badge hidden" id="repo-inbox-badge"></span>
+</button>
 <button class="ghost sm icon-btn" id="repo-settings" title="Settings">⚙</button>
 </div>
 </nav>
@@ -349,6 +362,37 @@
 <a class="review-link muted" id="review-final-link">Final report</a>
 <a class="review-link muted" id="review-log-link">Log</a>
 <a class="review-link muted" id="review-scratchpad-link">Scratchpad</a>
+</div>
+</div>
+</section>
+<section class="panel" id="messages">
+<div class="cards">
+<div class="card">
+<div class="card-header">
+<div class="card-header-left">
+<span class="label">Inbox</span>
+</div>
+<button class="ghost sm" id="messages-refresh">Refresh</button>
+</div>
+<div class="messages-layout">
+<div class="messages-sidebar">
+<div class="messages-thread-list" id="messages-thread-list"></div>
+</div>
+<div class="messages-main">
+<div class="messages-thread-detail" id="messages-thread-detail"><div class="muted">Select a thread</div></div>
+<div class="messages-reply-box">
+<textarea class="messages-reply-body" id="messages-reply-body" placeholder="Write a reply…"></textarea>
+<div class="messages-reply-row">
+<input type="file" id="messages-reply-files" multiple />
+<div class="messages-reply-actions">
+<button class="primary sm" id="messages-reply-send">Send</button>
+<button class="sm" id="messages-reply-send-resume">Send &amp; Resume</button>
+<button class="sm" id="messages-resume" disabled>Resume</button>
+</div>
+</div>
+</div>
+</div>
+</div>
 </div>
 </div>
 </section>
@@ -646,7 +690,8 @@
 <button class="tmb-key tmb-mod" data-key="alt" id="tmb-alt">Alt</button>
 <button class="tmb-key" data-seq="">Esc</button>
 <button class="tmb-key" data-seq="	">Tab</button>
-<button class="tmb-key tmb-primary" data-seq="">Enter</button>
+<button class="tmb-key tmb-primary" data-seq="
+">Enter</button>
 </div>
 <div class="tmb-row">
 <button class="tmb-key tmb-ctrl-combo" data-ctrl="c">^C</button>

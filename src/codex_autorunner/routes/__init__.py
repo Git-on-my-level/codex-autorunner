@@ -7,6 +7,7 @@ This package splits monolithic api_routes.py into focused modules:
 - app_server: App-server thread registry endpoints
 - docs: Document management (read/write) and chat
 - flows: Flow runtime management (start/stop/resume/status/events/artifacts)
+- messages: Inbox/message wrappers over ticket_flow handoff + reply histories
 - repos: Run control (start/stop/resume/reset)
 - runs: Run telemetry and artifacts
 - sessions: Terminal session registry endpoints
@@ -24,6 +25,7 @@ from .app_server import build_app_server_routes
 from .base import build_base_routes
 from .docs import build_docs_routes
 from .flows import build_flow_routes
+from .messages import build_messages_routes
 from .repos import build_repos_routes
 from .review import build_review_routes
 from .runs import build_runs_routes
@@ -52,6 +54,7 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     router.include_router(build_app_server_routes())
     router.include_router(build_docs_routes())
     router.include_router(build_flow_routes())
+    router.include_router(build_messages_routes())
     router.include_router(build_repos_routes())
     router.include_router(build_review_routes())
     router.include_router(build_runs_routes())

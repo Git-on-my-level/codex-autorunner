@@ -34,6 +34,8 @@ from ..core.config import (
 )
 from ..core.doc_chat import DocChatService
 from ..core.engine import Engine, LockError
+from ..core.flows.models import FlowRunStatus
+from ..core.flows.store import FlowStore
 from ..core.hub import HubSupervisor
 from ..core.logging_utils import safe_log, setup_rotating_logger
 from ..core.optional_dependencies import require_optional_dependencies
@@ -57,6 +59,8 @@ from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
+from ..tickets.outbox import parse_user_message, resolve_outbox_paths
+from ..tickets.files import safe_relpath
 from ..spec_ingest import SpecIngestService
 from ..voice import VoiceConfig, VoiceService
 from .hub_jobs import HubJobManager
@@ -1354,6 +1358,121 @@ def create_hub_app(
             "status": status,
             **series,
         }
+
+    @app.get("/hub/messages")
+    async def hub_messages(limit: int = 100):
+        """Return paused ticket_flow messages across all repos.
+
+        The hub inbox is intentionally simple: it surfaces the latest archived
+        handoff message for each paused ticket_flow run.
+        """
+
+        def _latest_handoff(
+            repo_root: Path, run_id: str, input_data: dict
+        ) -> Optional[dict]:
+            try:
+                workspace_root = Path(input_data.get("workspace_root") or repo_root)
+                runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
+                outbox_paths = resolve_outbox_paths(
+                    workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
+                )
+                history_dir = outbox_paths.handoff_history_dir
+                if not history_dir.exists() or not history_dir.is_dir():
+                    return None
+                seq_dirs: list[Path] = []
+                for child in history_dir.iterdir():
+                    if not child.is_dir():
+                        continue
+                    name = child.name
+                    if len(name) == 4 and name.isdigit():
+                        seq_dirs.append(child)
+                if not seq_dirs:
+                    return None
+                latest_dir = sorted(seq_dirs, key=lambda p: p.name)[-1]
+                seq = int(latest_dir.name)
+                msg_path = latest_dir / "USER_MESSAGE.md"
+                msg, errors = parse_user_message(msg_path)
+                if errors or msg is None:
+                    return {
+                        "seq": seq,
+                        "dir": safe_relpath(latest_dir, repo_root),
+                        "message": None,
+                        "errors": errors,
+                        "files": [],
+                    }
+                files: list[str] = []
+                for child in sorted(latest_dir.iterdir(), key=lambda p: p.name):
+                    if child.name.startswith("."):
+                        continue
+                    if child.name == "USER_MESSAGE.md":
+                        continue
+                    if child.is_file():
+                        files.append(child.name)
+                return {
+                    "seq": seq,
+                    "dir": safe_relpath(latest_dir, repo_root),
+                    "message": {
+                        "mode": msg.mode,
+                        "title": msg.title,
+                        "body": msg.body,
+                        "extra": msg.extra,
+                    },
+                    "errors": [],
+                    "files": files,
+                }
+            except Exception:
+                return None
+
+        def _gather() -> list[dict]:
+            messages: list[dict] = []
+            try:
+                snapshots = context.supervisor.list_repos()
+            except Exception:
+                return []
+            for snap in snapshots:
+                if not (snap.initialized and snap.exists_on_disk):
+                    continue
+                repo_root = snap.path
+                db_path = repo_root / ".codex-autorunner" / "flows.db"
+                if not db_path.exists():
+                    continue
+                try:
+                    store = FlowStore(db_path)
+                    store.initialize()
+                    paused = store.list_flow_runs(
+                        flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+                    )
+                except Exception:
+                    continue
+                if not paused:
+                    continue
+                record = paused[0]
+                latest = _latest_handoff(
+                    repo_root, str(record.id), dict(record.input_data or {})
+                )
+                if not latest or not latest.get("message"):
+                    continue
+                messages.append(
+                    {
+                        "repo_id": snap.id,
+                        "repo_display_name": snap.display_name,
+                        "repo_path": str(snap.path),
+                        "run_id": record.id,
+                        "run_created_at": record.created_at,
+                        "status": record.status.value,
+                        "seq": latest["seq"],
+                        "message": latest["message"],
+                        "files": latest.get("files") or [],
+                        "open_url": f"/repos/{snap.id}/?tab=messages&run_id={record.id}",
+                    }
+                )
+            messages.sort(key=lambda m: (m.get("run_created_at") or ""), reverse=True)
+            if limit and limit > 0:
+                return messages[: int(limit)]
+            return messages
+
+        items = await asyncio.to_thread(_gather)
+        return {"items": items}
 
     @app.get("/hub/repos")
     async def list_repos():

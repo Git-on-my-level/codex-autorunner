@@ -1,8 +1,18 @@
 import { publish } from "./bus.js";
 import { getUrlParams, updateUrlParams } from "./utils.js";
 const tabs = [];
-export function registerTab(id, label) {
-    tabs.push({ id, label });
+export function registerTab(id, label, opts = {}) {
+    tabs.push({ id, label, hidden: Boolean(opts.hidden) });
+}
+let setActivePanelFn = null;
+let pendingActivate = null;
+export function activateTab(id) {
+    if (setActivePanelFn) {
+        setActivePanelFn(id);
+    }
+    else {
+        pendingActivate = id;
+    }
 }
 export function initTabs(defaultTab = "dashboard") {
     const container = document.querySelector(".tabs");
@@ -17,7 +27,11 @@ export function initTabs(defaultTab = "dashboard") {
         updateUrlParams({ tab: id });
         publish("tab:change", id);
     };
+    setActivePanelFn = setActivePanel;
     tabs.forEach(tab => {
+        if (tab.hidden) {
+            return;
+        }
         const btn = document.createElement("button");
         btn.className = "tab";
         btn.dataset.target = tab.id;
@@ -37,5 +51,10 @@ export function initTabs(defaultTab = "dashboard") {
     }
     else if (tabs.length > 0) {
         setActivePanel(tabs[0].id);
+    }
+    if (pendingActivate && tabs.some((t) => t.id === pendingActivate)) {
+        const id = pendingActivate;
+        pendingActivate = null;
+        setActivePanel(id);
     }
 }

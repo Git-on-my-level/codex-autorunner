@@ -5,12 +5,24 @@ import { getUrlParams, updateUrlParams } from "./utils.js";
 interface Tab {
   id: string;
   label: string;
+  hidden?: boolean;
 }
 
 const tabs: Tab[] = [];
 
-export function registerTab(id: string, label: string): void {
-  tabs.push({ id, label });
+export function registerTab(id: string, label: string, opts: { hidden?: boolean } = {}): void {
+  tabs.push({ id, label, hidden: Boolean(opts.hidden) });
+}
+
+let setActivePanelFn: ((id: string) => void) | null = null;
+let pendingActivate: string | null = null;
+
+export function activateTab(id: string): void {
+  if (setActivePanelFn) {
+    setActivePanelFn(id);
+  } else {
+    pendingActivate = id;
+  }
 }
 
 export function initTabs(defaultTab: string = "dashboard"): void {
@@ -31,7 +43,12 @@ export function initTabs(defaultTab: string = "dashboard"): void {
     publish("tab:change", id);
   };
 
+  setActivePanelFn = setActivePanel;
+
   tabs.forEach(tab => {
+    if (tab.hidden) {
+      return;
+    }
     const btn = document.createElement("button");
     btn.className = "tab";
     btn.dataset.target = tab.id;
@@ -51,5 +68,11 @@ export function initTabs(defaultTab: string = "dashboard"): void {
     setActivePanel(initialTab);
   } else if (tabs.length > 0) {
     setActivePanel(tabs[0].id);
+  }
+
+  if (pendingActivate && tabs.some((t) => t.id === pendingActivate)) {
+    const id = pendingActivate;
+    pendingActivate = null;
+    setActivePanel(id);
   }
 }

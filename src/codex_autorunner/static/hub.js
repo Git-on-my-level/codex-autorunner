@@ -27,6 +27,8 @@ const hubUsageChartCanvas = document.getElementById("hub-usage-chart-canvas");
 const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
 const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
+const hubInboxList = document.getElementById("hub-inbox-list");
+const hubInboxRefresh = document.getElementById("hub-inbox-refresh");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 const HUB_JOB_POLL_INTERVAL_MS = 1200;
 const HUB_JOB_TIMEOUT_MS = 180000;
@@ -1008,6 +1010,7 @@ async function refreshHub() {
         saveSessionCache(HUB_CACHE_KEY, hubData);
         renderSummary(data.repos || []);
         renderRepos(data.repos || []);
+        await loadHubInbox().catch(() => { });
         await refreshRepoPrCache(data.repos || []).catch(() => { });
         await loadHubUsage().catch(() => { });
     }
@@ -1016,6 +1019,40 @@ async function refreshHub() {
     }
     finally {
         setButtonLoading(false);
+    }
+}
+async function loadHubInbox() {
+    if (!hubInboxList)
+        return;
+    hubInboxList.innerHTML = "Loading…";
+    try {
+        const payload = (await api("/hub/messages", { method: "GET" }));
+        const items = payload?.items || [];
+        if (!items.length) {
+            hubInboxList.innerHTML = '<div class="muted">No paused runs</div>';
+            return;
+        }
+        hubInboxList.innerHTML = items
+            .map((item) => {
+            const title = item.message?.title || item.message?.mode || "Message";
+            const excerpt = item.message?.body ? item.message.body.slice(0, 160) : "";
+            const repoLabel = item.repo_display_name || item.repo_id;
+            const href = item.open_url || `/repos/${item.repo_id}/?tab=messages&run_id=${item.run_id}`;
+            return `
+          <a class="hub-inbox-item" href="${escapeHtml(resolvePath(href))}">
+            <div class="hub-inbox-item-header">
+              <span class="hub-inbox-repo">${escapeHtml(repoLabel)}</span>
+              <span class="pill pill-small pill-warn">paused</span>
+            </div>
+            <div class="hub-inbox-title">${escapeHtml(title)}</div>
+            <div class="hub-inbox-excerpt muted small">${escapeHtml(excerpt)}</div>
+          </a>
+        `;
+        })
+            .join("");
+    }
+    catch (_err) {
+        hubInboxList.innerHTML = '';
     }
 }
 async function triggerHubScan() {
@@ -1387,6 +1424,9 @@ export function initHub() {
         return;
     attachHubHandlers();
     initHubUsageChartControls();
+    hubInboxRefresh?.addEventListener("click", () => {
+        void loadHubInbox();
+    });
     const cachedHub = loadSessionCache(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
     if (cachedHub) {
         hubData = cachedHub;

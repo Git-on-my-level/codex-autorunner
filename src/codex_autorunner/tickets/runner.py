@@ -11,6 +11,7 @@ from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_frontmatter
 from .models import TicketFrontmatter, TicketResult, TicketRunConfig, normalize_requires
 from .outbox import dispatch_outbox, ensure_outbox_dirs, resolve_outbox_paths
+from .replies import ensure_reply_dirs, parse_user_reply, resolve_reply_paths
 
 _logger = logging.getLogger(__name__)
 
@@ -67,6 +68,14 @@ class TicketRunner:
             run_id=self._run_id,
         )
         ensure_outbox_dirs(outbox_paths)
+
+        # Ensure reply inbox dirs exist (human -> agent messages).
+        reply_paths = resolve_reply_paths(
+            workspace_root=self._workspace_root,
+            runs_dir=runs_dir,
+            run_id=self._run_id,
+        )
+        ensure_reply_dirs(reply_paths)
 
         ticket_paths = list_ticket_paths(ticket_dir)
         if not ticket_paths:
@@ -227,6 +236,11 @@ class TicketRunner:
                 )
 
         ticket_turns = int(state.get("ticket_turns") or 0)
+        reply_seq = int(state.get("reply_seq") or 0)
+        reply_context, reply_max_seq = self._build_reply_context(
+            reply_paths=reply_paths, last_seq=reply_seq
+        )
+
         prompt = self._build_prompt(
             ticket_path=current_path,
             ticket_doc=ticket_doc,
@@ -237,6 +251,7 @@ class TicketRunner:
             ),
             outbox_paths=outbox_paths,
             lint_errors=lint_errors if lint_errors else None,
+            reply_context=reply_context,
         )
 
         # Execute turn.
@@ -266,6 +281,10 @@ class TicketRunner:
                 ),
                 current_ticket=safe_relpath(current_path, self._workspace_root),
             )
+
+        # Mark replies as consumed only after a successful agent turn.
+        if reply_max_seq > reply_seq:
+            state["reply_seq"] = reply_max_seq
         state["last_agent_output"] = result.text
         state["last_agent_id"] = result.agent_id
         state["last_agent_conversation_id"] = result.conversation_id
@@ -450,6 +469,84 @@ class TicketRunner:
             ),
         )
 
+    def _build_reply_context(self, *, reply_paths, last_seq: int) -> tuple[str, int]:
+        """Render new human replies (reply_history) into a prompt block.
+
+        Returns (rendered_text, max_seq_seen).
+        """
+
+        history_dir = getattr(reply_paths, "reply_history_dir", None)
+        if history_dir is None:
+            return "", last_seq
+        if not history_dir.exists() or not history_dir.is_dir():
+            return "", last_seq
+
+        entries: list[tuple[int, Path]] = []
+        try:
+            for child in history_dir.iterdir():
+                try:
+                    if not child.is_dir():
+                        continue
+                    name = child.name
+                    if not (len(name) == 4 and name.isdigit()):
+                        continue
+                    seq = int(name)
+                    if seq <= last_seq:
+                        continue
+                    entries.append((seq, child))
+                except OSError:
+                    continue
+        except OSError:
+            return "", last_seq
+
+        if not entries:
+            return "", last_seq
+
+        entries.sort(key=lambda x: x[0])
+        max_seq = max(seq for seq, _ in entries)
+
+        blocks: list[str] = []
+        for seq, entry_dir in entries:
+            reply_path = entry_dir / "USER_REPLY.md"
+            reply, errors = (
+                parse_user_reply(reply_path)
+                if reply_path.exists()
+                else (None, ["USER_REPLY.md missing"])
+            )
+
+            block_lines: list[str] = [f"[USER_REPLY {seq:04d}]"]
+            if errors:
+                block_lines.append("Errors:\n- " + "\n- ".join(errors))
+            if reply is not None:
+                if reply.title:
+                    block_lines.append(f"Title: {reply.title}")
+                if reply.body:
+                    block_lines.append(reply.body)
+
+            attachments: list[str] = []
+            try:
+                for child in sorted(entry_dir.iterdir(), key=lambda p: p.name):
+                    try:
+                        if child.name.startswith("."):
+                            continue
+                        if child.name == "USER_REPLY.md":
+                            continue
+                        if child.is_dir():
+                            continue
+                        attachments.append(safe_relpath(child, self._workspace_root))
+                    except OSError:
+                        continue
+            except OSError:
+                attachments = []
+
+            if attachments:
+                block_lines.append("Attachments:\n- " + "\n- ".join(attachments))
+
+            blocks.append("\n".join(block_lines).strip())
+
+        rendered = "\n\n".join(blocks).strip()
+        return rendered, max_seq
+
     def _build_prompt(
         self,
         *,
@@ -458,6 +555,7 @@ class TicketRunner:
         last_agent_output: Optional[str],
         outbox_paths,
         lint_errors: Optional[list[str]],
+        reply_context: Optional[str] = None,
     ) -> str:
         rel_ticket = safe_relpath(ticket_path, self._workspace_root)
         rel_handoff = safe_relpath(outbox_paths.handoff_dir, self._workspace_root)
@@ -495,6 +593,14 @@ class TicketRunner:
                 + "\n"
             )
 
+        reply_block = ""
+        if reply_context:
+            reply_block = (
+                "\n\n---\n\nHUMAN REPLIES (from reply_history; newest since last turn):\n"
+                + reply_context
+                + "\n"
+            )
+
         ticket_block = (
             "\n\n---\n\n"
             "TICKET CONTENT (edit this file to track progress; update frontmatter.done when complete):\n"
@@ -508,4 +614,11 @@ class TicketRunner:
                 "\n\n---\n\nPREVIOUS AGENT OUTPUT (same ticket):\n" + last_agent_output
             )
 
-        return header + lint_block + requires_block + ticket_block + prev_block
+        return (
+            header
+            + lint_block
+            + requires_block
+            + reply_block
+            + ticket_block
+            + prev_block
+        )

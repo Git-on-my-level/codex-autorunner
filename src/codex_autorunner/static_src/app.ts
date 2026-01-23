@@ -7,6 +7,7 @@ import { initLogs } from "./logs.js";
 import { initTerminal } from "./terminal.js";
 import { initRuns } from "./runs.js";
 import { initTicketFlow } from "./tickets.js";
+import { initMessages, initMessageBell } from "./messages.js";
 import { loadState } from "./state.js";
 import { initGitHub } from "./github.js";
 import { initMobileCompact } from "./mobileCompact.js";
@@ -36,6 +37,7 @@ function initRepoShell(): void {
   }
 
   registerTab("dashboard", "Dashboard");
+  registerTab("messages", "Messages", { hidden: true });
   registerTab("docs", "Docs");
   registerTab("runs", "Runs");
   registerTab("tickets", "Tickets");
@@ -47,6 +49,8 @@ function initRepoShell(): void {
     if (initializedTabs.has(tabId)) return;
     if (tabId === "docs") {
       initDocs();
+    } else if (tabId === "messages") {
+      initMessages();
     } else if (tabId === "logs") {
       initLogs();
     } else if (tabId === "tickets") {
@@ -78,6 +82,7 @@ function initRepoShell(): void {
     { once: true }
   );
   initDashboard();
+  initMessageBell();
   initLiveUpdates();
   initRepoSettingsPanel();
   initGitHub();
