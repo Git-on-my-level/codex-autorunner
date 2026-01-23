@@ -86,7 +86,7 @@ function deriveHealthFromPayload(payload: any): RepoHealth {
   const flowsStatus = String((payload as Record<string, any>).flows?.status || "").toLowerCase();
   const docsStatus = String((payload as Record<string, any>).docs?.status || "").toLowerCase();
 
-  if (payloadStatus !== "ok") {
+  if (payloadStatus !== "ok" && payloadStatus !== "degraded") {
     return { status: "offline", detail: String((payload as Record<string, any>).detail || payloadStatus) };
   }
 
@@ -102,6 +102,23 @@ function deriveHealthFromPayload(payload: any): RepoHealth {
       detail: "Work docs missing; initialize .codex-autorunner.",
     };
   }
+  // If the server is reachable but flows/docs are missing, surface a degraded state
+  if (flowsStatus && flowsStatus !== "ok") {
+    return {
+      status: "degraded",
+      detail:
+        flowsStatus === "missing"
+          ? "Flows DB missing; initialize the repo."
+          : `Flows unavailable: ${flowsStatus}`,
+    };
+  }
+  if (docsStatus && docsStatus !== "ok") {
+    return {
+      status: "degraded",
+      detail: "Work docs missing; initialize .codex-autorunner.",
+    };
+  }
+
   return { status: "ok" };
 }
 

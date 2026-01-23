@@ -71,13 +71,28 @@ function deriveHealthFromPayload(payload) {
     const payloadStatus = String(payload.status || "ok").toLowerCase();
     const flowsStatus = String(payload.flows?.status || "").toLowerCase();
     const docsStatus = String(payload.docs?.status || "").toLowerCase();
-    if (payloadStatus !== "ok") {
+    if (payloadStatus !== "ok" && payloadStatus !== "degraded") {
         return { status: "offline", detail: String(payload.detail || payloadStatus) };
     }
     if (flowsStatus && flowsStatus !== "ok") {
         return {
             status: "degraded",
             detail: flowsStatus === "missing" ? "Flows DB missing; repo not initialized." : `Flows unavailable: ${flowsStatus}`,
+        };
+    }
+    if (docsStatus && docsStatus !== "ok") {
+        return {
+            status: "degraded",
+            detail: "Work docs missing; initialize .codex-autorunner.",
+        };
+    }
+    // If the server is reachable but flows/docs are missing, surface a degraded state
+    if (flowsStatus && flowsStatus !== "ok") {
+        return {
+            status: "degraded",
+            detail: flowsStatus === "missing"
+                ? "Flows DB missing; initialize the repo."
+                : `Flows unavailable: ${flowsStatus}`,
         };
     }
     if (docsStatus && docsStatus !== "ok") {
