@@ -34,11 +34,12 @@ function initRepoShell() {
             brand.insertAdjacentElement("afterend", repoName);
         }
     }
+    const defaultTab = REPO_ID ? "tickets" : "dashboard";
+    registerTab("tickets", "Tickets");
+    registerTab("messages", "Inbox");
     registerTab("dashboard", "Dashboard");
-    registerTab("messages", "Messages", { hidden: true });
     registerTab("docs", "Docs");
     registerTab("runs", "Runs");
-    registerTab("tickets", "Tickets");
     registerTab("logs", "Logs");
     registerTab("terminal", "Terminal");
     const initializedTabs = new Set();
@@ -50,6 +51,11 @@ function initRepoShell() {
         }
         else if (tabId === "messages") {
             initMessages();
+        }
+        else if (tabId === "dashboard") {
+            initDashboard();
+            initGitHub();
+            void loadState({ notify: false }).catch(() => { });
         }
         else if (tabId === "logs") {
             initLogs();
@@ -68,7 +74,7 @@ function initRepoShell() {
         }
         lazyInit(tabId);
     });
-    initTabs();
+    initTabs(defaultTab);
     const activePanel = document.querySelector(".panel.active");
     if (activePanel?.id) {
         lazyInit(activePanel.id);
@@ -77,13 +83,10 @@ function initRepoShell() {
     terminalPanel?.addEventListener("pointerdown", () => {
         lazyInit("terminal");
     }, { once: true });
-    initDashboard();
     initMessageBell();
     initLiveUpdates();
     initRepoSettingsPanel();
-    initGitHub();
     initMobileCompact();
-    loadState();
     const repoShell = document.getElementById("repo-shell");
     if (repoShell?.hasAttribute("inert")) {
         const openModals = document.querySelectorAll(".modal-overlay:not([hidden])");

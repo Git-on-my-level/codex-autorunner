@@ -36,11 +36,13 @@ function initRepoShell(): void {
     }
   }
 
+  const defaultTab = REPO_ID ? "tickets" : "dashboard";
+
+  registerTab("tickets", "Tickets");
+  registerTab("messages", "Inbox");
   registerTab("dashboard", "Dashboard");
-  registerTab("messages", "Messages", { hidden: true });
   registerTab("docs", "Docs");
   registerTab("runs", "Runs");
-  registerTab("tickets", "Tickets");
   registerTab("logs", "Logs");
   registerTab("terminal", "Terminal");
 
@@ -51,6 +53,10 @@ function initRepoShell(): void {
       initDocs();
     } else if (tabId === "messages") {
       initMessages();
+    } else if (tabId === "dashboard") {
+      initDashboard();
+      initGitHub();
+      void loadState({ notify: false }).catch(() => {});
     } else if (tabId === "logs") {
       initLogs();
     } else if (tabId === "tickets") {
@@ -68,7 +74,7 @@ function initRepoShell(): void {
     lazyInit(tabId as string);
   });
 
-  initTabs();
+  initTabs(defaultTab);
   const activePanel = document.querySelector(".panel.active") as HTMLElement;
   if (activePanel?.id) {
     lazyInit(activePanel.id);
@@ -81,14 +87,10 @@ function initRepoShell(): void {
     },
     { once: true }
   );
-  initDashboard();
   initMessageBell();
   initLiveUpdates();
   initRepoSettingsPanel();
-  initGitHub();
   initMobileCompact();
-
-  loadState();
 
   const repoShell = document.getElementById("repo-shell");
   if (repoShell?.hasAttribute("inert")) {
