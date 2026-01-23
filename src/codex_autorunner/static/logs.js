@@ -1,6 +1,6 @@
-import { api, flash, streamEvents, getUrlParams, updateUrlParams } from "./utils.js";
+import { flash, getUrlParams, updateUrlParams } from "./utils.js";
 import { publish, subscribe } from "./bus.js";
-import { saveToCache, loadFromCache } from "./cache.js";
+import { loadFromCache } from "./cache.js";
 import { CONSTANTS } from "./constants.js";
 const logRunIdInput = document.getElementById("log-run-id");
 const logTailInput = document.getElementById("log-tail");
@@ -425,7 +425,7 @@ function renderLogWindow({ startIndex = null, followTail = true } = {}) {
         scrollLogsToBottom(true);
     }
 }
-function appendLogLine(line) {
+function _appendLogLine(line) {
     const output = document.getElementById("log-output");
     if (!output)
         return;
@@ -510,57 +510,7 @@ function setLogStreamButton(active) {
     }
 }
 async function loadLogs() {
-    syncLogUrlState();
-    const runId = logRunIdInput?.value || "";
-    const tail = logTailInput?.value || "200";
-    const params = new URLSearchParams();
-    if (runId) {
-        params.set("run_id", runId);
-    }
-    else if (tail) {
-        params.set("tail", tail);
-    }
-    const path = params.toString()
-        ? `/api/logs?${params.toString()}`
-        : "/api/logs";
-    try {
-        const data = await api(path);
-        const text = typeof data === "string" ? data : data.log || "";
-        const output = document.getElementById("log-output");
-        if (!output)
-            return;
-        if (text) {
-            rawLogLines = text.split("\n");
-            trimLogBuffer();
-            rebuildLogContexts();
-            delete output.dataset.isPlaceholder;
-            isViewingTail = true;
-            renderLogs();
-            if (!runId) {
-                const lines = rawLogLines.slice(-200);
-                saveToCache("logs:tail", lines.join("\n"));
-            }
-        }
-        else {
-            output.textContent = "(empty log)";
-            output.dataset.isPlaceholder = "true";
-            rawLogLines = [];
-            resetRenderState();
-            resetLogContexts();
-            renderedStartIndex = 0;
-            renderedEndIndex = 0;
-            isViewingTail = true;
-            updateLoadOlderButton();
-            if (!runId) {
-                saveToCache("logs:tail", "");
-            }
-        }
-        flash("Logs loaded", "success");
-        publish("logs:loaded", { runId, tail, text });
-    }
-    catch (err) {
-        flash(err.message || "Failed to load logs", "error");
-    }
+    flash("Log loading via /api/logs endpoint is no longer available", "error");
 }
 function stopLogStreaming() {
     if (stopLogStream) {
@@ -571,37 +521,7 @@ function stopLogStreaming() {
     publish("logs:streaming", false);
 }
 function startLogStreaming() {
-    if (stopLogStream)
-        return;
-    const output = document.getElementById("log-output");
-    if (!output)
-        return;
-    output.textContent = "(listening...)";
-    output.dataset.isPlaceholder = "true";
-    rawLogLines = [];
-    resetRenderState();
-    resetLogContexts();
-    renderedStartIndex = 0;
-    renderedEndIndex = 0;
-    isViewingTail = true;
-    updateLoadOlderButton();
-    stopLogStream = streamEvents("/api/logs/stream", {
-        onMessage: (data) => {
-            appendLogLine(data || "");
-        },
-        onError: (err) => {
-            flash(err.message || "Stream error", "error");
-            stopLogStreaming();
-        },
-        onFinish: () => {
-            stopLogStream = null;
-            setLogStreamButton(false);
-            publish("logs:streaming", false);
-        },
-    });
-    setLogStreamButton(true);
-    publish("logs:streaming", true);
-    flash("Streaming logs…", "info");
+    flash("Log streaming via /api/logs/stream endpoint is no longer available", "error");
 }
 function syncRunIdPlaceholder(state) {
     lastKnownRunId = state?.last_run_id ?? null;
