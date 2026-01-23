@@ -19,6 +19,8 @@ from fastapi.responses import (
 )
 
 from ..codex_cli import extract_flag_value
+from ..core.config import HubConfig
+from ..core.flows.store import FlowStore
 from ..core.logging_utils import safe_log
 from ..core.state import SessionRecord, load_state, now_iso, persist_session_registry
 from ..web.pty_session import REPLAY_END, ActiveSession, PTYSession
@@ -86,6 +88,55 @@ def build_base_routes(static_dir: Path) -> APIRouter:
     @router.get("/api/version", response_model=VersionResponse)
     def get_version(request: Request):
         return {"asset_version": request.app.state.asset_version}
+
+    @router.get("/api/repo/health")
+    def repo_health(request: Request):
+        config = getattr(request.app.state, "config", None)
+        if isinstance(config, HubConfig):
+            raise HTTPException(
+                status_code=404, detail="Repo health not available in hub mode"
+            )
+
+        engine = getattr(request.app.state, "engine", None)
+        repo_root = getattr(engine, "repo_root", None)
+        if repo_root is None:
+            return JSONResponse(
+                {"status": "error", "detail": "Repo context unavailable"},
+                status_code=503,
+            )
+
+        flows_db = repo_root / ".codex-autorunner" / "flows.db"
+        flows_status = "ok"
+        flows_detail = None
+        if flows_db.exists():
+            try:
+                store = FlowStore(flows_db)
+                store.initialize()
+                store.close()
+            except Exception as exc:
+                flows_status = "unavailable"
+                flows_detail = str(exc)
+        else:
+            flows_status = "missing"
+
+        docs_dir = repo_root / ".codex-autorunner"
+        docs_status = "ok" if docs_dir.exists() else "missing"
+
+        overall_status = (
+            "ok" if flows_status == "ok" and docs_status == "ok" else "degraded"
+        )
+
+        return {
+            "status": overall_status,
+            "mode": "repo",
+            "repo_root": str(repo_root),
+            "flows": {
+                "status": flows_status,
+                "path": str(flows_db),
+                "detail": flows_detail,
+            },
+            "docs": {"status": docs_status, "path": str(docs_dir)},
+        }
 
     @router.get("/api/state/stream")
     async def stream_state_endpoint(request: Request):

@@ -15,7 +15,9 @@ import { subscribe } from "./bus.js";
 import { initRepoSettingsPanel } from "./settings.js";
 import { flash } from "./utils.js";
 import { initLiveUpdates } from "./liveUpdates.js";
-function initRepoShell() {
+import { initHealthGate } from "./health.js";
+async function initRepoShell() {
+    await initHealthGate();
     if (REPO_ID) {
         const navBar = document.querySelector(".nav-bar");
         if (navBar) {
@@ -105,6 +107,6 @@ function bootstrap() {
         repoShell.classList.remove("hidden");
     if (hubShell)
         hubShell.classList.add("hidden");
-    initRepoShell();
+    void initRepoShell();
 }
 bootstrap();

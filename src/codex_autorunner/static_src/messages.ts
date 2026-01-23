@@ -2,6 +2,7 @@ import { api, escapeHtml, flash, getUrlParams, updateUrlParams } from "./utils.j
 import { activateTab } from "./tabs.js";
 import { subscribe } from "./bus.js";
 import { REPO_ID } from "./env.js";
+import { isRepoHealthy } from "./health.js";
 
 interface AgentMessage {
   mode?: string;
@@ -105,6 +106,11 @@ function setBadge(count: number): void {
 
 async function refreshBell(): Promise<void> {
   if (!bellBtn) return;
+  if (!isRepoHealthy()) {
+    activeRunId = null;
+    setBadge(0);
+    return;
+  }
   try {
     const res = (await api("/api/messages/active")) as ActiveMessageResponse;
     if (res?.active && res.run_id) {
@@ -141,8 +147,16 @@ export function initMessageBell(): void {
   refreshBell();
   window.setInterval(() => {
     if (document.hidden) return;
+    if (!isRepoHealthy()) return;
     refreshBell();
   }, 15000);
+
+  subscribe("repo:health", (payload: unknown) => {
+    const status = (payload as { status?: string } | null)?.status || "";
+    if (status === "ok" || status === "degraded") {
+      void refreshBell();
+    }
+  });
 }
 
 function renderThreadItem(thread: ThreadSummary): string {
@@ -161,6 +175,10 @@ function renderThreadItem(thread: ThreadSummary): string {
 async function loadThreads(): Promise<void> {
   if (!threadsEl) return;
   threadsEl.innerHTML = "Loading…";
+  if (!isRepoHealthy()) {
+    threadsEl.innerHTML = "<div class=\"muted\">Repo offline or uninitialized</div>";
+    return;
+  }
   let res: ThreadsResponse;
   try {
     res = (await api("/api/messages/threads")) as ThreadsResponse;
@@ -307,6 +325,10 @@ async function loadThread(runId: string): Promise<void> {
   selectedRunId = runId;
   if (!detailEl) return;
   detailEl.innerHTML = "Loading…";
+  if (!isRepoHealthy()) {
+    detailEl.innerHTML = "<div class=\"muted\">Repo offline or uninitialized.</div>";
+    return;
+  }
   let detail: ThreadDetail;
   try {
     detail = (await api(`/api/messages/threads/${encodeURIComponent(runId)}`)) as ThreadDetail;
@@ -366,6 +388,10 @@ async function sendReply({ resume }: { resume: boolean }): Promise<void> {
   const runId = selectedRunId;
   if (!runId) {
     flash("Select a message thread first", "error");
+    return;
+  }
+  if (!isRepoHealthy()) {
+    flash("Repo offline; cannot send reply.", "error");
     return;
   }
   const body = replyBodyEl?.value || "";

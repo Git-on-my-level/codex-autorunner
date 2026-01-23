@@ -43,6 +43,17 @@ def _flows_db_path(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "flows.db"
 
 
+def _load_store_or_404(db_path: Path) -> FlowStore:
+    store = FlowStore(db_path)
+    try:
+        store.initialize()
+        return store
+    except Exception as exc:
+        raise HTTPException(
+            status_code=404, detail="Flows database unavailable"
+        ) from exc
+
+
 def _timestamp(path: Path) -> Optional[str]:
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
@@ -315,15 +326,14 @@ def build_messages_routes() -> APIRouter:
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             raise HTTPException(status_code=404, detail="No flows database")
-        store = FlowStore(db_path)
+        store = _load_store_or_404(db_path)
         try:
-            store.initialize()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=404, detail="Flows database unavailable"
-            ) from exc
-
-        record = store.get_flow_run(run_id)
+            record = store.get_flow_run(run_id)
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
         if not record:
             raise HTTPException(status_code=404, detail="Run not found")
         input_data = dict(record.input_data or {})
@@ -357,14 +367,14 @@ def build_messages_routes() -> APIRouter:
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             raise HTTPException(status_code=404, detail="No flows database")
-        store = FlowStore(db_path)
+        store = _load_store_or_404(db_path)
         try:
-            store.initialize()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=404, detail="Flows database unavailable"
-            ) from exc
-        record = store.get_flow_run(run_id)
+            record = store.get_flow_run(run_id)
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
         if not record:
             raise HTTPException(status_code=404, detail="Run not found")
 
@@ -402,9 +412,14 @@ def build_messages_routes() -> APIRouter:
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             raise HTTPException(status_code=404, detail="No flows database")
-        store = FlowStore(db_path)
-        store.initialize()
-        record = store.get_flow_run(run_id)
+        store = _load_store_or_404(db_path)
+        try:
+            record = store.get_flow_run(run_id)
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
         if not record:
             raise HTTPException(status_code=404, detail="Run not found")
 

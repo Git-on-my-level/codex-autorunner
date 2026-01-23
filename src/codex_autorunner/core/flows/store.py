@@ -32,6 +32,12 @@ class FlowStore:
 
     def _get_conn(self) -> sqlite3.Connection:
         if not hasattr(self._local, "conn"):
+            # Ensure parent directory exists so sqlite can create/open the file.
+            try:
+                self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                # Let sqlite raise a clearer error below if directory creation failed.
+                pass
             self._local.conn = sqlite3.connect(
                 self.db_path, check_same_thread=False, isolation_level=None
             )

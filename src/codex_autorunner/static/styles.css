@@ -1724,6 +1724,16 @@ button.icon-btn {
   background: rgba(108, 245, 216, 0.08);
 }
 
+.doc-banner.error {
+  border-left-color: var(--error);
+  background: rgba(255, 85, 102, 0.08);
+}
+
+.doc-banner.warn {
+  border-left-color: var(--warning);
+  background: rgba(255, 209, 102, 0.08);
+}
+
 .doc-banner.hidden {
   display: none;
 }
@@ -1749,6 +1759,27 @@ button.icon-btn {
 
 .doc-banner-detail {
   word-break: break-word;
+}
+
+.legacy-runner {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.legacy-runner summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--muted);
+  list-style: none;
+}
+
+.legacy-runner summary::-webkit-details-marker {
+  display: none;
+}
+
+.legacy-runner[open] summary {
+  color: var(--text);
 }
 
 .spec-issue-import {

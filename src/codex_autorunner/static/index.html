@@ -103,17 +103,62 @@
 </div>
 </nav>
 <main>
+<div class="doc-banner hidden" id="repo-health-banner">
+  <div class="doc-banner-text">
+    <div class="doc-banner-title" id="repo-health-title">Repo server offline</div>
+    <div class="doc-banner-detail muted small" id="repo-health-detail"></div>
+  </div>
+  <div class="doc-banner-actions">
+    <button class="ghost sm" id="repo-health-retry">Retry</button>
+  </div>
+</div>
 <section class="panel" id="analytics">
 <div class="cards">
 <div class="card status-card">
 <div class="card-header">
 <div class="card-header-left">
-<span class="label">Runner Status</span>
+<span class="label">Ticket Analytics</span>
 <span class="version-label" id="repo-version">v–</span>
 </div>
 <span class="pill pill-idle" id="runner-status">idle</span>
 </div>
 <div class="grid-two">
+<div>
+<p class="muted">Started</p>
+<p class="metric" id="last-start">–</p>
+</div>
+<div>
+          <p class="muted">Finished</p>
+          <p class="metric" id="last-finish">–</p>
+        </div>
+        <div>
+<p class="muted">Duration</p>
+<p class="metric" id="last-duration">–</p>
+</div>
+<div>
+<p class="muted">TODO</p>
+<p class="metric" id="todo-count">–</p>
+</div>
+<div>
+<p class="muted">Done</p>
+<p class="metric" id="done-count">–</p>
+</div>
+<div>
+<p class="muted">Active ticket</p>
+<p class="metric" id="ticket-active">–</p>
+</div>
+<div>
+<p class="muted">Turns</p>
+<p class="metric" id="ticket-turns">–</p>
+</div>
+<div>
+<p class="muted">Handoffs</p>
+<p class="metric" id="message-handoffs">–</p>
+</div>
+<div>
+<p class="muted">Replies</p>
+<p class="metric" id="message-replies">–</p>
+</div>
 <div>
 <p class="muted">Run ID</p>
 <p class="metric" id="last-run-id">–</p>
@@ -122,57 +167,24 @@
 <p class="muted">Exit</p>
 <p class="metric" id="last-exit-code">–</p>
 </div>
-        <div>
-          <p class="muted">Started</p>
-          <p class="metric" id="last-start">–</p>
-        </div>
-        <div>
-          <p class="muted">Finished</p>
-          <p class="metric" id="last-finish">–</p>
-        </div>
-        <div>
-          <p class="muted">Duration</p>
-          <p class="metric" id="last-duration">–</p>
-        </div>
-        <div>
-          <p class="muted">TODO</p>
-          <p class="metric" id="todo-count">–</p>
-        </div>
-        <div>
-          <p class="muted">Done</p>
-          <p class="metric" id="done-count">–</p>
-        </div>
-        <div>
-          <p class="muted">Active ticket</p>
-          <p class="metric" id="ticket-active">–</p>
-        </div>
-        <div>
-          <p class="muted">Turns</p>
-          <p class="metric" id="ticket-turns">–</p>
-        </div>
-        <div>
-          <p class="muted">Handoffs</p>
-          <p class="metric" id="message-handoffs">–</p>
-        </div>
-        <div>
-          <p class="muted">Replies</p>
-          <p class="metric" id="message-replies">–</p>
-        </div>
-      </div>
-      <div class="doc-agent-controls dashboard-agent-controls">
-        <select id="dashboard-agent-select" title="Agent"></select>
-        <select id="dashboard-model-select" title="Model"></select>
-        <select id="dashboard-reasoning-select" title="Reasoning"></select>
 </div>
-<div class="actions">
-<button class="primary" id="start-run" title="Run a full autorunner iteration through all tasks">Start</button>
-<button class="ghost" id="stop-run" title="Gracefully stop the current run (safe shutdown)">Stop</button>
-<button class="danger" id="kill-run" title="Immediately terminate the run (force stop - may cause data loss)">Kill</button>
-<button class="ghost hidden" id="clear-lock" title="Clear a stale autorunner lock">Clear lock</button>
-<button class="ghost" id="reset-runner" title="Clear run state and restart fresh (destructive)">Reset</button>
-<button class="ghost icon-btn" id="refresh-state" title="Refresh state">↻</button>
-</div>
-<p class="muted small" id="runner-pid">PID: –</p>
+<details class="legacy-runner" id="runner-controls">
+  <summary>Legacy autorunner controls</summary>
+  <div class="doc-agent-controls dashboard-agent-controls">
+    <select id="dashboard-agent-select" title="Agent"></select>
+    <select id="dashboard-model-select" title="Model"></select>
+    <select id="dashboard-reasoning-select" title="Reasoning"></select>
+  </div>
+  <div class="actions">
+    <button class="primary" id="start-run" title="Run a full autorunner iteration through all tasks">Start</button>
+    <button class="ghost" id="stop-run" title="Gracefully stop the current run (safe shutdown)">Stop</button>
+    <button class="danger" id="kill-run" title="Immediately terminate the run (force stop - may cause data loss)">Kill</button>
+    <button class="ghost hidden" id="clear-lock" title="Clear a stale autorunner lock">Clear lock</button>
+    <button class="ghost" id="reset-runner" title="Clear run state and restart fresh (destructive)">Reset</button>
+    <button class="ghost icon-btn" id="refresh-state" title="Refresh state">↻</button>
+  </div>
+  <p class="muted small" id="runner-pid">PID: –</p>
+</details>
 </div>
 <div class="card usage-card-compact">
 <div class="usage-header">

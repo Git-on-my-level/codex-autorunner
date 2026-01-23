@@ -1,6 +1,8 @@
 import { api, flash, resolvePath, statusPill } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
+import { subscribe } from "./bus.js";
+import { isRepoHealthy } from "./health.js";
 
 type FlowRun = {
   id?: string;
@@ -263,6 +265,14 @@ async function loadHandoffHistory(runId: string | null): Promise<void> {
 
 async function loadTicketFlow(): Promise<void> {
   const { status, run, current, reason, resumeBtn, bootstrapBtn, stopBtn } = els();
+  if (!isRepoHealthy()) {
+    if (status) statusPill(status, "error");
+    if (run) run.textContent = "–";
+    if (current) current.textContent = "–";
+    if (reason) reason.textContent = "Repo offline or uninitialized.";
+    setButtonsDisabled(true);
+    return;
+  }
   try {
     const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
     const latest = (runs && runs[0]) || null;
@@ -302,6 +312,10 @@ async function loadTicketFlow(): Promise<void> {
 async function bootstrapTicketFlow(): Promise<void> {
   const { bootstrapBtn } = els();
   if (!bootstrapBtn) return;
+  if (!isRepoHealthy()) {
+    flash("Repo offline; cannot start ticket flow.", "error");
+    return;
+  }
   const confirmed = window.confirm(
     "Create TICKET-001.md (if missing) and start the ticket flow?"
   );
@@ -327,6 +341,10 @@ async function bootstrapTicketFlow(): Promise<void> {
 async function resumeTicketFlow(): Promise<void> {
   const { resumeBtn } = els();
   if (!resumeBtn) return;
+  if (!isRepoHealthy()) {
+    flash("Repo offline; cannot resume ticket flow.", "error");
+    return;
+  }
   if (!currentRunId) {
     flash("No ticket flow run to resume", "info");
     return;
@@ -348,6 +366,10 @@ async function resumeTicketFlow(): Promise<void> {
 async function stopTicketFlow(): Promise<void> {
   const { stopBtn } = els();
   if (!stopBtn) return;
+  if (!isRepoHealthy()) {
+    flash("Repo offline; cannot stop ticket flow.", "error");
+    return;
+  }
   if (!currentRunId) {
     flash("No ticket flow run to stop", "info");
     return;
@@ -385,5 +407,12 @@ export function initTicketFlow(): void {
       15000,
     refreshOnActivation: true,
     immediate: false,
+  });
+
+  subscribe("repo:health", (payload: unknown) => {
+    const status = (payload as { status?: string } | null)?.status || "";
+    if (status === "ok" || status === "degraded") {
+      void loadTicketFlow();
+    }
   });
 }

@@ -16,6 +16,9 @@ const refreshers = new Map();
 let activeTab = null;
 // Track page visibility
 let pageVisible = true;
+// Global enable/disable toggle (e.g., when repo server is offline)
+let globallyEnabled = true;
+let globalPauseReason = null;
 /**
  * Register a component for auto-refresh.
  *
@@ -43,7 +46,7 @@ export function registerAutoRefresh(id, options) {
     // Start timer if applicable
     maybeStartTimer(id, refresher);
     // Immediate refresh if requested
-    if (immediate) {
+    if (immediate && globallyEnabled) {
         doRefresh(id, refresher);
     }
     return () => unregisterAutoRefresh(id);
@@ -70,9 +73,31 @@ export function triggerRefresh(id) {
     }
 }
 /**
+ * Globally enable/disable all auto-refresh timers.
+ */
+export function setAutoRefreshEnabled(enabled, reason) {
+    globallyEnabled = enabled;
+    globalPauseReason = enabled ? null : reason || null;
+    refreshers.forEach((refresher, id) => {
+        if (!enabled) {
+            if (refresher.timerId) {
+                clearInterval(refresher.timerId);
+                refresher.timerId = null;
+            }
+            return;
+        }
+        maybeStartTimer(id, refresher);
+    });
+}
+export function getAutoRefreshPauseReason() {
+    return globalPauseReason;
+}
+/**
  * Check if conditions allow refresh for this refresher.
  */
 function canRefresh(refresher) {
+    if (!globallyEnabled)
+        return false;
     // Don't refresh if page is hidden
     if (!pageVisible)
         return false;
@@ -112,6 +137,8 @@ function maybeStartTimer(id, refresher) {
         refresher.timerId = null;
     }
     // Only start timer if page is visible and tab is active (or global)
+    if (!globallyEnabled)
+        return;
     if (!pageVisible)
         return;
     if (refresher.tabId && refresher.tabId !== activeTab)

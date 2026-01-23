@@ -39,6 +39,38 @@ def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
     return db_path, artifacts_root
 
 
+def _require_flow_store(repo_root: Path) -> FlowStore:
+    db_path, _ = _flow_paths(repo_root)
+    store = FlowStore(db_path)
+    try:
+        store.initialize()
+        return store
+    except Exception as exc:
+        _logger.warning("Flows database unavailable at %s: %s", db_path, exc)
+        raise HTTPException(
+            status_code=404, detail="Flows database unavailable"
+        ) from exc
+
+
+def _safe_list_flow_runs(
+    repo_root: Path, flow_type: Optional[str] = None
+) -> list[FlowRunRecord]:
+    db_path, _ = _flow_paths(repo_root)
+    store = FlowStore(db_path)
+    try:
+        store.initialize()
+        records = store.list_flow_runs(flow_type=flow_type)
+        return records
+    except Exception as exc:
+        _logger.debug("FlowStore list runs failed: %s", exc)
+        return []
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass
+
+
 def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
     repo_root = repo_root.resolve()
     key = (repo_root, flow_type)
@@ -73,17 +105,26 @@ def _get_flow_controller(repo_root: Path, flow_type: str) -> FlowController:
         db_path=db_path,
         artifacts_root=artifacts_root,
     )
-    controller.initialize()
+    try:
+        controller.initialize()
+    except Exception as exc:
+        _logger.warning("Failed to initialize flow controller: %s", exc)
+        raise HTTPException(
+            status_code=503, detail="Flows unavailable; initialize the repo first."
+        ) from exc
     _controller_cache[key] = controller
     return controller
 
 
 def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
-    db_path, _ = _flow_paths(repo_root)
-    store = FlowStore(db_path)
-    store.initialize()
-    record = store.get_flow_run(run_id)
-    store.close()
+    store = _require_flow_store(repo_root)
+    try:
+        record = store.get_flow_run(run_id)
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass
     if not record:
         raise HTTPException(status_code=404, detail=f"Flow run {run_id} not found")
     return record
@@ -264,11 +305,7 @@ def build_flow_routes() -> APIRouter:
     @router.get("/runs", response_model=list[FlowStatusResponse])
     async def list_runs(flow_type: Optional[str] = None):
         repo_root = find_repo_root()
-        db_path, _ = _flow_paths(repo_root)
-        store = FlowStore(db_path)
-        store.initialize()
-        records = store.list_flow_runs(flow_type=flow_type)
-        store.close()
+        records = _safe_list_flow_runs(repo_root, flow_type=flow_type)
         return [FlowStatusResponse.from_record(rec) for rec in records]
 
     async def _start_flow(

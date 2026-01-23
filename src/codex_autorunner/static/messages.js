@@ -2,6 +2,7 @@ import { api, escapeHtml, flash, getUrlParams, updateUrlParams } from "./utils.j
 import { activateTab } from "./tabs.js";
 import { subscribe } from "./bus.js";
 import { REPO_ID } from "./env.js";
+import { isRepoHealthy } from "./health.js";
 let bellInitialized = false;
 let messagesInitialized = false;
 let activeRunId = null;
@@ -39,6 +40,11 @@ function setBadge(count) {
 async function refreshBell() {
     if (!bellBtn)
         return;
+    if (!isRepoHealthy()) {
+        activeRunId = null;
+        setBadge(0);
+        return;
+    }
     try {
         const res = (await api("/api/messages/active"));
         if (res?.active && res.run_id) {
@@ -78,8 +84,16 @@ export function initMessageBell() {
     window.setInterval(() => {
         if (document.hidden)
             return;
+        if (!isRepoHealthy())
+            return;
         refreshBell();
     }, 15000);
+    subscribe("repo:health", (payload) => {
+        const status = payload?.status || "";
+        if (status === "ok" || status === "degraded") {
+            void refreshBell();
+        }
+    });
 }
 function renderThreadItem(thread) {
     const latest = thread.latest?.message;
@@ -97,6 +111,10 @@ async function loadThreads() {
     if (!threadsEl)
         return;
     threadsEl.innerHTML = "Loading…";
+    if (!isRepoHealthy()) {
+        threadsEl.innerHTML = "<div class=\"muted\">Repo offline or uninitialized</div>";
+        return;
+    }
     let res;
     try {
         res = (await api("/api/messages/threads"));
@@ -242,6 +260,10 @@ async function loadThread(runId) {
     if (!detailEl)
         return;
     detailEl.innerHTML = "Loading…";
+    if (!isRepoHealthy()) {
+        detailEl.innerHTML = "<div class=\"muted\">Repo offline or uninitialized.</div>";
+        return;
+    }
     let detail;
     try {
         detail = (await api(`/api/messages/threads/${encodeURIComponent(runId)}`));
@@ -299,6 +321,10 @@ async function sendReply({ resume }) {
     const runId = selectedRunId;
     if (!runId) {
         flash("Select a message thread first", "error");
+        return;
+    }
+    if (!isRepoHealthy()) {
+        flash("Repo offline; cannot send reply.", "error");
         return;
     }
     const body = replyBodyEl?.value || "";
