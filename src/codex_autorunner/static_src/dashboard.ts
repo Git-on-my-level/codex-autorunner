@@ -1,20 +1,9 @@
-import { api, flash, statusPill, confirmModal, openModal } from "./utils.js";
+import { api, flash, confirmModal, openModal } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";
 import { renderTodoPreview } from "./todoPreview.js";
-import {
-  loadState,
-  startRun,
-  stopRun,
-  killRun,
-  resetRun,
-  clearLock,
-  startStatePolling,
-} from "./state.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
-import { initAgentControls } from "./agentControls.js";
-import { initReview } from "./review.js";
 
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 let pendingSummaryOpen = false;
@@ -39,111 +28,6 @@ let latestMessageStats: {
   currentTicket: string | null;
   totalTurns: number | null;
 } | null = null;
-
-interface State {
-  status: string;
-  last_run_id?: number | null;
-  last_exit_code?: number | null;
-  last_run_started_at?: string | null;
-  last_run_finished_at?: string | null;
-  outstanding_count?: number | null;
-  done_count?: number | null;
-  runner_pid?: number | null;
-  lock_present?: boolean | null;
-  lock_pid?: number | null;
-  lock_freeable?: boolean | null;
-  lock_freeable_reason?: string | null;
-}
-
-function renderState(state: State | null): void {
-  if (!state) return;
-  saveToCache("state", state);
-  const statusEl = document.getElementById("runner-status");
-  if (statusEl) {
-    statusPill(statusEl, state.status);
-  }
-  const lastRunIdEl = document.getElementById("last-run-id");
-  if (lastRunIdEl) {
-    lastRunIdEl.textContent = String(state.last_run_id ?? "–");
-  }
-  const lastExitCodeEl = document.getElementById("last-exit-code");
-  if (lastExitCodeEl) {
-    lastExitCodeEl.textContent = String(state.last_exit_code ?? "–");
-  }
-  const lastStartEl = document.getElementById("last-start");
-  if (lastStartEl) {
-    lastStartEl.textContent = state.last_run_started_at ?? "–";
-  }
-  const lastFinishEl = document.getElementById("last-finish");
-  if (lastFinishEl) {
-    lastFinishEl.textContent = state.last_run_finished_at ?? "–";
-  }
-  const lastDurationEl = document.getElementById("last-duration");
-  if (lastDurationEl) {
-    const start = state.last_run_started_at ? new Date(state.last_run_started_at) : null;
-    const end = state.last_run_finished_at ? new Date(state.last_run_finished_at) : null;
-    let duration = "–";
-    if (start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end > start) {
-      const seconds = (end.getTime() - start.getTime()) / 1000;
-      if (seconds < 60) duration = `${seconds.toFixed(1)}s`;
-      else {
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.round(seconds % 60);
-        duration = `${mins}m ${secs}s`;
-      }
-    }
-    lastDurationEl.textContent = duration;
-  }
-  const todoCountEl = document.getElementById("todo-count");
-  if (todoCountEl) {
-    todoCountEl.textContent = String(state.outstanding_count ?? "–");
-  }
-  const doneCountEl = document.getElementById("done-count");
-  if (doneCountEl) {
-    doneCountEl.textContent = String(state.done_count ?? "–");
-  }
-  const runnerPidEl = document.getElementById("runner-pid");
-  if (runnerPidEl) {
-    runnerPidEl.textContent = `Runner pid: ${state.runner_pid ?? "–"}`;
-  }
-  const summaryBtn = document.getElementById("open-summary");
-  if (summaryBtn) {
-    const done = Number(state.outstanding_count ?? NaN) === 0;
-    summaryBtn.classList.toggle("hidden", !done);
-  }
-
-  const clearLockBtn = document.getElementById("clear-lock");
-  if (clearLockBtn) {
-    const freeable = Boolean(state.lock_freeable);
-    clearLockBtn.classList.toggle("hidden", !freeable);
-    if (state.lock_freeable_reason) {
-      clearLockBtn.title = state.lock_freeable_reason;
-    }
-  }
-  
-  const status = state.status || "idle";
-  const startBtn = document.getElementById("start-run");
-  const stopBtn = document.getElementById("stop-run");
-  const killBtn = document.getElementById("kill-run");
-  const resetBtn = document.getElementById("reset-runner");
-  
-  if (status === "idle" || status === "stopped" || status === "completed") {
-    if (startBtn) startBtn.classList.remove("hidden");
-    if (stopBtn) stopBtn.classList.add("hidden");
-    if (killBtn) killBtn.classList.add("hidden");
-    if (resetBtn) resetBtn.classList.remove("hidden");
-  } else if (status === "running") {
-    if (startBtn) startBtn.classList.add("hidden");
-    if (stopBtn) stopBtn.classList.remove("hidden");
-    if (killBtn) killBtn.classList.remove("hidden");
-    if (resetBtn) resetBtn.classList.add("hidden");
-  } else if (status === "error") {
-    if (startBtn) startBtn.classList.remove("hidden");
-    if (stopBtn) stopBtn.classList.add("hidden");
-    if (killBtn) killBtn.classList.remove("hidden");
-    if (resetBtn) resetBtn.classList.remove("hidden");
-  }
-}
 
 function updateTodoPreview(content: string): void {
   renderTodoPreview(content || "");
@@ -915,22 +799,7 @@ function openSummaryDoc(): void {
 export function initDashboard(): void {
   initSettings();
   initUsageChartControls();
-  initReview();
-  const agentSelect = document.getElementById("dashboard-agent-select") as HTMLSelectElement | null;
-  const modelSelect = document.getElementById("dashboard-model-select") as HTMLSelectElement | null;
-  const reasoningSelect = document.getElementById(
-    "dashboard-reasoning-select"
-  ) as HTMLSelectElement | null;
-  initAgentControls({ agentSelect, modelSelect, reasoningSelect });
-
-  const buildRunOverrides = () => {
-    const overrides: { agent?: string; model?: string; reasoning?: string } = {};
-    if (agentSelect) overrides.agent = agentSelect.value;
-    if (modelSelect) overrides.model = modelSelect.value;
-    if (reasoningSelect) overrides.reasoning = reasoningSelect.value;
-    return overrides;
-  };
-  subscribe("state:update", renderState);
+  // initReview(); // Removed - review.ts was deleted
   subscribe("todo:invalidate", () => {
     void loadTodoPreview({ silent: true });
   });
@@ -947,21 +816,8 @@ export function initDashboard(): void {
       openSummaryDoc();
     }
   });
-  bindAction("start-run", () => startRun(false, buildRunOverrides()));
-  bindAction("stop-run", stopRun);
-  bindAction("kill-run", killRun);
-  bindAction("clear-lock", clearLock);
-  bindAction("reset-runner", async () => {
-    const confirmed = await confirmModal(
-      "Reset runner? This will clear all logs and reset run ID to 1."
-    );
-    if (confirmed) await resetRun();
-  });
-  bindAction("refresh-state", async () => { await loadState(); });
   bindAction("usage-refresh", loadUsage);
   bindAction("refresh-preview", loadTodoPreview);
-  const cachedState = loadFromCache("state");
-  if (cachedState) renderState(cachedState as State);
 
   const cachedUsage = loadFromCache("usage");
   if (cachedUsage) renderUsage(cachedUsage as UsageData);
@@ -989,7 +845,6 @@ export function initDashboard(): void {
   loadVersion();
   checkUpdateStatus();
   loadMessageStats();
-  startStatePolling();
 
   registerAutoRefresh("dashboard-usage", {
     callback: async () => { await loadUsage(); },

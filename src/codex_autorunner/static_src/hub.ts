@@ -67,16 +67,6 @@ interface SessionCachePayload<T> {
   value: T;
 }
 
-interface PrInfo {
-  pr?: {
-    number?: number;
-    title?: string;
-  };
-  links?: {
-    files?: string;
-  };
-}
-
 interface HubJob {
   job_id: string;
   status?: string;
@@ -111,17 +101,11 @@ interface UpdateResponse {
 }
 
 let hubData: HubData = { repos: [], last_scan_at: null };
-const repoPrCache = new Map<string, { data: PrInfo | null; fetchedAt: number; failed?: boolean }>();
-const repoPrFetches = new Set<string>();
 const prefetchedUrls = new Set<string>();
 
 const HUB_CACHE_TTL_MS = 30000;
 const HUB_CACHE_KEY = `car:hub:${HUB_BASE || "/"}`;
 const HUB_USAGE_CACHE_KEY = `car:hub-usage:${HUB_BASE || "/"}`;
-const PR_CACHE_TTL_MS = 120000;
-const PR_FAILURE_TTL_MS = 15000;
-const PR_FETCH_CONCURRENCY = 3;
-const PR_PREFETCH_MARGIN = "200px";
 const HUB_REFRESH_ACTIVE_MS = 5000;
 const HUB_REFRESH_IDLE_MS = 30000;
 
@@ -159,10 +143,6 @@ const hubUsageChartState: HubUsageChartState = {
 
 let hubUsageSeriesRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let hubUsageSummaryRetryTimer: ReturnType<typeof setTimeout> | null = null;
-const repoPrPending = new Set<string>();
-const repoPrQueue: HubRepo[] = [];
-let repoPrActive = 0;
-let repoPrObserver: IntersectionObserver | null = null;
 
 function saveSessionCache<T>(key: string, value: T): void {
   try {
@@ -970,74 +950,8 @@ function inferBaseId(repo: HubRepo | null): string | null {
   return null;
 }
 
-function initRepoPrObserver(): IntersectionObserver | null {
-  if (!("IntersectionObserver" in window)) return null;
-  if (repoPrObserver) return repoPrObserver;
-  repoPrObserver = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (!entry.isIntersecting) return;
-        const target = entry.target as HTMLElement;
-        const repoId = target?.dataset?.repoId;
-        if (repoId) {
-          const repo = (hubData.repos || []).find((item) => item.id === repoId);
-          if (repo) scheduleRepoPrFetch(repo);
-        }
-        if (target) repoPrObserver?.unobserve(target);
-      });
-    },
-    { rootMargin: PR_PREFETCH_MARGIN }
-  );
-  return repoPrObserver;
-}
-
-function scheduleRepoPrFetch(repo: HubRepo): void {
-  if (!repo || repo.mounted !== true) return;
-  const cached = repoPrCache.get(repo.id);
-  if (
-    cached &&
-    typeof cached.fetchedAt === "number" &&
-    Date.now() - cached.fetchedAt <
-      (cached.failed ? PR_FAILURE_TTL_MS : PR_CACHE_TTL_MS)
-  ) {
-    return;
-  }
-  if (repoPrFetches.has(repo.id) || repoPrPending.has(repo.id)) return;
-  repoPrPending.add(repo.id);
-  repoPrQueue.push(repo);
-  pumpRepoPrQueue();
-}
-
-function pumpRepoPrQueue(): void {
-  while (repoPrActive < PR_FETCH_CONCURRENCY && repoPrQueue.length) {
-    const repo = repoPrQueue.shift();
-    if (!repo || repoPrFetches.has(repo.id)) continue;
-    repoPrPending.delete(repo.id);
-    repoPrActive += 1;
-    repoPrFetches.add(repo.id);
-    api(`/repos/${repo.id}/api/github/pr`, { method: "GET" })
-      .then((pr) => {
-        repoPrCache.set(repo.id, { data: pr as PrInfo | null, fetchedAt: Date.now() });
-      })
-      .catch(() => {
-        repoPrCache.set(repo.id, {
-          data: null,
-          fetchedAt: Date.now(),
-          failed: true,
-        });
-      })
-      .finally(() => {
-        repoPrFetches.delete(repo.id);
-        repoPrActive -= 1;
-        pumpRepoPrQueue();
-        renderRepos(hubData.repos || []);
-      });
-  }
-}
-
 function renderRepos(repos: HubRepo[]): void {
   if (!repoListEl) return;
-  if (repoPrObserver) repoPrObserver.disconnect();
   repoListEl.innerHTML = "";
   if (!repos.length) {
     repoListEl.innerHTML =
@@ -1135,21 +1049,8 @@ function renderRepos(repos: HubRepo[]): void {
       infoItems.length > 0
         ? `<span class="hub-repo-info-line">${escapeHtml(
             infoItems.join(" · ")
-          )}</span>`
+           )}</span>`
         : "";
-
-    const prInfo = repoPrCache.get(repo.id)?.data;
-    const prPill = prInfo?.links?.files
-      ? `<a class="pill pill-small hub-pr-pill" href="${escapeHtml(
-          prInfo.links.files
-        )}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(
-          prInfo.pr?.title || "Open PR files"
-        )}">PR${
-          prInfo.pr?.number
-            ? ` #${escapeHtml(prInfo.pr.number)}`
-            : ""
-        }</a>`
-      : "";
 
     card.innerHTML = `
       <div class="hub-repo-row">
@@ -1167,7 +1068,6 @@ function renderRepos(repos: HubRepo[]): void {
           )}</span>
           <div class="hub-repo-subline">
             ${infoLine}
-            ${prPill}
           </div>
         </div>
         <div class="hub-repo-right">
@@ -1184,15 +1084,6 @@ function renderRepos(repos: HubRepo[]): void {
     }
 
     repoListEl.appendChild(card);
-
-    if (repo.mounted === true) {
-      const observer = initRepoPrObserver();
-      if (observer) {
-        observer.observe(card);
-      } else {
-        scheduleRepoPrFetch(repo);
-      }
-    }
   };
 
   orderedGroups.forEach((group) => {
@@ -1232,24 +1123,6 @@ function renderRepos(repos: HubRepo[]): void {
   }
 }
 
-async function refreshRepoPrCache(repos: HubRepo[]): Promise<void> {
-  const mounted = repos.filter((r) => r && r.mounted === true);
-  if (!mounted.length) return;
-  const observer = initRepoPrObserver();
-  if (observer && repoListEl) {
-    mounted.forEach((repo) => {
-      const card = repoListEl.querySelector(`[data-repo-id="${repo.id}"]`);
-      if (card) {
-        observer.observe(card);
-      } else {
-        scheduleRepoPrFetch(repo);
-      }
-    });
-    return;
-  }
-  mounted.forEach((repo) => scheduleRepoPrFetch(repo));
-}
-
 async function refreshHub(): Promise<void> {
   setButtonLoading(true);
   try {
@@ -1260,7 +1133,6 @@ async function refreshHub(): Promise<void> {
     renderSummary(data.repos || []);
     renderRepos(data.repos || []);
     await loadHubInbox().catch(() => {});
-    await refreshRepoPrCache(data.repos || []).catch(() => {});
     await loadHubUsage().catch(() => {});
   } catch (err) {
     flash((err as Error).message || "Hub request failed", "error");
@@ -1579,12 +1451,6 @@ function attachHubHandlers(): void {
   if (repoListEl) {
     repoListEl.addEventListener("click", (event) => {
         const target = event.target as HTMLElement;
-
-        const prLink = target instanceof HTMLElement && target.closest("a.hub-pr-pill");
-        if (prLink) {
-          event.stopPropagation();
-          return;
-        }
 
         const btn = target instanceof HTMLElement && target.closest("button[data-action]") as HTMLElement | null;
         if (btn) {

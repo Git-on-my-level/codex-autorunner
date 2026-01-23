@@ -325,7 +325,12 @@ def build_messages_routes() -> APIRouter:
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
-            raise HTTPException(status_code=404, detail="No flows database")
+            return {
+                "handoff_history": [],
+                "reply_history": [],
+                "handoff_count": 0,
+                "reply_count": 0,
+            }
         store = _load_store_or_404(db_path)
         try:
             record = store.get_flow_run(run_id)

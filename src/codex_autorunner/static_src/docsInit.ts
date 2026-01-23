@@ -34,7 +34,6 @@ import { copyDocToClipboard, pasteSpecFromClipboard } from "./docsClipboard.js";
 import {
   clearDocs,
   getDocFromUrl,
-  importIssueToSpec,
   loadDocs,
   safeLoadDocs,
   saveDoc,
@@ -218,21 +217,6 @@ export function initDocs(): void {
         specIssueUI.toggle.textContent = isHidden
           ? "Import Issue → SPEC"
           : "Cancel";
-      }
-    });
-  }
-  if (specIssueUI.button) {
-    specIssueUI.button.addEventListener("click", () => {
-      if (getActiveDoc() !== "spec") setDoc("spec");
-      importIssueToSpec();
-    });
-  }
-  if (specIssueUI.input) {
-    specIssueUI.input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        if (getActiveDoc() !== "spec") setDoc("spec");
-        importIssueToSpec();
       }
     });
   }

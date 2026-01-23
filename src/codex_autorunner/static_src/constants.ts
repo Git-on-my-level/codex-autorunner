@@ -39,8 +39,6 @@ export const CONSTANTS = {
       "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.",
   },
   API: {
-    STATE_ENDPOINT: "/api/state",
-    LOGS_ENDPOINT: "/api/logs",
     DOCS_ENDPOINT: "/api/docs",
     TERMINAL_ENDPOINT: "/api/terminal",
     TERMINAL_IMAGE_ENDPOINT: "/api/terminal/image",

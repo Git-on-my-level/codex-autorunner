@@ -837,14 +837,7 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/review commit <sha> (or /review commit to pick)")
         lines.append("/review custom <instructions> (or /review custom to prompt)")
         lines.append("/review detached ...")
-    if "pr" in command_specs:
-        lines.append("")
-        lines.append("PR Flow:")
-        lines.append(
-            "/pr start <issueRef> [--draft|--ready] [--base <branch>] [--until minor|clean] [--max-cycles N]"
-        )
-        lines.append("/pr fix <prRef> [--until minor|clean] [--max-cycles N]")
-        lines.append("/pr status | /pr stop | /pr resume | /pr collect")
+
     lines.append("")
     lines.append("Other:")
     lines.append("Note: /resume is supported for the codex and opencode agents.")

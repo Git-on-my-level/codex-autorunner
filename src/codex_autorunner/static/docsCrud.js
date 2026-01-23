@@ -1,12 +1,10 @@
 import { api, confirmModal, flash, getUrlParams, updateUrlParams } from "./utils.js";
-import { loadState } from "./state.js";
 import { publish } from "./bus.js";
 import { renderTodoPreview } from "./todoPreview.js";
 import { docButtons, docActionsUI, specIssueUI, specIngestUI, chatUI, } from "./docsElements.js";
 import { CLEARABLE_DOCS, DOC_TYPES, docsState, getActiveDoc, getChatState, getDraft, hasDraft, isDraftPreview, setActiveDoc, } from "./docsState.js";
 import { renderChat } from "./docChatRender.js";
 import { reloadPatch, refreshAllDrafts } from "./docChatActions.js";
-import { applyChatResult } from "./docChatStream.js";
 import { renderSnapshotButtons } from "./docsSnapshot.js";
 import { renderSpecIngestPatch, reloadSpecIngestPatch } from "./docsSpecIngest.js";
 import { getDocTextarea, syncDocEditor, updateDocControls } from "./docsUi.js";
@@ -120,74 +118,6 @@ export function setDoc(kind) {
     }
     updateUrlParams({ doc: kind });
 }
-export async function importIssueToSpec() {
-    if (!specIssueUI.input || !specIssueUI.button)
-        return;
-    const issue = (specIssueUI.input.value || "").trim();
-    if (!issue) {
-        flash("Enter a GitHub issue number or URL", "error");
-        return;
-    }
-    const state = getChatState();
-    if (state.status === "running") {
-        flash("SPEC chat is running; try again shortly", "error");
-        return;
-    }
-    specIssueUI.button.disabled = true;
-    specIssueUI.button.classList.add("loading");
-    try {
-        const entry = {
-            id: `${Date.now()}`,
-            prompt: `Import issue → SPEC: ${issue}`,
-            targets: ["spec"],
-            response: "",
-            status: "running",
-            time: String(Date.now()),
-            drafts: {},
-            updated: [],
-        };
-        state.history.unshift(entry);
-        state.status = "running";
-        state.error = "";
-        state.streamText = "";
-        state.statusText = "importing issue";
-        renderChat();
-        const res = await api("/api/github/spec/from-issue", {
-            method: "POST",
-            body: { issue },
-        });
-        applyChatResult(res, state, entry);
-        entry.status = "done";
-        state.status = "idle";
-        if (specIssueUI.inputRow) {
-            specIssueUI.inputRow.classList.add("hidden");
-        }
-        if (specIssueUI.toggle) {
-            specIssueUI.toggle.textContent = "Import Issue → SPEC";
-        }
-        if (specIssueUI.input) {
-            specIssueUI.input.value = "";
-        }
-        flash("Imported issue into pending SPEC draft");
-    }
-    catch (err) {
-        const error = err;
-        const message = error?.message || "Issue import failed";
-        const entry = state.history[0];
-        if (entry) {
-            entry.status = "error";
-            entry.error = message;
-        }
-        state.status = "idle";
-        state.error = message;
-        flash(message, "error");
-    }
-    finally {
-        specIssueUI.button.disabled = false;
-        specIssueUI.button.classList.remove("loading");
-        renderChat();
-    }
-}
 export async function saveDoc() {
     if (getActiveDoc() === "snapshot") {
         flash("Snapshot is read-only. Use Generate to update.", "error");
@@ -213,7 +143,7 @@ export async function saveDoc() {
         publish("docs:updated", { kind: getActiveDoc(), content });
         if (getActiveDoc() === "todo") {
             renderTodoPreview(content);
-            await loadState({ notify: false });
+            // await loadState({ notify: false }); // Removed - state.ts was deleted
         }
     }
     catch (err) {

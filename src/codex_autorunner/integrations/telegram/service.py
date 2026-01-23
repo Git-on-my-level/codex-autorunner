@@ -30,6 +30,7 @@ from ...core.utils import (
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
 from ...manifest import load_manifest
 from ...tickets.outbox import resolve_outbox_paths
+from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_paths
 from ...voice import VoiceConfig, VoiceService
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
 from .adapter import (
@@ -139,6 +140,26 @@ def _build_opencode_supervisor(
         return None
 
     return supervisor
+
+
+def _next_reply_seq_sync(reply_history_dir: Any) -> int:
+    from pathlib import Path
+
+    path = Path(reply_history_dir)
+    if not path.exists() or not path.is_dir():
+        return 1
+    existing: list[int] = []
+    _SEQ_RE = __import__("re").compile(r"^[0-9]{4}$")
+    for child in path.iterdir():
+        try:
+            if not child.is_dir():
+                continue
+            if not _SEQ_RE.fullmatch(child.name):
+                continue
+            existing.append(int(child.name))
+        except OSError:
+            continue
+    return (max(existing) + 1) if existing else 1
 
 
 class TelegramBotService(
@@ -1174,6 +1195,85 @@ class TelegramBotService(
             f"Ticket flow paused (run {run_id}). Latest handoff #{seq}:\n\n"
             f"{trimmed}\n\nUse /flow resume to continue."
         )
+
+    def _get_paused_ticket_flow(
+        self, workspace_root: Path
+    ) -> Optional[tuple[str, FlowRunRecord]]:
+        db_path = workspace_root / ".codex-autorunner" / "flows.db"
+        if not db_path.exists():
+            return None
+        store = FlowStore(db_path)
+        try:
+            store.initialize()
+            runs = store.list_flow_runs(
+                flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+            )
+            if not runs:
+                return None
+            latest = runs[0]
+            return latest.id, latest
+        finally:
+            store.close()
+
+    async def _write_user_reply_from_telegram(
+        self,
+        workspace_root: Path,
+        run_id: str,
+        run_record: FlowRunRecord,
+        message: TelegramMessage,
+        text: str,
+        files: Optional[list[tuple[str, bytes]]] = None,
+    ) -> tuple[bool, str]:
+        try:
+            input_data = dict(run_record.input_data or {})
+            runs_dir_raw = input_data.get("runs_dir")
+            runs_dir = (
+                Path(runs_dir_raw)
+                if isinstance(runs_dir_raw, str) and runs_dir_raw
+                else Path(".codex-autorunner/runs")
+            )
+            reply_paths = resolve_reply_paths(
+                workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
+            )
+            ensure_reply_dirs(reply_paths)
+
+            cleaned_text = text.strip()
+            raw = cleaned_text
+            if raw and not raw.endswith("\n"):
+                raw += "\n"
+
+            await asyncio.to_thread(
+                reply_paths.user_reply_path.write_text, raw, encoding="utf-8"
+            )
+
+            if files:
+                for filename, data in files:
+                    dest = reply_paths.reply_dir / filename
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    await asyncio.to_thread(dest.write_bytes, data)
+
+            seq = await asyncio.to_thread(
+                lambda: _next_reply_seq_sync(reply_paths.reply_history_dir)
+            )
+            dispatch, errors = await asyncio.to_thread(
+                dispatch_reply, reply_paths, next_seq=seq
+            )
+            if errors:
+                return False, "\n".join(errors)
+            if dispatch is None:
+                return False, "Failed to archive reply"
+            return (
+                True,
+                f"Reply archived (seq {dispatch.seq}). Use /flow resume to continue.",
+            )
+        except Exception as exc:
+            self._logger.warning(
+                "Failed to write USER_REPLY.md from Telegram",
+                exc=exc,
+                workspace_root=str(workspace_root),
+                run_id=run_id,
+            )
+            return False, f"Failed to write reply: {exc}"
 
     async def _interrupt_timeout_check(
         self, key: str, turn_id: str, message_id: int

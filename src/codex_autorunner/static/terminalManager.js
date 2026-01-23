@@ -44,7 +44,6 @@ const XTERM_COLOR_MODE_PALETTE_16 = 0x01000000;
 const XTERM_COLOR_MODE_PALETTE_256 = 0x02000000;
 const XTERM_COLOR_MODE_RGB = 0x03000000;
 const CAR_CONTEXT_HOOK_ID = "car_context";
-const GITHUB_CONTEXT_HOOK_ID = "github_context";
 const CAR_CONTEXT_KEYWORDS = [
     "car",
     "codex",
@@ -56,7 +55,6 @@ const CAR_CONTEXT_KEYWORDS = [
     "autorunner",
     "work docs",
 ];
-const GITHUB_LINK_RE = /https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:issues|pull)\/\d+(?:[/?#][^\s]*)?/i;
 const CAR_CONTEXT_HINT_TEXT = "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.";
 const CAR_CONTEXT_HINT = wrapInjectedContext(CAR_CONTEXT_HINT_TEXT);
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT = CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
@@ -360,7 +358,6 @@ export class TerminalManager {
         this.lastAltScrollbackSize = 0;
         this.transcriptResetForConnect = false;
         this._registerTextInputHook(this._buildCarContextHook());
-        this._registerTextInputHook(this._buildGithubContextHook());
         // Bind methods that are used as callbacks
         this._handleResize = this._handleResize.bind(this);
         this._handleVoiceHotkeyDown = this._handleVoiceHotkeyDown.bind(this);
@@ -637,43 +634,8 @@ export class TerminalManager {
             },
         };
     }
-    _buildGithubContextHook() {
-        return {
-            id: GITHUB_CONTEXT_HOOK_ID,
-            apply: async ({ text }) => {
-                if (!text || !text.trim())
-                    return null;
-                const match = text.match(GITHUB_LINK_RE);
-                if (!match)
-                    return null;
-                try {
-                    const res = await api("/api/github/context", {
-                        method: "POST",
-                        body: { url: match[0] },
-                    });
-                    if (!res || typeof res !== "object")
-                        return null;
-                    const injection = wrapInjectedContextIfNeeded(res.hint);
-                    const separator = text.endsWith("\n") ? "\n" : "\n\n";
-                    return { text: `${text}${separator}${injection}` };
-                }
-                catch (_err) {
-                    return null;
-                }
-            },
-        };
-    }
     async _loadTerminalIdleTimeout() {
-        try {
-            const data = await api(CONSTANTS.API.STATE_ENDPOINT);
-            if (data &&
-                typeof data === "object" && data !== null && "terminal_idle_timeout_seconds" in data) {
-                this.terminalIdleTimeoutSeconds = data.terminal_idle_timeout_seconds;
-            }
-        }
-        catch (_err) {
-            // ignore
-        }
+        // State endpoint removed - terminal idle timeout no longer loaded from /api/state
     }
     _getSessionStorageKey() {
         return `${SESSION_STORAGE_PREFIX}${this._getRepoStorageKey()}`;

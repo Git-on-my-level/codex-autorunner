@@ -15,8 +15,6 @@ function disableLegacyAnalyticsUI() {
     // Ticket-first: these panels and their API calls are deprecated.
     const legacyIds = [
         "runner-controls",
-        "github-card",
-        "review-card",
         "analytics-runs",
         "analytics-logs",
     ];

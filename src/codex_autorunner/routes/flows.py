@@ -28,7 +28,6 @@ _active_workers: Dict[
 ] = {}
 _controller_cache: Dict[tuple[Path, str], FlowController] = {}
 _definition_cache: Dict[tuple[Path, str], FlowDefinition] = {}
-# Ticket flow is canonical. Legacy flows are deprecated and intentionally not exposed.
 _supported_flow_types = ("ticket_flow",)
 
 
@@ -39,7 +38,7 @@ def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
     return db_path, artifacts_root
 
 
-def _require_flow_store(repo_root: Path) -> FlowStore:
+def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
     db_path, _ = _flow_paths(repo_root)
     store = FlowStore(db_path)
     try:
@@ -47,9 +46,7 @@ def _require_flow_store(repo_root: Path) -> FlowStore:
         return store
     except Exception as exc:
         _logger.warning("Flows database unavailable at %s: %s", db_path, exc)
-        raise HTTPException(
-            status_code=404, detail="Flows database unavailable"
-        ) from exc
+        return None
 
 
 def _safe_list_flow_runs(
@@ -107,15 +104,17 @@ def _get_flow_controller(repo_root: Path, flow_type: str) -> FlowController:
         controller.initialize()
     except Exception as exc:
         _logger.warning("Failed to initialize flow controller: %s", exc)
-        # Ticket flow should not be gated on legacy "repo initialization" concepts.
-        # If storage is unavailable (permissions, disk errors), surface a transient 503.
-        raise HTTPException(status_code=503, detail="Flows unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Flows unavailable; initialize the repo first."
+        ) from exc
     _controller_cache[key] = controller
     return controller
 
 
 def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
     store = _require_flow_store(repo_root)
+    if store is None:
+        raise HTTPException(status_code=503, detail="Flows database unavailable")
     try:
         record = store.get_flow_run(run_id)
     finally:
@@ -296,8 +295,6 @@ def build_flow_routes() -> APIRouter:
         records = _safe_list_flow_runs(repo_root, flow_type=flow_type)
         return [FlowStatusResponse.from_record(rec) for rec in records]
 
-    # NOTE: This MUST come after /runs. Starlette route matching is order-based,
-    # and a dynamic /{flow_type} route would otherwise swallow /runs.
     @router.get("/{flow_type}")
     async def get_flow_definition(flow_type: str):
         repo_root = find_repo_root()

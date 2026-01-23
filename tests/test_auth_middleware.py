@@ -33,12 +33,10 @@ def _ws_scope(headers: Optional[list[tuple[bytes, bytes]]] = None) -> dict:
         ("/static/app.js", False),
         ("/health", False),
         ("/cat", False),
-        ("/api/state", True),
         ("/hub/repos", True),
         ("/repos/demo", True),
         ("/repos/demo/", True),
         ("/repos/demo/static/app.js", False),
-        ("/repos/demo/api/state", True),
         ("/repos/demo/ws", True),
     ],
 )
@@ -50,7 +48,7 @@ def test_auth_middleware_public_allowlist(path: str, requires_auth: bool) -> Non
 def test_auth_middleware_respects_base_path() -> None:
     middleware = AuthTokenMiddleware(lambda *_: None, token="token", base_path="/car")
     assert middleware._requires_auth(_scope("/car/health")) is False
-    assert middleware._requires_auth(_scope("/car/api/state")) is True
+    assert middleware._requires_auth(_scope("/car/hub/repos")) is True
 
 
 def test_auth_middleware_extracts_ws_protocol_token() -> None:
