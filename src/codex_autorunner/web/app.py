@@ -1446,26 +1446,26 @@ def create_hub_app(
                     continue
                 if not paused:
                     continue
-                record = paused[0]
-                latest = _latest_handoff(
-                    repo_root, str(record.id), dict(record.input_data or {})
-                )
-                if not latest or not latest.get("message"):
-                    continue
-                messages.append(
-                    {
-                        "repo_id": snap.id,
-                        "repo_display_name": snap.display_name,
-                        "repo_path": str(snap.path),
-                        "run_id": record.id,
-                        "run_created_at": record.created_at,
-                        "status": record.status.value,
-                        "seq": latest["seq"],
-                        "message": latest["message"],
-                        "files": latest.get("files") or [],
-                        "open_url": f"/repos/{snap.id}/?tab=messages&run_id={record.id}",
-                    }
-                )
+                for record in paused:
+                    latest = _latest_handoff(
+                        repo_root, str(record.id), dict(record.input_data or {})
+                    )
+                    if not latest or not latest.get("message"):
+                        continue
+                    messages.append(
+                        {
+                            "repo_id": snap.id,
+                            "repo_display_name": snap.display_name,
+                            "repo_path": str(snap.path),
+                            "run_id": record.id,
+                            "run_created_at": record.created_at,
+                            "status": record.status.value,
+                            "seq": latest["seq"],
+                            "message": latest["message"],
+                            "files": latest.get("files") or [],
+                            "open_url": f"/repos/{snap.id}/?tab=messages&run_id={record.id}",
+                        }
+                    )
             messages.sort(key=lambda m: (m.get("run_created_at") or ""), reverse=True)
             if limit and limit > 0:
                 return messages[: int(limit)]

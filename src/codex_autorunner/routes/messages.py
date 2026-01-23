@@ -46,6 +46,8 @@ def _safe_attachment_name(name: str) -> str:
     base = os.path.basename(name or "").strip()
     if not base:
         raise ValueError("Missing attachment filename")
+    if base.lower() == "user_reply.md":
+        raise ValueError("Attachment filename reserved: USER_REPLY.md")
     if not re.fullmatch(r"[A-Za-z0-9._-]+", base):
         raise ValueError(
             "Invalid attachment filename; use only letters, digits, dot, underscore, dash"
@@ -194,26 +196,33 @@ def build_messages_routes() -> APIRouter:
         )
         if not paused:
             return {"active": False}
-        record = paused[0]
-        history = _collect_handoff_history(
-            repo_root=repo_root,
-            run_id=str(record.id),
-            record_input=dict(record.input_data or {}),
-        )
-        if not history:
-            return {"active": False}
-        latest = history[0]
-        return {
-            "active": True,
-            "repo_id": request.app.state.repo_id,
-            "run_id": record.id,
-            "flow_type": record.flow_type,
-            "status": record.status.value,
-            "seq": latest.get("seq"),
-            "message": latest.get("message"),
-            "files": latest.get("files"),
-            "open_url": f"/?tab=messages&run_id={record.id}",
-        }
+
+        # Walk paused runs (newest first as returned by FlowStore) until we find
+        # one with at least one archived handoff message. This avoids hiding
+        # older paused runs that do have history when the newest paused run
+        # hasn't yet written USER_MESSAGE.md.
+        for record in paused:
+            history = _collect_handoff_history(
+                repo_root=repo_root,
+                run_id=str(record.id),
+                record_input=dict(record.input_data or {}),
+            )
+            if not history:
+                continue
+            latest = history[0]
+            return {
+                "active": True,
+                "repo_id": request.app.state.repo_id,
+                "run_id": record.id,
+                "flow_type": record.flow_type,
+                "status": record.status.value,
+                "seq": latest.get("seq"),
+                "message": latest.get("message"),
+                "files": latest.get("files"),
+                "open_url": f"/?tab=messages&run_id={record.id}",
+            }
+
+        return {"active": False}
 
     @router.get("/api/messages/threads")
     def list_threads():
@@ -330,7 +339,11 @@ def build_messages_routes() -> APIRouter:
         run_id: str,
         body: str = Form(""),
         title: Optional[str] = Form(None),
-        files: Optional[list[UploadFile]] = File(default=None),  # noqa: B008
+        # NOTE: FastAPI/starlette will supply either a single UploadFile or a list
+        # depending on how the multipart form is encoded. Declaring this as a
+        # concrete list avoids a common 422 where a single file upload is treated
+        # as a non-list value.
+        files: list[UploadFile] = File(default=[]),  # noqa: B006,B008
     ):
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
@@ -371,7 +384,7 @@ def build_messages_routes() -> APIRouter:
                 status_code=500, detail=f"Failed to write USER_REPLY.md: {exc}"
             ) from exc
 
-        for upload in files or []:
+        for upload in files:
             try:
                 filename = _safe_attachment_name(upload.filename or "")
             except ValueError as exc:
