@@ -59,9 +59,9 @@ from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
-from ..tickets.outbox import parse_user_message, resolve_outbox_paths
-from ..tickets.files import safe_relpath
 from ..spec_ingest import SpecIngestService
+from ..tickets.files import safe_relpath
+from ..tickets.outbox import parse_user_message, resolve_outbox_paths
 from ..voice import VoiceConfig, VoiceService
 from .hub_jobs import HubJobManager
 from .middleware import (
