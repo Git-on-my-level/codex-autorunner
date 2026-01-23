@@ -32,7 +32,11 @@ function renderBanner(status, detail) {
         ? "Repo server offline or unreachable"
         : "Repo server uninitialized";
     if (detailEl) {
-        detailEl.textContent = detail || (isOffline ? "Check that the repo server is running." : "Initialize the repo to enable flows/docs.");
+        detailEl.textContent =
+            detail ||
+                (isOffline
+                    ? "Check that the repo server is running."
+                    : "Create .codex-autorunner/tickets/ to initialize this repo.");
     }
     if (retry)
         retry.disabled = false;
@@ -69,37 +73,21 @@ function deriveHealthFromPayload(payload) {
         return { status: "offline", detail: "Empty health response" };
     }
     const payloadStatus = String(payload.status || "ok").toLowerCase();
-    const flowsStatus = String(payload.flows?.status || "").toLowerCase();
-    const docsStatus = String(payload.docs?.status || "").toLowerCase();
     if (payloadStatus !== "ok" && payloadStatus !== "degraded") {
         return { status: "offline", detail: String(payload.detail || payloadStatus) };
     }
-    if (flowsStatus && flowsStatus !== "ok") {
+    // Ticket-first: the only initialization requirement is `.codex-autorunner/tickets/`.
+    const ticketsStatus = String(payload.tickets?.status || "").toLowerCase();
+    if (ticketsStatus && ticketsStatus !== "ok") {
         return {
             status: "degraded",
-            detail: flowsStatus === "missing" ? "Flows DB missing; repo not initialized." : `Flows unavailable: ${flowsStatus}`,
+            detail: "Tickets directory missing; create .codex-autorunner/tickets/.",
         };
     }
-    if (docsStatus && docsStatus !== "ok") {
-        return {
-            status: "degraded",
-            detail: "Work docs missing; initialize .codex-autorunner.",
-        };
-    }
-    // If the server is reachable but flows/docs are missing, surface a degraded state
-    if (flowsStatus && flowsStatus !== "ok") {
-        return {
-            status: "degraded",
-            detail: flowsStatus === "missing"
-                ? "Flows DB missing; initialize the repo."
-                : `Flows unavailable: ${flowsStatus}`,
-        };
-    }
-    if (docsStatus && docsStatus !== "ok") {
-        return {
-            status: "degraded",
-            detail: "Work docs missing; initialize .codex-autorunner.",
-        };
+    // Flows DB is lazily created. Only treat truly unavailable storage as degraded.
+    const flowsStatus = String(payload.flows?.status || "").toLowerCase();
+    if (flowsStatus && flowsStatus !== "ok" && flowsStatus !== "missing") {
+        return { status: "degraded", detail: `Flows unavailable: ${flowsStatus}` };
     }
     return { status: "ok" };
 }

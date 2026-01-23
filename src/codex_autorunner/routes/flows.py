@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 from ..core.engine import Engine
 from ..core.flows import FlowController, FlowDefinition, FlowRunRecord, FlowStore
 from ..core.utils import find_repo_root
-from ..flows.pr_flow import build_pr_flow_definition
 from ..flows.ticket_flow import build_ticket_flow_definition
 from ..tickets import AgentPool
 from ..tickets.files import list_ticket_paths, read_ticket, safe_relpath
@@ -29,7 +28,8 @@ _active_workers: Dict[
 ] = {}
 _controller_cache: Dict[tuple[Path, str], FlowController] = {}
 _definition_cache: Dict[tuple[Path, str], FlowDefinition] = {}
-_supported_flow_types = ("ticket_flow", "pr_flow")
+# Ticket flow is canonical. Legacy flows are deprecated and intentionally not exposed.
+_supported_flow_types = ("ticket_flow",)
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -77,9 +77,7 @@ def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
     if key in _definition_cache:
         return _definition_cache[key]
 
-    if flow_type == "pr_flow":
-        definition = build_pr_flow_definition()
-    elif flow_type == "ticket_flow":
+    if flow_type == "ticket_flow":
         engine = Engine(repo_root)
         agent_pool = AgentPool(engine.config)
         definition = build_ticket_flow_definition(agent_pool=agent_pool)
@@ -109,9 +107,9 @@ def _get_flow_controller(repo_root: Path, flow_type: str) -> FlowController:
         controller.initialize()
     except Exception as exc:
         _logger.warning("Failed to initialize flow controller: %s", exc)
-        raise HTTPException(
-            status_code=503, detail="Flows unavailable; initialize the repo first."
-        ) from exc
+        # Ticket flow should not be gated on legacy "repo initialization" concepts.
+        # If storage is unavailable (permissions, disk errors), surface a transient 503.
+        raise HTTPException(status_code=503, detail="Flows unavailable") from exc
     _controller_cache[key] = controller
     return controller
 
@@ -292,6 +290,14 @@ def build_flow_routes() -> APIRouter:
         ]
         return {"definitions": definitions}
 
+    @router.get("/runs", response_model=list[FlowStatusResponse])
+    async def list_runs(flow_type: Optional[str] = None):
+        repo_root = find_repo_root()
+        records = _safe_list_flow_runs(repo_root, flow_type=flow_type)
+        return [FlowStatusResponse.from_record(rec) for rec in records]
+
+    # NOTE: This MUST come after /runs. Starlette route matching is order-based,
+    # and a dynamic /{flow_type} route would otherwise swallow /runs.
     @router.get("/{flow_type}")
     async def get_flow_definition(flow_type: str):
         repo_root = find_repo_root()
@@ -301,12 +307,6 @@ def build_flow_routes() -> APIRouter:
             )
         definition = _build_flow_definition(repo_root, flow_type)
         return _definition_info(definition)
-
-    @router.get("/runs", response_model=list[FlowStatusResponse])
-    async def list_runs(flow_type: Optional[str] = None):
-        repo_root = find_repo_root()
-        records = _safe_list_flow_runs(repo_root, flow_type=flow_type)
-        return [FlowStatusResponse.from_record(rec) for rec in records]
 
     async def _start_flow(
         flow_type: str, request: FlowStartRequest

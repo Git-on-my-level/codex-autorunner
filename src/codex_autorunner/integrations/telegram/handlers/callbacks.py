@@ -81,8 +81,12 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
         if key:
             await handlers._handle_review_commit_callback(key, callback, parsed)
     elif isinstance(parsed, PrFlowStartCallback):
-        if key:
-            await handlers._handle_pr_flow_start_callback(key, callback, parsed)
+        # Ticket-first: PR flow is deprecated.
+        await handlers._answer_callback(
+            callback,
+            "PR flow is deprecated; use ticket flow (/flow) instead.",
+        )
+        return
     elif isinstance(parsed, CancelCallback):
         if key:
             if parsed.kind == "interrupt":

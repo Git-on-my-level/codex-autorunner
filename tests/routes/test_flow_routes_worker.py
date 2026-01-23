@@ -22,11 +22,13 @@ def test_flow_route_runs_worker_and_completes(tmp_path, monkeypatch):
     flow_routes._definition_cache.clear()
 
     definition = FlowDefinition(
-        flow_type="pr_flow", initial_step="step1", steps={"step1": _simple_step}
+        flow_type="ticket_flow", initial_step="step1", steps={"step1": _simple_step}
     )
     definition.validate()
 
-    monkeypatch.setattr(flow_routes, "build_pr_flow_definition", lambda: definition)
+    monkeypatch.setattr(
+        flow_routes, "_build_flow_definition", lambda repo_root, flow_type: definition
+    )
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
     def _fake_start_worker(repo_root: Path, run_id: str):
@@ -40,7 +42,7 @@ def test_flow_route_runs_worker_and_completes(tmp_path, monkeypatch):
 
     try:
         with TestClient(app) as client:
-            resp = client.post("/api/flows/pr_flow/start", json={"input_data": {}})
+            resp = client.post("/api/flows/ticket_flow/start", json={"input_data": {}})
             assert resp.status_code == 200
             run_id = resp.json()["id"]
 

@@ -105,37 +105,44 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 status_code=503,
             )
 
+        # Ticket-first: repo initialization is defined solely by the presence of
+        # `.codex-autorunner/tickets/`. Legacy run infra (flows DB, docs, GitHub)
+        # must never be treated as a required precondition for UI/API.
+        tickets_dir = repo_root / ".codex-autorunner" / "tickets"
+        tickets_status = (
+            "ok" if tickets_dir.exists() and tickets_dir.is_dir() else "missing"
+        )
+
+        # Flows DB is used for ticket_flow run metadata, but the absence of an
+        # existing flows.db file is NOT an error. We attempt lazy initialization
+        # and only surface a degraded state if sqlite cannot open/create it.
         flows_db = repo_root / ".codex-autorunner" / "flows.db"
         flows_status = "ok"
         flows_detail = None
-        if flows_db.exists():
-            try:
-                store = FlowStore(flows_db)
-                store.initialize()
-                store.close()
-            except Exception as exc:
-                flows_status = "unavailable"
-                flows_detail = str(exc)
-        else:
-            flows_status = "missing"
-
-        docs_dir = repo_root / ".codex-autorunner"
-        docs_status = "ok" if docs_dir.exists() else "missing"
+        try:
+            store = FlowStore(flows_db)
+            store.initialize()
+            store.close()
+        except Exception as exc:
+            flows_status = "unavailable"
+            flows_detail = str(exc)
 
         overall_status = (
-            "ok" if flows_status == "ok" and docs_status == "ok" else "degraded"
+            "ok"
+            if tickets_status == "ok" and flows_status != "unavailable"
+            else "degraded"
         )
 
         return {
             "status": overall_status,
             "mode": "repo",
             "repo_root": str(repo_root),
+            "tickets": {"status": tickets_status, "path": str(tickets_dir)},
             "flows": {
                 "status": flows_status,
                 "path": str(flows_db),
                 "detail": flows_detail,
             },
-            "docs": {"status": docs_status, "path": str(docs_dir)},
         }
 
     @router.get("/api/state/stream")
