@@ -11,6 +11,8 @@ const showRunToggle = document.getElementById("log-show-run") as HTMLInputElemen
 const showSummaryToggle = document.getElementById("log-show-summary") as HTMLInputElement | null;
 const jumpBottomButton = document.getElementById("log-jump-bottom") as HTMLButtonElement | null;
 const loadOlderButton = document.getElementById("log-load-older") as HTMLButtonElement | null;
+const analyticsLogs = document.getElementById("analytics-logs") as HTMLDetailsElement | null;
+const analyticsLogsToggle = document.getElementById("analytics-logs-toggle") as HTMLElement | null;
 
 let stopLogStream: (() => void) | null = null;
 let lastKnownRunId: number | null = null;
@@ -225,6 +227,18 @@ interface LogContextState {
 function resetLogContexts(): void {
   logContexts = [];
   logContextState = { inPromptBlock: false, inDiffBlock: false };
+}
+
+function initLogsToggle(): void {
+  if (!analyticsLogs) return;
+  const update = (): void => {
+    if (analyticsLogsToggle) {
+      analyticsLogsToggle.textContent = analyticsLogs.open ? "Logs (expanded)" : "Logs (show)";
+    }
+    analyticsLogs.classList.toggle("open", analyticsLogs.open);
+  };
+  analyticsLogs.addEventListener("toggle", update);
+  update();
 }
 
 function updateLogContextForLine(line: string): void {
@@ -703,6 +717,7 @@ function renderLogs(): void {
 }
 
 export function initLogs(): void {
+  initLogsToggle();
   applyLogUrlState();
   const loadLogsButton = document.getElementById("load-logs");
   if (loadLogsButton) {
@@ -720,7 +735,7 @@ export function initLogs(): void {
 
   subscribe("state:update", syncRunIdPlaceholder);
   subscribe("tab:change", (tab) => {
-    if (tab !== "logs" && stopLogStream) {
+    if (tab !== "analytics" && stopLogStream) {
       stopLogStreaming();
     }
   });

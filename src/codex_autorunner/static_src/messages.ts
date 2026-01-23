@@ -7,6 +7,7 @@ interface AgentMessage {
   mode?: string;
   title?: string | null;
   body?: string | null;
+  extra?: Record<string, unknown> | null;
 }
 
 interface ActiveMessageResponse {
@@ -23,7 +24,11 @@ interface ThreadSummary {
   latest?: {
     seq?: number;
     message?: AgentMessage | null;
+    created_at?: string | null;
   };
+  handoff_count?: number;
+  reply_count?: number;
+  ticket_state?: TicketState | null;
 }
 
 interface ThreadsResponse {
@@ -34,17 +39,33 @@ interface ThreadDetail {
   run?: {
     id: string;
     status?: string;
+    created_at?: string | null;
   };
   handoff_history?: Array<{
     seq: number;
     message?: AgentMessage | null;
-    files?: Array<{ name: string; url: string }>;
+    files?: Array<{ name: string; url: string; size?: number | null }>;
+    created_at?: string | null;
   }>;
   reply_history?: Array<{
     seq: number;
     reply?: { title?: string | null; body?: string | null } | null;
-    files?: Array<{ name: string; url: string }>;
+    files?: Array<{ name: string; url: string; size?: number | null }>;
+    created_at?: string | null;
   }>;
+  handoff_count?: number;
+  reply_count?: number;
+  ticket_state?: TicketState | null;
+}
+
+interface TicketState {
+  current_ticket?: string | null;
+  total_turns?: number | null;
+  ticket_turns?: number | null;
+  outbox_seq?: number | null;
+  reply_seq?: number | null;
+  status?: string | null;
+  reason?: string | null;
 }
 
 let bellInitialized = false;
@@ -63,6 +84,13 @@ const replyFilesEl = document.getElementById("messages-reply-files") as HTMLInpu
 const replySendEl = document.getElementById("messages-reply-send") as HTMLButtonElement | null;
 const replySendResumeEl = document.getElementById("messages-reply-send-resume") as HTMLButtonElement | null;
 const resumeEl = document.getElementById("messages-resume") as HTMLButtonElement | null;
+
+function formatTimestamp(ts?: string | null): string {
+  if (!ts) return "–";
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return ts;
+  return date.toLocaleString();
+}
 
 function setBadge(count: number): void {
   if (!bellBadge) return;
@@ -158,35 +186,98 @@ async function loadThreads(): Promise<void> {
   });
 }
 
-function renderFiles(files: Array<{ name: string; url: string }> | undefined): string {
+function formatBytes(size?: number | null): string {
+  if (typeof size !== "number" || Number.isNaN(size)) return "";
+  if (size >= 1_000_000) return `${(size / 1_000_000).toFixed(1)} MB`;
+  if (size >= 1_000) return `${(size / 1_000).toFixed(0)} KB`;
+  return `${size} B`;
+}
+
+function renderMarkdown(body?: string | null): string {
+  if (!body) return "";
+  let text = escapeHtml(body);
+
+  // Code fences
+  text = text.replace(/```([\s\S]*?)```/g, (_m, code) => {
+    return `<pre class="md-code"><code>${code}</code></pre>`;
+  });
+  // Inline code
+  text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+  // Bold and italic (simple, non-nested)
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  // Links [text](url) only for http/https
+  text = text.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (_m, label, url) => {
+    return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`;
+  });
+
+  // Lists
+  const lines = text.split(/\n/);
+  const out: string[] = [];
+  let inList = false;
+  lines.forEach((line) => {
+    if (/^[-*]\s+/.test(line)) {
+      if (!inList) {
+        out.push("<ul>");
+        inList = true;
+      }
+      out.push(`<li>${line.replace(/^[-*]\s+/, "")}</li>`);
+    } else {
+      if (inList) {
+        out.push("</ul>");
+        inList = false;
+      }
+      out.push(line);
+    }
+  });
+  if (inList) out.push("</ul>");
+
+  // Paragraphs
+  const joined = out.join("\n");
+  return joined
+    .split(/\n\n+/)
+    .map((block) => `<p>${block.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function renderFiles(files: Array<{ name: string; url: string; size?: number | null }> | undefined): string {
   if (!files || !files.length) return "";
   const items = files
-    .map((f) => `<li><a href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a></li>`)
+    .map((f) => {
+      const size = formatBytes(f.size);
+      return `<li class="messages-file">
+        <span class="messages-file-icon">📎</span>
+        <a href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a>
+        ${size ? `<span class="messages-file-size muted small">${escapeHtml(size)}</span>` : ""}
+      </li>`;
+    })
     .join("");
   return `<ul class="messages-files">${items}</ul>`;
 }
 
-function renderHandoff(entry: { seq: number; message?: AgentMessage | null; files?: any[] }): string {
+function renderHandoff(entry: { seq: number; message?: AgentMessage | null; files?: any[]; created_at?: string | null }): string {
   const msg = entry.message;
   const title = msg?.title || "Agent message";
   const mode = msg?.mode ? ` <span class="pill pill-small">${escapeHtml(msg.mode)}</span>` : "";
-  const body = msg?.body ? `<pre class="messages-body">${escapeHtml(msg.body)}</pre>` : "";
+  const body = msg?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(msg.body)}</div>` : "";
+  const ts = entry.created_at ? `<span class="muted small">${escapeHtml(formatTimestamp(entry.created_at))}</span>` : "";
   return `
     <details class="messages-entry" open>
-      <summary>#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)}${mode}</summary>
+      <summary>#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)}${mode} ${ts}</summary>
       ${body}
       ${renderFiles(entry.files)}
     </details>
   `;
 }
 
-function renderReply(entry: { seq: number; reply?: any; files?: any[] }): string {
+function renderReply(entry: { seq: number; reply?: any; files?: any[]; created_at?: string | null }): string {
   const rep = entry.reply;
   const title = rep?.title || "Reply";
-  const body = rep?.body ? `<pre class="messages-body">${escapeHtml(rep.body)}</pre>` : "";
+  const body = rep?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(rep.body)}</div>` : "";
+  const ts = entry.created_at ? `<span class="muted small">${escapeHtml(formatTimestamp(entry.created_at))}</span>` : "";
   return `
     <details class="messages-entry" open>
-      <summary>#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)} <span class="pill pill-small pill-idle">you</span></summary>
+      <summary>#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)} <span class="pill pill-small pill-idle">you</span> ${ts}</summary>
       ${body}
       ${renderFiles(entry.files)}
     </details>
@@ -213,14 +304,29 @@ async function loadThread(runId: string): Promise<void> {
   const replies = (detail.reply_history || []).map(renderReply).join("");
   const resumeHint = runStatus === "paused" ? "Paused" : runStatus;
   const isPaused = runStatus === "paused";
+  const createdAt = (detail.run?.created_at as string | undefined) || null;
+  const ticketState = detail.ticket_state;
+  const turns = ticketState?.total_turns ?? null;
+  const currentTicket = ticketState?.current_ticket;
+  const handoffCount = detail.handoff_count ?? (detail.handoff_history || []).length;
+  const replyCount = detail.reply_count ?? (detail.reply_history || []).length;
 
   detailEl.innerHTML = `
     <div class="messages-thread-header">
       <div>
         <div class="messages-thread-id">Run: <code>${escapeHtml(runId)}</code></div>
-        <div class="muted small">Repo: ${escapeHtml(REPO_ID || "–")} · Status: ${escapeHtml(resumeHint)}</div>
+        <div class="muted small">Repo: ${escapeHtml(REPO_ID || "–")} · Status: ${escapeHtml(resumeHint)} · Started: ${escapeHtml(formatTimestamp(createdAt))}</div>
       </div>
-      ${mode ? `<span class="pill pill-small">${escapeHtml(mode)}</span>` : ""}
+      <div class="messages-thread-tags">
+        ${mode ? `<span class="pill pill-small">${escapeHtml(mode)}</span>` : ""}
+        ${runStatus ? `<span class="pill pill-small pill-${isPaused ? "warn" : "idle"}">${escapeHtml(runStatus)}</span>` : ""}
+      </div>
+    </div>
+    <div class="messages-thread-meta">
+      <div class="messages-meta-item"><span class="muted small">Handoffs</span><span class="metric">${escapeHtml(String(handoffCount || 0))}</span></div>
+      <div class="messages-meta-item"><span class="muted small">Replies</span><span class="metric">${escapeHtml(String(replyCount || 0))}</span></div>
+      <div class="messages-meta-item"><span class="muted small">Turns</span><span class="metric">${escapeHtml(turns != null ? String(turns) : "–")}</span></div>
+      <div class="messages-meta-item"><span class="muted small">Active ticket</span><span class="metric">${escapeHtml(currentTicket || "–")}</span></div>
     </div>
     <div class="messages-thread-history">
       <h3 class="messages-section-title">Agent messages</h3>
@@ -325,5 +431,8 @@ export function initMessages(): void {
         void loadThread(runId);
       }
     }
+  });
+  subscribe("state:update", () => {
+    void refreshBell();
   });
 }

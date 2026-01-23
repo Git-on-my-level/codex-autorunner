@@ -10,6 +10,8 @@ const showRunToggle = document.getElementById("log-show-run");
 const showSummaryToggle = document.getElementById("log-show-summary");
 const jumpBottomButton = document.getElementById("log-jump-bottom");
 const loadOlderButton = document.getElementById("log-load-older");
+const analyticsLogs = document.getElementById("analytics-logs");
+const analyticsLogsToggle = document.getElementById("analytics-logs-toggle");
 let stopLogStream = null;
 let lastKnownRunId = null;
 let rawLogLines = [];
@@ -168,6 +170,18 @@ function resetRenderState() {
 function resetLogContexts() {
     logContexts = [];
     logContextState = { inPromptBlock: false, inDiffBlock: false };
+}
+function initLogsToggle() {
+    if (!analyticsLogs)
+        return;
+    const update = () => {
+        if (analyticsLogsToggle) {
+            analyticsLogsToggle.textContent = analyticsLogs.open ? "Logs (expanded)" : "Logs (show)";
+        }
+        analyticsLogs.classList.toggle("open", analyticsLogs.open);
+    };
+    analyticsLogs.addEventListener("toggle", update);
+    update();
 }
 function updateLogContextForLine(line) {
     logContexts.push({ ...logContextState });
@@ -601,6 +615,7 @@ function renderLogs() {
     renderLogWindow({ followTail: isViewingTail });
 }
 export function initLogs() {
+    initLogsToggle();
     applyLogUrlState();
     const loadLogsButton = document.getElementById("load-logs");
     if (loadLogsButton) {
@@ -618,7 +633,7 @@ export function initLogs() {
     }
     subscribe("state:update", syncRunIdPlaceholder);
     subscribe("tab:change", (tab) => {
-        if (tab !== "logs" && stopLogStream) {
+        if (tab !== "analytics" && stopLogStream) {
             stopLogStreaming();
         }
     });

@@ -122,27 +122,47 @@
 <p class="muted">Exit</p>
 <p class="metric" id="last-exit-code">–</p>
 </div>
-<div>
-<p class="muted">Started</p>
-<p class="metric" id="last-start">–</p>
-</div>
-<div>
-<p class="muted">Finished</p>
-<p class="metric" id="last-finish">–</p>
-</div>
-<div>
-<p class="muted">TODO</p>
-<p class="metric" id="todo-count">–</p>
-</div>
-<div>
-<p class="muted">Done</p>
-<p class="metric" id="done-count">–</p>
-</div>
-</div>
-<div class="doc-agent-controls dashboard-agent-controls">
-<select id="dashboard-agent-select" title="Agent"></select>
-<select id="dashboard-model-select" title="Model"></select>
-<select id="dashboard-reasoning-select" title="Reasoning"></select>
+        <div>
+          <p class="muted">Started</p>
+          <p class="metric" id="last-start">–</p>
+        </div>
+        <div>
+          <p class="muted">Finished</p>
+          <p class="metric" id="last-finish">–</p>
+        </div>
+        <div>
+          <p class="muted">Duration</p>
+          <p class="metric" id="last-duration">–</p>
+        </div>
+        <div>
+          <p class="muted">TODO</p>
+          <p class="metric" id="todo-count">–</p>
+        </div>
+        <div>
+          <p class="muted">Done</p>
+          <p class="metric" id="done-count">–</p>
+        </div>
+        <div>
+          <p class="muted">Active ticket</p>
+          <p class="metric" id="ticket-active">–</p>
+        </div>
+        <div>
+          <p class="muted">Turns</p>
+          <p class="metric" id="ticket-turns">–</p>
+        </div>
+        <div>
+          <p class="muted">Handoffs</p>
+          <p class="metric" id="message-handoffs">–</p>
+        </div>
+        <div>
+          <p class="muted">Replies</p>
+          <p class="metric" id="message-replies">–</p>
+        </div>
+      </div>
+      <div class="doc-agent-controls dashboard-agent-controls">
+        <select id="dashboard-agent-select" title="Agent"></select>
+        <select id="dashboard-model-select" title="Model"></select>
+        <select id="dashboard-reasoning-select" title="Reasoning"></select>
 </div>
 <div class="actions">
 <button class="primary" id="start-run" title="Run a full autorunner iteration through all tasks">Start</button>
@@ -380,22 +400,23 @@
 </label>
 </div>
 <div class="runs-layout">
-<div class="runs-card">
-<div class="runs-card-header">
-<span class="label">Runs</span>
-</div>
-<table class="runs-table">
-<thead>
-<tr>
-<th>Run</th>
-<th>Status</th>
-<th>Started</th>
-<th>Model</th>
-<th>Tokens</th>
-<th>Completed TODOs</th>
-</tr>
-</thead>
-<tbody id="runs-table-body"></tbody>
+  <div class="runs-card">
+    <div class="runs-card-header">
+      <span class="label">Runs</span>
+    </div>
+    <table class="runs-table">
+      <thead>
+        <tr>
+          <th>Run</th>
+          <th>Status</th>
+          <th>Started</th>
+          <th>Duration</th>
+          <th>Model</th>
+          <th>Tokens</th>
+          <th>Completed TODOs</th>
+        </tr>
+      </thead>
+      <tbody id="runs-table-body"></tbody>
 </table>
 </div>
 <div class="runs-card">
@@ -408,7 +429,7 @@
 </div>
 </div>
 <details class="analytics-logs" id="analytics-logs">
-<summary>Logs</summary>
+<summary id="analytics-logs-toggle">Logs</summary>
 <div class="inline-toolbar">
 <label class="chip" data-short="Sum">
 <input checked="" id="log-show-summary" type="checkbox"/>

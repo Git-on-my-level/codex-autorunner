@@ -16,6 +16,14 @@ const replyFilesEl = document.getElementById("messages-reply-files");
 const replySendEl = document.getElementById("messages-reply-send");
 const replySendResumeEl = document.getElementById("messages-reply-send-resume");
 const resumeEl = document.getElementById("messages-resume");
+function formatTimestamp(ts) {
+    if (!ts)
+        return "–";
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime()))
+        return ts;
+    return date.toLocaleString();
+}
 function setBadge(count) {
     if (!bellBadge)
         return;
@@ -114,11 +122,73 @@ async function loadThreads() {
         });
     });
 }
+function formatBytes(size) {
+    if (typeof size !== "number" || Number.isNaN(size))
+        return "";
+    if (size >= 1000000)
+        return `${(size / 1000000).toFixed(1)} MB`;
+    if (size >= 1000)
+        return `${(size / 1000).toFixed(0)} KB`;
+    return `${size} B`;
+}
+function renderMarkdown(body) {
+    if (!body)
+        return "";
+    let text = escapeHtml(body);
+    // Code fences
+    text = text.replace(/```([\s\S]*?)```/g, (_m, code) => {
+        return `<pre class="md-code"><code>${code}</code></pre>`;
+    });
+    // Inline code
+    text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+    // Bold and italic (simple, non-nested)
+    text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    text = text.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    // Links [text](url) only for http/https
+    text = text.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (_m, label, url) => {
+        return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`;
+    });
+    // Lists
+    const lines = text.split(/\n/);
+    const out = [];
+    let inList = false;
+    lines.forEach((line) => {
+        if (/^[-*]\s+/.test(line)) {
+            if (!inList) {
+                out.push("<ul>");
+                inList = true;
+            }
+            out.push(`<li>${line.replace(/^[-*]\s+/, "")}</li>`);
+        }
+        else {
+            if (inList) {
+                out.push("</ul>");
+                inList = false;
+            }
+            out.push(line);
+        }
+    });
+    if (inList)
+        out.push("</ul>");
+    // Paragraphs
+    const joined = out.join("\n");
+    return joined
+        .split(/\n\n+/)
+        .map((block) => `<p>${block.replace(/\n/g, "<br>")}</p>`)
+        .join("");
+}
 function renderFiles(files) {
     if (!files || !files.length)
         return "";
     const items = files
-        .map((f) => `<li><a href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a></li>`)
+        .map((f) => {
+        const size = formatBytes(f.size);
+        return `<li class="messages-file">
+        <span class="messages-file-icon">📎</span>
+        <a href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a>
+        ${size ? `<span class="messages-file-size muted small">${escapeHtml(size)}</span>` : ""}
+      </li>`;
+    })
         .join("");
     return `<ul class="messages-files">${items}</ul>`;
 }
@@ -126,10 +196,11 @@ function renderHandoff(entry) {
     const msg = entry.message;
     const title = msg?.title || "Agent message";
     const mode = msg?.mode ? ` <span class="pill pill-small">${escapeHtml(msg.mode)}</span>` : "";
-    const body = msg?.body ? `<pre class="messages-body">${escapeHtml(msg.body)}</pre>` : "";
+    const body = msg?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(msg.body)}</div>` : "";
+    const ts = entry.created_at ? `<span class="muted small">${escapeHtml(formatTimestamp(entry.created_at))}</span>` : "";
     return `
     <details class="messages-entry" open>
-      <summary>#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)}${mode}</summary>
+      <summary>#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)}${mode} ${ts}</summary>
       ${body}
       ${renderFiles(entry.files)}
     </details>
@@ -138,10 +209,11 @@ function renderHandoff(entry) {
 function renderReply(entry) {
     const rep = entry.reply;
     const title = rep?.title || "Reply";
-    const body = rep?.body ? `<pre class="messages-body">${escapeHtml(rep.body)}</pre>` : "";
+    const body = rep?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(rep.body)}</div>` : "";
+    const ts = entry.created_at ? `<span class="muted small">${escapeHtml(formatTimestamp(entry.created_at))}</span>` : "";
     return `
     <details class="messages-entry" open>
-      <summary>#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)} <span class="pill pill-small pill-idle">you</span></summary>
+      <summary>#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)} <span class="pill pill-small pill-idle">you</span> ${ts}</summary>
       ${body}
       ${renderFiles(entry.files)}
     </details>
@@ -167,13 +239,28 @@ async function loadThread(runId) {
     const replies = (detail.reply_history || []).map(renderReply).join("");
     const resumeHint = runStatus === "paused" ? "Paused" : runStatus;
     const isPaused = runStatus === "paused";
+    const createdAt = detail.run?.created_at || null;
+    const ticketState = detail.ticket_state;
+    const turns = ticketState?.total_turns ?? null;
+    const currentTicket = ticketState?.current_ticket;
+    const handoffCount = detail.handoff_count ?? (detail.handoff_history || []).length;
+    const replyCount = detail.reply_count ?? (detail.reply_history || []).length;
     detailEl.innerHTML = `
     <div class="messages-thread-header">
       <div>
         <div class="messages-thread-id">Run: <code>${escapeHtml(runId)}</code></div>
-        <div class="muted small">Repo: ${escapeHtml(REPO_ID || "–")} · Status: ${escapeHtml(resumeHint)}</div>
+        <div class="muted small">Repo: ${escapeHtml(REPO_ID || "–")} · Status: ${escapeHtml(resumeHint)} · Started: ${escapeHtml(formatTimestamp(createdAt))}</div>
       </div>
-      ${mode ? `<span class="pill pill-small">${escapeHtml(mode)}</span>` : ""}
+      <div class="messages-thread-tags">
+        ${mode ? `<span class="pill pill-small">${escapeHtml(mode)}</span>` : ""}
+        ${runStatus ? `<span class="pill pill-small pill-${isPaused ? "warn" : "idle"}">${escapeHtml(runStatus)}</span>` : ""}
+      </div>
+    </div>
+    <div class="messages-thread-meta">
+      <div class="messages-meta-item"><span class="muted small">Handoffs</span><span class="metric">${escapeHtml(String(handoffCount || 0))}</span></div>
+      <div class="messages-meta-item"><span class="muted small">Replies</span><span class="metric">${escapeHtml(String(replyCount || 0))}</span></div>
+      <div class="messages-meta-item"><span class="muted small">Turns</span><span class="metric">${escapeHtml(turns != null ? String(turns) : "–")}</span></div>
+      <div class="messages-meta-item"><span class="muted small">Active ticket</span><span class="metric">${escapeHtml(currentTicket || "–")}</span></div>
     </div>
     <div class="messages-thread-history">
       <h3 class="messages-section-title">Agent messages</h3>
@@ -280,5 +367,8 @@ export function initMessages() {
                 void loadThread(runId);
             }
         }
+    });
+    subscribe("state:update", () => {
+        void refreshBell();
     });
 }

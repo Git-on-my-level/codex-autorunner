@@ -3622,6 +3622,14 @@ label {
   height: 100%;
 }
 
+.analytics-logs summary {
+  cursor: pointer;
+}
+
+.analytics-logs.open summary {
+  color: var(--accent);
+}
+
 .log-load-btn {
   position: absolute;
   top: 16px;
@@ -4660,7 +4668,6 @@ button.loading::after {
   }
   
   /* Analytics panel mobile improvements */
-  #dashboard .cards,
   #analytics .cards {
     padding: 0;
     gap: 6px;
@@ -6663,6 +6670,12 @@ button.loading::after {
   margin-top: 4px;
 }
 
+.messages-thread-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .messages-thread-detail {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -6686,6 +6699,57 @@ button.loading::after {
   padding: 0;
   margin: 10px 0 0;
   color: var(--text);
+}
+
+.messages-markdown p {
+  margin: 0 0 6px;
+}
+
+.messages-markdown ul {
+  margin: 0 0 6px 16px;
+  padding: 0;
+}
+
+.messages-markdown code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.messages-markdown pre {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.messages-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.messages-file-icon {
+  font-size: 12px;
+}
+
+.messages-file-size {
+  margin-left: 4px;
+}
+
+.messages-thread-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin: 10px 0 6px;
+}
+
+.messages-meta-item {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .messages-reply-box {

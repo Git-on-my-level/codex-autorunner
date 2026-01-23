@@ -147,6 +147,7 @@ function renderRunsTable(): void {
   }
   runsState.runs.forEach((run) => {
     const status = runStatus(run);
+    const duration = formatDuration(run.duration_seconds);
     const row = document.createElement("tr");
     row.className = "runs-row";
     row.dataset.runId = String(run.run_id);
@@ -154,6 +155,7 @@ function renderRunsTable(): void {
       <td>#${run.run_id}</td>
       <td><span class="runs-pill runs-pill-${status}">${STATUS_LABELS[status]}</span></td>
       <td>${formatTimestamp(run.started_at)}</td>
+      <td>${duration}</td>
       <td>${run.app_server?.model || "–"}</td>
       <td>${formatNumber(run.token_total)}</td>
       <td>${formatNumber(run.completed_todo_count || 0)}</td>
@@ -491,7 +493,7 @@ export function initRuns(): void {
 
   registerAutoRefresh("runs-list", {
     callback: loadRuns,
-    tabId: "runs",
+    tabId: "analytics",
     interval: RUNS_AUTO_REFRESH_INTERVAL,
     refreshOnActivation: true,
     immediate: false,

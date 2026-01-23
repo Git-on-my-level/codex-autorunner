@@ -33,6 +33,12 @@ const usageChartState: UsageChartState = {
 
 let usageSeriesRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let usageSummaryRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let latestMessageStats: {
+  handoffs: number;
+  replies: number;
+  currentTicket: string | null;
+  totalTurns: number | null;
+} | null = null;
 
 interface State {
   status: string;
@@ -71,6 +77,22 @@ function renderState(state: State | null): void {
   const lastFinishEl = document.getElementById("last-finish");
   if (lastFinishEl) {
     lastFinishEl.textContent = state.last_run_finished_at ?? "–";
+  }
+  const lastDurationEl = document.getElementById("last-duration");
+  if (lastDurationEl) {
+    const start = state.last_run_started_at ? new Date(state.last_run_started_at) : null;
+    const end = state.last_run_finished_at ? new Date(state.last_run_finished_at) : null;
+    let duration = "–";
+    if (start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end > start) {
+      const seconds = (end.getTime() - start.getTime()) / 1000;
+      if (seconds < 60) duration = `${seconds.toFixed(1)}s`;
+      else {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.round(seconds % 60);
+        duration = `${mins}m ${secs}s`;
+      }
+    }
+    lastDurationEl.textContent = duration;
   }
   const todoCountEl = document.getElementById("todo-count");
   if (todoCountEl) {
@@ -279,6 +301,63 @@ function renderUsage(data: UsageData | null): void {
   }
   
   if (metaEl) metaEl.textContent = codexHome;
+}
+
+interface MessageThread {
+  run_id: string;
+  handoff_count?: number;
+  reply_count?: number;
+  ticket_state?: {
+    current_ticket?: string | null;
+    total_turns?: number | null;
+  } | null;
+  status?: string;
+  created_at?: string;
+}
+
+async function loadMessageStats(): Promise<void> {
+  try {
+    const data = (await api("/api/messages/threads")) as { threads?: MessageThread[] };
+    const threads = Array.isArray(data?.threads) ? data.threads : [];
+    if (!threads.length) {
+      latestMessageStats = {
+        handoffs: 0,
+        replies: 0,
+        currentTicket: null,
+        totalTurns: null,
+      };
+    } else {
+      const primary =
+        threads.find((t) => t.status === "paused") ||
+        threads[0];
+      latestMessageStats = {
+        handoffs: primary.handoff_count ?? 0,
+        replies: primary.reply_count ?? 0,
+        currentTicket: primary.ticket_state?.current_ticket || null,
+        totalTurns: primary.ticket_state?.total_turns ?? null,
+      };
+    }
+  } catch (_err) {
+    // best effort
+    latestMessageStats = latestMessageStats || null;
+  }
+  renderMessageStats();
+}
+
+function renderMessageStats(): void {
+  const stats = latestMessageStats;
+  const handoffsEl = document.getElementById("message-handoffs");
+  const repliesEl = document.getElementById("message-replies");
+  const ticketEl = document.getElementById("ticket-active");
+  const turnsEl = document.getElementById("ticket-turns");
+  const handoffs = stats?.handoffs ?? 0;
+  const replies = stats?.replies ?? 0;
+  const ticket = stats?.currentTicket || "–";
+  const turns = stats?.totalTurns;
+  if (handoffsEl) handoffsEl.textContent = String(handoffs);
+  if (repliesEl) repliesEl.textContent = String(replies);
+  if (ticketEl) ticketEl.textContent = ticket;
+  if (turnsEl) turnsEl.textContent = turns != null ? String(turns) : "–";
 }
 
 function buildUsageSeriesQuery(): string {
@@ -909,6 +988,7 @@ export function initDashboard(): void {
   loadTodoPreview();
   loadVersion();
   checkUpdateStatus();
+  loadMessageStats();
   startStatePolling();
 
   registerAutoRefresh("dashboard-usage", {
@@ -917,6 +997,13 @@ export function initDashboard(): void {
     interval: CONSTANTS.UI.AUTO_REFRESH_USAGE_INTERVAL,
     refreshOnActivation: true,
     immediate: false,
+  });
+  registerAutoRefresh("message-stats", {
+    callback: loadMessageStats,
+    tabId: "analytics",
+    interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
+    refreshOnActivation: true,
+    immediate: true,
   });
 }
 

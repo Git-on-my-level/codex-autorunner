@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
@@ -22,7 +23,7 @@ import yaml
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from ..core.flows.models import FlowRunStatus
+from ..core.flows.models import FlowRunRecord, FlowRunStatus
 from ..core.flows.store import FlowStore
 from ..core.utils import find_repo_root
 from ..tickets.files import safe_relpath
@@ -40,6 +41,13 @@ _logger = logging.getLogger(__name__)
 
 def _flows_db_path(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "flows.db"
+
+
+def _timestamp(path: Path) -> Optional[str]:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+    except OSError:
+        return None
 
 
 def _safe_attachment_name(name: str) -> str:
@@ -100,15 +108,22 @@ def _collect_handoff_history(
                         continue
                     rel = child.name
                     url = f"/api/flows/{run_id}/handoff_history/{seq:04d}/{quote(rel)}"
-                    files.append({"name": child.name, "url": url})
+                    size = None
+                    try:
+                        size = child.stat().st_size
+                    except OSError:
+                        size = None
+                    files.append({"name": child.name, "url": url, "size": size})
                 except OSError:
                     continue
         except OSError:
             files = []
+        created_at = _timestamp(msg_path) or _timestamp(entry_dir)
         history.append(
             {
                 "seq": seq,
                 "dir": safe_relpath(entry_dir, workspace_root),
+                "created_at": created_at,
                 "message": (
                     {
                         "mode": msg.mode,
@@ -154,15 +169,22 @@ def _collect_reply_history(
                         continue
                     rel = child.name
                     url = f"/api/messages/{run_id}/reply_history/{seq:04d}/{quote(rel)}"
-                    files.append({"name": child.name, "url": url})
+                    size = None
+                    try:
+                        size = child.stat().st_size
+                    except OSError:
+                        size = None
+                    files.append({"name": child.name, "url": url, "size": size})
                 except OSError:
                     continue
         except OSError:
             files = []
+        created_at = _timestamp(reply_path) or _timestamp(entry_dir)
         history.append(
             {
                 "seq": seq,
                 "dir": safe_relpath(entry_dir, workspace_root),
+                "created_at": created_at,
                 "reply": (
                     {"title": reply.title, "body": reply.body, "extra": reply.extra}
                     if reply
@@ -173,6 +195,23 @@ def _collect_reply_history(
             }
         )
     return history
+
+
+def _ticket_state_snapshot(record: FlowRunRecord) -> dict[str, Any]:
+    state = record.state if isinstance(record.state, dict) else {}
+    ticket_state = state.get("ticket_engine") if isinstance(state, dict) else {}
+    if not isinstance(ticket_state, dict):
+        ticket_state = {}
+    allowed_keys = {
+        "current_ticket",
+        "total_turns",
+        "ticket_turns",
+        "outbox_seq",
+        "reply_seq",
+        "reason",
+        "status",
+    }
+    return {k: ticket_state.get(k) for k in allowed_keys if k in ticket_state}
 
 
 def build_messages_routes() -> APIRouter:
@@ -238,14 +277,20 @@ def build_messages_routes() -> APIRouter:
         runs = store.list_flow_runs(flow_type="ticket_flow")
         threads: list[dict[str, Any]] = []
         for record in runs:
+            record_input = dict(record.input_data or {})
             history = _collect_handoff_history(
                 repo_root=repo_root,
                 run_id=str(record.id),
-                record_input=dict(record.input_data or {}),
+                record_input=record_input,
             )
             if not history:
                 continue
             latest = history[0]
+            reply_history = _collect_reply_history(
+                repo_root=repo_root,
+                run_id=str(record.id),
+                record_input=record_input,
+            )
             threads.append(
                 {
                     "run_id": record.id,
@@ -256,6 +301,9 @@ def build_messages_routes() -> APIRouter:
                     "finished_at": record.finished_at,
                     "current_step": record.current_step,
                     "latest": latest,
+                    "handoff_count": len(history),
+                    "reply_count": len(reply_history),
+                    "ticket_state": _ticket_state_snapshot(record),
                     "open_url": f"/?tab=messages&run_id={record.id}",
                 }
             )
@@ -279,6 +327,12 @@ def build_messages_routes() -> APIRouter:
         if not record:
             raise HTTPException(status_code=404, detail="Run not found")
         input_data = dict(record.input_data or {})
+        handoff_history = _collect_handoff_history(
+            repo_root=repo_root, run_id=run_id, record_input=input_data
+        )
+        reply_history = _collect_reply_history(
+            repo_root=repo_root, run_id=run_id, record_input=input_data
+        )
         return {
             "run": {
                 "id": record.id,
@@ -290,12 +344,11 @@ def build_messages_routes() -> APIRouter:
                 "current_step": record.current_step,
                 "error_message": record.error_message,
             },
-            "handoff_history": _collect_handoff_history(
-                repo_root=repo_root, run_id=run_id, record_input=input_data
-            ),
-            "reply_history": _collect_reply_history(
-                repo_root=repo_root, run_id=run_id, record_input=input_data
-            ),
+            "handoff_history": handoff_history,
+            "reply_history": reply_history,
+            "handoff_count": len(handoff_history),
+            "reply_count": len(reply_history),
+            "ticket_state": _ticket_state_snapshot(record),
         }
 
     @router.get("/api/messages/{run_id}/reply_history/{seq}/{file_path:path}")

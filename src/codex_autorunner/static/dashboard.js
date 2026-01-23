@@ -16,6 +16,7 @@ const usageChartState = {
 };
 let usageSeriesRetryTimer = null;
 let usageSummaryRetryTimer = null;
+let latestMessageStats = null;
 function renderState(state) {
     if (!state)
         return;
@@ -39,6 +40,23 @@ function renderState(state) {
     const lastFinishEl = document.getElementById("last-finish");
     if (lastFinishEl) {
         lastFinishEl.textContent = state.last_run_finished_at ?? "–";
+    }
+    const lastDurationEl = document.getElementById("last-duration");
+    if (lastDurationEl) {
+        const start = state.last_run_started_at ? new Date(state.last_run_started_at) : null;
+        const end = state.last_run_finished_at ? new Date(state.last_run_finished_at) : null;
+        let duration = "–";
+        if (start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end > start) {
+            const seconds = (end.getTime() - start.getTime()) / 1000;
+            if (seconds < 60)
+                duration = `${seconds.toFixed(1)}s`;
+            else {
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.round(seconds % 60);
+                duration = `${mins}m ${secs}s`;
+            }
+        }
+        lastDurationEl.textContent = duration;
     }
     const todoCountEl = document.getElementById("todo-count");
     if (todoCountEl) {
@@ -225,6 +243,54 @@ function renderUsage(data) {
     }
     if (metaEl)
         metaEl.textContent = codexHome;
+}
+async function loadMessageStats() {
+    try {
+        const data = (await api("/api/messages/threads"));
+        const threads = Array.isArray(data?.threads) ? data.threads : [];
+        if (!threads.length) {
+            latestMessageStats = {
+                handoffs: 0,
+                replies: 0,
+                currentTicket: null,
+                totalTurns: null,
+            };
+        }
+        else {
+            const primary = threads.find((t) => t.status === "paused") ||
+                threads[0];
+            latestMessageStats = {
+                handoffs: primary.handoff_count ?? 0,
+                replies: primary.reply_count ?? 0,
+                currentTicket: primary.ticket_state?.current_ticket || null,
+                totalTurns: primary.ticket_state?.total_turns ?? null,
+            };
+        }
+    }
+    catch (_err) {
+        // best effort
+        latestMessageStats = latestMessageStats || null;
+    }
+    renderMessageStats();
+}
+function renderMessageStats() {
+    const stats = latestMessageStats;
+    const handoffsEl = document.getElementById("message-handoffs");
+    const repliesEl = document.getElementById("message-replies");
+    const ticketEl = document.getElementById("ticket-active");
+    const turnsEl = document.getElementById("ticket-turns");
+    const handoffs = stats?.handoffs ?? 0;
+    const replies = stats?.replies ?? 0;
+    const ticket = stats?.currentTicket || "–";
+    const turns = stats?.totalTurns;
+    if (handoffsEl)
+        handoffsEl.textContent = String(handoffs);
+    if (repliesEl)
+        repliesEl.textContent = String(replies);
+    if (ticketEl)
+        ticketEl.textContent = ticket;
+    if (turnsEl)
+        turnsEl.textContent = turns != null ? String(turns) : "–";
 }
 function buildUsageSeriesQuery() {
     const params = new URLSearchParams();
@@ -759,6 +825,7 @@ export function initDashboard() {
     loadTodoPreview();
     loadVersion();
     checkUpdateStatus();
+    loadMessageStats();
     startStatePolling();
     registerAutoRefresh("dashboard-usage", {
         callback: async () => { await loadUsage(); },
@@ -766,6 +833,13 @@ export function initDashboard() {
         interval: CONSTANTS.UI.AUTO_REFRESH_USAGE_INTERVAL,
         refreshOnActivation: true,
         immediate: false,
+    });
+    registerAutoRefresh("message-stats", {
+        callback: loadMessageStats,
+        tabId: "analytics",
+        interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
+        refreshOnActivation: true,
+        immediate: true,
     });
 }
 async function loadVersion() {
