@@ -103,7 +103,7 @@
 </div>
 </nav>
 <main>
-<section class="panel active" id="dashboard">
+<section class="panel" id="analytics">
 <div class="cards">
 <div class="card status-card">
 <div class="card-header">
@@ -364,6 +364,85 @@
 <a class="review-link muted" id="review-scratchpad-link">Scratchpad</a>
 </div>
 </div>
+<div class="analytics-subsection" id="analytics-runs">
+<div class="inline-toolbar runs-toolbar">
+<button class="primary sm" id="runs-refresh">Refresh</button>
+<label>
+              Attribution
+              <select id="runs-attribution-mode">
+<option value="split">Split (default)</option>
+<option value="full">Full (upper bound)</option>
+</select>
+</label>
+<label>
+              TODO filter
+              <input id="runs-todo-search" placeholder="Search TODOs" type="text"/>
+</label>
+</div>
+<div class="runs-layout">
+<div class="runs-card">
+<div class="runs-card-header">
+<span class="label">Runs</span>
+</div>
+<table class="runs-table">
+<thead>
+<tr>
+<th>Run</th>
+<th>Status</th>
+<th>Started</th>
+<th>Model</th>
+<th>Tokens</th>
+<th>Completed TODOs</th>
+</tr>
+</thead>
+<tbody id="runs-table-body"></tbody>
+</table>
+</div>
+<div class="runs-card">
+<div class="runs-card-header runs-card-header-inline">
+<span class="label">Tokens per TODO</span>
+<span class="muted small" id="runs-todo-summary">–</span>
+</div>
+<div class="runs-todo-list" id="runs-todo-list">No TODOs yet.</div>
+</div>
+</div>
+</div>
+<details class="analytics-logs" id="analytics-logs">
+<summary>Logs</summary>
+<div class="inline-toolbar">
+<label class="chip" data-short="Sum">
+<input checked="" id="log-show-summary" type="checkbox"/>
+<span>Summary</span>
+</label>
+<label>Run <input id="log-run-id" min="1" placeholder="latest" type="number"/></label>
+<label>Tail <input id="log-tail" min="10" type="number" value="200"/></label>
+<button class="primary sm" id="load-logs">Load</button>
+<button class="ghost sm" id="toggle-log-stream">Stream</button>
+<span class="log-stream-status" id="log-stream-status"></span>
+<label class="chip" data-short="TS">
+<input checked="" id="log-show-timestamp" type="checkbox"/>
+<span>Timestamp</span>
+</label>
+<label class="chip" data-short="Run">
+<input id="log-show-run" type="checkbox"/>
+<span>Run</span>
+</label>
+</div>
+<div class="log-legend">
+<span class="log-legend-item"><span class="log-legend-dot thinking"></span>Thinking</span>
+<span class="log-legend-item"><span class="log-legend-dot exec"></span>Tool calls</span>
+<span class="log-legend-item"><span class="log-legend-dot file"></span>File updates</span>
+<span class="log-legend-item"><span class="log-legend-dot diff-add"></span>Added</span>
+<span class="log-legend-item"><span class="log-legend-dot diff-del"></span>Removed</span>
+<span class="log-legend-item"><span class="log-legend-dot output"></span>Agent output</span>
+<span class="log-legend-item"><span class="log-legend-dot context"></span>Context</span>
+</div>
+<div class="log-container">
+<button class="log-load-btn hidden" id="log-load-older" title="Load older logs">Load older</button>
+<pre class="log-viewer" id="log-output">(no log loaded)</pre>
+<button class="log-jump-btn hidden" id="log-jump-bottom" title="Jump to latest">↓ Latest</button>
+</div>
+</details>
 </section>
 <section class="panel" id="messages">
 <div class="cards">
@@ -527,83 +606,6 @@
 <div class="doc-chat-history" id="doc-chat-history"></div>
 </div>
 </div>
-</div>
-</section>
-<section class="panel" id="logs">
-<div class="inline-toolbar">
-<label class="chip" data-short="Sum">
-<input checked="" id="log-show-summary" type="checkbox"/>
-<span>Summary</span>
-</label>
-<label>Run <input id="log-run-id" min="1" placeholder="latest" type="number"/></label>
-<label>Tail <input id="log-tail" min="10" type="number" value="200"/></label>
-<button class="primary sm" id="load-logs">Load</button>
-<button class="ghost sm" id="toggle-log-stream">Stream</button>
-<span class="log-stream-status" id="log-stream-status"></span>
-<label class="chip" data-short="TS">
-<input checked="" id="log-show-timestamp" type="checkbox"/>
-<span>Timestamp</span>
-</label>
-<label class="chip" data-short="Run">
-<input id="log-show-run" type="checkbox"/>
-<span>Run</span>
-</label>
-</div>
-<div class="log-legend">
-<span class="log-legend-item"><span class="log-legend-dot thinking"></span>Thinking</span>
-<span class="log-legend-item"><span class="log-legend-dot exec"></span>Tool calls</span>
-<span class="log-legend-item"><span class="log-legend-dot file"></span>File updates</span>
-<span class="log-legend-item"><span class="log-legend-dot diff-add"></span>Added</span>
-<span class="log-legend-item"><span class="log-legend-dot diff-del"></span>Removed</span>
-<span class="log-legend-item"><span class="log-legend-dot output"></span>Agent output</span>
-<span class="log-legend-item"><span class="log-legend-dot context"></span>Context</span>
-</div>
-<div class="log-container">
-<button class="log-load-btn hidden" id="log-load-older" title="Load older logs">Load older</button>
-<pre class="log-viewer" id="log-output">(no log loaded)</pre>
-<button class="log-jump-btn hidden" id="log-jump-bottom" title="Jump to latest">↓ Latest</button>
-</div>
-</section>
-<section class="panel" id="runs">
-<div class="inline-toolbar runs-toolbar">
-<button class="primary sm" id="runs-refresh">Refresh</button>
-<label>
-              Attribution
-              <select id="runs-attribution-mode">
-<option value="split">Split (default)</option>
-<option value="full">Full (upper bound)</option>
-</select>
-</label>
-<label>
-              TODO filter
-              <input id="runs-todo-search" placeholder="Search TODOs" type="text"/>
-</label>
-</div>
-<div class="runs-layout">
-<div class="runs-card">
-<div class="runs-card-header">
-<span class="label">Runs</span>
-</div>
-<table class="runs-table">
-<thead>
-<tr>
-<th>Run</th>
-<th>Status</th>
-<th>Started</th>
-<th>Model</th>
-<th>Tokens</th>
-<th>Completed TODOs</th>
-</tr>
-</thead>
-<tbody id="runs-table-body"></tbody>
-</table>
-</div>
-<div class="runs-card">
-<div class="runs-card-header runs-card-header-inline">
-<span class="label">Tokens per TODO</span>
-<span class="muted small" id="runs-todo-summary">–</span>
-</div>
-<div class="runs-todo-list" id="runs-todo-list">No TODOs yet.</div>
 </div>
 </section>
 <section class="panel active" id="tickets">

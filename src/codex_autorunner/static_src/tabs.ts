@@ -25,7 +25,7 @@ export function activateTab(id: string): void {
   }
 }
 
-export function initTabs(defaultTab: string = "dashboard"): void {
+export function initTabs(defaultTab: string = "analytics"): void {
   const container = document.querySelector(".tabs");
   if (!container) return;
 

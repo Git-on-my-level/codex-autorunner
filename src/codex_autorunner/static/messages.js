@@ -1,6 +1,7 @@
 import { api, escapeHtml, flash, getUrlParams, updateUrlParams } from "./utils.js";
 import { activateTab } from "./tabs.js";
 import { subscribe } from "./bus.js";
+import { REPO_ID } from "./env.js";
 let bellInitialized = false;
 let messagesInitialized = false;
 let activeRunId = null;
@@ -160,16 +161,19 @@ async function loadThread(runId) {
         flash("Failed to load message thread", "error");
         return;
     }
-    const runStatus = detail.run?.status || "";
+    const runStatus = (detail.run?.status || "").toString();
+    const mode = (detail.handoff_history || [])[0]?.message?.mode || "";
     const handoff = (detail.handoff_history || []).map(renderHandoff).join("");
     const replies = (detail.reply_history || []).map(renderReply).join("");
     const resumeHint = runStatus === "paused" ? "Paused" : runStatus;
+    const isPaused = runStatus === "paused";
     detailEl.innerHTML = `
     <div class="messages-thread-header">
       <div>
         <div class="messages-thread-id">Run: <code>${escapeHtml(runId)}</code></div>
-        <div class="muted small">Status: ${escapeHtml(resumeHint)}</div>
+        <div class="muted small">Repo: ${escapeHtml(REPO_ID || "–")} · Status: ${escapeHtml(resumeHint)}</div>
       </div>
+      ${mode ? `<span class="pill pill-small">${escapeHtml(mode)}</span>` : ""}
     </div>
     <div class="messages-thread-history">
       <h3 class="messages-section-title">Agent messages</h3>
@@ -179,8 +183,12 @@ async function loadThread(runId) {
     </div>
   `;
     if (resumeEl) {
-        resumeEl.disabled = runStatus !== "paused";
+        resumeEl.disabled = !isPaused;
     }
+    if (replySendEl)
+        replySendEl.disabled = !isPaused;
+    if (replySendResumeEl)
+        replySendResumeEl.disabled = !isPaused;
 }
 async function sendReply({ resume }) {
     const runId = selectedRunId;

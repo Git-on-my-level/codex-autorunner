@@ -14,7 +14,7 @@ export function activateTab(id) {
         pendingActivate = id;
     }
 }
-export function initTabs(defaultTab = "dashboard") {
+export function initTabs(defaultTab = "analytics") {
     const container = document.querySelector(".tabs");
     if (!container)
         return;

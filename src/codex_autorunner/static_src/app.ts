@@ -28,7 +28,7 @@ function initRepoShell(): void {
       navBar.insertBefore(backBtn, navBar.firstChild);
     }
     const brand = document.querySelector(".nav-brand");
-    if (brand) {
+  if (brand) {
       const repoName = document.createElement("span");
       repoName.className = "nav-repo-name";
       repoName.textContent = REPO_ID;
@@ -36,14 +36,12 @@ function initRepoShell(): void {
     }
   }
 
-  const defaultTab = REPO_ID ? "tickets" : "dashboard";
+  const defaultTab = REPO_ID ? "tickets" : "analytics";
 
   registerTab("tickets", "Tickets");
   registerTab("messages", "Inbox");
-  registerTab("dashboard", "Dashboard");
+  registerTab("analytics", "Analytics");
   registerTab("docs", "Docs");
-  registerTab("runs", "Runs");
-  registerTab("logs", "Logs");
   registerTab("terminal", "Terminal");
 
   const initializedTabs = new Set<string>();
@@ -53,16 +51,14 @@ function initRepoShell(): void {
       initDocs();
     } else if (tabId === "messages") {
       initMessages();
-    } else if (tabId === "dashboard") {
+    } else if (tabId === "analytics") {
       initDashboard();
       initGitHub();
       void loadState({ notify: false }).catch(() => {});
-    } else if (tabId === "logs") {
+      initRuns();
       initLogs();
     } else if (tabId === "tickets") {
       initTicketFlow();
-    } else if (tabId === "runs") {
-      initRuns();
     }
     initializedTabs.add(tabId);
   };

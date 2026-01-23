@@ -4659,8 +4659,9 @@ button.loading::after {
     gap: 4px;
   }
   
-  /* Dashboard panel mobile improvements */
-  #dashboard .cards {
+  /* Analytics panel mobile improvements */
+  #dashboard .cards,
+  #analytics .cards {
     padding: 0;
     gap: 6px;
   }

@@ -913,7 +913,7 @@ export function initDashboard(): void {
 
   registerAutoRefresh("dashboard-usage", {
     callback: async () => { await loadUsage(); },
-    tabId: "dashboard",
+    tabId: "analytics",
     interval: CONSTANTS.UI.AUTO_REFRESH_USAGE_INTERVAL,
     refreshOnActivation: true,
     immediate: false,

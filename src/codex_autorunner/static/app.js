@@ -34,13 +34,11 @@ function initRepoShell() {
             brand.insertAdjacentElement("afterend", repoName);
         }
     }
-    const defaultTab = REPO_ID ? "tickets" : "dashboard";
+    const defaultTab = REPO_ID ? "tickets" : "analytics";
     registerTab("tickets", "Tickets");
     registerTab("messages", "Inbox");
-    registerTab("dashboard", "Dashboard");
+    registerTab("analytics", "Analytics");
     registerTab("docs", "Docs");
-    registerTab("runs", "Runs");
-    registerTab("logs", "Logs");
     registerTab("terminal", "Terminal");
     const initializedTabs = new Set();
     const lazyInit = (tabId) => {
@@ -52,19 +50,15 @@ function initRepoShell() {
         else if (tabId === "messages") {
             initMessages();
         }
-        else if (tabId === "dashboard") {
+        else if (tabId === "analytics") {
             initDashboard();
             initGitHub();
             void loadState({ notify: false }).catch(() => { });
-        }
-        else if (tabId === "logs") {
+            initRuns();
             initLogs();
         }
         else if (tabId === "tickets") {
             initTicketFlow();
-        }
-        else if (tabId === "runs") {
-            initRuns();
         }
         initializedTabs.add(tabId);
     };
