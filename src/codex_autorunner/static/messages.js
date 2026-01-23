@@ -135,9 +135,12 @@ function renderMarkdown(body) {
     if (!body)
         return "";
     let text = escapeHtml(body);
-    // Code fences
+    // Extract fenced code blocks to avoid mutating their contents later.
+    const codeBlocks = [];
     text = text.replace(/```([\s\S]*?)```/g, (_m, code) => {
-        return `<pre class="md-code"><code>${code}</code></pre>`;
+        const placeholder = `@@CODEBLOCK_${codeBlocks.length}@@`;
+        codeBlocks.push(`<pre class="md-code"><code>${code}</code></pre>`);
+        return placeholder;
     });
     // Inline code
     text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -148,11 +151,19 @@ function renderMarkdown(body) {
     text = text.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (_m, label, url) => {
         return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`;
     });
-    // Lists
+    // Lists (skip placeholders so code fences remain untouched)
     const lines = text.split(/\n/);
     const out = [];
     let inList = false;
     lines.forEach((line) => {
+        if (/^@@CODEBLOCK_\d+@@$/.test(line)) {
+            if (inList) {
+                out.push("</ul>");
+                inList = false;
+            }
+            out.push(line);
+            return;
+        }
         if (/^[-*]\s+/.test(line)) {
             if (!inList) {
                 out.push("<ul>");
@@ -170,11 +181,18 @@ function renderMarkdown(body) {
     });
     if (inList)
         out.push("</ul>");
-    // Paragraphs
+    // Paragraphs and placeholder restoration
     const joined = out.join("\n");
     return joined
         .split(/\n\n+/)
-        .map((block) => `<p>${block.replace(/\n/g, "<br>")}</p>`)
+        .map((block) => {
+        const match = block.match(/^@@CODEBLOCK_(\d+)@@$/);
+        if (match) {
+            const idx = Number(match[1]);
+            return codeBlocks[idx] ?? "";
+        }
+        return `<p>${block.replace(/\n/g, "<br>")}</p>`;
+    })
         .join("");
 }
 function renderFiles(files) {
