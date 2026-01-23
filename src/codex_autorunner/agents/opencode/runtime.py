@@ -1524,7 +1524,11 @@ async def collect_opencode_output(
         statuses = await client.session_status(directory=workspace_path)
         if isinstance(statuses, dict):
             session_status = statuses.get(session_id)
+            if session_status is None:
+                return {"status": {"type": "idle"}}
             if isinstance(session_status, dict):
+                return {"status": session_status}
+            if isinstance(session_status, str):
                 return {"status": session_status}
         return {"status": {}}
 

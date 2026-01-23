@@ -1,7 +1,11 @@
+import asyncio
+import time
+
 import pytest
 
 from codex_autorunner.agents.opencode.events import SSEEvent
 from codex_autorunner.agents.opencode.runtime import (
+    collect_opencode_output,
     collect_opencode_output_from_events,
     extract_session_id,
     parse_message_response,
@@ -469,3 +473,53 @@ def test_parse_message_response() -> None:
     result = parse_message_response(payload)
     assert result.text == "Hello"
     assert result.error == "bad auth"
+
+
+@pytest.mark.anyio
+async def test_collect_output_poll_treats_missing_status_as_idle() -> None:
+    """Stall recovery should treat a missing session status entry as idle and finish."""
+
+    class _FakeClient:
+        def __init__(self):
+            self.session_status_calls = 0
+
+        def stream_events(self, *, directory, ready_event=None):
+            async def _gen():
+                while True:
+                    await asyncio.sleep(3600)
+                    yield SSEEvent(event="keepalive", data="{}")
+
+            return _gen()
+
+        async def session_status(self, *, directory):
+            self.session_status_calls += 1
+            # Simulate OpenCode's sparse status map: session missing => idle
+            return {}
+
+        async def respond_permission(self, **kwargs):
+            return None
+
+        async def reply_question(self, *args, **kwargs):
+            return None
+
+        async def reject_question(self, *args, **kwargs):
+            return None
+
+        async def providers(self, **kwargs):
+            return {}
+
+    client = _FakeClient()
+    start = time.monotonic()
+    output = await collect_opencode_output(
+        client,
+        session_id="s1",
+        workspace_path=".",
+        stall_timeout_seconds=0.01,
+    )
+    elapsed = time.monotonic() - start
+
+    # Should exit quickly via polling path and not hang indefinitely
+    assert elapsed < 0.5
+    assert output.text == ""
+    assert output.error is None
+    assert client.session_status_calls >= 1

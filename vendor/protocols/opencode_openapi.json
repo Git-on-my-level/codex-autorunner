@@ -4060,6 +4060,15 @@
       },
       "Project": {
         "properties": {
+          "commands": {
+            "properties": {
+              "start": {
+                "description": "Startup script to run when creating a new workspace (worktree)",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "icon": {
             "properties": {
               "color": {
@@ -5822,6 +5831,7 @@
             "type": "string"
           },
           "startCommand": {
+            "description": "Additional startup script to run after the project's start command",
             "type": "string"
           }
         },
@@ -6327,7 +6337,7 @@
         "summary": "List worktrees"
       },
       "post": {
-        "description": "Create a new git worktree for the current project.",
+        "description": "Create a new git worktree for the current project and run any configured startup scripts.",
         "operationId": "worktree.create",
         "parameters": [
           {
@@ -7603,7 +7613,7 @@
     },
     "/project/{projectID}": {
       "patch": {
-        "description": "Update project properties such as name, icon and color.",
+        "description": "Update project properties such as name, icon, and commands.",
         "operationId": "project.update",
         "parameters": [
           {
@@ -7627,6 +7637,15 @@
             "application/json": {
               "schema": {
                 "properties": {
+                  "commands": {
+                    "properties": {
+                      "start": {
+                        "description": "Startup script to run when creating a new workspace (worktree)",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
                   "icon": {
                     "properties": {
                       "color": {
