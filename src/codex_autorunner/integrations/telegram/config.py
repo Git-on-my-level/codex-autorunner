@@ -18,6 +18,8 @@ DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
 DEFAULT_PARSE_MODE = "HTML"
+DEFAULT_TRIGGER_MODE = "all"
+TRIGGER_MODE_OPTIONS = {"all", "mentions"}
 DEFAULT_STATE_FILE = ".codex-autorunner/telegram_state.sqlite3"
 DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
 DEFAULT_APP_SERVER_MAX_HANDLES = 20
@@ -151,6 +153,7 @@ class TelegramBotConfig:
     allowed_chat_ids: set[int]
     allowed_user_ids: set[int]
     require_topics: bool
+    trigger_mode: str
     defaults: TelegramBotDefaults
     concurrency: TelegramBotConcurrency
     media: TelegramBotMediaConfig
@@ -205,6 +208,10 @@ class TelegramBotConfig:
         allowed_user_ids = set(_parse_int_list(cfg.get("allowed_user_ids")))
 
         require_topics = bool(cfg.get("require_topics", False))
+
+        trigger_mode = (
+            str(cfg.get("trigger_mode", DEFAULT_TRIGGER_MODE)).strip().lower()
+        )
 
         defaults_raw_value = cfg.get("defaults")
         defaults_raw: dict[str, Any] = (
@@ -501,6 +508,7 @@ class TelegramBotConfig:
             allowed_chat_ids=allowed_chat_ids,
             allowed_user_ids=allowed_user_ids,
             require_topics=require_topics,
+            trigger_mode=trigger_mode,
             defaults=defaults,
             concurrency=concurrency,
             media=media,
@@ -546,6 +554,8 @@ class TelegramBotConfig:
             issues.append(
                 "poll_request_timeout_seconds must be greater than poll_timeout_seconds"
             )
+        if self.trigger_mode not in TRIGGER_MODE_OPTIONS:
+            issues.append(f"trigger_mode must be one of {sorted(TRIGGER_MODE_OPTIONS)}")
         if issues:
             raise TelegramBotConfigError("; ".join(issues))
 

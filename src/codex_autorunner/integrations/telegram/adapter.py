@@ -120,6 +120,12 @@ class TelegramMessage:
     voice: Optional[TelegramVoice] = None
     media_group_id: Optional[str] = None
 
+    # Extra metadata used for trigger gating / UX (optional, depends on update payload).
+    chat_type: Optional[str] = None
+    reply_to_message_id: Optional[int] = None
+    reply_to_is_bot: bool = False
+    reply_to_username: Optional[str] = None
+
 
 @dataclass(frozen=True)
 class TelegramCallbackQuery:
@@ -341,9 +347,32 @@ def _parse_message(
     chat_id = chat.get("id")
     if not isinstance(chat_id, int):
         return None
+
+    chat_type = chat.get("type")
+    if chat_type is not None and not isinstance(chat_type, str):
+        chat_type = None
+
     thread_id = payload.get("message_thread_id")
     if thread_id is not None and not isinstance(thread_id, int):
         thread_id = None
+
+    reply_to_message_id: Optional[int] = None
+    reply_to_is_bot = False
+    reply_to_username: Optional[str] = None
+    reply_to = payload.get("reply_to_message")
+    if isinstance(reply_to, dict):
+        rmid = reply_to.get("message_id")
+        if isinstance(rmid, int):
+            reply_to_message_id = rmid
+        reply_from = reply_to.get("from")
+        if isinstance(reply_from, dict):
+            is_bot = reply_from.get("is_bot")
+            if isinstance(is_bot, bool):
+                reply_to_is_bot = is_bot
+            username = reply_from.get("username")
+            if isinstance(username, str):
+                reply_to_username = username
+
     sender = payload.get("from")
     from_user_id = sender.get("id") if isinstance(sender, dict) else None
     if from_user_id is not None and not isinstance(from_user_id, int):
@@ -385,6 +414,10 @@ def _parse_message(
         audio=audio,
         voice=voice,
         media_group_id=media_group_id,
+        chat_type=chat_type,
+        reply_to_message_id=reply_to_message_id,
+        reply_to_is_bot=reply_to_is_bot,
+        reply_to_username=reply_to_username,
     )
 
 
