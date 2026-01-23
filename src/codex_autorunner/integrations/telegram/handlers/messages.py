@@ -19,6 +19,7 @@ from ..adapter import (
 )
 from ..config import TelegramMediaCandidate
 from ..constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from ..trigger_mode import should_trigger_run
 from .questions import handle_custom_text_input
 
 COALESCE_LONG_MESSAGE_WINDOW_SECONDS = 6.0
@@ -356,6 +357,23 @@ async def handle_message_inner(
             )
             await _clear_placeholder()
             return
+
+    if handlers._config.trigger_mode == "mentions" and not should_trigger_run(
+        message,
+        text=text,
+        bot_username=handlers._bot_username,
+    ):
+        log_event(
+            handlers._logger,
+            logging.INFO,
+            "telegram.trigger.ignored",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            reason="mentions_only",
+        )
+        await _clear_placeholder()
+        return
 
     if has_media:
 

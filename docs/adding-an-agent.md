@@ -195,12 +195,19 @@ Reference existing implementations:
 
 ## Step 3: Register the Agent
 
-Add your agent to `src/codex_autorunner/agents/registry.py`:
+There are two supported registration paths:
+
+### Option A: In-tree (modify CAR)
+
+If you are adding an agent directly to the CAR codebase, register it in:
+
+- `src/codex_autorunner/agents/registry.py` (add to `_BUILTIN_AGENTS`)
+
+Example (in-tree):
 
 ```python
 # Add import
 from .myagent.harness import MyAgentHarness
-from .myagent.supervisor import MyAgentSupervisor
 
 def _make_myagent_harness(ctx: Any) -> AgentHarness:
     supervisor = ctx.myagent_supervisor
@@ -209,27 +216,60 @@ def _make_myagent_harness(ctx: Any) -> AgentHarness:
     return MyAgentHarness(supervisor)
 
 def _check_myagent_health(ctx: Any) -> bool:
-    supervisor = ctx.myagent_supervisor
-    return supervisor is not None
+    return ctx.myagent_supervisor is not None
 
-# Add to _REGISTERED_AGENTS
-_REGISTERED_AGENTS: dict[str, AgentDescriptor] = {
-    # ... existing agents ...
-    "myagent": AgentDescriptor(
-        id="myagent",
-        name="My Agent",
-        capabilities=frozenset([
-            "threads",
-            "turns",
-            "model_listing",
-            "event_streaming",
-            # Add other capabilities as needed
-        ]),
-        make_harness=_make_myagent_harness,
-        healthcheck=_check_myagent_health,
-    ),
-}
+# Add to _BUILTIN_AGENTS
+_BUILTIN_AGENTS["myagent"] = AgentDescriptor(
+    id="myagent",
+    name="My Agent",
+    capabilities=frozenset([
+        "threads",
+        "turns",
+        "model_listing",
+        "event_streaming",
+        # Add other capabilities as needed
+    ]),
+    make_harness=_make_myagent_harness,
+    healthcheck=_check_myagent_health,
+)
 ```
+
+### Option B: Out-of-tree plugin (recommended)
+
+This mirrors Takopi’s entrypoint-based plugin approach: publish a Python package
+that exposes an `AgentDescriptor` via a standard entry point group.
+
+1) In your plugin package, define an exported descriptor:
+
+```python
+# my_package/my_agent_plugin.py
+from __future__ import annotations
+
+from codex_autorunner.api import AgentDescriptor, AgentHarness, CAR_PLUGIN_API_VERSION
+
+def _make(ctx: object) -> AgentHarness:
+    # construct your harness from ctx (supervisors, settings, etc)
+    raise NotImplementedError
+
+AGENT_BACKEND = AgentDescriptor(
+    id="myagent",
+    name="My Agent",
+    capabilities=frozenset(["threads", "turns"]),
+    make_harness=_make,
+    plugin_api_version=CAR_PLUGIN_API_VERSION,
+)
+```
+
+2) Declare an entry point in your plugin’s `pyproject.toml`:
+
+```toml
+[project.entry-points."codex_autorunner.agent_backends"]
+myagent = "my_package.my_agent_plugin:AGENT_BACKEND"
+```
+
+At runtime, CAR will discover and load the plugin backend automatically.
+Conflicting ids are rejected (plugin ids may not override built-ins).
+
 
 ## Step 4: Add Configuration
 

@@ -245,3 +245,20 @@ def test_telegram_bot_config_metrics_mode_override(tmp_path: Path) -> None:
     }
     cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
     assert cfg.metrics_mode == "append_to_response"
+
+
+def test_telegram_bot_config_validate_trigger_mode(tmp_path: Path) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "trigger_mode": "nope",
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "123",
+    }
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    with pytest.raises(TelegramBotConfigError):
+        cfg.validate()
