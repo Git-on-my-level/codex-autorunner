@@ -20,7 +20,12 @@ from ..core.flows import (
     FlowRunStatus,
     FlowStore,
 )
-from ..core.flows.worker_process import spawn_flow_worker
+from ..core.flows.worker_process import (
+    FlowWorkerHealth,
+    check_worker_health,
+    clear_worker_metadata,
+    spawn_flow_worker,
+)
 from ..core.utils import find_repo_root
 from ..flows.ticket_flow import build_ticket_flow_definition
 from ..tickets import AgentPool
@@ -30,7 +35,7 @@ from ..tickets.outbox import parse_user_message, resolve_outbox_paths
 _logger = logging.getLogger(__name__)
 
 _active_workers: Dict[
-    str, Tuple[subprocess.Popen, Optional[IO[bytes]], Optional[IO[bytes]]]
+    str, Tuple[Optional[subprocess.Popen], Optional[IO[bytes]], Optional[IO[bytes]]]
 ] = {}
 _controller_cache: Dict[tuple[Path, str], FlowController] = {}
 _definition_cache: Dict[tuple[Path, str], FlowDefinition] = {}
@@ -133,6 +138,21 @@ def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
     return record
 
 
+def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
+    return next(
+        (
+            rec
+            for rec in records
+            if rec.status
+            in (
+                FlowRunStatus.RUNNING,
+                FlowRunStatus.PAUSED,
+            )
+        ),
+        None,
+    )
+
+
 def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
     try:
         return str(uuid.UUID(str(run_id)))
@@ -146,7 +166,7 @@ def _cleanup_worker_handle(run_id: str) -> None:
         return
 
     proc, stdout, stderr = handle
-    if proc.poll() is None:
+    if proc and proc.poll() is None:
         try:
             proc.terminate()
         except Exception:
@@ -169,8 +189,17 @@ def _reap_dead_worker(run_id: str) -> None:
     if not handle:
         return
     proc, *_ = handle
-    if proc.poll() is not None:
+    if proc and proc.poll() is not None:
         _cleanup_worker_handle(run_id)
+
+
+def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
+    # Clear metadata if stale to allow clean respawn.
+    if health.status in {"dead", "mismatch", "invalid"}:
+        try:
+            clear_worker_metadata(health.artifact_path.parent)
+        except Exception:
+            _logger.debug("Failed to clear worker metadata: %s", health.artifact_path)
 
 
 class FlowStartRequest(BaseModel):
@@ -212,8 +241,19 @@ class FlowArtifactInfo(BaseModel):
     metadata: Dict = Field(default_factory=dict)
 
 
-def _start_flow_worker(repo_root: Path, run_id: str) -> subprocess.Popen:
+def _start_flow_worker(repo_root: Path, run_id: str) -> Optional[subprocess.Popen]:
     normalized_run_id = _normalize_run_id(run_id)
+
+    health = check_worker_health(repo_root, normalized_run_id)
+    _ensure_worker_not_stale(health)
+    if health.is_alive:
+        _logger.info(
+            "Worker already active for run %s (pid=%s), skipping spawn",
+            normalized_run_id,
+            health.pid,
+        )
+        return None
+
     _reap_dead_worker(normalized_run_id)
 
     proc, stdout_handle, stderr_handle = spawn_flow_worker(repo_root, normalized_run_id)
@@ -226,10 +266,23 @@ def _stop_worker(run_id: str, timeout: float = 10.0) -> None:
     normalized_run_id = _normalize_run_id(run_id)
     handle = _active_workers.get(normalized_run_id)
     if not handle:
+        health = check_worker_health(find_repo_root(), normalized_run_id)
+        if health.is_alive and health.pid:
+            try:
+                _logger.info(
+                    "Stopping untracked worker for run %s (pid=%s)",
+                    normalized_run_id,
+                    health.pid,
+                )
+                subprocess.run(["kill", str(health.pid)], check=False)
+            except Exception as exc:
+                _logger.warning(
+                    "Failed to stop untracked worker %s: %s", normalized_run_id, exc
+                )
         return
 
     proc, *_ = handle
-    if proc.poll() is None:
+    if proc and proc.poll() is None:
         proc.terminate()
         try:
             proc.wait(timeout=timeout)
@@ -288,7 +341,7 @@ def build_flow_routes() -> APIRouter:
         return _definition_info(definition)
 
     async def _start_flow(
-        flow_type: str, request: FlowStartRequest
+        flow_type: str, request: FlowStartRequest, *, force_new: bool = False
     ) -> FlowStatusResponse:
         if flow_type not in _supported_flow_types:
             raise HTTPException(
@@ -298,6 +351,18 @@ def build_flow_routes() -> APIRouter:
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root, flow_type)
 
+        # Reuse an active/paused run unless force_new is requested.
+        if not force_new:
+            runs = controller.list_runs()
+            active = _active_or_paused_run(runs)
+            if active:
+                _reap_dead_worker(active.id)
+                _start_flow_worker(repo_root, active.id)
+                response = FlowStatusResponse.from_record(active)
+                response.state = response.state or {}
+                response.state["hint"] = "active_run_reused"
+                return response
+
         run_id = _normalize_run_id(uuid.uuid4())
 
         record = await controller.start_flow(
@@ -306,16 +371,15 @@ def build_flow_routes() -> APIRouter:
             metadata=request.metadata,
         )
 
-        if run_id in _active_workers:
-            _logger.info("Worker already active for run %s, skipping spawn", run_id)
-        else:
-            _start_flow_worker(repo_root, run_id)
+        _start_flow_worker(repo_root, run_id)
 
         return FlowStatusResponse.from_record(record)
 
     @router.post("/{flow_type}/start", response_model=FlowStatusResponse)
     async def start_flow(flow_type: str, request: FlowStartRequest):
-        return await _start_flow(flow_type, request)
+        meta = request.metadata if isinstance(request.metadata, dict) else {}
+        force_new = bool(meta.get("force_new"))
+        return await _start_flow(flow_type, request, force_new=force_new)
 
     @router.post("/ticket_flow/bootstrap", response_model=FlowStatusResponse)
     async def bootstrap_ticket_flow(request: Optional[FlowStartRequest] = None):
@@ -343,9 +407,11 @@ def build_flow_routes() -> APIRouter:
             )
             if active:
                 _reap_dead_worker(active.id)
-                if active.id not in _active_workers:
-                    _start_flow_worker(repo_root, active.id)
-                return FlowStatusResponse.from_record(active)
+                _start_flow_worker(repo_root, active.id)
+                resp = FlowStatusResponse.from_record(active)
+                resp.state = resp.state or {}
+                resp.state["hint"] = "active_run_reused"
+                return resp
 
         seeded = False
         if not ticket_path.exists():
@@ -374,7 +440,7 @@ You are the first ticket in a new ticket_flow run.
             input_data=flow_request.input_data,
             metadata=meta | {"seeded_ticket": seeded},
         )
-        return await _start_flow("ticket_flow", payload)
+        return await _start_flow("ticket_flow", payload, force_new=force_new)
 
     @router.get("/ticket_flow/tickets")
     async def list_ticket_files():
@@ -419,10 +485,7 @@ You are the first ticket in a new ticket_flow run.
 
         updated = await controller.resume_flow(run_id)
         _reap_dead_worker(run_id)
-        if run_id in _active_workers:
-            _logger.info("Worker already active for run %s, skipping spawn", run_id)
-        else:
-            _start_flow_worker(repo_root, run_id)
+        _start_flow_worker(repo_root, run_id)
 
         return FlowStatusResponse.from_record(updated)
 
@@ -434,6 +497,11 @@ You are the first ticket in a new ticket_flow run.
         _reap_dead_worker(run_id)
 
         record = _get_flow_record(repo_root, run_id)
+
+        # If the worker died but metadata still claims it exists, clear it so status
+        # callers get a clean view next time they start/resume.
+        health = check_worker_health(repo_root, run_id)
+        _ensure_worker_not_stale(health)
 
         return FlowStatusResponse.from_record(record)
 
