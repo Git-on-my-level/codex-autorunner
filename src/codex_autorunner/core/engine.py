@@ -134,6 +134,7 @@ class Engine:
         self._run_index_store = RunIndexStore(self.state_path)
         self.lock_path = self.repo_root / ".codex-autorunner" / "lock"
         self.stop_path = self.repo_root / ".codex-autorunner" / "stop"
+        self._hub_path = hub_path
         self._active_global_handler: Optional[RotatingFileHandler] = None
         self._active_run_log: Optional[IO[str]] = None
         self._app_server_threads = AppServerThreadRegistry(
@@ -332,8 +333,23 @@ class Engine:
         self._update_state("running", run_id, None, started=True)
         self._last_run_interrupted = False
         self._start_run_telemetry(run_id)
+
+        actor: dict[str, Any] = {
+            "backend": "codex_app_server",
+            "agent_id": validated_agent,
+            "surface": "hub" if self._hub_path else "cli",
+        }
+        mode: dict[str, Any] = {
+            "approval_policy": state.autorunner_approval_policy or "never",
+            "sandbox": state.autorunner_sandbox_mode or "dangerFullAccess",
+        }
+        runner_cfg = self.config.raw.get("runner") or {}
+        review_cfg = runner_cfg.get("review")
+        if isinstance(review_cfg, dict):
+            mode["review_enabled"] = bool(review_cfg.get("enabled"))
+
         with self._run_log_context(run_id):
-            self._write_run_marker(run_id, "start")
+            self._write_run_marker(run_id, "start", actor=actor, mode=mode)
             if validated_agent == "opencode":
                 exit_code = await self._run_opencode_app_server_async(
                     prompt,
@@ -623,14 +639,25 @@ class Engine:
         (self.log_path.parent / "runs").mkdir(parents=True, exist_ok=True)
 
     def _write_run_marker(
-        self, run_id: int, marker: str, exit_code: Optional[int] = None
+        self,
+        run_id: int,
+        marker: str,
+        exit_code: Optional[int] = None,
+        *,
+        actor: Optional[dict[str, Any]] = None,
+        mode: Optional[dict[str, Any]] = None,
     ) -> None:
         suffix = ""
         if marker == "end":
             suffix = f" (code {exit_code})"
             self._emit_event(run_id, "run.finished", exit_code=exit_code)
         elif marker == "start":
-            self._emit_event(run_id, "run.started")
+            payload: dict[str, Any] = {}
+            if actor is not None:
+                payload["actor"] = actor
+            if mode is not None:
+                payload["mode"] = mode
+            self._emit_event(run_id, "run.started", **payload)
         text = f"=== run {run_id} {marker}{suffix} ==="
         offset = self._emit_global_line(text)
         if self._active_run_log is not None:
@@ -646,7 +673,9 @@ class Engine:
             run_log = self._run_log_path(run_id)
             with run_log.open("a", encoding="utf-8") as f:
                 f.write(f"{text}\n")
-        self._update_run_index(run_id, marker, offset, exit_code)
+        self._update_run_index(
+            run_id, marker, offset, exit_code, actor=actor, mode=mode
+        )
 
     def _emit_global_line(self, text: str) -> Optional[tuple[int, int]]:
         if self._active_global_handler is None:
@@ -847,7 +876,10 @@ class Engine:
         """
         try:
             state = load_state(self.state_path)
-        except Exception:
+        except Exception as exc:
+            self._app_server_logger.warning(
+                "Failed to load state during run index reconciliation: %s", exc
+            )
             return
 
         active_pid: Optional[int] = None
@@ -870,7 +902,10 @@ class Engine:
         now = now_iso()
         try:
             index = self._run_index_store.load_all()
-        except Exception:
+        except Exception as exc:
+            self._app_server_logger.warning(
+                "Failed to load run index during reconciliation: %s", exc
+            )
             return
 
         for key, entry in index.items():
@@ -917,7 +952,10 @@ class Engine:
                         ),
                     },
                 )
-            except Exception:
+            except Exception as exc:
+                self._app_server_logger.warning(
+                    "Failed to reconcile run index entry for run %d: %s", run_id, exc
+                )
                 continue
 
     def _merge_run_index_entry(self, run_id: int, updates: dict[str, Any]) -> None:
@@ -929,6 +967,9 @@ class Engine:
         marker: str,
         offset: Optional[tuple[int, int]],
         exit_code: Optional[int],
+        *,
+        actor: Optional[dict[str, Any]] = None,
+        mode: Optional[dict[str, Any]] = None,
     ) -> None:
         self._run_index_store.update_marker(
             run_id,
@@ -937,6 +978,8 @@ class Engine:
             exit_code,
             log_path=str(self.log_path),
             run_log_path=str(self._run_log_path(run_id)),
+            actor=actor,
+            mode=mode,
         )
 
     def _list_from_counts(self, source: list[str], counts: Counter[str]) -> list[str]:
@@ -1854,27 +1897,55 @@ class Engine:
                     or current_done_count != last_done_count
                 )
 
-                # Check if there was any meaningful output (diff, files changed, etc.)
+                # Check if there was any meaningful output (diff, plan, etc.)
                 has_output = False
-                try:
-                    runs_root = self.repo_root / ".codex-autorunner" / "runs"
-                    candidate_paths = [
-                        runs_root / f"run-{run_id}.output.txt",
-                        runs_root / f"run-{run_id}" / "output.txt",
-                    ]
-                    for output_path in candidate_paths:
-                        if output_path.exists():
-                            output_content = output_path.read_text(
-                                encoding="utf-8"
-                            ).strip()
-                            # Consider it output if there's meaningful text (not just empty or whitespace)
-                            has_output = len(output_content) > 100
-                            break
-                except (OSError, IOError):
-                    pass
+                run_entry = self._run_index_store.get_entry(run_id)
+                if run_entry:
+                    artifacts = run_entry.get("artifacts", {})
+                    if isinstance(artifacts, dict):
+                        diff_path = artifacts.get("diff_path")
+                        if diff_path:
+                            try:
+                                diff_content = (
+                                    Path(diff_path).read_text(encoding="utf-8").strip()
+                                )
+                                has_output = len(diff_content) > 0
+                            except (OSError, IOError):
+                                pass
+                        if not has_output:
+                            plan_path = artifacts.get("plan_path")
+                            if plan_path:
+                                try:
+                                    plan_content = (
+                                        Path(plan_path)
+                                        .read_text(encoding="utf-8")
+                                        .strip()
+                                    )
+                                    has_output = len(plan_content) > 0
+                                except (OSError, IOError):
+                                    pass
 
                 if not has_progress and not has_output:
                     no_progress_count += 1
+
+                    evidence = {
+                        "outstanding_count": current_outstanding_count,
+                        "done_count": current_done_count,
+                        "has_diff": bool(
+                            run_entry
+                            and isinstance(run_entry.get("artifacts"), dict)
+                            and run_entry["artifacts"].get("diff_path")
+                        ),
+                        "has_plan": bool(
+                            run_entry
+                            and isinstance(run_entry.get("artifacts"), dict)
+                            and run_entry["artifacts"].get("plan_path")
+                        ),
+                        "run_id": run_id,
+                    }
+                    self._emit_event(
+                        run_id, "run.no_progress", count=no_progress_count, **evidence
+                    )
                     self.log_line(
                         run_id,
                         f"info: no progress detected ({no_progress_count}/{self.config.runner_no_progress_threshold} runs without progress)",
