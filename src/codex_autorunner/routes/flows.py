@@ -1,11 +1,10 @@
 import json
 import logging
 import re
-import subprocess
 import uuid
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
-from typing import IO, Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Union
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
@@ -17,10 +16,12 @@ from ..core.flows import (
     FlowController,
     FlowDefinition,
     FlowRunRecord,
-    FlowRunStatus,
     FlowStore,
 )
-from ..core.flows.worker_process import spawn_flow_worker
+from ..core.flows import (
+    worker as flow_worker,
+)
+from ..core.flows.worker import reap_flow_worker, spawn_flow_worker, stop_flow_worker
 from ..core.utils import find_repo_root
 from ..flows.ticket_flow import build_ticket_flow_definition
 from ..tickets import AgentPool
@@ -29,9 +30,7 @@ from ..tickets.outbox import parse_user_message, resolve_outbox_paths
 
 _logger = logging.getLogger(__name__)
 
-_active_workers: Dict[
-    str, Tuple[subprocess.Popen, Optional[IO[bytes]], Optional[IO[bytes]]]
-] = {}
+_active_workers = flow_worker._ACTIVE_WORKERS
 _controller_cache: Dict[tuple[Path, str], FlowController] = {}
 _definition_cache: Dict[tuple[Path, str], FlowDefinition] = {}
 _supported_flow_types = ("ticket_flow",)
@@ -140,39 +139,6 @@ def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
         raise HTTPException(status_code=400, detail="Invalid run_id") from None
 
 
-def _cleanup_worker_handle(run_id: str) -> None:
-    handle = _active_workers.pop(run_id, None)
-    if not handle:
-        return
-
-    proc, stdout, stderr = handle
-    if proc.poll() is None:
-        try:
-            proc.terminate()
-        except Exception:
-            pass
-
-    for stream in (stdout, stderr):
-        if stream and not stream.closed:
-            try:
-                stream.flush()
-            except Exception:
-                pass
-            try:
-                stream.close()
-            except Exception:
-                pass
-
-
-def _reap_dead_worker(run_id: str) -> None:
-    handle = _active_workers.get(run_id)
-    if not handle:
-        return
-    proc, *_ = handle
-    if proc.poll() is not None:
-        _cleanup_worker_handle(run_id)
-
-
 class FlowStartRequest(BaseModel):
     input_data: Dict = Field(default_factory=dict)
     metadata: Optional[Dict] = None
@@ -210,38 +176,6 @@ class FlowArtifactInfo(BaseModel):
     path: str
     created_at: str
     metadata: Dict = Field(default_factory=dict)
-
-
-def _start_flow_worker(repo_root: Path, run_id: str) -> subprocess.Popen:
-    normalized_run_id = _normalize_run_id(run_id)
-    _reap_dead_worker(normalized_run_id)
-
-    proc, stdout_handle, stderr_handle = spawn_flow_worker(repo_root, normalized_run_id)
-    _active_workers[normalized_run_id] = (proc, stdout_handle, stderr_handle)
-    _logger.info("Started flow worker for run %s (pid=%d)", normalized_run_id, proc.pid)
-    return proc
-
-
-def _stop_worker(run_id: str, timeout: float = 10.0) -> None:
-    normalized_run_id = _normalize_run_id(run_id)
-    handle = _active_workers.get(normalized_run_id)
-    if not handle:
-        return
-
-    proc, *_ = handle
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _logger.warning(
-                "Worker for run %s did not exit in time, killing", normalized_run_id
-            )
-            proc.kill()
-        except Exception as exc:
-            _logger.warning("Error stopping worker %s: %s", normalized_run_id, exc)
-
-    _cleanup_worker_handle(normalized_run_id)
 
 
 def build_flow_routes() -> APIRouter:
@@ -306,10 +240,7 @@ def build_flow_routes() -> APIRouter:
             metadata=request.metadata,
         )
 
-        if run_id in _active_workers:
-            _logger.info("Worker already active for run %s, skipping spawn", run_id)
-        else:
-            _start_flow_worker(repo_root, run_id)
+        spawn_flow_worker(repo_root, run_id, logger=_logger)
 
         return FlowStatusResponse.from_record(record)
 
@@ -333,18 +264,13 @@ def build_flow_routes() -> APIRouter:
                 (
                     rec
                     for rec in records
-                    if rec.status
-                    in (
-                        FlowRunStatus.RUNNING,
-                        FlowRunStatus.PAUSED,
-                    )
+                    if rec.status.is_active() or rec.status.is_paused()
                 ),
                 None,
             )
             if active:
-                _reap_dead_worker(active.id)
-                if active.id not in _active_workers:
-                    _start_flow_worker(repo_root, active.id)
+                reap_flow_worker(repo_root, active.id)
+                spawn_flow_worker(repo_root, active.id, logger=_logger)
                 return FlowStatusResponse.from_record(active)
 
         seeded = False
@@ -405,7 +331,7 @@ You are the first ticket in a new ticket_flow run.
         record = _get_flow_record(repo_root, run_id)
         controller = _get_flow_controller(repo_root, record.flow_type)
 
-        _stop_worker(run_id)
+        stop_flow_worker(repo_root, run_id, logger=_logger)
 
         updated = await controller.stop_flow(run_id)
         return FlowStatusResponse.from_record(updated)
@@ -418,11 +344,8 @@ You are the first ticket in a new ticket_flow run.
         controller = _get_flow_controller(repo_root, record.flow_type)
 
         updated = await controller.resume_flow(run_id)
-        _reap_dead_worker(run_id)
-        if run_id in _active_workers:
-            _logger.info("Worker already active for run %s, skipping spawn", run_id)
-        else:
-            _start_flow_worker(repo_root, run_id)
+        reap_flow_worker(repo_root, run_id)
+        spawn_flow_worker(repo_root, run_id, logger=_logger)
 
         return FlowStatusResponse.from_record(updated)
 
@@ -431,7 +354,7 @@ You are the first ticket in a new ticket_flow run.
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
 
-        _reap_dead_worker(run_id)
+        reap_flow_worker(repo_root, run_id)
 
         record = _get_flow_record(repo_root, run_id)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,12 +39,26 @@ IMAGE_EXTS = set(IMAGE_CONTENT_TYPES.values())
 MAX_BATCH_ITEMS = 10
 
 
-def _is_ticket_reply(message: TelegramMessage, bot_username: Optional[str]) -> bool:
-    if message.reply_to_is_bot and message.reply_to_message_id is not None:
-        if bot_username and message.reply_to_username:
-            return message.reply_to_username.lower() == bot_username.lower()
-        return True
-    return False
+_TICKET_FLOW_REPLY_RE = re.compile(
+    r"Ticket flow paused \(run (?P<run_id>[^)]+)\)", re.IGNORECASE
+)
+
+
+def _ticket_reply_run_id(
+    message: TelegramMessage, bot_username: Optional[str]
+) -> Optional[str]:
+    if not (message.reply_to_is_bot and message.reply_to_message_id is not None):
+        return None
+    if bot_username and message.reply_to_username:
+        if message.reply_to_username.lower() != bot_username.lower():
+            return None
+    reply_text = (message.reply_to_text or message.reply_to_caption or "").strip()
+    if not reply_text:
+        return None
+    match = _TICKET_FLOW_REPLY_RE.search(reply_text)
+    if not match:
+        return None
+    return match.group("run_id")
 
 
 @dataclass
@@ -349,18 +364,13 @@ async def handle_message_inner(
         return
 
     record = await handlers._router.get_topic(key)
-    if (
-        record
-        and record.workspace_path
-        and text
-        and _is_ticket_reply(message, handlers._bot_username)
-    ):
+    reply_run_id = (
+        _ticket_reply_run_id(message, handlers._bot_username) if text else None
+    )
+    if record and record.workspace_path and text and reply_run_id:
         workspace_root = canonicalize_path(Path(record.workspace_path))
-        preferred_run_id = handlers._ticket_flow_pause_targets.get(
-            str(workspace_root), None
-        )
         paused = handlers._get_paused_ticket_flow(
-            workspace_root, preferred_run_id=preferred_run_id
+            workspace_root, preferred_run_id=reply_run_id
         )
         if paused:
             run_id, run_record = paused
@@ -799,13 +809,13 @@ async def handle_media_message(
         return
 
     workspace_root = canonicalize_path(Path(record.workspace_path))
-    preferred_run_id = handlers._ticket_flow_pause_targets.get(
-        str(workspace_root), None
+    reply_run_id = _ticket_reply_run_id(message, handlers._bot_username)
+    paused = (
+        handlers._get_paused_ticket_flow(workspace_root, preferred_run_id=reply_run_id)
+        if reply_run_id
+        else None
     )
-    paused = handlers._get_paused_ticket_flow(
-        workspace_root, preferred_run_id=preferred_run_id
-    )
-    if paused and caption_text and _is_ticket_reply(message, handlers._bot_username):
+    if paused and caption_text:
         run_id, run_record = paused
         files = []
         if message.photos:

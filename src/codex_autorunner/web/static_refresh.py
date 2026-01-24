@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.logging_utils import safe_log
-from .static_assets import (
+from ..core.static_assets import (
     asset_version,
     materialize_static_assets,
     missing_static_assets,

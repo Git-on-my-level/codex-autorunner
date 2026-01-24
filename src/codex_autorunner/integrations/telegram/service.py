@@ -1195,7 +1195,10 @@ class TelegramBotService(
         trimmed = _truncate_text(content.strip() or "(no handoff message)", 3000)
         return (
             f"Ticket flow paused (run {run_id}). Latest handoff #{seq}:\n\n"
-            f"{trimmed}\n\nUse /flow resume to continue."
+            f"{trimmed}\n\n"
+            "Reply to this message with your response, or use "
+            f"/reply {run_id} <message>.\n"
+            "Use /flow resume to continue."
         )
 
     def _get_paused_ticket_flow(

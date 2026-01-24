@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
+from typing import Optional
 
 from .....core.engine import Engine
 from .....core.flows import FlowController, FlowStore
 from .....core.flows.models import FlowRunStatus
-from .....core.flows.worker_process import spawn_flow_worker
+from .....core.flows.worker import spawn_flow_worker
 from .....core.utils import canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
 from .....tickets import AgentPool
@@ -15,6 +17,13 @@ from ...helpers import _truncate_text
 from .shared import SharedHelpers
 
 _logger = logging.getLogger(__name__)
+
+
+def _parse_run_id(value: str) -> Optional[str]:
+    try:
+        return str(uuid.UUID(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -38,14 +47,7 @@ def _get_ticket_controller(repo_root: Path) -> FlowController:
 
 
 def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
-    proc, out, err = spawn_flow_worker(repo_root, run_id)
-    try:
-        # We don't track handles in Telegram commands, close in parent after spawn.
-        out.close()
-        err.close()
-    finally:
-        if proc.poll() is not None:
-            _logger.warning("Flow worker for %s exited immediately", run_id)
+    spawn_flow_worker(repo_root, run_id, logger=_logger, start_new_session=True)
 
 
 class FlowCommands(SharedHelpers):
@@ -188,30 +190,106 @@ Create SPEC.md and additional tickets under .codex-autorunner/tickets/. Then wri
             return
 
         repo_root = canonicalize_path(Path(record.workspace_path))
-        text = args.strip()
-        if not text:
+        raw = args.strip()
+        if not raw:
             await self._send_message(
                 message.chat_id,
-                "Provide a reply: `/reply <message>`",
+                "Provide a reply: `/reply <run_id> <message>` or `/reply <message>`",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
 
-        target_run_id = self._ticket_flow_pause_targets.get(str(repo_root))
-        paused = self._get_paused_ticket_flow(repo_root, preferred_run_id=target_run_id)
-        if not paused:
-            await self._send_message(
-                message.chat_id,
-                "No paused ticket flow run found for this workspace.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
+        run_id = None
+        message_text = raw
+        head, _sep, tail = raw.partition(" ")
+        candidate = _parse_run_id(head)
+        if candidate:
+            if not tail.strip():
+                await self._send_message(
+                    message.chat_id,
+                    "Provide a reply after the run id: `/reply <run_id> <message>`",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            run_id = candidate
+            message_text = tail.strip()
 
-        run_id, run_record = paused
+        run_record = None
+        if run_id:
+            store = FlowStore(_flow_paths(repo_root)[0])
+            try:
+                store.initialize()
+                record = store.get_flow_run(run_id)
+            finally:
+                store.close()
+            if record is None or record.flow_type != "ticket_flow":
+                await self._send_message(
+                    message.chat_id,
+                    f"Run {run_id} not found for ticket_flow.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            if record.status != FlowRunStatus.PAUSED:
+                await self._send_message(
+                    message.chat_id,
+                    f"Run {run_id} is {record.status.value}, not paused.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            run_record = record
+        else:
+            target_run_id = self._ticket_flow_pause_targets.get(str(repo_root))
+            paused = self._get_paused_ticket_flow(
+                repo_root, preferred_run_id=target_run_id
+            )
+            if not paused:
+                await self._send_message(
+                    message.chat_id,
+                    "No paused ticket flow run found for this workspace.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            run_id, run_record = paused
+
+        files = []
+        if message.photos:
+            photos = sorted(
+                message.photos,
+                key=lambda p: (p.file_size or 0, p.width * p.height),
+                reverse=True,
+            )
+            if photos:
+                best = photos[0]
+                try:
+                    file_info = await self._bot.get_file(best.file_id)
+                    data = await self._bot.download_file(file_info.file_path)
+                    filename = f"photo_{best.file_id}.jpg"
+                    files.append((filename, data))
+                except Exception:
+                    pass
+        elif message.document:
+            try:
+                file_info = await self._bot.get_file(message.document.file_id)
+                data = await self._bot.download_file(file_info.file_path)
+                filename = (
+                    message.document.file_name or f"document_{message.document.file_id}"
+                )
+                files.append((filename, data))
+            except Exception:
+                pass
+
         success, result = await self._write_user_reply_from_telegram(
-            repo_root, run_id, run_record, message, text
+            repo_root,
+            run_id,
+            run_record,
+            message,
+            message_text,
+            files if files else None,
         )
         await self._send_message(
             message.chat_id,

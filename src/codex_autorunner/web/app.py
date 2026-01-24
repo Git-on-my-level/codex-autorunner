@@ -42,6 +42,13 @@ from ..core.optional_dependencies import require_optional_dependencies
 from ..core.request_context import get_request_id
 from ..core.snapshot import SnapshotService
 from ..core.state import load_state, persist_session_registry
+from ..core.static_assets import (
+    asset_version,
+    index_response_headers,
+    materialize_static_assets,
+    render_index_html,
+    require_static_assets,
+)
 from ..core.usage import (
     UsageError,
     default_codex_home,
@@ -79,13 +86,6 @@ from .schemas import (
     HubJobResponse,
     HubRemoveRepoRequest,
     RunControlRequest,
-)
-from .static_assets import (
-    asset_version,
-    index_response_headers,
-    materialize_static_assets,
-    render_index_html,
-    require_static_assets,
 )
 from .terminal_sessions import parse_tui_idle_seconds, prune_terminal_registry
 

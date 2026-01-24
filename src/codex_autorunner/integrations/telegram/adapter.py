@@ -135,6 +135,8 @@ class TelegramMessage:
     reply_to_message_id: Optional[int] = None
     reply_to_is_bot: bool = False
     reply_to_username: Optional[str] = None
+    reply_to_text: Optional[str] = None
+    reply_to_caption: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -366,10 +368,18 @@ def _parse_message(
     reply_to_message_id: Optional[int] = None
     reply_to_is_bot = False
     reply_to_username: Optional[str] = None
+    reply_to_text: Optional[str] = None
+    reply_to_caption: Optional[str] = None
     if isinstance(schema.reply_to_message, dict):
         rmid = schema.reply_to_message.get("message_id")
         if isinstance(rmid, int):
             reply_to_message_id = rmid
+        reply_text = schema.reply_to_message.get("text")
+        if isinstance(reply_text, str):
+            reply_to_text = reply_text
+        reply_caption = schema.reply_to_message.get("caption")
+        if isinstance(reply_caption, str):
+            reply_to_caption = reply_caption
         reply_from = schema.reply_to_message.get("from")
         if isinstance(reply_from, dict):
             is_bot = reply_from.get("is_bot")
@@ -414,6 +424,8 @@ def _parse_message(
         reply_to_message_id=reply_to_message_id,
         reply_to_is_bot=reply_to_is_bot,
         reply_to_username=reply_to_username,
+        reply_to_text=reply_to_text,
+        reply_to_caption=reply_to_caption,
     )
 
 

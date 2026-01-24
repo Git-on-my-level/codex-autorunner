@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from codex_autorunner import server
-from codex_autorunner.web.static_assets import resolve_static_dir
+from codex_autorunner.core.static_assets import resolve_static_dir
 
 
 def test_static_dir_has_index():

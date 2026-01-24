@@ -6,9 +6,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+from codex_autorunner.core import static_assets
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.server import create_app
-from codex_autorunner.web import static_assets
 
 
 def _write_required_assets(static_dir: Path) -> None:
