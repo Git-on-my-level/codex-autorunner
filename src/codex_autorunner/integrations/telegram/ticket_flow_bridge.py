@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -54,17 +55,19 @@ class TelegramTicketFlowBridge:
                 int(thread_id) == active_thread if thread_id is not None else False
             )
             last_active_at = getattr(record, "last_active_at", None)
-            try:
-                last_active = (
-                    float(last_active_at)
-                    if last_active_at is not None
-                    else float("-inf")
-                )
-            except Exception:
-                last_active = float("-inf")
+            last_active = TelegramTicketFlowBridge._parse_last_active(last_active_at)
             return (1 if active_match else 0, last_active, key)
 
         return max(entries, key=score)
+
+    @staticmethod
+    def _parse_last_active(raw: Optional[str]) -> float:
+        if not isinstance(raw, str):
+            return float("-inf")
+        try:
+            return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").timestamp()
+        except ValueError:
+            return float("-inf")
 
     async def watch_ticket_flow_pauses(self, interval_seconds: float) -> None:
         interval = max(interval_seconds, 1.0)
@@ -72,7 +75,7 @@ class TelegramTicketFlowBridge:
             try:
                 await self._scan_and_notify_pauses()
             except Exception as exc:
-                self._logger.warning("telegram.ticket_flow.watch_failed", exc=exc)
+                self._logger.warning("telegram.ticket_flow.watch_failed", exc_info=exc)
             await asyncio.sleep(interval)
 
     async def _scan_and_notify_pauses(self) -> None:
@@ -105,7 +108,7 @@ class TelegramTicketFlowBridge:
         except Exception as exc:
             self._logger.warning(
                 "telegram.ticket_flow.scan_failed",
-                exc=exc,
+                exc_info=exc,
                 workspace_root=str(workspace_root),
             )
             return
@@ -152,7 +155,7 @@ class TelegramTicketFlowBridge:
         except Exception as exc:
             self._logger.warning(
                 "telegram.ticket_flow.notify_failed",
-                exc=exc,
+                exc_info=exc,
                 topic_key=primary_key,
                 run_id=run_id,
                 seq=seq,
@@ -309,4 +312,8 @@ def _spawn_ticket_worker(repo_root: Path, run_id: str, logger: logging.Logger) -
         err.close()
         logger.info("Started ticket_flow worker for %s (pid=%s)", run_id, proc.pid)
     except Exception as exc:
-        logger.warning("ticket_flow.worker.spawn_failed", exc=exc, run_id=run_id)
+        logger.warning(
+            "ticket_flow.worker.spawn_failed",
+            exc_info=exc,
+            extra={"run_id": run_id},
+        )
