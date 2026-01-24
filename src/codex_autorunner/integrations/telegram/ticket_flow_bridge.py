@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import Optional
 
 from ...core.flows import FlowStore
+from ...core.flows.controller import FlowController
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
+from ...core.flows.worker_process import spawn_flow_worker
 from ...core.utils import canonicalize_path
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...tickets import AgentPool
-from ...core.flows.controller import FlowController
-from ...core.flows.worker_process import spawn_flow_worker
 from .state import parse_topic_key
 
 
@@ -32,7 +32,9 @@ class TelegramTicketFlowBridge:
         self._send_message_with_outbox = send_message_with_outbox
 
     @staticmethod
-    def _select_ticket_flow_topic(entries: list[tuple[str, object]]) -> Optional[tuple[str, object]]:
+    def _select_ticket_flow_topic(
+        entries: list[tuple[str, object]],
+    ) -> Optional[tuple[str, object]]:
         if not entries:
             return None
 
@@ -53,7 +55,11 @@ class TelegramTicketFlowBridge:
             )
             last_active_at = getattr(record, "last_active_at", None)
             try:
-                last_active = float(last_active_at) if last_active_at is not None else float("-inf")
+                last_active = (
+                    float(last_active_at)
+                    if last_active_at is not None
+                    else float("-inf")
+                )
             except Exception:
                 last_active = float("-inf")
             return (1 if active_match else 0, last_active, key)
@@ -123,9 +129,7 @@ class TelegramTicketFlowBridge:
             for key, record in pending
         ]
         for key, _previous in updates:
-            await self._store.update_topic(
-                key, self._set_ticket_handoff_marker(marker)
-            )
+            await self._store.update_topic(key, self._set_ticket_handoff_marker(marker))
 
         primary_key, _primary_record = primary
         try:

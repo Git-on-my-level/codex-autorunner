@@ -25,7 +25,6 @@ from ...core.text_delta_coalescer import TextDeltaCoalescer
 from ...core.utils import build_opencode_supervisor
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
 from ...manifest import load_manifest
-from ...tickets.outbox import resolve_outbox_paths
 from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_paths
 from ...voice import VoiceConfig, VoiceService
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
@@ -79,7 +78,6 @@ from .helpers import (
     _read_lock_payload,
     _split_topic_key,
     _telegram_lock_path,
-    _truncate_text,
     _with_conversation_id,
 )
 from .notifications import TelegramNotificationHandlers
@@ -1023,7 +1021,9 @@ class TelegramBotService(
         workspace_root: Path,
         entries: list[tuple[str, "TelegramTopicRecord"]],
     ) -> None:
-        await self._ticket_flow_bridge._notify_ticket_flow_pause(workspace_root, entries)
+        await self._ticket_flow_bridge._notify_ticket_flow_pause(
+            workspace_root, entries
+        )
 
     def _load_ticket_flow_pause(
         self, workspace_root: Path

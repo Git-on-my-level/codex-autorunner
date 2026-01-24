@@ -60,11 +60,6 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "snapshot": ".codex-autorunner/SNAPSHOT.md",
         "snapshot_state": ".codex-autorunner/snapshot_state.json",
     },
-    "ticket_flow": {
-        "approval_mode": "yolo",
-        # Keep ticket_flow deterministic by default; surfaces can tighten this.
-        "default_approval_decision": "accept",
-    },
     "review": {
         "enabled": True,
         "agent": "opencode",
@@ -1407,9 +1402,9 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         runner_stop_after_runs=cfg["runner"].get("stop_after_runs"),
         runner_max_wallclock_seconds=cfg["runner"].get("max_wallclock_seconds"),
         runner_no_progress_threshold=int(cfg["runner"].get("no_progress_threshold", 3)),
-    git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
-    git_commit_message_template=str(cfg["git"].get("commit_message_template")),
-    ticket_flow=cast(Dict[str, Any], cfg.get("ticket_flow") or {}),
+        git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
+        git_commit_message_template=str(cfg["git"].get("commit_message_template")),
+        ticket_flow=cast(Dict[str, Any], cfg.get("ticket_flow") or {}),
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
             root,

@@ -1,12 +1,13 @@
-import asyncio
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from codex_autorunner.core.config import DEFAULT_REPO_CONFIG, _parse_app_server_config
 from codex_autorunner.integrations.app_server.client import TurnResult
-from codex_autorunner.integrations.app_server.supervisor import WorkspaceAppServerSupervisor
-from codex_autorunner.core.config import AppServerConfig, DEFAULT_REPO_CONFIG, _parse_app_server_config
+from codex_autorunner.integrations.app_server.supervisor import (
+    WorkspaceAppServerSupervisor,
+)
 from codex_autorunner.tickets.agent_pool import AgentPool, AgentTurnRequest
 
 
@@ -22,9 +23,9 @@ class _DummyTurnHandle:
             errors=[],
             raw_events=[],
         )
-        setattr(result, "error", None)
-        setattr(result, "duration_seconds", 0.0)
-        setattr(result, "token_usage", {})
+        result.error = None
+        result.duration_seconds = 0.0
+        result.token_usage = {}
         return result
 
 
@@ -54,7 +55,9 @@ class _CaptureSupervisor:
 
 
 @pytest.mark.asyncio
-async def test_agent_pool_respects_ticket_flow_approval_defaults(monkeypatch, tmp_path: Path):
+async def test_agent_pool_respects_ticket_flow_approval_defaults(
+    monkeypatch, tmp_path: Path
+):
     captured = {}
 
     def _capture_supervisor(*args, **kwargs):
