@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from .redaction import redact_text
 from .text_delta_coalescer import TextDeltaCoalescer
 
 
@@ -69,7 +70,8 @@ def _extract_error_message(params: Any) -> str:
 
 
 class AppServerEventFormatter:
-    def __init__(self) -> None:
+    def __init__(self, redact_enabled: bool = True) -> None:
+        self._redact_enabled = redact_enabled
         self._thinking_items: set[str] = set()
         self._reasoning_coalescers: dict[str, TextDeltaCoalescer] = {}
 
@@ -187,7 +189,8 @@ class AppServerEventFormatter:
                 or params.get("value")
             )
             if isinstance(diff, str) and diff:
-                lines.extend(diff.splitlines())
+                diff_text = redact_text(diff) if self._redact_enabled else diff
+                lines.extend(diff_text.splitlines())
             return lines
 
         if method == "error":
@@ -199,7 +202,8 @@ class AppServerEventFormatter:
         if "outputdelta" in method.lower():
             delta = params.get("delta") or params.get("text") or params.get("output")
             if isinstance(delta, str) and delta:
-                lines.extend(delta.splitlines())
+                delta_text = redact_text(delta) if self._redact_enabled else delta
+                lines.extend(delta_text.splitlines())
             return lines
 
         return lines

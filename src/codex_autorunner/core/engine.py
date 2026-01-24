@@ -66,6 +66,7 @@ from .locks import (
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
 from .prompt import build_final_summary_prompt
+from .redaction import redact_text
 from .review_context import build_spec_progress_review_context
 from .run_index import RunIndexStore
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
@@ -142,7 +143,12 @@ class Engine:
         self._app_server_threads_lock = threading.Lock()
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
-        self._app_server_event_formatter = AppServerEventFormatter()
+        redact_enabled = getattr(self.config, "security", {}).get(
+            "redact_run_logs", True
+        )
+        self._app_server_event_formatter = AppServerEventFormatter(
+            redact_enabled=redact_enabled
+        )
         self._app_server_events = AppServerEventBuffer()
         self._opencode_event_formatter = OpenCodeEventFormatter()
         self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
@@ -380,6 +386,9 @@ class Engine:
                 "thread_total_after": telemetry.token_total,
             }
         artifacts: dict[str, str] = {}
+        redact_enabled = getattr(self.config, "security", {}).get(
+            "redact_run_logs", True
+        )
         if telemetry and telemetry.plan is not None:
             try:
                 plan_content = (
@@ -396,6 +405,8 @@ class Engine:
                 plan_content = json.dumps(
                     {"plan": str(telemetry.plan)}, ensure_ascii=True, indent=2
                 )
+            if redact_enabled:
+                plan_content = redact_text(plan_content)
             plan_path = self._write_run_artifact(run_id, "plan.json", plan_content)
             artifacts["plan_path"] = str(plan_path)
         if telemetry and telemetry.diff is not None:
@@ -406,10 +417,20 @@ class Engine:
                     telemetry.diff, ensure_ascii=True, indent=2, default=str
                 )
             )
+            if redact_enabled:
+                diff_content = redact_text(diff_content)
             diff_path = self._write_run_artifact(run_id, "diff.patch", diff_content)
             artifacts["diff_path"] = str(diff_path)
         if artifacts:
             run_updates["artifacts"] = artifacts
+        if redact_enabled:
+            from .redaction import get_redaction_patterns
+
+            run_updates["security"] = {
+                "redaction_enabled": True,
+                "redaction_version": "1.0",
+                "redaction_patterns": get_redaction_patterns(),
+            }
         if run_updates:
             self._merge_run_index_entry(run_id, run_updates)
         self._clear_run_telemetry(run_id)
