@@ -38,6 +38,14 @@ IMAGE_EXTS = set(IMAGE_CONTENT_TYPES.values())
 MAX_BATCH_ITEMS = 10
 
 
+def _is_ticket_reply(message: TelegramMessage, bot_username: Optional[str]) -> bool:
+    if message.reply_to_is_bot and message.reply_to_message_id is not None:
+        if bot_username and message.reply_to_username:
+            return message.reply_to_username.lower() == bot_username.lower()
+        return True
+    return False
+
+
 @dataclass
 class _CoalescedBuffer:
     message: TelegramMessage
@@ -341,9 +349,19 @@ async def handle_message_inner(
         return
 
     record = await handlers._router.get_topic(key)
-    if record and record.workspace_path and text:
+    if (
+        record
+        and record.workspace_path
+        and text
+        and _is_ticket_reply(message, handlers._bot_username)
+    ):
         workspace_root = canonicalize_path(Path(record.workspace_path))
-        paused = handlers._get_paused_ticket_flow(workspace_root)
+        preferred_run_id = handlers._ticket_flow_pause_targets.get(
+            str(workspace_root), None
+        )
+        paused = handlers._get_paused_ticket_flow(
+            workspace_root, preferred_run_id=preferred_run_id
+        )
         if paused:
             run_id, run_record = paused
             success, result = await handlers._write_user_reply_from_telegram(
@@ -781,8 +799,13 @@ async def handle_media_message(
         return
 
     workspace_root = canonicalize_path(Path(record.workspace_path))
-    paused = handlers._get_paused_ticket_flow(workspace_root)
-    if paused and caption_text:
+    preferred_run_id = handlers._ticket_flow_pause_targets.get(
+        str(workspace_root), None
+    )
+    paused = handlers._get_paused_ticket_flow(
+        workspace_root, preferred_run_id=preferred_run_id
+    )
+    if paused and caption_text and _is_ticket_reply(message, handlers._bot_username):
         run_id, run_record = paused
         files = []
         if message.photos:

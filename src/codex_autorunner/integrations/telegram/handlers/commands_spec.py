@@ -42,6 +42,12 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             lambda message, args, _runtime: handlers._handle_flow(message, args),
             allow_during_turn=True,
         ),
+        "reply": CommandSpec(
+            "reply",
+            "reply to a paused ticket flow handoff",
+            lambda message, args, _runtime: handlers._handle_reply(message, args),
+            allow_during_turn=True,
+        ),
         "agent": CommandSpec(
             "agent",
             "show or set the active agent",

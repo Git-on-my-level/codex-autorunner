@@ -2,7 +2,6 @@ import json
 import logging
 import re
 import subprocess
-import sys
 import uuid
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
@@ -14,7 +13,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..core.engine import Engine
-from ..core.flows import FlowController, FlowDefinition, FlowRunRecord, FlowStore
+from ..core.flows import (
+    FlowController,
+    FlowDefinition,
+    FlowRunRecord,
+    FlowRunStatus,
+    FlowStore,
+)
+from ..core.flows.worker_process import spawn_flow_worker
 from ..core.utils import find_repo_root
 from ..flows.ticket_flow import build_ticket_flow_definition
 from ..tickets import AgentPool
@@ -210,31 +216,7 @@ def _start_flow_worker(repo_root: Path, run_id: str) -> subprocess.Popen:
     normalized_run_id = _normalize_run_id(run_id)
     _reap_dead_worker(normalized_run_id)
 
-    artifacts_dir = repo_root / ".codex-autorunner" / "flows" / normalized_run_id
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-    stdout_path = artifacts_dir / "worker.out.log"
-    stderr_path = artifacts_dir / "worker.err.log"
-
-    stdout_handle = open(stdout_path, "ab")
-    stderr_handle = open(stderr_path, "ab")
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "codex_autorunner",
-        "flow",
-        "worker",
-        "--run-id",
-        normalized_run_id,
-    ]
-
-    proc = subprocess.Popen(
-        cmd,
-        cwd=repo_root,
-        stdout=stdout_handle,
-        stderr=stderr_handle,
-    )
+    proc, stdout_handle, stderr_handle = spawn_flow_worker(repo_root, normalized_run_id)
     _active_workers[normalized_run_id] = (proc, stdout_handle, stderr_handle)
     _logger.info("Started flow worker for run %s (pid=%d)", normalized_run_id, proc.pid)
     return proc
@@ -342,6 +324,28 @@ def build_flow_routes() -> APIRouter:
         ticket_dir.mkdir(parents=True, exist_ok=True)
         ticket_path = ticket_dir / "TICKET-001.md"
         flow_request = request or FlowStartRequest()
+        meta = flow_request.metadata if isinstance(flow_request.metadata, dict) else {}
+        force_new = bool(meta.get("force_new"))
+
+        if not force_new:
+            records = _safe_list_flow_runs(repo_root, flow_type="ticket_flow")
+            active = next(
+                (
+                    rec
+                    for rec in records
+                    if rec.status
+                    in (
+                        FlowRunStatus.RUNNING,
+                        FlowRunStatus.PAUSED,
+                    )
+                ),
+                None,
+            )
+            if active:
+                _reap_dead_worker(active.id)
+                if active.id not in _active_workers:
+                    _start_flow_worker(repo_root, active.id)
+                return FlowStatusResponse.from_record(active)
 
         seeded = False
         if not ticket_path.exists():

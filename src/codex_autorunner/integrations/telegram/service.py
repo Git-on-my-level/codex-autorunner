@@ -253,6 +253,7 @@ class TelegramBotService(
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._pending_questions: dict[str, PendingQuestion] = {}
+        self._ticket_flow_pause_targets: dict[str, str] = {}
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
         self._update_options: dict[str, SelectionState] = {}
@@ -1112,6 +1113,7 @@ class TelegramBotService(
                 thread_id=thread_id,
                 reply_to=None,
             )
+            self._ticket_flow_pause_targets[str(workspace_root)] = run_id
         except Exception as exc:
             log_event(
                 self._logger,
@@ -1197,7 +1199,7 @@ class TelegramBotService(
         )
 
     def _get_paused_ticket_flow(
-        self, workspace_root: Path
+        self, workspace_root: Path, preferred_run_id: Optional[str] = None
     ) -> Optional[tuple[str, FlowRunRecord]]:
         db_path = workspace_root / ".codex-autorunner" / "flows.db"
         if not db_path.exists():
@@ -1205,6 +1207,10 @@ class TelegramBotService(
         store = FlowStore(db_path)
         try:
             store.initialize()
+            if preferred_run_id:
+                preferred = store.get_flow_run(preferred_run_id)
+                if preferred and preferred.status == FlowRunStatus.PAUSED:
+                    return preferred.id, preferred
             runs = store.list_flow_runs(
                 flow_type="ticket_flow", status=FlowRunStatus.PAUSED
             )
