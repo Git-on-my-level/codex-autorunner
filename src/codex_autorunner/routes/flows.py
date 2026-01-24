@@ -252,7 +252,6 @@ def _start_flow_worker(repo_root: Path, run_id: str) -> Optional[subprocess.Pope
             normalized_run_id,
             health.pid,
         )
-        _active_workers.setdefault(normalized_run_id, (None, None, None))
         return None
 
     _reap_dead_worker(normalized_run_id)
