@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional, Union
@@ -6,6 +7,7 @@ from ...core.circuit_breaker import CircuitBreaker
 from ...integrations.app_server.client import CodexAppServerClient
 from .agent_backend import AgentBackend, AgentEvent, now_iso
 from .run_event import (
+    ApprovalRequested,
     Completed,
     Failed,
     OutputDelta,
@@ -40,6 +42,7 @@ class CodexAppServerBackend(AgentBackend):
         self._thread_id: Optional[str] = None
 
         self._circuit_breaker = CircuitBreaker("CodexAppServer", logger=_logger)
+        self._event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
 
     async def _ensure_client(self) -> CodexAppServerClient:
         if self._client is None:
@@ -127,9 +130,12 @@ class CodexAppServerBackend(AgentBackend):
         )
 
         yield Started(timestamp=now_iso(), session_id=actual_session_id)
+
         yield OutputDelta(
             timestamp=now_iso(), content=message, delta_type="user_message"
         )
+
+        self._event_queue = asyncio.Queue()
 
         handle = await client.turn_start(
             actual_session_id if actual_session_id else "default",
@@ -138,28 +144,56 @@ class CodexAppServerBackend(AgentBackend):
             sandbox_policy=self._sandbox_policy,
         )
 
-        failed_emitted = False
+        wait_task = asyncio.create_task(handle.wait(timeout=600.0))
+
         try:
-            result = await handle.wait(timeout=600.0)
+            while True:
+                if not self._event_queue.empty():
+                    run_event = self._event_queue.get_nowait()
+                    if run_event:
+                        yield run_event
+                    continue
 
-            for msg in result.agent_messages:
-                yield OutputDelta(
-                    timestamp=now_iso(), content=msg, delta_type="assistant_message"
+                get_task = asyncio.create_task(self._event_queue.get())
+                done_set, pending_set = await asyncio.wait(
+                    {wait_task, get_task}, return_when=asyncio.FIRST_COMPLETED
                 )
 
-            for event_data in result.raw_events:
-                run_event = self._map_to_run_event(event_data)
-                if run_event:
-                    if isinstance(run_event, Failed):
-                        failed_emitted = True
-                    yield run_event
+                if wait_task in done_set:
+                    if get_task in pending_set:
+                        get_task.cancel()
+                    result = wait_task.result()
+                    for msg in result.agent_messages:
+                        yield OutputDelta(
+                            timestamp=now_iso(),
+                            content=msg,
+                            delta_type="assistant_message",
+                        )
+                    for event_data in result.raw_events:
+                        run_event = self._map_to_run_event(event_data)
+                        if run_event:
+                            yield run_event
+                    while not self._event_queue.empty():
+                        extra = self._event_queue.get_nowait()
+                        if extra:
+                            yield extra
+                    yield Completed(
+                        timestamp=now_iso(),
+                        final_message="\n".join(result.agent_messages),
+                    )
+                    break
 
-            if not failed_emitted:
-                yield Completed(
-                    timestamp=now_iso(), final_message="\n".join(result.agent_messages)
-                )
+                for task in done_set:
+                    if task is not wait_task:
+                        run_event = task.result()
+                        if run_event:
+                            yield run_event
+                for task in pending_set:
+                    task.cancel()
         except Exception as e:
             _logger.error("Error during turn execution: %s", e)
+            if not wait_task.done():
+                wait_task.cancel()
             yield Failed(timestamp=now_iso(), error_message=str(e))
 
     async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
@@ -192,16 +226,29 @@ class CodexAppServerBackend(AgentBackend):
         item_type = request.get("params", {}).get("type", "")
 
         _logger.info("Received approval request: %s (type=%s)", method, item_type)
+        request_id = str(request.get("id") or "")
+        # Surface the approval request to consumers (e.g., Telegram) while defaulting to approve
+        await self._event_queue.put(
+            ApprovalRequested(
+                timestamp=now_iso(),
+                request_id=request_id,
+                description=method or "approval requested",
+                context=request.get("params", {}),
+            )
+        )
 
         return {"approve": True}
 
     async def _handle_notification(self, notification: Dict[str, Any]) -> None:
         method = notification.get("method", "")
+        params = notification.get("params", {}) or {}
+        thread_id = params.get("threadId") or params.get("thread_id")
+        if self._thread_id and thread_id and thread_id != self._thread_id:
+            return
         _logger.debug("Received notification: %s", method)
-
-        if method == "turn/streamDelta":
-            content = notification.get("params", {}).get("delta", "")
-            _logger.info("Stream delta: %s", content[:100])
+        run_event = self._map_to_run_event(notification)
+        if run_event:
+            await self._event_queue.put(run_event)
 
     def _map_to_run_event(self, event_data: Dict[str, Any]) -> Optional[RunEvent]:
         method = event_data.get("method", "")

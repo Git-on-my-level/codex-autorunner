@@ -46,6 +46,23 @@ class TelegramMessageTransport:
     ) -> bool:
         try:
             payload_text, parse_mode = self._prepare_message(text)
+            if len(payload_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+                trimmed = trim_markdown_message(
+                    payload_text,
+                    max_len=TELEGRAM_MAX_MESSAGE_LENGTH,
+                    render=(
+                        _format_telegram_html
+                        if parse_mode == "HTML"
+                        else (
+                            lambda v: (
+                                _format_telegram_markdown(v, parse_mode)
+                                if parse_mode in ("Markdown", "MarkdownV2")
+                                else v
+                            )
+                        )
+                    ),
+                )
+                payload_text = trimmed
             await self._bot.edit_message_text(
                 chat_id,
                 message_id,

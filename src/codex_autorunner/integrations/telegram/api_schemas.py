@@ -4,6 +4,21 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+__all__ = [
+    "BaseTelegramSchema",
+    "TelegramPhotoSizeSchema",
+    "TelegramDocumentSchema",
+    "TelegramAudioSchema",
+    "TelegramVoiceSchema",
+    "TelegramMessageEntitySchema",
+    "TelegramMessageSchema",
+    "TelegramCallbackQuerySchema",
+    "TelegramUpdateSchema",
+    "parse_update_payload",
+    "parse_message_payload",
+    "parse_callback_query_payload",
+]
+
 
 class BaseTelegramSchema(BaseModel):
     model_config = {"extra": "ignore", "validate_assignment": False}

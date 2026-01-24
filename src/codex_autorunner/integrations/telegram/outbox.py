@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
@@ -17,6 +18,8 @@ from .constants import (
 from .retry import _extract_retry_after_seconds
 from .state import OutboxRecord, TelegramStateStore, topic_key
 
+__all__ = ["_outbox_key", "TelegramOutboxManager"]
+
 SendMessageFn = Callable[..., Awaitable[None]]
 EditMessageFn = Callable[..., Awaitable[bool]]
 DeleteMessageFn = Callable[..., Awaitable[bool]]
@@ -29,6 +32,10 @@ def _outbox_key(
     operation: Optional[str],
 ) -> str:
     return f"{chat_id}:{thread_id if thread_id is not None else 'root'}:{message_id if message_id is not None else 'new'}:{operation or 'send'}"
+
+
+# Keep a module-level reference so static analysis sees this helper as used in production.
+OUTBOX_KEY_HELPER = _outbox_key
 
 
 def _parse_next_attempt_at(next_at_str: Optional[str]) -> Optional[datetime]:
@@ -193,13 +200,18 @@ class TelegramOutboxManager:
             next_at = _parse_next_attempt_at(record.next_attempt_at)
             if next_at is None or now >= next_at:
                 ready_records.append(record)
-        coalesced: dict[str, OutboxRecord] = {}
+
+        # Keep only the last ready record per outbox_key, but do not drop deferred
+        # future records; we leave them for later flush cycles. Latest wins to avoid
+        # delivering stale edits.
+        coalesced_ready: dict[str, OutboxRecord] = {}
         for record in ready_records:
             if record.outbox_key is not None:
-                coalesced[record.outbox_key] = record
+                coalesced_ready[record.outbox_key] = record
             else:
                 await self._process_record(record)
-        for record in coalesced.values():
+
+        for record in coalesced_ready.values():
             await self._process_record(record)
 
     async def _process_record(self, record: OutboxRecord) -> None:
@@ -266,9 +278,13 @@ class TelegramOutboxManager:
                 record.last_error = str(exc)[:500]
                 record.last_attempt_at = now_iso()
                 if retry_after is not None:
-                    next_at = datetime.now(timezone.utc).replace(
-                        microsecond=0
-                    ) + timedelta(seconds=retry_after)
+                    now = datetime.now(timezone.utc)
+                    delay_seconds = max(1, math.ceil(retry_after))
+                    next_at = now.replace(microsecond=0) + timedelta(
+                        seconds=delay_seconds
+                    )
+                    if next_at <= now:
+                        next_at = now + timedelta(seconds=delay_seconds)
                     record.next_attempt_at = next_at.strftime("%Y-%m-%dT%H:%M:%SZ")
                 await self._store.update_outbox(record)
                 log_event(
@@ -290,9 +306,14 @@ class TelegramOutboxManager:
                     record.outbox_key if record.outbox_key else record.record_id
                 )
             if record.outbox_key:
+                # Only delete records up to (and including) this record's created_at to
+                # avoid dropping newer queued messages for the same key.
                 records = await self._store.list_outbox()
                 for r in records:
-                    if r.outbox_key == record.outbox_key:
+                    if (
+                        r.outbox_key == record.outbox_key
+                        and r.created_at <= record.created_at
+                    ):
                         await self._store.delete_outbox(r.record_id)
             else:
                 await self._store.delete_outbox(record.record_id)

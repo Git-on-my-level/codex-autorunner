@@ -210,7 +210,9 @@ async def test_outbox_retry_after_honored(
         await asyncio.sleep(3.5)
         assert task.done()
 
-        assert len(attempt_times) >= 1
+        assert len(attempt_times) == 2
+        # next_attempt_at is stored in whole seconds, allow small slack
+        assert attempt_times[1] - attempt_times[0] >= 1.0
     finally:
         await store.close()
 

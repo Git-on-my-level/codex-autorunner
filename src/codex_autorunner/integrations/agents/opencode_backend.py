@@ -136,8 +136,16 @@ class OpenCodeBackend(AgentBackend):
         raise NotImplementedError("Approvals not implemented for OpenCodeBackend")
 
     async def _yield_events_until_completion(self) -> AsyncGenerator[AgentEvent, None]:
+        paths = ["/event", "/global/event"]
+        if self._session_id:
+            paths.insert(0, f"/session/{self._session_id}/event")
         try:
-            async for sse in self._client.stream_events(directory=None):
+            async for sse in self._client.stream_events(
+                directory=None,
+                paths=paths,
+            ):
+                if not self._sse_matches_session(sse):
+                    continue
                 for agent_event in self._convert_sse_to_agent_event(sse):
                     yield agent_event
                     if agent_event.event_type in {
@@ -156,8 +164,16 @@ class OpenCodeBackend(AgentBackend):
     async def _yield_run_events_until_completion(
         self,
     ) -> AsyncGenerator[RunEvent, None]:
+        paths = ["/event", "/global/event"]
+        if self._session_id:
+            paths.insert(0, f"/session/{self._session_id}/event")
         try:
-            async for sse in self._client.stream_events(directory=None):
+            async for sse in self._client.stream_events(
+                directory=None,
+                paths=paths,
+            ):
+                if not self._sse_matches_session(sse):
+                    continue
                 for run_event in self._convert_sse_to_run_event(sse):
                     yield run_event
                     if isinstance(run_event, (Completed, Failed)):
@@ -207,7 +223,19 @@ class OpenCodeBackend(AgentBackend):
             events.append(Failed(timestamp=now_iso(), error_message=error_message))
 
         elif payload_type == "sessionEnd":
-            events.append(Completed(timestamp=now_iso(), final_message=""))
+            # Prefer messageEnd content if we already saw it; otherwise treat as failure.
+            final_message = payload.get("message") or ""
+            if final_message:
+                events.append(
+                    Completed(timestamp=now_iso(), final_message=final_message)
+                )
+            else:
+                events.append(
+                    Failed(
+                        timestamp=now_iso(),
+                        error_message=payload.get("reason", "Session ended early"),
+                    )
+                )
 
         return events
 
@@ -220,85 +248,78 @@ class OpenCodeBackend(AgentBackend):
             return events
 
         payload_type = payload.get("type", "")
+        session_id = self._extract_session_id(payload)
 
         if payload_type == "textDelta":
             text = payload.get("text", "")
-            events.append(
-                AgentEvent.stream_delta(content=text, delta_type="assistant_stream")
-            )
+            event = AgentEvent.stream_delta(content=text, delta_type="assistant_stream")
+            if session_id:
+                event.data["session_id"] = session_id
+            events.append(event)
 
         elif payload_type == "toolCall":
             tool_name = payload.get("toolName", "")
             tool_input = payload.get("toolInput", {})
-            events.append(
-                AgentEvent.tool_call(tool_name=tool_name, tool_input=tool_input)
-            )
+            event = AgentEvent.tool_call(tool_name=tool_name, tool_input=tool_input)
+            if session_id:
+                event.data["session_id"] = session_id
+            events.append(event)
 
         elif payload_type == "toolCallEnd":
             tool_name = payload.get("toolName", "")
             result = payload.get("result")
             error = payload.get("error")
-            events.append(
-                AgentEvent.tool_result(tool_name=tool_name, result=result, error=error)
+            event = AgentEvent.tool_result(
+                tool_name=tool_name, result=result, error=error
             )
+            if session_id:
+                event.data["session_id"] = session_id
+            events.append(event)
 
         elif payload_type == "messageEnd":
             final_message = payload.get("message", "")
-            events.append(AgentEvent.message_complete(final_message=final_message))
+            event = AgentEvent.message_complete(final_message=final_message)
+            if session_id:
+                event.data["session_id"] = session_id
+            events.append(event)
 
         elif payload_type == "error":
             error_message = payload.get("message", "Unknown error")
-            events.append(AgentEvent.error(error_message=error_message))
+            event = AgentEvent.error(error_message=error_message)
+            if session_id:
+                event.data["session_id"] = session_id
+            events.append(event)
 
         elif payload_type == "sessionEnd":
             events.append(
                 AgentEvent(
                     type=AgentEventType.SESSION_ENDED.value,
                     timestamp=now_iso(),
-                    data={"reason": payload.get("reason", "unknown")},
+                    data={
+                        "reason": payload.get("reason", "unknown"),
+                        "session_id": session_id,
+                    },
                 )
             )
 
         return events
 
-        payload_type = payload.get("type", "")
+    def _extract_session_id(self, payload: dict[str, Any]) -> Optional[str]:
+        for key in ("session", "sessionId", "sessionID", "session_id"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                return value
+        return None
 
-        if payload_type == "textDelta":
-            text = payload.get("text", "")
-            events.append(
-                AgentEvent.stream_delta(content=text, delta_type="assistant_stream")
-            )
-
-        elif payload_type == "toolCall":
-            tool_name = payload.get("toolName", "")
-            tool_input = payload.get("toolInput", {})
-            events.append(
-                AgentEvent.tool_call(tool_name=tool_name, tool_input=tool_input)
-            )
-
-        elif payload_type == "toolCallEnd":
-            tool_name = payload.get("toolName", "")
-            result = payload.get("result")
-            error = payload.get("error")
-            events.append(
-                AgentEvent.tool_result(tool_name=tool_name, result=result, error=error)
-            )
-
-        elif payload_type == "messageEnd":
-            final_message = payload.get("message", "")
-            events.append(AgentEvent.message_complete(final_message=final_message))
-
-        elif payload_type == "error":
-            error_message = payload.get("message", "Unknown error")
-            events.append(AgentEvent.error(error_message=error_message))
-
-        elif payload_type == "sessionEnd":
-            events.append(
-                AgentEvent(
-                    type=AgentEventType.SESSION_ENDED.value,
-                    timestamp=now_iso(),
-                    data={"reason": payload.get("reason", "unknown")},
-                )
-            )
-
-        return events
+    def _sse_matches_session(self, sse: SSEEvent) -> bool:
+        if not self._session_id:
+            return True
+        try:
+            payload = json.loads(sse.data) if sse.data else {}
+        except json.JSONDecodeError:
+            return True
+        session_id = self._extract_session_id(payload)
+        if session_id is None:
+            # If server does not tag events, do not drop them.
+            return True
+        return session_id == self._session_id
