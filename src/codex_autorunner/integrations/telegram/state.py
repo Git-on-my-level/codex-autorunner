@@ -1100,7 +1100,10 @@ class TelegramStateStore:
     def _load_legacy_state_json(self, path: Path) -> Optional[TelegramState]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            # The path may already be a SQLite file (e.g., state_file still ends
+            # with .json after the migration to SQLite). In that case, ignore the
+            # legacy load attempt and treat the DB as the source of truth.
             return None
         if not isinstance(payload, dict):
             return None

@@ -397,6 +397,11 @@ class TelegramBotConfig:
         state_file = Path(cfg.get("state_file", DEFAULT_STATE_FILE))
         if not state_file.is_absolute():
             state_file = (root / state_file).resolve()
+        if state_file.suffix == ".json":
+            raise TelegramBotConfigError(
+                "telegram_bot.state_file must point to a SQLite database "
+                "(.sqlite3). Update your config to .codex-autorunner/telegram_state.sqlite3"
+            )
 
         app_server_command_env = str(
             cfg.get("app_server_command_env", "CAR_TELEGRAM_APP_SERVER_COMMAND")

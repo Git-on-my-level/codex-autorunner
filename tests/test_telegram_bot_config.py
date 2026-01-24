@@ -200,6 +200,22 @@ def test_telegram_bot_config_message_overflow_default(tmp_path: Path) -> None:
     assert cfg.message_overflow == DEFAULT_MESSAGE_OVERFLOW
 
 
+def test_telegram_bot_config_rejects_json_state_file(tmp_path: Path) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "state_file": "telegram_state.json",
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "123",
+    }
+    with pytest.raises(TelegramBotConfigError):
+        TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+
+
 def test_telegram_bot_config_message_overflow_override(tmp_path: Path) -> None:
     raw = {
         "enabled": True,
