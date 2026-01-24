@@ -21,11 +21,24 @@ from ..core.flows import (
     FlowStore,
 )
 from ..core.flows.worker_process import spawn_flow_worker
-from ..core.utils import find_repo_root
+from ..core.utils import atomic_write, find_repo_root
 from ..flows.ticket_flow import build_ticket_flow_definition
 from ..tickets import AgentPool
-from ..tickets.files import list_ticket_paths, read_ticket, safe_relpath
+from ..tickets.files import (
+    list_ticket_paths,
+    parse_ticket_index,
+    read_ticket,
+    safe_relpath,
+)
+from ..tickets.frontmatter import parse_markdown_frontmatter
+from ..tickets.lint import lint_ticket_frontmatter
 from ..tickets.outbox import parse_user_message, resolve_outbox_paths
+from ..web.schemas import (
+    TicketCreateRequest,
+    TicketDeleteResponse,
+    TicketResponse,
+    TicketUpdateRequest,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -397,6 +410,120 @@ You are the first ticket in a new ticket_flow run.
             "ticket_dir": safe_relpath(ticket_dir, repo_root),
             "tickets": tickets,
         }
+
+    @router.post("/ticket_flow/tickets", response_model=TicketResponse)
+    async def create_ticket(request: TicketCreateRequest):
+        """Create a new ticket with auto-generated index."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find next available index
+        existing_paths = list_ticket_paths(ticket_dir)
+        existing_indices = set()
+        for p in existing_paths:
+            idx = parse_ticket_index(p.name)
+            if idx is not None:
+                existing_indices.add(idx)
+
+        next_index = 1
+        while next_index in existing_indices:
+            next_index += 1
+
+        # Build frontmatter
+        requires_block = ""
+        if request.requires:
+            req_lines = "\n".join(f"  - {r}" for r in request.requires)
+            requires_block = f"requires:\n{req_lines}\n"
+
+        title_line = f"title: {request.title}\n" if request.title else ""
+        goal_line = f"goal: {request.goal}\n" if request.goal else ""
+
+        content = (
+            "---\n"
+            f"agent: {request.agent}\n"
+            "done: false\n"
+            f"{title_line}"
+            f"{goal_line}"
+            f"{requires_block}"
+            "---\n\n"
+            f"{request.body}\n"
+        )
+
+        ticket_path = ticket_dir / f"TICKET-{next_index:03d}.md"
+        atomic_write(ticket_path, content)
+
+        # Read back to validate and return
+        doc, errors = read_ticket(ticket_path)
+        if errors or not doc:
+            raise HTTPException(
+                status_code=400, detail=f"Failed to create valid ticket: {errors}"
+            )
+
+        return TicketResponse(
+            path=safe_relpath(ticket_path, repo_root),
+            index=doc.index,
+            frontmatter=asdict(doc.frontmatter),
+            body=doc.body,
+        )
+
+    @router.put("/ticket_flow/tickets/{index}", response_model=TicketResponse)
+    async def update_ticket(index: int, request: TicketUpdateRequest):
+        """Update an existing ticket by index."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_path = ticket_dir / f"TICKET-{index:03d}.md"
+
+        if not ticket_path.exists():
+            raise HTTPException(
+                status_code=404, detail=f"Ticket TICKET-{index:03d}.md not found"
+            )
+
+        # Validate frontmatter before saving
+        data, body = parse_markdown_frontmatter(request.content)
+        _, errors = lint_ticket_frontmatter(data)
+        if errors:
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "Invalid ticket frontmatter", "errors": errors},
+            )
+
+        atomic_write(ticket_path, request.content)
+
+        # Read back to return validated data
+        doc, read_errors = read_ticket(ticket_path)
+        if read_errors or not doc:
+            raise HTTPException(
+                status_code=400, detail=f"Failed to save valid ticket: {read_errors}"
+            )
+
+        return TicketResponse(
+            path=safe_relpath(ticket_path, repo_root),
+            index=doc.index,
+            frontmatter=asdict(doc.frontmatter),
+            body=doc.body,
+        )
+
+    @router.delete("/ticket_flow/tickets/{index}", response_model=TicketDeleteResponse)
+    async def delete_ticket(index: int):
+        """Delete a ticket by index."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_path = ticket_dir / f"TICKET-{index:03d}.md"
+
+        if not ticket_path.exists():
+            raise HTTPException(
+                status_code=404, detail=f"Ticket TICKET-{index:03d}.md not found"
+            )
+
+        rel_path = safe_relpath(ticket_path, repo_root)
+        ticket_path.unlink()
+
+        return TicketDeleteResponse(
+            status="deleted",
+            index=index,
+            path=rel_path,
+        )
 
     @router.post("/{run_id}/stop", response_model=FlowStatusResponse)
     async def stop_flow(run_id: uuid.UUID):

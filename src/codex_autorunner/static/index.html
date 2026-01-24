@@ -422,6 +422,7 @@
 <button class="ghost sm" id="ticket-flow-stop">Stop</button>
 <button class="ghost sm" id="ticket-flow-resume">Resume</button>
 <button class="ghost sm icon-btn" id="ticket-flow-refresh" title="Refresh ticket flow">↻</button>
+<button class="ghost sm" id="ticket-new-btn" title="Create new ticket">+ New Ticket</button>
 </div>
 <div class="ticket-flow-meta">
 <div>
@@ -449,7 +450,79 @@
 <div class="ticket-list" id="ticket-handoff-history">No messages yet.</div>
 </div>
 </div>
-</div></div>
+</div>
+<!-- Ticket Editor Modal (Full Screen) -->
+<div class="modal-overlay hidden" id="ticket-editor-modal">
+<div class="modal-content ticket-editor-modal">
+<div class="modal-header ticket-editor-header">
+<div class="ticket-header-row">
+<select class="ticket-fm-select" id="ticket-fm-agent" title="Agent">
+<option value="codex">codex</option>
+<option value="opencode">opencode</option>
+<option value="pause">pause</option>
+</select>
+<input class="ticket-fm-input" id="ticket-fm-title" placeholder="Title (optional)" spellcheck="false" type="text">
+<label class="ticket-fm-toggle" title="Mark as done">
+<input id="ticket-fm-done" type="checkbox">
+<span class="ticket-fm-toggle-label">Done</span>
+</label>
+<button class="ghost sm icon-btn" id="ticket-editor-close" title="Close">×</button>
+</div>
+</div>
+<div class="ticket-editor-error hidden" id="ticket-editor-error"></div>
+<div class="ticket-editor-main">
+<!-- Body Editor -->
+<div class="ticket-editor-toolbar">
+<button class="ghost sm" id="ticket-insert-checkbox" title="Insert checkbox">+ Checkbox</button>
+<button class="ghost sm" id="ticket-undo-btn" title="Undo changes" disabled>Undo</button>
+<button class="danger sm hidden" id="ticket-editor-delete" title="Delete ticket">Delete</button>
+<span class="ticket-autosave-status muted small" id="ticket-autosave-status"></span>
+</div>
+<textarea id="ticket-editor-content" class="ticket-editor-textarea" spellcheck="false" placeholder="Describe the task details here..."></textarea>
+<!-- Patch Preview -->
+<div class="ticket-patch-main hidden" id="ticket-patch-main">
+<div class="ticket-patch-header">
+<span class="ticket-patch-title">Pending Changes</span>
+<span class="ticket-patch-status muted" id="ticket-patch-status"></span>
+</div>
+<div class="ticket-patch-body" id="ticket-patch-body"></div>
+<div class="ticket-patch-actions">
+<button class="primary sm" id="ticket-patch-apply">Apply</button>
+<button class="ghost sm" id="ticket-patch-discard">Discard</button>
+</div>
+</div>
+<!-- Chat Panel (matches Docs chat) -->
+<div class="ticket-chat-panel">
+<div class="ticket-chat-compose">
+<div class="ticket-chat-agent-controls">
+<select id="ticket-chat-agent-select" title="Agent"></select>
+<select id="ticket-chat-model-select" title="Model"></select>
+<select id="ticket-chat-reasoning-select" title="Reasoning"></select>
+</div>
+<div class="ticket-chat-input-row">
+<textarea id="ticket-chat-input" class="ticket-chat-input" enterkeyhint="enter" placeholder="Ask AI to edit this ticket..." rows="1" spellcheck="false"></textarea>
+<div class="ticket-chat-input-buttons">
+<button class="ghost sm voice-button" id="ticket-chat-voice" title="Hold to talk"></button>
+<button class="primary sm" id="ticket-chat-send" title="Send">↑</button>
+</div>
+</div>
+<div class="ticket-chat-meta">
+<div class="ticket-chat-meta-left">
+<span class="muted small ticket-chat-hint" id="ticket-chat-hint">Cmd+Enter to send · Enter for newline</span>
+<span class="muted small hidden ticket-chat-voice-status" id="ticket-chat-voice-status"></span>
+</div>
+<div class="ticket-chat-meta-right">
+<button class="ghost sm hidden ticket-chat-cancel-inline" id="ticket-chat-cancel" title="Cancel">✕</button>
+<span class="ticket-chat-status" id="ticket-chat-status">idle</span>
+</div>
+</div>
+</div>
+<div class="ticket-chat-stream" id="ticket-chat-stream"></div>
+</div>
+</div>
+</div>
+</div>
+</div>
 <section class="panel" id="terminal">
 <div class="terminal-toolbar">
 <div class="terminal-toolbar-row terminal-toolbar-main">

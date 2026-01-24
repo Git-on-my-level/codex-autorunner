@@ -362,3 +362,31 @@ class ReviewStatusResponse(ResponseModel):
 class ReviewControlResponse(ResponseModel):
     status: str
     detail: Optional[str] = None
+
+
+# Ticket CRUD schemas
+
+
+class TicketCreateRequest(Payload):
+    agent: str = "codex"
+    title: Optional[str] = None
+    goal: Optional[str] = None
+    requires: Optional[List[str]] = None
+    body: str = ""
+
+
+class TicketUpdateRequest(Payload):
+    content: str  # Full markdown with frontmatter
+
+
+class TicketResponse(ResponseModel):
+    path: str
+    index: int
+    frontmatter: Dict[str, Any]
+    body: str
+
+
+class TicketDeleteResponse(ResponseModel):
+    status: str
+    index: int
+    path: str

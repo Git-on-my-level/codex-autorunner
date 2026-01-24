@@ -1275,6 +1275,21 @@ def load_hub_config_data(config_path: Path) -> Dict[str, Any]:
 def _resolve_hub_config_path(start: Path) -> Path:
     config_path = find_nearest_hub_config_path(start)
     if not config_path:
+        # Auto-initialize hub config if missing in the current directory or parents.
+        # If we are in a git repo, we'll initialize a hub there.
+        try:
+            from .utils import find_repo_root
+
+            target_root = find_repo_root(start)
+        except Exception:
+            target_root = start
+
+        from ..bootstrap import seed_hub_files
+
+        seed_hub_files(target_root)
+        config_path = find_nearest_hub_config_path(target_root)
+
+    if not config_path:
         raise ConfigError(
             f"Missing hub config file; expected to find {CONFIG_FILENAME} in {start} or parents (use --hub to specify)"
         )

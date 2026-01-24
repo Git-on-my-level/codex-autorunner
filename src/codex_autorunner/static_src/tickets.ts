@@ -3,6 +3,7 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
+import { initTicketEditor, openTicketEditor, TicketData } from "./ticketEditor.js";
 
 type FlowRun = {
   id?: string;
@@ -96,7 +97,13 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
     const item = document.createElement("div");
     const fm = (ticket.frontmatter || {}) as Record<string, unknown>;
     const done = Boolean(fm?.done);
-    item.className = `ticket-item ${done ? "done" : ""}`;
+    item.className = `ticket-item ${done ? "done" : ""} clickable`;
+    item.title = "Click to edit";
+
+    // Make ticket item clickable to open editor
+    item.addEventListener("click", () => {
+      openTicketEditor(ticket as TicketData);
+    });
 
     const head = document.createElement("div");
     head.className = "ticket-item-head";
@@ -398,6 +405,9 @@ export function initTicketFlow(): void {
   if (stopBtn) stopBtn.addEventListener("click", stopTicketFlow);
   if (refreshBtn) refreshBtn.addEventListener("click", loadTicketFlow);
 
+  // Initialize the ticket editor modal
+  initTicketEditor();
+
   loadTicketFlow();
   registerAutoRefresh("ticket-flow", {
     callback: loadTicketFlow,
@@ -414,5 +424,10 @@ export function initTicketFlow(): void {
     if (status === "ok" || status === "degraded") {
       void loadTicketFlow();
     }
+  });
+
+  // Refresh ticket list when tickets are updated (from editor)
+  subscribe("tickets:updated", () => {
+    void loadTicketFiles();
   });
 }

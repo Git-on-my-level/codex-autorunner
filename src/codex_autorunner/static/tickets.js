@@ -3,6 +3,7 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
+import { initTicketEditor, openTicketEditor } from "./ticketEditor.js";
 let currentRunId = null;
 function els() {
     return {
@@ -49,7 +50,12 @@ function renderTickets(data) {
         const item = document.createElement("div");
         const fm = (ticket.frontmatter || {});
         const done = Boolean(fm?.done);
-        item.className = `ticket-item ${done ? "done" : ""}`;
+        item.className = `ticket-item ${done ? "done" : ""} clickable`;
+        item.title = "Click to edit";
+        // Make ticket item clickable to open editor
+        item.addEventListener("click", () => {
+            openTicketEditor(ticket);
+        });
         const head = document.createElement("div");
         head.className = "ticket-item-head";
         const name = document.createElement("span");
@@ -341,6 +347,8 @@ export function initTicketFlow() {
         stopBtn.addEventListener("click", stopTicketFlow);
     if (refreshBtn)
         refreshBtn.addEventListener("click", loadTicketFlow);
+    // Initialize the ticket editor modal
+    initTicketEditor();
     loadTicketFlow();
     registerAutoRefresh("ticket-flow", {
         callback: loadTicketFlow,
@@ -355,5 +363,9 @@ export function initTicketFlow() {
         if (status === "ok" || status === "degraded") {
             void loadTicketFlow();
         }
+    });
+    // Refresh ticket list when tickets are updated (from editor)
+    subscribe("tickets:updated", () => {
+        void loadTicketFiles();
     });
 }
