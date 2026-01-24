@@ -1,6 +1,6 @@
 Codex Autorunner - Design
 
-Single-repo autorunner that drives the Codex CLI using markdown docs in .codex-autorunner/ as the control surface. Ships a CLI and local web UI/API; hub mode supervises multiple repos/worktrees.
+Single-repo autorunner that drives the Codex app-server (with OpenCode support) using markdown docs in .codex-autorunner/ as the control surface. Ships a CLI and local web UI/API; hub mode supervises multiple repos/worktrees. The Codex CLI is primarily used for the interactive terminal surface (PTY).
 
 ## Goals / Non-goals
 - Goals: autonomous loop, doc-driven control surface, small local footprint, repo-local state, UI + API for control.
@@ -25,13 +25,13 @@ Repo root:
 Hub additions:
   .codex-autorunner/manifest.yml, hub_state.json, codex-autorunner-hub.log
 
-Config sections (repo): docs, codex, prompt, runner, git, github, server, terminal, voice, log, server_log.
+Config sections (repo): docs, codex, prompt, runner, git, github, server, terminal, voice, log, server_log, app_server, opencode.
 Precedence: built-ins < codex-autorunner.yml < override < .codex-autorunner/config.yml < env.
 
 ## Core loop
 - Parse TODO checkboxes and preserve ordering.
 - Build prompt from docs plus bounded prior run output.
-- Run Codex CLI with streaming logs.
+- Run Codex app-server with streaming logs via OpenCode runtime.
 - Update state and stop on empty TODOs, non-zero exit, stop_after_runs, wallclock limit, or external stop flag.
 
 ## API surface (repo)

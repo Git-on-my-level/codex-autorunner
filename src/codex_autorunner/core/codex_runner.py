@@ -1,3 +1,9 @@
+# DEPRECATED: This module implements a Codex CLI subprocess runner.
+# The primary execution path now uses the Codex app-server via OpenCode runtime.
+# This file is kept for potential future CLI-as-backend support but is currently
+# not referenced by the main engine. See src/codex_autorunner/core/engine.py for
+# the current execution path (_run_codex_app_server_async).
+
 import asyncio
 import subprocess
 from pathlib import Path
