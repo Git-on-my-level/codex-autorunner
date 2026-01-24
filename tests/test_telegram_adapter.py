@@ -49,6 +49,18 @@ from codex_autorunner.integrations.telegram.adapter import (
     parse_command,
     parse_update,
 )
+from codex_autorunner.integrations.telegram.api_schemas import (
+    TelegramCallbackQuerySchema,
+    TelegramDocumentSchema,
+    TelegramMessageEntitySchema,
+    TelegramMessageSchema,
+    TelegramPhotoSizeSchema,
+    TelegramUpdateSchema,
+    TelegramVoiceSchema,
+    parse_callback_query_payload,
+    parse_message_payload,
+    parse_update_payload,
+)
 
 
 def test_parse_command_basic() -> None:
@@ -630,3 +642,406 @@ def test_next_update_offset() -> None:
     updates = [{"update_id": 1}, {"update_id": 3}, {"update_id": 2}]
     assert next_update_offset(updates, None) == 4
     assert next_update_offset([], 5) == 5
+
+
+def test_api_schema_parse_update_basic() -> None:
+    update = {
+        "update_id": 1,
+        "message": {
+            "message_id": 2,
+            "chat": {"id": 123, "type": "private"},
+            "from": {"id": 456},
+            "text": "hello",
+            "date": 1234567890,
+        },
+    }
+    schema = parse_update_payload(update)
+    assert isinstance(schema, TelegramUpdateSchema)
+    assert schema.update_id == 1
+    assert schema.message is not None
+    assert schema.edited_message is None
+    assert schema.callback_query is None
+
+
+def test_api_schema_parse_update_with_callback() -> None:
+    update = {
+        "update_id": 2,
+        "callback_query": {
+            "id": "cb123",
+            "from": {"id": 456},
+            "data": "test",
+            "message": {"message_id": 7, "chat": {"id": 123}},
+        },
+    }
+    schema = parse_update_payload(update)
+    assert isinstance(schema, TelegramUpdateSchema)
+    assert schema.update_id == 2
+    assert schema.message is None
+    assert schema.callback_query is not None
+
+
+def test_api_schema_parse_update_tolerates_unknown_fields() -> None:
+    update = {
+        "update_id": 3,
+        "message": {
+            "message_id": 4,
+            "chat": {"id": 123, "type": "private"},
+            "from": {"id": 456},
+            "text": "hello",
+            "date": 1234567890,
+            "unknown_field": "should be ignored",
+            "another_unknown": {"nested": "data"},
+        },
+        "unknown_update_field": "ignored",
+    }
+    schema = parse_update_payload(update)
+    assert isinstance(schema, TelegramUpdateSchema)
+    assert schema.update_id == 3
+
+
+def test_api_schema_parse_message_basic() -> None:
+    message = {
+        "message_id": 1,
+        "chat": {"id": 123, "type": "private"},
+        "from": {"id": 456},
+        "text": "hello",
+        "date": 1234567890,
+        "is_topic_message": False,
+    }
+    schema = parse_message_payload(message)
+    assert isinstance(schema, TelegramMessageSchema)
+    assert schema.message_id == 1
+    assert schema.chat["id"] == 123
+    assert schema.text == "hello"
+    assert schema.caption is None
+
+
+def test_api_schema_parse_message_with_caption_entities() -> None:
+    message = {
+        "message_id": 2,
+        "chat": {"id": 123, "type": "private"},
+        "from": {"id": 456},
+        "photo": [
+            {
+                "file_id": "photo_1",
+                "file_unique_id": "unique_1",
+                "width": 100,
+                "height": 100,
+            }
+        ],
+        "caption": "Look at this!",
+        "caption_entities": [{"type": "bold", "offset": 0, "length": 4}],
+        "date": 1234567890,
+    }
+    schema = parse_message_payload(message)
+    assert isinstance(schema, TelegramMessageSchema)
+    assert schema.caption == "Look at this!"
+    assert schema.caption_entities is not None
+    assert len(schema.caption_entities) == 1
+    assert schema.caption_entities[0]["type"] == "bold"
+
+
+def test_api_schema_parse_message_text_entities() -> None:
+    message = {
+        "message_id": 3,
+        "chat": {"id": 123, "type": "private"},
+        "from": {"id": 456},
+        "text": "/command arg1 arg2",
+        "entities": [{"type": "bot_command", "offset": 0, "length": 8}],
+        "date": 1234567890,
+    }
+    schema = parse_message_payload(message)
+    assert isinstance(schema, TelegramMessageSchema)
+    assert schema.text == "/command arg1 arg2"
+    assert schema.entities is not None
+    assert len(schema.entities) == 1
+    assert schema.entities[0]["type"] == "bot_command"
+
+
+def test_api_schema_parse_message_photo() -> None:
+    message = {
+        "message_id": 4,
+        "chat": {"id": 123, "type": "private"},
+        "from": {"id": 456},
+        "photo": [
+            {
+                "file_id": "small",
+                "file_unique_id": "unique_small",
+                "width": 64,
+                "height": 64,
+                "file_size": 1000,
+            },
+            {
+                "file_id": "large",
+                "file_unique_id": "unique_large",
+                "width": 1024,
+                "height": 768,
+                "file_size": 50000,
+            },
+        ],
+        "date": 1234567890,
+    }
+    schema = parse_message_payload(message)
+    assert isinstance(schema, TelegramMessageSchema)
+    assert schema.photo is not None
+    assert len(schema.photo) == 2
+
+
+def test_api_schema_parse_message_document() -> None:
+    message = {
+        "message_id": 5,
+        "chat": {"id": 123, "type": "private"},
+        "from": {"id": 456},
+        "document": {
+            "file_id": "doc_123",
+            "file_unique_id": "unique_doc",
+            "file_name": "test.pdf",
+            "mime_type": "application/pdf",
+            "file_size": 102400,
+        },
+        "date": 1234567890,
+    }
+    schema = parse_message_payload(message)
+    assert isinstance(schema, TelegramMessageSchema)
+    assert schema.document is not None
+    assert schema.document["file_name"] == "test.pdf"
+
+
+def test_api_schema_parse_message_voice() -> None:
+    message = {
+        "message_id": 6,
+        "chat": {"id": 123, "type": "private"},
+        "from": {"id": 456},
+        "voice": {
+            "file_id": "voice_123",
+            "file_unique_id": "unique_voice",
+            "duration": 15,
+            "mime_type": "audio/ogg",
+            "file_size": 2048,
+        },
+        "date": 1234567890,
+    }
+    schema = parse_message_payload(message)
+    assert isinstance(schema, TelegramMessageSchema)
+    assert schema.voice is not None
+    assert schema.voice["duration"] == 15
+
+
+def test_api_schema_parse_callback_query() -> None:
+    callback = {
+        "id": "cb123",
+        "from": {"id": 456, "is_bot": False, "username": "testuser"},
+        "data": "action:payload",
+        "message": {
+            "message_id": 10,
+            "chat": {"id": 123, "type": "private"},
+            "message_thread_id": 5,
+        },
+    }
+    schema = parse_callback_query_payload(callback)
+    assert isinstance(schema, TelegramCallbackQuerySchema)
+    assert schema.id == "cb123"
+    assert schema.data == "action:payload"
+    assert schema.message is not None
+
+
+def test_api_schema_parse_callback_query_no_message() -> None:
+    callback = {
+        "id": "cb456",
+        "from": {"id": 789},
+        "data": "inline:data",
+    }
+    schema = parse_callback_query_payload(callback)
+    assert isinstance(schema, TelegramCallbackQuerySchema)
+    assert schema.id == "cb456"
+    assert schema.message is None
+
+
+def test_api_schema_parse_photo_size() -> None:
+    photo_data = {
+        "file_id": "photo_abc",
+        "file_unique_id": "unique_abc",
+        "width": 800,
+        "height": 600,
+        "file_size": 30000,
+    }
+    schema = TelegramPhotoSizeSchema.model_validate(photo_data)
+    assert schema.file_id == "photo_abc"
+    assert schema.width == 800
+    assert schema.height == 600
+    assert schema.file_size == 30000
+
+
+def test_api_schema_parse_document() -> None:
+    doc_data = {
+        "file_id": "doc_xyz",
+        "file_unique_id": "unique_xyz",
+        "file_name": "report.pdf",
+        "mime_type": "application/pdf",
+        "file_size": 1024000,
+    }
+    schema = TelegramDocumentSchema.model_validate(doc_data)
+    assert schema.file_id == "doc_xyz"
+    assert schema.file_name == "report.pdf"
+    assert schema.mime_type == "application/pdf"
+
+
+def test_api_schema_parse_voice() -> None:
+    voice_data = {
+        "file_id": "voice_qwe",
+        "file_unique_id": "unique_qwe",
+        "duration": 30,
+        "mime_type": "audio/ogg",
+        "file_size": 4096,
+    }
+    schema = TelegramVoiceSchema.model_validate(voice_data)
+    assert schema.file_id == "voice_qwe"
+    assert schema.duration == 30
+    assert schema.mime_type == "audio/ogg"
+
+
+def test_api_schema_parse_message_entity() -> None:
+    entity_data = {"type": "url", "offset": 10, "length": 20}
+    schema = TelegramMessageEntitySchema.model_validate(entity_data)
+    assert schema.type == "url"
+    assert schema.offset == 10
+    assert schema.length == 20
+
+
+def test_api_schema_unknown_fields_tolerated() -> None:
+    update = {
+        "update_id": 99,
+        "message": {
+            "message_id": 100,
+            "chat": {"id": 123, "type": "private"},
+            "from": {"id": 456, "unknown_user_field": "ignored"},
+            "text": "test",
+            "date": 1234567890,
+            "unknown_message_field": {"nested": "data"},
+        },
+        "unknown_update_field": 123,
+    }
+    schema = parse_update_payload(update)
+    assert isinstance(schema, TelegramUpdateSchema)
+    assert schema.update_id == 99
+
+
+def test_api_schema_optional_fields() -> None:
+    message = {
+        "message_id": 7,
+        "chat": {"id": 123, "type": "private"},
+        "text": "minimal message",
+        "date": 1234567890,
+    }
+    schema = parse_message_payload(message)
+    assert isinstance(schema, TelegramMessageSchema)
+    assert schema.message_id == 7
+    assert schema.from_user is None
+    assert schema.caption is None
+    assert schema.entities is None
+
+
+def test_api_schema_invalid_payload_returns_none() -> None:
+    assert parse_message_payload(None) is None
+    assert parse_message_payload("invalid") is None
+    assert parse_message_payload({"message_id": "not an int"}) is None
+    assert parse_callback_query_payload(None) is None
+    assert parse_callback_query_payload("invalid") is None
+
+
+def test_adapter_integration_with_schemas() -> None:
+    update = {
+        "update_id": 100,
+        "message": {
+            "message_id": 200,
+            "chat": {"id": 999, "type": "private"},
+            "from": {"id": 888, "is_bot": False, "username": "test"},
+            "text": "/test command",
+            "date": 1234567890,
+            "entities": [{"type": "bot_command", "offset": 0, "length": 5}],
+        },
+    }
+    parsed = parse_update(update)
+    assert parsed is not None
+    assert parsed.message is not None
+    assert parsed.message.text == "/test command"
+    assert parsed.message.chat_id == 999
+    assert parsed.message.from_user_id == 888
+    assert len(parsed.message.entities) == 1
+    assert parsed.message.entities[0].type == "bot_command"
+
+
+def test_golden_fixture_photo_with_caption() -> None:
+    update = {
+        "update_id": 300,
+        "message": {
+            "message_id": 400,
+            "chat": {"id": -1001234567890, "type": "supergroup"},
+            "from": {"id": 123456789, "is_bot": False, "username": "user"},
+            "photo": [
+                {
+                    "file_id": "AgACAgIAAxkBAAIe...",
+                    "file_unique_id": "AQAD...",
+                    "width": 90,
+                    "height": 90,
+                    "file_size": 1234,
+                },
+                {
+                    "file_id": "AgACAgIAAxkBAAIe...BQ",
+                    "file_unique_id": "AQAD...BQ",
+                    "width": 320,
+                    "height": 320,
+                    "file_size": 5678,
+                },
+                {
+                    "file_id": "AgACAgIAAxkBAAIe...BA",
+                    "file_unique_id": "AQAD...BA",
+                    "width": 800,
+                    "height": 800,
+                    "file_size": 12345,
+                },
+            ],
+            "caption": "Check out this photo! #amazing",
+            "caption_entities": [{"type": "hashtag", "offset": 21, "length": 8}],
+            "date": 1234567890,
+        },
+    }
+    parsed = parse_update(update)
+    assert parsed is not None
+    assert parsed.message is not None
+    assert parsed.message.caption == "Check out this photo! #amazing"
+    assert len(parsed.message.photos) == 3
+    assert parsed.message.photos[0].width == 90
+    assert parsed.message.photos[2].width == 800
+    assert len(parsed.message.caption_entities) == 1
+    assert parsed.message.caption_entities[0].type == "hashtag"
+
+
+def test_golden_fixture_complex_callback() -> None:
+    update = {
+        "update_id": 400,
+        "callback_query": {
+            "id": "438129494",
+            "from": {
+                "id": 123456789,
+                "is_bot": False,
+                "first_name": "John",
+                "last_name": "Doe",
+                "username": "johndoe",
+            },
+            "message": {
+                "message_id": 500,
+                "chat": {"id": -1001234567890, "type": "supergroup"},
+                "message_thread_id": 42,
+                "date": 1234567890,
+            },
+            "data": "appr:accept:req123",
+        },
+    }
+    parsed = parse_update(update)
+    assert parsed is not None
+    assert parsed.callback is not None
+    assert parsed.callback.callback_id == "438129494"
+    assert parsed.callback.data == "appr:accept:req123"
+    assert parsed.callback.chat_id == -1001234567890
+    assert parsed.callback.thread_id == 42

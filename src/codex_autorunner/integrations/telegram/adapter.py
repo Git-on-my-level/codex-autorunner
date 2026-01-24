@@ -12,6 +12,16 @@ from ...core.circuit_breaker import CircuitBreaker
 from ...core.exceptions import CodexError, PermanentError, TransientError
 from ...core.logging_utils import log_event
 from ...core.retry import retry_transient
+from .api_schemas import (
+    TelegramAudioSchema,
+    TelegramDocumentSchema,
+    TelegramMessageEntitySchema,
+    TelegramPhotoSizeSchema,
+    TelegramVoiceSchema,
+    parse_callback_query_payload,
+    parse_message_payload,
+    parse_update_payload,
+)
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .retry import _extract_retry_after_seconds
 
@@ -323,48 +333,44 @@ def is_interrupt_alias(text: Optional[str]) -> bool:
 
 
 def parse_update(update: dict[str, Any]) -> Optional[TelegramUpdate]:
-    update_id = update.get("update_id")
-    if not isinstance(update_id, int):
+    try:
+        schema = parse_update_payload(update)
+    except Exception:
         return None
-    message = _parse_message(update_id, update.get("message"), edited=False)
+    message = _parse_message(schema.update_id, schema.message, edited=False)
     if message is None:
-        message = _parse_message(update_id, update.get("edited_message"), edited=True)
-    callback = _parse_callback(update_id, update.get("callback_query"))
+        message = _parse_message(schema.update_id, schema.edited_message, edited=True)
+    callback = _parse_callback(schema.update_id, schema.callback_query)
     if message is None and callback is None:
         return None
-    return TelegramUpdate(update_id=update_id, message=message, callback=callback)
+    return TelegramUpdate(
+        update_id=schema.update_id, message=message, callback=callback
+    )
 
 
 def _parse_message(
     update_id: int, payload: Any, *, edited: bool = False
 ) -> Optional[TelegramMessage]:
-    if not isinstance(payload, dict):
+    schema = parse_message_payload(payload)
+    if schema is None:
         return None
-    message_id = payload.get("message_id")
-    chat = payload.get("chat")
-    if not isinstance(message_id, int) or not isinstance(chat, dict):
-        return None
-    chat_id = chat.get("id")
+
+    chat_id = schema.chat.get("id") if isinstance(schema.chat, dict) else None
     if not isinstance(chat_id, int):
         return None
 
-    chat_type = chat.get("type")
+    chat_type = schema.chat.get("type") if isinstance(schema.chat, dict) else None
     if chat_type is not None and not isinstance(chat_type, str):
         chat_type = None
-
-    thread_id = payload.get("message_thread_id")
-    if thread_id is not None and not isinstance(thread_id, int):
-        thread_id = None
 
     reply_to_message_id: Optional[int] = None
     reply_to_is_bot = False
     reply_to_username: Optional[str] = None
-    reply_to = payload.get("reply_to_message")
-    if isinstance(reply_to, dict):
-        rmid = reply_to.get("message_id")
+    if isinstance(schema.reply_to_message, dict):
+        rmid = schema.reply_to_message.get("message_id")
         if isinstance(rmid, int):
             reply_to_message_id = rmid
-        reply_from = reply_to.get("from")
+        reply_from = schema.reply_to_message.get("from")
         if isinstance(reply_from, dict):
             is_bot = reply_from.get("is_bot")
             if isinstance(is_bot, bool):
@@ -373,47 +379,37 @@ def _parse_message(
             if isinstance(username, str):
                 reply_to_username = username
 
-    sender = payload.get("from")
-    from_user_id = sender.get("id") if isinstance(sender, dict) else None
+    from_user_id = (
+        schema.from_user.get("id") if isinstance(schema.from_user, dict) else None
+    )
     if from_user_id is not None and not isinstance(from_user_id, int):
         from_user_id = None
-    text = payload.get("text")
-    if text is not None and not isinstance(text, str):
-        text = None
-    caption = payload.get("caption")
-    if caption is not None and not isinstance(caption, str):
-        caption = None
-    entities = _parse_entities(payload.get("entities"))
-    caption_entities = _parse_entities(payload.get("caption_entities"))
-    photos = _parse_photo_sizes(payload.get("photo"))
-    document = _parse_document(payload.get("document"))
-    audio = _parse_audio(payload.get("audio"))
-    voice = _parse_voice(payload.get("voice"))
-    media_group_id = payload.get("media_group_id")
-    if media_group_id is not None and not isinstance(media_group_id, str):
-        media_group_id = None
-    date = payload.get("date")
-    if date is not None and not isinstance(date, int):
-        date = None
-    is_topic_message = bool(payload.get("is_topic_message"))
+
+    entities = _parse_entities(schema.entities)
+    caption_entities = _parse_entities(schema.caption_entities)
+    photos = _parse_photo_sizes(schema.photo)
+    document = _parse_document(schema.document)
+    audio = _parse_audio(schema.audio)
+    voice = _parse_voice(schema.voice)
+
     return TelegramMessage(
         update_id=update_id,
-        message_id=message_id,
+        message_id=schema.message_id,
         chat_id=chat_id,
-        thread_id=thread_id,
+        thread_id=schema.message_thread_id,
         from_user_id=from_user_id,
-        text=text,
-        date=date,
-        is_topic_message=is_topic_message,
+        text=schema.text,
+        date=schema.date,
+        is_topic_message=schema.is_topic_message,
         is_edited=edited,
-        caption=caption,
+        caption=schema.caption,
         entities=entities,
         caption_entities=caption_entities,
         photos=photos,
         document=document,
         audio=audio,
         voice=voice,
-        media_group_id=media_group_id,
+        media_group_id=schema.media_group_id,
         chat_type=chat_type,
         reply_to_message_id=reply_to_message_id,
         reply_to_is_bot=reply_to_is_bot,
@@ -422,39 +418,38 @@ def _parse_message(
 
 
 def _parse_callback(update_id: int, payload: Any) -> Optional[TelegramCallbackQuery]:
-    if not isinstance(payload, dict):
+    schema = parse_callback_query_payload(payload)
+    if schema is None:
         return None
-    callback_id = payload.get("id")
-    if not isinstance(callback_id, str):
-        return None
-    sender = payload.get("from")
-    from_user_id = sender.get("id") if isinstance(sender, dict) else None
+
+    from_user_id = (
+        schema.from_user.get("id") if isinstance(schema.from_user, dict) else None
+    )
     if from_user_id is not None and not isinstance(from_user_id, int):
         from_user_id = None
-    data = payload.get("data")
-    if data is not None and not isinstance(data, str):
-        data = None
-    message = payload.get("message")
+
     message_id = None
     chat_id = None
     thread_id = None
-    if isinstance(message, dict):
-        message_id = message.get("message_id")
-        chat = message.get("chat")
+    if isinstance(schema.message, dict):
+        message_id = schema.message.get("message_id")
+        chat = schema.message.get("chat")
         if isinstance(chat, dict):
             chat_id = chat.get("id")
-        thread_id = message.get("message_thread_id")
+        thread_id = schema.message.get("message_thread_id")
+
     if message_id is not None and not isinstance(message_id, int):
         message_id = None
     if chat_id is not None and not isinstance(chat_id, int):
         chat_id = None
     if thread_id is not None and not isinstance(thread_id, int):
         thread_id = None
+
     return TelegramCallbackQuery(
         update_id=update_id,
-        callback_id=callback_id,
+        callback_id=schema.id,
         from_user_id=from_user_id,
-        data=data,
+        data=schema.data,
         message_id=message_id,
         chat_id=chat_id,
         thread_id=thread_id,
@@ -468,26 +463,17 @@ def _parse_photo_sizes(payload: Any) -> tuple[TelegramPhotoSize, ...]:
     for item in payload:
         if not isinstance(item, dict):
             continue
-        file_id = item.get("file_id")
-        if not isinstance(file_id, str) or not file_id:
+        try:
+            schema = TelegramPhotoSizeSchema.model_validate(item)
+        except Exception:
             continue
-        file_unique_id = item.get("file_unique_id")
-        if file_unique_id is not None and not isinstance(file_unique_id, str):
-            file_unique_id = None
-        width = item.get("width")
-        height = item.get("height")
-        if not isinstance(width, int) or not isinstance(height, int):
-            continue
-        file_size = item.get("file_size")
-        if file_size is not None and not isinstance(file_size, int):
-            file_size = None
         sizes.append(
             TelegramPhotoSize(
-                file_id=file_id,
-                file_unique_id=file_unique_id,
-                width=width,
-                height=height,
-                file_size=file_size,
+                file_id=schema.file_id,
+                file_unique_id=schema.file_unique_id,
+                width=schema.width,
+                height=schema.height,
+                file_size=schema.file_size,
             )
         )
     return tuple(sizes)
@@ -496,85 +482,49 @@ def _parse_photo_sizes(payload: Any) -> tuple[TelegramPhotoSize, ...]:
 def _parse_document(payload: Any) -> Optional[TelegramDocument]:
     if not isinstance(payload, dict):
         return None
-    file_id = payload.get("file_id")
-    if not isinstance(file_id, str) or not file_id:
+    try:
+        schema = TelegramDocumentSchema.model_validate(payload)
+    except Exception:
         return None
-    file_unique_id = payload.get("file_unique_id")
-    if file_unique_id is not None and not isinstance(file_unique_id, str):
-        file_unique_id = None
-    file_name = payload.get("file_name")
-    if file_name is not None and not isinstance(file_name, str):
-        file_name = None
-    mime_type = payload.get("mime_type")
-    if mime_type is not None and not isinstance(mime_type, str):
-        mime_type = None
-    file_size = payload.get("file_size")
-    if file_size is not None and not isinstance(file_size, int):
-        file_size = None
     return TelegramDocument(
-        file_id=file_id,
-        file_unique_id=file_unique_id,
-        file_name=file_name,
-        mime_type=mime_type,
-        file_size=file_size,
+        file_id=schema.file_id,
+        file_unique_id=schema.file_unique_id,
+        file_name=schema.file_name,
+        mime_type=schema.mime_type,
+        file_size=schema.file_size,
     )
 
 
 def _parse_audio(payload: Any) -> Optional[TelegramAudio]:
     if not isinstance(payload, dict):
         return None
-    file_id = payload.get("file_id")
-    if not isinstance(file_id, str) or not file_id:
+    try:
+        schema = TelegramAudioSchema.model_validate(payload)
+    except Exception:
         return None
-    file_unique_id = payload.get("file_unique_id")
-    if file_unique_id is not None and not isinstance(file_unique_id, str):
-        file_unique_id = None
-    duration = payload.get("duration")
-    if duration is not None and not isinstance(duration, int):
-        duration = None
-    file_name = payload.get("file_name")
-    if file_name is not None and not isinstance(file_name, str):
-        file_name = None
-    mime_type = payload.get("mime_type")
-    if mime_type is not None and not isinstance(mime_type, str):
-        mime_type = None
-    file_size = payload.get("file_size")
-    if file_size is not None and not isinstance(file_size, int):
-        file_size = None
     return TelegramAudio(
-        file_id=file_id,
-        file_unique_id=file_unique_id,
-        duration=duration,
-        file_name=file_name,
-        mime_type=mime_type,
-        file_size=file_size,
+        file_id=schema.file_id,
+        file_unique_id=schema.file_unique_id,
+        duration=schema.duration,
+        file_name=schema.file_name,
+        mime_type=schema.mime_type,
+        file_size=schema.file_size,
     )
 
 
 def _parse_voice(payload: Any) -> Optional[TelegramVoice]:
     if not isinstance(payload, dict):
         return None
-    file_id = payload.get("file_id")
-    if not isinstance(file_id, str) or not file_id:
+    try:
+        schema = TelegramVoiceSchema.model_validate(payload)
+    except Exception:
         return None
-    file_unique_id = payload.get("file_unique_id")
-    if file_unique_id is not None and not isinstance(file_unique_id, str):
-        file_unique_id = None
-    duration = payload.get("duration")
-    if duration is not None and not isinstance(duration, int):
-        duration = None
-    mime_type = payload.get("mime_type")
-    if mime_type is not None and not isinstance(mime_type, str):
-        mime_type = None
-    file_size = payload.get("file_size")
-    if file_size is not None and not isinstance(file_size, int):
-        file_size = None
     return TelegramVoice(
-        file_id=file_id,
-        file_unique_id=file_unique_id,
-        duration=duration,
-        mime_type=mime_type,
-        file_size=file_size,
+        file_id=schema.file_id,
+        file_unique_id=schema.file_unique_id,
+        duration=schema.duration,
+        mime_type=schema.mime_type,
+        file_size=schema.file_size,
     )
 
 
@@ -585,14 +535,15 @@ def _parse_entities(payload: Any) -> tuple[TelegramMessageEntity, ...]:
     for item in payload:
         if not isinstance(item, dict):
             continue
-        kind = item.get("type")
-        offset = item.get("offset")
-        length = item.get("length")
-        if not isinstance(kind, str):
+        try:
+            schema = TelegramMessageEntitySchema.model_validate(item)
+        except Exception:
             continue
-        if not isinstance(offset, int) or not isinstance(length, int):
-            continue
-        entities.append(TelegramMessageEntity(type=kind, offset=offset, length=length))
+        entities.append(
+            TelegramMessageEntity(
+                type=schema.type, offset=schema.offset, length=schema.length
+            )
+        )
     return tuple(entities)
 
 
@@ -1457,6 +1408,7 @@ class TelegramBotClient:
         message_id: int,
         text: str,
         *,
+        message_thread_id: Optional[int] = None,
         reply_markup: Optional[dict[str, Any]] = None,
         parse_mode: Optional[str] = None,
         disable_web_page_preview: bool = True,
@@ -1466,6 +1418,7 @@ class TelegramBotClient:
             logging.INFO,
             "telegram.edit_message",
             chat_id=chat_id,
+            thread_id=message_thread_id,
             message_id=message_id,
             text_len=len(text),
             has_markup=reply_markup is not None,
@@ -1478,6 +1431,8 @@ class TelegramBotClient:
             "text": text,
             "disable_web_page_preview": disable_web_page_preview,
         }
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
         if parse_mode is not None:
@@ -1489,12 +1444,15 @@ class TelegramBotClient:
         self,
         chat_id: Union[int, str],
         message_id: int,
+        *,
+        message_thread_id: Optional[int] = None,
     ) -> bool:
         log_event(
             self._logger,
             logging.INFO,
             "telegram.delete_message",
             chat_id=chat_id,
+            thread_id=message_thread_id,
             message_id=message_id,
         )
         payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id}
@@ -1505,6 +1463,9 @@ class TelegramBotClient:
         self,
         callback_query_id: str,
         *,
+        chat_id: Optional[int] = None,
+        thread_id: Optional[int] = None,
+        message_id: Optional[int] = None,
         text: Optional[str] = None,
         show_alert: bool = False,
     ) -> dict[str, Any]:
@@ -1513,6 +1474,9 @@ class TelegramBotClient:
             logging.INFO,
             "telegram.answer_callback",
             callback_query_id=callback_query_id,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            message_id=message_id,
             text_len=len(text) if text else 0,
             show_alert=show_alert,
         )

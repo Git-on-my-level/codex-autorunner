@@ -1,10 +1,20 @@
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional, Union
 
 from ...core.circuit_breaker import CircuitBreaker
 from ...integrations.app_server.client import CodexAppServerClient
-from .agent_backend import AgentBackend, AgentEvent
+from .agent_backend import AgentBackend, AgentEvent, now_iso
+from .run_event import (
+    ApprovalRequested,
+    Completed,
+    Failed,
+    OutputDelta,
+    RunEvent,
+    Started,
+    ToolCall,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -32,6 +42,7 @@ class CodexAppServerBackend(AgentBackend):
         self._thread_id: Optional[str] = None
 
         self._circuit_breaker = CircuitBreaker("CodexAppServer", logger=_logger)
+        self._event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
 
     async def _ensure_client(self) -> CodexAppServerClient:
         if self._client is None:
@@ -99,6 +110,90 @@ class CodexAppServerBackend(AgentBackend):
             final_message="\n".join(result.agent_messages)
         )
 
+    async def run_turn_events(
+        self, session_id: str, message: str
+    ) -> AsyncGenerator[RunEvent, None]:
+        client = await self._ensure_client()
+
+        if session_id:
+            self._thread_id = session_id
+
+        if not self._thread_id:
+            actual_session_id = await self.start_session(target={}, context={})
+        else:
+            actual_session_id = self._thread_id
+
+        _logger.info(
+            "Running turn events on thread %s with message: %s",
+            actual_session_id or "unknown",
+            message[:100],
+        )
+
+        yield Started(timestamp=now_iso(), session_id=actual_session_id)
+
+        yield OutputDelta(
+            timestamp=now_iso(), content=message, delta_type="user_message"
+        )
+
+        self._event_queue = asyncio.Queue()
+
+        handle = await client.turn_start(
+            actual_session_id if actual_session_id else "default",
+            text=message,
+            approval_policy=self._approval_policy,
+            sandbox_policy=self._sandbox_policy,
+        )
+
+        wait_task = asyncio.create_task(handle.wait(timeout=600.0))
+
+        try:
+            while True:
+                if not self._event_queue.empty():
+                    run_event = self._event_queue.get_nowait()
+                    if run_event:
+                        yield run_event
+                    continue
+
+                get_task = asyncio.create_task(self._event_queue.get())
+                done_set, pending_set = await asyncio.wait(
+                    {wait_task, get_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if wait_task in done_set:
+                    if get_task in pending_set:
+                        get_task.cancel()
+                    result = wait_task.result()
+                    for msg in result.agent_messages:
+                        yield OutputDelta(
+                            timestamp=now_iso(),
+                            content=msg,
+                            delta_type="assistant_message",
+                        )
+                    # raw_events already contain the same notifications we streamed
+                    # through _event_queue; skipping here avoids double-emitting.
+                    while not self._event_queue.empty():
+                        extra = self._event_queue.get_nowait()
+                        if extra:
+                            yield extra
+                    yield Completed(
+                        timestamp=now_iso(),
+                        final_message="\n".join(result.agent_messages),
+                    )
+                    break
+
+                for task in done_set:
+                    if task is not wait_task:
+                        run_event = task.result()
+                        if run_event:
+                            yield run_event
+                for task in pending_set:
+                    task.cancel()
+        except Exception as e:
+            _logger.error("Error during turn execution: %s", e)
+            if not wait_task.done():
+                wait_task.cancel()
+            yield Failed(timestamp=now_iso(), error_message=str(e))
+
     async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
         if False:
             yield AgentEvent.stream_delta(content="", delta_type="noop")
@@ -129,16 +224,56 @@ class CodexAppServerBackend(AgentBackend):
         item_type = request.get("params", {}).get("type", "")
 
         _logger.info("Received approval request: %s (type=%s)", method, item_type)
+        request_id = str(request.get("id") or "")
+        # Surface the approval request to consumers (e.g., Telegram) while defaulting to approve
+        await self._event_queue.put(
+            ApprovalRequested(
+                timestamp=now_iso(),
+                request_id=request_id,
+                description=method or "approval requested",
+                context=request.get("params", {}),
+            )
+        )
 
         return {"approve": True}
 
     async def _handle_notification(self, notification: Dict[str, Any]) -> None:
         method = notification.get("method", "")
+        params = notification.get("params", {}) or {}
+        thread_id = params.get("threadId") or params.get("thread_id")
+        if self._thread_id and thread_id and thread_id != self._thread_id:
+            return
         _logger.debug("Received notification: %s", method)
+        run_event = self._map_to_run_event(notification)
+        if run_event:
+            await self._event_queue.put(run_event)
+
+    def _map_to_run_event(self, event_data: Dict[str, Any]) -> Optional[RunEvent]:
+        method = event_data.get("method", "")
 
         if method == "turn/streamDelta":
-            content = notification.get("params", {}).get("delta", "")
-            _logger.info("Stream delta: %s", content[:100])
+            content = event_data.get("params", {}).get("delta", "")
+            return OutputDelta(
+                timestamp=now_iso(), content=content, delta_type="assistant_stream"
+            )
+
+        if method == "item/toolCall/start":
+            params = event_data.get("params", {})
+            return ToolCall(
+                timestamp=now_iso(),
+                tool_name=params.get("name", ""),
+                tool_input=params.get("input", {}),
+            )
+
+        if method == "item/toolCall/end":
+            return None
+
+        if method == "turn/error":
+            params = event_data.get("params", {})
+            error_message = params.get("message", "Unknown error")
+            return Failed(timestamp=now_iso(), error_message=error_message)
+
+        return None
 
     def _parse_raw_event(self, event_data: Dict[str, Any]) -> AgentEvent:
         method = event_data.get("method", "")

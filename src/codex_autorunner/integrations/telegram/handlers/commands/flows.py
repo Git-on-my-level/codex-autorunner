@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import logging
-import subprocess
-import sys
 from pathlib import Path
 
 from .....core.engine import Engine
 from .....core.flows import FlowController, FlowStore
 from .....core.flows.models import FlowRunStatus
+from .....core.flows.worker_process import spawn_flow_worker
 from .....core.utils import canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
 from .....tickets import AgentPool
@@ -39,30 +38,14 @@ def _get_ticket_controller(repo_root: Path) -> FlowController:
 
 
 def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
-    # Run detached worker (best-effort). stdout/stderr to files to avoid pipe deadlocks.
-    logs_dir = repo_root / ".codex-autorunner" / "runs" / run_id
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    out = (logs_dir / "worker.stdout.log").open("ab")
-    err = (logs_dir / "worker.stderr.log").open("ab")
+    proc, out, err = spawn_flow_worker(repo_root, run_id)
     try:
-        subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "codex_autorunner.cli",
-                "flow",
-                "worker",
-                "--run-id",
-                run_id,
-            ],
-            cwd=str(repo_root),
-            stdout=out,
-            stderr=err,
-            start_new_session=True,
-        )
-    finally:
+        # We don't track handles in Telegram commands, close in parent after spawn.
         out.close()
         err.close()
+    finally:
+        if proc.poll() is not None:
+            _logger.warning("Flow worker for %s exited immediately", run_id)
 
 
 class FlowCommands(SharedHelpers):
@@ -188,6 +171,51 @@ Create SPEC.md and additional tickets under .codex-autorunner/tickets/. Then wri
         await self._send_message(
             message.chat_id,
             text,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
+    async def _handle_reply(self, message: TelegramMessage, args: str) -> None:
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._store.get_topic(key)
+        if not record or not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                "No workspace bound. Use /bind to bind this topic to a repo first.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        repo_root = canonicalize_path(Path(record.workspace_path))
+        text = args.strip()
+        if not text:
+            await self._send_message(
+                message.chat_id,
+                "Provide a reply: `/reply <message>`",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        target_run_id = self._ticket_flow_pause_targets.get(str(repo_root))
+        paused = self._get_paused_ticket_flow(repo_root, preferred_run_id=target_run_id)
+        if not paused:
+            await self._send_message(
+                message.chat_id,
+                "No paused ticket flow run found for this workspace.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        run_id, run_record = paused
+        success, result = await self._write_user_reply_from_telegram(
+            repo_root, run_id, run_record, message, text
+        )
+        await self._send_message(
+            message.chat_id,
+            result,
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )

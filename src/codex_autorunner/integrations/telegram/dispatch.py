@@ -72,14 +72,26 @@ def _log_denied(handlers: Any, update: TelegramUpdate) -> None:
     chat_id = None
     user_id = None
     thread_id = None
+    message_id = None
+    update_id = None
+    conversation_id = None
     if update.message:
         chat_id = update.message.chat_id
         user_id = update.message.from_user_id
         thread_id = update.message.thread_id
+        message_id = update.message.message_id
+        update_id = update.message.update_id
     elif update.callback:
         chat_id = update.callback.chat_id
         user_id = update.callback.from_user_id
         thread_id = update.callback.thread_id
+        message_id = update.callback.message_id
+        update_id = update.callback.update_id
+    if chat_id is not None:
+        try:
+            conversation_id = topic_key(chat_id, thread_id)
+        except Exception:
+            conversation_id = None
     log_event(
         handlers._logger,
         logging.INFO,
@@ -87,6 +99,9 @@ def _log_denied(handlers: Any, update: TelegramUpdate) -> None:
         chat_id=chat_id,
         user_id=user_id,
         thread_id=thread_id,
+        message_id=message_id,
+        update_id=update_id,
+        conversation_id=conversation_id,
     )
 
 
@@ -172,6 +187,7 @@ async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
             has_message=bool(update.message),
             has_callback=bool(update.callback),
             update_received_at=now_iso(),
+            conversation_id=conversation_id,
         )
         if (
             update.update_id is not None
@@ -188,6 +204,7 @@ async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
                 chat_id=context.chat_id,
                 thread_id=context.thread_id,
                 message_id=context.message_id,
+                conversation_id=conversation_id,
             )
             return
         if not allowlist_allows(update, handlers._allowlist):

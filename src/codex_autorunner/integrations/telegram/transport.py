@@ -41,14 +41,33 @@ class TelegramMessageTransport:
         message_id: int,
         text: str,
         *,
+        message_thread_id: Optional[int] = None,
         reply_markup: Optional[dict[str, Any]] = None,
     ) -> bool:
         try:
             payload_text, parse_mode = self._prepare_message(text)
+            if len(payload_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+                trimmed = trim_markdown_message(
+                    payload_text,
+                    max_len=TELEGRAM_MAX_MESSAGE_LENGTH,
+                    render=(
+                        _format_telegram_html
+                        if parse_mode == "HTML"
+                        else (
+                            lambda v: (
+                                _format_telegram_markdown(v, parse_mode)
+                                if parse_mode in ("Markdown", "MarkdownV2")
+                                else v
+                            )
+                        )
+                    ),
+                )
+                payload_text = trimmed
             await self._bot.edit_message_text(
                 chat_id,
                 message_id,
                 payload_text,
+                message_thread_id=message_thread_id,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
             )
@@ -56,11 +75,17 @@ class TelegramMessageTransport:
             return False
         return True
 
-    async def _delete_message(self, chat_id: int, message_id: Optional[int]) -> bool:
+    async def _delete_message(
+        self, chat_id: int, message_id: Optional[int], thread_id: Optional[int] = None
+    ) -> bool:
         if message_id is None:
             return False
         try:
-            return bool(await self._bot.delete_message(chat_id, message_id))
+            return bool(
+                await self._bot.delete_message(
+                    chat_id, message_id, message_thread_id=thread_id
+                )
+            )
         except Exception:
             return False
 
@@ -77,6 +102,7 @@ class TelegramMessageTransport:
             callback.chat_id,
             callback.message_id,
             text,
+            message_thread_id=callback.thread_id,
             reply_markup=reply_markup,
         )
 
@@ -385,7 +411,13 @@ class TelegramMessageTransport:
         if callback is None:
             return
         try:
-            await self._bot.answer_callback_query(callback.callback_id, text=text)
+            await self._bot.answer_callback_query(
+                callback.callback_id,
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+                message_id=callback.message_id,
+                text=text,
+            )
         except Exception as exc:
             log_event(
                 self._logger,
@@ -393,6 +425,7 @@ class TelegramMessageTransport:
                 "telegram.answer_callback.failed",
                 chat_id=callback.chat_id,
                 thread_id=callback.thread_id,
+                message_id=callback.message_id,
                 callback_id=callback.callback_id,
                 exc=exc,
             )

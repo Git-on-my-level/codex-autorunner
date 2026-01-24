@@ -38,7 +38,6 @@ from ..integrations.app_server.client import (
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
-from ..web.static_assets import missing_static_assets, resolve_static_dir
 from .about_car import ensure_about_car_file
 from .adapter_utils import handle_agent_output
 from .app_server_events import AppServerEventBuffer
@@ -70,6 +69,7 @@ from .prompt import build_final_summary_prompt
 from .review_context import build_spec_progress_review_context
 from .run_index import RunIndexStore
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
+from .static_assets import missing_static_assets, resolve_static_dir
 from .utils import (
     RepoNotFoundError,
     atomic_write,

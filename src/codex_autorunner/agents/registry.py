@@ -107,11 +107,11 @@ def _select_entry_points(group: str) -> Iterable[importlib.metadata.EntryPoint]:
     """Compatibility wrapper for `importlib.metadata.entry_points()` across py versions."""
 
     eps = importlib.metadata.entry_points()
-    if hasattr(eps, "select"):
-        return eps.select(group=group)
     # Python 3.9: may return a dict
     if isinstance(eps, dict):
         return eps.get(group, [])
+    if hasattr(eps, "select"):
+        return list(eps.select(group=group))
     return []
 
 
