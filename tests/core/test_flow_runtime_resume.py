@@ -109,3 +109,51 @@ async def test_stop_requested_mid_run_halts_flow(tmp_path: Path) -> None:
     assert finished.status == FlowRunStatus.STOPPED
     assert finished.current_step == "second"
     assert calls == ["first"]  # second step never ran
+
+
+@pytest.mark.asyncio
+async def test_flow_failure_sets_failed_status_and_events(tmp_path: Path) -> None:
+    events: List[FlowEventType] = []
+
+    async def boom(_record, _input):
+        raise RuntimeError("boom")
+
+    controller = _make_controller(tmp_path, {"boom": boom})
+    controller.add_event_listener(lambda e: events.append(e.event_type))
+    record = await controller.start_flow(input_data={}, run_id="run-4")
+
+    failed = await controller.run_flow(record.id)
+
+    assert failed.status == FlowRunStatus.FAILED
+    assert failed.error_message == "boom"
+    assert failed.current_step is None
+    assert FlowEventType.STEP_FAILED in events
+
+
+@pytest.mark.asyncio
+async def test_flow_state_persists_across_reopen(tmp_path: Path) -> None:
+    async def first_step(record, _input):
+        if record.state.get("counter"):
+            return StepOutcome.continue_to({"second"})
+        return StepOutcome.pause(output={"counter": 1})
+
+    async def second_step(record, _input):
+        # Ensure state from previous run is available.
+        assert record.state.get("counter") == 1
+        return StepOutcome.complete(output={"second": "done"})
+
+    steps = {"first": first_step, "second": second_step}
+
+    controller1 = _make_controller(tmp_path, steps, initial_step="first")
+    record = await controller1.start_flow(input_data={}, run_id="run-5")
+    paused = await controller1.run_flow(record.id)
+    assert paused.status == FlowRunStatus.PAUSED
+    controller1.shutdown()
+
+    # New controller instance reads existing DB/state and resumes.
+    controller2 = _make_controller(tmp_path, steps, initial_step="first")
+    finished = await controller2.run_flow(record.id)
+
+    assert finished.status == FlowRunStatus.COMPLETED
+    assert finished.state["counter"] == 1
+    assert finished.state["second"] == "done"
