@@ -258,3 +258,275 @@ async def test_ticket_runner_lint_retry_reuses_conversation_id(tmp_path: Path) -
     assert len(pool.requests) == 2
     assert pool.requests[1].conversation_id == "conv1"
     assert "Ticket frontmatter lint failed" in pool.requests[1].prompt
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_switches_agents_between_tickets(tmp_path: Path) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_1 = ticket_dir / "TICKET-001.md"
+    ticket_2 = ticket_dir / "TICKET-002.md"
+    _write_ticket(ticket_1, agent="codex", done=False)
+    _write_ticket(ticket_2, agent="opencode", done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        if req.agent_id == "codex":
+            _set_ticket_done(ticket_1, done=True)
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="conv-codex",
+                turn_id="t1",
+                text="codex turn",
+            )
+        _set_ticket_done(ticket_2, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv-opencode",
+            turn_id="t2",
+            text="opencode turn",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    r1 = await runner.step({})
+    r2 = await runner.step(r1.state)
+    r3 = await runner.step(r2.state)
+
+    assert r1.status == "continue"
+    assert r2.status == "continue"
+    assert r3.status == "completed"
+    assert [req.agent_id for req in pool.requests] == ["codex", "opencode"]
+    assert pool.requests[0].conversation_id is None
+    assert pool.requests[1].conversation_id is None
+    assert r1.agent_conversation_id == "conv-codex"
+    assert r2.agent_conversation_id == "conv-opencode"
+    assert r1.current_ticket.endswith("TICKET-001.md")
+    assert r2.current_ticket.endswith("TICKET-002.md")
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_advances_through_multiple_tickets(tmp_path: Path) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    tickets = []
+    for idx in range(1, 4):
+        ticket_path = ticket_dir / f"TICKET-00{idx}.md"
+        _write_ticket(ticket_path, done=False)
+        tickets.append(ticket_path)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        path = tickets[len(pool.requests) - 1]
+        _set_ticket_done(path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=f"conv-{len(pool.requests)}",
+            turn_id=f"t{len(pool.requests)}",
+            text=f"done-{path.name}",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    r1 = await runner.step({})
+    r2 = await runner.step(r1.state)
+    r3 = await runner.step(r2.state)
+    r4 = await runner.step(r3.state)
+
+    assert [r.status for r in (r1, r2, r3, r4)] == [
+        "continue",
+        "continue",
+        "continue",
+        "completed",
+    ]
+    assert [r.current_ticket for r in (r1, r2, r3)] == [
+        str(Path(".codex-autorunner/tickets/TICKET-001.md")),
+        str(Path(".codex-autorunner/tickets/TICKET-002.md")),
+        str(Path(".codex-autorunner/tickets/TICKET-003.md")),
+    ]
+    assert pool.requests[0].agent_id == "codex"
+    assert pool.requests[1].agent_id == "codex"
+    assert pool.requests[2].agent_id == "codex"
+    assert pool.requests[0].conversation_id is None
+    assert pool.requests[1].conversation_id is None
+    assert pool.requests[2].conversation_id is None
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_notify_does_not_pause_and_pause_does(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    runs_dir = Path(".codex-autorunner/runs")
+    run_id = "run-1"
+    run_dir = workspace_root / runs_dir / run_id
+    handoff_dir = run_dir / "handoff"
+    user_msg = run_dir / "USER_MESSAGE.md"
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        turn = len(pool.requests)
+        handoff_dir.mkdir(parents=True, exist_ok=True)
+        mode = "notify" if turn == 1 else "pause"
+        user_msg.write_text(
+            f"---\nmode: {mode}\n---\n\nTurn {turn}\n", encoding="utf-8"
+        )
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=f"conv-{turn}",
+            turn_id=f"t{turn}",
+            text=f"turn-{turn}",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id=run_id,
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=runs_dir,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    r1 = await runner.step({})
+    r2 = await runner.step(r1.state)
+
+    handoff_history = run_dir / "handoff_history"
+    assert r1.status == "continue"
+    assert r1.dispatch is not None
+    assert r1.dispatch.message.mode == "notify"
+    assert (handoff_history / "0001" / "USER_MESSAGE.md").exists()
+    assert r1.state.get("outbox_seq") == 1
+
+    assert r2.status == "paused"
+    assert r2.dispatch is not None
+    assert r2.dispatch.message.mode == "pause"
+    assert (handoff_history / "0002" / "USER_MESSAGE.md").exists()
+    assert r2.state.get("outbox_seq") == 2
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_consumes_reply_history(tmp_path: Path) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    runs_dir = Path(".codex-autorunner/runs")
+    run_id = "run-1"
+    reply_history = workspace_root / runs_dir / run_id / "reply_history"
+    (reply_history / "0001").mkdir(parents=True, exist_ok=True)
+    (reply_history / "0001" / "USER_REPLY.md").write_text(
+        "---\ntitle: First\n---\n\nFirst reply\n", encoding="utf-8"
+    )
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        turn = len(pool.requests)
+        if turn == 1:
+            assert "[USER_REPLY 0001]" in req.prompt
+            assert "First reply" in req.prompt
+        else:
+            assert "[USER_REPLY 0001]" not in req.prompt
+            assert "[USER_REPLY 0002]" in req.prompt
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=f"conv-{turn}",
+            turn_id=f"t{turn}",
+            text=f"turn-{turn}",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id=run_id,
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=runs_dir,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    r1 = await runner.step({})
+    # Add a second reply after the first turn to ensure sequencing.
+    (reply_history / "0002").mkdir(parents=True, exist_ok=True)
+    (reply_history / "0002" / "USER_REPLY.md").write_text(
+        "---\ntitle: Second\n---\n\nSecond reply\n", encoding="utf-8"
+    )
+    r2 = await runner.step(r1.state)
+
+    assert r1.state.get("reply_seq") == 1
+    assert r2.state.get("reply_seq") == 2
+    assert len(pool.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_resumes_after_requires_created(tmp_path: Path) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, requires=["SPEC.md"], done=False)
+
+    spec_path = workspace_root / "SPEC.md"
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        _set_ticket_done(ticket_path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv-1",
+            turn_id="t1",
+            text="processed after spec",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    paused = await runner.step({})
+    assert paused.status == "paused"
+    assert not pool.requests
+    assert "Missing required input files" in (paused.reason or "")
+
+    spec_path.write_text("# Spec\n", encoding="utf-8")
+    resumed = await runner.step(paused.state)
+    completed = await runner.step(resumed.state)
+
+    assert len(pool.requests) == 1
+    assert resumed.status == "continue"
+    assert completed.status == "completed"
