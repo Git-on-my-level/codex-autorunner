@@ -99,6 +99,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "prev_run_max_chars": 6000,
         "template": ".codex-autorunner/prompt.txt",
     },
+    "security": {
+        "redact_run_logs": True,
+    },
     "runner": {
         "sleep_seconds": 5,
         "stop_after_runs": None,
