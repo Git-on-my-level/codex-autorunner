@@ -27,7 +27,7 @@ export function updatePatchPreviewFromDraft(draft: DraftPayload | undefined): vo
 
 export function renderChat(): void {
   const state = getChatState();
-  const latest = state.history[0];
+  const latest = state.history[0] as ChatHistoryEntry | undefined;
   const isRunning = state.status === "running";
   const hasError = !!state.error;
 
@@ -90,7 +90,7 @@ export function renderChat(): void {
   }
 
   const activeDoc = getActiveDoc();
-  const latestDrafts = (latest as any)?.drafts as Record<string, DraftPayload> | undefined;
+  const latestDrafts = latest?.drafts as Record<string, DraftPayload> | undefined;
   const draft =
     (getDraft(activeDoc) as DraftPayload | null) || (latestDrafts?.[activeDoc] || null);
   const hasPatch = !!(draft && (draft.patch || "").trim());
@@ -104,7 +104,7 @@ export function renderChat(): void {
     if (hasPatch) {
       chatUI.patchSummary.textContent =
         draft?.agentMessage ||
-        (latest as any)?.response ||
+        latest?.response ||
         state.error ||
         "Draft ready";
     } else {

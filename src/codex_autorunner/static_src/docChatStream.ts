@@ -12,6 +12,7 @@ import {
   parseMaybeJson,
   recoverDraftMap,
   recoverPatchFromRaw,
+  type DraftPayload,
 } from "./docsParse.js";
 import { applyDraftUpdates } from "./docsDrafts.js";
 import { renderChat, updatePatchPreviewFromDraft } from "./docChatRender.js";
@@ -313,14 +314,14 @@ export async function handleStreamEvent(event: string, rawData: string, state: C
         entry.updated = updated;
         entry.drafts = recoveredDrafts;
         applyDraftUpdates(recoveredDrafts);
-        updatePatchPreviewFromDraft(recoveredDrafts[getActiveDoc()] as any);
+        updatePatchPreviewFromDraft(recoveredDrafts[getActiveDoc()] as DraftPayload);
         entry.status = "done";
         renderChat();
         return;
       }
       const recoveredPatch = recoverPatchFromRaw(rawData);
       if (recoveredPatch) {
-        const recoveredDraft: Record<string, unknown> = {
+        const recoveredDraft: DraftPayload = {
           patch: recoveredPatch,
           content: "",
           agentMessage: "",
@@ -330,7 +331,7 @@ export async function handleStreamEvent(event: string, rawData: string, state: C
         entry.updated = [getActiveDoc()];
         entry.drafts = { [getActiveDoc()]: recoveredDraft };
         applyDraftUpdates(entry.drafts);
-        updatePatchPreviewFromDraft(recoveredDraft as any);
+        updatePatchPreviewFromDraft(recoveredDraft);
         entry.status = "done";
         renderChat();
         return;
@@ -340,7 +341,7 @@ export async function handleStreamEvent(event: string, rawData: string, state: C
       entry.updated = updated;
       entry.drafts = payload.drafts || {};
       applyDraftUpdates(payload.drafts);
-      updatePatchPreviewFromDraft(payload.drafts?.[getActiveDoc()] as any);
+      updatePatchPreviewFromDraft(payload.drafts?.[getActiveDoc()] as DraftPayload);
       entry.status = "done";
     }
     renderChat();
@@ -383,7 +384,7 @@ export function applyChatResult(payload: unknown, state: ChatState, entry: ChatE
   const parsed = parseChatPayload(payload);
   if (parsed.interrupted) {
     entry.status = "interrupted";
-    entry.error = (parsed as any).detail || "Doc chat interrupted";
+    entry.error = (parsed as Record<string, unknown>).detail as string || "Doc chat interrupted";
     state.status = "interrupted";
     state.error = "";
     return;
