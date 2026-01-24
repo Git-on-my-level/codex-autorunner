@@ -143,9 +143,7 @@ class Engine:
         self._app_server_threads_lock = threading.Lock()
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
-        redact_enabled = getattr(self.config, "security", {}).get(
-            "redact_run_logs", True
-        )
+        redact_enabled = self.config.security.get("redact_run_logs", True)
         self._app_server_event_formatter = AppServerEventFormatter(
             redact_enabled=redact_enabled
         )
@@ -386,9 +384,7 @@ class Engine:
                 "thread_total_after": telemetry.token_total,
             }
         artifacts: dict[str, str] = {}
-        redact_enabled = getattr(self.config, "security", {}).get(
-            "redact_run_logs", True
-        )
+        redact_enabled = self.config.security.get("redact_run_logs", True)
         if telemetry and telemetry.plan is not None:
             try:
                 plan_content = (
@@ -410,17 +406,19 @@ class Engine:
             plan_path = self._write_run_artifact(run_id, "plan.json", plan_content)
             artifacts["plan_path"] = str(plan_path)
         if telemetry and telemetry.diff is not None:
-            diff_content = (
-                telemetry.diff
-                if isinstance(telemetry.diff, str)
-                else json.dumps(
-                    telemetry.diff, ensure_ascii=True, indent=2, default=str
+            normalized_diff = self._normalize_diff_payload(telemetry.diff)
+            if normalized_diff is not None:
+                diff_content = (
+                    normalized_diff
+                    if isinstance(normalized_diff, str)
+                    else json.dumps(
+                        normalized_diff, ensure_ascii=True, indent=2, default=str
+                    )
                 )
-            )
-            if redact_enabled:
-                diff_content = redact_text(diff_content)
-            diff_path = self._write_run_artifact(run_id, "diff.patch", diff_content)
-            artifacts["diff_path"] = str(diff_path)
+                if redact_enabled:
+                    diff_content = redact_text(diff_content)
+                diff_path = self._write_run_artifact(run_id, "diff.patch", diff_content)
+                artifacts["diff_path"] = str(diff_path)
         if artifacts:
             run_updates["artifacts"] = artifacts
         if redact_enabled:
@@ -768,6 +766,29 @@ class Engine:
                 return
             self._run_telemetry = None
 
+    @staticmethod
+    def _normalize_diff_payload(diff: Any) -> Optional[Any]:
+        if diff is None:
+            return None
+        if isinstance(diff, str):
+            return diff if diff.strip() else None
+        if isinstance(diff, dict):
+            # Prefer meaningful fields if present.
+            for key in ("diff", "patch", "content", "value"):
+                if key in diff:
+                    val = diff.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val
+                    if val not in (None, "", [], {}, ()):
+                        return diff
+            for val in diff.values():
+                if isinstance(val, str) and val.strip():
+                    return diff
+                if val not in (None, "", [], {}, ()):
+                    return diff
+            return None
+        return diff
+
     def _maybe_update_run_index_telemetry(
         self, run_id: int, min_interval_seconds: float = 3.0
     ) -> None:
@@ -842,13 +863,12 @@ class Engine:
             if method == "turn/plan/updated":
                 telemetry.plan = params.get("plan") if "plan" in params else params
             if method == "turn/diff/updated":
-                diff = (
-                    params.get("diff")
-                    or params.get("patch")
-                    or params.get("content")
-                    or params.get("value")
-                )
-                telemetry.diff = diff if diff is not None else params
+                diff: Any = None
+                for key in ("diff", "patch", "content", "value"):
+                    if key in params:
+                        diff = params.get(key)
+                        break
+                telemetry.diff = diff if diff is not None else params or None
         if run_id is None:
             return
         for line in self._app_server_event_formatter.format_event(message):
