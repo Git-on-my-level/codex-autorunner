@@ -278,7 +278,7 @@ function renderUsageChart(data: UsageChartData | null): void {
   const series = data?.series || [];
   const isLoading = data?.status === "loading";
   if (!buckets.length || !series.length) {
-    (container as any).__usageChartBound = false;
+    (container as UsageChartElement).__usageChartBound = false;
     container.innerHTML = isLoading
       ? '<div class="usage-chart-empty">Loading…</div>'
       : '<div class="usage-chart-empty">No data</div>';
@@ -366,7 +366,7 @@ function renderUsageChart(data: UsageChartData | null): void {
   }
 
   svg += "</svg>";
-  (container as any).__usageChartBound = false;
+  (container as UsageChartElement).__usageChartBound = false;
   container.innerHTML = svg;
   attachUsageChartInteraction(container, {
     buckets,
@@ -421,6 +421,11 @@ function setChartLoading(container: HTMLElement | null, loading: boolean): void 
   container.classList.toggle("loading", loading);
 }
 
+interface UsageChartElement extends HTMLElement {
+  __usageChartBound?: boolean;
+  __usageChartState?: ChartInteractionState;
+}
+
 interface ChartInteractionState {
   buckets: string[];
   series: SeriesEntry[];
@@ -434,9 +439,9 @@ interface ChartInteractionState {
 }
 
 function attachUsageChartInteraction(container: HTMLElement, state: ChartInteractionState): void {
-  (container as any).__usageChartState = state;
-  if ((container as any).__usageChartBound) return;
-  (container as any).__usageChartBound = true;
+  (container as UsageChartElement).__usageChartState = state;
+  if ((container as UsageChartElement).__usageChartBound) return;
+  (container as UsageChartElement).__usageChartBound = true;
 
   const focus = document.createElement("div");
   focus.className = "usage-chart-focus";
@@ -449,7 +454,7 @@ function attachUsageChartInteraction(container: HTMLElement, state: ChartInterac
   container.appendChild(tooltip);
 
   const updateTooltip = (event: PointerEvent) => {
-    const chartState = (container as any).__usageChartState as ChartInteractionState;
+    const chartState = (container as UsageChartElement).__usageChartState;
     if (!chartState) return;
     const rect = container.getBoundingClientRect();
     const x = event.clientX - rect.left;
