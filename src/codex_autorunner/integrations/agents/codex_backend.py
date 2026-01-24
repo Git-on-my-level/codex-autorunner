@@ -127,7 +127,6 @@ class CodexAppServerBackend(AgentBackend):
         )
 
         yield Started(timestamp=now_iso(), session_id=actual_session_id)
-
         yield OutputDelta(
             timestamp=now_iso(), content=message, delta_type="user_message"
         )
@@ -139,6 +138,7 @@ class CodexAppServerBackend(AgentBackend):
             sandbox_policy=self._sandbox_policy,
         )
 
+        failed_emitted = False
         try:
             result = await handle.wait(timeout=600.0)
 
@@ -150,11 +150,14 @@ class CodexAppServerBackend(AgentBackend):
             for event_data in result.raw_events:
                 run_event = self._map_to_run_event(event_data)
                 if run_event:
+                    if isinstance(run_event, Failed):
+                        failed_emitted = True
                     yield run_event
 
-            yield Completed(
-                timestamp=now_iso(), final_message="\n".join(result.agent_messages)
-            )
+            if not failed_emitted:
+                yield Completed(
+                    timestamp=now_iso(), final_message="\n".join(result.agent_messages)
+                )
         except Exception as e:
             _logger.error("Error during turn execution: %s", e)
             yield Failed(timestamp=now_iso(), error_message=str(e))

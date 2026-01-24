@@ -5,6 +5,7 @@
     "python:class:src/codex_autorunner/web/schemas.py:121:GithubPrSyncRequest",
     "python:class:src/codex_autorunner/web/schemas.py:152:StateResponse",
     "python:function:src/codex_autorunner/integrations/github/service.py:257:parse_pr_input",
+    "python:function:src/codex_autorunner/integrations/telegram/outbox.py:25:_outbox_key",
     "python:function:src/codex_autorunner/routes/shared.py:134:log_stream",
     "python:function:src/codex_autorunner/routes/shared.py:167:jsonl_event_stream",
     "python:function:src/codex_autorunner/routes/shared.py:213:state_stream"

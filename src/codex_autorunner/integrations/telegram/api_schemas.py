@@ -48,19 +48,6 @@ class TelegramMessageEntitySchema(BaseTelegramSchema):
     length: int
 
 
-class TelegramUserSchema(BaseTelegramSchema):
-    id: int
-    is_bot: Optional[bool] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    username: Optional[str] = None
-
-
-class TelegramChatSchema(BaseTelegramSchema):
-    id: int
-    type: str
-
-
 class TelegramMessageSchema(BaseTelegramSchema):
     message_id: int
     chat: dict[str, Any] = Field(default_factory=dict)
