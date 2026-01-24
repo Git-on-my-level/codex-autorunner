@@ -2,6 +2,12 @@
 
 This repo dogfoods codex-autorunner to build itself. Read this before running the agent loop.
 
+## CAR Constitution
+- Default posture: YOLO (full permissions)
+- Non-negotiable invariants: filesystem is truth; single source of runtime state under `.codex-autorunner/`; layered architecture (protocol-agnostic engine, adapters, surfaces); prefer determinism and explicit configs; keep diffs small and single-purpose; observability is a contract; agents propose + execute but files decide.
+- Quick start: read `docs/car_constitution/61_AGENT_CHEATSHEET.md`.
+- Routing: identity/invariants `docs/car_constitution/10_CODEBASE_CONSTITUTION.md`; placement `20_ARCHITECTURE_MAP.md`; change hygiene `30_ENGINEERING_STANDARDS.md`; debugging/timeouts `50_OBSERVABILITY_OPERATIONS.md`; posture `60_AGENT_ONBOARDING.md`; vocabulary `95_GLOSSARY.md`.
+
 ## Layout and key files
 - Core package: `src/codex_autorunner/` (engine, CLI, server/API, UI assets).
 - Runtime/config/state live under `.codex-autorunner/` (not at repo root):
@@ -59,36 +65,7 @@ Reference docs in `docs/` (e.g., configuration, operations, debugging).
 - Telegram troubleshooting guide: `docs/ops/telegram-debugging.md`
 
 ## Subagent Model Configuration
-
-Codex-autorunner supports configuring different models for parent agents vs subagents.
-
-This is useful for:
-- Avoiding concurrency throttling (use faster/cheaper models for subagents)
-- Cost optimization (parent agent uses full model, subagents use variants)
-- Performance tuning (different models for different task types)
-
-### Configuration
-
-Configure subagent models in `codex-autorunner.yml`:
-
-```yaml
-agents:
-  opencode:
-    subagent_models:
-      subagent: zai-coding-plan/glm-4.7-flashx
-
-repo_defaults:
-  review:
-    subagent_agent: subagent
-    subagent_model: zai-coding-plan/glm-4.7-flashx
-```
-
-### How it Works
-
-1. CAR ensures `.opencode/agent/subagent.md` exists with FlashX model before starting review
-2. Review coordinator runs on full GLM-4.7
-3. Coordinator spawns subagents by calling `task` tool with agent="subagent"
-4. Subagents inherit FlashX model from their agent config
+- See `docs/adding-an-agent.md` for the review/subagent model setup and YAML example.
 
 ## Dogfooding rules
 - We sometimes develop codex-autorunner using itself.

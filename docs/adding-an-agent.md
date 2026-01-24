@@ -199,6 +199,27 @@ There are two supported registration paths:
 
 ### Option A: In-tree (modify CAR)
 
+## Subagent model configuration (review workloads)
+
+CAR can run review coordinators on one model while spawning cheaper/faster subagents. Configure this in `codex-autorunner.yml`:
+
+```yaml
+agents:
+  opencode:
+    subagent_models:
+      subagent: zai-coding-plan/glm-4.7-flashx
+
+repo_defaults:
+  review:
+    subagent_agent: subagent
+    subagent_model: zai-coding-plan/glm-4.7-flashx
+```
+
+How it works:
+1. CAR ensures `.opencode/agent/subagent.md` exists with the FlashX model before starting review.
+2. The review coordinator runs on the full GLM-4.7 model.
+3. The coordinator spawns subagents via the `task` tool with `agent="subagent"`, inheriting the configured model.
+
 If you are adding an agent directly to the CAR codebase, register it in:
 
 - `src/codex_autorunner/agents/registry.py` (add to `_BUILTIN_AGENTS`)
