@@ -470,10 +470,7 @@ class TelegramBotConfig:
                 else:
                     agent_timeouts[str(key)] = timeout_value
 
-        if (
-            not has_explicit_codex_timeout
-            and app_server_turn_timeout_seconds is not None
-        ):
+        if not has_explicit_codex_timeout:
             agent_timeouts["codex"] = app_server_turn_timeout_seconds
 
         polling_raw_value = cfg.get("polling")
