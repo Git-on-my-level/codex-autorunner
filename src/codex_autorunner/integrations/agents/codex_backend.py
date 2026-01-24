@@ -169,10 +169,8 @@ class CodexAppServerBackend(AgentBackend):
                             content=msg,
                             delta_type="assistant_message",
                         )
-                    for event_data in result.raw_events:
-                        run_event = self._map_to_run_event(event_data)
-                        if run_event:
-                            yield run_event
+                    # raw_events already contain the same notifications we streamed
+                    # through _event_queue; skipping here avoids double-emitting.
                     while not self._event_queue.empty():
                         extra = self._event_queue.get_nowait()
                         if extra:
