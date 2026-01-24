@@ -797,9 +797,6 @@ def _app_lifespan(context: AppContext):
 
             tasks.append(asyncio.create_task(_opencode_prune_loop()))
 
-        # PR Flow chatops disabled during refactor - to be reimplemented
-        # TODO: Re-enable after Flow Runtime is fully integrated
-
         if (
             context.tui_idle_seconds is not None
             and context.tui_idle_check_seconds is not None
@@ -872,17 +869,6 @@ def _app_lifespan(context: AppContext):
                 task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
-            chatops = getattr(app.state, "pr_flow_chatops", None)
-            if chatops is not None:
-                try:
-                    await chatops.stop()
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.DEBUG,
-                        "Failed to stop chatops during shutdown",
-                        exc=exc,
-                    )
             async with app.state.terminal_lock:
                 for session in app.state.terminal_sessions.values():
                     session.close()

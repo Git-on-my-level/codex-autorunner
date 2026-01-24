@@ -139,25 +139,6 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "sync_commit_mode": "auto",  # none|auto|always
         # Bounds the agentic sync step in GitHubService.sync_pr (seconds).
         "sync_agent_timeout_seconds": 1800,
-        "pr_flow": {
-            "enabled": True,
-            "max_cycles": 3,
-            "stop_condition": "no_issues",
-            "max_implementation_runs": None,
-            "max_wallclock_seconds": None,
-            "review": {
-                "include_codex": True,
-                "include_github": True,
-                "include_checks": True,
-            },
-            "chatops": {
-                "enabled": False,
-                "poll_interval_seconds": 60,
-                "allow_users": [],
-                "allow_associations": [],
-                "ignore_bots": True,
-            },
-        },
     },
     "app_server": {
         "command": ["codex", "app-server"],
@@ -1792,69 +1773,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             github.get("sync_agent_timeout_seconds"), int
         ):
             raise ConfigError("github.sync_agent_timeout_seconds must be an integer")
-        pr_flow = github.get("pr_flow")
-        if pr_flow is not None:
-            if not isinstance(pr_flow, dict):
-                raise ConfigError("github.pr_flow must be a mapping if provided")
-            if "enabled" in pr_flow and not isinstance(pr_flow.get("enabled"), bool):
-                raise ConfigError("github.pr_flow.enabled must be boolean")
-            if "max_cycles" in pr_flow and not isinstance(
-                pr_flow.get("max_cycles"), int
-            ):
-                raise ConfigError("github.pr_flow.max_cycles must be an integer")
-            if "stop_condition" in pr_flow and not isinstance(
-                pr_flow.get("stop_condition"), str
-            ):
-                raise ConfigError("github.pr_flow.stop_condition must be a string")
-            for key in ("max_implementation_runs", "max_wallclock_seconds"):
-                val = pr_flow.get(key)
-                if val is not None and not isinstance(val, int):
-                    raise ConfigError(
-                        f"github.pr_flow.{key} must be an integer or null"
-                    )
-            review_cfg = pr_flow.get("review")
-            if review_cfg is not None:
-                if not isinstance(review_cfg, dict):
-                    raise ConfigError("github.pr_flow.review must be a mapping")
-                for key in ("include_codex", "include_github", "include_checks"):
-                    if key in review_cfg and not isinstance(review_cfg.get(key), bool):
-                        raise ConfigError(
-                            f"github.pr_flow.review.{key} must be boolean"
-                        )
-            chatops_cfg = pr_flow.get("chatops")
-            if chatops_cfg is not None:
-                if not isinstance(chatops_cfg, dict):
-                    raise ConfigError("github.pr_flow.chatops must be a mapping")
-                if "enabled" in chatops_cfg and not isinstance(
-                    chatops_cfg.get("enabled"), bool
-                ):
-                    raise ConfigError("github.pr_flow.chatops.enabled must be boolean")
-                if "poll_interval_seconds" in chatops_cfg and not isinstance(
-                    chatops_cfg.get("poll_interval_seconds"), int
-                ):
-                    raise ConfigError(
-                        "github.pr_flow.chatops.poll_interval_seconds must be an integer"
-                    )
-                for key in ("allow_users", "allow_associations"):
-                    if key in chatops_cfg and not isinstance(
-                        chatops_cfg.get(key), list
-                    ):
-                        raise ConfigError(
-                            f"github.pr_flow.chatops.{key} must be a list"
-                        )
-                if "ignore_bots" in chatops_cfg and not isinstance(
-                    chatops_cfg.get("ignore_bots"), bool
-                ):
-                    raise ConfigError(
-                        "github.pr_flow.chatops.ignore_bots must be boolean"
-                    )
-                if chatops_cfg.get("enabled", False):
-                    allow_users = chatops_cfg.get("allow_users") or []
-                    allow_assoc = chatops_cfg.get("allow_associations") or []
-                    if not allow_users and not allow_assoc:
-                        raise ConfigError(
-                            "github.pr_flow.chatops.enabled requires at least one of allow_users or allow_associations to be non-empty"
-                        )
+
     server = cfg.get("server")
     if not isinstance(server, dict):
         raise ConfigError("server section must be a mapping")

@@ -6,7 +6,7 @@ import { autoResizeTextarea, getDocTextarea, updateDocControls } from "./docsUi.
 import { renderChat } from "./docChatRender.js";
 import { applyPatch, cancelDocChat, discardPatch, refreshAllDrafts, reloadPatch, sendDocChat, startNewDocChatThread, toggleDraftPreview, } from "./docChatActions.js";
 import { copyDocToClipboard, pasteSpecFromClipboard } from "./docsClipboard.js";
-import { clearDocs, getDocFromUrl, importIssueToSpec, loadDocs, safeLoadDocs, saveDoc, setDoc, } from "./docsCrud.js";
+import { clearDocs, getDocFromUrl, loadDocs, safeLoadDocs, saveDoc, setDoc, } from "./docsCrud.js";
 import { applySpecIngestPatch, cancelSpecIngest, continueSpecIngest, discardSpecIngestPatch, ingestSpec, reloadSpecIngestPatch, } from "./docsSpecIngest.js";
 import { initDocVoice } from "./docsVoice.js";
 import { loadSnapshot, runSnapshot } from "./docsSnapshot.js";
@@ -168,23 +168,6 @@ export function initDocs() {
                 specIssueUI.toggle.textContent = isHidden
                     ? "Import Issue → SPEC"
                     : "Cancel";
-            }
-        });
-    }
-    if (specIssueUI.button) {
-        specIssueUI.button.addEventListener("click", () => {
-            if (getActiveDoc() !== "spec")
-                setDoc("spec");
-            importIssueToSpec();
-        });
-    }
-    if (specIssueUI.input) {
-        specIssueUI.input.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
-                e.preventDefault();
-                if (getActiveDoc() !== "spec")
-                    setDoc("spec");
-                importIssueToSpec();
             }
         });
     }

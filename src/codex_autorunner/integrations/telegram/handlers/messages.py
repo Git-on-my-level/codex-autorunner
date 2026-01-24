@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from ....core.logging_utils import log_event
-from ....integrations.github.service import parse_github_url
+from ....core.utils import canonicalize_path
 from ..adapter import (
     TelegramDocument,
     TelegramMessage,
@@ -19,6 +19,7 @@ from ..adapter import (
 )
 from ..config import TelegramMediaCandidate
 from ..constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from ..trigger_mode import should_trigger_run
 from .questions import handle_custom_text_input
 
 COALESCE_LONG_MESSAGE_WINDOW_SECONDS = 6.0
@@ -35,6 +36,14 @@ IMAGE_CONTENT_TYPES = {
 }
 IMAGE_EXTS = set(IMAGE_CONTENT_TYPES.values())
 MAX_BATCH_ITEMS = 10
+
+
+def _is_ticket_reply(message: TelegramMessage, bot_username: Optional[str]) -> bool:
+    if message.reply_to_is_bot and message.reply_to_message_id is not None:
+        if bot_username and message.reply_to_username:
+            return message.reply_to_username.lower() == bot_username.lower()
+        return True
+    return False
 
 
 @dataclass
@@ -246,14 +255,6 @@ async def handle_message_inner(
         await _clear_placeholder()
         return
 
-    if text:
-        parsed = parse_github_url(text.strip())
-        if parsed and parsed[1] == "issue":
-            slug, kind, number = parsed
-            await handlers._handle_github_issue_url(message, key, slug, number)
-            await _clear_placeholder()
-            return
-
     if text and is_interrupt_alias(text):
         await handlers._handle_interrupt(message, runtime)
         await _clear_placeholder()
@@ -345,6 +346,51 @@ async def handle_message_inner(
                     work=work,
                 ),
             )
+        return
+
+    record = await handlers._router.get_topic(key)
+    if (
+        record
+        and record.workspace_path
+        and text
+        and _is_ticket_reply(message, handlers._bot_username)
+    ):
+        workspace_root = canonicalize_path(Path(record.workspace_path))
+        preferred_run_id = handlers._ticket_flow_pause_targets.get(
+            str(workspace_root), None
+        )
+        paused = handlers._get_paused_ticket_flow(
+            workspace_root, preferred_run_id=preferred_run_id
+        )
+        if paused:
+            run_id, run_record = paused
+            success, result = await handlers._write_user_reply_from_telegram(
+                workspace_root, run_id, run_record, message, text
+            )
+            await handlers._send_message(
+                message.chat_id,
+                result,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            await _clear_placeholder()
+            return
+
+    if handlers._config.trigger_mode == "mentions" and not should_trigger_run(
+        message,
+        text=text,
+        bot_username=handlers._bot_username,
+    ):
+        log_event(
+            handlers._logger,
+            logging.INFO,
+            "telegram.trigger.ignored",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            reason="mentions_only",
+        )
+        await _clear_placeholder()
         return
 
     if has_media:
@@ -747,6 +793,52 @@ async def handle_media_message(
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
             ),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        return
+
+    workspace_root = canonicalize_path(Path(record.workspace_path))
+    preferred_run_id = handlers._ticket_flow_pause_targets.get(
+        str(workspace_root), None
+    )
+    paused = handlers._get_paused_ticket_flow(
+        workspace_root, preferred_run_id=preferred_run_id
+    )
+    if paused and caption_text and _is_ticket_reply(message, handlers._bot_username):
+        run_id, run_record = paused
+        files = []
+        if message.photos:
+            photos = sorted(
+                message.photos,
+                key=lambda p: (p.file_size or 0, p.width * p.height),
+                reverse=True,
+            )
+            if photos:
+                best = photos[0]
+                try:
+                    file_info = await handlers._bot.get_file(best.file_id)
+                    data = await handlers._bot.download_file(file_info.file_path)
+                    filename = f"photo_{best.file_id}.jpg"
+                    files.append((filename, data))
+                except Exception:
+                    pass
+        elif message.document:
+            try:
+                file_info = await handlers._bot.get_file(message.document.file_id)
+                data = await handlers._bot.download_file(file_info.file_path)
+                filename = (
+                    message.document.file_name or f"document_{message.document.file_id}"
+                )
+                files.append((filename, data))
+            except Exception:
+                pass
+        success, result = await handlers._write_user_reply_from_telegram(
+            workspace_root, run_id, run_record, message, caption_text, files
+        )
+        await handlers._send_message(
+            message.chat_id,
+            result,
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )

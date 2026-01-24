@@ -22,7 +22,6 @@ class AgentEventType(str, Enum):
     APPROVAL_DENIED = "approval_denied"
     SESSION_STARTED = "session_started"
     SESSION_ENDED = "session_ended"
-    SESION_STARTED = "session_started"
 
 
 @dataclass
@@ -123,6 +122,11 @@ class AgentBackend:
         raise NotImplementedError
 
     async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
+        raise NotImplementedError
+
+    async def run_turn_events(
+        self, session_id: str, message: str
+    ) -> AsyncGenerator[Any, None]:
         raise NotImplementedError
 
     async def interrupt(self, session_id: str) -> None:

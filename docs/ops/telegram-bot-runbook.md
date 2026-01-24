@@ -16,6 +16,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - Ensure `telegram_bot.allowed_user_ids` includes your Telegram user id.
 - `telegram_bot.shell.enabled` is off by default; set it to `true` to enable `!<cmd>` support.
 - Enabling shell allows remote command execution gated only by the Telegram allowlist.
+- In group chats where the bot is an admin, consider `telegram_bot.trigger_mode: mentions` to avoid reacting to every message.
 - Example:
   ```yaml
   telegram_bot:

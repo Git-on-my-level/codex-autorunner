@@ -175,6 +175,8 @@ telegram_bot:
   allowed_chat_ids: []
   allowed_user_ids: []
   require_topics: false
+  # When set to 'mentions', only start runs when explicitly invoked (e.g. @botname mention or reply).
+  trigger_mode: all
   defaults:
     approval_mode: yolo
     approval_policy: on-request

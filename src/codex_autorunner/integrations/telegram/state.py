@@ -452,6 +452,10 @@ class OutboxRecord:
     attempts: int = 0
     last_error: Optional[str] = None
     last_attempt_at: Optional[str] = None
+    next_attempt_at: Optional[str] = None
+    operation: Optional[str] = None
+    message_id: Optional[int] = None
+    outbox_key: Optional[str] = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> Optional["OutboxRecord"]:
@@ -467,6 +471,10 @@ class OutboxRecord:
         attempts = payload.get("attempts", 0)
         last_error = payload.get("last_error")
         last_attempt_at = payload.get("last_attempt_at")
+        next_attempt_at = payload.get("next_attempt_at")
+        operation = payload.get("operation")
+        message_id = payload.get("message_id")
+        outbox_key = payload.get("outbox_key")
         if not isinstance(record_id, str) or not record_id:
             return None
         if not isinstance(chat_id, int):
@@ -489,6 +497,14 @@ class OutboxRecord:
             last_error = None
         if not isinstance(last_attempt_at, str):
             last_attempt_at = None
+        if not isinstance(next_attempt_at, str):
+            next_attempt_at = None
+        if not isinstance(operation, str):
+            operation = None
+        if message_id is not None and not isinstance(message_id, int):
+            message_id = None
+        if not isinstance(outbox_key, str):
+            outbox_key = None
         return cls(
             record_id=record_id,
             chat_id=chat_id,
@@ -500,6 +516,10 @@ class OutboxRecord:
             attempts=attempts,
             last_error=last_error,
             last_attempt_at=last_attempt_at,
+            next_attempt_at=next_attempt_at,
+            operation=operation,
+            message_id=message_id,
+            outbox_key=outbox_key,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -514,6 +534,10 @@ class OutboxRecord:
             "attempts": self.attempts,
             "last_error": self.last_error,
             "last_attempt_at": self.last_attempt_at,
+            "next_attempt_at": self.next_attempt_at,
+            "operation": self.operation,
+            "message_id": self.message_id,
+            "outbox_key": self.outbox_key,
         }
 
 
@@ -961,6 +985,10 @@ class TelegramStateStore:
                     thread_id INTEGER,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    next_attempt_at TEXT,
+                    operation TEXT,
+                    message_id INTEGER,
+                    outbox_key TEXT,
                     payload_json TEXT NOT NULL
                 )
                 """
@@ -971,6 +999,25 @@ class TelegramStateStore:
                     ON telegram_outbox(created_at)
                 """
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tg_outbox_key
+                    ON telegram_outbox(outbox_key)
+                    WHERE outbox_key IS NOT NULL
+                """
+            )
+            for col, col_type in [
+                ("next_attempt_at", "TEXT"),
+                ("operation", "TEXT"),
+                ("message_id", "INTEGER"),
+                ("outbox_key", "TEXT"),
+            ]:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE telegram_outbox ADD COLUMN {col} {col_type}"
+                    )
+                except sqlite3.OperationalError:
+                    pass
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS telegram_pending_voice (
@@ -1782,14 +1829,22 @@ class TelegramStateStore:
                     thread_id,
                     created_at,
                     updated_at,
+                    next_attempt_at,
+                    operation,
+                    message_id,
+                    outbox_key,
                     payload_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(record_id) DO UPDATE SET
                     chat_id=excluded.chat_id,
                     thread_id=excluded.thread_id,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at,
+                    next_attempt_at=excluded.next_attempt_at,
+                    operation=excluded.operation,
+                    message_id=excluded.message_id,
+                    outbox_key=excluded.outbox_key,
                     payload_json=excluded.payload_json
                 """,
                 (
@@ -1798,6 +1853,10 @@ class TelegramStateStore:
                     record.thread_id,
                     record.created_at,
                     updated_at,
+                    record.next_attempt_at,
+                    record.operation,
+                    record.message_id,
+                    record.outbox_key,
                     payload_json,
                 ),
             )

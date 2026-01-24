@@ -273,3 +273,20 @@ def test_telegram_bot_config_inherits_app_server_timeout(tmp_path: Path) -> None
     cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
     assert cfg.app_server_turn_timeout_seconds == 123
     assert cfg.agent_turn_timeout_seconds["codex"] == 123
+
+
+def test_telegram_bot_config_validate_trigger_mode(tmp_path: Path) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "trigger_mode": "nope",
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "123",
+    }
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    with pytest.raises(TelegramBotConfigError):
+        cfg.validate()

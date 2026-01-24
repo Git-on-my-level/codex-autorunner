@@ -116,6 +116,10 @@ def seed_repo_files(
     if not log_path.exists() or force:
         log_path.write_text("", encoding="utf-8")
 
+    tickets_dir = ca_dir / "tickets"
+    if not tickets_dir.exists() or force:
+        tickets_dir.mkdir(parents=True, exist_ok=True)
+
     _seed_doc(ca_dir / "TODO.md", force, sample_todo())
     _seed_doc(ca_dir / "PROGRESS.md", force, "# Progress\n\n")
     _seed_doc(ca_dir / "OPINIONS.md", force, sample_opinions())

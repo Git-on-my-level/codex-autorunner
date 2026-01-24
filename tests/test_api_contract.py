@@ -11,9 +11,7 @@ def test_repo_openapi_contract_has_core_paths(repo) -> None:
     paths = schema["paths"]
 
     expected = {
-        "/api/state": {"get"},
         "/api/version": {"get"},
-        "/api/logs": {"get"},
         "/api/docs": {"get"},
         "/api/docs/{kind}": {"put"},
         "/api/docs/{kind}/chat": {"post"},

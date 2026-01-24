@@ -497,7 +497,6 @@ class RequestIdMiddleware:
         heavy_prefixes = (
             "/api/docs",
             "/api/snapshot",
-            "/api/runs",
             "/api/usage",
             "/api/ingest-spec",
             "/hub/usage",
