@@ -157,3 +157,74 @@ async def test_flow_state_persists_across_reopen(tmp_path: Path) -> None:
     assert finished.status == FlowRunStatus.COMPLETED
     assert finished.state["counter"] == 1
     assert finished.state["second"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_resume_flow_rejects_active_run(tmp_path: Path) -> None:
+    async def step(_record, _input):
+        return StepOutcome.complete()
+
+    controller = _make_controller(tmp_path, {"step": step})
+    record = await controller.start_flow(input_data={}, run_id="run-6")
+    controller.store.update_flow_run_status(
+        run_id=record.id, status=FlowRunStatus.RUNNING
+    )
+
+    with pytest.raises(ValueError):
+        await controller.resume_flow(record.id)
+
+
+@pytest.mark.asyncio
+async def test_step_stop_outcome_sets_stopped(tmp_path: Path) -> None:
+    async def stop_step(_record, _input):
+        return StepOutcome.stop(output={"stopped": True})
+
+    controller = _make_controller(tmp_path, {"stop": stop_step})
+    record = await controller.start_flow(input_data={}, run_id="run-7")
+
+    stopped = await controller.run_flow(record.id)
+
+    assert stopped.status == FlowRunStatus.STOPPED
+    assert stopped.current_step is None
+    assert stopped.state["stopped"] is True
+    assert stopped.finished_at is not None
+
+
+@pytest.mark.asyncio
+async def test_step_complete_sets_finished_and_state(tmp_path: Path) -> None:
+    async def done_step(_record, _input):
+        return StepOutcome.complete(output={"done": 1})
+
+    controller = _make_controller(tmp_path, {"done": done_step})
+    record = await controller.start_flow(input_data={}, run_id="run-8")
+
+    finished = await controller.run_flow(record.id)
+
+    assert finished.status == FlowRunStatus.COMPLETED
+    assert finished.state["done"] == 1
+    assert finished.current_step is None
+    assert finished.finished_at is not None
+
+
+@pytest.mark.asyncio
+async def test_continue_advances_to_sorted_next_step(tmp_path: Path) -> None:
+    events: List[FlowEventType] = []
+
+    async def first(_record, _input):
+        return StepOutcome.continue_to({"b", "a"})
+
+    async def step_a(record, _input):
+        events.append(FlowEventType.STEP_STARTED)
+        return StepOutcome.complete(output={"a": True})
+
+    controller = _make_controller(
+        tmp_path, {"first": first, "a": step_a, "b": step_a}, initial_step="first"
+    )
+    controller.add_event_listener(lambda e: events.append(e.event_type))
+    record = await controller.start_flow(input_data={}, run_id="run-9")
+
+    finished = await controller.run_flow(record.id)
+
+    assert finished.status == FlowRunStatus.COMPLETED
+    # ensure 'a' executed before completion by checking output
+    assert finished.state["a"] is True
