@@ -732,6 +732,7 @@ class RepoConfig:
     root: Path
     version: int
     mode: str
+    security: Dict[str, Any]
     docs: Dict[str, Path]
     codex_binary: str
     codex_args: List[str]
@@ -1371,6 +1372,8 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         cfg.get("notifications") if isinstance(cfg.get("notifications"), dict) else {}
     )
     notifications_cfg = cast(Dict[str, Any], notifications_cfg)
+    security_cfg = cfg.get("security") if isinstance(cfg.get("security"), dict) else {}
+    security_cfg = cast(Dict[str, Any], security_cfg)
     log_cfg = cfg.get("log", {})
     log_cfg = cast(Dict[str, Any], log_cfg if isinstance(log_cfg, dict) else {})
     server_log_cfg = cfg.get("server_log", {}) or {}
@@ -1405,6 +1408,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         opencode=_parse_opencode_config(
             cfg.get("opencode"), root, DEFAULT_REPO_CONFIG.get("opencode")
         ),
+        security=security_cfg,
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
