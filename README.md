@@ -1,7 +1,7 @@
 # codex-autorunner
 [![PyPI](https://img.shields.io/pypi/v/codex-autorunner.svg)](https://pypi.org/project/codex-autorunner/)
 
-An opinionated autorunner that uses the Codex CLI to work on large tasks via a simple loop. On each loop we feed the Codex instance the last one's final output along with core documents.
+An opinionated autorunner that uses the Codex app-server as the primary execution backend with OpenCode support to work on large tasks via a simple loop. On each loop we feed the Codex instance the last one's final output along with core documents.
 1. TODO - Tracks long-horizon tasks
 2. PROGRESS - High level overview of what's been done already that may be relevant for future agents
 3. OPINIONS - Guidelines for how we should approach implementation
@@ -28,7 +28,7 @@ Mobile-first experience, code on the go with Whisper support (BYOK)
 
 ## What it does
 - Initializes a repo with Codex-friendly docs and config.
-- Runs Codex in a loop against the repo, streaming logs.
+- Runs Codex app-server in a loop against the repo, streaming logs via OpenCode runtime.
 - Tracks state, logs, and config under `.codex-autorunner/`.
 - Exposes a power-user HTTP API and web UI for docs, logs, runner control, and a Codex TUI terminal.
 - Optionally runs a Telegram bot for interactive, user-in-the-loop Codex sessions.
