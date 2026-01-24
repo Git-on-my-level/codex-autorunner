@@ -885,6 +885,10 @@ _telegram_check_once() {
   if [[ ! -x "${telegram_cmd}" ]]; then
     return 1
   fi
+  # First ensure the state DB schema can be opened/migrated; then ping Telegram API.
+  "${telegram_cmd}" telegram state-check \
+    --path "${hub_root}" \
+    >/dev/null 2>&1 || return 1
   "${telegram_cmd}" telegram health \
     --path "${hub_root}" \
     --timeout "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
