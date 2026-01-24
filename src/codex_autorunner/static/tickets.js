@@ -263,7 +263,12 @@ async function bootstrapTicketFlow() {
             body: {},
         }));
         currentRunId = res?.id || null;
-        flash("Ticket flow started");
+        if (res?.state?.hint === "active_run_reused") {
+            flash("Ticket flow already running; continuing existing run", "info");
+        }
+        else {
+            flash("Ticket flow started");
+        }
         await loadTicketFlow();
     }
     catch (err) {
