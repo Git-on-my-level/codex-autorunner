@@ -11,6 +11,10 @@ type FlowRun = {
   error_message?: string | null;
 };
 
+type BootstrapResponse = FlowRun & {
+  state?: Record<string, unknown> & { hint?: string };
+};
+
 type TicketFile = {
   path?: string;
   index?: number | null;
@@ -326,9 +330,13 @@ async function bootstrapTicketFlow(): Promise<void> {
     const res = (await api("/api/flows/ticket_flow/bootstrap", {
       method: "POST",
       body: {},
-    })) as FlowRun;
+    })) as BootstrapResponse;
     currentRunId = res?.id || null;
-    flash("Ticket flow started");
+    if (res?.state?.hint === "active_run_reused") {
+      flash("Ticket flow already running; continuing existing run", "info");
+    } else {
+      flash("Ticket flow started");
+    }
     await loadTicketFlow();
   } catch (err) {
     flash((err as Error).message || "Failed to start ticket flow", "error");

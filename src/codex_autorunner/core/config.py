@@ -99,6 +99,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "prev_run_max_chars": 6000,
         "template": ".codex-autorunner/prompt.txt",
     },
+    "security": {
+        "redact_run_logs": True,
+    },
     "runner": {
         "sleep_seconds": 5,
         "stop_after_runs": None,
@@ -128,6 +131,11 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 "write_to_review_runs_dir": True,
             },
         },
+    },
+    "ticket_flow": {
+        "approval_mode": "yolo",
+        # Keep ticket_flow deterministic by default; surfaces can tighten this.
+        "default_approval_decision": "accept",
     },
     "git": {
         "auto_commit": False,
@@ -386,6 +394,7 @@ REPO_DEFAULT_KEYS = {
     "codex",
     "prompt",
     "runner",
+    "ticket_flow",
     "git",
     "github",
     "notifications",
@@ -729,6 +738,7 @@ class RepoConfig:
     root: Path
     version: int
     mode: str
+    security: Dict[str, Any]
     docs: Dict[str, Path]
     codex_binary: str
     codex_args: List[str]
@@ -742,6 +752,7 @@ class RepoConfig:
     runner_stop_after_runs: Optional[int]
     runner_max_wallclock_seconds: Optional[int]
     runner_no_progress_threshold: int
+    ticket_flow: Dict[str, Any]
     git_auto_commit: bool
     git_commit_message_template: str
     app_server: AppServerConfig
@@ -1368,6 +1379,8 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         cfg.get("notifications") if isinstance(cfg.get("notifications"), dict) else {}
     )
     notifications_cfg = cast(Dict[str, Any], notifications_cfg)
+    security_cfg = cfg.get("security") if isinstance(cfg.get("security"), dict) else {}
+    security_cfg = cast(Dict[str, Any], security_cfg)
     log_cfg = cfg.get("log", {})
     log_cfg = cast(Dict[str, Any], log_cfg if isinstance(log_cfg, dict) else {})
     server_log_cfg = cfg.get("server_log", {}) or {}
@@ -1394,6 +1407,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         runner_no_progress_threshold=int(cfg["runner"].get("no_progress_threshold", 3)),
         git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
         git_commit_message_template=str(cfg["git"].get("commit_message_template")),
+        ticket_flow=cast(Dict[str, Any], cfg.get("ticket_flow") or {}),
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
             root,
@@ -1402,6 +1416,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         opencode=_parse_opencode_config(
             cfg.get("opencode"), root, DEFAULT_REPO_CONFIG.get("opencode")
         ),
+        security=security_cfg,
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
@@ -1750,6 +1765,18 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
         val = runner.get(k)
         if val is not None and not isinstance(val, int):
             raise ConfigError(f"runner.{k} must be an integer or null")
+    ticket_flow_cfg = cfg.get("ticket_flow")
+    if ticket_flow_cfg is not None and not isinstance(ticket_flow_cfg, dict):
+        raise ConfigError("ticket_flow section must be a mapping if provided")
+    if isinstance(ticket_flow_cfg, dict):
+        if "approval_mode" in ticket_flow_cfg and not isinstance(
+            ticket_flow_cfg.get("approval_mode"), str
+        ):
+            raise ConfigError("ticket_flow.approval_mode must be a string")
+        if "default_approval_decision" in ticket_flow_cfg and not isinstance(
+            ticket_flow_cfg.get("default_approval_decision"), str
+        ):
+            raise ConfigError("ticket_flow.default_approval_decision must be a string")
     git = cfg.get("git")
     if not isinstance(git, dict):
         raise ConfigError("git section must be a mapping")

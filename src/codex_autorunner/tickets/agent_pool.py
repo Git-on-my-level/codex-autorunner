@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from ..agents.opencode.runtime import collect_opencode_output
 from ..agents.opencode.supervisor import OpenCodeSupervisor
@@ -53,6 +53,10 @@ class AgentPool:
             return self._app_server_supervisor
 
         app_server_cfg = self._config.app_server
+        ticket_flow_cfg = cast(dict[str, Any], getattr(self._config, "ticket_flow", {}))
+        default_approval_decision = ticket_flow_cfg.get(
+            "default_approval_decision", "accept"
+        )
 
         def _env_builder(
             workspace_root: Path, workspace_id: str, state_dir: Path
@@ -80,7 +84,7 @@ class AgentPool:
             turn_stall_timeout_seconds=app_server_cfg.turn_stall_timeout_seconds,
             turn_stall_poll_interval_seconds=app_server_cfg.turn_stall_poll_interval_seconds,
             turn_stall_recovery_min_interval_seconds=app_server_cfg.turn_stall_recovery_min_interval_seconds,
-            default_approval_decision="accept",
+            default_approval_decision=default_approval_decision,
         )
         return self._app_server_supervisor
 
@@ -144,7 +148,13 @@ class AgentPool:
         handle = await supervisor.get_client(req.workspace_root)
         client: CodexAppServerClient = handle.client
 
-        approval_policy = "on-request"
+        approval_mode = (
+            cast(dict[str, Any], getattr(self._config, "ticket_flow", {})).get(
+                "approval_mode", "yolo"
+            )
+            or "yolo"
+        ).strip()
+        approval_policy = "never" if approval_mode == "yolo" else "on-request"
         sandbox = "workspace-write"
 
         thread_id = req.conversation_id

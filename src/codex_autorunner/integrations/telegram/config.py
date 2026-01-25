@@ -176,6 +176,7 @@ class TelegramBotConfig:
     metrics_mode: str
     coalesce_window_seconds: float
     agent_binaries: dict[str, str]
+    ticket_flow_auto_resume: bool
 
     @classmethod
     def from_raw(
@@ -383,6 +384,11 @@ class TelegramBotConfig:
         if coalesce_window_seconds <= 0:
             coalesce_window_seconds = DEFAULT_COALESCE_WINDOW_SECONDS
 
+        ticket_flow_raw = (
+            cfg.get("ticket_flow") if isinstance(cfg.get("ticket_flow"), dict) else {}
+        )
+        ticket_flow_auto_resume = bool(ticket_flow_raw.get("auto_resume", False))
+
         agent_binaries = dict(agent_binaries or {})
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
@@ -533,6 +539,7 @@ class TelegramBotConfig:
             metrics_mode=metrics_mode,
             coalesce_window_seconds=coalesce_window_seconds,
             agent_binaries=agent_binaries,
+            ticket_flow_auto_resume=ticket_flow_auto_resume,
         )
 
     def validate(self) -> None:

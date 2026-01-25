@@ -36,6 +36,17 @@ interface ThreadsResponse {
   threads?: ThreadSummary[];
 }
 
+interface FileAttachment {
+  name: string;
+  url: string;
+  size?: number | null;
+}
+
+interface ReplyMessage {
+  title?: string | null;
+  body?: string | null;
+}
+
 interface ThreadDetail {
   run?: {
     id: string;
@@ -292,7 +303,7 @@ function renderFiles(files: Array<{ name: string; url: string; size?: number | n
   return `<ul class="messages-files">${items}</ul>`;
 }
 
-function renderHandoff(entry: { seq: number; message?: AgentMessage | null; files?: any[]; created_at?: string | null }): string {
+function renderHandoff(entry: { seq: number; message?: AgentMessage | null; files?: FileAttachment[]; created_at?: string | null }): string {
   const msg = entry.message;
   const title = msg?.title || "Agent message";
   const mode = msg?.mode ? ` <span class="pill pill-small">${escapeHtml(msg.mode)}</span>` : "";
@@ -307,7 +318,7 @@ function renderHandoff(entry: { seq: number; message?: AgentMessage | null; file
   `;
 }
 
-function renderReply(entry: { seq: number; reply?: any; files?: any[]; created_at?: string | null }): string {
+function renderReply(entry: { seq: number; reply?: ReplyMessage | null; files?: FileAttachment[]; created_at?: string | null }): string {
   const rep = entry.reply;
   const title = rep?.title || "Reply";
   const body = rep?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(rep.body)}</div>` : "";

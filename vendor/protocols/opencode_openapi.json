@@ -1095,6 +1095,12 @@
             "$ref": "#/components/schemas/Event.file.edited"
           },
           {
+            "$ref": "#/components/schemas/Event.worktree.ready"
+          },
+          {
+            "$ref": "#/components/schemas/Event.worktree.failed"
+          },
+          {
             "$ref": "#/components/schemas/Event.lsp.client.diagnostics"
           },
           {
@@ -2253,6 +2259,58 @@
           },
           "type": {
             "const": "vcs.branch.updated",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ],
+        "type": "object"
+      },
+      "Event.worktree.failed": {
+        "properties": {
+          "properties": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "const": "worktree.failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "properties"
+        ],
+        "type": "object"
+      },
+      "Event.worktree.ready": {
+        "properties": {
+          "properties": {
+            "properties": {
+              "branch": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "branch"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "const": "worktree.ready",
             "type": "string"
           }
         },
