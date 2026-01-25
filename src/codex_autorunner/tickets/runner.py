@@ -251,6 +251,16 @@ class TicketRunner:
             reply_paths=reply_paths, last_seq=reply_seq
         )
 
+        previous_ticket_content: Optional[str] = None
+        try:
+            if current_path in ticket_paths:
+                curr_idx = ticket_paths.index(current_path)
+                if curr_idx > 0:
+                    prev_path = ticket_paths[curr_idx - 1]
+                    previous_ticket_content = prev_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
         prompt = self._build_prompt(
             ticket_path=current_path,
             ticket_doc=ticket_doc,
@@ -270,6 +280,7 @@ class TicketRunner:
             outbox_paths=outbox_paths,
             lint_errors=lint_errors if lint_errors else None,
             reply_context=reply_context,
+            previous_ticket_content=previous_ticket_content,
         )
 
         # Execute turn.
@@ -676,6 +687,7 @@ class TicketRunner:
         outbox_paths,
         lint_errors: Optional[list[str]],
         reply_context: Optional[str] = None,
+        previous_ticket_content: Optional[str] = None,
     ) -> str:
         rel_ticket = safe_relpath(ticket_path, self._workspace_root)
         rel_handoff = safe_relpath(outbox_paths.handoff_dir, self._workspace_root)
@@ -742,6 +754,15 @@ class TicketRunner:
                 + "\n"
             )
 
+        prev_ticket_block = ""
+        if previous_ticket_content:
+            prev_ticket_block = (
+                "\n\n---\n\n"
+                "PREVIOUS TICKET CONTEXT (for reference only; do not edit):\n"
+                + previous_ticket_content
+                + "\n"
+            )
+
         ticket_block = (
             "\n\n---\n\n"
             "TICKET CONTENT (edit this file to track progress; update frontmatter.done when complete):\n"
@@ -762,6 +783,7 @@ class TicketRunner:
             + lint_block
             + requires_block
             + reply_block
+            + prev_ticket_block
             + ticket_block
             + prev_block
         )
