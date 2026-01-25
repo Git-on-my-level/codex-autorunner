@@ -524,7 +524,22 @@
 </div>
 </div>
 </div>
-<div class="ticket-chat-stream" id="ticket-chat-stream"></div>
+<!-- Rich Chat Stream: shows agent events and message history -->
+<div class="ticket-chat-stream" id="ticket-chat-stream">
+<!-- Agent Activity Events (thinking, tool calls, etc.) - shown during processing -->
+<div class="ticket-chat-events hidden" id="ticket-chat-events">
+<div class="ticket-chat-section-header">
+<div class="ticket-chat-section-title">
+Agent activity
+<span class="ticket-chat-count" id="ticket-chat-events-count">0</span>
+</div>
+<button class="ghost sm hidden" id="ticket-chat-events-toggle">Show more</button>
+</div>
+<div class="ticket-chat-events-list" id="ticket-chat-events-list"></div>
+</div>
+<!-- Messages History (user prompts and assistant responses) -->
+<div class="ticket-chat-messages" id="ticket-chat-messages"></div>
+</div>
 </div>
 </div>
 </div>

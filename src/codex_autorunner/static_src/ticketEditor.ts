@@ -16,6 +16,7 @@ import {
 } from "./ticketChatActions.js";
 import { initAgentControls } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
+import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
 
 type TicketData = {
   path?: string;
@@ -482,6 +483,8 @@ export function openTicketEditor(ticket?: TicketData): void {
   // Clear chat input
   if (chatInput) chatInput.value = "";
   renderTicketChat();
+  renderTicketEvents();
+  renderTicketMessages();
 
   state.isOpen = true;
   modal.classList.remove("hidden");
@@ -618,6 +621,9 @@ export function initTicketEditor(): void {
 
   // Initialize voice input for ticket chat
   void initTicketVoice();
+
+  // Initialize rich chat experience (events toggle, etc.)
+  initTicketChatEvents();
 
   // Button handlers
   if (deleteBtn) deleteBtn.addEventListener("click", () => void deleteTicket());

@@ -15,6 +15,33 @@ export interface TicketDraft {
   baseHash: string;
 }
 
+/**
+ * Represents a real-time event from the agent (thinking, tool calls, commands, etc.)
+ * These are transient updates shown during processing.
+ */
+export interface TicketChatEvent {
+  id: string;
+  title: string;       // "Thinking", "Tool", "Command", "File change", etc.
+  summary: string;     // The content/description
+  detail: string;      // Optional detail (e.g., exit code)
+  kind: string;        // "thinking", "tool", "command", "file", "output", "error", "status"
+  time: number;        // Timestamp in ms
+  itemId: string | null;
+  method: string;      // Original event method name
+}
+
+/**
+ * Represents a message in the chat history (user prompts and assistant responses).
+ * Unlike events, messages persist after the request completes.
+ */
+export interface TicketChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  time: string;        // ISO timestamp
+  isFinal: boolean;    // True for final assistant responses, false for intermediate
+}
+
 export interface TicketChatState {
   status: TicketChatStatus;
   ticketIndex: number | null;
@@ -23,7 +50,16 @@ export interface TicketChatState {
   statusText: string;
   controller: AbortController | null;
   draft: TicketDraft | null;
+  // Rich chat experience: events and message history
+  events: TicketChatEvent[];
+  messages: TicketChatMessage[];
+  eventItemIndex: Record<string, number>;  // Maps itemId to event index for delta updates
+  eventsExpanded: boolean;
 }
+
+// Limits for events display
+export const TICKET_CHAT_EVENT_LIMIT = 8;
+export const TICKET_CHAT_EVENT_MAX = 50;
 
 // Global state for ticket chat
 export const ticketChatState: TicketChatState = {
@@ -34,9 +70,13 @@ export const ticketChatState: TicketChatState = {
   statusText: "",
   controller: null,
   draft: null,
+  events: [],
+  messages: [],
+  eventItemIndex: {},
+  eventsExpanded: false,
 };
 
-function getTicketChatElements() {
+export function getTicketChatElements() {
   return {
     input: document.getElementById("ticket-chat-input") as HTMLTextAreaElement | null,
     sendBtn: document.getElementById("ticket-chat-send") as HTMLButtonElement | null,
@@ -56,6 +96,12 @@ function getTicketChatElements() {
     agentSelect: document.getElementById("ticket-chat-agent-select") as HTMLSelectElement | null,
     modelSelect: document.getElementById("ticket-chat-model-select") as HTMLSelectElement | null,
     reasoningSelect: document.getElementById("ticket-chat-reasoning-select") as HTMLSelectElement | null,
+    // Rich chat experience: events and messages
+    eventsMain: document.getElementById("ticket-chat-events") as HTMLElement | null,
+    eventsList: document.getElementById("ticket-chat-events-list") as HTMLElement | null,
+    eventsCount: document.getElementById("ticket-chat-events-count") as HTMLElement | null,
+    eventsToggle: document.getElementById("ticket-chat-events-toggle") as HTMLButtonElement | null,
+    messagesEl: document.getElementById("ticket-chat-messages") as HTMLElement | null,
   };
 }
 
@@ -65,12 +111,55 @@ export function resetTicketChatState(): void {
   ticketChatState.streamText = "";
   ticketChatState.statusText = "";
   ticketChatState.controller = null;
+  // Note: events are cleared at the start of each new request, not here
+  // Messages persist across requests within the same ticket
+}
+
+/**
+ * Clear events at the start of a new request.
+ * Events are transient (thinking/tool calls) and reset each turn.
+ */
+export function clearTicketEvents(): void {
+  ticketChatState.events = [];
+  ticketChatState.eventItemIndex = {};
+}
+
+/**
+ * Add a user message to the chat history.
+ */
+export function addUserMessage(content: string): void {
+  ticketChatState.messages.push({
+    id: `user-${Date.now()}`,
+    role: "user",
+    content,
+    time: new Date().toISOString(),
+    isFinal: true,
+  });
+}
+
+/**
+ * Add an assistant message to the chat history.
+ */
+export function addAssistantMessage(content: string, isFinal = true): void {
+  ticketChatState.messages.push({
+    id: `assistant-${Date.now()}`,
+    role: "assistant",
+    content,
+    time: new Date().toISOString(),
+    isFinal,
+  });
 }
 
 export function setTicketIndex(index: number | null): void {
+  const changed = ticketChatState.ticketIndex !== index;
   ticketChatState.ticketIndex = index;
   ticketChatState.draft = null;
   resetTicketChatState();
+  // Clear chat history when switching tickets
+  if (changed) {
+    ticketChatState.messages = [];
+    clearTicketEvents();
+  }
 }
 
 export function renderTicketChat(): void {
@@ -100,14 +189,14 @@ export function renderTicketChat(): void {
     els.cancelBtn.classList.toggle("hidden", ticketChatState.status !== "running");
   }
 
-  // Show stream text
+  // The streamEl now contains events and messages sections.
+  // Show the stream container when there are events, messages, or running.
   if (els.streamEl) {
-    if (ticketChatState.streamText) {
-      els.streamEl.textContent = ticketChatState.streamText;
-      els.streamEl.classList.remove("hidden");
-    } else {
-      els.streamEl.classList.add("hidden");
-    }
+    const hasContent =
+      ticketChatState.events.length > 0 ||
+      ticketChatState.messages.length > 0 ||
+      ticketChatState.status === "running";
+    els.streamEl.classList.toggle("hidden", !hasContent);
   }
 
   // MUTUALLY EXCLUSIVE: Show either the content editor OR the patch preview, never both.

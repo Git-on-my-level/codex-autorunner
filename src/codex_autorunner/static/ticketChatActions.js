@@ -4,6 +4,9 @@
 import { api, flash } from "./utils.js";
 import { performTicketChatRequest } from "./ticketChatStream.js";
 import { publish } from "./bus.js";
+// Limits for events display
+export const TICKET_CHAT_EVENT_LIMIT = 8;
+export const TICKET_CHAT_EVENT_MAX = 50;
 // Global state for ticket chat
 export const ticketChatState = {
     status: "idle",
@@ -13,8 +16,12 @@ export const ticketChatState = {
     statusText: "",
     controller: null,
     draft: null,
+    events: [],
+    messages: [],
+    eventItemIndex: {},
+    eventsExpanded: false,
 };
-function getTicketChatElements() {
+export function getTicketChatElements() {
     return {
         input: document.getElementById("ticket-chat-input"),
         sendBtn: document.getElementById("ticket-chat-send"),
@@ -34,6 +41,12 @@ function getTicketChatElements() {
         agentSelect: document.getElementById("ticket-chat-agent-select"),
         modelSelect: document.getElementById("ticket-chat-model-select"),
         reasoningSelect: document.getElementById("ticket-chat-reasoning-select"),
+        // Rich chat experience: events and messages
+        eventsMain: document.getElementById("ticket-chat-events"),
+        eventsList: document.getElementById("ticket-chat-events-list"),
+        eventsCount: document.getElementById("ticket-chat-events-count"),
+        eventsToggle: document.getElementById("ticket-chat-events-toggle"),
+        messagesEl: document.getElementById("ticket-chat-messages"),
     };
 }
 export function resetTicketChatState() {
@@ -42,11 +55,51 @@ export function resetTicketChatState() {
     ticketChatState.streamText = "";
     ticketChatState.statusText = "";
     ticketChatState.controller = null;
+    // Note: events are cleared at the start of each new request, not here
+    // Messages persist across requests within the same ticket
+}
+/**
+ * Clear events at the start of a new request.
+ * Events are transient (thinking/tool calls) and reset each turn.
+ */
+export function clearTicketEvents() {
+    ticketChatState.events = [];
+    ticketChatState.eventItemIndex = {};
+}
+/**
+ * Add a user message to the chat history.
+ */
+export function addUserMessage(content) {
+    ticketChatState.messages.push({
+        id: `user-${Date.now()}`,
+        role: "user",
+        content,
+        time: new Date().toISOString(),
+        isFinal: true,
+    });
+}
+/**
+ * Add an assistant message to the chat history.
+ */
+export function addAssistantMessage(content, isFinal = true) {
+    ticketChatState.messages.push({
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        content,
+        time: new Date().toISOString(),
+        isFinal,
+    });
 }
 export function setTicketIndex(index) {
+    const changed = ticketChatState.ticketIndex !== index;
     ticketChatState.ticketIndex = index;
     ticketChatState.draft = null;
     resetTicketChatState();
+    // Clear chat history when switching tickets
+    if (changed) {
+        ticketChatState.messages = [];
+        clearTicketEvents();
+    }
 }
 export function renderTicketChat() {
     const els = getTicketChatElements();
@@ -71,15 +124,13 @@ export function renderTicketChat() {
     if (els.cancelBtn) {
         els.cancelBtn.classList.toggle("hidden", ticketChatState.status !== "running");
     }
-    // Show stream text
+    // The streamEl now contains events and messages sections.
+    // Show the stream container when there are events, messages, or running.
     if (els.streamEl) {
-        if (ticketChatState.streamText) {
-            els.streamEl.textContent = ticketChatState.streamText;
-            els.streamEl.classList.remove("hidden");
-        }
-        else {
-            els.streamEl.classList.add("hidden");
-        }
+        const hasContent = ticketChatState.events.length > 0 ||
+            ticketChatState.messages.length > 0 ||
+            ticketChatState.status === "running";
+        els.streamEl.classList.toggle("hidden", !hasContent);
     }
     // MUTUALLY EXCLUSIVE: Show either the content editor OR the patch preview, never both.
     // This prevents confusion about which view is the "current" state.

@@ -6,6 +6,7 @@ import { publish } from "./bus.js";
 import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, ticketChatState, } from "./ticketChatActions.js";
 import { initAgentControls } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
+import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
 const DEFAULT_FRONTMATTER = {
     agent: "codex",
     done: false,
@@ -378,6 +379,8 @@ export function openTicketEditor(ticket) {
     if (chatInput)
         chatInput.value = "";
     renderTicketChat();
+    renderTicketEvents();
+    renderTicketMessages();
     state.isOpen = true;
     modal.classList.remove("hidden");
     // Focus on title field for new tickets, body for existing
@@ -481,6 +484,8 @@ export function initTicketEditor() {
     });
     // Initialize voice input for ticket chat
     void initTicketVoice();
+    // Initialize rich chat experience (events toggle, etc.)
+    initTicketChatEvents();
     // Button handlers
     if (deleteBtn)
         deleteBtn.addEventListener("click", () => void deleteTicket());

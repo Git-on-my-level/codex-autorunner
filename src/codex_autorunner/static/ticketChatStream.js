@@ -2,7 +2,8 @@
  * Ticket Chat Stream - handles SSE streaming for ticket chat
  */
 import { resolvePath, getAuthToken } from "./utils.js";
-import { ticketChatState, renderTicketChat } from "./ticketChatActions.js";
+import { ticketChatState, renderTicketChat, clearTicketEvents, addUserMessage, addAssistantMessage, } from "./ticketChatActions.js";
+import { applyTicketEvent, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
 const decoder = new TextDecoder();
 function parseMaybeJson(data) {
     try {
@@ -13,6 +14,12 @@ function parseMaybeJson(data) {
     }
 }
 export async function performTicketChatRequest(ticketIndex, message, signal, options = {}) {
+    // Clear events from previous request and add user message to history
+    clearTicketEvents();
+    addUserMessage(message);
+    // Render both chat (for container visibility) and messages
+    renderTicketChat();
+    renderTicketMessages();
     const endpoint = resolvePath(`/api/tickets/${ticketIndex}/chat`);
     const headers = {
         "Content-Type": "application/json",
@@ -118,15 +125,16 @@ function handleTicketStreamEvent(event, rawData) {
                 : parsed.status || "";
             ticketChatState.statusText = status;
             renderTicketChat();
+            renderTicketEvents();
             break;
         }
         case "token": {
             const token = typeof parsed === "string"
                 ? parsed
-                : parsed.token
-                    || parsed.text
-                    || rawData
-                    || "";
+                : parsed.token ||
+                    parsed.text ||
+                    rawData ||
+                    "";
             ticketChatState.streamText = (ticketChatState.streamText || "") + token;
             if (!ticketChatState.statusText || ticketChatState.statusText === "queued") {
                 ticketChatState.statusText = "responding";
@@ -138,15 +146,25 @@ function handleTicketStreamEvent(event, rawData) {
             applyTicketChatResult(parsed);
             break;
         }
+        case "event":
+        case "app-server": {
+            // App-server events (thinking, tool calls, etc.)
+            applyTicketEvent(ticketChatState, parsed);
+            renderTicketEvents();
+            break;
+        }
         case "error": {
             const message = typeof parsed === "object" && parsed !== null
-                ? parsed.detail
-                    || parsed.error
-                    || rawData
+                ? parsed.detail ||
+                    parsed.error ||
+                    rawData
                 : rawData || "Ticket chat failed";
             ticketChatState.status = "error";
             ticketChatState.error = String(message);
+            // Add error as assistant message
+            addAssistantMessage(`Error: ${message}`, true);
             renderTicketChat();
+            renderTicketMessages();
             throw new Error(String(message));
         }
         case "interrupted": {
@@ -156,17 +174,33 @@ function handleTicketStreamEvent(event, rawData) {
             ticketChatState.status = "interrupted";
             ticketChatState.error = "";
             ticketChatState.statusText = String(message);
+            // Add interrupted message
+            addAssistantMessage("Request interrupted", true);
             renderTicketChat();
+            renderTicketMessages();
             break;
         }
         case "done":
         case "finish": {
             ticketChatState.status = "done";
+            // Add final assistant message from stream text if available
+            if (ticketChatState.streamText) {
+                addAssistantMessage(ticketChatState.streamText, true);
+            }
             renderTicketChat();
+            renderTicketMessages();
+            renderTicketEvents();
             break;
         }
         default:
-            // Unknown event, ignore
+            // Unknown event - try to parse as app-server event
+            if (typeof parsed === "object" && parsed !== null) {
+                const messageObj = parsed;
+                if (messageObj.method || messageObj.message) {
+                    applyTicketEvent(ticketChatState, parsed);
+                    renderTicketEvents();
+                }
+            }
             break;
     }
 }
@@ -177,13 +211,18 @@ function applyTicketChatResult(payload) {
     if (result.status === "interrupted") {
         ticketChatState.status = "interrupted";
         ticketChatState.error = "";
+        addAssistantMessage("Request interrupted", true);
         renderTicketChat();
+        renderTicketMessages();
         return;
     }
     if (result.status === "error" || result.error) {
         ticketChatState.status = "error";
-        ticketChatState.error = result.detail || result.error || "Chat failed";
+        ticketChatState.error =
+            result.detail || result.error || "Chat failed";
+        addAssistantMessage(`Error: ${ticketChatState.error}`, true);
         renderTicketChat();
+        renderTicketMessages();
         return;
     }
     // Success
@@ -192,7 +231,8 @@ function applyTicketChatResult(payload) {
         ticketChatState.streamText = result.message;
     }
     if (result.agent_message || result.agentMessage) {
-        ticketChatState.statusText = result.agent_message || result.agentMessage || "";
+        ticketChatState.statusText =
+            result.agent_message || result.agentMessage || "";
     }
     // Check for draft/patch in response
     if (result.draft || result.patch || result.content) {
@@ -204,5 +244,19 @@ function applyTicketChatResult(payload) {
             baseHash: result.base_hash || result.baseHash || "",
         };
     }
+    // Add assistant message from response
+    const responseText = ticketChatState.statusText ||
+        ticketChatState.streamText ||
+        (ticketChatState.draft ? "Changes ready to apply" : "Done");
+    if (responseText && ticketChatState.messages.length > 0) {
+        // Only add if we have messages (i.e., a user message was sent)
+        const lastMessage = ticketChatState.messages[ticketChatState.messages.length - 1];
+        // Avoid duplicate assistant messages
+        if (lastMessage.role === "user") {
+            addAssistantMessage(responseText, true);
+        }
+    }
     renderTicketChat();
+    renderTicketMessages();
+    renderTicketEvents();
 }
