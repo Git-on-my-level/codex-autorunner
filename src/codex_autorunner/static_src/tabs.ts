@@ -1,5 +1,5 @@
 import { publish } from "./bus.js";
-import { getUrlParams, updateUrlParams } from "./utils.js";
+import { escapeHtml, getUrlParams, updateUrlParams } from "./utils.js";
 
 
 interface Tab {
@@ -52,7 +52,10 @@ export function initTabs(defaultTab: string = "analytics"): void {
     const btn = document.createElement("button");
     btn.className = "tab";
     btn.dataset.target = tab.id;
-    btn.textContent = tab.label;
+    btn.innerHTML = `
+      <span class="tab-label">${escapeHtml(tab.label)}</span>
+      <span class="badge hidden" id="tab-badge-${tab.id}"></span>
+    `;
     btn.addEventListener("click", () => setActivePanel(tab.id));
     container.appendChild(btn);
   });

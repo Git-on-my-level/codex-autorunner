@@ -3,6 +3,7 @@
  */
 import { api, flash } from "./utils.js";
 import { publish } from "./bus.js";
+import { clearTicketChatHistory } from "./ticketChatStorage.js";
 import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, ticketChatState, } from "./ticketChatActions.js";
 import { initAgentControls } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
@@ -447,6 +448,7 @@ export async function deleteTicket() {
         await api(`/api/flows/ticket_flow/tickets/${state.ticketIndex}`, {
             method: "DELETE",
         });
+        clearTicketChatHistory(state.ticketIndex);
         flash("Ticket deleted");
         // Close modal
         state.isOpen = false;

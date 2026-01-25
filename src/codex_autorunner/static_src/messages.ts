@@ -1,5 +1,4 @@
 import { api, escapeHtml, flash, getUrlParams, updateUrlParams } from "./utils.js";
-import { activateTab } from "./tabs.js";
 import { subscribe } from "./bus.js";
 import { REPO_ID } from "./env.js";
 import { isRepoHealthy } from "./health.js";
@@ -85,9 +84,6 @@ let messagesInitialized = false;
 let activeRunId: string | null = null;
 let selectedRunId: string | null = null;
 
-const bellBtn = document.getElementById("repo-inbox-btn") as HTMLButtonElement | null;
-const bellBadge = document.getElementById("repo-inbox-badge") as HTMLElement | null;
-
 const threadsEl = document.getElementById("messages-thread-list");
 const detailEl = document.getElementById("messages-thread-detail");
 const refreshEl = document.getElementById("messages-refresh") as HTMLButtonElement | null;
@@ -105,18 +101,18 @@ function formatTimestamp(ts?: string | null): string {
 }
 
 function setBadge(count: number): void {
-  if (!bellBadge) return;
+  const badge = document.getElementById("tab-badge-messages");
+  if (!badge) return;
   if (count > 0) {
-    bellBadge.textContent = String(count);
-    bellBadge.classList.remove("hidden");
+    badge.textContent = String(count);
+    badge.classList.remove("hidden");
   } else {
-    bellBadge.textContent = "";
-    bellBadge.classList.add("hidden");
+    badge.textContent = "";
+    badge.classList.add("hidden");
   }
 }
 
 async function refreshBell(): Promise<void> {
-  if (!bellBtn) return;
   if (!isRepoHealthy()) {
     activeRunId = null;
     setBadge(0);
@@ -140,19 +136,7 @@ async function refreshBell(): Promise<void> {
 
 export function initMessageBell(): void {
   if (bellInitialized) return;
-  if (!bellBtn) return;
   bellInitialized = true;
-
-  bellBtn.addEventListener("click", () => {
-    const runId = activeRunId;
-    activateTab("messages");
-    if (runId) {
-      updateUrlParams({ tab: "messages", run_id: runId });
-      // messages tab init will pick this up.
-    } else {
-      updateUrlParams({ tab: "messages" });
-    }
-  });
 
   // Cheap polling. (The repo shell already does other polling; keep this light.)
   refreshBell();

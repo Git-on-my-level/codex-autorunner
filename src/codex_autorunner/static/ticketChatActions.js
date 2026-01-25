@@ -4,6 +4,7 @@
 import { api, flash } from "./utils.js";
 import { performTicketChatRequest } from "./ticketChatStream.js";
 import { publish } from "./bus.js";
+import { saveTicketChatHistory, loadTicketChatHistory } from "./ticketChatStorage.js";
 // Limits for events display
 export const TICKET_CHAT_EVENT_LIMIT = 8;
 export const TICKET_CHAT_EVENT_MAX = 50;
@@ -77,6 +78,9 @@ export function addUserMessage(content) {
         time: new Date().toISOString(),
         isFinal: true,
     });
+    if (ticketChatState.ticketIndex != null) {
+        saveTicketChatHistory(ticketChatState.ticketIndex, ticketChatState.messages);
+    }
 }
 /**
  * Add an assistant message to the chat history.
@@ -89,6 +93,9 @@ export function addAssistantMessage(content, isFinal = true) {
         time: new Date().toISOString(),
         isFinal,
     });
+    if (ticketChatState.ticketIndex != null) {
+        saveTicketChatHistory(ticketChatState.ticketIndex, ticketChatState.messages);
+    }
 }
 export function setTicketIndex(index) {
     const changed = ticketChatState.ticketIndex !== index;
@@ -97,7 +104,7 @@ export function setTicketIndex(index) {
     resetTicketChatState();
     // Clear chat history when switching tickets
     if (changed) {
-        ticketChatState.messages = [];
+        ticketChatState.messages = index != null ? loadTicketChatHistory(index) : [];
         clearTicketEvents();
     }
 }

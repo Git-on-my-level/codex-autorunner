@@ -59,7 +59,9 @@ function clearOldTicketChatHistory(): void {
       try {
         const data = JSON.parse(localStorage.getItem(key) || "{}");
         entries.push({ key, lastUpdated: data.lastUpdated || "" });
-      } catch {}
+      } catch (e) {
+        // Ignore parse errors for individual entries
+      }
     }
   }
   // Sort by date, remove oldest half
