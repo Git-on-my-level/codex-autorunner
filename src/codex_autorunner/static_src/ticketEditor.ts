@@ -423,6 +423,31 @@ function onContentChange(): void {
 }
 
 /**
+ * Split YAML frontmatter from a markdown document.
+ * Returns [frontmatter_yaml, body]. If no frontmatter is present, frontmatter_yaml is null.
+ */
+function splitMarkdownFrontmatter(text: string): [string | null, string] {
+  if (!text) return [null, ""];
+  const lines = text.split(/\r?\n/);
+  if (lines.length === 0) return [null, ""];
+  if (!/^---\s*$/.test(lines[0])) return [null, text];
+
+  let endIdx: number | null = null;
+  for (let i = 1; i < lines.length; i++) {
+    if (/^---\s*$/.test(lines[i])) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  if (endIdx === null) return [null, text];
+
+  const fmYaml = lines.slice(1, endIdx).join("\n");
+  const body = lines.slice(endIdx + 1).join("\n");
+  return [fmYaml, body];
+}
+
+/**
  * Open the ticket editor modal
  * @param ticket - If provided, opens in edit mode; otherwise creates new ticket
  */
@@ -445,7 +470,18 @@ export function openTicketEditor(ticket?: TicketData): void {
     setFrontmatterForm(fm);
     
     // Set body (without frontmatter)
-    const body = ticket.body || "";
+    let body = ticket.body || "";
+    
+    // If the body itself contains frontmatter, strip it if it's well-formed
+    const [fmYaml, strippedBody] = splitMarkdownFrontmatter(body);
+    if (fmYaml !== null) {
+      body = strippedBody.trim();
+    } else if (body.startsWith("---")) {
+      // If it starts with --- but splitMarkdownFrontmatter returned null, it's malformed.
+      // We keep it in the body so the user can see/fix it.
+      flash("Malformed frontmatter detected in body", "error");
+    }
+
     state.originalBody = body;
     state.lastSavedBody = body;
     content.value = body;
@@ -711,6 +747,13 @@ export function initTicketEditor(): void {
   // Enter key creates new TODO checkbox when on a checkbox line
   if (content) {
     content.addEventListener("keydown", (e) => {
+      // Prevent manual frontmatter entry in the body
+      if (e.key === "-" && content.selectionStart === 2 && content.value.startsWith("--") && !content.value.includes("\n")) {
+        flash("Please use the frontmatter editor above", "error");
+        e.preventDefault();
+        return;
+      }
+
       if (e.key === "Enter" && !e.isComposing && !e.shiftKey) {
         const text = content.value;
         const pos = content.selectionStart;
