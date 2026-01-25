@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 from typing import Any, AsyncIterator, Iterable, Optional
 
 import httpx
@@ -549,16 +550,37 @@ class OpenCodeClient:
     def has_endpoint(
         self, openapi_spec: dict[str, Any], method: str, path: str
     ) -> bool:
-        """Check if endpoint is available in OpenAPI spec."""
+        """Check if endpoint is available in OpenAPI spec.
+
+        The OpenAPI spec sometimes uses different template parameter names (e.g.,
+        `{sessionID}` vs `{session_id}`). We normalize templates before matching so
+        capability detection does not depend on placeholder spelling.
+        """
         if not isinstance(openapi_spec, dict):
             return False
         paths = openapi_spec.get("paths", {})
         if not isinstance(paths, dict):
             return False
-        path_info = paths.get(path)
-        if not isinstance(path_info, dict):
-            return False
-        return method in path_info
+
+        target = _normalize_template_path(path)
+        method = method.lower()
+
+        for candidate_path, info in paths.items():
+            if not isinstance(info, dict):
+                continue
+            if _normalize_template_path(candidate_path) != target:
+                continue
+            if method in info:
+                return True
+        return False
+
+
+def _normalize_template_path(path: str) -> str:
+    """Collapse template placeholders to a canonical form.
+
+    Example: `/session/{sessionID}/prompt_async` -> `/session/{}/prompt_async`
+    """
+    return re.sub(r"{[^/]+}", "{}", path)
 
 
 __all__ = ["OpenCodeClient", "OpenCodeProtocolError", "OpenCodeApiProfile"]
