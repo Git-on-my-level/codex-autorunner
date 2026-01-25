@@ -1760,12 +1760,16 @@ button.icon-btn {
 .ticket-live-output-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* justify-content: space-between; */
   gap: 8px;
   padding: 8px 12px;
   background: rgba(255, 255, 255, 0.03);
   cursor: pointer;
   user-select: none;
+}
+
+.ticket-live-output-header .icon-btn {
+  margin-left: auto;
 }
 
 .ticket-live-output-header:hover {
@@ -7076,7 +7080,13 @@ button.loading::after {
 }
 
 .ticket-header-row .ticket-fm-toggle {
+  display: flex;
+  align-items: center;
   gap: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 6px 8px;
+  margin: -6px 0;
 }
 
 .ticket-header-row .ticket-fm-toggle-label {
@@ -7091,8 +7101,8 @@ button.loading::after {
 .ticket-editor-modal #ticket-editor-close {
   font-size: 16px;
   line-height: 1;
-  padding: 2px 6px;
-  margin-left: auto;
+  padding: 8px 12px;
+  margin: -6px -12px -6px auto;
   flex-shrink: 0;
 }
 
@@ -7118,6 +7128,15 @@ button.loading::after {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+}
+
+.ticket-editor-textarea,
+.ticket-patch-main {
+  z-index: 1;
+}
+
+.ticket-chat-panel {
+  z-index: 2;
 }
 
 .ticket-editor-toolbar {
@@ -7215,6 +7234,8 @@ button.loading::after {
   gap: 4px;
   cursor: pointer;
   white-space: nowrap;
+  padding: 6px 8px;
+  margin: -6px 0;
 }
 
 .ticket-fm-toggle input[type="checkbox"] {

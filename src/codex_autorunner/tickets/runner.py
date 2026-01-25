@@ -687,7 +687,7 @@ class TicketRunner:
             "- To message the user, optionally write attachments first to the handoff directory, then write USER_MESSAGE.md last.\n"
             f"  - Handoff directory: {rel_handoff}\n"
             f"  - USER_MESSAGE.md path: {rel_user_msg}\n"
-            "  USER_MESSAGE.md frontmatter supports: mode: notify|pause (pause will halt the run).\n"
+            "  USER_MESSAGE.md frontmatter supports: mode: notify|pause (pause will wait for a user response; notify will continue without waiting for user input).\n"
             "- Keep tickets minimal and avoid scope creep. You may create new tickets only if blocking the current SPEC.\n"
         )
 

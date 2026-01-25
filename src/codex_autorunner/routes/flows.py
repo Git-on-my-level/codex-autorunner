@@ -444,7 +444,7 @@ You are the first ticket in a new ticket_flow run.
 - Create or update `.codex-autorunner/SPEC.md` that captures goals, scope, risks, and constraints.
 - Break the work into additional `TICKET-00X.md` files with clear owners/goals; keep this ticket open until they exist.
 - Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/handoff/` if needed.
-- Write `USER_MESSAGE.md` with `mode: pause` summarizing the ticket plan and requesting user review before proceeding.
+- Write `USER_MESSAGE.md` with `mode: pause` (wait for user response) summarizing the ticket plan and requesting user review before proceeding. Use `mode: notify` if you want to message the user but keep running.
 """
             ticket_path.write_text(template, encoding="utf-8")
             seeded = True
