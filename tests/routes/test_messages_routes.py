@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
+from codex_autorunner.routes import flows as flows_routes
 from codex_autorunner.routes import messages as messages_routes
 
 
@@ -53,10 +54,12 @@ def test_messages_active_and_reply_archive(tmp_path, monkeypatch):
     _write_handoff_history(repo_root, run_id, seq=1)
 
     monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
 
     app = FastAPI()
     app.state.repo_id = "repo"
     app.include_router(messages_routes.build_messages_routes())
+    app.include_router(flows_routes.build_flow_routes())
 
     with TestClient(app) as client:
         active = client.get("/api/messages/active")

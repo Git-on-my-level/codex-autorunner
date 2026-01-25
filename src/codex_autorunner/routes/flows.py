@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -749,6 +750,43 @@ You are the first ticket in a new ticket_flow run.
                 )
 
         return {"run_id": normalized, "history": history_entries}
+
+    @router.get("/{run_id}/reply_history/{seq}/{file_path:path}")
+    def get_reply_history_file(run_id: str, seq: str, file_path: str):
+        repo_root = find_repo_root()
+        db_path, _ = _flow_paths(repo_root)
+        store = FlowStore(db_path)
+        try:
+            store.initialize()
+            record = store.get_flow_run(run_id)
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
+        if not record:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        if not (len(seq) == 4 and seq.isdigit()):
+            raise HTTPException(status_code=400, detail="Invalid seq")
+        if ".." in file_path or file_path.startswith("/"):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+        filename = os.path.basename(file_path)
+        if filename != file_path:
+            raise HTTPException(status_code=400, detail="Invalid file path")
+
+        input_data = dict(record.input_data or {})
+        workspace_root = Path(input_data.get("workspace_root") or repo_root)
+        runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
+        from ..tickets.replies import resolve_reply_paths
+
+        reply_paths = resolve_reply_paths(
+            workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
+        )
+        target = reply_paths.reply_history_dir / seq / filename
+        if not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(path=str(target), filename=filename)
 
     @router.get("/{run_id}/handoff_history/{seq}/{file_path:path}")
     async def get_handoff_file(run_id: str, seq: str, file_path: str):
