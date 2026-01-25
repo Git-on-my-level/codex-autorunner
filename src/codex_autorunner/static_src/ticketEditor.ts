@@ -3,6 +3,7 @@
  */
 import { api, flash } from "./utils.js";
 import { publish } from "./bus.js";
+import { clearTicketChatHistory } from "./ticketChatStorage.js";
 import {
   setTicketIndex,
   sendTicketChat,
@@ -563,6 +564,8 @@ export async function deleteTicket(): Promise<void> {
     await api(`/api/flows/ticket_flow/tickets/${state.ticketIndex}`, {
       method: "DELETE",
     });
+
+    clearTicketChatHistory(state.ticketIndex);
 
     flash("Ticket deleted");
 

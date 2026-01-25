@@ -4,6 +4,7 @@
 import { api, flash } from "./utils.js";
 import { performTicketChatRequest } from "./ticketChatStream.js";
 import { publish } from "./bus.js";
+import { saveTicketChatHistory, loadTicketChatHistory } from "./ticketChatStorage.js";
 
 export type TicketChatStatus = "idle" | "running" | "done" | "error" | "interrupted";
 
@@ -135,6 +136,9 @@ export function addUserMessage(content: string): void {
     time: new Date().toISOString(),
     isFinal: true,
   });
+  if (ticketChatState.ticketIndex != null) {
+    saveTicketChatHistory(ticketChatState.ticketIndex, ticketChatState.messages);
+  }
 }
 
 /**
@@ -148,6 +152,9 @@ export function addAssistantMessage(content: string, isFinal = true): void {
     time: new Date().toISOString(),
     isFinal,
   });
+  if (ticketChatState.ticketIndex != null) {
+    saveTicketChatHistory(ticketChatState.ticketIndex, ticketChatState.messages);
+  }
 }
 
 export function setTicketIndex(index: number | null): void {
@@ -157,7 +164,7 @@ export function setTicketIndex(index: number | null): void {
   resetTicketChatState();
   // Clear chat history when switching tickets
   if (changed) {
-    ticketChatState.messages = [];
+    ticketChatState.messages = index != null ? loadTicketChatHistory(index) : [];
     clearTicketEvents();
   }
 }
