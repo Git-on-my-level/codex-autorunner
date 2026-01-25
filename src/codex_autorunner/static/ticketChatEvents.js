@@ -163,7 +163,13 @@ export function applyTicketEvent(state, payload) {
     let summary = "";
     let detail = "";
     let kind = "event";
-    if (method === "item/completed") {
+    // Handle generic status updates
+    if (method === "status" || params.status) {
+        title = "Status";
+        summary = params.status || "Processing";
+        kind = "status";
+    }
+    else if (method === "item/completed") {
         const itemType = item.type;
         if (itemType === "commandExecution") {
             title = "Command";
@@ -270,10 +276,12 @@ export function renderTicketEvents() {
     }
     els.eventsList.innerHTML = "";
     if (!hasEvents) {
-        const empty = document.createElement("div");
-        empty.className = "ticket-chat-events-empty";
-        empty.textContent = isRunning ? "Waiting for updates..." : "No updates yet.";
-        els.eventsList.appendChild(empty);
+        if (isRunning) {
+            const empty = document.createElement("div");
+            empty.className = "ticket-chat-events-empty ticket-chat-events-waiting";
+            empty.textContent = "Processing...";
+            els.eventsList.appendChild(empty);
+        }
         return;
     }
     visible.forEach((entry) => {
@@ -309,7 +317,7 @@ export function renderTicketEvents() {
 }
 /**
  * Render the ticket chat messages history.
- * Shows user prompts and assistant responses.
+ * Shows user prompts and assistant responses with clear role labels.
  */
 export function renderTicketMessages() {
     const els = getTicketChatElements();
@@ -325,6 +333,17 @@ export function renderTicketMessages() {
         const roleClass = msg.role === "user" ? "user" : "assistant";
         const finalClass = msg.isFinal ? "final" : "thinking";
         wrapper.className = `ticket-chat-message ${roleClass} ${finalClass}`.trim();
+        // Add role label for clear differentiation
+        const roleLabel = document.createElement("div");
+        roleLabel.className = "ticket-chat-message-role";
+        if (msg.role === "user") {
+            roleLabel.textContent = "You";
+        }
+        else {
+            // Show different label for thinking vs final response
+            roleLabel.textContent = msg.isFinal ? "Response" : "Thinking";
+        }
+        wrapper.appendChild(roleLabel);
         const content = document.createElement("div");
         content.className = "ticket-chat-message-content";
         content.textContent = msg.content;

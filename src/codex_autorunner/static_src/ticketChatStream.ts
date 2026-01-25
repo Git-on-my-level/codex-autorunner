@@ -228,8 +228,12 @@ function handleTicketStreamEvent(event: string, rawData: string): void {
     case "finish": {
       ticketChatState.status = "done";
       // Add final assistant message from stream text if available
-      if (ticketChatState.streamText) {
-        addAssistantMessage(ticketChatState.streamText, true);
+      // But only if we haven't already added one (from update event)
+      if (ticketChatState.streamText && ticketChatState.messages.length > 0) {
+        const lastMessage = ticketChatState.messages[ticketChatState.messages.length - 1];
+        if (lastMessage.role === "user") {
+          addAssistantMessage(ticketChatState.streamText, true);
+        }
       }
       renderTicketChat();
       renderTicketMessages();

@@ -192,6 +192,11 @@ def build_ticket_chat_routes() -> APIRouter:
                 reasoning=reasoning,
             )
             if result.get("status") == "ok":
+                # Stream raw events first so client can display agent activity
+                raw_events = result.pop("raw_events", []) or []
+                for event in raw_events:
+                    yield format_sse("app-server", event)
+
                 yield format_sse("update", result)
                 yield format_sse("done", {"status": "ok"})
             elif result.get("status") == "interrupted":
@@ -404,10 +409,14 @@ def build_ticket_chat_routes() -> APIRouter:
             output = "\n".join(turn_result.agent_messages).strip()
             agent_message = _parse_agent_message(output)
 
+            # Include raw events for streaming to client
+            raw_events = getattr(turn_result, "raw_events", []) or []
+
             return {
                 "status": "ok",
                 "agent_message": agent_message,
                 "message": output,
+                "raw_events": raw_events,
             }
 
         except TicketChatError:

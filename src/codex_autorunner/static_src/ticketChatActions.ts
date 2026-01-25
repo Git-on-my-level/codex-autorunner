@@ -143,8 +143,16 @@ export function addUserMessage(content: string): void {
 
 /**
  * Add an assistant message to the chat history.
+ * Prevents duplicates by checking if the same content was just added.
  */
 export function addAssistantMessage(content: string, isFinal = true): void {
+  // Prevent duplicate messages with same content
+  if (ticketChatState.messages.length > 0) {
+    const lastMsg = ticketChatState.messages[ticketChatState.messages.length - 1];
+    if (lastMsg.role === "assistant" && lastMsg.content === content) {
+      return; // Skip duplicate
+    }
+  }
   ticketChatState.messages.push({
     id: `assistant-${Date.now()}`,
     role: "assistant",
