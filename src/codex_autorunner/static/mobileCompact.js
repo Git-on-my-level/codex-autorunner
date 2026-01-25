@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { isMobileViewport, setMobileChromeHidden, setMobileComposeFixed, } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { getTerminalManager } from "./terminal.js";

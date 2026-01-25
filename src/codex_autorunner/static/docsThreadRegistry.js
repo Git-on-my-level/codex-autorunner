@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, resolvePath } from "./utils.js";
 import { threadRegistryUI } from "./docsElements.js";
 export function renderThreadRegistryBanner(notice) {

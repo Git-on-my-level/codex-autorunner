@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { initDocs } from "./docsInit.js";
 import { applyDocUpdateFromChat } from "./docsDocUpdates.js";
 import { applyPatch, discardPatch, reloadPatch } from "./docChatActions.js";

@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 export function parseChatPayload(payload) {
     if (!payload)
         return { response: "", content: "", patch: "", drafts: {}, updated: [], createdAt: "", baseHash: "", agentMessage: "" };

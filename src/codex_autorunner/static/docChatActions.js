@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, confirmModal } from "./utils.js";
 import { chatUI } from "./docsElements.js";
 import { CHAT_HISTORY_LIMIT, DOC_TYPES, docsState, getActiveDoc, getChatState, getDocChatViewing, getDraft, isDraftPreview, setDraft, setDraftPreview, setHistoryNavIndex, resetChatEvents, } from "./docsState.js";

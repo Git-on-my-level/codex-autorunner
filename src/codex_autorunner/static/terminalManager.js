@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, buildWsUrl, getAuthToken, isMobileViewport } from "./utils.js";
 import { getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, } from "./agentControls.js";
 function base64UrlEncode(value) {
