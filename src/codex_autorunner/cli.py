@@ -47,6 +47,7 @@ from .integrations.telegram.service import (
     TelegramBotLockError,
     TelegramBotService,
 )
+from .integrations.telegram.state import TelegramStateStore
 from .manifest import load_manifest
 from .server import create_hub_app
 from .spec_ingest import SpecIngestError, SpecIngestService, clear_work_docs
@@ -1158,8 +1159,27 @@ def telegram_health(
         asyncio.run(_run())
     except TelegramAPIError as exc:
         _raise_exit(f"Telegram health check failed: {exc}", cause=exc)
-    except Exception as exc:
-        _raise_exit(f"Telegram health check failed: {exc}", cause=exc)
+
+
+@telegram_app.command("state-check")
+def telegram_state_check(
+    path: Optional[Path] = typer.Option(None, "--path", help="Repo or hub root path"),
+):
+    """Open the Telegram state DB and ensure schema migrations apply."""
+    try:
+        config = load_hub_config(path or Path.cwd())
+    except ConfigError as exc:
+        _raise_exit(str(exc), cause=exc)
+
+    try:
+        store = TelegramStateStore(
+            config.telegram_bot.state_file,
+            default_approval_mode=config.telegram_bot.defaults.approval_mode,
+        )
+        # This will open the DB and apply schema/migrations.
+        store._connection_sync()  # type: ignore[attr-defined]
+    except Exception as exc:  # pragma: no cover - defensive runtime check
+        _raise_exit(f"Telegram state check failed: {exc}", cause=exc)
 
 
 @app.command()
