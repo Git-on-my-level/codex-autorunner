@@ -1,15 +1,23 @@
-import { api, flash, getUrlParams, resolvePath, statusPill } from "./utils.js";
+import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor, TicketData } from "./ticketEditor.js";
 
+type FlowEvent = {
+  event_type: string;
+  timestamp: string;
+  data?: Record<string, unknown>;
+  step_id?: string;
+};
+
 type FlowRun = {
   id?: string;
   status?: string;
   state?: Record<string, unknown>;
   error_message?: string | null;
+  started_at?: string | null;
 };
 
 type BootstrapResponse = FlowRun & {
@@ -41,13 +49,248 @@ type HandoffEntry = {
 
 let currentRunId: string | null = null;
 let ticketsExist = false;
+let currentActiveTicket: string | null = null;
+let currentFlowStatus: string | null = null;
+let elapsedTimerId: ReturnType<typeof setInterval> | null = null;
+let flowStartedAt: Date | null = null;
+let eventSource: EventSource | null = null;
+let lastActivityTime: Date | null = null;
+let lastActivityTimerId: ReturnType<typeof setInterval> | null = null;
+let liveOutputExpanded = false;
+let liveOutputBuffer: string[] = [];
+const MAX_OUTPUT_LINES = 200;
+
+function formatElapsed(startTime: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - startTime.getTime();
+  const diffSecs = Math.floor(diffMs / 1000);
+  
+  if (diffSecs < 60) {
+    return `${diffSecs}s`;
+  }
+  const mins = Math.floor(diffSecs / 60);
+  const secs = diffSecs % 60;
+  if (mins < 60) {
+    return `${mins}m ${secs}s`;
+  }
+  const hours = Math.floor(mins / 60);
+  const remainingMins = mins % 60;
+  return `${hours}h ${remainingMins}m`;
+}
+
+function startElapsedTimer(): void {
+  stopElapsedTimer();
+  if (!flowStartedAt) return;
+  
+  const update = () => {
+    const { elapsed } = els();
+    if (elapsed && flowStartedAt) {
+      elapsed.textContent = formatElapsed(flowStartedAt);
+    }
+  };
+  
+  update(); // Update immediately
+  elapsedTimerId = setInterval(update, 1000);
+}
+
+function stopElapsedTimer(): void {
+  if (elapsedTimerId) {
+    clearInterval(elapsedTimerId);
+    elapsedTimerId = null;
+  }
+}
+
+// ---- SSE Event Stream Functions ----
+
+function formatTimeAgo(timestamp: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - timestamp.getTime();
+  const diffSecs = Math.floor(diffMs / 1000);
+  
+  if (diffSecs < 5) return "just now";
+  if (diffSecs < 60) return `${diffSecs}s ago`;
+  const mins = Math.floor(diffSecs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  return `${hours}h ago`;
+}
+
+function updateLastActivityDisplay(): void {
+  const el = document.getElementById("ticket-flow-last-activity");
+  if (el && lastActivityTime) {
+    el.textContent = formatTimeAgo(lastActivityTime);
+  }
+}
+
+function startLastActivityTimer(): void {
+  stopLastActivityTimer();
+  updateLastActivityDisplay();
+  lastActivityTimerId = setInterval(updateLastActivityDisplay, 1000);
+}
+
+function stopLastActivityTimer(): void {
+  if (lastActivityTimerId) {
+    clearInterval(lastActivityTimerId);
+    lastActivityTimerId = null;
+  }
+}
+
+function appendToLiveOutput(text: string): void {
+  const outputEl = document.getElementById("ticket-live-output-text");
+  if (!outputEl) return;
+  
+  // Add new lines to buffer
+  const newLines = text.split("\n");
+  liveOutputBuffer.push(...newLines);
+  
+  // Trim buffer if it exceeds max lines
+  while (liveOutputBuffer.length > MAX_OUTPUT_LINES) {
+    liveOutputBuffer.shift();
+  }
+  
+  // Update display
+  outputEl.textContent = liveOutputBuffer.join("\n");
+  
+  // Auto-scroll to bottom
+  const contentEl = document.getElementById("ticket-live-output-content");
+  if (contentEl) {
+    contentEl.scrollTop = contentEl.scrollHeight;
+  }
+}
+
+function clearLiveOutput(): void {
+  liveOutputBuffer = [];
+  const outputEl = document.getElementById("ticket-live-output-text");
+  if (outputEl) outputEl.textContent = "";
+}
+
+function setLiveOutputStatus(status: "disconnected" | "connected" | "streaming"): void {
+  const statusEl = document.getElementById("ticket-live-output-status");
+  if (!statusEl) return;
+  
+  statusEl.className = "ticket-live-output-status";
+  switch (status) {
+    case "disconnected":
+      statusEl.textContent = "Disconnected";
+      break;
+    case "connected":
+      statusEl.textContent = "Connected";
+      statusEl.classList.add("connected");
+      break;
+    case "streaming":
+      statusEl.textContent = "Streaming";
+      statusEl.classList.add("streaming");
+      break;
+  }
+}
+
+function handleFlowEvent(event: FlowEvent): void {
+  // Update last activity time
+  lastActivityTime = new Date(event.timestamp);
+  updateLastActivityDisplay();
+  
+  // Handle agent stream delta events
+  if (event.event_type === "agent_stream_delta") {
+    setLiveOutputStatus("streaming");
+    const delta = event.data?.delta as string || "";
+    if (delta) {
+      appendToLiveOutput(delta);
+    }
+  }
+  
+  // Handle flow lifecycle events
+  if (event.event_type === "flow_completed" || 
+      event.event_type === "flow_failed" || 
+      event.event_type === "flow_stopped") {
+    setLiveOutputStatus("connected");
+    // Refresh the flow state
+    void loadTicketFlow();
+  }
+  
+  // Handle step events
+  if (event.event_type === "step_started") {
+    const stepName = event.data?.step_name as string || "";
+    if (stepName) {
+      appendToLiveOutput(`\n--- Step: ${stepName} ---\n`);
+    }
+  }
+}
+
+function connectEventStream(runId: string): void {
+  disconnectEventStream();
+  
+  const token = getAuthToken();
+  let url = resolvePath(`/api/flows/${runId}/events`);
+  if (token) {
+    url += `?token=${encodeURIComponent(token)}`;
+  }
+  
+  eventSource = new EventSource(url);
+  
+  eventSource.onopen = () => {
+    setLiveOutputStatus("connected");
+  };
+  
+  eventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data) as FlowEvent;
+      handleFlowEvent(data);
+    } catch (err) {
+      // Ignore parse errors
+    }
+  };
+  
+  eventSource.onerror = () => {
+    setLiveOutputStatus("disconnected");
+    // Don't auto-reconnect here - loadTicketFlow will handle it
+  };
+}
+
+function disconnectEventStream(): void {
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+  setLiveOutputStatus("disconnected");
+}
+
+function initLiveOutputPanel(): void {
+  const toggleBtn = document.getElementById("ticket-live-output-toggle");
+  const expandBtn = document.getElementById("ticket-live-output-expand");
+  const contentEl = document.getElementById("ticket-live-output-content");
+  const panelEl = document.getElementById("ticket-live-output-panel");
+  
+  const toggle = () => {
+    liveOutputExpanded = !liveOutputExpanded;
+    if (contentEl) {
+      contentEl.classList.toggle("hidden", !liveOutputExpanded);
+    }
+    if (panelEl) {
+      panelEl.classList.toggle("expanded", liveOutputExpanded);
+    }
+  };
+  
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", toggle);
+  }
+  if (expandBtn) {
+    expandBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggle();
+    });
+  }
+}
 
 function els(): {
   card: HTMLElement | null;
   status: HTMLElement | null;
   run: HTMLElement | null;
   current: HTMLElement | null;
+  turn: HTMLElement | null;
+  elapsed: HTMLElement | null;
+  progress: HTMLElement | null;
   reason: HTMLElement | null;
+  lastActivity: HTMLElement | null;
   dir: HTMLElement | null;
   tickets: HTMLElement | null;
   history: HTMLElement | null;
@@ -62,7 +305,11 @@ function els(): {
     status: document.getElementById("ticket-flow-status"),
     run: document.getElementById("ticket-flow-run"),
     current: document.getElementById("ticket-flow-current"),
+    turn: document.getElementById("ticket-flow-turn"),
+    elapsed: document.getElementById("ticket-flow-elapsed"),
+    progress: document.getElementById("ticket-flow-progress"),
     reason: document.getElementById("ticket-flow-reason"),
+    lastActivity: document.getElementById("ticket-flow-last-activity"),
     dir: document.getElementById("ticket-flow-dir"),
     tickets: document.getElementById("ticket-flow-tickets"),
     history: document.getElementById("ticket-handoff-history"),
@@ -114,7 +361,9 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
     const item = document.createElement("div");
     const fm = (ticket.frontmatter || {}) as Record<string, unknown>;
     const done = Boolean(fm?.done);
-    item.className = `ticket-item ${done ? "done" : ""} clickable`;
+    // Check if this ticket is currently being worked on
+    const isActive = currentActiveTicket && ticket.path === currentActiveTicket && currentFlowStatus === "running";
+    item.className = `ticket-item ${done ? "done" : ""} ${isActive ? "active" : ""} clickable`;
     item.title = "Click to edit";
 
     // Make ticket item clickable to open editor
@@ -132,6 +381,13 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
     agent.textContent = (fm?.agent as string) || "codex";
     head.appendChild(name);
     head.appendChild(agent);
+    // Add WORKING badge for active ticket
+    if (isActive) {
+      const workingBadge = document.createElement("span");
+      workingBadge.className = "ticket-working-badge";
+      workingBadge.textContent = "Working";
+      head.appendChild(workingBadge);
+    }
     item.appendChild(head);
 
     if (fm?.title) {
@@ -307,27 +563,60 @@ async function loadHandoffHistory(runId: string | null): Promise<void> {
 }
 
 async function loadTicketFlow(): Promise<void> {
-  const { status, run, current, reason, resumeBtn, bootstrapBtn, stopBtn } = els();
+  const { status, run, current, turn, elapsed, progress, reason, lastActivity, resumeBtn, bootstrapBtn, stopBtn } = els();
   if (!isRepoHealthy()) {
     if (status) statusPill(status, "error");
     if (run) run.textContent = "–";
     if (current) current.textContent = "–";
+    if (turn) turn.textContent = "–";
+    if (elapsed) elapsed.textContent = "–";
+    if (progress) progress.textContent = "–";
+    if (lastActivity) lastActivity.textContent = "–";
     if (reason) reason.textContent = "Repo offline or uninitialized.";
     setButtonsDisabled(true);
+    stopElapsedTimer();
+    stopLastActivityTimer();
+    disconnectEventStream();
     return;
   }
   try {
     const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
     const latest = (runs && runs[0]) || null;
     currentRunId = (latest?.id as string) || null;
+    currentFlowStatus = (latest?.status as string) || null;
+    
+    // Extract ticket engine state
+    const ticketEngine = (latest?.state as Record<string, unknown> | undefined)?.ticket_engine as
+      | Record<string, unknown>
+      | undefined;
+    currentActiveTicket = (ticketEngine?.current_ticket as string) || null;
+    const ticketTurns = (ticketEngine?.ticket_turns as number) ?? null;
+    const totalTurns = (ticketEngine?.total_turns as number) ?? null;
 
     if (status) statusPill(status, (latest?.status as string) || "idle");
     if (run) run.textContent = latest?.id || "–";
     if (current)
-      current.textContent =
-        ((latest?.state as Record<string, unknown> | undefined)?.ticket_engine as
-          | Record<string, unknown>
-          | undefined)?.current_ticket?.toString() || "–";
+      current.textContent = currentActiveTicket || "–";
+    
+    // Display turn counter
+    if (turn) {
+      if (ticketTurns !== null && currentFlowStatus === "running") {
+        turn.textContent = `${ticketTurns}${totalTurns !== null ? ` (${totalTurns} total)` : ""}`;
+      } else {
+        turn.textContent = "–";
+      }
+    }
+    
+    // Handle elapsed time
+    if (latest?.started_at && (latest.status === "running" || latest.status === "pending")) {
+      flowStartedAt = new Date(latest.started_at);
+      startElapsedTimer();
+    } else {
+      stopElapsedTimer();
+      flowStartedAt = null;
+      if (elapsed) elapsed.textContent = "–";
+    }
+    
     if (reason) reason.textContent = summarizeReason(latest) || "–";
 
     if (resumeBtn) {
@@ -339,6 +628,33 @@ async function loadTicketFlow(): Promise<void> {
       stopBtn.disabled = !latest?.id || !stoppable;
     }
     await loadTicketFiles();
+    
+    // Calculate and display ticket progress
+    if (progress) {
+      const doneCount = ticketsExist ? 
+        document.querySelectorAll(".ticket-item.done").length : 0;
+      const totalCount = ticketsExist ? 
+        document.querySelectorAll(".ticket-item").length : 0;
+      if (totalCount > 0) {
+        progress.textContent = `${doneCount} of ${totalCount} done`;
+      } else {
+        progress.textContent = "–";
+      }
+    }
+    
+    // Connect/disconnect event stream based on flow status
+    if (currentRunId && (latest?.status === "running" || latest?.status === "pending")) {
+      // Only connect if not already connected to this run
+      if (!eventSource || eventSource.url?.indexOf(currentRunId) === -1) {
+        connectEventStream(currentRunId);
+        startLastActivityTimer();
+      }
+    } else {
+      disconnectEventStream();
+      stopLastActivityTimer();
+      if (lastActivity) lastActivity.textContent = "–";
+      lastActivityTime = null;
+    }
 
     if (bootstrapBtn) {
       const busy = latest?.status === "running" || latest?.status === "pending";
@@ -381,6 +697,7 @@ async function bootstrapTicketFlow(): Promise<void> {
       flash("Ticket flow already running; continuing existing run", "info");
     } else {
       flash("Ticket flow started");
+      clearLiveOutput(); // Clear output for new run
     }
     await loadTicketFlow();
   } catch (err) {
@@ -450,6 +767,9 @@ export function initTicketFlow(): void {
   if (resumeBtn) resumeBtn.addEventListener("click", resumeTicketFlow);
   if (stopBtn) stopBtn.addEventListener("click", stopTicketFlow);
   if (refreshBtn) refreshBtn.addEventListener("click", loadTicketFlow);
+  
+  // Initialize live output panel
+  initLiveOutputPanel();
 
   const newThreadBtn = document.getElementById("ticket-chat-new-thread");
   if (newThreadBtn) {

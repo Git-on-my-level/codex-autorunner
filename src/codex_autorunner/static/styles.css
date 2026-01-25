@@ -1631,6 +1631,61 @@ button.icon-btn {
   background: rgba(63, 185, 80, 0.08);
 }
 
+.ticket-card .ticket-item.active {
+  border-color: #f0b429;
+  background: rgba(240, 180, 41, 0.12);
+  box-shadow: 0 0 12px rgba(240, 180, 41, 0.25);
+  animation: ticket-active-pulse 2s ease-in-out infinite;
+}
+
+@keyframes ticket-active-pulse {
+  0%, 100% {
+    box-shadow: 0 0 12px rgba(240, 180, 41, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(240, 180, 41, 0.4);
+  }
+}
+
+.ticket-card .ticket-item.active .ticket-agent {
+  background: rgba(240, 180, 41, 0.25);
+  color: #fff3cd;
+}
+
+.ticket-card .ticket-item.active .ticket-working-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: rgba(240, 180, 41, 0.3);
+  color: #fff3cd;
+  margin-left: 6px;
+}
+
+.ticket-card .ticket-item.active .ticket-working-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f0b429;
+  animation: working-dot-pulse 1s ease-in-out infinite;
+}
+
+@keyframes working-dot-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.8);
+  }
+}
+
 .ticket-card .ticket-item .ticket-item-head {
   display: flex;
   align-items: center;
@@ -1691,6 +1746,90 @@ button.icon-btn {
 .ticket-card .ticket-flow-reason {
   display: block;
   margin: 4px 0 0;
+}
+
+/* Live Agent Output Panel */
+.ticket-live-output-panel {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.02), rgba(26, 33, 48, 0.7));
+  overflow: hidden;
+}
+
+.ticket-live-output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ticket-live-output-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.ticket-live-output-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.ticket-live-output-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+}
+
+.ticket-live-output-status.connected {
+  background: rgba(63, 185, 80, 0.2);
+  color: #3fb950;
+}
+
+.ticket-live-output-status.streaming {
+  background: rgba(108, 245, 216, 0.2);
+  color: var(--accent);
+  animation: pulse-running 1.5s ease-in-out infinite;
+}
+
+.ticket-live-output-content {
+  max-height: 300px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}
+
+.ticket-live-output-content.hidden {
+  display: none;
+}
+
+.ticket-live-output-text {
+  margin: 0;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #c3c8d4;
+  min-height: 60px;
+}
+
+.ticket-live-output-text:empty::before {
+  content: "Waiting for agent output...";
+  color: var(--muted);
+  font-style: italic;
+}
+
+.ticket-live-output-panel #ticket-live-output-expand {
+  transition: transform 0.2s;
+}
+
+.ticket-live-output-panel.expanded #ticket-live-output-expand {
+  transform: rotate(180deg);
 }
 
 /* Review card */
