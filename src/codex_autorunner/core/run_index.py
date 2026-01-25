@@ -197,6 +197,8 @@ class RunIndexStore:
         *,
         log_path: str,
         run_log_path: str,
+        actor: Optional[dict[str, Any]] = None,
+        mode: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         with open_sqlite(self._path) as conn:
             self._ensure_schema(conn)
@@ -207,6 +209,10 @@ class RunIndexStore:
                 entry["started_at"] = now_iso()
                 entry["log_path"] = log_path
                 entry["run_log_path"] = run_log_path
+                if actor is not None:
+                    entry["actor"] = actor
+                if mode is not None:
+                    entry["mode"] = mode
             elif marker == "end":
                 entry["end_offset"] = offset[1] if offset else None
                 entry["finished_at"] = now_iso()

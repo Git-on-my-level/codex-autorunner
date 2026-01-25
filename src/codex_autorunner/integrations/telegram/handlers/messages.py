@@ -349,12 +349,9 @@ async def handle_message_inner(
         return
 
     record = await handlers._router.get_topic(key)
-    if (
-        record
-        and record.workspace_path
-        and text
-        and _is_ticket_reply(message, handlers._bot_username)
-    ):
+    paused = None
+    workspace_root: Optional[Path] = None
+    if record and record.workspace_path:
         workspace_root = canonicalize_path(Path(record.workspace_path))
         preferred_run_id = handlers._ticket_flow_pause_targets.get(
             str(workspace_root), None
@@ -362,19 +359,37 @@ async def handle_message_inner(
         paused = handlers._get_paused_ticket_flow(
             workspace_root, preferred_run_id=preferred_run_id
         )
-        if paused:
-            run_id, run_record = paused
-            success, result = await handlers._write_user_reply_from_telegram(
-                workspace_root, run_id, run_record, message, text
+    if (
+        paused
+        and text
+        and not _is_ticket_reply(message, handlers._bot_username)
+        and not command
+    ):
+        await handlers._send_message(
+            message.chat_id,
+            "Ticket flow is paused. Reply to the latest handoff message (tap Reply) or use /flow resume.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        await _clear_placeholder()
+        return
+    if paused and text and _is_ticket_reply(message, handlers._bot_username):
+        run_id, run_record = paused
+        success, result = await handlers._write_user_reply_from_telegram(
+            workspace_root or Path("."), run_id, run_record, message, text
+        )
+        await handlers._send_message(
+            message.chat_id,
+            result,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        if success and getattr(handlers._config, "ticket_flow_auto_resume", False):
+            await handlers._ticket_flow_bridge.auto_resume_run(
+                workspace_root or Path("."), run_id
             )
-            await handlers._send_message(
-                message.chat_id,
-                result,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            await _clear_placeholder()
-            return
+        await _clear_placeholder()
+        return
 
     if handlers._config.trigger_mode == "mentions" and not should_trigger_run(
         message,
@@ -842,6 +857,8 @@ async def handle_media_message(
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
+        if success and getattr(handlers._config, "ticket_flow_auto_resume", False):
+            await handlers._ticket_flow_bridge.auto_resume_run(workspace_root, run_id)
         return
 
     image_candidate = select_image_candidate(message)

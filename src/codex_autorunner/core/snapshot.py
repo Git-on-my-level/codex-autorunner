@@ -3,7 +3,6 @@ import dataclasses
 import hashlib
 import json
 import os
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -25,6 +24,7 @@ from .git_utils import (
     git_ls_files,
     git_status_porcelain,
 )
+from .redaction import redact_text
 from .utils import atomic_write, read_json
 
 
@@ -48,30 +48,6 @@ def _sha256_text(text: str) -> str:
 
 def _sha256_bytes(blob: bytes) -> str:
     return hashlib.sha256(blob).hexdigest()
-
-
-_REDACTIONS: List[Tuple[re.Pattern[str], str]] = [
-    # OpenAI-like keys.
-    (re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"), "sk-[REDACTED]"),
-    # GitHub personal access tokens.
-    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"), "gh_[REDACTED]"),
-    # AWS access key ids (best-effort).
-    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "AKIA[REDACTED]"),
-    # JWT-ish blobs.
-    (
-        re.compile(
-            r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
-        ),
-        "[JWT_REDACTED]",
-    ),
-]
-
-
-def redact_text(text: str) -> str:
-    redacted = text
-    for pattern, replacement in _REDACTIONS:
-        redacted = pattern.sub(replacement, redacted)
-    return redacted
 
 
 _DEFAULT_IGNORED_DIRS = {

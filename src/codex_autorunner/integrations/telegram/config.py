@@ -176,6 +176,7 @@ class TelegramBotConfig:
     metrics_mode: str
     coalesce_window_seconds: float
     agent_binaries: dict[str, str]
+    ticket_flow_auto_resume: bool
 
     @classmethod
     def from_raw(
@@ -383,6 +384,11 @@ class TelegramBotConfig:
         if coalesce_window_seconds <= 0:
             coalesce_window_seconds = DEFAULT_COALESCE_WINDOW_SECONDS
 
+        ticket_flow_raw = (
+            cfg.get("ticket_flow") if isinstance(cfg.get("ticket_flow"), dict) else {}
+        )
+        ticket_flow_auto_resume = bool(ticket_flow_raw.get("auto_resume", False))
+
         agent_binaries = dict(agent_binaries or {})
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
@@ -397,6 +403,11 @@ class TelegramBotConfig:
         state_file = Path(cfg.get("state_file", DEFAULT_STATE_FILE))
         if not state_file.is_absolute():
             state_file = (root / state_file).resolve()
+        if state_file.suffix == ".json":
+            raise TelegramBotConfigError(
+                "telegram_bot.state_file must point to a SQLite database "
+                "(.sqlite3). Update your config to .codex-autorunner/telegram_state.sqlite3"
+            )
 
         app_server_command_env = str(
             cfg.get("app_server_command_env", "CAR_TELEGRAM_APP_SERVER_COMMAND")
@@ -470,10 +481,7 @@ class TelegramBotConfig:
                 else:
                     agent_timeouts[str(key)] = timeout_value
 
-        if (
-            not has_explicit_codex_timeout
-            and app_server_turn_timeout_seconds is not None
-        ):
+        if not has_explicit_codex_timeout:
             agent_timeouts["codex"] = app_server_turn_timeout_seconds
 
         polling_raw_value = cfg.get("polling")
@@ -531,6 +539,7 @@ class TelegramBotConfig:
             metrics_mode=metrics_mode,
             coalesce_window_seconds=coalesce_window_seconds,
             agent_binaries=agent_binaries,
+            ticket_flow_auto_resume=ticket_flow_auto_resume,
         )
 
     def validate(self) -> None:

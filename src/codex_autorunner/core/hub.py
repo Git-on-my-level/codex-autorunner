@@ -137,7 +137,8 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
         import json
 
         payload = json.loads(data)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to parse hub state from %s: %s", state_path, exc)
         return HubState(last_scan_at=None, repos=[])
     last_scan_at = payload.get("last_scan_at")
     repos_payload = payload.get("repos") or []
@@ -168,7 +169,13 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                 runner_pid=entry.get("runner_pid"),
             )
             repos.append(repo)
-        except Exception:
+        except Exception as exc:
+            repo_id = entry.get("id", "unknown")
+            logger.warning(
+                "Failed to load repo snapshot for id=%s from hub state: %s",
+                repo_id,
+                exc,
+            )
             continue
     return HubState(last_scan_at=last_scan_at, repos=repos)
 

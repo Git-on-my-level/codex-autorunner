@@ -6,7 +6,10 @@ from pathlib import Path
 from .....core.engine import Engine
 from .....core.flows import FlowController, FlowStore
 from .....core.flows.models import FlowRunStatus
-from .....core.flows.worker_process import spawn_flow_worker
+from .....core.flows.worker_process import (
+    check_worker_health,
+    spawn_flow_worker,
+)
 from .....core.utils import canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
 from .....tickets import AgentPool
@@ -38,6 +41,11 @@ def _get_ticket_controller(repo_root: Path) -> FlowController:
 
 
 def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
+    health = check_worker_health(repo_root, run_id)
+    if health.is_alive:
+        _logger.info("Worker already active for run %s (pid=%s)", run_id, health.pid)
+        return
+
     proc, out, err = spawn_flow_worker(repo_root, run_id)
     try:
         # We don't track handles in Telegram commands, close in parent after spawn.

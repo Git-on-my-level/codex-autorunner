@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from codex_autorunner.core.engine import Engine
+import pytest
+
+from codex_autorunner.core.engine import Engine, LockError
+from codex_autorunner.core.locks import LockAssessment
 from codex_autorunner.core.runner_controller import ProcessRunnerController
 from codex_autorunner.core.state import load_state, save_state
 
@@ -264,3 +268,28 @@ def test_reconcile_run_index_runner_active_different_run(
     assert entry_3.get("finished_at") is None
     assert entry_3.get("exit_code") is None
     assert entry_3.get("reconciled_at") is None
+
+
+def test_start_raises_when_active_lock(monkeypatch, repo: Path) -> None:
+    engine = Engine(repo)
+    lock_payload = {
+        "pid": 12345,
+        "host": "localhost",
+        "started_at": "2025-01-01T00:00:00Z",
+    }
+    engine.lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.runner_controller.assess_lock",
+        lambda _path, **_kwargs: LockAssessment(
+            freeable=False, reason=None, pid=12345, host="localhost"
+        ),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.runner_controller.process_alive",
+        lambda _pid: True,
+    )
+
+    controller = ProcessRunnerController(engine)
+    with pytest.raises(LockError):
+        controller.start()
