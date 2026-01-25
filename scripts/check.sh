@@ -64,7 +64,7 @@ echo "Type check (mypy)..."
 "$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server
 
 echo "Linting JS/TS (eslint)..."
-"$ESLINT_BIN" "src/codex_autorunner/static/**/*.js" "src/codex_autorunner/static_src/**/*.ts"
+"$ESLINT_BIN" "src/codex_autorunner/static_src/**/*.ts"
 
 echo "Build static assets (pnpm run build)..."
 pnpm run build

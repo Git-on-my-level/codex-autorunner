@@ -78,7 +78,7 @@ format:
 	$(PYTHON) -m ruff check --fix src tests
 	@if [ -d node_modules ]; then \
 		echo "Fixing JS files (eslint)..."; \
-		./node_modules/.bin/eslint --fix "src/codex_autorunner/static/**/*.js" "src/codex_autorunner/static_src/**/*.ts" || true; \
+		./node_modules/.bin/eslint --fix "src/codex_autorunner/static_src/**/*.ts" || true; \
 	fi
 
 deadcode-baseline:
