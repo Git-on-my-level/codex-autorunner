@@ -1,7 +1,7 @@
 /**
  * Ticket Editor Modal - handles creating, editing, and deleting tickets
  */
-import { api, flash, updateUrlParams } from "./utils.js";
+import { api, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js";
 import { publish } from "./bus.js";
 import { clearTicketChatHistory } from "./ticketChatStorage.js";
 import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, ticketChatState, } from "./ticketChatActions.js";
@@ -326,31 +326,6 @@ function onContentChange() {
     scheduleAutosave();
 }
 /**
- * Split YAML frontmatter from a markdown document.
- * Returns [frontmatter_yaml, body]. If no frontmatter is present, frontmatter_yaml is null.
- */
-function splitMarkdownFrontmatter(text) {
-    if (!text)
-        return [null, ""];
-    const lines = text.split(/\r?\n/);
-    if (lines.length === 0)
-        return [null, ""];
-    if (!/^---\s*$/.test(lines[0]))
-        return [null, text];
-    let endIdx = null;
-    for (let i = 1; i < lines.length; i++) {
-        if (/^---\s*$/.test(lines[i])) {
-            endIdx = i;
-            break;
-        }
-    }
-    if (endIdx === null)
-        return [null, text];
-    const fmYaml = lines.slice(1, endIdx).join("\n");
-    const body = lines.slice(endIdx + 1).join("\n");
-    return [fmYaml, body];
-}
-/**
  * Open the ticket editor modal
  * @param ticket - If provided, opens in edit mode; otherwise creates new ticket
  */
@@ -374,12 +349,16 @@ export function openTicketEditor(ticket) {
         // If the body itself contains frontmatter, strip it if it's well-formed
         const [fmYaml, strippedBody] = splitMarkdownFrontmatter(body);
         if (fmYaml !== null) {
-            body = strippedBody.trim();
+            body = strippedBody.trimStart();
         }
         else if (body.startsWith("---")) {
             // If it starts with --- but splitMarkdownFrontmatter returned null, it's malformed.
             // We keep it in the body so the user can see/fix it.
             flash("Malformed frontmatter detected in body", "error");
+        }
+        else {
+            // Ensure we don't accumulate whitespace from the backend's normalization
+            body = body.trimStart();
         }
         state.originalBody = body;
         state.lastSavedBody = body;

@@ -1,7 +1,7 @@
 /**
  * Ticket Chat Actions - handles sending messages, applying/discarding patches
  */
-import { api, flash } from "./utils.js";
+import { api, flash, splitMarkdownFrontmatter } from "./utils.js";
 import { performTicketChatRequest } from "./ticketChatStream.js";
 import { publish } from "./bus.js";
 import { saveTicketChatHistory, loadTicketChatHistory } from "./ticketChatStorage.js";
@@ -304,7 +304,15 @@ export async function applyTicketPatch() {
         if (res.content) {
             const textarea = document.getElementById("ticket-editor-content");
             if (textarea) {
-                textarea.value = res.content;
+                const [fmYaml, body] = splitMarkdownFrontmatter(res.content);
+                if (fmYaml !== null) {
+                    textarea.value = body.trimStart();
+                }
+                else {
+                    textarea.value = res.content.trimStart();
+                }
+                // Trigger input event to update undo stack and autosave
+                textarea.dispatchEvent(new Event("input", { bubbles: true }));
             }
         }
     }
