@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { docActionsUI } from "./docsElements.js";
 import { COPYABLE_DOCS, PASTEABLE_DOCS, docsState, getActiveDoc, getDraft, hasDraft, isDraftPreview, } from "./docsState.js";
 export function renderDiffHtml(diffText) {

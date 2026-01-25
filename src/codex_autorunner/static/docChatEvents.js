@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { chatUI } from "./docsElements.js";
 import { CHAT_EVENT_LIMIT, CHAT_EVENT_MAX, getActiveDoc, } from "./docsState.js";
 function extractCommand(item, params) {

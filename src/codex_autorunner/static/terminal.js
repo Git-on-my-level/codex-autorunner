@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { TerminalManager } from "./terminalManager.js";
 let terminalManager = null;
 export function getTerminalManager() {

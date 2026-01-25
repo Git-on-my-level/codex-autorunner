@@ -12,11 +12,12 @@
     "lint:ts": "eslint \"src/codex_autorunner/static_src/**/*.ts\"",
     "lint": "eslint \"src/codex_autorunner/static/**/*.js\" \"src/codex_autorunner/static_src/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.json",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json && node scripts/add-static-banner.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "eslint": "^9.39.2",
+    "glob": "^11.0.0",
     "globals": "^17.0.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.53.1"

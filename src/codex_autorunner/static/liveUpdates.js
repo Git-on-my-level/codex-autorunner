@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { publish, subscribe } from "./bus.js";
 const INVALIDATION_DEBOUNCE_MS = 750;
 let initialized = false;

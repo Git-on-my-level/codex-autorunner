@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { CONSTANTS } from "./constants.js";
 import { docButtons } from "./docsElements.js";
 export const DOC_TYPES = ["todo", "progress", "opinions", "spec", "summary"];

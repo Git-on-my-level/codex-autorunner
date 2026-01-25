@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
 import { snapshotUI } from "./docsElements.js";
 import { docsState, getActiveDoc } from "./docsState.js";

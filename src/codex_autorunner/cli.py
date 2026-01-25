@@ -1185,11 +1185,19 @@ def telegram_state_check(
         config = load_hub_config(path or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
+    telegram_cfg = TelegramBotConfig.from_raw(
+        config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
+        root=config.root,
+        agent_binaries=getattr(config, "agents", None)
+        and {name: agent.binary for name, agent in config.agents.items()},
+    )
+    if not telegram_cfg.enabled:
+        _raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
 
     try:
         store = TelegramStateStore(
-            config.telegram_bot.state_file,
-            default_approval_mode=config.telegram_bot.defaults.approval_mode,
+            telegram_cfg.state_file,
+            default_approval_mode=telegram_cfg.defaults.approval_mode,
         )
         # This will open the DB and apply schema/migrations.
         store._connection_sync()  # type: ignore[attr-defined]

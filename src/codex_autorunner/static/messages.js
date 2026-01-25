@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, escapeHtml, flash, getUrlParams, updateUrlParams } from "./utils.js";
 import { activateTab } from "./tabs.js";
 import { subscribe } from "./bus.js";

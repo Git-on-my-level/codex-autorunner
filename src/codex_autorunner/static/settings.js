@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, flash, resolvePath } from "./utils.js";
 const ui = {
     settingsBtn: document.getElementById("repo-settings"),

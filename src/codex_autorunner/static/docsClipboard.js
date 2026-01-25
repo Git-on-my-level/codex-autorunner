@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { flash } from "./utils.js";
 import { PASTEABLE_DOCS, getActiveDoc, hasDraft, isDraftPreview } from "./docsState.js";
 import { getDocTextarea, getDocCopyText, updateDocControls } from "./docsUi.js";

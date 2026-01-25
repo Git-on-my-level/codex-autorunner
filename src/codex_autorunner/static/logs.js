@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { flash, getUrlParams } from "./utils.js";
 import { publish, subscribe } from "./bus.js";
 import { CONSTANTS } from "./constants.js";
