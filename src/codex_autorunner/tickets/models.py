@@ -51,6 +51,7 @@ class TicketRunConfig:
     runs_dir: Path
     max_total_turns: int = 25
     max_lint_retries: int = 3
+    max_commit_retries: int = 2
     auto_commit: bool = True
     checkpoint_message_template: str = (
         "CAR checkpoint: run={run_id} turn={turn} agent={agent}"

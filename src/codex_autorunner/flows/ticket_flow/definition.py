@@ -33,6 +33,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
         max_total_turns = int(input_data.get("max_total_turns") or 25)
         max_lint_retries = int(input_data.get("max_lint_retries") or 3)
+        max_commit_retries = int(input_data.get("max_commit_retries") or 2)
         auto_commit = bool(
             input_data.get("auto_commit") if "auto_commit" in input_data else True
         )
@@ -45,6 +46,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 runs_dir=runs_dir,
                 max_total_turns=max_total_turns,
                 max_lint_retries=max_lint_retries,
+                max_commit_retries=max_commit_retries,
                 auto_commit=auto_commit,
             ),
             agent_pool=agent_pool,
@@ -77,6 +79,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 "runs_dir": {"type": "string"},
                 "max_total_turns": {"type": "integer"},
                 "max_lint_retries": {"type": "integer"},
+                "max_commit_retries": {"type": "integer"},
                 "auto_commit": {"type": "boolean"},
             },
         },

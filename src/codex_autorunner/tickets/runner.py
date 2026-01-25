@@ -50,6 +50,12 @@ class TicketRunner:
         state = dict(state or {})
         # Clear transient reason from previous pause/resume cycles.
         state.pop("reason", None)
+
+        commit_state = (
+            state.get("commit") if isinstance(state.get("commit"), dict) else {}
+        )
+        commit_pending = bool(commit_state.get("pending"))
+        commit_retries = int(commit_state.get("retries") or 0)
         # Global counters.
         total_turns = int(state.get("total_turns") or 0)
         if total_turns >= self._config.max_total_turns:
@@ -94,13 +100,15 @@ class TicketRunner:
             else None
         )
 
-        # If current ticket is done, clear it.
-        if current_path and ticket_is_done(current_path):
+        # If current ticket is done, clear it unless we're in the middle of a
+        # bounded "commit required" follow-up loop.
+        if current_path and ticket_is_done(current_path) and not commit_pending:
             current_path = None
             state.pop("current_ticket", None)
             state.pop("ticket_turns", None)
             state.pop("last_agent_output", None)
             state.pop("lint", None)
+            state.pop("commit", None)
 
         if current_path is None:
             next_path = self._find_next_ticket(ticket_paths)
@@ -115,6 +123,7 @@ class TicketRunner:
             state["ticket_turns"] = 0
             state.pop("last_agent_output", None)
             state.pop("lint", None)
+            state.pop("commit", None)
 
         # Determine lint-retry mode early. When lint state is present, we allow the
         # agent to fix the ticket frontmatter even if the ticket is currently
@@ -249,6 +258,14 @@ class TicketRunner:
                 if isinstance(state.get("last_agent_output"), str)
                 else None
             ),
+            last_checkpoint_error=(
+                state.get("last_checkpoint_error")
+                if isinstance(state.get("last_checkpoint_error"), str)
+                else None
+            ),
+            commit_required=commit_pending,
+            commit_attempt=commit_retries + 1 if commit_pending else 0,
+            commit_max_attempts=self._config.max_commit_retries,
             outbox_paths=outbox_paths,
             lint_errors=lint_errors if lint_errors else None,
             reply_context=reply_context,
@@ -266,6 +283,15 @@ class TicketRunner:
         ticket_turns += 1
         state["total_turns"] = total_turns
         state["ticket_turns"] = ticket_turns
+
+        head_before_turn: Optional[str] = None
+        try:
+            head_proc = run_git(
+                ["rev-parse", "HEAD"], cwd=self._workspace_root, check=True
+            )
+            head_before_turn = (head_proc.stdout or "").strip() or None
+        except Exception:
+            head_before_turn = None
 
         result = await self._agent_pool.run_turn(req)
         if result.error:
@@ -289,6 +315,30 @@ class TicketRunner:
         state["last_agent_id"] = result.agent_id
         state["last_agent_conversation_id"] = result.conversation_id
         state["last_agent_turn_id"] = result.turn_id
+
+        # Best-effort: check whether the agent created a commit and whether the
+        # working tree is clean, before any runner-driven checkpoint commit.
+        head_after_agent: Optional[str] = None
+        clean_after_agent: Optional[bool] = None
+        status_after_agent: Optional[str] = None
+        agent_committed_this_turn: Optional[bool] = None
+        try:
+            head_proc = run_git(
+                ["rev-parse", "HEAD"], cwd=self._workspace_root, check=True
+            )
+            head_after_agent = (head_proc.stdout or "").strip() or None
+            status_proc = run_git(
+                ["status", "--porcelain"], cwd=self._workspace_root, check=True
+            )
+            status_after_agent = (status_proc.stdout or "").strip()
+            clean_after_agent = not bool(status_after_agent)
+            if head_before_turn and head_after_agent:
+                agent_committed_this_turn = head_after_agent != head_before_turn
+        except Exception:
+            head_after_agent = None
+            clean_after_agent = None
+            status_after_agent = None
+            agent_committed_this_turn = None
 
         # Post-turn: archive outbox if USER_MESSAGE exists.
         outbox_seq = int(state.get("outbox_seq") or 0)
@@ -349,7 +399,10 @@ class TicketRunner:
 
         # Optional: auto-commit checkpoint (best-effort).
         checkpoint_error = None
-        if self._config.auto_commit:
+        commit_required_now = bool(
+            updated_fm and updated_fm.done and clean_after_agent is False
+        )
+        if self._config.auto_commit and not commit_pending and not commit_required_now:
             checkpoint_error = self._checkpoint_git(
                 turn=total_turns, agent=result.agent_id
             )
@@ -372,12 +425,70 @@ class TicketRunner:
                 agent_turn_id=result.turn_id,
             )
 
-        # Advance if ticket done.
+        # If ticket is marked done, require a clean working tree (i.e., changes
+        # committed) before advancing. This is bounded by max_commit_retries.
         if updated_fm and updated_fm.done:
+            if clean_after_agent is False:
+                # Enter or continue bounded commit loop.
+                if commit_pending:
+                    # A "commit required" turn just ran and did not succeed.
+                    next_failed_attempts = commit_retries + 1
+                else:
+                    # Ticket just transitioned to done, but repo is still dirty.
+                    next_failed_attempts = 0
+
+                state["commit"] = {
+                    "pending": True,
+                    "retries": next_failed_attempts,
+                    "head_before": head_before_turn,
+                    "head_after": head_after_agent,
+                    "agent_committed_this_turn": agent_committed_this_turn,
+                    "status_porcelain": status_after_agent,
+                }
+
+                if (
+                    commit_pending
+                    and next_failed_attempts >= self._config.max_commit_retries
+                ):
+                    detail = (status_after_agent or "").strip()
+                    detail_lines = detail.splitlines()[:20]
+                    detail_block = (
+                        "\n\nWorking tree status (git status --porcelain):\n- "
+                        + "\n- ".join(detail_lines)
+                        if detail_lines
+                        else ""
+                    )
+                    return self._pause(
+                        state,
+                        reason=(
+                            "Ticket is marked done, but the repo still has uncommitted changes and the agent "
+                            f"did not successfully commit after {self._config.max_commit_retries} attempts.\n"
+                            "Please commit manually (ensuring pre-commit hooks pass) and resume."
+                            + detail_block
+                        ),
+                        current_ticket=safe_relpath(current_path, self._workspace_root),
+                    )
+
+                return TicketResult(
+                    status="continue",
+                    state=state,
+                    reason="Ticket done but commit required; requesting agent commit.",
+                    current_ticket=safe_relpath(current_path, self._workspace_root),
+                    agent_output=result.text,
+                    agent_id=result.agent_id,
+                    agent_conversation_id=result.conversation_id,
+                    agent_turn_id=result.turn_id,
+                )
+
+            # Clean (or unknown) → commit satisfied (or no changes / cannot check).
+            state.pop("commit", None)
             state.pop("current_ticket", None)
             state.pop("ticket_turns", None)
             state.pop("last_agent_output", None)
             state.pop("lint", None)
+        else:
+            # If the ticket is no longer done, clear any pending commit gating.
+            state.pop("commit", None)
 
         if checkpoint_error:
             # Non-fatal, but surface in state for UI.
@@ -553,6 +664,10 @@ class TicketRunner:
         ticket_path: Path,
         ticket_doc,
         last_agent_output: Optional[str],
+        last_checkpoint_error: Optional[str] = None,
+        commit_required: bool = False,
+        commit_attempt: int = 0,
+        commit_max_attempts: int = 2,
         outbox_paths,
         lint_errors: Optional[list[str]],
         reply_context: Optional[str] = None,
@@ -575,6 +690,27 @@ class TicketRunner:
             "  USER_MESSAGE.md frontmatter supports: mode: notify|pause (pause will halt the run).\n"
             "- Keep tickets minimal and avoid scope creep. You may create new tickets only if blocking the current SPEC.\n"
         )
+
+        checkpoint_block = ""
+        if last_checkpoint_error:
+            checkpoint_block = (
+                "\n\n---\n\n"
+                "WARNING: The previous checkpoint git commit failed (often due to pre-commit hooks).\n"
+                "Resolve this before proceeding, or future turns may fail to checkpoint.\n\n"
+                "Checkpoint error:\n"
+                f"{last_checkpoint_error}\n"
+            )
+
+        commit_block = ""
+        if commit_required:
+            attempts_remaining = max(commit_max_attempts - commit_attempt + 1, 0)
+            commit_block = (
+                "\n\n---\n\n"
+                "ACTION REQUIRED: Commit your changes, ensuring any pre-commit hooks pass.\n"
+                "- Use a meaningful commit message that matches what you implemented.\n"
+                "- If hooks fail, fix the underlying issues and retry the commit.\n"
+                f"- Attempts remaining before user intervention: {attempts_remaining}\n"
+            )
 
         if lint_errors:
             lint_block = (
@@ -616,6 +752,8 @@ class TicketRunner:
 
         return (
             header
+            + checkpoint_block
+            + commit_block
             + lint_block
             + requires_block
             + reply_block
