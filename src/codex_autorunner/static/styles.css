@@ -8193,6 +8193,15 @@ button.loading::after {
   padding: 6px 12px;
 }
 
+/* ===== Ticket Chat Large Screen (Telegram-style left-aligned messages) ===== */
+@media (min-width: 900px) {
+  /* Both user and assistant messages align left like Telegram */
+  .ticket-chat-message.user {
+    margin-left: 0;
+    margin-right: auto;
+  }
+}
+
 /* ===== Ticket Editor Mobile ===== */
 @media (max-width: 600px) {
   .ticket-editor-header {
