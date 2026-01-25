@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { flash } from "./utils.js";
 import { initVoiceInput } from "./voice.js";
 import { chatUI } from "./docsElements.js";

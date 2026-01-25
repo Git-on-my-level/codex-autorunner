@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { CONSTANTS } from "./constants.js";
 import { registerAutoRefresh, triggerRefresh } from "./autoRefresh.js";
 import { chatUI, docActionsUI, docButtons, snapshotUI, specIngestUI, specIssueUI, threadRegistryUI, } from "./docsElements.js";

@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 /**
  * Auto-refresh utility for managing periodic data fetching.
  *

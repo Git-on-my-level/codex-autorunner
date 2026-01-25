@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 export const docButtons = document.querySelectorAll(".chip[data-doc]");
 export const chatUI = {
     status: document.getElementById("doc-chat-status"),

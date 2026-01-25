@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { getActiveDoc, hasDraft, isDraftPreview, setDraft, } from "./docsState.js";
 import { normalizeDraftPayload } from "./docsParse.js";
 import { syncDocEditor } from "./docsUi.js";

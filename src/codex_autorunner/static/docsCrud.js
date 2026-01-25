@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, flash, getUrlParams, updateUrlParams } from "./utils.js";
 import { publish } from "./bus.js";
 import { renderTodoPreview } from "./todoPreview.js";

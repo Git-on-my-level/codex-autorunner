@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, confirmModal, openModal } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";

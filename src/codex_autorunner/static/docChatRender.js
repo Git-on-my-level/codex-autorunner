@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { flash, statusPill, isMobileViewport } from "./utils.js";
 import { chatUI } from "./docsElements.js";
 import { CHAT_HISTORY_LIMIT, getActiveDoc, getChatState, getDraft, isDraftPreview, setHistoryNavIndex, } from "./docsState.js";

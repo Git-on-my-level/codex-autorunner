@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
 const UI = {
     status: document.getElementById("snapshot-status"),

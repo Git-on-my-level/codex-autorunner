@@ -17,6 +17,7 @@ Thanks for helping improve codex-autorunner.
 - Run tests: `python -m pytest` (or `make test`)
 - JS lint (UI): `npm run lint:js`
 - Format: `python -m black src tests`
+- Build static assets: `pnpm run build` (source is `src/codex_autorunner/static_src/`, output is `src/codex_autorunner/static/`)
 
 ## Pull requests
 - Explain the user-facing impact.

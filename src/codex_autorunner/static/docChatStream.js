@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { resolvePath, getAuthToken } from "./utils.js";
 import { chatDecoder, getActiveDoc, getChatState, resetChatEvents, } from "./docsState.js";
 import { parseChatPayload, parseMaybeJson, recoverDraftMap, recoverPatchFromRaw, } from "./docsParse.js";

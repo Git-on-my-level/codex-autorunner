@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 export function renderTodoPreview(text) {
     const list = document.getElementById("todo-preview-list");
     if (!list)
