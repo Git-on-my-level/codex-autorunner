@@ -22,6 +22,10 @@ function getTicketChatElements() {
         cancelBtn: document.getElementById("ticket-chat-cancel"),
         statusEl: document.getElementById("ticket-chat-status"),
         streamEl: document.getElementById("ticket-chat-stream"),
+        // Content area elements - mutually exclusive with patch preview
+        contentTextarea: document.getElementById("ticket-editor-content"),
+        contentToolbar: document.getElementById("ticket-editor-toolbar"),
+        // Patch preview elements - mutually exclusive with content area
         patchMain: document.getElementById("ticket-patch-main"),
         patchBody: document.getElementById("ticket-patch-body"),
         patchStatus: document.getElementById("ticket-patch-status"),
@@ -77,19 +81,26 @@ export function renderTicketChat() {
             els.streamEl.classList.add("hidden");
         }
     }
-    // Show/hide patch preview
+    // MUTUALLY EXCLUSIVE: Show either the content editor OR the patch preview, never both.
+    // This prevents confusion about which view is the "current" state.
+    const hasDraft = !!ticketChatState.draft;
+    // Hide content area when showing patch preview
+    if (els.contentTextarea) {
+        els.contentTextarea.classList.toggle("hidden", hasDraft);
+    }
+    if (els.contentToolbar) {
+        els.contentToolbar.classList.toggle("hidden", hasDraft);
+    }
+    // Show patch preview only when there's a draft
     if (els.patchMain) {
-        if (ticketChatState.draft) {
-            els.patchMain.classList.remove("hidden");
+        els.patchMain.classList.toggle("hidden", !hasDraft);
+        if (hasDraft) {
             if (els.patchBody) {
                 els.patchBody.textContent = ticketChatState.draft.patch || "(no changes)";
             }
             if (els.patchStatus) {
                 els.patchStatus.textContent = ticketChatState.draft.agentMessage || "";
             }
-        }
-        else {
-            els.patchMain.classList.add("hidden");
         }
     }
 }

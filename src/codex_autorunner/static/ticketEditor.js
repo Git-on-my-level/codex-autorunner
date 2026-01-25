@@ -5,6 +5,7 @@ import { api, flash } from "./utils.js";
 import { publish } from "./bus.js";
 import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, ticketChatState, } from "./ticketChatActions.js";
 import { initAgentControls } from "./agentControls.js";
+import { initTicketVoice } from "./ticketVoice.js";
 const DEFAULT_FRONTMATTER = {
     agent: "codex",
     done: false,
@@ -478,6 +479,8 @@ export function initTicketEditor() {
         modelSelect,
         reasoningSelect,
     });
+    // Initialize voice input for ticket chat
+    void initTicketVoice();
     // Button handlers
     if (deleteBtn)
         deleteBtn.addEventListener("click", () => void deleteTicket());

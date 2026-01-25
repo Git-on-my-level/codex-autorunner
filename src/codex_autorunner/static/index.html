@@ -471,15 +471,22 @@
 </div>
 <div class="ticket-editor-error hidden" id="ticket-editor-error"></div>
 <div class="ticket-editor-main">
-<!-- Body Editor -->
-<div class="ticket-editor-toolbar">
+<!--
+  MUTUALLY EXCLUSIVE VIEWS:
+  The toolbar + textarea (content editor) and the patch-main (pending changes preview)
+  should NEVER be shown at the same time. When there's a pending draft from AI chat,
+  only show the patch preview. When there's no pending draft, only show the content editor.
+  See renderTicketChat() in ticketChatActions.ts for the toggle logic.
+-->
+<!-- Body Editor (hidden when patch preview is visible) -->
+<div class="ticket-editor-toolbar" id="ticket-editor-toolbar">
 <button class="ghost sm" id="ticket-insert-checkbox" title="Insert checkbox">+ Checkbox</button>
 <button class="ghost sm" id="ticket-undo-btn" title="Undo changes" disabled>Undo</button>
 <button class="danger sm hidden" id="ticket-editor-delete" title="Delete ticket">Delete</button>
 <span class="ticket-autosave-status muted small" id="ticket-autosave-status"></span>
 </div>
 <textarea id="ticket-editor-content" class="ticket-editor-textarea" spellcheck="false" placeholder="Describe the task details here..."></textarea>
-<!-- Patch Preview -->
+<!-- Patch Preview (hidden when content editor is visible) -->
 <div class="ticket-patch-main hidden" id="ticket-patch-main">
 <div class="ticket-patch-header">
 <span class="ticket-patch-title">Pending Changes</span>

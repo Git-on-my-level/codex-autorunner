@@ -15,6 +15,7 @@ import {
   ticketChatState,
 } from "./ticketChatActions.js";
 import { initAgentControls } from "./agentControls.js";
+import { initTicketVoice } from "./ticketVoice.js";
 
 type TicketData = {
   path?: string;
@@ -614,6 +615,9 @@ export function initTicketEditor(): void {
     modelSelect,
     reasoningSelect,
   });
+
+  // Initialize voice input for ticket chat
+  void initTicketVoice();
 
   // Button handlers
   if (deleteBtn) deleteBtn.addEventListener("click", () => void deleteTicket());
