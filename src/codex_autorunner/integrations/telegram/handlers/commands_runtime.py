@@ -54,16 +54,15 @@ from ..constants import (
     TurnKey,
 )
 from ..helpers import (
+    CodexFeatureRow,
     _coerce_model_options,
     _compact_preview,
-    CodexFeatureRow,
     _extract_command_result,
     _extract_rollout_path,
     _extract_thread_id,
     _extract_thread_info,
     _find_thread_entry,
     _format_feature_flags,
-    format_codex_features,
     _format_help_text,
     _format_mcp_list,
     _format_model_list,
@@ -73,13 +72,14 @@ from ..helpers import (
     _parse_review_commit_log,
     _path_within,
     _prepare_shell_response,
-    parse_codex_features_list,
     _render_command_output,
     _set_model_overrides,
     _set_pending_compact_seed,
     _set_rollout_path,
     _thread_summary_preview,
     _with_conversation_id,
+    format_codex_features,
+    parse_codex_features_list,
 )
 from ..state import (
     parse_topic_key,
@@ -1633,7 +1633,9 @@ class TelegramCommandHandlers(
                 return None
             return _format_feature_flags(result)
 
-        async def _fetch_codex_features() -> tuple[list[CodexFeatureRow], Optional[str]]:
+        async def _fetch_codex_features() -> (
+            tuple[list[CodexFeatureRow], Optional[str]]
+        ):
             try:
                 result = await client.request(
                     "command/exec",
@@ -1652,7 +1654,10 @@ class TelegramCommandHandlers(
                     thread_id=message.thread_id,
                     exc=exc,
                 )
-                return [], "Failed to run `codex features list`; check Codex install/PATH."
+                return (
+                    [],
+                    "Failed to run `codex features list`; check Codex install/PATH.",
+                )
             stdout, stderr, exit_code = _extract_command_result(result)
             if exit_code not in (None, 0):
                 detail = stderr.strip() if isinstance(stderr, str) else ""
@@ -1798,7 +1803,9 @@ class TelegramCommandHandlers(
                 effective_value = overridden.get("effectiveValue")
                 layer = overridden.get("overridingLayer") or {}
                 layer_name = layer.get("name") if isinstance(layer, dict) else None
-                layer_version = layer.get("version") if isinstance(layer, dict) else None
+                layer_version = (
+                    layer.get("version") if isinstance(layer, dict) else None
+                )
                 lines.append("Write was overridden by another config layer.")
                 if layer_name:
                     layer_desc = (

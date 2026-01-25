@@ -85,7 +85,9 @@ def format_codex_features(
         if stage_filter is None or row.stage.lower() == stage_filter.lower()
     ]
     if not filtered:
-        label = "feature flags" if stage_filter is None else f"{stage_filter} feature flags"
+        label = (
+            "feature flags" if stage_filter is None else f"{stage_filter} feature flags"
+        )
         return f"No {label} found."
     header = (
         "Codex feature flags (all):"
