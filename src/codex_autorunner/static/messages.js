@@ -1,6 +1,5 @@
 import { api, escapeHtml, flash, getUrlParams, updateUrlParams } from "./utils.js";
 import { subscribe } from "./bus.js";
-import { REPO_ID } from "./env.js";
 import { isRepoHealthy } from "./health.js";
 let bellInitialized = false;
 let messagesInitialized = false;
@@ -12,8 +11,6 @@ const refreshEl = document.getElementById("messages-refresh");
 const replyBodyEl = document.getElementById("messages-reply-body");
 const replyFilesEl = document.getElementById("messages-reply-files");
 const replySendEl = document.getElementById("messages-reply-send");
-const replySendResumeEl = document.getElementById("messages-reply-send-resume");
-const resumeEl = document.getElementById("messages-resume");
 function formatTimestamp(ts) {
     if (!ts)
         return "–";
@@ -82,11 +79,22 @@ function renderThreadItem(thread) {
     const latest = thread.latest?.message;
     const title = latest?.title || latest?.mode || "Message";
     const subtitle = latest?.body ? latest.body.slice(0, 120) : "";
+    const isPaused = thread.status === "paused";
+    // Only show action indicator if there's an unreplied pause
+    // Compare outbox_seq (handoff count) vs reply_seq to check if user has responded
+    const ticketState = thread.ticket_state;
+    const outboxSeq = ticketState?.outbox_seq ?? 0;
+    const replySeq = ticketState?.reply_seq ?? 0;
+    const hasUnrepliedPause = isPaused && (outboxSeq > replySeq || (latest?.mode === "pause" && replySeq === 0));
+    const indicator = hasUnrepliedPause ? `<span class="messages-thread-indicator" title="Action required"></span>` : "";
+    const handoffs = thread.handoff_count ?? 0;
+    const replies = thread.reply_count ?? 0;
+    const metaLine = `${handoffs} message${handoffs !== 1 ? "s" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
     return `
     <button class="messages-thread" data-run-id="${escapeHtml(thread.run_id)}">
-      <div class="messages-thread-title">${escapeHtml(title)}</div>
+      <div class="messages-thread-title">${indicator}${escapeHtml(title)}</div>
       <div class="messages-thread-subtitle muted">${escapeHtml(subtitle)}</div>
-      <div class="messages-thread-meta muted small">${escapeHtml(thread.status || "")}</div>
+      <div class="messages-thread-meta-line">${escapeHtml(metaLine)}</div>
     </button>
   `;
 }
@@ -214,29 +222,86 @@ function renderFiles(files) {
 function renderHandoff(entry) {
     const msg = entry.message;
     const title = msg?.title || "Agent message";
-    const mode = msg?.mode ? ` <span class="pill pill-small">${escapeHtml(msg.mode)}</span>` : "";
+    const isPause = msg?.mode === "pause";
+    const modeClass = isPause ? "pill-action" : "pill-info";
+    const modeLabel = isPause ? "ACTION REQUIRED" : "INFO";
+    const modePill = msg?.mode ? ` <span class="pill pill-small ${modeClass}">${escapeHtml(modeLabel)}</span>` : "";
     const body = msg?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(msg.body)}</div>` : "";
-    const ts = entry.created_at ? `<span class="muted small">${escapeHtml(formatTimestamp(entry.created_at))}</span>` : "";
+    const ts = entry.created_at ? formatTimestamp(entry.created_at) : "";
     return `
-    <div class="messages-entry">
-      <div class="messages-entry-header">#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)}${mode} ${ts}</div>
+    <div class="messages-entry" data-seq="${entry.seq}" data-type="handoff" data-created="${escapeHtml(entry.created_at || "")}">
+      <div class="messages-entry-header">
+        <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
+        <span class="messages-entry-title">${escapeHtml(title)}</span>
+        ${modePill}
+        <span class="messages-entry-time">${escapeHtml(ts)}</span>
+      </div>
       ${body}
       ${renderFiles(entry.files)}
     </div>
   `;
 }
-function renderReply(entry) {
+function renderReply(entry, parentSeq) {
     const rep = entry.reply;
-    const title = rep?.title || "Reply";
+    const title = rep?.title || "Your reply";
     const body = rep?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(rep.body)}</div>` : "";
-    const ts = entry.created_at ? `<span class="muted small">${escapeHtml(formatTimestamp(entry.created_at))}</span>` : "";
+    const ts = entry.created_at ? formatTimestamp(entry.created_at) : "";
+    const replyIndicator = parentSeq !== undefined
+        ? `<div class="messages-reply-indicator">In response to #${parentSeq.toString().padStart(4, "0")}</div>`
+        : "";
     return `
-    <div class="messages-entry">
-      <div class="messages-entry-header">#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)} <span class="pill pill-small pill-idle">you</span> ${ts}</div>
+    <div class="messages-entry messages-entry-reply" data-seq="${entry.seq}" data-type="reply" data-created="${escapeHtml(entry.created_at || "")}">
+      ${replyIndicator}
+      <div class="messages-entry-header">
+        <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
+        <span class="messages-entry-title">${escapeHtml(title)}</span>
+        <span class="pill pill-small pill-idle">you</span>
+        <span class="messages-entry-time">${escapeHtml(ts)}</span>
+      </div>
       ${body}
       ${renderFiles(entry.files)}
     </div>
   `;
+}
+function buildThreadedTimeline(handoffs, replies) {
+    // Combine all entries into a single timeline
+    const timeline = [];
+    handoffs.forEach((h) => {
+        timeline.push({
+            type: "handoff",
+            seq: h.seq,
+            created_at: h.created_at || null,
+            handoff: h,
+        });
+    });
+    replies.forEach((r) => {
+        timeline.push({
+            type: "reply",
+            seq: r.seq,
+            created_at: r.created_at || null,
+            reply: r,
+        });
+    });
+    // Sort chronologically by created_at, fallback to seq
+    timeline.sort((a, b) => {
+        if (a.created_at && b.created_at) {
+            return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        }
+        return a.seq - b.seq;
+    });
+    // Render timeline, associating replies with preceding handoffs
+    let lastHandoffSeq;
+    const rendered = [];
+    timeline.forEach((entry) => {
+        if (entry.type === "handoff" && entry.handoff) {
+            lastHandoffSeq = entry.handoff.seq;
+            rendered.push(renderHandoff(entry.handoff));
+        }
+        else if (entry.type === "reply" && entry.reply) {
+            rendered.push(renderReply(entry.reply, lastHandoffSeq));
+        }
+    });
+    return rendered.join("");
 }
 async function loadThread(runId) {
     selectedRunId = runId;
@@ -257,39 +322,35 @@ async function loadThread(runId) {
         return;
     }
     const runStatus = (detail.run?.status || "").toString();
-    const mode = (detail.handoff_history || [])[0]?.message?.mode || "";
-    const handoff = (detail.handoff_history || []).map(renderHandoff).join("");
-    const replies = (detail.reply_history || []).map(renderReply).join("");
-    const resumeHint = runStatus === "paused" ? "Paused" : runStatus;
     const isPaused = runStatus === "paused";
-    const createdAt = detail.run?.created_at || null;
-    const ticketState = detail.ticket_state;
-    const turns = ticketState?.total_turns ?? null;
-    const currentTicket = ticketState?.current_ticket;
     const handoffCount = detail.handoff_count ?? (detail.handoff_history || []).length;
     const replyCount = detail.reply_count ?? (detail.reply_history || []).length;
+    const ticketState = detail.ticket_state;
+    const turns = ticketState?.total_turns ?? null;
+    // Truncate run ID for display
+    const shortRunId = runId.length > 12 ? runId.slice(0, 8) + "…" : runId;
+    // Build compact stats line
+    const statsParts = [];
+    statsParts.push(`${handoffCount} message${handoffCount !== 1 ? "s" : ""}`);
+    statsParts.push(`${replyCount} repl${replyCount !== 1 ? "ies" : "y"}`);
+    if (turns != null)
+        statsParts.push(`${turns} turn${turns !== 1 ? "s" : ""}`);
+    const statsLine = statsParts.join(" · ");
+    // Status pill
+    const statusPillClass = isPaused ? "pill-action" : "pill-idle";
+    const statusLabel = isPaused ? "paused" : runStatus || "idle";
+    // Build threaded timeline
+    const threadedContent = buildThreadedTimeline(detail.handoff_history || [], detail.reply_history || []);
     detailEl.innerHTML = `
     <div class="messages-thread-header">
-      <div>
-        <div class="messages-thread-id">Run: <code>${escapeHtml(runId)}</code></div>
-        <div class="muted small">Repo: ${escapeHtml(REPO_ID || "–")} · Status: ${escapeHtml(resumeHint)} · Started: ${escapeHtml(formatTimestamp(createdAt))}</div>
-      </div>
-      <div class="messages-thread-tags">
-        ${mode ? `<span class="pill pill-small">${escapeHtml(mode)}</span>` : ""}
-        ${runStatus ? `<span class="pill pill-small pill-${isPaused ? "warn" : "idle"}">${escapeHtml(runStatus)}</span>` : ""}
+      <div class="messages-header-info">
+        <code title="${escapeHtml(runId)}">${escapeHtml(shortRunId)}</code>
+        <span class="pill pill-small ${statusPillClass}">${escapeHtml(statusLabel)}</span>
       </div>
     </div>
-    <div class="messages-thread-meta">
-      <div class="messages-meta-item"><span class="muted small">Handoffs</span><span class="metric">${escapeHtml(String(handoffCount || 0))}</span></div>
-      <div class="messages-meta-item"><span class="muted small">Replies</span><span class="metric">${escapeHtml(String(replyCount || 0))}</span></div>
-      <div class="messages-meta-item"><span class="muted small">Turns</span><span class="metric">${escapeHtml(turns != null ? String(turns) : "–")}</span></div>
-      <div class="messages-meta-item"><span class="muted small">Active ticket</span><span class="metric">${escapeHtml(currentTicket || "–")}</span></div>
-    </div>
+    <div class="messages-stats-line">${escapeHtml(statsLine)}</div>
     <div class="messages-thread-history">
-      <h3 class="messages-section-title">Agent messages</h3>
-      ${handoff || '<div class="muted">No agent messages archived</div>'}
-      <h3 class="messages-section-title">Your replies</h3>
-      ${replies || '<div class="muted">No replies yet</div>'}
+      ${threadedContent || '<div class="muted">No messages yet</div>'}
     </div>
   `;
     // Only show reply box for paused runs - replies to other states won't be seen
@@ -298,7 +359,7 @@ async function loadThread(runId) {
         replyBoxEl.classList.toggle("hidden", !isPaused);
     }
 }
-async function sendReply({ resume }) {
+async function sendReply() {
     const runId = selectedRunId;
     if (!runId) {
         flash("Select a message thread first", "error");
@@ -324,11 +385,10 @@ async function sendReply({ resume }) {
         if (replyFilesEl)
             replyFilesEl.value = "";
         flash("Reply sent", "success");
-        if (resume) {
-            await api(`/api/flows/${encodeURIComponent(runId)}/resume`, { method: "POST" });
-            flash("Run resumed", "success");
-            void refreshBell();
-        }
+        // Always resume after sending
+        await api(`/api/flows/${encodeURIComponent(runId)}/resume`, { method: "POST" });
+        flash("Run resumed", "success");
+        void refreshBell();
         void loadThread(runId);
     }
     catch (_err) {
@@ -348,22 +408,7 @@ export function initMessages() {
             void loadThread(runId);
     });
     replySendEl?.addEventListener("click", () => {
-        void sendReply({ resume: false });
-    });
-    replySendResumeEl?.addEventListener("click", () => {
-        void sendReply({ resume: true });
-    });
-    resumeEl?.addEventListener("click", () => {
-        const runId = selectedRunId;
-        if (!runId)
-            return;
-        void api(`/api/flows/${encodeURIComponent(runId)}/resume`, { method: "POST" })
-            .then(() => {
-            flash("Run resumed", "success");
-            void refreshBell();
-            void loadThread(runId);
-        })
-            .catch(() => flash("Failed to resume", "error"));
+        void sendReply();
     });
     // Load threads immediately, and try to open run_id from URL if present.
     void loadThreads().then(() => {
