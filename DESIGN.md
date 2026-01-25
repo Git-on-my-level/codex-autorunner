@@ -7,10 +7,12 @@ Single-repo autorunner that drives the Codex app-server (with OpenCode support) 
 - Non-goals: hosted service, plugin ecosystem, SDK-only integrations, multi-tenant infra.
 
 ## Architecture
-- Engine: reads/writes docs, builds prompts, runs Codex subprocesses, logs output, manages state/locks, stop rules, optional git commits.
+- Engine: protocol-agnostic control layer that reads/writes docs, builds prompts, manages state/locks, stop rules, optional git commits, and delegates all backend execution to adapters.
 - CLI: Typer wrapper around engine for init/run/once/status/log/edit/doctor/snapshot/etc.
 - Server/UI: FastAPI with the same engine, static UI, doc chat, terminal websocket, logs and runner control.
 - Hub mode: supervises many repos and worktrees via a manifest; provides hub API for scan/run/stop/resume/init and usage.
+
+> Constitution alignment: transport/vendor-specific logic (Codex subprocesses, app-server/OpenCode runtime, Telegram, etc.) lives in adapters/surfaces; the Engine consumes a protocol-neutral backend interface. This preserves the one-way dependency rule in `docs/car_constitution/20_ARCHITECTURE_MAP.md`.
 
 ## Layout and config
 Repo root:
