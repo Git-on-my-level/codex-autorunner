@@ -1,5 +1,6 @@
 from codex_autorunner.integrations.telegram.helpers import (
     CodexFeatureRow,
+    derive_codex_features_command,
     format_codex_features,
     parse_codex_features_list,
 )
@@ -49,3 +50,18 @@ def test_format_codex_features_all() -> None:
     assert "- alpha: True" in text
     assert "- bravo: False" in text
     assert "/experimental all" not in text  # already listing all
+
+
+def test_derive_codex_features_command_strips_app_server_suffix() -> None:
+    command = derive_codex_features_command(["/opt/codex/bin/codex", "app-server"])
+    assert command == ["/opt/codex/bin/codex", "features", "list"]
+
+
+def test_derive_codex_features_command_keeps_flags() -> None:
+    command = derive_codex_features_command(["codex", "--foo", "app-server"])
+    assert command == ["codex", "--foo", "features", "list"]
+
+
+def test_derive_codex_features_command_fallback() -> None:
+    command = derive_codex_features_command([])
+    assert command == ["codex", "features", "list"]

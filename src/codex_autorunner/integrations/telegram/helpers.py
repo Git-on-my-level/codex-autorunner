@@ -49,6 +49,21 @@ class CodexFeatureRow:
     enabled: bool
 
 
+def derive_codex_features_command(app_server_command: Sequence[str]) -> list[str]:
+    """
+    Build a Codex CLI invocation for `features list` that mirrors the configured app-server command.
+
+    We strip a trailing \"app-server\" subcommand (plus keep any preceding flags/binary),
+    so custom binaries or wrapper scripts stay aligned with the running app server.
+    """
+    base = list(app_server_command or [])
+    if base and base[-1] == "app-server":
+        base = base[:-1]
+    if not base:
+        base = ["codex"]
+    return [*base, "features", "list"]
+
+
 def parse_codex_features_list(stdout: str) -> list[CodexFeatureRow]:
     rows: list[CodexFeatureRow] = []
     if not isinstance(stdout, str):

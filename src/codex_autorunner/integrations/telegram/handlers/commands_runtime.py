@@ -78,6 +78,7 @@ from ..helpers import (
     _set_rollout_path,
     _thread_summary_preview,
     _with_conversation_id,
+    derive_codex_features_command,
     format_codex_features,
     parse_codex_features_list,
 )
@@ -1636,12 +1637,15 @@ class TelegramCommandHandlers(
         async def _fetch_codex_features() -> (
             tuple[list[CodexFeatureRow], Optional[str]]
         ):
+            features_command = derive_codex_features_command(
+                self._config.app_server_command
+            )
             try:
                 result = await client.request(
                     "command/exec",
                     {
                         "cwd": record.workspace_path,
-                        "command": ["codex", "features", "list"],
+                        "command": features_command,
                         "timeoutMs": 10000,
                     },
                 )
@@ -1661,13 +1665,16 @@ class TelegramCommandHandlers(
             stdout, stderr, exit_code = _extract_command_result(result)
             if exit_code not in (None, 0):
                 detail = stderr.strip() if isinstance(stderr, str) else ""
-                msg = f"`codex features list` failed (exit {exit_code})."
+                msg = f"`{' '.join(features_command)}` failed (exit {exit_code})."
                 if detail:
                     msg = f"{msg} stderr: {detail}"
                 return [], msg
             rows = parse_codex_features_list(stdout)
             if not rows:
-                return [], "No feature rows returned by `codex features list`."
+                return (
+                    [],
+                    f"No feature rows returned by `{' '.join(features_command)}`.",
+                )
             return rows, None
 
         list_all = bool(argv and argv[0].lower() == "all")
