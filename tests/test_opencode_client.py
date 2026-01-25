@@ -1,6 +1,9 @@
 import json
 
-from codex_autorunner.agents.opencode.client import _normalize_sse_event
+from codex_autorunner.agents.opencode.client import (
+    _normalize_sse_event,
+    _normalize_template_path,
+)
 from codex_autorunner.agents.opencode.events import SSEEvent
 
 
@@ -47,3 +50,10 @@ def test_normalize_sse_event_preserves_wrapper_metadata() -> None:
     assert payload["sessionID"] == "s42"
     assert payload.get("state") == "running"
     assert normalized.event == "session.status"
+
+
+def test_normalize_template_path_matches_placeholder_names() -> None:
+    normalized = _normalize_template_path("/session/{sessionID}/prompt_async")
+    assert normalized == "/session/{}/prompt_async"
+    # Different placeholder names should normalize identically
+    assert normalized == _normalize_template_path("/session/{session_id}/prompt_async")
