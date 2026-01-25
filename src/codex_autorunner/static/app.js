@@ -1,7 +1,6 @@
 import { REPO_ID, HUB_BASE } from "./env.js";
 import { initHub } from "./hub.js";
 import { initTabs, registerTab } from "./tabs.js";
-import { initDocs } from "./docs.js";
 import { initTerminal } from "./terminal.js";
 import { initTicketFlow } from "./tickets.js";
 import { initMessages, initMessageBell } from "./messages.js";
@@ -11,6 +10,7 @@ import { initRepoSettingsPanel } from "./settings.js";
 import { flash } from "./utils.js";
 import { initLiveUpdates } from "./liveUpdates.js";
 import { initHealthGate } from "./health.js";
+import { initWorkspace } from "./workspace.js";
 function disableLegacyAnalyticsUI() {
     // Ticket-first: these panels and their API calls are deprecated.
     const legacyIds = [
@@ -64,14 +64,14 @@ async function initRepoShell() {
     registerTab("tickets", "Tickets");
     registerTab("messages", "Inbox");
     registerTab("analytics", "Analytics");
-    registerTab("docs", "Docs");
+    registerTab("workspace", "Workspace");
     registerTab("terminal", "Terminal");
     const initializedTabs = new Set();
     const lazyInit = (tabId) => {
         if (initializedTabs.has(tabId))
             return;
-        if (tabId === "docs") {
-            initDocs();
+        if (tabId === "workspace") {
+            initWorkspace();
         }
         else if (tabId === "messages") {
             initMessages();

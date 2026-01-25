@@ -1,7 +1,6 @@
 import { api, flash, confirmModal, openModal } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";
-import { renderTodoPreview } from "./todoPreview.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 
@@ -29,11 +28,8 @@ let latestMessageStats: {
   totalTurns: number | null;
 } | null = null;
 
-function updateTodoPreview(content: string): void {
-  renderTodoPreview(content || "");
-  if (content !== undefined) {
-    saveToCache("todo-doc", content || "");
-  }
+function updateTodoPreview(_content: string): void {
+  // Docs UI removed; keep stub for backward compatibility.
 }
 
 interface DocsEventPayload {
@@ -53,16 +49,10 @@ function handleDocsEvent(payload: DocsEventPayload | null): void {
   }
 }
 
-async function loadTodoPreview(options: { silent?: boolean } = {}): Promise<void> {
-  const { silent = false } = options;
-  try {
-    const data = await api("/api/docs");
-    updateTodoPreview((data as { todo?: string })?.todo || "");
-  } catch (err) {
-    if (!silent) {
-      flash((err as Error).message || "Failed to load TODO preview", "error");
-    }
-  }
+async function loadTodoPreview(_options: { silent?: boolean } = {}): Promise<void> {
+  // Docs endpoint removed; no-op to preserve call sites.
+  const cached = loadFromCache("todo-doc") as string | undefined;
+  if (cached) updateTodoPreview(cached);
 }
 
 function setUsageLoading(loading: boolean): void {

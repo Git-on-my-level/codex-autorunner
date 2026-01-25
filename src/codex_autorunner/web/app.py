@@ -32,7 +32,6 @@ from ..core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
-from ..core.doc_chat import DocChatService
 from ..core.engine import Engine, LockError
 from ..core.flows.models import FlowRunStatus
 from ..core.flows.store import FlowStore
@@ -40,7 +39,6 @@ from ..core.hub import HubSupervisor
 from ..core.logging_utils import safe_log, setup_rotating_logger
 from ..core.optional_dependencies import require_optional_dependencies
 from ..core.request_context import get_request_id
-from ..core.snapshot import SnapshotService
 from ..core.state import load_state, persist_session_registry
 from ..core.usage import (
     UsageError,
@@ -59,7 +57,6 @@ from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
-from ..spec_ingest import SpecIngestService
 from ..tickets.files import safe_relpath
 from ..tickets.outbox import parse_user_message, resolve_outbox_paths
 from ..voice import VoiceConfig, VoiceService
@@ -96,9 +93,6 @@ class AppContext:
     env: Mapping[str, str]
     engine: Engine
     manager: RunnerManager
-    doc_chat: DocChatService
-    spec_ingest: SpecIngestService
-    snapshot_service: SnapshotService
     app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
     app_server_prune_interval: Optional[float]
     app_server_threads: AppServerThreadRegistry
@@ -211,6 +205,25 @@ def _extract_turn_context(params: dict) -> tuple[Optional[str], Optional[str]]:
     turn_id = str(turn_id) if isinstance(turn_id, str) and turn_id else None
     thread_id = str(thread_id) if isinstance(thread_id, str) and thread_id else None
     return thread_id, turn_id
+
+
+def _path_is_allowed_for_file_write(path: str) -> bool:
+    normalized = (path or "").strip()
+    if not normalized:
+        return False
+    # Canonical allowlist for all AI-assisted file edits via app-server approval:
+    # - tickets: .codex-autorunner/tickets/**
+    # - workspace docs: .codex-autorunner/workspace/**
+    allowed_prefixes = (
+        ".codex-autorunner/tickets/",
+        ".codex-autorunner/workspace/",
+    )
+    if normalized in (".codex-autorunner/tickets", ".codex-autorunner/workspace"):
+        return True
+    return any(
+        normalized == prefix.rstrip("/") or normalized.startswith(prefix)
+        for prefix in allowed_prefixes
+    )
 
 
 def _build_app_server_supervisor(
@@ -359,19 +372,8 @@ def _build_app_context(
         f"Repo server ready at {engine.repo_root}",
     )
     app_server_events = AppServerEventBuffer()
-    allowed_doc_paths = {
-        path
-        for kind in ("todo", "progress", "opinions", "spec", "summary")
-        for path in [
-            _normalize_approval_path(
-                str(engine.config.doc_path(kind).relative_to(engine.config.root)),
-                engine.config.root,
-            )
-        ]
-        if path
-    }
 
-    async def _doc_chat_approval_handler(message: dict) -> str:
+    async def _file_write_approval_handler(message: dict) -> str:
         method = message.get("method")
         params = message.get("params")
         params = params if isinstance(params, dict) else {}
@@ -392,9 +394,11 @@ def _build_app_context(
                     }
                 )
                 return "decline"
-            rejected = [path for path in normalized if path not in allowed_doc_paths]
+            rejected = [
+                path for path in normalized if not _path_is_allowed_for_file_write(path)
+            ]
             if rejected:
-                notice = "Rejected write to non-doc files: " + ", ".join(rejected)
+                notice = "Rejected write outside allowlist: " + ", ".join(rejected)
                 await app_server_events.handle_notification(
                     {
                         "method": "error",
@@ -408,7 +412,7 @@ def _build_app_context(
                 return "decline"
             return "accept"
         if method == "item/commandExecution/requestApproval":
-            notice = "Rejected command execution in doc chat session."
+            notice = "Rejected command execution in file write session."
             await app_server_events.handle_notification(
                 {
                     "method": "error",
@@ -428,7 +432,7 @@ def _build_app_context(
         event_prefix="web.app_server",
         base_env=env,
         notification_handler=app_server_events.handle_notification,
-        approval_handler=_doc_chat_approval_handler,
+        approval_handler=_file_write_approval_handler,
     )
     app_server_threads = AppServerThreadRegistry(
         default_app_server_threads_path(engine.repo_root)
@@ -449,27 +453,6 @@ def _build_app_context(
         env=env,
         subagent_models=subagent_models,
         session_stall_timeout_seconds=config.opencode.session_stall_timeout_seconds,
-    )
-    doc_chat = DocChatService(
-        engine,
-        app_server_supervisor=app_server_supervisor,
-        app_server_threads=app_server_threads,
-        app_server_events=app_server_events,
-        opencode_supervisor=opencode_supervisor,
-        env=env,
-    )
-    spec_ingest = SpecIngestService(
-        engine,
-        app_server_supervisor=app_server_supervisor,
-        app_server_threads=app_server_threads,
-        app_server_events=app_server_events,
-        opencode_supervisor=opencode_supervisor,
-        env=env,
-    )
-    snapshot_service = SnapshotService(
-        engine,
-        app_server_supervisor=app_server_supervisor,
-        app_server_threads=app_server_threads,
     )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:
@@ -573,9 +556,6 @@ def _build_app_context(
         env=env,
         engine=engine,
         manager=manager,
-        doc_chat=doc_chat,
-        spec_ingest=spec_ingest,
-        snapshot_service=snapshot_service,
         app_server_supervisor=app_server_supervisor,
         app_server_prune_interval=app_server_prune_interval,
         app_server_threads=app_server_threads,
@@ -608,9 +588,6 @@ def _apply_app_context(app: FastAPI, context: AppContext) -> None:
     app.state.engine = context.engine
     app.state.config = context.engine.config  # Expose config consistently
     app.state.manager = context.manager
-    app.state.doc_chat = context.doc_chat
-    app.state.spec_ingest = context.spec_ingest
-    app.state.snapshot_service = context.snapshot_service
     app.state.app_server_supervisor = context.app_server_supervisor
     app.state.app_server_prune_interval = context.app_server_prune_interval
     app.state.app_server_threads = context.app_server_threads

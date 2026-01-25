@@ -1,7 +1,6 @@
 import { api, flash, confirmModal, openModal } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";
-import { renderTodoPreview } from "./todoPreview.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
@@ -14,11 +13,8 @@ const usageChartState = {
 let usageSeriesRetryTimer = null;
 let usageSummaryRetryTimer = null;
 let latestMessageStats = null;
-function updateTodoPreview(content) {
-    renderTodoPreview(content || "");
-    if (content !== undefined) {
-        saveToCache("todo-doc", content || "");
-    }
+function updateTodoPreview(_content) {
+    // Docs UI removed; keep stub for backward compatibility.
 }
 function handleDocsEvent(payload) {
     if (!payload)
@@ -31,17 +27,11 @@ function handleDocsEvent(payload) {
         updateTodoPreview(payload.todo);
     }
 }
-async function loadTodoPreview(options = {}) {
-    const { silent = false } = options;
-    try {
-        const data = await api("/api/docs");
-        updateTodoPreview(data?.todo || "");
-    }
-    catch (err) {
-        if (!silent) {
-            flash(err.message || "Failed to load TODO preview", "error");
-        }
-    }
+async function loadTodoPreview(_options = {}) {
+    // Docs endpoint removed; no-op to preserve call sites.
+    const cached = loadFromCache("todo-doc");
+    if (cached)
+        updateTodoPreview(cached);
 }
 function setUsageLoading(loading) {
     const btn = document.getElementById("usage-refresh");

@@ -15,12 +15,20 @@ def _display_path(root: Path, path: Path) -> str:
 
 
 def build_doc_paths(config: Config) -> Mapping[str, str]:
+    def _safe_path(*keys: str) -> str:
+        for key in keys:
+            try:
+                return _display_path(config.root, config.doc_path(key))
+            except KeyError:
+                continue
+        return ""
+
     return {
-        "todo": _display_path(config.root, config.doc_path("todo")),
-        "progress": _display_path(config.root, config.doc_path("progress")),
-        "opinions": _display_path(config.root, config.doc_path("opinions")),
-        "spec": _display_path(config.root, config.doc_path("spec")),
-        "summary": _display_path(config.root, config.doc_path("summary")),
+        "todo": _safe_path("todo", "active_context"),
+        "progress": _safe_path("progress", "decisions"),
+        "opinions": _safe_path("opinions"),
+        "spec": _safe_path("spec"),
+        "summary": _safe_path("summary"),
     }
 
 
@@ -64,8 +72,8 @@ def build_final_summary_prompt(
 
     doc_paths = build_doc_paths(config)
     doc_contents = {
-        "todo": docs.read_doc("todo"),
-        "progress": docs.read_doc("progress"),
+        "todo": docs.read_doc("todo") or docs.read_doc("active_context"),
+        "progress": docs.read_doc("progress") or docs.read_doc("decisions"),
         "opinions": docs.read_doc("opinions"),
         "spec": docs.read_doc("spec"),
         "summary": docs.read_doc("summary"),

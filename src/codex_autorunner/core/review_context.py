@@ -97,13 +97,10 @@ def build_spec_progress_review_context(
         remaining = 0
 
     def doc_label(name: str) -> str:
-        mapping = {
-            "spec": "SPEC.md",
-            "progress": "PROGRESS.md",
-            "todo": "TODO.md",
-            "summary": "SUMMARY.md",
-        }
-        return mapping.get(name.lower(), name)
+        try:
+            return engine.config.doc_path(name).relative_to(engine.repo_root).as_posix()
+        except Exception:
+            return name
 
     def read_doc(name: str) -> str:
         try:
@@ -122,7 +119,7 @@ def build_spec_progress_review_context(
 
     primary_list = [doc for doc in primary_docs if isinstance(doc, str)] or [
         "spec",
-        "progress",
+        "active_context",
     ]
     primary_set = {doc.lower() for doc in primary_list}
 

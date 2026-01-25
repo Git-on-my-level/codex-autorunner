@@ -495,10 +495,10 @@ class RequestIdMiddleware:
         """Check if endpoint should log response size (docs, runs, hub repos)."""
         path_lower = path.lower()
         heavy_prefixes = (
-            "/api/docs",
-            "/api/snapshot",
+            "/api/workspace",
+            "/api/workspace/spec/ingest",
+            "/api/file-chat",
             "/api/usage",
-            "/api/ingest-spec",
             "/hub/usage",
             "/hub/repos",
         )

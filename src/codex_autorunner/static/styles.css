@@ -7503,6 +7503,14 @@ button.loading::after {
   width: 100%;
 }
 
+.ticket-header-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .ticket-header-row .ticket-fm-select {
   padding: 5px 8px;
   font-size: 11px;
@@ -7523,7 +7531,10 @@ button.loading::after {
   cursor: pointer;
   white-space: nowrap;
   padding: 6px 8px;
-  margin: -6px 0;
+  margin: 0;
+  position: relative;
+  z-index: 1;
+  touch-action: manipulation;
 }
 
 .ticket-header-row .ticket-fm-toggle-label {
@@ -7538,9 +7549,16 @@ button.loading::after {
 .ticket-editor-modal #ticket-editor-close {
   font-size: 16px;
   line-height: 1;
-  padding: 8px 12px;
-  margin: -6px -12px -6px auto;
+  padding: 0;
+  margin: 0;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
   flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  touch-action: manipulation;
 }
 
 .ticket-editor-error {

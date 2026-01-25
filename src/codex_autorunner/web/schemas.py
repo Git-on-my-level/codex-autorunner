@@ -13,6 +13,26 @@ class Payload(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
 
+class ResponseModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+class WorkspaceWriteRequest(Payload):
+    content: str = ""
+
+
+class WorkspaceResponse(ResponseModel):
+    active_context: str
+    decisions: str
+    spec: str
+
+
+class SpecIngestTicketsResponse(ResponseModel):
+    status: str
+    created: int
+    first_ticket_path: Optional[str] = None
+
+
 class RunControlRequest(Payload):
     once: bool = False
     agent: Optional[str] = None
@@ -60,37 +80,6 @@ class HubCleanupWorktreeRequest(Payload):
     delete_remote: bool = False
 
 
-class DocContentRequest(Payload):
-    content: str = ""
-
-
-class SnapshotRequest(Payload):
-    pass
-
-
-class DocChatPayload(Payload):
-    message: Optional[str] = None
-    stream: bool = False
-    targets: Optional[List[str]] = None
-    target: Optional[str] = None
-    agent: Optional[str] = None
-    model: Optional[str] = None
-    reasoning: Optional[str] = None
-    context_doc: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("context_doc", "contextDoc", "viewing"),
-    )
-
-
-class IngestSpecRequest(Payload):
-    force: bool = False
-    spec_path: Optional[str] = None
-    message: Optional[str] = None
-    agent: Optional[str] = None
-    model: Optional[str] = None
-    reasoning: Optional[str] = None
-
-
 class AppServerThreadResetRequest(Payload):
     key: str = Field(
         validation_alias=AliasChoices("key", "feature", "feature_key", "featureKey")
@@ -132,10 +121,6 @@ class SessionStopRequest(Payload):
 
 class SystemUpdateRequest(Payload):
     target: Optional[str] = None
-
-
-class ResponseModel(BaseModel):
-    model_config = ConfigDict(extra="ignore")
 
 
 class HubJobResponse(ResponseModel):
@@ -215,30 +200,9 @@ class SessionStopResponse(ResponseModel):
     session_id: str
 
 
-class DocsResponse(ResponseModel):
-    todo: str
-    progress: str
-    opinions: str
-    spec: str
-    summary: str
-
-
-class IngestSpecResponse(ResponseModel):
-    status: str
-    todo: str
-    progress: str
-    opinions: str
-    spec: str
-    summary: str
-    patch: Optional[str] = None
-    agent_message: Optional[str] = None
-
-
 class AppServerThreadsResponse(ResponseModel):
-    doc_chat: Dict[str, Optional[str]]
-    doc_chat_opencode: Optional[Dict[str, Optional[str]]] = None
-    spec_ingest: Optional[str] = None
-    spec_ingest_opencode: Optional[str] = None
+    file_chat: Optional[str] = None
+    file_chat_opencode: Optional[str] = None
     autorunner: Optional[str] = None
     autorunner_opencode: Optional[str] = None
     corruption: Optional[Dict[str, Any]] = None
@@ -259,23 +223,6 @@ class AppServerThreadArchiveResponse(ResponseModel):
 class AppServerThreadResetAllResponse(ResponseModel):
     status: str
     cleared: bool
-
-
-class DocWriteResponse(ResponseModel):
-    kind: str
-    content: str
-
-
-class SnapshotResponse(ResponseModel):
-    exists: bool
-    content: str
-    state: Dict[str, Any]
-
-
-class SnapshotCreateResponse(ResponseModel):
-    content: str
-    truncated: bool
-    state: Dict[str, Any]
 
 
 class TokenTotalsResponse(ResponseModel):

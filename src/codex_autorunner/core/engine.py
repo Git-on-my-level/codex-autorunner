@@ -38,6 +38,7 @@ from ..integrations.app_server.client import (
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
+from ..tickets.files import list_ticket_paths, ticket_is_done
 from .about_car import ensure_about_car_file
 from .adapter_utils import handle_agent_output
 from .app_server_events import AppServerEventBuffer
@@ -267,41 +268,21 @@ class Engine:
         return None
 
     def todos_done(self) -> bool:
-        return self.docs.todos_done()
+        # Ticket-first mode: completion is determined by ticket files, not TODO.md.
+        ticket_dir = self.repo_root / ".codex-autorunner" / "tickets"
+        ticket_paths = list_ticket_paths(ticket_dir)
+        if not ticket_paths:
+            return False
+        return all(ticket_is_done(path) for path in ticket_paths)
 
     def summary_finalized(self) -> bool:
-        """Return True if SUMMARY.md contains the finalization marker."""
-        try:
-            text = self.docs.read_doc("summary")
-        except (FileNotFoundError, OSError) as exc:
-            self._app_server_logger.debug("Failed to read SUMMARY.md: %s", exc)
-            return False
-        return SUMMARY_FINALIZED_MARKER in (text or "")
+        # Legacy docs finalization no longer applies (no SUMMARY doc).
+        return True
 
     def _stamp_summary_finalized(self, run_id: int) -> None:
-        """
-        Append an idempotency marker to SUMMARY.md so the final summary job runs only once.
-        Users may remove the marker to force regeneration.
-        """
-        path = self.config.doc_path("summary")
-        try:
-            existing = path.read_text(encoding="utf-8") if path.exists() else ""
-        except (FileNotFoundError, OSError) as exc:
-            self._app_server_logger.debug(
-                "Failed to read SUMMARY.md for stamping: %s", exc
-            )
-            existing = ""
-        if SUMMARY_FINALIZED_MARKER in existing:
-            return
-        stamp = f"{SUMMARY_FINALIZED_MARKER_PREFIX} run_id={int(run_id)} -->\n"
-        new_text = existing
-        if new_text and not new_text.endswith("\n"):
-            new_text += "\n"
-        # Keep a blank line before the marker for readability.
-        if new_text and not new_text.endswith("\n\n"):
-            new_text += "\n"
-        new_text += stamp
-        atomic_write(path, new_text)
+        # No-op: summary file no longer exists.
+        _ = run_id
+        return
 
     async def _execute_run_step(
         self,
@@ -1873,8 +1854,10 @@ class Engine:
             )
         )
         no_progress_count = 0
-        last_outstanding_count = len(self.docs.todos()[0])
-        last_done_count = len(self.docs.todos()[1])
+        ticket_dir = self.repo_root / ".codex-autorunner" / "tickets"
+        initial_tickets = list_ticket_paths(ticket_dir)
+        last_done_count = sum(1 for path in initial_tickets if ticket_is_done(path))
+        last_outstanding_count = len(initial_tickets) - last_done_count
         exit_reason: Optional[str] = None
 
         try:
@@ -1928,9 +1911,11 @@ class Engine:
                     break
 
                 # Check for no progress across runs
-                current_outstanding, current_done = self.docs.todos()
-                current_outstanding_count = len(current_outstanding)
-                current_done_count = len(current_done)
+                current_tickets = list_ticket_paths(ticket_dir)
+                current_done_count = sum(
+                    1 for path in current_tickets if ticket_is_done(path)
+                )
+                current_outstanding_count = len(current_tickets) - current_done_count
 
                 # Check if there was any meaningful progress
                 has_progress = (

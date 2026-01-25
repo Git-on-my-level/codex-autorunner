@@ -28,11 +28,9 @@ def _display_path(repo_root: Path, path: Path) -> str:
 def build_about_car_markdown(
     *,
     repo_root: Path,
-    todo_path: Path,
-    progress_path: Path,
-    opinions_path: Path,
+    active_context_path: Path,
+    decisions_path: Path,
     spec_path: Path,
-    summary_path: Path,
     hub_config_path: Optional[Path] = None,
     repo_override_path: Optional[Path] = None,
 ) -> str:
@@ -44,11 +42,9 @@ def build_about_car_markdown(
     repo_override_path = repo_override_path or (repo_root / REPO_OVERRIDE_FILENAME)
     root_config_path = repo_root / ROOT_CONFIG_FILENAME
     root_override_path = repo_root / ROOT_OVERRIDE_FILENAME
-    todo_disp = _display_path(repo_root, todo_path)
-    progress_disp = _display_path(repo_root, progress_path)
-    opinions_disp = _display_path(repo_root, opinions_path)
+    active_context_disp = _display_path(repo_root, active_context_path)
+    decisions_disp = _display_path(repo_root, decisions_path)
     spec_disp = _display_path(repo_root, spec_path)
-    summary_disp = _display_path(repo_root, summary_path)
     hub_config_disp = _display_path(repo_root, hub_config_path)
     repo_override_disp = _display_path(repo_root, repo_override_path)
     root_config_disp = _display_path(repo_root, root_config_path)
@@ -58,25 +54,21 @@ def build_about_car_markdown(
         f"{ABOUT_CAR_GENERATED_MARKER}\n"
         "# ABOUT_CAR — Codex Autorunner (CAR)\n\n"
         "You are running inside **Codex Autorunner (CAR)**.\n\n"
-        "CAR uses a small set of markdown **work docs** as the control surface for long-horizon work. "
-        "These docs live under the repo-local, gitignored `.codex-autorunner/` directory.\n\n"
-        "## Work docs (canonical)\n"
-        "- **TODO** — ordered checklist of high-level tasks: "
-        f"`{todo_disp}`\n"
-        "- **PROGRESS** — running notes / validation / context: "
-        f"`{progress_disp}`\n"
-        "- **OPINIONS** — constraints + style guidelines: "
-        f"`{opinions_disp}`\n"
-        "- **SPEC** — source-of-truth requirements and scope: "
-        f"`{spec_disp}`\n"
-        "- **SUMMARY** — user-facing report + external/user action items: "
-        f"`{summary_disp}`\n\n"
+        "CAR uses a ticket-first workflow.\n\n"
+        "## Required for operation\n"
+        "- Tickets live under `.codex-autorunner/tickets/`.\n\n"
+        "## Optional workspace docs\n"
+        "- **Active context**: "
+        f"`{active_context_disp}`\n"
+        "- **Decisions**: "
+        f"`{decisions_disp}`\n"
+        "- **Spec**: "
+        f"`{spec_disp}`\n\n"
         "## Critical rules\n"
-        f'- When the user says **"add this to the TODOs"**, edit `{todo_disp}`.\n'
-        "- Do **not** create new copies of TODO/PROGRESS/OPINIONS/SPEC/SUMMARY elsewhere in the repo.\n"
+        "- Do **not** create new copies of workspace docs elsewhere in the repo.\n"
         "- Treat `.codex-autorunner/` as intentional project structure even though it is hidden/gitignored.\n\n"
         "## How CAR works (short)\n"
-        "- `car run/once` repeatedly runs Codex non-interactively, feeding it the work docs (and the prior run tail).\n"
+        "- The web UI provides ticket editing + unified file chat.\n"
         "- `car serve` starts the hub web UI. The **Terminal** tab launches the configured `codex` binary in a PTY.\n"
         f"- Hub config lives at `{hub_config_disp}` (generated).\n"
         f"- Repo overrides (optional) live at `{repo_override_disp}`.\n"
@@ -101,11 +93,9 @@ def ensure_about_car_file_for_repo(
 
     content = build_about_car_markdown(
         repo_root=repo_root,
-        todo_path=doc_paths["todo"],
-        progress_path=doc_paths["progress"],
-        opinions_path=doc_paths["opinions"],
+        active_context_path=doc_paths["active_context"],
+        decisions_path=doc_paths["decisions"],
         spec_path=doc_paths["spec"],
-        summary_path=doc_paths["summary"],
     )
     if content and not content.endswith("\n"):
         content += "\n"
@@ -129,10 +119,8 @@ def ensure_about_car_file(config: Config, *, force: bool = False) -> Path:
     """Config-aware wrapper that uses configured doc paths."""
     repo_root = config.root
     docs = {
-        "todo": config.doc_path("todo"),
-        "progress": config.doc_path("progress"),
-        "opinions": config.doc_path("opinions"),
+        "active_context": config.doc_path("active_context"),
+        "decisions": config.doc_path("decisions"),
         "spec": config.doc_path("spec"),
-        "summary": config.doc_path("summary"),
     }
     return ensure_about_car_file_for_repo(repo_root, doc_paths=docs, force=force)

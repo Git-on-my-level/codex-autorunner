@@ -52,13 +52,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
     "mode": "repo",
     "docs": {
-        "todo": ".codex-autorunner/TODO.md",
-        "progress": ".codex-autorunner/PROGRESS.md",
-        "opinions": ".codex-autorunner/OPINIONS.md",
-        "spec": ".codex-autorunner/SPEC.md",
-        "summary": ".codex-autorunner/SUMMARY.md",
-        "snapshot": ".codex-autorunner/SNAPSHOT.md",
-        "snapshot_state": ".codex-autorunner/snapshot_state.json",
+        "active_context": ".codex-autorunner/workspace/active_context.md",
+        "decisions": ".codex-autorunner/workspace/decisions.md",
+        "spec": ".codex-autorunner/workspace/spec.md",
     },
     "review": {
         "enabled": True,
@@ -1365,15 +1361,9 @@ def load_repo_config(start: Path, hub_path: Optional[Path] = None) -> RepoConfig
 def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     root = config_path.parent.parent.resolve()
     docs = {
-        "todo": Path(cfg["docs"]["todo"]),
-        "progress": Path(cfg["docs"]["progress"]),
-        "opinions": Path(cfg["docs"]["opinions"]),
+        "active_context": Path(cfg["docs"]["active_context"]),
+        "decisions": Path(cfg["docs"]["decisions"]),
         "spec": Path(cfg["docs"]["spec"]),
-        "summary": Path(cfg["docs"]["summary"]),
-        "snapshot": Path(cfg["docs"].get("snapshot", ".codex-autorunner/SNAPSHOT.md")),
-        "snapshot_state": Path(
-            cfg["docs"].get("snapshot_state", ".codex-autorunner/snapshot_state.json")
-        ),
     }
     voice_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
     voice_cfg = cast(Dict[str, Any], voice_cfg)
@@ -1727,7 +1717,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             )
         except ConfigPathError as exc:
             raise ConfigError(str(exc)) from exc
-    for key in ("todo", "progress", "opinions", "spec", "summary"):
+    for key in ("active_context", "decisions", "spec"):
         if not isinstance(docs.get(key), str) or not docs[key]:
             raise ConfigError(f"docs.{key} must be a non-empty string path")
     _validate_agents_config(cfg)

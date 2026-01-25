@@ -11,7 +11,7 @@ This package splits monolithic api_routes.py into focused modules:
 - repos: Run control (start/stop/resume/reset)
 - sessions: Terminal session registry endpoints
 - settings: Session settings for autorunner overrides
-- ticket_chat: Ticket chat with AI editing
+- file_chat: Unified file chat (tickets + workspace docs)
 - voice: Voice transcription and config
 - terminal_images: Terminal image uploads
 """
@@ -23,7 +23,7 @@ from fastapi import APIRouter
 from .agents import build_agents_routes
 from .app_server import build_app_server_routes
 from .base import build_base_routes
-from .docs import build_docs_routes
+from .file_chat import build_file_chat_routes
 from .flows import build_flow_routes
 from .messages import build_messages_routes
 from .repos import build_repos_routes
@@ -32,8 +32,9 @@ from .sessions import build_sessions_routes
 from .settings import build_settings_routes
 from .system import build_system_routes
 from .terminal_images import build_terminal_image_routes
-from .ticket_chat import build_ticket_chat_routes
+from .usage import build_usage_routes
 from .voice import build_voice_routes
+from .workspace import build_workspace_routes
 
 
 def build_repo_router(static_dir: Path) -> APIRouter:
@@ -52,8 +53,9 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     router.include_router(build_base_routes(static_dir))
     router.include_router(build_agents_routes())
     router.include_router(build_app_server_routes())
-    router.include_router(build_docs_routes())
+    router.include_router(build_workspace_routes())
     router.include_router(build_flow_routes())
+    router.include_router(build_file_chat_routes())
     router.include_router(build_messages_routes())
     router.include_router(build_repos_routes())
     router.include_router(build_review_routes())
@@ -61,7 +63,7 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     router.include_router(build_settings_routes())
     router.include_router(build_system_routes())
     router.include_router(build_terminal_image_routes())
-    router.include_router(build_ticket_chat_routes())
+    router.include_router(build_usage_routes())
     router.include_router(build_voice_routes())
 
     return router

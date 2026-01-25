@@ -6,6 +6,7 @@ from typing import Any, Callable, Optional
 
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import run_git
+from ..workspace.paths import workspace_doc_path
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
@@ -15,6 +16,8 @@ from .outbox import dispatch_outbox, ensure_outbox_dirs, resolve_outbox_paths
 from .replies import ensure_reply_dirs, parse_user_reply, resolve_reply_paths
 
 _logger = logging.getLogger(__name__)
+
+WORKSPACE_DOC_MAX_CHARS = 4000
 
 
 class TicketRunner:
@@ -754,6 +757,38 @@ class TicketRunner:
                 + "\n"
             )
 
+        workspace_block = ""
+        workspace_docs: list[tuple[str, str, str]] = []
+        for key, label in (
+            ("active_context", "Active context"),
+            ("decisions", "Decisions"),
+            ("spec", "Spec"),
+        ):
+            path = workspace_doc_path(self._workspace_root, key)
+            try:
+                if not path.exists():
+                    continue
+                content = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                _logger.debug("workspace doc read failed for %s: %s", path, exc)
+                continue
+            snippet = (content or "").strip()
+            if not snippet:
+                continue
+            workspace_docs.append(
+                (
+                    label,
+                    safe_relpath(path, self._workspace_root),
+                    snippet[:WORKSPACE_DOC_MAX_CHARS],
+                )
+            )
+
+        if workspace_docs:
+            blocks = ["Workspace docs (truncated; skip if not relevant):"]
+            for label, rel, body in workspace_docs:
+                blocks.append(f"{label} [{rel}]:\n{body}")
+            workspace_block = "\n\n---\n\n" + "\n\n".join(blocks) + "\n"
+
         prev_ticket_block = ""
         if previous_ticket_content:
             prev_ticket_block = (
@@ -782,6 +817,7 @@ class TicketRunner:
             + commit_block
             + lint_block
             + requires_block
+            + workspace_block
             + reply_block
             + prev_ticket_block
             + ticket_block

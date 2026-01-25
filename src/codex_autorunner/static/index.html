@@ -230,14 +230,6 @@
               <span id="usage-meta">–</span>
             </div>
           </div>
-          <div class="card todo-preview">
-            <div class="card-header">
-              <span class="label">TODO</span>
-              <button class="primary sm hidden" id="open-summary" title="Open final report (SUMMARY)">Summary</button>
-              <button class="ghost sm icon-btn" id="refresh-preview" title="Refresh TODO preview">↻</button>
-            </div>
-            <ul class="checklist" id="todo-preview-list"></ul>
-          </div>
         </div>
 
         <div class="analytics-subsection" id="analytics-runs" hidden>
@@ -274,138 +266,82 @@
           </div>
         </div>
       </section>
-      <section class="panel" id="docs">
+      <section class="panel" id="workspace">
         <div class="doc-nav">
-          <button class="chip active" data-doc="todo">TODO</button>
-          <button class="chip" data-doc="progress">PROGRESS</button>
-          <button class="chip" data-doc="opinions">OPINIONS</button>
-          <button class="chip" data-doc="spec">SPEC</button>
-          <button class="chip" data-doc="summary">SUMMARY</button>
-          <button class="chip" data-doc="snapshot">SNAPSHOT</button>
-          <span class="muted" id="doc-status"></span>
-        </div>
-        <div class="doc-banner hidden" id="doc-thread-registry-banner">
-          <div class="doc-banner-text">
-            <div class="doc-banner-title">
-              Conversation state reset due to corrupted registry.
-            </div>
-            <div class="doc-banner-detail muted small" id="doc-thread-registry-detail"></div>
-          </div>
-          <div class="doc-banner-actions">
-            <button class="ghost sm" id="doc-thread-registry-reset">Reset conversations</button>
-            <button class="ghost sm" id="doc-thread-registry-download">Download backup</button>
-          </div>
-        </div>
-        <div class="spec-issue-import hidden" id="spec-issue-import">
-          <button class="ghost sm" id="spec-issue-import-toggle">Import Issue → SPEC</button>
-          <div class="spec-issue-input-row hidden" id="spec-issue-input-row">
-            <input autocomplete="off" id="spec-issue-input"
-              placeholder="Issue number or URL (e.g. 123 or https://github.com/org/repo/issues/123)" spellcheck="false"
-              type="text" />
-            <button class="primary sm" id="spec-issue-import-btn">Import</button>
-          </div>
+          <button class="chip active" data-workspace="active_context">Active context</button>
+          <button class="chip" data-workspace="decisions">Decisions</button>
+          <button class="chip" data-workspace="spec">Spec</button>
+          <span class="muted" id="workspace-status"></span>
+          <button class="ghost sm hidden" id="workspace-generate-tickets" title="Generate tickets from spec">Generate
+            tickets</button>
         </div>
         <div class="doc-editor">
-          <div class="doc-patch-main hidden" id="spec-ingest-patch-main">
-            <div class="doc-patch-header">
-              <div class="doc-patch-info">
-                <div class="muted small">Spec ingest patch</div>
-                <div class="doc-patch-summary" id="spec-ingest-patch-summary"></div>
-                <div class="doc-patch-legend">
-                  <span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
-                  <span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
-                </div>
-              </div>
-              <div class="doc-patch-actions">
-                <button class="primary sm" id="spec-ingest-patch-apply">Apply Patch</button>
-                <button class="ghost sm" id="spec-ingest-patch-reload">Reload</button>
-                <button class="danger sm" id="spec-ingest-patch-discard">Discard</button>
-              </div>
-            </div>
-            <div class="doc-patch-body" id="spec-ingest-patch-body">(no patch)</div>
-          </div>
-          <div class="doc-patch-main hidden" id="doc-patch-main">
+          <div class="doc-patch-main hidden" id="workspace-patch-main">
             <div class="doc-patch-header">
               <div class="doc-patch-info">
                 <div class="muted small">Pending draft</div>
-                <div class="doc-patch-summary" id="doc-patch-summary"></div>
-                <div class="doc-patch-meta" id="doc-patch-meta"></div>
+                <div class="doc-patch-summary" id="workspace-patch-summary"></div>
+                <div class="doc-patch-meta" id="workspace-patch-meta"></div>
                 <div class="doc-patch-legend">
                   <span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
                   <span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
                 </div>
               </div>
               <div class="doc-patch-actions">
-                <button class="primary sm" id="doc-patch-apply">Apply Draft</button>
-                <button aria-pressed="false" class="ghost sm" id="doc-patch-preview">Preview draft</button>
-                <button class="ghost sm" id="doc-patch-reload">Reload</button>
-                <button class="danger sm" id="doc-patch-discard">Discard</button>
+                <button class="primary sm" id="workspace-patch-apply">Apply</button>
+                <button class="ghost sm" id="workspace-patch-reload">Reload</button>
+                <button class="danger sm" id="workspace-patch-discard">Discard</button>
               </div>
             </div>
-            <div class="doc-patch-body" id="doc-patch-body">(no draft)</div>
+            <div class="doc-patch-body" id="workspace-patch-body">(no draft)</div>
           </div>
-          <textarea id="doc-content" spellcheck="false"></textarea>
-          <div class="doc-actions" id="doc-actions-standard">
-            <button class="primary" data-short="Save" id="save-doc">Save</button>
-            <button class="ghost" data-short="Reload" id="reload-doc">Reload</button>
-            <button class="ghost hidden" data-short="Copy" id="doc-copy">Copy</button>
-            <button class="ghost hidden" data-short="Paste" id="spec-paste">Paste</button>
-            <button class="ghost hidden" data-short="Ingest" id="ingest-spec">Ingest SPEC → Docs</button>
-            <button class="danger hidden" data-short="Clear" id="clear-docs">Clear TODO/PROGRESS/OPINIONS</button>
-          </div>
-          <div class="doc-actions hidden" id="doc-actions-snapshot">
-            <button class="primary" data-short="Run" id="snapshot-generate">Run snapshot</button>
-            <button class="ghost" data-short="Copy" id="snapshot-copy">Copy</button>
-            <button class="ghost" data-short="Reload" id="snapshot-refresh">Reload</button>
+          <textarea id="workspace-content" spellcheck="false"></textarea>
+          <div class="doc-actions" id="workspace-actions">
+            <button class="primary" id="workspace-save">Save</button>
+            <button class="ghost" id="workspace-reload">Reload</button>
           </div>
           <div class="doc-chat-panel compose-panel">
             <div class="doc-chat-compose">
               <div class="doc-agent-controls">
-                <select id="doc-agent-select" title="Agent"></select>
-                <select id="doc-model-select" title="Model"></select>
-                <select id="doc-reasoning-select" title="Reasoning"></select>
+                <select id="workspace-chat-agent-select" title="Agent"></select>
+                <select id="workspace-chat-model-select" title="Model"></select>
+                <select id="workspace-chat-reasoning-select" title="Reasoning"></select>
               </div>
               <div class="doc-chat-input-row compose-row">
-                <textarea enterkeyhint="enter" id="doc-chat-input" placeholder="Chat about the work docs..." rows="1"
-                  spellcheck="false"></textarea>
+                <textarea enterkeyhint="enter" id="workspace-chat-input" placeholder="Ask AI to edit this workspace doc..."
+                  rows="1" spellcheck="false"></textarea>
                 <div class="doc-chat-input-buttons compose-buttons">
-                  <button class="ghost sm voice-button" id="doc-chat-voice" title="Hold to talk"></button>
-                  <button class="primary sm" id="doc-chat-send" title="Send">↑</button>
+                  <button class="primary sm" id="workspace-chat-send" title="Send">↑</button>
                 </div>
               </div>
               <div class="doc-chat-meta">
                 <div class="doc-chat-meta-left">
-                  <span class="muted small" id="doc-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for newline</span>
-                  <span class="muted small hidden voice-status" id="doc-chat-voice-status"></span>
+                  <span class="muted small" id="workspace-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for newline</span>
                 </div>
                 <div class="doc-chat-meta-right">
-                  <button class="ghost sm hidden doc-chat-cancel-inline" id="doc-chat-cancel" title="Cancel">✕</button>
-                  <button class="ghost sm" id="doc-chat-new-thread" title="Start a new chat thread">New thread</button>
-                  <span class="pill pill-idle" id="doc-chat-status">idle</span>
+                  <button class="ghost sm hidden doc-chat-cancel-inline" id="workspace-chat-cancel"
+                    title="Cancel">✕</button>
+                  <button class="ghost sm" id="workspace-chat-new-thread" title="Start a new chat thread">New thread</button>
+                  <span class="pill pill-idle" id="workspace-chat-status">idle</span>
                 </div>
               </div>
             </div>
-            <div class="doc-chat-stream" id="doc-chat-stream">
-              <div class="doc-chat-error hidden" id="doc-chat-error"></div>
-              <div class="doc-chat-events hidden" id="doc-chat-events">
+            <div class="doc-chat-stream" id="workspace-chat-stream">
+              <div class="doc-chat-error hidden" id="workspace-chat-error"></div>
+              <div class="doc-chat-events hidden" id="workspace-chat-events">
                 <div class="doc-chat-section-header">
                   <div class="doc-chat-section-title">
                     Agent updates
-                    <span class="doc-chat-count" id="doc-chat-events-count">0</span>
+                    <span class="doc-chat-count" id="workspace-chat-events-count">0</span>
                   </div>
-                  <button class="ghost sm hidden" id="doc-chat-events-toggle">
-                    Show more
-                  </button>
+                  <button class="ghost sm hidden" id="workspace-chat-events-toggle">Show more</button>
                 </div>
-                <div class="doc-chat-events-list" id="doc-chat-events-list"></div>
+                <div class="doc-chat-events-list" id="workspace-chat-events-list"></div>
               </div>
               <div class="doc-chat-section-header">
-                <div class="doc-chat-section-title">
-                  History
-                  <span class="doc-chat-count" id="doc-chat-history-count">0</span>
-                </div>
+                <div class="doc-chat-section-title">History</div>
               </div>
-              <div class="doc-chat-history" id="doc-chat-history"></div>
+              <div class="doc-chat-history" id="workspace-chat-history"></div>
             </div>
           </div>
         </div>
@@ -494,11 +430,13 @@
                 </select>
                 <input class="ticket-fm-input" id="ticket-fm-title" placeholder="Title (optional)" spellcheck="false"
                   type="text">
-                <label class="ticket-fm-toggle" title="Mark as done">
-                  <input id="ticket-fm-done" type="checkbox">
-                  <span class="ticket-fm-toggle-label">Done</span>
-                </label>
-                <button class="ghost sm icon-btn" id="ticket-editor-close" title="Close">×</button>
+                <div class="ticket-header-actions">
+                  <label class="ticket-fm-toggle" title="Mark as done">
+                    <input id="ticket-fm-done" type="checkbox">
+                    <span class="ticket-fm-toggle-label">Done</span>
+                  </label>
+                  <button class="ghost sm icon-btn" id="ticket-editor-close" title="Close">×</button>
+                </div>
               </div>
             </div>
             <div class="ticket-editor-error hidden" id="ticket-editor-error"></div>
@@ -685,24 +623,6 @@
       <div class="modal-actions">
         <button class="ghost" id="input-modal-cancel">Cancel</button>
         <button class="primary" id="input-modal-ok">OK</button>
-      </div>
-    </div>
-  </div>
-  <!-- Ingest Spec Modal -->
-  <div class="modal-overlay" hidden="" id="ingest-modal">
-    <div aria-describedby="ingest-modal-message" aria-labelledby="ingest-modal-title" aria-modal="true"
-      class="modal-dialog modal-ingest" role="dialog" tabindex="-1">
-      <span class="sr-only" id="ingest-modal-title">Ingest Spec</span>
-      <div id="ingest-modal-content">
-        <p id="ingest-modal-message">Ready to ingest SPEC into TODO, PROGRESS, and OPINIONS?</p>
-        <div class="ingest-modal-refinement hidden" id="ingest-modal-refinement">
-          <textarea id="ingest-modal-input" placeholder="Refine the ingest (optional)..." rows="3"
-            spellcheck="false"></textarea>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button class="ghost" id="ingest-modal-cancel">Cancel</button>
-        <button class="primary" id="ingest-modal-ok">Ingest</button>
       </div>
     </div>
   </div>

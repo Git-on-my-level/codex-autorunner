@@ -434,7 +434,7 @@ def build_flow_routes() -> APIRouter:
 agent: codex
 done: false
 title: Bootstrap ticket plan
-goal: Create SPEC and seed follow-up tickets
+goal: Capture scope and seed follow-up tickets
 requires:
   - .codex-autorunner/ISSUE.md
 ---
@@ -442,7 +442,10 @@ requires:
 You are the first ticket in a new ticket_flow run.
 
 - Read `.codex-autorunner/ISSUE.md` (or ask for the issue/PR URL if missing).
-- Create or update `.codex-autorunner/SPEC.md` that captures goals, scope, risks, and constraints.
+- If helpful, create or update workspace docs under `.codex-autorunner/workspace/`:
+  - `active_context.md` for current context and links
+  - `decisions.md` for decisions/rationale
+  - `spec.md` for requirements and constraints
 - Break the work into additional `TICKET-00X.md` files with clear owners/goals; keep this ticket open until they exist.
 - Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/handoff/` if needed.
 - Write `USER_MESSAGE.md` with `mode: pause` (wait for user response) summarizing the ticket plan and requesting user review before proceeding. Use `mode: notify` if you want to message the user but keep running.
