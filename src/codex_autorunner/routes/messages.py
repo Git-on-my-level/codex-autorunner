@@ -117,7 +117,8 @@ def _collect_handoff_history(
                     if child.is_dir():
                         continue
                     rel = child.name
-                    url = f"/api/flows/{run_id}/handoff_history/{seq:04d}/{quote(rel)}"
+                    # Use a relative URL so hub-mode mounts under `/repos/<id>/` work.
+                    url = f"api/flows/{run_id}/handoff_history/{seq:04d}/{quote(rel)}"
                     size = None
                     try:
                         size = child.stat().st_size
@@ -178,7 +179,8 @@ def _collect_reply_history(
                     if child.is_dir():
                         continue
                     rel = child.name
-                    url = f"/api/flows/{run_id}/reply_history/{seq:04d}/{quote(rel)}"
+                    # Use a relative URL so hub-mode mounts under `/repos/<id>/` work.
+                    url = f"api/flows/{run_id}/reply_history/{seq:04d}/{quote(rel)}"
                     size = None
                     try:
                         size = child.stat().st_size
@@ -261,14 +263,14 @@ def build_messages_routes() -> APIRouter:
             latest = history[0]
             return {
                 "active": True,
-                "repo_id": request.app.state.repo_id,
                 "run_id": record.id,
                 "flow_type": record.flow_type,
                 "status": record.status.value,
                 "seq": latest.get("seq"),
                 "message": latest.get("message"),
                 "files": latest.get("files"),
-                "open_url": f"/?tab=messages&run_id={record.id}",
+                # Relative URL works both at `/` and `/repos/<id>/`.
+                "open_url": f"?tab=messages&run_id={record.id}",
             }
 
         return {"active": False}
@@ -314,7 +316,8 @@ def build_messages_routes() -> APIRouter:
                     "handoff_count": len(history),
                     "reply_count": len(reply_history),
                     "ticket_state": _ticket_state_snapshot(record),
-                    "open_url": f"/?tab=messages&run_id={record.id}",
+                    # Relative URL works both at `/` and `/repos/<id>/`.
+                    "open_url": f"?tab=messages&run_id={record.id}",
                 }
             )
         return {"threads": threads}

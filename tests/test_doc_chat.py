@@ -1,13 +1,13 @@
 import asyncio
 import difflib
-import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
 import pytest
 from fastapi.testclient import TestClient
 
-from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.doc_chat import (
     DocChatConflictError,
     DocChatDraftState,
@@ -18,25 +18,11 @@ from codex_autorunner.core.doc_chat import (
 from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.locks import FileLock
 from codex_autorunner.integrations.app_server.client import TurnResult
-from codex_autorunner.server import create_app
+from codex_autorunner.server import create_hub_app
 
 
-def _seed_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".git").mkdir()
-    seed_hub_files(repo, force=True)
-    seed_repo_files(repo, force=True, git_required=False)
-    work = repo / ".codex-autorunner"
-    work.mkdir(exist_ok=True)
-    (work / "TODO.md").write_text(
-        "- [ ] first task\n- [x] done task\n", encoding="utf-8"
-    )
-    (work / "PROGRESS.md").write_text("progress body\n", encoding="utf-8")
-    (work / "OPINIONS.md").write_text("opinions body\n", encoding="utf-8")
-    (work / "SPEC.md").write_text("spec body\n", encoding="utf-8")
-    (work / "SUMMARY.md").write_text("summary body\n", encoding="utf-8")
-    return repo
+def _api(hub_env, path: str) -> str:
+    return f"/repos/{hub_env.repo_id}{path}"
 
 
 def _make_patch(path: str, before: str, after: str) -> str:
@@ -101,30 +87,41 @@ class FakeSupervisor:
 
 
 @pytest.fixture()
-def repo(tmp_path: Path) -> Path:
-    return _seed_repo(tmp_path)
+def repo(hub_env) -> Path:
+    work = hub_env.repo_root / ".codex-autorunner"
+    work.mkdir(exist_ok=True)
+    (work / "TODO.md").write_text(
+        "- [ ] first task\n- [x] done task\n", encoding="utf-8"
+    )
+    (work / "PROGRESS.md").write_text("progress body\n", encoding="utf-8")
+    (work / "OPINIONS.md").write_text("opinions body\n", encoding="utf-8")
+    (work / "SPEC.md").write_text("spec body\n", encoding="utf-8")
+    (work / "SUMMARY.md").write_text("summary body\n", encoding="utf-8")
+    return hub_env.repo_root
 
 
-def _client(repo_root: Path) -> TestClient:
-    app = create_app(repo_root)
+def _client(hub_env) -> TestClient:
+    app = create_hub_app(hub_env.hub_root)
     return TestClient(app)
 
 
-def test_chat_rejects_invalid_payload(repo: Path):
-    client = _client(repo)
-    res = client.post("/api/docs/unknown/chat", json={"message": "hi"})
+def test_chat_rejects_invalid_payload(hub_env, repo: Path):
+    client = _client(hub_env)
+    res = client.post(_api(hub_env, "/api/docs/unknown/chat"), json={"message": "hi"})
     assert res.status_code == 400
     assert res.json()["detail"] == "invalid doc kind"
 
-    res = client.post("/api/docs/todo/chat", json={"message": ""})
+    res = client.post(_api(hub_env, "/api/docs/todo/chat"), json={"message": ""})
     assert res.status_code == 400
     assert res.json()["detail"] == "message is required"
 
-    res = client.post("/api/docs/todo/chat", json=None)
+    res = client.post(_api(hub_env, "/api/docs/todo/chat"), json=None)
     assert res.status_code == 400
     assert res.json()["detail"] == "invalid payload"
 
-    res = client.post("/api/docs/chat", json={"message": "hi", "targets": ["specs"]})
+    res = client.post(
+        _api(hub_env, "/api/docs/chat"), json={"message": "hi", "targets": ["specs"]}
+    )
     assert res.status_code == 400
     assert res.json()["detail"] == "invalid doc kind"
 
@@ -140,27 +137,44 @@ def test_parse_request_enforces_kind_targets(repo: Path) -> None:
         service.parse_request({"message": "hi", "targets": ["spec"]}, kind="todo")
 
 
-def test_chat_repo_lock_conflict(repo: Path):
+def test_chat_repo_lock_conflict(hub_env, repo: Path):
     lock_path = repo / ".codex-autorunner" / "lock"
-    lock_path.write_text(str(os.getpid()), encoding="utf-8")
-    client = _client(repo)
-    res = client.post("/api/docs/todo/chat", json={"message": "run it"})
-    assert res.status_code == 409
-    assert "Autorunner lock is stale" in res.json()["detail"]
+    # Deterministic: the lock validator checks both pid-aliveness and that the
+    # process command contains an autorunner hint. Spawn a tiny process whose
+    # command line includes "codex-autorunner".
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)", "codex-autorunner"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        lock_path.write_text(f"{proc.pid}\n", encoding="utf-8")
+        client = _client(hub_env)
+        res = client.post(
+            _api(hub_env, "/api/docs/todo/chat"), json={"message": "run it"}
+        )
+        assert res.status_code == 409
+        assert "Autorunner is running" in res.json()["detail"]
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            proc.kill()
 
 
-def test_chat_busy_conflict(repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_chat_busy_conflict(hub_env, repo: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         DocChatService, "doc_busy", lambda self, *_args, **_kwargs: True
     )
-    client = _client(repo)
-    res = client.post("/api/docs/todo/chat", json={"message": "hi"})
+    client = _client(hub_env)
+    res = client.post(_api(hub_env, "/api/docs/todo/chat"), json={"message": "hi"})
     assert res.status_code == 409
     assert "already running" in res.json()["detail"]
 
 
 def test_chat_success_writes_doc_and_returns_agent_message(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    hub_env, repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
     async def fake_execute(self, request: DocChatRequest) -> dict:  # type: ignore[override]
         target_path = self.engine.config.doc_path("todo")
@@ -186,10 +200,12 @@ def test_chat_success_writes_doc_and_returns_agent_message(
 
     monkeypatch.setattr(DocChatService, "_execute_app_server", fake_execute)
 
-    client = _client(repo)
+    client = _client(hub_env)
     doc_path = repo / ".codex-autorunner" / "TODO.md"
     original = doc_path.read_text(encoding="utf-8")
-    res = client.post("/api/docs/todo/chat", json={"message": "rewrite the todo"})
+    res = client.post(
+        _api(hub_env, "/api/docs/todo/chat"), json={"message": "rewrite the todo"}
+    )
     assert res.status_code == 200, res.text
     data = res.json()
     assert data["status"] == "ok"
@@ -199,7 +215,7 @@ def test_chat_success_writes_doc_and_returns_agent_message(
 
     assert doc_path.read_text(encoding="utf-8") == original
 
-    res_apply = client.post("/api/docs/todo/chat/apply")
+    res_apply = client.post(_api(hub_env, "/api/docs/todo/chat/apply"))
     assert res_apply.status_code == 200, res_apply.text
     applied = res_apply.json()
     assert applied["content"].strip().splitlines() == [
@@ -211,18 +227,18 @@ def test_chat_success_writes_doc_and_returns_agent_message(
     assert "rewritten" in doc_path.read_text(encoding="utf-8")
 
 
-def test_api_docs_includes_summary(repo: Path):
-    client = _client(repo)
-    res = client.get("/api/docs")
+def test_api_docs_includes_summary(hub_env, repo: Path):
+    client = _client(hub_env)
+    res = client.get(_api(hub_env, "/api/docs"))
     assert res.status_code == 200, res.text
     data = res.json()
     assert set(data.keys()) >= {"todo", "progress", "opinions", "spec", "summary"}
     assert data["summary"] == "summary body\n"
 
 
-def test_api_docs_clear_returns_full_payload_and_resets_work_docs(repo: Path):
-    client = _client(repo)
-    res = client.post("/api/docs/clear")
+def test_api_docs_clear_returns_full_payload_and_resets_work_docs(hub_env, repo: Path):
+    client = _client(hub_env)
+    res = client.post(_api(hub_env, "/api/docs/clear"))
     assert res.status_code == 200, res.text
     data = res.json()
     assert set(data.keys()) >= {"todo", "progress", "opinions", "spec", "summary"}
@@ -238,7 +254,9 @@ def test_api_docs_clear_returns_full_payload_and_resets_work_docs(repo: Path):
     assert (work_dir / "OPINIONS.md").read_text(encoding="utf-8") == "# Opinions\n\n"
 
 
-def test_chat_accepts_summary_kind(repo: Path, monkeypatch: pytest.MonkeyPatch):
+def test_chat_accepts_summary_kind(
+    hub_env, repo: Path, monkeypatch: pytest.MonkeyPatch
+):
     async def fake_execute(self, request: DocChatRequest) -> dict:  # type: ignore[override]
         target_path = self.engine.config.doc_path("summary")
         before = target_path.read_text(encoding="utf-8")
@@ -263,10 +281,13 @@ def test_chat_accepts_summary_kind(repo: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(DocChatService, "_execute_app_server", fake_execute)
 
-    client = _client(repo)
+    client = _client(hub_env)
     doc_path = repo / ".codex-autorunner" / "SUMMARY.md"
     original = doc_path.read_text(encoding="utf-8")
-    res = client.post("/api/docs/summary/chat", json={"message": "rewrite the summary"})
+    res = client.post(
+        _api(hub_env, "/api/docs/summary/chat"),
+        json={"message": "rewrite the summary"},
+    )
     assert res.status_code == 200, res.text
     data = res.json()
     assert data["status"] == "ok"
@@ -275,7 +296,7 @@ def test_chat_accepts_summary_kind(repo: Path, monkeypatch: pytest.MonkeyPatch):
 
     assert doc_path.read_text(encoding="utf-8") == original
 
-    res_apply = client.post("/api/docs/summary/chat/apply")
+    res_apply = client.post(_api(hub_env, "/api/docs/summary/chat/apply"))
     assert res_apply.status_code == 200, res_apply.text
     applied = res_apply.json()
     assert applied["content"].strip() == "summary updated"
@@ -331,7 +352,7 @@ async def test_doc_chat_interrupt_ignores_external_lock(repo: Path) -> None:
 
 
 def test_chat_validation_failure_does_not_write(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    hub_env, repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
     existing = (repo / ".codex-autorunner" / "TODO.md").read_text(encoding="utf-8")
 
@@ -357,20 +378,22 @@ def test_chat_validation_failure_does_not_write(
         }
 
     monkeypatch.setattr(DocChatService, "_execute_app_server", fake_execute)
-    client = _client(repo)
-    res = client.post("/api/docs/todo/chat", json={"message": "break it"})
+    client = _client(hub_env)
+    res = client.post(
+        _api(hub_env, "/api/docs/todo/chat"), json={"message": "break it"}
+    )
     assert res.status_code == 200
     assert (repo / ".codex-autorunner" / "TODO.md").read_text(
         encoding="utf-8"
     ) == existing
-    res_discard = client.post("/api/docs/todo/chat/discard")
+    res_discard = client.post(_api(hub_env, "/api/docs/todo/chat/discard"))
     assert res_discard.status_code == 200
     assert (repo / ".codex-autorunner" / "TODO.md").read_text(
         encoding="utf-8"
     ) == existing
 
 
-def test_chat_apply_rejects_stale_draft(repo: Path) -> None:
+def test_chat_apply_rejects_stale_draft(hub_env, repo: Path) -> None:
     engine = Engine(repo)
     service = DocChatService(engine)
     target_path = engine.config.doc_path("todo")
@@ -388,11 +411,11 @@ def test_chat_apply_rejects_stale_draft(repo: Path) -> None:
     service._save_drafts({"todo": draft})
     target_path.write_text(before + "\nextra edit\n", encoding="utf-8")
 
-    client = _client(repo)
-    res = client.post("/api/docs/todo/chat/apply")
+    client = _client(hub_env)
+    res = client.post(_api(hub_env, "/api/docs/todo/chat/apply"))
     assert res.status_code == 409, res.text
 
-    pending = client.get("/api/docs/todo/chat/pending")
+    pending = client.get(_api(hub_env, "/api/docs/todo/chat/pending"))
     assert pending.status_code == 200, pending.text
 
 

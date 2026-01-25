@@ -1,13 +1,13 @@
 from fastapi.testclient import TestClient
 
-from codex_autorunner.server import create_app
+from codex_autorunner.server import create_hub_app
 
 
-def test_repo_openapi_contract_has_core_paths(repo) -> None:
-    app = create_app(repo)
+def test_repo_openapi_contract_has_core_paths(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
 
-    schema = client.get("/openapi.json").json()
+    schema = client.get(f"/repos/{hub_env.repo_id}/openapi.json").json()
     paths = schema["paths"]
 
     expected = {

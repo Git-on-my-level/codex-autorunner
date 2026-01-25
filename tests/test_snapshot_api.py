@@ -2,20 +2,15 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.server import create_app
+from codex_autorunner.server import create_hub_app
 
 pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 
-def _client(repo_root: Path) -> TestClient:
-    app = create_app(repo_root)
-    return TestClient(app)
-
-
-def test_get_snapshot_when_missing(repo: Path) -> None:
-    client = _client(repo)
-    res = client.get("/api/snapshot")
+def test_get_snapshot_when_missing(hub_env, repo: Path) -> None:
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    res = client.get(f"/repos/{hub_env.repo_id}/api/snapshot")
     assert res.status_code == 200, res.text
     payload = res.json()
     assert payload["exists"] is False
@@ -24,7 +19,7 @@ def test_get_snapshot_when_missing(repo: Path) -> None:
 
 
 def test_post_snapshot_persists_and_loads(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    hub_env, repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from codex_autorunner.core.snapshot import SnapshotResult, SnapshotService
 
@@ -38,14 +33,14 @@ def test_post_snapshot_persists_and_loads(
 
     monkeypatch.setattr(SnapshotService, "generate_snapshot", mock_generate)
 
-    client = _client(repo)
-    res = client.post("/api/snapshot", json={})
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    res = client.post(f"/repos/{hub_env.repo_id}/api/snapshot", json={})
     assert res.status_code == 200, res.text
     payload = res.json()
     assert "Hello" in payload["content"]
     assert payload["state"].get("truncated") is False
 
-    res2 = client.get("/api/snapshot")
+    res2 = client.get(f"/repos/{hub_env.repo_id}/api/snapshot")
     assert res2.status_code == 200, res2.text
     payload2 = res2.json()
     assert payload2["exists"] is True
@@ -53,7 +48,7 @@ def test_post_snapshot_persists_and_loads(
 
 
 def test_post_snapshot_ignores_legacy_params(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    hub_env, repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from codex_autorunner.core.snapshot import SnapshotResult, SnapshotService
 
@@ -61,9 +56,10 @@ def test_post_snapshot_ignores_legacy_params(
         return SnapshotResult(content="# Snapshot\n\nHi\n", truncated=False, state={})
 
     monkeypatch.setattr(SnapshotService, "generate_snapshot", mock_generate)
-    client = _client(repo)
+    client = TestClient(create_hub_app(hub_env.hub_root))
     res = client.post(
-        "/api/snapshot", json={"mode": "nope", "max_chars": 1, "audience": "onboarding"}
+        f"/repos/{hub_env.repo_id}/api/snapshot",
+        json={"mode": "nope", "max_chars": 1, "audience": "onboarding"},
     )
     assert res.status_code == 200, res.text
     payload = res.json()

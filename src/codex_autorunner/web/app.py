@@ -909,13 +909,14 @@ def _app_lifespan(context: AppContext):
     return lifespan
 
 
-def create_app(
-    repo_root: Optional[Path] = None,
-    base_path: Optional[str] = None,
+def create_repo_app(
+    repo_root: Path,
     server_overrides: Optional[ServerOverrides] = None,
     hub_config: Optional[HubConfig] = None,
 ) -> ASGIApp:
-    context = _build_app_context(repo_root, base_path, hub_config=hub_config)
+    # Hub-only: repo apps are always mounted under `/repos/<id>` and must not
+    # apply their own base-path rewriting (the hub handles that globally).
+    context = _build_app_context(repo_root, base_path="", hub_config=hub_config)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
     _apply_app_context(app, context)
     app.add_middleware(GZipMiddleware, minimum_size=500)
@@ -946,8 +947,6 @@ def create_app(
     asgi_app: ASGIApp = app
     if auth_token:
         asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
-    if context.base_path:
-        asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
     asgi_app = HostOriginMiddleware(asgi_app, allowed_hosts, allowed_origins)
     asgi_app = RequestIdMiddleware(asgi_app)
     asgi_app = SecurityHeadersMiddleware(asgi_app)
@@ -1075,9 +1074,8 @@ def create_hub_app(
             return False
         try:
             # Hub already handles the base path; avoid reapplying it in child apps.
-            sub_app = create_app(
+            sub_app = create_repo_app(
                 repo_path,
-                base_path="",
                 server_overrides=repo_server_overrides,
                 hub_config=context.config,
             )
@@ -1105,6 +1103,9 @@ def create_hub_app(
                     exc=exc2,
                 )
             return False
+        fastapi_app = _unwrap_fastapi(sub_app)
+        if fastapi_app is not None:
+            fastapi_app.state.repo_id = prefix
         app.mount(f"/repos/{prefix}", sub_app)
         mounted_repos.add(prefix)
         repo_apps[prefix] = sub_app
@@ -1133,9 +1134,8 @@ def create_hub_app(
                     continue
                 # Hub already handles the base path; avoid reapplying it in child apps.
                 try:
-                    sub_app = create_app(
+                    sub_app = create_repo_app(
                         snap.path,
-                        base_path="",
                         server_overrides=repo_server_overrides,
                         hub_config=context.config,
                     )
@@ -1167,6 +1167,9 @@ def create_hub_app(
                             exc=exc2,
                         )
                     continue
+                fastapi_app = _unwrap_fastapi(sub_app)
+                if fastapi_app is not None:
+                    fastapi_app.state.repo_id = snap.id
                 app.mount(f"/repos/{snap.id}", sub_app)
                 mounted_repos.add(snap.id)
                 repo_apps[snap.id] = sub_app

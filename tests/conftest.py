@@ -9,6 +9,7 @@ Ensure tests always import the in-repo code.
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -41,23 +42,41 @@ def pytest_collection_modifyitems(
 
 
 @pytest.fixture()
-def repo(tmp_path: Path) -> Path:
-    """
-    Create a minimal initialized repo on disk.
+def hub_env(tmp_path: Path):
+    """Create a minimal hub with a single initialized repo mounted under `/repos/<id>`."""
 
-    Several tests rely on `create_app(repo_root)` which requires:
-    - a `.git/` directory
-    - a hub config at `.codex-autorunner/config.yml`
-    - work docs/state to exist
-    """
-
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    (repo_root / ".git").mkdir()
     # Import lazily so `pytest_configure()` can prepend the local src/ directory
     # before any `codex_autorunner` modules are loaded.
     from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+    from codex_autorunner.core.config import load_hub_config
+    from codex_autorunner.manifest import load_manifest, save_manifest
 
-    seed_hub_files(repo_root, force=True)
+    @dataclass(frozen=True)
+    class HubEnv:
+        hub_root: Path
+        repo_id: str
+        repo_root: Path
+
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    # Put the repo under the hub's default repos_root (worktrees/ by default).
+    repo_id = "repo"
+    repo_root = hub_root / "worktrees" / repo_id
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
     seed_repo_files(repo_root, git_required=False)
-    return repo_root
+
+    hub_config = load_hub_config(hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_root)
+    manifest.ensure_repo(hub_root, repo_root, repo_id=repo_id, display_name=repo_id)
+    save_manifest(hub_config.manifest_path, manifest, hub_root)
+
+    return HubEnv(hub_root=hub_root, repo_id=repo_id, repo_root=repo_root)
+
+
+@pytest.fixture()
+def repo(hub_env) -> Path:
+    """Backwards-compatible repo fixture (the hub's single test repo root)."""
+    return hub_env.repo_root

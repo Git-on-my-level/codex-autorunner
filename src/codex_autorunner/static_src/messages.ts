@@ -1,4 +1,11 @@
-import { api, escapeHtml, flash, getUrlParams, updateUrlParams } from "./utils.js";
+import {
+  api,
+  escapeHtml,
+  flash,
+  getUrlParams,
+  resolvePath,
+  updateUrlParams,
+} from "./utils.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 
@@ -287,9 +294,10 @@ function renderFiles(files: Array<{ name: string; url: string; size?: number | n
   const items = files
     .map((f) => {
       const size = formatBytes(f.size);
+      const href = resolvePath(f.url || "");
       return `<li class="messages-file">
         <span class="messages-file-icon">📎</span>
-        <a href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a>
+        <a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a>
         ${size ? `<span class="messages-file-size muted small">${escapeHtml(size)}</span>` : ""}
       </li>`;
     })

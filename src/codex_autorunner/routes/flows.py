@@ -736,7 +736,8 @@ You are the first ticket in a new ticket_flow run.
                             "rel_path": rel,
                             "path": safe_relpath(child, repo_root),
                             "size": child.stat().st_size if child.is_file() else None,
-                            "url": f"/api/flows/{normalized}/handoff_history/{entry.name}/{quote(rel)}",
+                            # Use a relative URL so hub-mode mounts under `/repos/<id>/` work.
+                            "url": f"api/flows/{normalized}/handoff_history/{entry.name}/{quote(rel)}",
                         }
                     )
                 history_entries.append(
