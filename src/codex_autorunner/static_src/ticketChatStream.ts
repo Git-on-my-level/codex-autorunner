@@ -227,14 +227,7 @@ function handleTicketStreamEvent(event: string, rawData: string): void {
     case "done":
     case "finish": {
       ticketChatState.status = "done";
-      // Add final assistant message from stream text if available
-      // But only if we haven't already added one (from update event)
-      if (ticketChatState.streamText && ticketChatState.messages.length > 0) {
-        const lastMessage = ticketChatState.messages[ticketChatState.messages.length - 1];
-        if (lastMessage.role === "user") {
-          addAssistantMessage(ticketChatState.streamText, true);
-        }
-      }
+      // Final render to ensure UI is up to date
       renderTicketChat();
       renderTicketMessages();
       renderTicketEvents();
@@ -304,8 +297,8 @@ function applyTicketChatResult(payload: unknown): void {
 
   // Add assistant message from response
   const responseText =
-    ticketChatState.statusText ||
     ticketChatState.streamText ||
+    ticketChatState.statusText ||
     (ticketChatState.draft ? "Changes ready to apply" : "Done");
   if (responseText && ticketChatState.messages.length > 0) {
     // Only add if we have messages (i.e., a user message was sent)

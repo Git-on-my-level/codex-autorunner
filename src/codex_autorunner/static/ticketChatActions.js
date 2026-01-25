@@ -5,6 +5,7 @@ import { api, flash } from "./utils.js";
 import { performTicketChatRequest } from "./ticketChatStream.js";
 import { publish } from "./bus.js";
 import { saveTicketChatHistory, loadTicketChatHistory } from "./ticketChatStorage.js";
+import { renderTicketMessages } from "./ticketChatEvents.js";
 // Limits for events display
 export const TICKET_CHAT_EVENT_LIMIT = 8;
 export const TICKET_CHAT_EVENT_MAX = 50;
@@ -28,6 +29,7 @@ export function getTicketChatElements() {
         sendBtn: document.getElementById("ticket-chat-send"),
         voiceBtn: document.getElementById("ticket-chat-voice"),
         cancelBtn: document.getElementById("ticket-chat-cancel"),
+        newThreadBtn: document.getElementById("ticket-chat-new-thread"),
         statusEl: document.getElementById("ticket-chat-status"),
         streamEl: document.getElementById("ticket-chat-stream"),
         // Content area elements - mutually exclusive with patch preview
@@ -58,6 +60,32 @@ export function resetTicketChatState() {
     ticketChatState.controller = null;
     // Note: events are cleared at the start of each new request, not here
     // Messages persist across requests within the same ticket
+}
+export async function startNewTicketChatThread() {
+    if (ticketChatState.ticketIndex == null)
+        return;
+    const confirmed = window.confirm("Start a new conversation thread for this ticket?");
+    if (!confirmed)
+        return;
+    try {
+        const key = `ticket_chat.${ticketChatState.ticketIndex}`;
+        await api(`/api/app-server/threads/reset`, {
+            method: "POST",
+            body: { key },
+        });
+        // Clear local message history
+        ticketChatState.messages = [];
+        saveTicketChatHistory(ticketChatState.ticketIndex, []);
+        clearTicketEvents();
+        flash("New thread started");
+    }
+    catch (err) {
+        flash(`Failed to reset thread: ${err.message}`, "error");
+    }
+    finally {
+        renderTicketChat();
+        renderTicketMessages();
+    }
 }
 /**
  * Clear events at the start of a new request.
@@ -138,6 +166,11 @@ export function renderTicketChat() {
     // Show/hide cancel button
     if (els.cancelBtn) {
         els.cancelBtn.classList.toggle("hidden", ticketChatState.status !== "running");
+    }
+    // Show/hide new thread button
+    if (els.newThreadBtn) {
+        const hasHistory = ticketChatState.messages.length > 0;
+        els.newThreadBtn.classList.toggle("hidden", !hasHistory || ticketChatState.status === "running");
     }
     // The streamEl now contains events and messages sections.
     // Show the stream container when there are events, messages, or running.

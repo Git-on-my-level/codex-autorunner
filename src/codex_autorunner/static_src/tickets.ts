@@ -432,6 +432,14 @@ export function initTicketFlow(): void {
   if (stopBtn) stopBtn.addEventListener("click", stopTicketFlow);
   if (refreshBtn) refreshBtn.addEventListener("click", loadTicketFlow);
 
+  const newThreadBtn = document.getElementById("ticket-chat-new-thread");
+  if (newThreadBtn) {
+    newThreadBtn.addEventListener("click", async () => {
+      const { startNewTicketChatThread } = await import("./ticketChatActions.js");
+      await startNewTicketChatThread();
+    });
+  }
+
   // Initialize the ticket editor modal
   initTicketEditor();
 

@@ -262,6 +262,9 @@ def build_ticket_chat_routes() -> APIRouter:
             backup_content = ticket_content
 
             # Execute using doc_chat's backend
+            thread_registry = getattr(request.app.state, "app_server_threads", None)
+            thread_key = f"ticket_chat.{index}"
+
             if agent_id == "opencode":
                 result = await _execute_ticket_chat_opencode(
                     doc_chat,
@@ -271,6 +274,8 @@ def build_ticket_chat_routes() -> APIRouter:
                     interrupt_event,
                     model=model,
                     reasoning=reasoning,
+                    thread_registry=thread_registry,
+                    thread_key=thread_key,
                 )
             else:
                 result = await _execute_ticket_chat_app_server(
@@ -281,6 +286,8 @@ def build_ticket_chat_routes() -> APIRouter:
                     interrupt_event,
                     model=model,
                     reasoning=reasoning,
+                    thread_registry=thread_registry,
+                    thread_key=thread_key,
                 )
 
             if result.get("status") != "ok":
@@ -351,17 +358,33 @@ def build_ticket_chat_routes() -> APIRouter:
         *,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
+        thread_registry: Optional[Any] = None,
+        thread_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Execute ticket chat using the app-server backend."""
         try:
             supervisor = doc_chat._ensure_app_server()
             client = await supervisor.get_client(doc_chat.engine.repo_root)
 
-            # Start a new thread for ticket chat
-            thread = await client.thread_start(str(doc_chat.engine.repo_root))
-            thread_id = thread.get("id")
-            if not isinstance(thread_id, str) or not thread_id:
-                raise TicketChatError("App-server did not return a thread id")
+            # Resume or start a new thread for ticket chat
+            thread_id = None
+            if thread_registry and thread_key:
+                thread_id = thread_registry.get_thread_id(thread_key)
+
+            if thread_id:
+                try:
+                    await client.thread_resume(thread_id)
+                except Exception:
+                    # Thread might have expired or been deleted
+                    thread_id = None
+
+            if not thread_id:
+                thread = await client.thread_start(str(doc_chat.engine.repo_root))
+                thread_id = thread.get("id")
+                if not isinstance(thread_id, str) or not thread_id:
+                    raise TicketChatError("App-server did not return a thread id")
+                if thread_registry and thread_key:
+                    thread_registry.set_thread_id(thread_key, thread_id)
 
             turn_kwargs: Dict[str, Any] = {}
             if model:
@@ -433,6 +456,8 @@ def build_ticket_chat_routes() -> APIRouter:
         *,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
+        thread_registry: Optional[Any] = None,
+        thread_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Execute ticket chat using the opencode backend."""
         from ..agents.opencode.runtime import (
@@ -447,13 +472,21 @@ def build_ticket_chat_routes() -> APIRouter:
             supervisor = doc_chat._ensure_opencode()
             client = await supervisor.get_client(doc_chat.engine.repo_root)
 
-            # Create a new session for ticket chat
-            session = await client.create_session(
-                directory=str(doc_chat.engine.repo_root)
-            )
-            thread_id = extract_session_id(session, allow_fallback_id=True)
-            if not isinstance(thread_id, str) or not thread_id:
-                raise TicketChatError("OpenCode did not return a session id")
+            # Resume or start a new session for ticket chat
+            thread_id = None
+            if thread_registry and thread_key:
+                thread_id = thread_registry.get_thread_id(thread_key)
+
+            if not thread_id:
+                # Create a new session for ticket chat
+                session = await client.create_session(
+                    directory=str(doc_chat.engine.repo_root)
+                )
+                thread_id = extract_session_id(session, allow_fallback_id=True)
+                if not isinstance(thread_id, str) or not thread_id:
+                    raise TicketChatError("OpenCode did not return a session id")
+                if thread_registry and thread_key:
+                    thread_registry.set_thread_id(thread_key, thread_id)
 
             model_payload = split_model_id(model)
             await supervisor.mark_turn_started(doc_chat.engine.repo_root)
