@@ -1,4 +1,4 @@
-import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken } from "./utils.js";
+import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
@@ -16,6 +16,7 @@ let lastActivityTimerId = null;
 let liveOutputExpanded = false;
 let liveOutputBuffer = [];
 const MAX_OUTPUT_LINES = 200;
+let currentReasonFull = null; // Full reason text for modal display
 function formatElapsed(startTime) {
     const now = new Date();
     const diffMs = now.getTime() - startTime.getTime();
@@ -211,6 +212,35 @@ function initLiveOutputPanel() {
         });
     }
 }
+/**
+ * Initialize the reason modal click handler.
+ */
+function initReasonModal() {
+    const reasonEl = document.getElementById("ticket-flow-reason");
+    const modalOverlay = document.getElementById("reason-modal");
+    const modalContent = document.getElementById("reason-modal-content");
+    const closeBtn = document.getElementById("reason-modal-close");
+    if (!reasonEl || !modalOverlay || !modalContent)
+        return;
+    let closeModal = null;
+    const showReasonModal = () => {
+        if (!currentReasonFull || !reasonEl.classList.contains("has-details"))
+            return;
+        modalContent.textContent = currentReasonFull;
+        closeModal = openModal(modalOverlay, {
+            closeOnEscape: true,
+            closeOnOverlay: true,
+            returnFocusTo: reasonEl,
+        });
+    };
+    reasonEl.addEventListener("click", showReasonModal);
+    if (closeBtn) {
+        closeBtn.addEventListener("click", () => {
+            if (closeModal)
+                closeModal();
+        });
+    }
+}
 function els() {
     return {
         card: document.getElementById("ticket-card"),
@@ -392,16 +422,47 @@ function renderHandoffHistory(runId, data) {
         history.appendChild(container);
     });
 }
-function summarizeReason(run) {
+const MAX_REASON_LENGTH = 60;
+/**
+ * Get the full reason text (summary + details) for modal display.
+ */
+function getFullReason(run) {
     if (!run)
-        return "No ticket flow run yet.";
+        return null;
     const state = (run.state || {});
     const engine = (state.ticket_engine || {});
-    return (engine.reason ||
+    const reason = engine.reason || run.error_message || "";
+    const details = engine.reason_details || "";
+    if (!reason && !details)
+        return null;
+    if (details) {
+        return `${reason}\n\n${details}`.trim();
+    }
+    return reason;
+}
+/**
+ * Get a truncated reason summary for display in the grid.
+ * Also updates currentReasonFull for modal access.
+ */
+function summarizeReason(run) {
+    if (!run) {
+        currentReasonFull = null;
+        return "No ticket flow run yet.";
+    }
+    const state = (run.state || {});
+    const engine = (state.ticket_engine || {});
+    const fullReason = getFullReason(run);
+    currentReasonFull = fullReason;
+    const shortReason = engine.reason ||
         run.error_message ||
         (engine.current_ticket ? `Working on ${engine.current_ticket}` : "") ||
         run.status ||
-        "");
+        "";
+    // Truncate if too long
+    if (shortReason.length > MAX_REASON_LENGTH) {
+        return shortReason.slice(0, MAX_REASON_LENGTH - 3) + "...";
+    }
+    return shortReason;
 }
 async function loadTicketFiles() {
     const { tickets } = els();
@@ -512,8 +573,15 @@ async function loadTicketFlow() {
             if (elapsed)
                 elapsed.textContent = "–";
         }
-        if (reason)
+        if (reason) {
             reason.textContent = summarizeReason(latest) || "–";
+            // Add clickable class if there are details to show
+            const state = (latest?.state || {});
+            const engine = (state.ticket_engine || {});
+            const hasDetails = Boolean(engine.reason_details ||
+                (currentReasonFull && currentReasonFull.length > MAX_REASON_LENGTH));
+            reason.classList.toggle("has-details", hasDetails);
+        }
         if (resumeBtn) {
             resumeBtn.disabled = !latest?.id || latest.status !== "paused";
         }
@@ -721,6 +789,8 @@ export function initTicketFlow() {
         archiveBtn.addEventListener("click", archiveTicketFlow);
     if (refreshBtn)
         refreshBtn.addEventListener("click", loadTicketFlow);
+    // Initialize reason click handler for modal
+    initReasonModal();
     // Initialize live output panel
     initLiveOutputPanel();
     const newThreadBtn = document.getElementById("ticket-chat-new-thread");

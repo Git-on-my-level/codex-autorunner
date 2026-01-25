@@ -210,11 +210,8 @@ class TicketRunner:
             if ticket_errors or ticket_doc is None:
                 return self._pause(
                     state,
-                    reason=(
-                        "Ticket frontmatter invalid for "
-                        f"{safe_relpath(current_path, self._workspace_root)}:\n- "
-                        + "\n- ".join(ticket_errors)
-                    ),
+                    reason=f"Ticket frontmatter invalid: {safe_relpath(current_path, self._workspace_root)}",
+                    reason_details="Errors:\n- " + "\n- ".join(ticket_errors),
                     current_ticket=safe_relpath(current_path, self._workspace_root),
                 )
 
@@ -243,10 +240,8 @@ class TicketRunner:
                 ]
                 return self._pause(
                     state,
-                    reason=(
-                        "Missing required input files for this ticket:\n- "
-                        + "\n- ".join(rel_missing)
-                    ),
+                    reason="Missing required input files for this ticket.",
+                    reason_details="Missing files:\n- " + "\n- ".join(rel_missing),
                     current_ticket=safe_relpath(current_path, self._workspace_root),
                 )
 
@@ -308,10 +303,8 @@ class TicketRunner:
             state["last_agent_turn_id"] = result.turn_id
             return self._pause(
                 state,
-                reason=(
-                    "Agent turn failed; fix the underlying issue and resume.\n"
-                    f"Error: {result.error}"
-                ),
+                reason="Agent turn failed. Fix the issue and resume.",
+                reason_details=f"Error: {result.error}",
                 current_ticket=safe_relpath(current_path, self._workspace_root),
             )
 
@@ -358,10 +351,8 @@ class TicketRunner:
             state["outbox_lint"] = dispatch_errors
             return self._pause(
                 state,
-                reason=(
-                    "Invalid USER_MESSAGE.md frontmatter:\n- "
-                    + "\n- ".join(dispatch_errors)
-                ),
+                reason="Invalid USER_MESSAGE.md frontmatter.",
+                reason_details="Errors:\n- " + "\n- ".join(dispatch_errors),
                 current_ticket=safe_relpath(current_path, self._workspace_root),
             )
 
@@ -376,10 +367,10 @@ class TicketRunner:
             if lint_retries > self._config.max_lint_retries:
                 return self._pause(
                     state,
-                    reason=(
-                        "Ticket frontmatter is invalid after agent turn and exceeded lint retry limit.\n"
-                        "Fix the ticket frontmatter manually and resume.\n\nErrors:\n- "
-                        + "\n- ".join(fm_errors)
+                    reason="Ticket frontmatter invalid. Manual fix required.",
+                    reason_details=(
+                        "Exceeded lint retry limit. Fix the ticket frontmatter manually and resume.\n\n"
+                        "Errors:\n- " + "\n- ".join(fm_errors)
                     ),
                     current_ticket=safe_relpath(current_path, self._workspace_root),
                 )
@@ -459,20 +450,21 @@ class TicketRunner:
                 ):
                     detail = (status_after_agent or "").strip()
                     detail_lines = detail.splitlines()[:20]
-                    detail_block = (
-                        "\n\nWorking tree status (git status --porcelain):\n- "
-                        + "\n- ".join(detail_lines)
-                        if detail_lines
-                        else ""
-                    )
+                    details_parts = [
+                        "Please commit manually (ensuring pre-commit hooks pass) and resume."
+                    ]
+                    if detail_lines:
+                        details_parts.append(
+                            "\n\nWorking tree status (git status --porcelain):\n- "
+                            + "\n- ".join(detail_lines)
+                        )
                     return self._pause(
                         state,
                         reason=(
-                            "Ticket is marked done, but the repo still has uncommitted changes and the agent "
-                            f"did not successfully commit after {self._config.max_commit_retries} attempts.\n"
-                            "Please commit manually (ensuring pre-commit hooks pass) and resume."
-                            + detail_block
+                            f"Commit failed after {self._config.max_commit_retries} attempts. "
+                            "Manual commit required."
                         ),
+                        reason_details="".join(details_parts),
                         current_ticket=safe_relpath(current_path, self._workspace_root),
                     )
 
@@ -570,15 +562,21 @@ class TicketRunner:
         state: dict[str, Any],
         *,
         reason: str,
+        reason_details: Optional[str] = None,
         current_ticket: Optional[str] = None,
     ) -> TicketResult:
         state = dict(state)
         state["status"] = "paused"
         state["reason"] = reason
+        if reason_details:
+            state["reason_details"] = reason_details
+        else:
+            state.pop("reason_details", None)
         return TicketResult(
             status="paused",
             state=state,
             reason=reason,
+            reason_details=reason_details,
             current_ticket=current_ticket
             or (
                 state.get("current_ticket")

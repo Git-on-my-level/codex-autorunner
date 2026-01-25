@@ -65,6 +65,7 @@ class TicketResult:
     status: str  # "continue" | "paused" | "completed" | "failed"
     state: dict[str, Any]
     reason: Optional[str] = None
+    reason_details: Optional[str] = None  # Technical details (git status, etc.)
     dispatch: Optional[OutboxDispatch] = None
     current_ticket: Optional[str] = None
     agent_output: Optional[str] = None

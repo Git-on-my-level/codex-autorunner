@@ -1,4 +1,4 @@
-import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken } from "./utils.js";
+import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
@@ -59,6 +59,7 @@ let lastActivityTimerId: ReturnType<typeof setInterval> | null = null;
 let liveOutputExpanded = false;
 let liveOutputBuffer: string[] = [];
 const MAX_OUTPUT_LINES = 200;
+let currentReasonFull: string | null = null; // Full reason text for modal display
 
 function formatElapsed(startTime: Date): string {
   const now = new Date();
@@ -281,6 +282,38 @@ function initLiveOutputPanel(): void {
   }
 }
 
+/**
+ * Initialize the reason modal click handler.
+ */
+function initReasonModal(): void {
+  const reasonEl = document.getElementById("ticket-flow-reason");
+  const modalOverlay = document.getElementById("reason-modal");
+  const modalContent = document.getElementById("reason-modal-content");
+  const closeBtn = document.getElementById("reason-modal-close");
+
+  if (!reasonEl || !modalOverlay || !modalContent) return;
+
+  let closeModal: (() => void) | null = null;
+
+  const showReasonModal = () => {
+    if (!currentReasonFull || !reasonEl.classList.contains("has-details")) return;
+    modalContent.textContent = currentReasonFull;
+    closeModal = openModal(modalOverlay, {
+      closeOnEscape: true,
+      closeOnOverlay: true,
+      returnFocusTo: reasonEl,
+    });
+  };
+
+  reasonEl.addEventListener("click", showReasonModal);
+
+  if (closeBtn) {
+    closeBtn.addEventListener("click", () => {
+      if (closeModal) closeModal();
+    });
+  }
+}
+
 function els(): {
   card: HTMLElement | null;
   status: HTMLElement | null;
@@ -499,17 +532,48 @@ function renderHandoffHistory(
   });
 }
 
-function summarizeReason(run: FlowRun | null): string {
-  if (!run) return "No ticket flow run yet.";
+const MAX_REASON_LENGTH = 60;
+
+/**
+ * Get the full reason text (summary + details) for modal display.
+ */
+function getFullReason(run: FlowRun | null): string | null {
+  if (!run) return null;
   const state = (run.state || {}) as Record<string, unknown>;
   const engine = (state.ticket_engine || {}) as Record<string, unknown>;
-  return (
+  const reason = (engine.reason as string) || (run.error_message as string) || "";
+  const details = (engine.reason_details as string) || "";
+  if (!reason && !details) return null;
+  if (details) {
+    return `${reason}\n\n${details}`.trim();
+  }
+  return reason;
+}
+
+/**
+ * Get a truncated reason summary for display in the grid.
+ * Also updates currentReasonFull for modal access.
+ */
+function summarizeReason(run: FlowRun | null): string {
+  if (!run) {
+    currentReasonFull = null;
+    return "No ticket flow run yet.";
+  }
+  const state = (run.state || {}) as Record<string, unknown>;
+  const engine = (state.ticket_engine || {}) as Record<string, unknown>;
+  const fullReason = getFullReason(run);
+  currentReasonFull = fullReason;
+  const shortReason =
     (engine.reason as string) ||
     (run.error_message as string) ||
     (engine.current_ticket ? `Working on ${engine.current_ticket}` : "") ||
     run.status ||
-    ""
-  );
+    "";
+  // Truncate if too long
+  if (shortReason.length > MAX_REASON_LENGTH) {
+    return shortReason.slice(0, MAX_REASON_LENGTH - 3) + "...";
+  }
+  return shortReason;
 }
 
 async function loadTicketFiles(): Promise<void> {
@@ -619,7 +683,17 @@ async function loadTicketFlow(): Promise<void> {
       if (elapsed) elapsed.textContent = "–";
     }
     
-    if (reason) reason.textContent = summarizeReason(latest) || "–";
+    if (reason) {
+      reason.textContent = summarizeReason(latest) || "–";
+      // Add clickable class if there are details to show
+      const state = (latest?.state || {}) as Record<string, unknown>;
+      const engine = (state.ticket_engine || {}) as Record<string, unknown>;
+      const hasDetails = Boolean(
+        engine.reason_details ||
+          (currentReasonFull && currentReasonFull.length > MAX_REASON_LENGTH)
+      );
+      reason.classList.toggle("has-details", hasDetails);
+    }
 
     if (resumeBtn) {
       resumeBtn.disabled = !latest?.id || latest.status !== "paused";
@@ -815,7 +889,10 @@ export function initTicketFlow(): void {
   if (stopBtn) stopBtn.addEventListener("click", stopTicketFlow);
   if (archiveBtn) archiveBtn.addEventListener("click", archiveTicketFlow);
   if (refreshBtn) refreshBtn.addEventListener("click", loadTicketFlow);
-  
+
+  // Initialize reason click handler for modal
+  initReasonModal();
+
   // Initialize live output panel
   initLiveOutputPanel();
 
