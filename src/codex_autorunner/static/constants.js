@@ -1,6 +1,6 @@
 export const CONSTANTS = {
     UI: {
-        TOAST_DURATION: 2200,
+        TOAST_DURATION: 5000,
         POLLING_INTERVAL: 15000,
         LOG_SCROLL_THRESHOLD: 50,
         MAX_LOG_LINES_IN_DOM: 2000,

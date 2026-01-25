@@ -3948,7 +3948,7 @@ button.terminal-text-send-icon.disconnected {
   opacity: 0;
   transition: opacity 0.15s ease, transform 0.15s ease;
   transform: translateY(8px);
-  z-index: 1000;
+  z-index: 10000;
 }
 
 .toast.show {
