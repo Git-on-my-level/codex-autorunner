@@ -878,9 +878,8 @@ def doctor_cmd(
         except RepoNotFoundError:
             repo_config = None
 
-        if repo_config is not None:
-            telegram_checks = telegram_doctor_checks(repo_config)
-            report = DoctorReport(checks=report.checks + telegram_checks)
+        telegram_checks = telegram_doctor_checks(repo_config or hub_config)
+        report = DoctorReport(checks=report.checks + telegram_checks)
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
     if json_output:
