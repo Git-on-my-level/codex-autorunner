@@ -5,6 +5,7 @@ import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor } from "./ticketEditor.js";
 let currentRunId = null;
+let ticketsExist = false;
 function els() {
     return {
         card: document.getElementById("ticket-card"),
@@ -35,13 +36,24 @@ function truncate(text, max = 220) {
     return `${text.slice(0, max).trim()}…`;
 }
 function renderTickets(data) {
-    const { tickets, dir } = els();
+    const { tickets, dir, bootstrapBtn } = els();
     if (dir)
         dir.textContent = data?.ticket_dir || "–";
     if (!tickets)
         return;
     tickets.innerHTML = "";
     const list = (data?.tickets || []);
+    ticketsExist = list.length > 0;
+    // Disable start button if no tickets exist
+    if (bootstrapBtn && !bootstrapBtn.disabled) {
+        bootstrapBtn.disabled = !ticketsExist;
+        if (!ticketsExist) {
+            bootstrapBtn.title = "Create a ticket first";
+        }
+        else {
+            bootstrapBtn.title = "";
+        }
+    }
     if (!list.length) {
         tickets.textContent = "No tickets found. Create TICKET-001.md to begin.";
         return;
@@ -254,12 +266,19 @@ async function loadTicketFlow() {
             const stoppable = latest?.status === "running" || latest?.status === "pending";
             stopBtn.disabled = !latest?.id || !stoppable;
         }
+        await loadTicketFiles();
         if (bootstrapBtn) {
             const busy = latest?.status === "running" || latest?.status === "pending";
-            bootstrapBtn.disabled = busy;
+            // Disable if busy OR if no tickets exist
+            bootstrapBtn.disabled = busy || !ticketsExist;
             bootstrapBtn.textContent = busy ? "Running…" : "Start Ticket Flow";
+            if (!ticketsExist && !busy) {
+                bootstrapBtn.title = "Create a ticket first";
+            }
+            else {
+                bootstrapBtn.title = "";
+            }
         }
-        await loadTicketFiles();
         await loadHandoffHistory(currentRunId);
     }
     catch (err) {
@@ -276,9 +295,10 @@ async function bootstrapTicketFlow() {
         flash("Repo offline; cannot start ticket flow.", "error");
         return;
     }
-    const confirmed = window.confirm("Create TICKET-001.md (if missing) and start the ticket flow?");
-    if (!confirmed)
+    if (!ticketsExist) {
+        flash("Create a ticket first before starting the flow.", "error");
         return;
+    }
     setButtonsDisabled(true);
     bootstrapBtn.textContent = "Starting…";
     try {
