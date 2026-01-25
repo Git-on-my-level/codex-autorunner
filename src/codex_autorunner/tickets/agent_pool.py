@@ -3,17 +3,20 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 from ..agents.opencode.runtime import collect_opencode_output
 from ..agents.opencode.supervisor import OpenCodeSupervisor
 from ..core.config import RepoConfig
+from ..core.flows.models import FlowEventType
 from ..core.utils import build_opencode_supervisor
 from ..integrations.app_server.client import CodexAppServerClient
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 
 _logger = logging.getLogger(__name__)
+
+EmitEventFn = Callable[[FlowEventType, dict[str, Any]], None]
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,8 @@ class AgentTurnRequest:
     conversation_id: Optional[str] = None
     # Optional, agent-specific extras.
     options: Optional[dict[str, Any]] = None
+    # Optional flow event emitter (for live streaming).
+    emit_event: Optional[EmitEventFn] = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +52,51 @@ class AgentPool:
         self._config = config
         self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
         self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
+        self._active_emitters: dict[str, EmitEventFn] = {}
+
+    @staticmethod
+    def _extract_turn_id(params: Any) -> Optional[str]:
+        if not isinstance(params, dict):
+            return None
+        for key in ("turnId", "turn_id"):
+            value = params.get(key)
+            if isinstance(value, str) and value:
+                return value
+        turn = params.get("turn")
+        if isinstance(turn, dict):
+            for key in ("turnId", "turn_id", "id"):
+                value = turn.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        item = params.get("item")
+        if isinstance(item, dict):
+            for key in ("turnId", "turn_id"):
+                value = item.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        return None
+
+    async def _handle_app_server_notification(self, message: dict[str, Any]) -> None:
+        method = message.get("method")
+        params = message.get("params")
+        turn_id = self._extract_turn_id(params)
+        if not turn_id:
+            return
+        emitter = self._active_emitters.get(turn_id)
+        if emitter is None:
+            return
+
+        if method in ("item/agentMessage/delta", "turn/streamDelta"):
+            delta = None
+            if isinstance(params, dict):
+                raw = params.get("delta") or params.get("text")
+                if isinstance(raw, str):
+                    delta = raw
+            if delta:
+                emitter(
+                    FlowEventType.AGENT_STREAM_DELTA,
+                    {"delta": delta, "turn_id": turn_id, "method": method},
+                )
 
     def _ensure_app_server_supervisor(self) -> WorkspaceAppServerSupervisor:
         if self._app_server_supervisor is not None:
@@ -77,7 +127,7 @@ class AgentPool:
             state_root=app_server_cfg.state_root,
             env_builder=_env_builder,
             logger=logging.getLogger("codex_autorunner.app_server"),
-            notification_handler=None,
+            notification_handler=self._handle_app_server_notification,
             max_handles=app_server_cfg.max_handles,
             idle_ttl_seconds=app_server_cfg.idle_ttl_seconds,
             request_timeout=app_server_cfg.request_timeout,
@@ -176,7 +226,13 @@ class AgentPool:
             len(req.prompt),
         )
         turn_handle = await client.turn_start(thread_id, req.prompt)
-        result = await turn_handle.wait()
+        if req.emit_event is not None:
+            self._active_emitters[turn_handle.turn_id] = req.emit_event
+        try:
+            result = await turn_handle.wait()
+        finally:
+            if req.emit_event is not None:
+                self._active_emitters.pop(turn_handle.turn_id, None)
         text = "\n\n".join(result.agent_messages or []).strip()
         return AgentTurnResult(
             agent_id=req.agent_id,
@@ -203,28 +259,44 @@ class AgentPool:
                 raise RuntimeError("OpenCode create_session returned no session id")
 
         prompt_response = await client.prompt_async(session_id, message=req.prompt)
+
+        turn_id = str(
+            prompt_response.get("id") if isinstance(prompt_response, dict) else ""
+        )
+
+        async def _part_handler(
+            part_type: str, part: dict[str, Any], delta: Optional[str]
+        ) -> None:
+            if req.emit_event is None:
+                return
+            if part_type == "text" and isinstance(delta, str) and delta:
+                req.emit_event(
+                    FlowEventType.AGENT_STREAM_DELTA,
+                    {"delta": delta, "turn_id": turn_id, "part_type": part_type},
+                )
+            elif part_type == "usage":
+                req.emit_event(
+                    FlowEventType.TOKEN_USAGE,
+                    {"usage": part, "turn_id": turn_id},
+                )
+
         output = await collect_opencode_output(
             client,
             session_id=session_id,
             workspace_path=directory,
+            part_handler=_part_handler if req.emit_event is not None else None,
         )
         if output.error:
             return AgentTurnResult(
                 agent_id=req.agent_id,
                 conversation_id=session_id,
-                turn_id=str(
-                    prompt_response.get("id")
-                    if isinstance(prompt_response, dict)
-                    else ""
-                ),
+                turn_id=turn_id,
                 text=output.text,
                 error=output.error,
             )
         return AgentTurnResult(
             agent_id=req.agent_id,
             conversation_id=session_id,
-            turn_id=str(
-                prompt_response.get("id") if isinstance(prompt_response, dict) else ""
-            ),
+            turn_id=turn_id,
             text=output.text,
         )

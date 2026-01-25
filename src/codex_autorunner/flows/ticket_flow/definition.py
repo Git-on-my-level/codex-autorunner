@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from ...core.flows.definition import FlowDefinition, StepOutcome
-from ...core.flows.models import FlowRunRecord
+from ...core.flows.definition import EmitEventFn, FlowDefinition, StepOutcome
+from ...core.flows.models import FlowEventType, FlowRunRecord
 from ...core.utils import find_repo_root
 from ...tickets import AgentPool, TicketRunConfig, TicketRunner
 
@@ -17,7 +17,9 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
     """
 
     async def _ticket_turn_step(
-        record: FlowRunRecord, input_data: Dict[str, Any]
+        record: FlowRunRecord,
+        input_data: Dict[str, Any],
+        emit_event: Optional[EmitEventFn],
     ) -> StepOutcome:
         # Namespace all state under `ticket_engine` to avoid collisions with other flows.
         engine_state = (
@@ -52,7 +54,9 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
             agent_pool=agent_pool,
         )
 
-        result = await runner.step(engine_state)
+        if emit_event is not None:
+            emit_event(FlowEventType.STEP_PROGRESS, {"message": "Running ticket turn"})
+        result = await runner.step(engine_state, emit_event=emit_event)
         out_state = dict(record.state or {})
         out_state["ticket_engine"] = result.state
 

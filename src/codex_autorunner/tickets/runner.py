@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+from ..core.flows.models import FlowEventType
 from ..core.git_utils import run_git
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
@@ -38,7 +39,12 @@ class TicketRunner:
         self._config = config
         self._agent_pool = agent_pool
 
-    async def step(self, state: dict[str, Any]) -> TicketResult:
+    async def step(
+        self,
+        state: dict[str, Any],
+        *,
+        emit_event: Optional[Callable[[FlowEventType, dict[str, Any]], None]] = None,
+    ) -> TicketResult:
         """Execute exactly one orchestration step.
 
         A step is either:
@@ -277,6 +283,7 @@ class TicketRunner:
             prompt=prompt,
             workspace_root=self._workspace_root,
             conversation_id=reuse_conversation_id,
+            emit_event=emit_event,
         )
 
         total_turns += 1
