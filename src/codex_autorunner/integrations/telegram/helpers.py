@@ -42,6 +42,85 @@ class ModelOption:
     default_effort: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class CodexFeatureRow:
+    key: str
+    stage: str
+    enabled: bool
+
+
+def derive_codex_features_command(app_server_command: Sequence[str]) -> list[str]:
+    """
+    Build a Codex CLI invocation for `features list` that mirrors the configured app-server command.
+
+    We strip a trailing \"app-server\" subcommand (plus keep any preceding flags/binary),
+    so custom binaries or wrapper scripts stay aligned with the running app server.
+    """
+    base = list(app_server_command or [])
+    if base and base[-1] == "app-server":
+        base = base[:-1]
+    if not base:
+        base = ["codex"]
+    return [*base, "features", "list"]
+
+
+def parse_codex_features_list(stdout: str) -> list[CodexFeatureRow]:
+    rows: list[CodexFeatureRow] = []
+    if not isinstance(stdout, str):
+        return rows
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        key, stage, enabled_raw = parts
+        key = key.strip()
+        stage = stage.strip()
+        enabled_raw = enabled_raw.strip().lower()
+        if not key or not stage:
+            continue
+        if enabled_raw in ("true", "1", "yes", "y", "on"):
+            enabled = True
+        elif enabled_raw in ("false", "0", "no", "n", "off"):
+            enabled = False
+        else:
+            continue
+        rows.append(CodexFeatureRow(key=key, stage=stage, enabled=enabled))
+    return rows
+
+
+def format_codex_features(
+    rows: Sequence[CodexFeatureRow], *, stage_filter: Optional[str]
+) -> str:
+    filtered = [
+        row
+        for row in rows
+        if stage_filter is None or row.stage.lower() == stage_filter.lower()
+    ]
+    if not filtered:
+        label = (
+            "feature flags" if stage_filter is None else f"{stage_filter} feature flags"
+        )
+        return f"No {label} found."
+    header = (
+        "Codex feature flags (all):"
+        if stage_filter is None
+        else f"Codex feature flags ({stage_filter}):"
+    )
+    lines = [header]
+    for row in sorted(filtered, key=lambda r: r.key):
+        lines.append(f"- {row.key}: {row.enabled}")
+    lines.append("")
+    lines.append("Usage:")
+    lines.append("/experimental enable <flag>")
+    lines.append("/experimental disable <flag>")
+    if stage_filter is not None:
+        lines.append("/experimental all")
+    return "\n".join(lines)
+
+
 def _extract_thread_id(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
