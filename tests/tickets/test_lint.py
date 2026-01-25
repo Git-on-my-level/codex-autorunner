@@ -20,7 +20,7 @@ def test_lint_ticket_frontmatter_requires_agent_and_done() -> None:
     assert any("agent" in e for e in errors)
 
 
-def test_lint_ticket_frontmatter_accepts_known_agents_and_pause() -> None:
+def test_lint_ticket_frontmatter_accepts_known_agents_and_user() -> None:
     fm, errors = lint_ticket_frontmatter({"agent": "codex", "done": False})
     assert errors == []
     assert fm is not None
@@ -31,10 +31,10 @@ def test_lint_ticket_frontmatter_accepts_known_agents_and_pause() -> None:
     assert fm is not None
     assert fm.agent == "opencode"
 
-    fm, errors = lint_ticket_frontmatter({"agent": "pause", "done": False})
+    fm, errors = lint_ticket_frontmatter({"agent": "user", "done": False})
     assert errors == []
     assert fm is not None
-    assert fm.agent == "pause"
+    assert fm.agent == "user"
 
     fm, errors = lint_ticket_frontmatter({"agent": "unknown", "done": False})
     assert fm is None

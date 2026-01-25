@@ -6877,13 +6877,31 @@ button.loading::after {
 /* Messages panel */
 .messages-layout {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: minmax(220px, 280px) 1fr;
   gap: 12px;
+  height: calc(100vh - 180px);
+  min-height: 400px;
+}
+
+.messages-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .messages-thread-list {
   display: grid;
   gap: 8px;
+  align-content: start;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.messages-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .messages-thread {
@@ -6920,6 +6938,9 @@ button.loading::after {
   border-radius: var(--radius);
   padding: 12px;
   background: rgba(255, 255, 255, 0.02);
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .messages-entry {
@@ -6928,6 +6949,12 @@ button.loading::after {
   padding: 8px 10px;
   background: var(--panel);
   margin-top: 10px;
+}
+
+.messages-entry-header {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--text);
 }
 
 .messages-body {
@@ -6985,10 +7012,18 @@ button.loading::after {
 }
 
 .messages-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.02);
+}
+
+.messages-meta-item .metric {
+  font-size: 16px;
+  font-weight: 600;
 }
 
 .messages-reply-box {
@@ -7023,9 +7058,21 @@ button.loading::after {
   gap: 8px;
 }
 
+.messages-reply-actions button {
+  min-width: 100px;
+}
+
 @media (max-width: 900px) {
   .messages-layout {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: unset;
+  }
+  .messages-thread-list {
+    max-height: 200px;
+  }
+  .messages-thread-detail {
+    max-height: 50vh;
   }
 }
 

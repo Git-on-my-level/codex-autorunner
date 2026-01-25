@@ -177,8 +177,8 @@ class TicketRunner:
                     current_ticket=safe_relpath(current_path, self._workspace_root),
                 )
 
-            # Validate agent id unless it is the special pause sentinel.
-            if agent_id != "pause":
+            # Validate agent id unless it is the special user sentinel.
+            if agent_id != "user":
                 try:
                     from ..agents.registry import validate_agent_id
 
@@ -218,8 +218,8 @@ class TicketRunner:
                     current_ticket=safe_relpath(current_path, self._workspace_root),
                 )
 
-        # Built-in manual pause ticket.
-        if ticket_doc.frontmatter.agent == "pause":
+        # Built-in manual user ticket.
+        if ticket_doc.frontmatter.agent == "user":
             if ticket_doc.frontmatter.done:
                 # Nothing to do, will advance next step.
                 return TicketResult(status="continue", state=state)

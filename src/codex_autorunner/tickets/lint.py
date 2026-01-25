@@ -19,7 +19,7 @@ def lint_ticket_frontmatter(
     """Validate and normalize ticket frontmatter.
 
     Required keys:
-    - agent: string (or the special value "pause")
+    - agent: string (or the special value "user")
     - done: bool
     """
 
@@ -35,7 +35,7 @@ def lint_ticket_frontmatter(
         errors.append("frontmatter.agent is required (e.g. 'codex' or 'opencode').")
     else:
         # Special built-in ticket handler.
-        if agent != "pause":
+        if agent != "user":
             try:
                 validate_agent_id(agent)
             except ValueError as exc:

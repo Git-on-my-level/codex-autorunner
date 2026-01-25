@@ -294,11 +294,11 @@ function renderHandoff(entry: { seq: number; message?: AgentMessage | null; file
   const body = msg?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(msg.body)}</div>` : "";
   const ts = entry.created_at ? `<span class="muted small">${escapeHtml(formatTimestamp(entry.created_at))}</span>` : "";
   return `
-    <details class="messages-entry" open>
-      <summary>#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)}${mode} ${ts}</summary>
+    <div class="messages-entry">
+      <div class="messages-entry-header">#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)}${mode} ${ts}</div>
       ${body}
       ${renderFiles(entry.files)}
-    </details>
+    </div>
   `;
 }
 
@@ -308,11 +308,11 @@ function renderReply(entry: { seq: number; reply?: ReplyMessage | null; files?: 
   const body = rep?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(rep.body)}</div>` : "";
   const ts = entry.created_at ? `<span class="muted small">${escapeHtml(formatTimestamp(entry.created_at))}</span>` : "";
   return `
-    <details class="messages-entry" open>
-      <summary>#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)} <span class="pill pill-small pill-idle">you</span> ${ts}</summary>
+    <div class="messages-entry">
+      <div class="messages-entry-header">#${entry.seq.toString().padStart(4, "0")} ${escapeHtml(title)} <span class="pill pill-small pill-idle">you</span> ${ts}</div>
       ${body}
       ${renderFiles(entry.files)}
-    </details>
+    </div>
   `;
 }
 
@@ -372,11 +372,11 @@ async function loadThread(runId: string): Promise<void> {
     </div>
   `;
 
-  if (resumeEl) {
-    resumeEl.disabled = !isPaused;
+  // Only show reply box for paused runs - replies to other states won't be seen
+  const replyBoxEl = document.querySelector(".messages-reply-box") as HTMLElement | null;
+  if (replyBoxEl) {
+    replyBoxEl.classList.toggle("hidden", !isPaused);
   }
-  if (replySendEl) replySendEl.disabled = !isPaused;
-  if (replySendResumeEl) replySendResumeEl.disabled = !isPaused;
 }
 
 async function sendReply({ resume }: { resume: boolean }): Promise<void> {
