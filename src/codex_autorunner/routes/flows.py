@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import shutil
 import subprocess
 import uuid
 from dataclasses import asdict
@@ -615,6 +616,45 @@ You are the first ticket in a new ticket_flow run.
         _start_flow_worker(repo_root, run_id)
 
         return FlowStatusResponse.from_record(updated)
+
+    @router.post("/{run_id}/archive")
+    async def archive_flow(run_id: uuid.UUID, delete_run: bool = True):
+        """Archive a completed flow by moving tickets to the run's artifact directory."""
+        run_id = _normalize_run_id(run_id)
+        repo_root = find_repo_root()
+        record = _get_flow_record(repo_root, run_id)
+
+        # Only allow archiving terminal flows
+        if not FlowRunStatus(record.status).is_terminal():
+            raise HTTPException(
+                status_code=400,
+                detail="Can only archive completed/stopped/failed flows",
+            )
+
+        # Move tickets to run artifacts directory
+        _, artifacts_root = _flow_paths(repo_root)
+        archive_dir = artifacts_root / run_id / "archived_tickets"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        archived_count = 0
+        for ticket_path in list_ticket_paths(ticket_dir):
+            dest = archive_dir / ticket_path.name
+            shutil.move(str(ticket_path), str(dest))
+            archived_count += 1
+
+        # Delete run record if requested
+        if delete_run:
+            store = _require_flow_store(repo_root)
+            if store:
+                store.delete_flow_run(run_id)
+                store.close()
+
+        return {
+            "status": "archived",
+            "run_id": run_id,
+            "tickets_archived": archived_count,
+        }
 
     @router.get("/{run_id}/status", response_model=FlowStatusResponse)
     async def get_flow_status(run_id: uuid.UUID):

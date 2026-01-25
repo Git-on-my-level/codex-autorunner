@@ -299,6 +299,7 @@ function els(): {
   resumeBtn: HTMLButtonElement | null;
   refreshBtn: HTMLButtonElement | null;
   stopBtn: HTMLButtonElement | null;
+  archiveBtn: HTMLButtonElement | null;
 } {
   return {
     card: document.getElementById("ticket-card"),
@@ -318,12 +319,13 @@ function els(): {
     resumeBtn: document.getElementById("ticket-flow-resume") as HTMLButtonElement | null,
     refreshBtn: document.getElementById("ticket-flow-refresh") as HTMLButtonElement | null,
     stopBtn: document.getElementById("ticket-flow-stop") as HTMLButtonElement | null,
+    archiveBtn: document.getElementById("ticket-flow-archive") as HTMLButtonElement | null,
   };
 }
 
 function setButtonsDisabled(disabled: boolean): void {
-  const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn } = els();
-  [bootstrapBtn, resumeBtn, refreshBtn, stopBtn].forEach((btn) => {
+  const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn, archiveBtn } = els();
+  [bootstrapBtn, resumeBtn, refreshBtn, stopBtn, archiveBtn].forEach((btn) => {
     if (btn) btn.disabled = disabled;
   });
 }
@@ -563,7 +565,7 @@ async function loadHandoffHistory(runId: string | null): Promise<void> {
 }
 
 async function loadTicketFlow(): Promise<void> {
-  const { status, run, current, turn, elapsed, progress, reason, lastActivity, resumeBtn, bootstrapBtn, stopBtn } = els();
+  const { status, run, current, turn, elapsed, progress, reason, lastActivity, resumeBtn, bootstrapBtn, stopBtn, archiveBtn } = els();
   if (!isRepoHealthy()) {
     if (status) statusPill(status, "error");
     if (run) run.textContent = "–";
@@ -667,6 +669,17 @@ async function loadTicketFlow(): Promise<void> {
         bootstrapBtn.title = "";
       }
     }
+    
+    // Show archive button when flow is in terminal state and has tickets
+    if (archiveBtn) {
+      const isTerminal =
+        latest?.status === "completed" ||
+        latest?.status === "stopped" ||
+        latest?.status === "failed";
+      const canArchive = isTerminal && ticketsExist && Boolean(currentRunId);
+      archiveBtn.style.display = canArchive ? "" : "none";
+      archiveBtn.disabled = !canArchive;
+    }
     await loadHandoffHistory(currentRunId);
   } catch (err) {
     if (reason) reason.textContent = (err as Error).message || "Ticket flow unavailable";
@@ -758,14 +771,49 @@ async function stopTicketFlow(): Promise<void> {
   }
 }
 
+async function archiveTicketFlow(): Promise<void> {
+  const { archiveBtn } = els();
+  if (!archiveBtn) return;
+  if (!isRepoHealthy()) {
+    flash("Repo offline; cannot archive ticket flow.", "error");
+    return;
+  }
+  if (!currentRunId) {
+    flash("No ticket flow run to archive", "info");
+    return;
+  }
+  if (!confirm("Archive all tickets from this flow? They will be moved to the run's artifact directory.")) {
+    return;
+  }
+  setButtonsDisabled(true);
+  archiveBtn.textContent = "Archiving…";
+  try {
+    const res = (await api(`/api/flows/${currentRunId}/archive`, {
+      method: "POST",
+      body: {},
+    })) as { status?: string; tickets_archived?: number };
+    const count = res?.tickets_archived ?? 0;
+    flash(`Archived ${count} ticket${count !== 1 ? "s" : ""}`);
+    clearLiveOutput();
+    currentRunId = null;
+    await loadTicketFlow();
+  } catch (err) {
+    flash((err as Error).message || "Failed to archive ticket flow", "error");
+  } finally {
+    archiveBtn.textContent = "Archive Flow";
+    setButtonsDisabled(false);
+  }
+}
+
 export function initTicketFlow(): void {
-  const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn } = els();
+  const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, archiveBtn } = els();
   if (!card || card.dataset.ticketInitialized === "1") return;
   card.dataset.ticketInitialized = "1";
 
   if (bootstrapBtn) bootstrapBtn.addEventListener("click", bootstrapTicketFlow);
   if (resumeBtn) resumeBtn.addEventListener("click", resumeTicketFlow);
   if (stopBtn) stopBtn.addEventListener("click", stopTicketFlow);
+  if (archiveBtn) archiveBtn.addEventListener("click", archiveTicketFlow);
   if (refreshBtn) refreshBtn.addEventListener("click", loadTicketFlow);
   
   // Initialize live output panel

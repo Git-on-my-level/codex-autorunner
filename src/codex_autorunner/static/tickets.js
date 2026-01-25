@@ -230,11 +230,12 @@ function els() {
         resumeBtn: document.getElementById("ticket-flow-resume"),
         refreshBtn: document.getElementById("ticket-flow-refresh"),
         stopBtn: document.getElementById("ticket-flow-stop"),
+        archiveBtn: document.getElementById("ticket-flow-archive"),
     };
 }
 function setButtonsDisabled(disabled) {
-    const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn } = els();
-    [bootstrapBtn, resumeBtn, refreshBtn, stopBtn].forEach((btn) => {
+    const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn, archiveBtn } = els();
+    [bootstrapBtn, resumeBtn, refreshBtn, stopBtn, archiveBtn].forEach((btn) => {
         if (btn)
             btn.disabled = disabled;
     });
@@ -451,7 +452,7 @@ async function loadHandoffHistory(runId) {
     }
 }
 async function loadTicketFlow() {
-    const { status, run, current, turn, elapsed, progress, reason, lastActivity, resumeBtn, bootstrapBtn, stopBtn } = els();
+    const { status, run, current, turn, elapsed, progress, reason, lastActivity, resumeBtn, bootstrapBtn, stopBtn, archiveBtn } = els();
     if (!isRepoHealthy()) {
         if (status)
             statusPill(status, "error");
@@ -561,6 +562,15 @@ async function loadTicketFlow() {
                 bootstrapBtn.title = "";
             }
         }
+        // Show archive button when flow is in terminal state and has tickets
+        if (archiveBtn) {
+            const isTerminal = latest?.status === "completed" ||
+                latest?.status === "stopped" ||
+                latest?.status === "failed";
+            const canArchive = isTerminal && ticketsExist && Boolean(currentRunId);
+            archiveBtn.style.display = canArchive ? "" : "none";
+            archiveBtn.disabled = !canArchive;
+        }
         await loadHandoffHistory(currentRunId);
     }
     catch (err) {
@@ -660,8 +670,44 @@ async function stopTicketFlow() {
         setButtonsDisabled(false);
     }
 }
+async function archiveTicketFlow() {
+    const { archiveBtn } = els();
+    if (!archiveBtn)
+        return;
+    if (!isRepoHealthy()) {
+        flash("Repo offline; cannot archive ticket flow.", "error");
+        return;
+    }
+    if (!currentRunId) {
+        flash("No ticket flow run to archive", "info");
+        return;
+    }
+    if (!confirm("Archive all tickets from this flow? They will be moved to the run's artifact directory.")) {
+        return;
+    }
+    setButtonsDisabled(true);
+    archiveBtn.textContent = "Archiving…";
+    try {
+        const res = (await api(`/api/flows/${currentRunId}/archive`, {
+            method: "POST",
+            body: {},
+        }));
+        const count = res?.tickets_archived ?? 0;
+        flash(`Archived ${count} ticket${count !== 1 ? "s" : ""}`);
+        clearLiveOutput();
+        currentRunId = null;
+        await loadTicketFlow();
+    }
+    catch (err) {
+        flash(err.message || "Failed to archive ticket flow", "error");
+    }
+    finally {
+        archiveBtn.textContent = "Archive Flow";
+        setButtonsDisabled(false);
+    }
+}
 export function initTicketFlow() {
-    const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn } = els();
+    const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, archiveBtn } = els();
     if (!card || card.dataset.ticketInitialized === "1")
         return;
     card.dataset.ticketInitialized = "1";
@@ -671,6 +717,8 @@ export function initTicketFlow() {
         resumeBtn.addEventListener("click", resumeTicketFlow);
     if (stopBtn)
         stopBtn.addEventListener("click", stopTicketFlow);
+    if (archiveBtn)
+        archiveBtn.addEventListener("click", archiveTicketFlow);
     if (refreshBtn)
         refreshBtn.addEventListener("click", loadTicketFlow);
     // Initialize live output panel
