@@ -146,7 +146,7 @@ class AgentPool:
     async def _run_codex_turn(self, req: AgentTurnRequest) -> AgentTurnResult:
         supervisor = self._ensure_app_server_supervisor()
         handle = await supervisor.get_client(req.workspace_root)
-        client: CodexAppServerClient = handle.client
+        client: CodexAppServerClient = handle
 
         approval_mode = (
             cast(dict[str, Any], getattr(self._config, "ticket_flow", {})).get(
@@ -170,7 +170,12 @@ class AgentPool:
             if not thread_id:
                 raise RuntimeError("Codex thread_start returned no thread id")
 
-        turn_handle = await client.turn_start(thread_id, message=req.prompt)
+        _logger.info(
+            "Starting turn for thread %s with prompt length %d",
+            thread_id,
+            len(req.prompt),
+        )
+        turn_handle = await client.turn_start(thread_id, req.prompt)
         result = await turn_handle.wait()
         text = "\n\n".join(result.agent_messages or []).strip()
         return AgentTurnResult(
@@ -178,18 +183,16 @@ class AgentPool:
             conversation_id=thread_id,
             turn_id=result.turn_id,
             text=text,
-            error=result.error,
+            error=result.errors[0] if result.errors else None,
             raw={
                 "status": result.status,
-                "duration_seconds": result.duration_seconds,
-                "usage": result.token_usage,
             },
         )
 
     async def _run_opencode_turn(self, req: AgentTurnRequest) -> AgentTurnResult:
         supervisor = self._ensure_opencode_supervisor()
         handle = await supervisor.get_client(req.workspace_root)
-        client = handle.client
+        client = handle
         directory = str(req.workspace_root)
 
         session_id = req.conversation_id
@@ -199,16 +202,11 @@ class AgentPool:
             if not session_id:
                 raise RuntimeError("OpenCode create_session returned no session id")
 
-        prompt_response = await client.prompt_async(
-            session_id, req.prompt, directory=directory
-        )
+        prompt_response = await client.prompt_async(session_id, message=req.prompt)
         output = await collect_opencode_output(
             client,
-            session_id,
-            prompt_response,
-            directory=directory,
-            logger=_logger,
-            event_prefix="tickets",
+            session_id=session_id,
+            workspace_path=directory,
         )
         if output.error:
             return AgentTurnResult(
