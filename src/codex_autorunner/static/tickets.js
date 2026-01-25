@@ -1,9 +1,9 @@
-import { api, flash, resolvePath, statusPill } from "./utils.js";
+import { api, flash, getUrlParams, resolvePath, statusPill } from "./utils.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
-import { initTicketEditor, openTicketEditor } from "./ticketEditor.js";
+import { closeTicketEditor, initTicketEditor, openTicketEditor } from "./ticketEditor.js";
 let currentRunId = null;
 function els() {
     return {
@@ -183,6 +183,24 @@ async function loadTicketFiles() {
     catch (err) {
         renderTickets(null);
         flash(err.message || "Failed to load tickets", "error");
+    }
+}
+/**
+ * Open a ticket by its index
+ */
+async function openTicketByIndex(index) {
+    try {
+        const data = (await api("/api/flows/ticket_flow/tickets"));
+        const ticket = data.tickets?.find((t) => t.index === index);
+        if (ticket) {
+            openTicketEditor(ticket);
+        }
+        else {
+            flash(`Ticket TICKET-${String(index).padStart(3, "0")} not found`, "error");
+        }
+    }
+    catch (err) {
+        flash(`Failed to open ticket: ${err.message}`, "error");
     }
 }
 async function loadHandoffHistory(runId) {
@@ -373,4 +391,21 @@ export function initTicketFlow() {
     subscribe("tickets:updated", () => {
         void loadTicketFiles();
     });
+    // Handle browser navigation (back/forward)
+    window.addEventListener("popstate", () => {
+        const params = getUrlParams();
+        const ticketIndex = params.get("ticket");
+        if (ticketIndex) {
+            void openTicketByIndex(parseInt(ticketIndex, 10));
+        }
+        else {
+            closeTicketEditor();
+        }
+    });
+    // Check URL for ticket param on initial load
+    const params = getUrlParams();
+    const ticketIndex = params.get("ticket");
+    if (ticketIndex) {
+        void openTicketByIndex(parseInt(ticketIndex, 10));
+    }
 }

@@ -1,7 +1,7 @@
 /**
  * Ticket Editor Modal - handles creating, editing, and deleting tickets
  */
-import { api, flash } from "./utils.js";
+import { api, flash, updateUrlParams } from "./utils.js";
 import { publish } from "./bus.js";
 import { clearTicketChatHistory } from "./ticketChatStorage.js";
 import {
@@ -490,6 +490,11 @@ export function openTicketEditor(ticket?: TicketData): void {
   state.isOpen = true;
   modal.classList.remove("hidden");
   
+  // Update URL with ticket index
+  if (ticket?.index != null) {
+    updateUrlParams({ ticket: ticket.index });
+  }
+
   // Focus on title field for new tickets, body for existing
   if (state.mode === "create" && fmTitle) {
     fmTitle.focus();
@@ -530,6 +535,9 @@ export function closeTicketEditor(): void {
   state.undoStack = [];
   modal.classList.add("hidden");
   hideError();
+
+  // Clear ticket from URL
+  updateUrlParams({ ticket: null });
   
   // Reset chat state
   resetTicketChatState();
