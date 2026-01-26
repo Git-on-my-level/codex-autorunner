@@ -1074,6 +1074,7 @@ async function archiveTicketFlow(): Promise<void> {
     disconnectEventStream();
     stopElapsedTimer();
     stopLastActivityTimer();
+    lastActivityTime = null;
 
     // Update button states for no active run
     if (bootstrapBtn) {

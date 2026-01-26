@@ -960,6 +960,7 @@ async function archiveTicketFlow() {
         disconnectEventStream();
         stopElapsedTimer();
         stopLastActivityTimer();
+        lastActivityTime = null;
         // Update button states for no active run
         if (bootstrapBtn) {
             bootstrapBtn.disabled = false;
