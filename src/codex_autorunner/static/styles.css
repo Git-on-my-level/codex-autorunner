@@ -2194,6 +2194,130 @@ button.icon-btn {
   cursor: default;
 }
 
+/* Workspace layout */
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.workspace-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.workspace-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+#workspace-status.dirty {
+  color: var(--warning);
+}
+
+#workspace-status.error {
+  color: var(--error);
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 12px;
+}
+
+.workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-file-browser {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 100%;
+}
+
+.workspace-file-mobile {
+  display: none;
+}
+
+.workspace-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  max-height: calc(100vh - 220px);
+}
+
+.workspace-file-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 2px 4px;
+}
+
+.workspace-file-row {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: var(--bg);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.1s ease, background 0.1s ease;
+}
+
+.workspace-file-row:hover {
+  border-color: var(--border);
+}
+
+.workspace-file-row.pinned {
+  font-weight: 600;
+}
+
+.workspace-file-row.active {
+  border-color: var(--accent);
+  background: rgba(108, 245, 216, 0.08);
+}
+
+.workspace-file-divider {
+  border-top: 1px dashed var(--border);
+  margin: 4px 0;
+}
+
+@media (max-width: 720px) {
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-file-mobile {
+    display: block;
+  }
+
+  .workspace-file-list {
+    display: none;
+  }
+}
+
 /* Removed .snapshot-editor - snapshot now uses shared doc editor */
 
 .doc-patch-main {

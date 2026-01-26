@@ -8,6 +8,12 @@ export async function writeWorkspace(kind, content) {
         body: { content },
     }));
 }
+export async function listWorkspaceFiles() {
+    const res = (await api("/api/workspace/files"));
+    if (Array.isArray(res))
+        return res;
+    return res.files ?? [];
+}
 export async function ingestSpecToTickets() {
     return (await api("/api/workspace/spec/ingest", { method: "POST" }));
 }

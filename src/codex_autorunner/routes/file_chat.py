@@ -3,7 +3,7 @@ Unified file chat routes: AI-powered editing for tickets and workspace docs.
 
 Targets:
 - ticket:{index} -> .codex-autorunner/tickets/TICKET-###.md
-- workspace:{active_context|decisions|spec} -> .codex-autorunner/workspace/{kind}.md
+- workspace:{path} -> .codex-autorunner/workspace/{path}
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from ..agents.registry import validate_agent_id
 from ..core.app_server_events import format_sse
 from ..core.state import now_iso
 from ..core.utils import atomic_write, find_repo_root
-from ..workspace.paths import WORKSPACE_DOC_KINDS, workspace_doc_path
+from ..workspace.paths import WORKSPACE_DOC_KINDS, workspace_dir, workspace_doc_path
 from .shared import SSE_HEADERS
 
 FILE_CHAT_STATE_NAME = "file_chat_state.json"
@@ -101,22 +101,38 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
         )
 
     if target.lower().startswith("workspace:"):
-        suffix = target.split(":", 1)[1].strip().lower()
-        if suffix not in WORKSPACE_DOC_KINDS:
+        suffix_raw = target.split(":", 1)[1].strip()
+        if not suffix_raw:
             raise HTTPException(status_code=400, detail="invalid workspace target")
-        path = workspace_doc_path(repo_root, suffix)
+
+        # Allow legacy kind-only targets (active_context/decisions/spec)
+        if suffix_raw.lower() in WORKSPACE_DOC_KINDS:
+            path = workspace_doc_path(repo_root, suffix_raw)
+            rel_suffix = f"{suffix_raw}.md"
+        else:
+            # Treat suffix as a path relative to the workspace directory
+            base = workspace_dir(repo_root).resolve()
+            candidate = (base / suffix_raw).resolve()
+            if not candidate.is_relative_to(base):
+                raise HTTPException(status_code=400, detail="invalid workspace target")
+            path = candidate
+            try:
+                rel_suffix = str(candidate.relative_to(base))
+            except Exception:
+                rel_suffix = candidate.name
+
         rel = (
             str(path.relative_to(repo_root))
             if path.is_relative_to(repo_root)
             else str(path)
         )
         return _Target(
-            target=f"workspace:{suffix}",
+            target=f"workspace:{rel_suffix}",
             kind="workspace",
-            id=suffix,
+            id=rel_suffix,
             path=path,
             rel_path=rel,
-            state_key=f"workspace_{suffix}",
+            state_key=f"workspace_{rel_suffix.replace('/', '_')}",
         )
 
     raise HTTPException(status_code=400, detail="invalid target")

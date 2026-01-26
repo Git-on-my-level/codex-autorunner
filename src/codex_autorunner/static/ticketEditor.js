@@ -8,6 +8,7 @@ import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, dis
 import { initAgentControls } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
 import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
+import { DocEditor } from "./docEditor.js";
 const DEFAULT_FRONTMATTER = {
     agent: "codex",
     done: false,
@@ -24,8 +25,8 @@ const state = {
     lastSavedFrontmatter: { ...DEFAULT_FRONTMATTER },
 };
 // Autosave debounce timer
-let autosaveTimer = null;
 const AUTOSAVE_DELAY_MS = 1000;
+let ticketDocEditor = null;
 function els() {
     return {
         modal: document.getElementById("ticket-editor-modal"),
@@ -249,12 +250,8 @@ function hasUnsavedChanges() {
  * Schedule autosave with debounce
  */
 function scheduleAutosave() {
-    if (autosaveTimer) {
-        clearTimeout(autosaveTimer);
-    }
-    autosaveTimer = setTimeout(() => {
-        void performAutosave();
-    }, AUTOSAVE_DELAY_MS);
+    // DocEditor handles debounced autosave; leave for compatibility
+    void ticketDocEditor?.save();
 }
 /**
  * Perform autosave (silent save without closing modal)
@@ -325,6 +322,10 @@ function onContentChange() {
     pushUndoState();
     scheduleAutosave();
 }
+function onFrontmatterChange() {
+    pushUndoState();
+    void ticketDocEditor?.save(true);
+}
 /**
  * Open the ticket editor modal
  * @param ticket - If provided, opens in edit mode; otherwise creates new ticket
@@ -390,6 +391,19 @@ export function openTicketEditor(ticket) {
     // Initialize undo stack with current state
     state.undoStack = [{ body: content.value, frontmatter: getFrontmatterFromForm() }];
     updateUndoButton();
+    if (ticketDocEditor) {
+        ticketDocEditor.destroy();
+    }
+    ticketDocEditor = new DocEditor({
+        target: state.ticketIndex != null ? `ticket:${state.ticketIndex}` : "ticket:new",
+        textarea: content,
+        statusEl: els().autosaveStatus,
+        autoSaveDelay: AUTOSAVE_DELAY_MS,
+        onLoad: async () => content.value,
+        onSave: async () => {
+            await performAutosave();
+        },
+    });
     // Clear chat input
     if (chatInput)
         chatInput.value = "";
@@ -417,11 +431,6 @@ export function closeTicketEditor() {
     const { modal } = els();
     if (!modal)
         return;
-    // Cancel any pending autosave timer
-    if (autosaveTimer) {
-        clearTimeout(autosaveTimer);
-        autosaveTimer = null;
-    }
     // Autosave on close if there are changes
     if (hasUnsavedChanges()) {
         void performAutosave();
@@ -439,6 +448,8 @@ export function closeTicketEditor() {
     state.undoStack = [];
     modal.classList.add("hidden");
     hideError();
+    ticketDocEditor?.destroy();
+    ticketDocEditor = null;
     // Clear ticket from URL
     updateUrlParams({ ticket: null });
     // Reset chat state
@@ -525,11 +536,11 @@ export function initTicketEditor() {
     }
     // Autosave on frontmatter changes
     if (fmAgent)
-        fmAgent.addEventListener("change", onContentChange);
+        fmAgent.addEventListener("change", onFrontmatterChange);
     if (fmDone)
-        fmDone.addEventListener("change", onContentChange);
+        fmDone.addEventListener("change", onFrontmatterChange);
     if (fmTitle)
-        fmTitle.addEventListener("input", onContentChange);
+        fmTitle.addEventListener("input", onFrontmatterChange);
     // Chat button handlers
     if (chatSendBtn)
         chatSendBtn.addEventListener("click", () => void sendTicketChat());
@@ -563,13 +574,6 @@ export function initTicketEditor() {
     document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && state.isOpen) {
             closeTicketEditor();
-        }
-    });
-    // Cmd/Ctrl+S triggers immediate save
-    document.addEventListener("keydown", (e) => {
-        if (state.isOpen && (e.metaKey || e.ctrlKey) && e.key === "s") {
-            e.preventDefault();
-            void performAutosave();
         }
     });
     // Cmd/Ctrl+Z triggers undo

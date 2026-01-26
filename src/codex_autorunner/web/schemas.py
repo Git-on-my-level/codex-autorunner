@@ -27,6 +27,17 @@ class WorkspaceResponse(ResponseModel):
     spec: str
 
 
+class WorkspaceFileItem(ResponseModel):
+    name: str
+    path: str
+    is_pinned: bool = False
+    modified_at: Optional[str] = None
+
+
+class WorkspaceFileListResponse(ResponseModel):
+    files: List[WorkspaceFileItem]
+
+
 class SpecIngestTicketsResponse(ResponseModel):
     status: str
     created: int

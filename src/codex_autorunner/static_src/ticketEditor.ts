@@ -18,6 +18,7 @@ import {
 import { initAgentControls } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
 import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
+import { DocEditor } from "./docEditor.js";
 
 type TicketData = {
   path?: string;
@@ -63,8 +64,8 @@ const state: EditorState = {
 };
 
 // Autosave debounce timer
-let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 const AUTOSAVE_DELAY_MS = 1000;
+let ticketDocEditor: DocEditor | null = null;
 
 function els(): {
   modal: HTMLElement | null;
@@ -336,13 +337,8 @@ function hasUnsavedChanges(): boolean {
  * Schedule autosave with debounce
  */
 function scheduleAutosave(): void {
-  if (autosaveTimer) {
-    clearTimeout(autosaveTimer);
-  }
-  
-  autosaveTimer = setTimeout(() => {
-    void performAutosave();
-  }, AUTOSAVE_DELAY_MS);
+  // DocEditor handles debounced autosave; leave for compatibility
+  void ticketDocEditor?.save();
 }
 
 /**
@@ -422,6 +418,11 @@ function onContentChange(): void {
   scheduleAutosave();
 }
 
+function onFrontmatterChange(): void {
+  pushUndoState();
+  void ticketDocEditor?.save(true);
+}
+
 /**
  * Open the ticket editor modal
  * @param ticket - If provided, opens in edit mode; otherwise creates new ticket
@@ -495,6 +496,20 @@ export function openTicketEditor(ticket?: TicketData): void {
   state.undoStack = [{ body: content.value, frontmatter: getFrontmatterFromForm() }];
   updateUndoButton();
 
+  if (ticketDocEditor) {
+    ticketDocEditor.destroy();
+  }
+  ticketDocEditor = new DocEditor({
+    target: state.ticketIndex != null ? `ticket:${state.ticketIndex}` : "ticket:new",
+    textarea: content,
+    statusEl: els().autosaveStatus,
+    autoSaveDelay: AUTOSAVE_DELAY_MS,
+    onLoad: async () => content.value,
+    onSave: async () => {
+      await performAutosave();
+    },
+  });
+
   // Clear chat input
   if (chatInput) chatInput.value = "";
   renderTicketChat();
@@ -524,12 +539,6 @@ export function closeTicketEditor(): void {
   const { modal } = els();
   if (!modal) return;
 
-  // Cancel any pending autosave timer
-  if (autosaveTimer) {
-    clearTimeout(autosaveTimer);
-    autosaveTimer = null;
-  }
-
   // Autosave on close if there are changes
   if (hasUnsavedChanges()) {
     void performAutosave();
@@ -549,6 +558,8 @@ export function closeTicketEditor(): void {
   state.undoStack = [];
   modal.classList.add("hidden");
   hideError();
+  ticketDocEditor?.destroy();
+  ticketDocEditor = null;
 
   // Clear ticket from URL
   updateUrlParams({ ticket: null });
@@ -663,9 +674,9 @@ export function initTicketEditor(): void {
   }
   
   // Autosave on frontmatter changes
-  if (fmAgent) fmAgent.addEventListener("change", onContentChange);
-  if (fmDone) fmDone.addEventListener("change", onContentChange);
-  if (fmTitle) fmTitle.addEventListener("input", onContentChange);
+  if (fmAgent) fmAgent.addEventListener("change", onFrontmatterChange);
+  if (fmDone) fmDone.addEventListener("change", onFrontmatterChange);
+  if (fmTitle) fmTitle.addEventListener("input", onFrontmatterChange);
 
   // Chat button handlers
   if (chatSendBtn) chatSendBtn.addEventListener("click", () => void sendTicketChat());
@@ -703,14 +714,6 @@ export function initTicketEditor(): void {
     }
   });
 
-  // Cmd/Ctrl+S triggers immediate save
-  document.addEventListener("keydown", (e) => {
-    if (state.isOpen && (e.metaKey || e.ctrlKey) && e.key === "s") {
-      e.preventDefault();
-      void performAutosave();
-    }
-  });
-  
   // Cmd/Ctrl+Z triggers undo
   document.addEventListener("keydown", (e) => {
     if (state.isOpen && (e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {

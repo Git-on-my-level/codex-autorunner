@@ -279,83 +279,91 @@
         </div>
       </section>
       <section class="panel" id="workspace">
-        <div class="doc-nav">
-          <button class="chip active" data-workspace="active_context">Active context</button>
-          <button class="chip" data-workspace="decisions">Decisions</button>
-          <button class="chip" data-workspace="spec">Spec</button>
-          <span class="muted" id="workspace-status"></span>
-          <button class="ghost sm hidden" id="workspace-generate-tickets" title="Generate tickets from spec">Generate
-            tickets</button>
+        <div class="workspace-header">
+          <div class="workspace-header-left">
+            <h3 class="workspace-title">Workspace</h3>
+            <span class="muted small" id="workspace-status"></span>
+          </div>
+          <div class="workspace-header-actions">
+            <button class="ghost sm hidden" id="workspace-generate-tickets" title="Generate tickets from spec">Generate
+              tickets</button>
+            <button class="ghost sm" id="workspace-reload">Reload</button>
+            <button class="primary sm" id="workspace-save">Save</button>
+          </div>
         </div>
-        <div class="doc-editor">
-          <div class="doc-patch-main hidden" id="workspace-patch-main">
-            <div class="doc-patch-header">
-              <div class="doc-patch-info">
-                <div class="muted small">Pending draft</div>
-                <div class="doc-patch-summary" id="workspace-patch-summary"></div>
-                <div class="doc-patch-meta" id="workspace-patch-meta"></div>
-                <div class="doc-patch-legend">
-                  <span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
-                  <span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
-                </div>
-              </div>
-              <div class="doc-patch-actions">
-                <button class="primary sm" id="workspace-patch-apply">Apply</button>
-                <button class="ghost sm" id="workspace-patch-reload">Reload</button>
-                <button class="danger sm" id="workspace-patch-discard">Discard</button>
-              </div>
+        <div class="workspace-grid">
+          <aside class="workspace-file-browser">
+            <div class="workspace-file-mobile">
+              <select id="workspace-file-select"></select>
             </div>
-            <div class="doc-patch-body" id="workspace-patch-body">(no draft)</div>
-          </div>
-          <textarea id="workspace-content" spellcheck="false"></textarea>
-          <div class="doc-actions" id="workspace-actions">
-            <button class="primary" id="workspace-save">Save</button>
-            <button class="ghost" id="workspace-reload">Reload</button>
-          </div>
-          <div class="doc-chat-panel compose-panel">
-            <div class="doc-chat-compose">
-              <div class="doc-agent-controls">
-                <select id="workspace-chat-agent-select" title="Agent"></select>
-                <select id="workspace-chat-model-select" title="Model"></select>
-                <select id="workspace-chat-reasoning-select" title="Reasoning"></select>
-              </div>
-              <div class="doc-chat-input-row compose-row">
-                <textarea enterkeyhint="enter" id="workspace-chat-input"
-                  placeholder="Ask AI to edit this workspace doc..." rows="1" spellcheck="false"></textarea>
-                <div class="doc-chat-input-buttons compose-buttons">
-                  <button class="primary sm" id="workspace-chat-send" title="Send">↑</button>
-                </div>
-              </div>
-              <div class="doc-chat-meta">
-                <div class="doc-chat-meta-left">
-                  <span class="muted small" id="workspace-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for
-                    newline</span>
-                </div>
-                <div class="doc-chat-meta-right">
-                  <button class="ghost sm hidden doc-chat-cancel-inline" id="workspace-chat-cancel"
-                    title="Cancel">✕</button>
-                  <button class="ghost sm" id="workspace-chat-new-thread" title="Start a new chat thread">New
-                    thread</button>
-                  <span class="pill pill-idle" id="workspace-chat-status">idle</span>
-                </div>
-              </div>
-            </div>
-            <div class="doc-chat-stream" id="workspace-chat-stream">
-              <div class="doc-chat-error hidden" id="workspace-chat-error"></div>
-              <div class="doc-chat-events hidden" id="workspace-chat-events">
-                <div class="doc-chat-section-header">
-                  <div class="doc-chat-section-title">
-                    Agent updates
-                    <span class="doc-chat-count" id="workspace-chat-events-count">0</span>
+            <div class="workspace-file-list" id="workspace-file-list"></div>
+          </aside>
+          <div class="workspace-main">
+            <div class="doc-patch-main hidden" id="workspace-patch-main">
+              <div class="doc-patch-header">
+                <div class="doc-patch-info">
+                  <div class="muted small">Pending draft</div>
+                  <div class="doc-patch-summary" id="workspace-patch-summary"></div>
+                  <div class="doc-patch-meta" id="workspace-patch-meta"></div>
+                  <div class="doc-patch-legend">
+                    <span class="doc-patch-legend-item doc-patch-legend-add">Added</span>
+                    <span class="doc-patch-legend-item doc-patch-legend-del">Removed</span>
                   </div>
-                  <button class="ghost sm hidden" id="workspace-chat-events-toggle">Show more</button>
                 </div>
-                <div class="doc-chat-events-list" id="workspace-chat-events-list"></div>
+                <div class="doc-patch-actions">
+                  <button class="primary sm" id="workspace-patch-apply">Apply</button>
+                  <button class="ghost sm" id="workspace-patch-reload">Reload</button>
+                  <button class="danger sm" id="workspace-patch-discard">Discard</button>
+                </div>
               </div>
-              <div class="doc-chat-section-header">
-                <div class="doc-chat-section-title">History</div>
+              <div class="doc-patch-body" id="workspace-patch-body">(no draft)</div>
+            </div>
+            <textarea id="workspace-content" spellcheck="false"></textarea>
+            <div class="doc-chat-panel compose-panel">
+              <div class="doc-chat-compose">
+                <div class="doc-agent-controls">
+                  <select id="workspace-chat-agent-select" title="Agent"></select>
+                  <select id="workspace-chat-model-select" title="Model"></select>
+                  <select id="workspace-chat-reasoning-select" title="Reasoning"></select>
+                </div>
+                <div class="doc-chat-input-row compose-row">
+                  <textarea enterkeyhint="enter" id="workspace-chat-input"
+                    placeholder="Ask AI to edit this workspace doc..." rows="1" spellcheck="false"></textarea>
+                  <div class="doc-chat-input-buttons compose-buttons">
+                    <button class="primary sm" id="workspace-chat-send" title="Send">↑</button>
+                  </div>
+                </div>
+                <div class="doc-chat-meta">
+                  <div class="doc-chat-meta-left">
+                    <span class="muted small" id="workspace-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for
+                      newline</span>
+                  </div>
+                  <div class="doc-chat-meta-right">
+                    <button class="ghost sm hidden doc-chat-cancel-inline" id="workspace-chat-cancel"
+                      title="Cancel">✕</button>
+                    <button class="ghost sm" id="workspace-chat-new-thread" title="Start a new chat thread">New
+                      thread</button>
+                    <span class="pill pill-idle" id="workspace-chat-status">idle</span>
+                  </div>
+                </div>
               </div>
-              <div class="doc-chat-history" id="workspace-chat-history"></div>
+              <div class="doc-chat-stream" id="workspace-chat-stream">
+                <div class="doc-chat-error hidden" id="workspace-chat-error"></div>
+                <div class="doc-chat-events hidden" id="workspace-chat-events">
+                  <div class="doc-chat-section-header">
+                    <div class="doc-chat-section-title">
+                      Agent updates
+                      <span class="doc-chat-count" id="workspace-chat-events-count">0</span>
+                    </div>
+                    <button class="ghost sm hidden" id="workspace-chat-events-toggle">Show more</button>
+                  </div>
+                  <div class="doc-chat-events-list" id="workspace-chat-events-list"></div>
+                </div>
+                <div class="doc-chat-section-header">
+                  <div class="doc-chat-section-title">History</div>
+                </div>
+                <div class="doc-chat-history" id="workspace-chat-history"></div>
+              </div>
             </div>
           </div>
         </div>

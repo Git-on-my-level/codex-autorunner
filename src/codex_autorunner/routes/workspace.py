@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 
 from ..tickets.spec_ingest import (
     SpecIngestTicketsError,
@@ -8,13 +11,17 @@ from ..tickets.spec_ingest import (
 )
 from ..web.schemas import (
     SpecIngestTicketsResponse,
+    WorkspaceFileListResponse,
     WorkspaceResponse,
     WorkspaceWriteRequest,
 )
 from ..workspace.paths import (
     WORKSPACE_DOC_KINDS,
+    list_workspace_files,
     read_workspace_doc,
+    read_workspace_file,
     write_workspace_doc,
+    write_workspace_file,
 )
 
 
@@ -42,6 +49,30 @@ def build_workspace_routes() -> APIRouter:
             "decisions": read_workspace_doc(repo_root, "decisions"),
             "spec": read_workspace_doc(repo_root, "spec"),
         }
+
+    @router.get("/workspace/file", response_class=PlainTextResponse)
+    def read_workspace(request: Request, path: str):
+        repo_root = request.app.state.engine.repo_root
+        try:
+            content = read_workspace_file(repo_root, path)
+        except ValueError as exc:  # invalid path
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return PlainTextResponse(content)
+
+    @router.put("/workspace/file", response_class=PlainTextResponse)
+    def write_workspace(request: Request, payload: WorkspaceWriteRequest, path: str):
+        repo_root = request.app.state.engine.repo_root
+        try:
+            content = write_workspace_file(repo_root, path, payload.content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return PlainTextResponse(content)
+
+    @router.get("/workspace/files", response_model=WorkspaceFileListResponse)
+    def list_files(request: Request):
+        repo_root = request.app.state.engine.repo_root
+        files = [asdict(item) for item in list_workspace_files(repo_root)]
+        return {"files": files}
 
     @router.post("/workspace/spec/ingest", response_model=SpecIngestTicketsResponse)
     def ingest_workspace_spec(request: Request):

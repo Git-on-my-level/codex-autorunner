@@ -1,12 +1,10 @@
 import { flash } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 import {
-  fetchWorkspace,
-  writeWorkspace,
   ingestSpecToTickets,
   listTickets,
-  WorkspaceKind,
-  WorkspaceResponse,
+  listWorkspaceFiles,
+  WorkspaceFileListItem,
 } from "./workspaceApi.js";
 import {
   applyDraft,
@@ -16,9 +14,16 @@ import {
   sendFileChat,
   interruptFileChat,
 } from "./fileChat.js";
+import { DocEditor } from "./docEditor.js";
+import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
+
+type WorkspaceTarget = {
+  path: string; // relative to workspace dir
+  isPinned: boolean;
+};
 
 interface WorkspaceState {
-  kind: WorkspaceKind;
+  target: WorkspaceTarget | null;
   content: string;
   draft: FileDraft | null;
   loading: boolean;
@@ -30,10 +35,13 @@ interface WorkspaceState {
   messages: { role: "user" | "assistant"; content: string }[];
   events: { summary: string }[];
   hasTickets: boolean;
+  files: WorkspaceFileListItem[];
+  docEditor: DocEditor | null;
+  browser: WorkspaceFileBrowser | null;
 }
 
 const state: WorkspaceState = {
-  kind: "active_context",
+  target: null,
   content: "",
   draft: null,
   loading: false,
@@ -45,11 +53,15 @@ const state: WorkspaceState = {
   messages: [],
   events: [],
   hasTickets: true,
+  files: [],
+  docEditor: null,
+  browser: null,
 };
 
 function els() {
   return {
-    tabs: Array.from(document.querySelectorAll<HTMLButtonElement>("[data-workspace]")),
+    fileList: document.getElementById("workspace-file-list") as HTMLElement | null,
+    fileSelect: document.getElementById("workspace-file-select") as HTMLSelectElement | null,
     status: document.getElementById("workspace-status"),
     generateBtn: document.getElementById("workspace-generate-tickets") as HTMLButtonElement | null,
     textarea: document.getElementById("workspace-content") as HTMLTextAreaElement | null,
@@ -79,19 +91,13 @@ function els() {
 }
 
 function target(): string {
-  return `workspace:${state.kind}`;
+  if (!state.target) return "workspace:active_context";
+  return `workspace:${state.target.path}`;
 }
 
 function setStatus(text: string): void {
   const statusEl = els().status;
   if (statusEl) statusEl.textContent = text;
-}
-
-function renderTabs(): void {
-  for (const tab of els().tabs) {
-    const key = (tab.dataset.workspace || "") as WorkspaceKind;
-    tab.classList.toggle("active", key === state.kind);
-  }
 }
 
 function renderPatch(): void {
@@ -170,21 +176,40 @@ function resetChat(): void {
   state.events = [];
 }
 
-async function loadWorkspace(kind: WorkspaceKind): Promise<void> {
+async function loadWorkspaceFile(path: string): Promise<void> {
   state.loading = true;
   setStatus("Loading…");
   try {
-    const data = await fetchWorkspace();
-    state.kind = kind;
-    state.content = (data as WorkspaceResponse)[kind] || "";
-    const textarea = els().textarea;
-    if (textarea) textarea.value = state.content;
+    const data = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+    if (!data.ok) throw new Error(await data.text());
+    const text = await data.text();
+    state.content = text;
+    if (state.docEditor) {
+      state.docEditor.destroy();
+    }
+    const { textarea, saveBtn, status } = els();
+    if (!textarea) return;
+    state.docEditor = new DocEditor({
+      target: target(),
+      textarea,
+      saveButton: saveBtn,
+      statusEl: status,
+      onLoad: async () => text,
+      onSave: async (content) => {
+        const res = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        state.content = content;
+      },
+    });
     await loadPendingDraft();
-    renderTabs();
     renderPatch();
     setStatus("Loaded");
   } catch (err) {
-    const message = (err as Error).message || "Failed to load workspace";
+    const message = (err as Error).message || "Failed to load workspace file";
     flash(message, "error");
     setStatus(message);
   } finally {
@@ -197,20 +222,9 @@ async function loadPendingDraft(): Promise<void> {
   renderPatch();
 }
 
-async function saveWorkspace(): Promise<void> {
-  const textarea = els().textarea;
-  const content = textarea?.value ?? "";
-  try {
-    const res = await writeWorkspace(state.kind, content);
-    state.content = res[state.kind];
-    flash("Workspace saved", "success");
-  } catch (err) {
-    flash((err as Error).message || "Failed to save", "error");
-  }
-}
-
 async function reloadWorkspace(): Promise<void> {
-  await loadWorkspace(state.kind);
+  if (!state.target) return;
+  await loadWorkspaceFile(state.target.path);
 }
 
 async function maybeShowGenerate(): Promise<void> {
@@ -239,16 +253,6 @@ async function generateTickets(): Promise<void> {
     await maybeShowGenerate();
   } catch (err) {
     flash((err as Error).message || "Failed to generate tickets", "error");
-  }
-}
-
-function bindTabClicks(): void {
-  for (const tab of els().tabs) {
-    tab.addEventListener("click", () => {
-      const key = (tab.dataset.workspace || "") as WorkspaceKind;
-      if (!key || key === state.kind) return;
-      loadWorkspace(key).catch((err) => flash((err as Error).message, "error"));
-    });
   }
 }
 
@@ -392,13 +396,14 @@ async function cancelChat(): Promise<void> {
 }
 
 async function resetThread(): Promise<void> {
+  if (!state.target) return;
   try {
     await fetch(
       "/api/app-server/threads/reset",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: `file_chat.workspace.${state.kind}` }),
+        body: JSON.stringify({ key: `file_chat.workspace.${state.target.path}` }),
       }
     );
     state.messages = [];
@@ -411,10 +416,25 @@ async function resetThread(): Promise<void> {
   }
 }
 
+async function loadFiles(): Promise<void> {
+  const files = await listWorkspaceFiles();
+  state.files = files;
+  const { fileList, fileSelect } = els();
+  if (!fileList) return;
+  const browser = new WorkspaceFileBrowser({
+    container: fileList,
+    selectEl: fileSelect,
+    onSelect: (file) => {
+      state.target = { path: file.path, isPinned: file.is_pinned };
+      void loadWorkspaceFile(file.path);
+    },
+  });
+  state.browser = browser;
+  browser.setFiles(files, files.find((f) => f.is_pinned)?.path);
+}
+
 export async function initWorkspace(): Promise<void> {
   const {
-    saveBtn,
-    reloadBtn,
     generateBtn,
     patchApply,
     patchDiscard,
@@ -432,12 +452,11 @@ export async function initWorkspace(): Promise<void> {
     reasoningSelect: els().reasoningSelect,
   });
 
-  bindTabClicks();
-  maybeShowGenerate();
-  await loadWorkspace(state.kind);
+  await maybeShowGenerate();
+  await loadFiles();
 
-  saveBtn?.addEventListener("click", () => void saveWorkspace());
-  reloadBtn?.addEventListener("click", () => void reloadWorkspace());
+  els().saveBtn?.addEventListener("click", () => void state.docEditor?.save(true));
+  els().reloadBtn?.addEventListener("click", () => void reloadWorkspace());
   generateBtn?.addEventListener("click", () => void generateTickets());
   patchApply?.addEventListener("click", () => void applyWorkspaceDraft());
   patchDiscard?.addEventListener("click", () => void discardWorkspaceDraft());
