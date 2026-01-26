@@ -7695,47 +7695,58 @@ button.loading::after {
   margin-left: 4px;
 }
 
-.messages-thread-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 12px;
-}
-
-.messages-header-info {
+/* Footer bar (session ID, status, stats) - sticky at bottom of scroll area */
+.messages-thread-footer {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-  font-size: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+  font-size: 11px;
+  flex-wrap: nowrap;
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
 }
 
-.messages-header-info code {
+.messages-thread-footer code {
   font-size: 11px;
   background: rgba(255, 255, 255, 0.06);
   padding: 2px 6px;
   border-radius: 4px;
-  max-width: 100px;
+  max-width: 80px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: help;
+  flex-shrink: 0;
+}
+
+.messages-footer-stats {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Legacy header styles - deprecated but kept for compatibility */
+.messages-thread-header {
+  display: none;
+}
+
+.messages-header-info {
+  display: none;
+}
+
+.messages-header-info code {
+  display: none;
 }
 
 .messages-stats-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--muted);
-  margin-bottom: 12px;
+  display: none;
 }
 
 .messages-stats-line .pill {
-  margin-left: 4px;
+  display: none;
 }
 
 /* Legacy stat grid - deprecated but kept for compatibility */

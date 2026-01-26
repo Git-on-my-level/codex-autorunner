@@ -477,15 +477,13 @@ async function loadThread(runId: string): Promise<void> {
   );
 
   detailEl.innerHTML = `
-    <div class="messages-thread-header">
-      <div class="messages-header-info">
-        <code title="${escapeHtml(runId)}">${escapeHtml(shortRunId)}</code>
-        <span class="pill pill-small ${statusPillClass}">${escapeHtml(statusLabel)}</span>
-      </div>
-    </div>
-    <div class="messages-stats-line">${escapeHtml(statsLine)}</div>
     <div class="messages-thread-history">
       ${threadedContent || '<div class="muted">No messages yet</div>'}
+    </div>
+    <div class="messages-thread-footer">
+      <code title="${escapeHtml(runId)}">${escapeHtml(shortRunId)}</code>
+      <span class="pill pill-small ${statusPillClass}">${escapeHtml(statusLabel)}</span>
+      <span class="messages-footer-stats">${escapeHtml(statsLine)}</span>
     </div>
   `;
 
