@@ -4,6 +4,7 @@ import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor, TicketData } from "./ticketEditor.js";
+import { parseAppServerEvent, type AgentEvent, type ParsedAgentEvent } from "./agentEvents.js";
 
 type FlowEvent = {
   event_type: string;
@@ -59,6 +60,9 @@ let lastActivityTimerId: ReturnType<typeof setInterval> | null = null;
 let liveOutputExpanded = false;
 let liveOutputBuffer: string[] = [];
 const MAX_OUTPUT_LINES = 200;
+const LIVE_EVENT_MAX = 50;
+let liveOutputEvents: AgentEvent[] = [];
+let liveOutputEventIndex: Record<string, number> = {};
 let currentReasonFull: string | null = null; // Full reason text for modal display
 
 function formatElapsed(startTime: Date): string {
@@ -137,21 +141,33 @@ function stopLastActivityTimer(): void {
 }
 
 function appendToLiveOutput(text: string): void {
+  if (!text) return;
+
   const outputEl = document.getElementById("ticket-live-output-text");
   if (!outputEl) return;
-  
-  // Add new lines to buffer
-  const newLines = text.split("\n");
-  liveOutputBuffer.push(...newLines);
-  
+
+  const segments = text.split("\n");
+
+  // Merge first segment into the last buffered line to avoid artificial newlines between deltas
+  if (liveOutputBuffer.length === 0) {
+    liveOutputBuffer.push(segments[0]);
+  } else {
+    liveOutputBuffer[liveOutputBuffer.length - 1] += segments[0];
+  }
+
+  // Remaining segments represent real new lines
+  for (let i = 1; i < segments.length; i++) {
+    liveOutputBuffer.push(segments[i]);
+  }
+
   // Trim buffer if it exceeds max lines
   while (liveOutputBuffer.length > MAX_OUTPUT_LINES) {
     liveOutputBuffer.shift();
   }
-  
+
   // Update display
   outputEl.textContent = liveOutputBuffer.join("\n");
-  
+
   // Auto-scroll to bottom
   const contentEl = document.getElementById("ticket-live-output-content");
   if (contentEl) {
@@ -159,10 +175,91 @@ function appendToLiveOutput(text: string): void {
   }
 }
 
+function addLiveOutputEvent(parsed: ParsedAgentEvent): void {
+  const { event, mergeStrategy } = parsed;
+  const itemId = event.itemId;
+
+  if (mergeStrategy && itemId && liveOutputEventIndex[itemId] !== undefined) {
+    const existingIndex = liveOutputEventIndex[itemId] as number;
+    const existing = liveOutputEvents[existingIndex];
+    if (mergeStrategy === "append") {
+      existing.summary = `${existing.summary || ""}${event.summary}`;
+    } else if (mergeStrategy === "newline") {
+      existing.summary = `${existing.summary || ""}\n\n`;
+    }
+    existing.time = event.time;
+    return;
+  }
+
+  liveOutputEvents.push(event);
+  if (liveOutputEvents.length > LIVE_EVENT_MAX) {
+    liveOutputEvents = liveOutputEvents.slice(-LIVE_EVENT_MAX);
+    liveOutputEventIndex = {};
+    liveOutputEvents.forEach((evt, idx) => {
+      if (evt.itemId) liveOutputEventIndex[evt.itemId] = idx;
+    });
+  } else if (itemId) {
+    liveOutputEventIndex[itemId] = liveOutputEvents.length - 1;
+  }
+}
+
+function renderLiveOutputEvents(): void {
+  const container = document.getElementById("ticket-live-output-events");
+  const list = document.getElementById("ticket-live-output-events-list");
+  const count = document.getElementById("ticket-live-output-events-count");
+  if (!container || !list || !count) return;
+
+  const hasEvents = liveOutputEvents.length > 0;
+  container.classList.toggle("hidden", !hasEvents);
+  count.textContent = String(liveOutputEvents.length);
+  list.innerHTML = "";
+  if (!hasEvents) return;
+
+  liveOutputEvents.forEach((entry) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = `ticket-chat-event ${entry.kind || ""}`.trim();
+
+    const title = document.createElement("div");
+    title.className = "ticket-chat-event-title";
+    title.textContent = entry.title || entry.method || "Update";
+
+    const summary = document.createElement("div");
+    summary.className = "ticket-chat-event-summary";
+    summary.textContent = entry.summary || "(no details)";
+
+    wrapper.appendChild(title);
+    wrapper.appendChild(summary);
+
+    if (entry.detail) {
+      const detail = document.createElement("div");
+      detail.className = "ticket-chat-event-detail";
+      detail.textContent = entry.detail;
+      wrapper.appendChild(detail);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "ticket-chat-event-meta";
+    meta.textContent = entry.time
+      ? new Date(entry.time).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : "";
+    wrapper.appendChild(meta);
+
+    list.appendChild(wrapper);
+  });
+
+  list.scrollTop = list.scrollHeight;
+}
+
 function clearLiveOutput(): void {
   liveOutputBuffer = [];
   const outputEl = document.getElementById("ticket-live-output-text");
   if (outputEl) outputEl.textContent = "";
+  liveOutputEvents = [];
+  liveOutputEventIndex = {};
+  renderLiveOutputEvents();
 }
 
 function setLiveOutputStatus(status: "disconnected" | "connected" | "streaming"): void {
@@ -196,6 +293,15 @@ function handleFlowEvent(event: FlowEvent): void {
     const delta = event.data?.delta as string || "";
     if (delta) {
       appendToLiveOutput(delta);
+    }
+  }
+
+  // Handle rich app-server events (tools, commands, files, thinking, etc.)
+  if (event.event_type === "app_server_event") {
+    const parsed = parseAppServerEvent(event.data);
+    if (parsed) {
+      addLiveOutputEvent(parsed);
+      renderLiveOutputEvents();
     }
   }
   

@@ -1,11 +1,10 @@
 import { api, flash, confirmModal, openModal, statusPill } from "./utils.js";
-import { subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
-let pendingSummaryOpen = false;
+const ANALYTICS_SUMMARY_CACHE_KEY = "analytics-summary";
 
 interface UsageChartState {
   segment: string;
@@ -21,34 +20,6 @@ const usageChartState: UsageChartState = {
 
 let usageSeriesRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let usageSummaryRetryTimer: ReturnType<typeof setTimeout> | null = null;
-let latestRunHistory: FlowRun[] = [];
-
-function updateTodoPreview(_content: string): void {
-  // Docs UI removed; keep stub for backward compatibility.
-}
-
-interface DocsEventPayload {
-  kind?: string;
-  content?: string;
-  todo?: string;
-}
-
-function handleDocsEvent(payload: DocsEventPayload | null): void {
-  if (!payload) return;
-  if (payload.kind === "todo") {
-    updateTodoPreview(payload.content || "");
-    return;
-  }
-  if (typeof payload.todo === "string") {
-    updateTodoPreview(payload.todo);
-  }
-}
-
-async function loadTodoPreview(_options: { silent?: boolean } = {}): Promise<void> {
-  // Docs endpoint removed; no-op to preserve call sites.
-  const cached = loadFromCache("todo-doc") as string | undefined;
-  if (cached) updateTodoPreview(cached);
-}
 
 function setUsageLoading(loading: boolean): void {
   const btn = document.getElementById("usage-refresh");
@@ -217,8 +188,11 @@ interface FlowRun {
 async function loadTicketAnalytics(): Promise<void> {
   try {
     const data = (await api("/api/analytics/summary")) as AnalyticsSummary;
+    saveToCache(ANALYTICS_SUMMARY_CACHE_KEY, data);
     renderTicketAnalytics(data);
   } catch (err) {
+    const cached = loadFromCache(ANALYTICS_SUMMARY_CACHE_KEY) as AnalyticsSummary | null;
+    if (cached) renderTicketAnalytics(cached);
     flash((err as Error).message || "Failed to load analytics", "error");
   }
 }
@@ -281,8 +255,8 @@ function renderTicketAnalytics(data: AnalyticsSummary | null): void {
 async function loadRunHistory(): Promise<void> {
   try {
     const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
-    latestRunHistory = Array.isArray(runs) ? runs.slice(0, 10) : [];
-    renderRunHistory(latestRunHistory);
+    const runHistory = Array.isArray(runs) ? runs.slice(0, 10) : [];
+    renderRunHistory(runHistory);
   } catch (err) {
     flash((err as Error).message || "Failed to load run history", "error");
   }
@@ -332,7 +306,7 @@ function renderRunHistory(runs: FlowRun[]): void {
     `;
   });
   container.innerHTML = `
-    <div class="run-history-head run-history-row">
+    <div class="run-history-head">
       <div>ID</div><div>Status</div><div>Duration</div><div>Started</div><div>Step</div>
     </div>
     ${items.join("")}
@@ -887,37 +861,11 @@ function bindAction(buttonId: string, action: () => Promise<void>): void {
   });
 }
 
-function isDocsReady(): boolean {
-  return document.body?.dataset?.docsReady === "true";
-}
-
-function openSummaryDoc(): void {
-  const summaryChip = document.querySelector('.chip[data-doc="summary"]') as HTMLElement | null;
-  if (summaryChip) summaryChip.click();
-}
-
 export function initDashboard(): void {
   initSettings();
   initUsageChartControls();
   // initReview(); // Removed - review.ts was deleted
-  subscribe("todo:invalidate", () => {
-    void loadTodoPreview({ silent: true });
-  });
-  subscribe("docs:updated", handleDocsEvent);
-  subscribe("docs:loaded", handleDocsEvent);
-  subscribe("docs:ready", () => {
-    if (!isDocsReady()) {
-      if (document.body) {
-        document.body.dataset.docsReady = "true";
-      }
-    }
-    if (pendingSummaryOpen) {
-      pendingSummaryOpen = false;
-      openSummaryDoc();
-    }
-  });
   bindAction("usage-refresh", loadUsage);
-  bindAction("refresh-preview", loadTodoPreview);
   bindAction("analytics-refresh", async () => {
     await loadTicketAnalytics();
     await loadRunHistory();
@@ -925,29 +873,12 @@ export function initDashboard(): void {
 
   const cachedUsage = loadFromCache("usage");
   if (cachedUsage) renderUsage(cachedUsage as UsageData);
-
-  const cachedTodo = loadFromCache("todo-doc");
-  if (typeof cachedTodo === "string") {
-    updateTodoPreview(cachedTodo);
-  }
-
-  const summaryBtn = document.getElementById("open-summary") as HTMLButtonElement | null;
-  if (summaryBtn) {
-    summaryBtn.addEventListener("click", () => {
-      const docsTab = document.querySelector('.tab[data-target="docs"]') as HTMLElement | null;
-      if (docsTab) docsTab.click();
-      if (isDocsReady()) {
-        requestAnimationFrame(openSummaryDoc);
-      } else {
-        pendingSummaryOpen = true;
-      }
-    });
-  }
+  const cachedAnalytics = loadFromCache(ANALYTICS_SUMMARY_CACHE_KEY);
+  if (cachedAnalytics) renderTicketAnalytics(cachedAnalytics as AnalyticsSummary);
 
   loadUsage();
   loadTicketAnalytics();
   loadRunHistory();
-  loadTodoPreview();
   loadVersion();
   checkUpdateStatus();
 

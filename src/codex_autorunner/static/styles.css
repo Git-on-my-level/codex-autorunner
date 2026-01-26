@@ -1304,12 +1304,16 @@ a.hub-pr-pill:hover {
   overflow-x: auto;
 }
 
-.run-history-row {
+.run-history-row,
+.run-history-head {
   display: grid;
   grid-template-columns: 72px 80px 90px minmax(140px, 1fr) minmax(120px, 1fr);
   gap: 8px;
   align-items: center;
   padding: 6px 8px;
+}
+
+.run-history-row {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg);
@@ -1908,6 +1912,30 @@ button.icon-btn {
   content: "Waiting for agent output...";
   color: var(--muted);
   font-style: italic;
+}
+
+.ticket-live-output-events {
+  padding: 10px 12px 4px;
+}
+
+.ticket-live-output-events.hidden {
+  display: none;
+}
+
+.ticket-live-output-events-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+
+.ticket-live-output-events-count {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .ticket-live-output-panel #ticket-live-output-expand {

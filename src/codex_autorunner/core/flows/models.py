@@ -32,6 +32,7 @@ class FlowEventType(str, Enum):
     STEP_COMPLETED = "step_completed"
     STEP_FAILED = "step_failed"
     AGENT_STREAM_DELTA = "agent_stream_delta"
+    APP_SERVER_EVENT = "app_server_event"
     TOKEN_USAGE = "token_usage"
     FLOW_STARTED = "flow_started"
     FLOW_STOPPED = "flow_stopped"

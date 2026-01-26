@@ -86,6 +86,15 @@ class AgentPool:
         if emitter is None:
             return
 
+        # Forward the raw app-server event for richer UI rendering (tools, files, commands, etc.)
+        try:
+            emitter(
+                FlowEventType.APP_SERVER_EVENT,
+                {"message": message, "turn_id": turn_id},
+            )
+        except Exception:
+            _logger.exception("Failed emitting app-server event for turn %s", turn_id)
+
         if method in ("item/agentMessage/delta", "turn/streamDelta"):
             delta = None
             if isinstance(params, dict):
