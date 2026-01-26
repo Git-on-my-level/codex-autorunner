@@ -23,7 +23,7 @@ from fastapi import APIRouter
 from .agents import build_agents_routes
 from .analytics import build_analytics_routes
 from .app_server import build_app_server_routes
-from .base import build_base_routes
+from .base import build_base_routes, build_frontend_routes
 from .file_chat import build_file_chat_routes
 from .flows import build_flow_routes
 from .messages import build_messages_routes
@@ -67,6 +67,8 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     router.include_router(build_terminal_image_routes())
     router.include_router(build_usage_routes())
     router.include_router(build_voice_routes())
+    # Include frontend routes last to avoid shadowing API routes
+    router.include_router(build_frontend_routes(static_dir))
 
     return router
 
