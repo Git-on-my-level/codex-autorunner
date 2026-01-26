@@ -255,7 +255,11 @@
               </div>
               <div class="messages-main">
                 <div class="messages-thread-detail" id="messages-thread-detail">
-                  <div class="muted">Select a thread</div>
+                  <div class="messages-empty-state">
+                    <div class="messages-empty-icon">💬</div>
+                    <div class="messages-empty-title">Select a conversation</div>
+                    <div class="messages-empty-hint">Choose a session from the left to view dispatches and replies.</div>
+                  </div>
                 </div>
                 <div class="messages-reply-box">
                   <textarea class="messages-reply-body" id="messages-reply-body"
@@ -364,7 +368,6 @@
         </div>
       </section>
       <section class="panel active" id="tickets">
-        <h2>Tickets</h2>
         <div class="card ticket-card" id="ticket-card">
           <div class="card-header">
             <div class="card-header-left ticket-header-left">
@@ -412,6 +415,7 @@
           <div class="ticket-live-output-panel" id="ticket-live-output-panel">
             <div class="ticket-live-output-header" id="ticket-live-output-toggle">
               <span class="ticket-live-output-title">Live Agent Output</span>
+              <span class="ticket-live-output-preview" id="ticket-live-output-preview"></span>
               <span class="ticket-live-output-spacer"></span>
               <button class="ghost sm icon-btn" id="ticket-live-output-detail" title="Show details">⋯</button>
               <span class="ticket-live-output-status" id="ticket-live-output-status">Disconnected</span>
@@ -546,10 +550,10 @@
             </div>
           </div>
         </div>
-  </div>
-  <section class="panel" id="terminal">
-    <div class="terminal-toolbar">
-      <div class="terminal-toolbar-row terminal-toolbar-main">
+      </section>
+      <section class="panel" id="terminal">
+        <div class="terminal-toolbar">
+        <div class="terminal-toolbar-row terminal-toolbar-main">
         <span class="terminal-status muted" id="terminal-status">Disconnected</span>
         <div class="terminal-actions">
           <button class="primary sm" id="terminal-connect">New</button>

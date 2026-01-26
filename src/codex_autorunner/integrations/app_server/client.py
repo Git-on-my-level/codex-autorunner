@@ -1,15 +1,27 @@
 import asyncio
 import json
 import logging
+import os
 import random
 import re
 import time
 import uuid
+import weakref
 from collections import deque
 from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Union, cast
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+    no_type_check,
+)
 
 from ...core.circuit_breaker import CircuitBreaker
 from ...core.exceptions import (
@@ -45,6 +57,9 @@ _TURN_STALL_POLL_INTERVAL_SECONDS = 2.0
 _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS = 10.0
 _MAX_TURN_RAW_EVENTS = 200
 _INVALID_JSON_PREVIEW_BYTES = 200
+
+# Track live clients so tests/cleanup can cancel any background restart tasks.
+_CLIENT_INSTANCES: weakref.WeakSet = weakref.WeakSet()
 
 
 class CodexAppServerError(CodexError):
@@ -132,7 +147,7 @@ class CodexAppServerClient:
         env: Optional[Dict[str, str]] = None,
         approval_handler: Optional[ApprovalHandler] = None,
         default_approval_decision: str = "cancel",
-        auto_restart: bool = True,
+        auto_restart: Optional[bool] = None,
         request_timeout: Optional[float] = None,
         turn_stall_timeout_seconds: Optional[float] = _TURN_STALL_TIMEOUT_SECONDS,
         turn_stall_poll_interval_seconds: Optional[float] = None,
@@ -145,7 +160,13 @@ class CodexAppServerClient:
         self._env = env
         self._approval_handler = approval_handler
         self._default_approval_decision = default_approval_decision
-        self._auto_restart = auto_restart
+        if auto_restart is None:
+            disable_restart_env = os.environ.get(
+                "CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS"
+            )
+            self._auto_restart = False if disable_restart_env else True
+        else:
+            self._auto_restart = auto_restart
         self._request_timeout = request_timeout
         self._notification_handler = notification_handler
         self._logger = logger or logging.getLogger(__name__)
@@ -200,6 +221,7 @@ class CodexAppServerClient:
             self._turn_stall_recovery_min_interval_seconds = (
                 _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS
             )
+        _CLIENT_INSTANCES.add(self)
 
     async def start(self) -> None:
         await self._ensure_process()
@@ -215,6 +237,7 @@ class CodexAppServerClient:
             self._restart_task = None
         await self._terminate_process()
         self._fail_pending(CodexAppServerDisconnected("Client closed"))
+        _CLIENT_INSTANCES.discard(self)
 
     async def wait_for_disconnect(self, *, timeout: Optional[float] = None) -> None:
         disconnected = self._ensure_disconnect_event()
@@ -1349,44 +1372,53 @@ class CodexAppServerClient:
 
     @retry_transient(max_attempts=10, base_wait=0.5, max_wait=30.0)
     async def _restart_after_disconnect(self) -> None:
-        delay = max(self._restart_backoff_seconds, _RESTART_BACKOFF_INITIAL_SECONDS)
-        jitter = delay * _RESTART_BACKOFF_JITTER_RATIO
-        if jitter:
-            delay += random.uniform(0, jitter)
-        await asyncio.sleep(delay)
-        if self._closed:
-            raise CodexAppServerDisconnected("Client closed")
         try:
-            await self._ensure_process()
-            self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
-            log_event(
-                self._logger,
-                logging.INFO,
-                "app_server.restarted",
-                delay_seconds=round(delay, 2),
-            )
-        except CodexAppServerDisconnected:
+            delay = max(self._restart_backoff_seconds, _RESTART_BACKOFF_INITIAL_SECONDS)
+            jitter = delay * _RESTART_BACKOFF_JITTER_RATIO
+            if jitter:
+                delay += random.uniform(0, jitter)
+            await asyncio.sleep(delay)
+            if self._closed:
+                raise CodexAppServerDisconnected("Client closed")
+            try:
+                await self._ensure_process()
+                self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "app_server.restarted",
+                    delay_seconds=round(delay, 2),
+                )
+            except CodexAppServerDisconnected:
+                raise
+            except CircuitOpenError:
+                await asyncio.sleep(60.0)
+                raise
+            except Exception as exc:
+                next_delay = min(
+                    max(
+                        self._restart_backoff_seconds * 2,
+                        _RESTART_BACKOFF_INITIAL_SECONDS,
+                    ),
+                    _RESTART_BACKOFF_MAX_SECONDS,
+                )
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.restart.failed",
+                    delay_seconds=round(delay, 2),
+                    next_delay_seconds=round(next_delay, 2),
+                    exc=exc,
+                )
+                self._restart_backoff_seconds = next_delay
+                raise CodexAppServerDisconnected(f"Restart failed: {exc}") from exc
+        except asyncio.CancelledError:
+            # Ensure any partially-started process is cleaned up to avoid
+            # \"Task was destroyed\" noise when event loops shut down.
+            await self._terminate_process()
             raise
-        except CircuitOpenError:
-            await asyncio.sleep(60.0)
-            raise
-        except Exception as exc:
-            next_delay = min(
-                max(
-                    self._restart_backoff_seconds * 2, _RESTART_BACKOFF_INITIAL_SECONDS
-                ),
-                _RESTART_BACKOFF_MAX_SECONDS,
-            )
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "app_server.restart.failed",
-                delay_seconds=round(delay, 2),
-                next_delay_seconds=round(next_delay, 2),
-                exc=exc,
-            )
-            self._restart_backoff_seconds = next_delay
-            raise CodexAppServerDisconnected(f"Restart failed: {exc}") from exc
+        finally:
+            self._restart_task = None
 
     async def _terminate_process(self) -> None:
         if self._reader_task is not None:
@@ -1845,6 +1877,21 @@ def _extract_turn_snapshot_from_resume(
     return status, agent_messages, errors
 
 
+@no_type_check
+async def _close_all_clients() -> None:
+    """
+    Close any CodexAppServerClient instances that may still be alive.
+
+    This is primarily used in tests to avoid pending restart tasks keeping
+    subprocess transports alive when the event loop shuts down.
+    """
+    for client in list(_CLIENT_INSTANCES):
+        try:
+            await client.close()
+        except Exception:
+            continue
+
+
 __all__ = [
     "APPROVAL_METHODS",
     "ApprovalDecision",
@@ -1858,4 +1905,5 @@ __all__ = [
     "TurnHandle",
     "TurnResult",
     "_normalize_sandbox_policy",
+    "_close_all_clients",
 ]

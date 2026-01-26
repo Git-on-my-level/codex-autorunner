@@ -46,3 +46,45 @@ Non-responsibilities:
 - **One-way dependencies**: Surfaces → Adapters → Control Plane → Engine (never reverse).
 - **Isolation is structural**: containment via workspaces/credentials, not interactive prompts.
 - **Replaceability**: any adapter/surface can be rewritten; engine/control plane must remain stable.
+
+## Component Implementation
+Mapping the conceptual layers to the codebase:
+
+- **Engine**: `src/codex_autorunner/core/`. Handles the core loop, state, and locking.
+- **Control Plane**: `.codex-autorunner/` (files), `tickets/` (python).
+- **Adapters**: `src/codex_autorunner/integrations/` (GitHub, Telegram, App Server).
+- **Surfaces**:
+  - **CLI**: `src/codex_autorunner/cli.py` (Typer wrapper).
+  - **Server/UI**: `src/codex_autorunner/server.py` (FastAPI), `static/`.
+  - **Hub**: Supervises multiple repos/worktrees.
+
+## Data Layout & Config
+- **Repo Root**:
+  - `codex-autorunner.yml`: Defaults (committed).
+  - `codex-autorunner.override.yml`: Local overrides (gitignored).
+  - `.codex-autorunner/`: Canonical runtime state.
+    - `tickets/`: Required (`TICKET-###.md`).
+    - `workspace/`: Optional context (`active_context.md`, `decisions.md`, `spec.md`).
+    - `config.yml`: Generated config.
+    - `state.sqlite3`, logs, lock.
+- **Config Precedence**: Built-ins < `codex-autorunner.yml` < override < `.codex-autorunner/config.yml` < env.
+
+## Execution Loop
+1. **Select Ticket**: Active ticket target under `.codex-autorunner/tickets/`.
+2. **Build Prompt**: From ticket content, workspace docs, and bounded prior run output.
+3. **Run**: Execute Codex app-server with streaming logs via OpenCode runtime.
+4. **Update State**: Handle stop rules (exit code, stop_after_runs, limits).
+
+## Dispatch Model (Agent-Human Communication)
+- **Dispatch**: Agent → Human (`tickets/models.py`).
+  - `mode: "notify"`: Informational, agent continues.
+  - `mode: "pause"`: Handoff, agent waits for Reply.
+- **Reply**: Human → Agent response.
+- **Storage**: `runs/<run_id>/dispatch/` (staging), `runs/<run_id>/dispatch_history/` (archive).
+
+## API Surface
+- **Workspace**: `/api/workspace/*`
+- **File Chat**: `/api/file-chat/*`
+- **Runner/Logs**: `/api/run/*`, `/api/logs/*`
+- **Terminal**: `/api/terminal` (websocket), `/api/sessions`
+- **Hub**: `/hub/*` (repos, worktrees, usage)

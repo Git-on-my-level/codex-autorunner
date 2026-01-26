@@ -121,6 +121,8 @@ function appendToLiveOutput(text) {
     if (contentEl) {
         contentEl.scrollTop = contentEl.scrollHeight;
     }
+    // Update inline preview for collapsed state
+    updateInlinePreview();
 }
 function addLiveOutputEvent(parsed) {
     const { event, mergeStrategy } = parsed;
@@ -205,6 +207,35 @@ function renderLiveOutputCompact() {
     const text = liveOutputEvents.length ? renderCompactSummary(summary) : "";
     compactEl.textContent = text || "Waiting for agent output...";
 }
+function updateInlinePreview() {
+    const previewEl = document.getElementById("ticket-live-output-preview");
+    if (!previewEl)
+        return;
+    // Only show preview when panel is collapsed and there are events
+    if (liveOutputPanelExpanded || liveOutputEvents.length === 0) {
+        previewEl.textContent = "";
+        return;
+    }
+    // Get the most recent event for inline preview
+    const lastEvent = liveOutputEvents[liveOutputEvents.length - 1];
+    let preview = "";
+    if (lastEvent.title) {
+        preview = lastEvent.title;
+        if (lastEvent.summary) {
+            const summarySnippet = lastEvent.summary.split("\n")[0].slice(0, 50);
+            preview += `: ${summarySnippet}`;
+        }
+    }
+    else if (lastEvent.method) {
+        preview = lastEvent.method;
+    }
+    else if (liveOutputBuffer.length > 0) {
+        // Fall back to last line of output buffer
+        const lastLine = liveOutputBuffer[liveOutputBuffer.length - 1].trim();
+        preview = lastLine.slice(0, 60);
+    }
+    previewEl.textContent = preview;
+}
 function updateLiveOutputDetailToggle() {
     const detailBtn = document.getElementById("ticket-live-output-detail");
     if (!detailBtn)
@@ -224,6 +255,7 @@ function renderLiveOutputView() {
     renderLiveOutputCompact();
     renderLiveOutputEvents();
     updateLiveOutputDetailToggle();
+    updateInlinePreview();
 }
 function clearLiveOutput() {
     liveOutputBuffer = [];
@@ -335,6 +367,7 @@ function initLiveOutputPanel() {
         if (panelEl) {
             panelEl.classList.toggle("expanded", liveOutputPanelExpanded);
         }
+        updateInlinePreview();
     };
     if (toggleBtn) {
         toggleBtn.addEventListener("click", toggle);

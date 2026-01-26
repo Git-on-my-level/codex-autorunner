@@ -48,6 +48,7 @@ def test_workspace_docs_read_write(hub_env, client, repo: Path):
     ).read_text() == test_decisions
 
 
+@pytest.mark.integration
 def test_file_chat_workspace_targets(hub_env, client, repo: Path):
     # Setup workspace docs
     ws_dir = repo / ".codex-autorunner" / "workspace"

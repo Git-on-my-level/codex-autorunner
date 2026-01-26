@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +36,7 @@ class WorkspaceAppServerSupervisor:
         approval_handler: Optional[ApprovalHandler] = None,
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
-        auto_restart: bool = True,
+        auto_restart: Optional[bool] = None,
         request_timeout: Optional[float] = None,
         turn_stall_timeout_seconds: Optional[float] = None,
         turn_stall_poll_interval_seconds: Optional[float] = None,
@@ -50,7 +51,13 @@ class WorkspaceAppServerSupervisor:
         self._approval_handler = approval_handler
         self._notification_handler = notification_handler
         self._logger = logger or logging.getLogger(__name__)
-        self._auto_restart = auto_restart
+        if auto_restart is None:
+            disable_restart_env = os.environ.get(
+                "CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS"
+            )
+            self._auto_restart = False if disable_restart_env else True
+        else:
+            self._auto_restart = auto_restart
         self._request_timeout = request_timeout
         self._turn_stall_timeout_seconds = turn_stall_timeout_seconds
         self._turn_stall_poll_interval_seconds = turn_stall_poll_interval_seconds

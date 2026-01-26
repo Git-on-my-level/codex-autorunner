@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts
+.PHONY: install dev hooks test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check
 
 install:
 	$(PYTHON) -m pip install .
@@ -72,6 +72,19 @@ test-integration:
 
 check:
 	./scripts/check.sh
+	@if [ -d node_modules ]; then \
+		pnpm lint:html && pnpm test:dom; \
+	else \
+		echo "Skipping frontend checks (node_modules missing). Run 'make npm-install' first." >&2; \
+	fi
+
+lint-html: npm-install
+	pnpm lint:html
+
+dom-check: npm-install
+	pnpm test:dom
+
+frontend-check: lint-html dom-check
 
 format:
 	$(PYTHON) -m black src tests

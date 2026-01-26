@@ -1655,8 +1655,8 @@ button.icon-btn {
 .ticket-card .ticket-flow-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin: 8px 0;
+  gap: 6px;
+  margin: 6px 0;
 }
 
 .ticket-card .ticket-flow-actions .agent-controls {
@@ -1665,20 +1665,33 @@ button.icon-btn {
 }
 
 .ticket-card .ticket-flow-meta {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
-  padding: 8px;
-  border-radius: 10px;
-  background: linear-gradient(120deg, rgba(111, 137, 255, 0.15), rgba(16, 21, 33, 0.8));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: linear-gradient(120deg, rgba(111, 137, 255, 0.12), rgba(16, 21, 33, 0.6));
   border: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.ticket-card .ticket-flow-meta > div {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.ticket-card .ticket-flow-meta .muted {
+  font-size: 11px;
+  opacity: 0.6;
 }
 
 .ticket-card .ticket-flow-grid {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  margin-top: 10px;
+  margin-top: 8px;
   flex: 1;
   min-height: 0;
 }
@@ -1961,15 +1974,14 @@ button.icon-btn {
 }
 
 .ticket-card .ticket-flow-reason {
-  display: block;
-  margin: 4px 0 0;
+  display: inline;
 }
 
 /* Live Agent Output Panel */
 .ticket-live-output-panel {
-  margin-top: 10px;
+  margin-top: 8px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.02), rgba(26, 33, 48, 0.7));
   overflow: hidden;
 }
@@ -1977,16 +1989,17 @@ button.icon-btn {
 .ticket-live-output-header {
   display: flex;
   align-items: center;
-  /* justify-content: space-between; */
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   background: rgba(255, 255, 255, 0.03);
   cursor: pointer;
   user-select: none;
+  min-height: 32px;
 }
 
 .ticket-live-output-spacer {
-  margin-left: auto;
+  flex: 1;
+  min-width: 8px;
 }
 
 .ticket-live-output-header:hover {
@@ -1995,15 +2008,39 @@ button.icon-btn {
 
 .ticket-live-output-title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+/* Inline preview shown when panel is collapsed */
+.ticket-live-output-preview {
+  flex: 0 1 auto;
+  max-width: 50%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.8;
+}
+
+.ticket-live-output-preview:empty {
+  display: none;
+}
+
+/* Hide preview when panel is expanded */
+.ticket-live-output-panel.expanded .ticket-live-output-preview {
+  display: none;
 }
 
 .ticket-live-output-status {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 6px;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
   background: rgba(255, 255, 255, 0.08);
   color: var(--muted);
+  flex-shrink: 0;
 }
 
 .ticket-live-output-status.connected {
@@ -7605,14 +7642,14 @@ button.loading::after {
   font-size: 13px;
 }
 
-/* Messages panel */
-#messages .cards {
+/* Inbox / Messages panel */
+#inbox .cards {
   grid-template-columns: 1fr;
 }
 
-#messages .card {
+#inbox .card {
   max-width: none;
-  padding: 8px 10px;
+  padding: 12px 16px;
 }
 
 .messages-layout {
@@ -7660,9 +7697,10 @@ button.loading::after {
 .messages-thread-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-weight: 600;
   font-size: 12px;
+  flex-wrap: wrap;
 }
 
 .messages-thread-subtitle {
@@ -7696,11 +7734,95 @@ button.loading::after {
 .messages-thread-detail {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
+  padding: 16px;
   background: rgba(255, 255, 255, 0.02);
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+}
+
+/* Empty state styling */
+.messages-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 48px 24px;
+  height: 100%;
+  min-height: 200px;
+}
+
+.messages-empty-state .muted {
+  font-size: 13px;
+}
+
+.messages-empty-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+
+.messages-empty-title {
+  font-size: 15px;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+
+.messages-empty-hint {
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 280px;
+  line-height: 1.5;
+}
+
+/* Sidebar empty state */
+.messages-sidebar-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.01);
+  flex: 1;
+}
+
+.messages-sidebar-empty .muted {
+  font-size: 12px;
+}
+
+/* Session row styling for thread list */
+.messages-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.messages-session-row:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+  cursor: pointer;
+}
+
+.messages-session-id {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.messages-session-stats {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .messages-thread-history {

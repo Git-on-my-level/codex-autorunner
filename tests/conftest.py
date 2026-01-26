@@ -8,6 +8,8 @@ Ensure tests always import the in-repo code.
 
 from __future__ import annotations
 
+import asyncio
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +17,22 @@ from pathlib import Path
 import pytest
 
 DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 120
+os.environ.setdefault("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", "1")
+
+
+_ORIGINAL_UNRAISABLE_HOOK = sys.unraisablehook
+
+
+def _silence_event_loop_closed_unraisable(unraisable: sys.UnraisableHookArgs) -> None:
+    exc = unraisable.exc_value
+    if isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc):
+        # Suppress noisy asyncio transport __del__ warnings that can surface when
+        # cancelling restart tasks during teardown.
+        return
+    _ORIGINAL_UNRAISABLE_HOOK(unraisable)
+
+
+sys.unraisablehook = _silence_event_loop_closed_unraisable
 
 
 def pytest_configure() -> None:
@@ -39,6 +57,48 @@ def pytest_collection_modifyitems(
         if item.get_closest_marker("integration") is not None:
             continue
         item.add_marker(pytest.mark.timeout(DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_codex_app_server_clients() -> None:
+    """
+    Ensure any CodexAppServerClient restart tasks are cancelled after the suite.
+
+    Some tests intentionally crash the app-server to exercise auto-restart
+    behavior; if an instance slips through without an explicit close, the
+    pending restart task can emit \"Task was destroyed\" noise when the event
+    loop shuts down. Running this cleanup keeps `make check` quiet for agents.
+    """
+    yield
+    # Import lazily to avoid impacting non-app-server test collection time.
+    import anyio
+
+    from codex_autorunner.integrations.app_server.client import _close_all_clients
+
+    anyio.run(_close_all_clients)
+
+
+@pytest.fixture(autouse=True)
+async def _cleanup_codex_app_server_clients_per_test() -> None:
+    """
+    Per-test cleanup so pending restart tasks are cancelled before the event loop
+    for an async test tears down (avoids \"Task was destroyed\" noise).
+    """
+    yield
+    from codex_autorunner.integrations.app_server.client import _close_all_clients
+
+    await _close_all_clients()
+    pending_restart_tasks = [
+        t
+        for t in asyncio.all_tasks()
+        if t.get_coro().__qualname__.endswith(
+            "CodexAppServerClient._restart_after_disconnect"
+        )
+    ]
+    for t in pending_restart_tasks:
+        t.cancel()
+    if pending_restart_tasks:
+        await asyncio.gather(*pending_restart_tasks, return_exceptions=True)
 
 
 @pytest.fixture()
