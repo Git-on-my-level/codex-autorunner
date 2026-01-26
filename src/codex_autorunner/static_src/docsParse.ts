@@ -19,7 +19,7 @@ export function parseChatPayload(payload: unknown): {
         interrupted: true,
         detail: (p.detail as string | undefined) || "Doc chat interrupted",
         response: "", content: "", patch: "", drafts: {}, updated: [], createdAt: "", baseHash: "", agentMessage: ""
-      } as any;
+      } as ReturnType<typeof parseChatPayload>;
     }
     return { error: (p.detail as string | undefined) || "Doc chat failed", response: "", content: "", patch: "", drafts: {}, updated: [], createdAt: "", baseHash: "", agentMessage: "" };
   }

@@ -66,14 +66,14 @@ function setHealth(status: HealthStatus, detail?: string | null): void {
   }
 }
 
-async function tryFetch(path: string): Promise<{ ok: boolean; status: number; payload: any; text: string }> {
+async function tryFetch(path: string): Promise<{ ok: boolean; status: number; payload: unknown; text: string }> {
   const target = resolvePath(path);
   const headers: Record<string, string> = {};
   const token = getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(target, { headers });
   const text = await res.text();
-  let payload: any = null;
+  let payload: unknown = null;
   try {
     payload = JSON.parse(text);
   } catch (_err) {
@@ -82,18 +82,20 @@ async function tryFetch(path: string): Promise<{ ok: boolean; status: number; pa
   return { ok: res.ok, status: res.status, payload, text };
 }
 
-function deriveHealthFromPayload(payload: any): RepoHealth {
+function deriveHealthFromPayload(payload: unknown): RepoHealth {
   if (!payload || typeof payload !== "object") {
     return { status: "offline", detail: "Empty health response" };
   }
-  const payloadStatus = String((payload as Record<string, unknown>).status || "ok").toLowerCase();
+  const p = payload as Record<string, unknown>;
+  const payloadStatus = String(p.status || "ok").toLowerCase();
 
   if (payloadStatus !== "ok" && payloadStatus !== "degraded") {
-    return { status: "offline", detail: String((payload as Record<string, any>).detail || payloadStatus) };
+    return { status: "offline", detail: String(p.detail || payloadStatus) };
   }
 
   // Ticket-first: the only initialization requirement is `.codex-autorunner/tickets/`.
-  const ticketsStatus = String((payload as Record<string, any>).tickets?.status || "").toLowerCase();
+  const tickets = p.tickets as { status?: string } | undefined;
+  const ticketsStatus = String(tickets?.status || "").toLowerCase();
   if (ticketsStatus && ticketsStatus !== "ok") {
     return {
       status: "degraded",
@@ -102,7 +104,8 @@ function deriveHealthFromPayload(payload: any): RepoHealth {
   }
 
   // Flows DB is lazily created. Only treat truly unavailable storage as degraded.
-  const flowsStatus = String((payload as Record<string, any>).flows?.status || "").toLowerCase();
+  const flows = p.flows as { status?: string } | undefined;
+  const flowsStatus = String(flows?.status || "").toLowerCase();
   if (flowsStatus && flowsStatus !== "ok" && flowsStatus !== "missing") {
     return { status: "degraded", detail: `Flows unavailable: ${flowsStatus}` };
   }

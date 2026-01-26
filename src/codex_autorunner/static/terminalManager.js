@@ -1842,7 +1842,8 @@ export class TerminalManager {
      * Ensure xterm terminal is initialized
      */
     _ensureTerminal() {
-        if (!window.Terminal || !window.FitAddon) {
+        const win = window;
+        if (!win.Terminal || !win.FitAddon) {
             this._setStatus("xterm assets missing; reload or check /static/vendor");
             flash("xterm assets missing; reload the page", "error");
             return false;
@@ -1861,7 +1862,7 @@ export class TerminalManager {
         const container = document.getElementById("terminal-container");
         if (!container)
             return false;
-        this.term = new window.Terminal({
+        this.term = new win.Terminal({
             convertEol: true,
             fontFamily: '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
             fontSize: this._getFontSize(),
@@ -1873,7 +1874,7 @@ export class TerminalManager {
             scrollback: this.transcriptMaxLines,
             theme: CONSTANTS.THEME.XTERM,
         });
-        this.fitAddon = new window.FitAddon.FitAddon();
+        this.fitAddon = new win.FitAddon.FitAddon();
         this.term.loadAddon(this.fitAddon);
         this.term.open(container);
         this.term.write('Press "New" or "Resume" to launch Codex TUI...\r\n');
@@ -1966,7 +1967,8 @@ export class TerminalManager {
         if (!viewport)
             return;
         const getLineHeight = () => {
-            const dims = this.term?._core?._renderService?.dimensions;
+            const core = this.term?._core;
+            const dims = core?._renderService?.dimensions;
             if (dims && Number.isFinite(dims.actualCellHeight) && dims.actualCellHeight > 0) {
                 return dims.actualCellHeight;
             }
@@ -3062,7 +3064,8 @@ export class TerminalManager {
                 method: "POST",
                 body: formData,
             });
-            const imagePath = response?.path || response?.abs_path;
+            const p = response;
+            const imagePath = p.path || p.abs_path;
             if (!imagePath) {
                 throw new Error("Upload returned no path");
             }
