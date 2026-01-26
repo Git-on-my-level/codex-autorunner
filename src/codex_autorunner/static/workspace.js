@@ -1,4 +1,4 @@
-import { flash } from "./utils.js";
+import { api, flash } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 import { ingestSpecToTickets, listTickets, listWorkspaceFiles, } from "./workspaceApi.js";
 import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, } from "./fileChat.js";
@@ -142,10 +142,7 @@ async function loadWorkspaceFile(path) {
     state.loading = true;
     setStatus("Loading…");
     try {
-        const data = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`);
-        if (!data.ok)
-            throw new Error(await data.text());
-        const text = await data.text();
+        const text = await api(`/api/workspace/file?path=${encodeURIComponent(path)}`);
         state.content = text;
         if (state.docEditor) {
             state.docEditor.destroy();
@@ -160,13 +157,10 @@ async function loadWorkspaceFile(path) {
             statusEl: status,
             onLoad: async () => text,
             onSave: async (content) => {
-                const res = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
+                await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
                     method: "PUT",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ content }),
+                    body: { content },
                 });
-                if (!res.ok)
-                    throw new Error(await res.text());
                 state.content = content;
             },
         });
@@ -358,10 +352,9 @@ async function resetThread() {
     if (!state.target)
         return;
     try {
-        await fetch("/api/app-server/threads/reset", {
+        await api("/api/app-server/threads/reset", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ key: `file_chat.workspace.${state.target.path}` }),
+            body: { key: `file_chat.workspace.${state.target.path}` },
         });
         state.messages = [];
         state.events = [];

@@ -2262,12 +2262,41 @@ button.icon-btn {
   display: grid;
   grid-template-columns: 220px 1fr;
   gap: 12px;
+  flex: 1;
+  min-height: 0;
 }
 
 .workspace-main {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Workspace content textarea - dark mode styling */
+#workspace-content {
+  flex: 1;
+  min-height: 300px;
+  padding: 10px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  resize: none;
+}
+
+#workspace-content:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#workspace-content::placeholder {
+  color: var(--muted);
+  opacity: 0.6;
 }
 
 .workspace-file-browser {
