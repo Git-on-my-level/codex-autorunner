@@ -332,6 +332,7 @@ function els(): {
   resumeBtn: HTMLButtonElement | null;
   refreshBtn: HTMLButtonElement | null;
   stopBtn: HTMLButtonElement | null;
+  restartBtn: HTMLButtonElement | null;
   archiveBtn: HTMLButtonElement | null;
 } {
   return {
@@ -352,13 +353,14 @@ function els(): {
     resumeBtn: document.getElementById("ticket-flow-resume") as HTMLButtonElement | null,
     refreshBtn: document.getElementById("ticket-flow-refresh") as HTMLButtonElement | null,
     stopBtn: document.getElementById("ticket-flow-stop") as HTMLButtonElement | null,
+    restartBtn: document.getElementById("ticket-flow-restart") as HTMLButtonElement | null,
     archiveBtn: document.getElementById("ticket-flow-archive") as HTMLButtonElement | null,
   };
 }
 
 function setButtonsDisabled(disabled: boolean): void {
-  const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn, archiveBtn } = els();
-  [bootstrapBtn, resumeBtn, refreshBtn, stopBtn, archiveBtn].forEach((btn) => {
+  const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn } = els();
+  [bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn].forEach((btn) => {
     if (btn) btn.disabled = disabled;
   });
 }
@@ -744,13 +746,27 @@ async function loadTicketFlow(): Promise<void> {
       }
     }
     
-    // Show archive button when flow is in terminal state and has tickets
-    if (archiveBtn) {
+    // Show restart button when flow is paused or in terminal state (allows starting fresh)
+    const { restartBtn } = els();
+    if (restartBtn) {
+      const isPaused = latest?.status === "paused";
       const isTerminal =
         latest?.status === "completed" ||
         latest?.status === "stopped" ||
         latest?.status === "failed";
-      const canArchive = isTerminal && ticketsExist && Boolean(currentRunId);
+      const canRestart = (isPaused || isTerminal) && ticketsExist && Boolean(currentRunId);
+      restartBtn.style.display = canRestart ? "" : "none";
+      restartBtn.disabled = !canRestart;
+    }
+    
+    // Show archive button when flow is paused or in terminal state and has tickets
+    if (archiveBtn) {
+      const isPaused = latest?.status === "paused";
+      const isTerminal =
+        latest?.status === "completed" ||
+        latest?.status === "stopped" ||
+        latest?.status === "failed";
+      const canArchive = (isPaused || isTerminal) && ticketsExist && Boolean(currentRunId);
       archiveBtn.style.display = canArchive ? "" : "none";
       archiveBtn.disabled = !canArchive;
     }
@@ -845,6 +861,44 @@ async function stopTicketFlow(): Promise<void> {
   }
 }
 
+async function restartTicketFlow(): Promise<void> {
+  const { restartBtn } = els();
+  if (!restartBtn) return;
+  if (!isRepoHealthy()) {
+    flash("Repo offline; cannot restart ticket flow.", "error");
+    return;
+  }
+  if (!ticketsExist) {
+    flash("Create a ticket first before restarting the flow.", "error");
+    return;
+  }
+  if (!confirm("Restart ticket flow? This will stop the current run and start a new one.")) {
+    return;
+  }
+  setButtonsDisabled(true);
+  restartBtn.textContent = "Restarting…";
+  try {
+    // Stop the current run first if it exists
+    if (currentRunId) {
+      await api(`/api/flows/${currentRunId}/stop`, { method: "POST", body: {} });
+    }
+    // Start a new run with force_new to bypass reuse logic
+    const res = (await api("/api/flows/ticket_flow/bootstrap", {
+      method: "POST",
+      body: { metadata: { force_new: true } },
+    })) as BootstrapResponse;
+    currentRunId = res?.id || null;
+    flash("Ticket flow restarted");
+    clearLiveOutput();
+    await loadTicketFlow();
+  } catch (err) {
+    flash((err as Error).message || "Failed to restart ticket flow", "error");
+  } finally {
+    restartBtn.textContent = "Restart";
+    setButtonsDisabled(false);
+  }
+}
+
 async function archiveTicketFlow(): Promise<void> {
   const { archiveBtn } = els();
   if (!archiveBtn) return;
@@ -880,13 +934,14 @@ async function archiveTicketFlow(): Promise<void> {
 }
 
 export function initTicketFlow(): void {
-  const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, archiveBtn } = els();
+  const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn } = els();
   if (!card || card.dataset.ticketInitialized === "1") return;
   card.dataset.ticketInitialized = "1";
 
   if (bootstrapBtn) bootstrapBtn.addEventListener("click", bootstrapTicketFlow);
   if (resumeBtn) resumeBtn.addEventListener("click", resumeTicketFlow);
   if (stopBtn) stopBtn.addEventListener("click", stopTicketFlow);
+  if (restartBtn) restartBtn.addEventListener("click", restartTicketFlow);
   if (archiveBtn) archiveBtn.addEventListener("click", archiveTicketFlow);
   if (refreshBtn) refreshBtn.addEventListener("click", loadTicketFlow);
 

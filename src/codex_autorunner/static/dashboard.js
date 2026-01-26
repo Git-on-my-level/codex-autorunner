@@ -12,7 +12,6 @@ const usageChartState = {
 };
 let usageSeriesRetryTimer = null;
 let usageSummaryRetryTimer = null;
-let latestMessageStats = null;
 let latestRunHistory = [];
 function updateTodoPreview(_content) {
     // Docs UI removed; keep stub for backward compatibility.
@@ -130,35 +129,6 @@ function renderUsage(data) {
     if (metaEl)
         metaEl.textContent = codexHome;
 }
-async function loadMessageStats() {
-    try {
-        const data = (await api("/api/messages/threads"));
-        const threads = Array.isArray(data?.threads) ? data.threads : [];
-        if (!threads.length) {
-            latestMessageStats = {
-                handoffs: 0,
-                replies: 0,
-                currentTicket: null,
-                totalTurns: null,
-            };
-        }
-        else {
-            const primary = threads.find((t) => t.status === "paused") ||
-                threads[0];
-            latestMessageStats = {
-                handoffs: primary.handoff_count ?? 0,
-                replies: primary.reply_count ?? 0,
-                currentTicket: primary.ticket_state?.current_ticket || null,
-                totalTurns: primary.ticket_state?.total_turns ?? null,
-            };
-        }
-    }
-    catch (_err) {
-        // best effort
-        latestMessageStats = latestMessageStats || null;
-    }
-    renderMessageStats();
-}
 async function loadTicketAnalytics() {
     try {
         const data = (await api("/api/analytics/summary"));
@@ -196,32 +166,34 @@ function renderTicketAnalytics(data) {
     const doneCount = document.getElementById("done-count");
     const ticketActive = document.getElementById("ticket-active");
     const ticketTurns = document.getElementById("ticket-turns");
+    const totalTurns = document.getElementById("total-turns");
     const handoffsEl = document.getElementById("message-handoffs");
     const repliesEl = document.getElementById("message-replies");
     const runIdEl = document.getElementById("last-run-id");
-    const lastExitEl = document.getElementById("last-exit-code");
     if (lastStart)
-        lastStart.textContent = run?.started_at || "–";
+        lastStart.textContent = formatIso(run?.started_at || null);
     if (lastFinish)
-        lastFinish.textContent = run?.finished_at || "–";
+        lastFinish.textContent = formatIso(run?.finished_at || null);
     if (lastDuration)
         lastDuration.textContent = formatDuration(run?.duration_seconds ?? null);
     if (todoCount)
         todoCount.textContent = tickets ? String(tickets.todo_count) : "–";
     if (doneCount)
         doneCount.textContent = tickets ? String(tickets.done_count) : "–";
-    if (ticketActive)
-        ticketActive.textContent = tickets?.current_ticket || "–";
+    if (ticketActive) {
+        const ticket = tickets?.current_ticket || null;
+        ticketActive.textContent = ticket ? ticket.split("/").pop() || ticket : "–";
+    }
     if (ticketTurns)
         ticketTurns.textContent = turns?.current_ticket != null ? String(turns.current_ticket) : "–";
+    if (totalTurns)
+        totalTurns.textContent = turns?.total != null ? String(turns.total) : "–";
     if (handoffsEl)
         handoffsEl.textContent = turns?.handoffs != null ? String(turns.handoffs) : "0";
     if (repliesEl)
         repliesEl.textContent = turns?.replies != null ? String(turns.replies) : "0";
     if (runIdEl)
         runIdEl.textContent = run?.short_id || run?.id || "–";
-    if (lastExitEl)
-        lastExitEl.textContent = run?.status ?? "–";
     // Agent chip (optional future use)
     const agentEl = document.getElementById("ticket-agent");
     if (agentEl) {
@@ -289,25 +261,6 @@ function renderRunHistory(runs) {
     </div>
     ${items.join("")}
   `;
-}
-function renderMessageStats() {
-    const stats = latestMessageStats;
-    const handoffsEl = document.getElementById("message-handoffs");
-    const repliesEl = document.getElementById("message-replies");
-    const ticketEl = document.getElementById("ticket-active");
-    const turnsEl = document.getElementById("ticket-turns");
-    const handoffs = stats?.handoffs ?? 0;
-    const replies = stats?.replies ?? 0;
-    const ticket = stats?.currentTicket || "–";
-    const turns = stats?.totalTurns;
-    if (handoffsEl)
-        handoffsEl.textContent = String(handoffs);
-    if (repliesEl)
-        repliesEl.textContent = String(replies);
-    if (ticketEl)
-        ticketEl.textContent = ticket;
-    if (turnsEl)
-        turnsEl.textContent = turns != null ? String(turns) : "–";
 }
 function buildUsageSeriesQuery() {
     const params = new URLSearchParams();
@@ -820,20 +773,12 @@ export function initDashboard() {
     loadTodoPreview();
     loadVersion();
     checkUpdateStatus();
-    loadMessageStats();
     registerAutoRefresh("dashboard-usage", {
         callback: async () => { await loadUsage(); },
         tabId: "analytics",
         interval: CONSTANTS.UI.AUTO_REFRESH_USAGE_INTERVAL,
         refreshOnActivation: true,
         immediate: false,
-    });
-    registerAutoRefresh("message-stats", {
-        callback: loadMessageStats,
-        tabId: "analytics",
-        interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
-        refreshOnActivation: true,
-        immediate: true,
     });
     registerAutoRefresh("dashboard-analytics", {
         callback: async () => {

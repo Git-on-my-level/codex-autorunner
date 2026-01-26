@@ -1297,6 +1297,45 @@ a.hub-pr-pill:hover {
   word-break: break-all;
 }
 
+.run-history-list {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  overflow-x: auto;
+}
+
+.run-history-row {
+  display: grid;
+  grid-template-columns: 72px 80px 90px minmax(140px, 1fr) minmax(120px, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.run-history-head {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.run-history-id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.run-history-status {
+  text-transform: capitalize;
+}
+
+.run-history-step {
+  color: var(--muted);
+}
+
 .muted {
   color: var(--muted);
 }

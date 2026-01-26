@@ -147,8 +147,12 @@
                 <p class="metric" id="ticket-active">–</p>
               </div>
               <div>
-                <p class="muted">Turns</p>
+                <p class="muted">Ticket Turns</p>
                 <p class="metric" id="ticket-turns">–</p>
+              </div>
+              <div>
+                <p class="muted">Total Turns</p>
+                <p class="metric" id="total-turns">–</p>
               </div>
               <div>
                 <p class="muted">Handoffs</p>
@@ -161,10 +165,6 @@
               <div>
                 <p class="muted">Run ID</p>
                 <p class="metric" id="last-run-id">–</p>
-              </div>
-              <div>
-                <p class="muted">Exit</p>
-                <p class="metric" id="last-exit-code">–</p>
               </div>
             </div>
           </div>
@@ -320,20 +320,22 @@
                 <select id="workspace-chat-reasoning-select" title="Reasoning"></select>
               </div>
               <div class="doc-chat-input-row compose-row">
-                <textarea enterkeyhint="enter" id="workspace-chat-input" placeholder="Ask AI to edit this workspace doc..."
-                  rows="1" spellcheck="false"></textarea>
+                <textarea enterkeyhint="enter" id="workspace-chat-input"
+                  placeholder="Ask AI to edit this workspace doc..." rows="1" spellcheck="false"></textarea>
                 <div class="doc-chat-input-buttons compose-buttons">
                   <button class="primary sm" id="workspace-chat-send" title="Send">↑</button>
                 </div>
               </div>
               <div class="doc-chat-meta">
                 <div class="doc-chat-meta-left">
-                  <span class="muted small" id="workspace-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for newline</span>
+                  <span class="muted small" id="workspace-chat-hint">Cmd+Enter/Ctrl+Enter to send · Enter for
+                    newline</span>
                 </div>
                 <div class="doc-chat-meta-right">
                   <button class="ghost sm hidden doc-chat-cancel-inline" id="workspace-chat-cancel"
                     title="Cancel">✕</button>
-                  <button class="ghost sm" id="workspace-chat-new-thread" title="Start a new chat thread">New thread</button>
+                  <button class="ghost sm" id="workspace-chat-new-thread" title="Start a new chat thread">New
+                    thread</button>
                   <span class="pill pill-idle" id="workspace-chat-status">idle</span>
                 </div>
               </div>
@@ -372,6 +374,7 @@
             <button class="primary sm" id="ticket-flow-bootstrap">Start Ticket Flow</button>
             <button class="ghost sm" id="ticket-flow-stop">Stop</button>
             <button class="ghost sm" id="ticket-flow-resume">Resume</button>
+            <button class="ghost sm" id="ticket-flow-restart" style="display:none;">Restart</button>
             <button class="ghost sm" id="ticket-flow-archive" style="display:none;">Archive Flow</button>
             <button class="ghost sm icon-btn" id="ticket-flow-refresh" title="Refresh ticket flow">↻</button>
             <button class="ghost sm" id="ticket-new-btn" title="Create new ticket">+ New Ticket</button>
