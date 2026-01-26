@@ -1000,11 +1000,11 @@ class TelegramBotService(
         return self._ticket_flow_bridge._select_ticket_flow_topic(entries)
 
     @staticmethod
-    def _set_ticket_handoff_marker(
+    def _set_ticket_dispatch_marker(
         value: Optional[str],
     ) -> "Callable[[TelegramTopicRecord], None]":
         def apply(topic: "TelegramTopicRecord") -> None:
-            topic.last_ticket_handoff_seq = value
+            topic.last_ticket_dispatch_seq = value
 
         return apply
 
@@ -1030,8 +1030,8 @@ class TelegramBotService(
     ) -> Optional[tuple[str, str, str]]:
         return self._ticket_flow_bridge._load_ticket_flow_pause(workspace_root)
 
-    def _latest_handoff_seq(self, history_dir: Path) -> Optional[str]:
-        return self._ticket_flow_bridge._latest_handoff_seq(history_dir)
+    def _latest_dispatch_seq(self, history_dir: Path) -> Optional[str]:
+        return self._ticket_flow_bridge._latest_dispatch_seq(history_dir)
 
     def _format_ticket_flow_pause_reason(self, record: "FlowRunRecord") -> str:
         return self._ticket_flow_bridge._format_ticket_flow_pause_reason(record)

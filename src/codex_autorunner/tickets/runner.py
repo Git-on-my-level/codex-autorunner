@@ -12,7 +12,7 @@ from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_frontmatter
 from .models import TicketFrontmatter, TicketResult, TicketRunConfig, normalize_requires
-from .outbox import dispatch_outbox, ensure_outbox_dirs, resolve_outbox_paths
+from .outbox import archive_dispatch, ensure_outbox_dirs, resolve_outbox_paths
 from .replies import ensure_reply_dirs, parse_user_reply, resolve_reply_paths
 
 _logger = logging.getLogger(__name__)
@@ -361,24 +361,24 @@ class TicketRunner:
             status_after_agent = None
             agent_committed_this_turn = None
 
-        # Post-turn: archive outbox if USER_MESSAGE exists.
-        outbox_seq = int(state.get("outbox_seq") or 0)
-        dispatch, dispatch_errors = dispatch_outbox(
-            outbox_paths, next_seq=outbox_seq + 1
+        # Post-turn: archive outbox if DISPATCH.md exists.
+        dispatch_seq = int(state.get("dispatch_seq") or 0)
+        dispatch, dispatch_errors = archive_dispatch(
+            outbox_paths, next_seq=dispatch_seq + 1
         )
         if dispatch_errors:
-            # Treat as pause: user should fix USER_MESSAGE frontmatter. Keep outbox
+            # Treat as pause: user should fix DISPATCH.md frontmatter. Keep outbox
             # lint separate from ticket frontmatter lint to avoid mixing behaviors.
             state["outbox_lint"] = dispatch_errors
             return self._pause(
                 state,
-                reason="Invalid USER_MESSAGE.md frontmatter.",
+                reason="Invalid DISPATCH.md frontmatter.",
                 reason_details="Errors:\n- " + "\n- ".join(dispatch_errors),
                 current_ticket=safe_relpath(current_path, self._workspace_root),
             )
 
         if dispatch is not None:
-            state["outbox_seq"] = dispatch.seq
+            state["dispatch_seq"] = dispatch.seq
             state.pop("outbox_lint", None)
 
         # Post-turn: ticket frontmatter must remain valid.
@@ -427,8 +427,8 @@ class TicketRunner:
             )
 
         # If we dispatched a pause message, pause regardless of ticket completion.
-        if dispatch is not None and dispatch.message.mode == "pause":
-            reason = dispatch.message.title or "Paused for user input."
+        if dispatch is not None and dispatch.dispatch.mode == "pause":
+            reason = dispatch.dispatch.title or "Paused for user input."
             if checkpoint_error:
                 reason += f"\n\nNote: checkpoint commit failed: {checkpoint_error}"
             state["reason"] = reason
@@ -700,9 +700,9 @@ class TicketRunner:
         previous_ticket_content: Optional[str] = None,
     ) -> str:
         rel_ticket = safe_relpath(ticket_path, self._workspace_root)
-        rel_handoff = safe_relpath(outbox_paths.handoff_dir, self._workspace_root)
-        rel_user_msg = safe_relpath(
-            outbox_paths.user_message_path, self._workspace_root
+        rel_dispatch_dir = safe_relpath(outbox_paths.dispatch_dir, self._workspace_root)
+        rel_dispatch_path = safe_relpath(
+            outbox_paths.dispatch_path, self._workspace_root
         )
 
         header = (
@@ -711,10 +711,10 @@ class TicketRunner:
             "Key rules:\n"
             f"- Current ticket file: {rel_ticket}\n"
             "- Ticket completion is controlled by YAML frontmatter: set 'done: true' when finished.\n"
-            "- To message the user, optionally write attachments first to the handoff directory, then write USER_MESSAGE.md last.\n"
-            f"  - Handoff directory: {rel_handoff}\n"
-            f"  - USER_MESSAGE.md path: {rel_user_msg}\n"
-            "  USER_MESSAGE.md frontmatter supports: mode: notify|pause (pause will wait for a user response; notify will continue without waiting for user input).\n"
+            "- To message the user, optionally write attachments first to the dispatch directory, then write DISPATCH.md last.\n"
+            f"  - Dispatch directory: {rel_dispatch_dir}\n"
+            f"  - DISPATCH.md path: {rel_dispatch_path}\n"
+            "  DISPATCH.md frontmatter supports: mode: notify|pause (pause will wait for a user response; notify will continue without waiting for user input).\n"
             "- Keep tickets minimal and avoid scope creep. You may create new tickets only if blocking the current SPEC.\n"
         )
 

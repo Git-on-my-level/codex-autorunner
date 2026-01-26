@@ -34,6 +34,20 @@ Precedence: built-ins < codex-autorunner.yml < override < .codex-autorunner/conf
 - Run Codex app-server with streaming logs via OpenCode runtime.
 - Update state and stop on non-zero exit, stop_after_runs, wallclock limit, or external stop flag.
 
+## Agent-Human Communication (Dispatch Model)
+Agent-to-human communication uses the **Dispatch** model:
+- **Dispatch**: Any agent→human message (model: `Dispatch` in `tickets/models.py`)
+  - `mode: "notify"` - Informational; agent continues working
+  - `mode: "pause"` - Handoff; agent yields and awaits human Reply
+- **Reply**: Human→agent response that resumes agent execution
+- **Inbox**: UI tab showing conversation timeline (dispatches + replies)
+- **Notification**: External alerts (Discord/Telegram) for system events - separate from dispatches
+
+Filesystem layout:
+- `runs/<run_id>/dispatch/` - staging for dispatch attachments
+- `runs/<run_id>/dispatch_history/<seq>/` - archived dispatches
+- `runs/<run_id>/DISPATCH.md` - current dispatch file
+
 ## API surface (repo)
 - Workspace: /api/workspace, /api/workspace/{kind}, /api/workspace/spec/ingest.
 - File chat: /api/file-chat, /api/file-chat/pending, /api/file-chat/apply, /api/file-chat/discard, /api/file-chat/interrupt.

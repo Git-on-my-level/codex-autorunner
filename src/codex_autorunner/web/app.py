@@ -58,7 +58,7 @@ from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
 from ..tickets.files import safe_relpath
-from ..tickets.outbox import parse_user_message, resolve_outbox_paths
+from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..voice import VoiceConfig, VoiceService
 from .hub_jobs import HubJobManager
 from .middleware import (
@@ -1327,13 +1327,13 @@ def create_hub_app(
 
     @app.get("/hub/messages")
     async def hub_messages(limit: int = 100):
-        """Return paused ticket_flow messages across all repos.
+        """Return paused ticket_flow dispatches across all repos.
 
         The hub inbox is intentionally simple: it surfaces the latest archived
-        handoff message for each paused ticket_flow run.
+        dispatch for each paused ticket_flow run.
         """
 
-        def _latest_handoff(
+        def _latest_dispatch(
             repo_root: Path, run_id: str, input_data: dict
         ) -> Optional[dict]:
             try:
@@ -1342,7 +1342,7 @@ def create_hub_app(
                 outbox_paths = resolve_outbox_paths(
                     workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
                 )
-                history_dir = outbox_paths.handoff_history_dir
+                history_dir = outbox_paths.dispatch_history_dir
                 if not history_dir.exists() or not history_dir.is_dir():
                     return None
                 seq_dirs: list[Path] = []
@@ -1356,13 +1356,13 @@ def create_hub_app(
                     return None
                 latest_dir = sorted(seq_dirs, key=lambda p: p.name)[-1]
                 seq = int(latest_dir.name)
-                msg_path = latest_dir / "USER_MESSAGE.md"
-                msg, errors = parse_user_message(msg_path)
-                if errors or msg is None:
+                dispatch_path = latest_dir / "DISPATCH.md"
+                dispatch, errors = parse_dispatch(dispatch_path)
+                if errors or dispatch is None:
                     return {
                         "seq": seq,
                         "dir": safe_relpath(latest_dir, repo_root),
-                        "message": None,
+                        "dispatch": None,
                         "errors": errors,
                         "files": [],
                     }
@@ -1370,19 +1370,21 @@ def create_hub_app(
                 for child in sorted(latest_dir.iterdir(), key=lambda p: p.name):
                     if child.name.startswith("."):
                         continue
-                    if child.name == "USER_MESSAGE.md":
+                    if child.name == "DISPATCH.md":
                         continue
                     if child.is_file():
                         files.append(child.name)
+                dispatch_dict = {
+                    "mode": dispatch.mode,
+                    "title": dispatch.title,
+                    "body": dispatch.body,
+                    "extra": dispatch.extra,
+                    "is_handoff": dispatch.is_handoff,
+                }
                 return {
                     "seq": seq,
                     "dir": safe_relpath(latest_dir, repo_root),
-                    "message": {
-                        "mode": msg.mode,
-                        "title": msg.title,
-                        "body": msg.body,
-                        "extra": msg.extra,
-                    },
+                    "dispatch": dispatch_dict,
                     "errors": [],
                     "files": files,
                 }
@@ -1413,10 +1415,10 @@ def create_hub_app(
                 if not paused:
                     continue
                 for record in paused:
-                    latest = _latest_handoff(
+                    latest = _latest_dispatch(
                         repo_root, str(record.id), dict(record.input_data or {})
                     )
-                    if not latest or not latest.get("message"):
+                    if not latest or not latest.get("dispatch"):
                         continue
                     messages.append(
                         {
@@ -1427,9 +1429,9 @@ def create_hub_app(
                             "run_created_at": record.created_at,
                             "status": record.status.value,
                             "seq": latest["seq"],
-                            "message": latest["message"],
+                            "dispatch": latest["dispatch"],
                             "files": latest.get("files") or [],
-                            "open_url": f"/repos/{snap.id}/?tab=messages&run_id={record.id}",
+                            "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
                         }
                     )
             messages.sort(key=lambda m: (m.get("run_created_at") or ""), reverse=True)

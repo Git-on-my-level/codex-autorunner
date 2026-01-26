@@ -367,7 +367,7 @@ async def handle_message_inner(
     ):
         await handlers._send_message(
             message.chat_id,
-            "Ticket flow is paused. Reply to the latest handoff message (tap Reply) or use /flow resume.",
+            "Ticket flow is paused. Reply to the latest dispatch message (tap Reply) or use /flow resume.",
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )

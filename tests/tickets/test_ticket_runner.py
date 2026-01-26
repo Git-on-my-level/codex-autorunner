@@ -169,13 +169,13 @@ async def test_ticket_runner_dispatch_pause_message(tmp_path: Path) -> None:
     runs_dir = Path(".codex-autorunner/runs")
     run_id = "run-1"
     run_dir = workspace_root / runs_dir / run_id
-    handoff_dir = run_dir / "handoff"
-    user_msg = run_dir / "USER_MESSAGE.md"
+    dispatch_dir = run_dir / "dispatch"
+    dispatch_path = run_dir / "DISPATCH.md"
 
     def handler(req: AgentTurnRequest) -> AgentTurnResult:
-        handoff_dir.mkdir(parents=True, exist_ok=True)
-        (handoff_dir / "review.md").write_text("Please review", encoding="utf-8")
-        user_msg.write_text(
+        dispatch_dir.mkdir(parents=True, exist_ok=True)
+        (dispatch_dir / "review.md").write_text("Please review", encoding="utf-8")
+        dispatch_path.write_text(
             "---\nmode: pause\n---\n\nReview attached.\n", encoding="utf-8"
         )
         return AgentTurnResult(
@@ -199,10 +199,10 @@ async def test_ticket_runner_dispatch_pause_message(tmp_path: Path) -> None:
     r1 = await runner.step({})
     assert r1.status == "paused"
     assert r1.dispatch is not None
-    assert r1.dispatch.message.mode == "pause"
-    assert r1.state.get("outbox_seq") == 1
-    assert (run_dir / "handoff_history" / "0001" / "USER_MESSAGE.md").exists()
-    assert (run_dir / "handoff_history" / "0001" / "review.md").exists()
+    assert r1.dispatch.dispatch.mode == "pause"
+    assert r1.state.get("dispatch_seq") == 1
+    assert (run_dir / "dispatch_history" / "0001" / "DISPATCH.md").exists()
+    assert (run_dir / "dispatch_history" / "0001" / "review.md").exists()
 
 
 @pytest.mark.asyncio
@@ -385,14 +385,14 @@ async def test_ticket_runner_notify_does_not_pause_and_pause_does(
     runs_dir = Path(".codex-autorunner/runs")
     run_id = "run-1"
     run_dir = workspace_root / runs_dir / run_id
-    handoff_dir = run_dir / "handoff"
-    user_msg = run_dir / "USER_MESSAGE.md"
+    dispatch_dir = run_dir / "dispatch"
+    dispatch_path = run_dir / "DISPATCH.md"
 
     def handler(req: AgentTurnRequest) -> AgentTurnResult:
         turn = len(pool.requests)
-        handoff_dir.mkdir(parents=True, exist_ok=True)
+        dispatch_dir.mkdir(parents=True, exist_ok=True)
         mode = "notify" if turn == 1 else "pause"
-        user_msg.write_text(
+        dispatch_path.write_text(
             f"---\nmode: {mode}\n---\n\nTurn {turn}\n", encoding="utf-8"
         )
         return AgentTurnResult(
@@ -417,18 +417,18 @@ async def test_ticket_runner_notify_does_not_pause_and_pause_does(
     r1 = await runner.step({})
     r2 = await runner.step(r1.state)
 
-    handoff_history = run_dir / "handoff_history"
+    dispatch_history = run_dir / "dispatch_history"
     assert r1.status == "continue"
     assert r1.dispatch is not None
-    assert r1.dispatch.message.mode == "notify"
-    assert (handoff_history / "0001" / "USER_MESSAGE.md").exists()
-    assert r1.state.get("outbox_seq") == 1
+    assert r1.dispatch.dispatch.mode == "notify"
+    assert (dispatch_history / "0001" / "DISPATCH.md").exists()
+    assert r1.state.get("dispatch_seq") == 1
 
     assert r2.status == "paused"
     assert r2.dispatch is not None
-    assert r2.dispatch.message.mode == "pause"
-    assert (handoff_history / "0002" / "USER_MESSAGE.md").exists()
-    assert r2.state.get("outbox_seq") == 2
+    assert r2.dispatch.dispatch.mode == "pause"
+    assert (dispatch_history / "0002" / "DISPATCH.md").exists()
+    assert r2.state.get("dispatch_seq") == 2
 
 
 @pytest.mark.asyncio

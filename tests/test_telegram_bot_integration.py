@@ -593,7 +593,7 @@ async def test_resume_compact_seed_button_label_is_condensed(
     keyboard = resume_msg["reply_markup"]["inline_keyboard"]
     labels = [button["text"] for row in keyboard for button in row if "text" in button]
     assert any("Compacted:" in label for label in labels)
-    assert all("Context handoff from previous thread" not in label for label in labels)
+    assert all("Context from previous thread" not in label for label in labels)
 
 
 @pytest.mark.anyio

@@ -44,7 +44,7 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "reply": CommandSpec(
             "reply",
-            "reply to a paused ticket flow handoff",
+            "reply to a paused ticket flow dispatch",
             lambda message, args, _runtime: handlers._handle_reply(message, args),
             allow_during_turn=True,
         ),

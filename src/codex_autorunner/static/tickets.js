@@ -397,8 +397,8 @@ function els() {
         lastActivity: document.getElementById("ticket-flow-last-activity"),
         dir: document.getElementById("ticket-flow-dir"),
         tickets: document.getElementById("ticket-flow-tickets"),
-        history: document.getElementById("ticket-handoff-history"),
-        handoffNote: document.getElementById("ticket-handoff-note"),
+        history: document.getElementById("ticket-dispatch-history"),
+        dispatchNote: document.getElementById("ticket-dispatch-note"),
         bootstrapBtn: document.getElementById("ticket-flow-bootstrap"),
         resumeBtn: document.getElementById("ticket-flow-resume"),
         refreshBtn: document.getElementById("ticket-flow-refresh"),
@@ -493,49 +493,52 @@ function renderTickets(data) {
         tickets.appendChild(item);
     });
 }
-function renderHandoffHistory(runId, data) {
-    const { history, handoffNote } = els();
+function renderDispatchHistory(runId, data) {
+    const { history, dispatchNote } = els();
     if (!history)
         return;
     history.innerHTML = "";
     if (!runId) {
-        history.textContent = "Start the ticket flow to see user handoffs.";
-        if (handoffNote)
-            handoffNote.textContent = "–";
+        history.textContent = "Start the ticket flow to see agent dispatches.";
+        if (dispatchNote)
+            dispatchNote.textContent = "–";
         return;
     }
     const entries = (data?.history || []);
     if (!entries.length) {
-        history.textContent = "No handoffs yet.";
-        if (handoffNote)
-            handoffNote.textContent = "–";
+        history.textContent = "No dispatches yet.";
+        if (dispatchNote)
+            dispatchNote.textContent = "–";
         return;
     }
-    if (handoffNote)
-        handoffNote.textContent = `Latest #${entries[0]?.seq ?? "–"}`;
+    if (dispatchNote)
+        dispatchNote.textContent = `Latest #${entries[0]?.seq ?? "–"}`;
     entries.forEach((entry) => {
         const container = document.createElement("div");
-        container.className = "handoff-item clickable";
+        container.className = "dispatch-item clickable";
         container.title = "Click to view in Inbox";
         // Add click handler to navigate to inbox
         container.addEventListener("click", () => {
             if (runId) {
-                // Update URL with run_id so messages tab loads the right thread
+                // Update URL with run_id so inbox tab loads the right thread
                 const url = new URL(window.location.href);
                 url.searchParams.set("run_id", runId);
                 window.history.replaceState({}, "", url.toString());
-                // Switch to messages tab
-                activateTab("messages");
+                // Switch to inbox tab
+                activateTab("inbox");
             }
         });
+        const dispatch = entry.dispatch;
+        const isHandoff = dispatch?.mode === "pause";
+        const modeLabel = isHandoff ? "HANDOFF" : (dispatch?.mode || "notify").toUpperCase();
         const head = document.createElement("div");
-        head.className = "handoff-item-head";
+        head.className = "dispatch-item-head";
         const seq = document.createElement("span");
         seq.className = "ticket-name";
         seq.textContent = `#${entry.seq || "?"}`;
         const mode = document.createElement("span");
         mode.className = "ticket-agent";
-        mode.textContent = (entry.message?.mode || "notify").toUpperCase();
+        mode.textContent = modeLabel;
         head.append(seq, mode);
         container.appendChild(head);
         if (entry.errors && entry.errors.length) {
@@ -544,17 +547,17 @@ function renderHandoffHistory(runId, data) {
             err.textContent = entry.errors.join("; ");
             container.appendChild(err);
         }
-        const title = entry.message?.title;
+        const title = dispatch?.title;
         if (title) {
             const titleEl = document.createElement("div");
-            titleEl.className = "ticket-body ticket-handoff-title";
+            titleEl.className = "ticket-body ticket-dispatch-title";
             titleEl.textContent = title;
             container.appendChild(titleEl);
         }
-        const bodyText = entry.message?.body;
+        const bodyText = dispatch?.body;
         if (bodyText) {
             const body = document.createElement("div");
-            body.className = "ticket-body ticket-handoff-body messages-markdown";
+            body.className = "ticket-body ticket-dispatch-body messages-markdown";
             body.innerHTML = renderMarkdown(bodyText);
             container.appendChild(body);
         }
@@ -651,21 +654,22 @@ async function openTicketByIndex(index) {
         flash(`Failed to open ticket: ${err.message}`, "error");
     }
 }
-async function loadHandoffHistory(runId) {
+async function loadDispatchHistory(runId) {
     const { history } = els();
     if (history)
-        history.textContent = "Loading handoff history…";
+        history.textContent = "Loading dispatch history…";
     if (!runId) {
-        renderHandoffHistory(null, null);
+        renderDispatchHistory(null, null);
         return;
     }
     try {
-        const data = (await api(`/api/flows/${runId}/handoff_history`));
-        renderHandoffHistory(runId, data);
+        // Use dispatch_history endpoint
+        const data = (await api(`/api/flows/${runId}/dispatch_history`));
+        renderDispatchHistory(runId, data);
     }
     catch (err) {
-        renderHandoffHistory(runId, null);
-        flash(err.message || "Failed to load handoff history", "error");
+        renderDispatchHistory(runId, null);
+        flash(err.message || "Failed to load dispatch history", "error");
     }
 }
 async function loadTicketFlow() {
@@ -814,7 +818,7 @@ async function loadTicketFlow() {
             archiveBtn.style.display = canArchive ? "" : "none";
             archiveBtn.disabled = !canArchive;
         }
-        await loadHandoffHistory(currentRunId);
+        await loadDispatchHistory(currentRunId);
     }
     catch (err) {
         if (reason)
@@ -1005,7 +1009,7 @@ async function archiveTicketFlow() {
             reason.textContent = "No ticket flow run yet.";
             reason.classList.remove("has-details");
         }
-        renderHandoffHistory(null, null);
+        renderDispatchHistory(null, null);
         // Stop timers and disconnect event stream
         disconnectEventStream();
         stopElapsedTimer();

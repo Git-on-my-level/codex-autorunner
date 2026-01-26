@@ -149,7 +149,7 @@ function renderTicketAnalytics(data) {
     const ticketActive = document.getElementById("ticket-active");
     const ticketTurns = document.getElementById("ticket-turns");
     const totalTurns = document.getElementById("total-turns");
-    const handoffsEl = document.getElementById("message-handoffs");
+    const dispatchesEl = document.getElementById("message-dispatches");
     const repliesEl = document.getElementById("message-replies");
     const runIdEl = document.getElementById("last-run-id");
     if (lastStart)
@@ -170,8 +170,9 @@ function renderTicketAnalytics(data) {
         ticketTurns.textContent = turns?.current_ticket != null ? String(turns.current_ticket) : "–";
     if (totalTurns)
         totalTurns.textContent = turns?.total != null ? String(turns.total) : "–";
-    if (handoffsEl)
-        handoffsEl.textContent = turns?.handoffs != null ? String(turns.handoffs) : "0";
+    const dispatchCount = turns?.dispatches ?? 0;
+    if (dispatchesEl)
+        dispatchesEl.textContent = String(dispatchCount);
     if (repliesEl)
         repliesEl.textContent = turns?.replies != null ? String(turns.replies) : "0";
     if (runIdEl)

@@ -36,7 +36,7 @@ type TicketFile = {
   errors?: string[];
 };
 
-type HandoffAttachment = {
+type DispatchAttachment = {
   name?: string;
   rel_path?: string;
   path?: string;
@@ -44,11 +44,11 @@ type HandoffAttachment = {
   url?: string;
 };
 
-type HandoffEntry = {
+type DispatchEntry = {
   seq?: string;
-  message?: Record<string, unknown> | null;
+  dispatch?: Record<string, unknown> | null;
   errors?: string[];
-  attachments?: HandoffAttachment[];
+  attachments?: DispatchAttachment[];
 };
 
 let currentRunId: string | null = null;
@@ -480,7 +480,7 @@ function els(): {
   dir: HTMLElement | null;
   tickets: HTMLElement | null;
   history: HTMLElement | null;
-  handoffNote: HTMLElement | null;
+  dispatchNote: HTMLElement | null;
   bootstrapBtn: HTMLButtonElement | null;
   resumeBtn: HTMLButtonElement | null;
   refreshBtn: HTMLButtonElement | null;
@@ -500,8 +500,8 @@ function els(): {
     lastActivity: document.getElementById("ticket-flow-last-activity"),
     dir: document.getElementById("ticket-flow-dir"),
     tickets: document.getElementById("ticket-flow-tickets"),
-    history: document.getElementById("ticket-handoff-history"),
-    handoffNote: document.getElementById("ticket-handoff-note"),
+    history: document.getElementById("ticket-dispatch-history"),
+    dispatchNote: document.getElementById("ticket-dispatch-note"),
     bootstrapBtn: document.getElementById("ticket-flow-bootstrap") as HTMLButtonElement | null,
     resumeBtn: document.getElementById("ticket-flow-resume") as HTMLButtonElement | null,
     refreshBtn: document.getElementById("ticket-flow-refresh") as HTMLButtonElement | null,
@@ -605,54 +605,58 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
   });
 }
 
-function renderHandoffHistory(
+function renderDispatchHistory(
   runId: string | null,
-  data: { history?: HandoffEntry[] } | null
+  data: { history?: DispatchEntry[] } | null
 ): void {
-  const { history, handoffNote } = els();
+  const { history, dispatchNote } = els();
   if (!history) return;
   history.innerHTML = "";
 
   if (!runId) {
-    history.textContent = "Start the ticket flow to see user handoffs.";
-    if (handoffNote) handoffNote.textContent = "–";
+    history.textContent = "Start the ticket flow to see agent dispatches.";
+    if (dispatchNote) dispatchNote.textContent = "–";
     return;
   }
 
-  const entries = (data?.history || []) as HandoffEntry[];
+  const entries = (data?.history || []) as DispatchEntry[];
   if (!entries.length) {
-    history.textContent = "No handoffs yet.";
-    if (handoffNote) handoffNote.textContent = "–";
+    history.textContent = "No dispatches yet.";
+    if (dispatchNote) dispatchNote.textContent = "–";
     return;
   }
 
-  if (handoffNote) handoffNote.textContent = `Latest #${entries[0]?.seq ?? "–"}`;
+  if (dispatchNote) dispatchNote.textContent = `Latest #${entries[0]?.seq ?? "–"}`;
 
   entries.forEach((entry) => {
     const container = document.createElement("div");
-    container.className = "handoff-item clickable";
+    container.className = "dispatch-item clickable";
     container.title = "Click to view in Inbox";
 
     // Add click handler to navigate to inbox
     container.addEventListener("click", () => {
       if (runId) {
-        // Update URL with run_id so messages tab loads the right thread
+        // Update URL with run_id so inbox tab loads the right thread
         const url = new URL(window.location.href);
         url.searchParams.set("run_id", runId);
         window.history.replaceState({}, "", url.toString());
-        // Switch to messages tab
-        activateTab("messages");
+        // Switch to inbox tab
+        activateTab("inbox");
       }
     });
 
+    const dispatch = entry.dispatch;
+    const isHandoff = dispatch?.mode === "pause";
+    const modeLabel = isHandoff ? "HANDOFF" : ((dispatch?.mode as string) || "notify").toUpperCase();
+
     const head = document.createElement("div");
-    head.className = "handoff-item-head";
+    head.className = "dispatch-item-head";
     const seq = document.createElement("span");
     seq.className = "ticket-name";
     seq.textContent = `#${entry.seq || "?"}`;
     const mode = document.createElement("span");
     mode.className = "ticket-agent";
-    mode.textContent = ((entry.message?.mode as string) || "notify").toUpperCase();
+    mode.textContent = modeLabel;
     head.append(seq, mode);
     container.appendChild(head);
 
@@ -663,23 +667,23 @@ function renderHandoffHistory(
       container.appendChild(err);
     }
 
-    const title = entry.message?.title as string | undefined;
+    const title = dispatch?.title as string | undefined;
     if (title) {
       const titleEl = document.createElement("div");
-      titleEl.className = "ticket-body ticket-handoff-title";
+      titleEl.className = "ticket-body ticket-dispatch-title";
       titleEl.textContent = title;
       container.appendChild(titleEl);
     }
 
-    const bodyText = entry.message?.body as string | undefined;
+    const bodyText = dispatch?.body as string | undefined;
     if (bodyText) {
       const body = document.createElement("div");
-      body.className = "ticket-body ticket-handoff-body messages-markdown";
+      body.className = "ticket-body ticket-dispatch-body messages-markdown";
       body.innerHTML = renderMarkdown(bodyText);
       container.appendChild(body);
     }
 
-    const attachments = (entry.attachments || []) as HandoffAttachment[];
+    const attachments = (entry.attachments || []) as DispatchAttachment[];
     if (attachments.length) {
       const wrap = document.createElement("div");
       wrap.className = "ticket-attachments";
@@ -778,21 +782,22 @@ async function openTicketByIndex(index: number): Promise<void> {
   }
 }
 
-async function loadHandoffHistory(runId: string | null): Promise<void> {
+async function loadDispatchHistory(runId: string | null): Promise<void> {
   const { history } = els();
-  if (history) history.textContent = "Loading handoff history…";
+  if (history) history.textContent = "Loading dispatch history…";
   if (!runId) {
-    renderHandoffHistory(null, null);
+    renderDispatchHistory(null, null);
     return;
   }
   try {
-    const data = (await api(`/api/flows/${runId}/handoff_history`)) as {
-      history?: HandoffEntry[];
+    // Use dispatch_history endpoint
+    const data = (await api(`/api/flows/${runId}/dispatch_history`)) as {
+      history?: DispatchEntry[];
     };
-    renderHandoffHistory(runId, data);
+    renderDispatchHistory(runId, data);
   } catch (err) {
-    renderHandoffHistory(runId, null);
-    flash((err as Error).message || "Failed to load handoff history", "error");
+    renderDispatchHistory(runId, null);
+    flash((err as Error).message || "Failed to load dispatch history", "error");
   }
 }
 
@@ -943,7 +948,7 @@ async function loadTicketFlow(): Promise<void> {
       archiveBtn.style.display = canArchive ? "" : "none";
       archiveBtn.disabled = !canArchive;
     }
-    await loadHandoffHistory(currentRunId);
+    await loadDispatchHistory(currentRunId);
   } catch (err) {
     if (reason) reason.textContent = (err as Error).message || "Ticket flow unavailable";
     flash((err as Error).message || "Failed to load ticket flow state", "error");
@@ -1118,7 +1123,7 @@ async function archiveTicketFlow(): Promise<void> {
       reason.textContent = "No ticket flow run yet.";
       reason.classList.remove("has-details");
     }
-    renderHandoffHistory(null, null);
+    renderDispatchHistory(null, null);
 
     // Stop timers and disconnect event stream
     disconnectEventStream();

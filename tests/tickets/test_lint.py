@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from codex_autorunner.tickets.lint import (
+    lint_dispatch_frontmatter,
     lint_ticket_frontmatter,
-    lint_user_message_frontmatter,
 )
 
 
@@ -56,14 +56,14 @@ def test_lint_ticket_frontmatter_normalizes_requires_and_preserves_extra() -> No
     assert fm.extra.get("custom") == {"a": 1}
 
 
-def test_lint_user_message_frontmatter_defaults_notify_and_validates_mode() -> None:
-    normalized, errors = lint_user_message_frontmatter({})
+def test_lint_dispatch_frontmatter_defaults_notify_and_validates_mode() -> None:
+    normalized, errors = lint_dispatch_frontmatter({})
     assert errors == []
     assert normalized["mode"] == "notify"
 
-    normalized, errors = lint_user_message_frontmatter({"mode": "PAUSE"})
+    normalized, errors = lint_dispatch_frontmatter({"mode": "PAUSE"})
     assert errors == []
     assert normalized["mode"] == "pause"
 
-    normalized, errors = lint_user_message_frontmatter({"mode": "bad"})
+    normalized, errors = lint_dispatch_frontmatter({"mode": "bad"})
     assert errors

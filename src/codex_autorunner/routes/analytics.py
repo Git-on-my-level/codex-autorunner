@@ -149,7 +149,7 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
     turns: Dict[str, Optional[int]] = {
         "total": None,
         "current_ticket": None,
-        "handoffs": 0,
+        "dispatches": 0,
         "replies": 0,
     }
     current_ticket: Optional[str] = None
@@ -188,7 +188,7 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
         reply_paths = resolve_reply_paths(
             workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_record.id
         )
-        turns["handoffs"] = _count_history_dirs(outbox_paths.handoff_history_dir)
+        turns["dispatches"] = _count_history_dirs(outbox_paths.dispatch_history_dir)
         turns["replies"] = _count_history_dirs(reply_paths.reply_history_dir)
 
         # If current ticket is known, read its frontmatter to pick agent id when available.
@@ -214,7 +214,7 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
         "turns": {
             "total": turns.get("total"),
             "current_ticket": turns.get("current_ticket"),
-            "handoffs": turns.get("handoffs"),
+            "dispatches": turns.get("dispatches"),
             "replies": turns.get("replies"),
         },
         "agent": {

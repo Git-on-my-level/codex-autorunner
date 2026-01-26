@@ -9,36 +9,42 @@ import {
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 
-interface AgentMessage {
+/**
+ * Dispatch: Agent-to-human communication.
+ * - mode: "notify" = informational, agent continues
+ * - mode: "pause" = handoff, agent yields and awaits reply
+ */
+interface Dispatch {
   mode?: string;
   title?: string | null;
   body?: string | null;
   extra?: Record<string, unknown> | null;
+  is_handoff?: boolean;  // True when mode === "pause"
 }
 
 interface ActiveMessageResponse {
   active?: boolean;
   run_id?: string;
   seq?: number;
-  message?: AgentMessage | null;
+  dispatch?: Dispatch | null;
   open_url?: string;
 }
 
-interface ThreadSummary {
+interface ConversationSummary {
   run_id: string;
   status?: string;
   latest?: {
     seq?: number;
-    message?: AgentMessage | null;
+    dispatch?: Dispatch | null;
     created_at?: string | null;
   };
-  handoff_count?: number;
+  dispatch_count?: number;
   reply_count?: number;
   ticket_state?: TicketState | null;
 }
 
 interface ThreadsResponse {
-  threads?: ThreadSummary[];
+  conversations?: ConversationSummary[];
 }
 
 interface FileAttachment {
@@ -52,25 +58,29 @@ interface ReplyMessage {
   body?: string | null;
 }
 
+interface DispatchHistoryEntry {
+  seq: number;
+  dispatch?: Dispatch | null;
+  files?: Array<{ name: string; url: string; size?: number | null }>;
+  created_at?: string | null;
+}
+
+interface ReplyHistoryEntry {
+  seq: number;
+  reply?: { title?: string | null; body?: string | null } | null;
+  files?: Array<{ name: string; url: string; size?: number | null }>;
+  created_at?: string | null;
+}
+
 interface ThreadDetail {
   run?: {
     id: string;
     status?: string;
     created_at?: string | null;
   };
-  handoff_history?: Array<{
-    seq: number;
-    message?: AgentMessage | null;
-    files?: Array<{ name: string; url: string; size?: number | null }>;
-    created_at?: string | null;
-  }>;
-  reply_history?: Array<{
-    seq: number;
-    reply?: { title?: string | null; body?: string | null } | null;
-    files?: Array<{ name: string; url: string; size?: number | null }>;
-    created_at?: string | null;
-  }>;
-  handoff_count?: number;
+  dispatch_history?: DispatchHistoryEntry[];
+  reply_history?: ReplyHistoryEntry[];
+  dispatch_count?: number;
   reply_count?: number;
   ticket_state?: TicketState | null;
 }
@@ -79,7 +89,7 @@ interface TicketState {
   current_ticket?: string | null;
   total_turns?: number | null;
   ticket_turns?: number | null;
-  outbox_seq?: number | null;
+  dispatch_seq?: number | null;
   reply_seq?: number | null;
   status?: string | null;
   reason?: string | null;
@@ -105,7 +115,7 @@ function formatTimestamp(ts?: string | null): string {
 }
 
 function setBadge(count: number): void {
-  const badge = document.getElementById("tab-badge-messages");
+  const badge = document.getElementById("tab-badge-inbox");
   if (!badge) return;
   if (count > 0) {
     badge.textContent = String(count);
@@ -158,23 +168,24 @@ export function initMessageBell(): void {
   });
 }
 
-function renderThreadItem(thread: ThreadSummary): string {
-  const latest = thread.latest?.message;
-  const title = latest?.title || latest?.mode || "Handoff";
-  const subtitle = latest?.body ? latest.body.slice(0, 120) : "";
+function renderThreadItem(thread: ConversationSummary): string {
+  const latestDispatch = thread.latest?.dispatch;
+  const isHandoff = latestDispatch?.is_handoff || latestDispatch?.mode === "pause";
+  const title = latestDispatch?.title || (isHandoff ? "Handoff" : "Dispatch");
+  const subtitle = latestDispatch?.body ? latestDispatch.body.slice(0, 120) : "";
   const isPaused = thread.status === "paused";
 
-  // Only show action indicator if there's an unreplied pause
-  // Compare outbox_seq (handoff count) vs reply_seq to check if user has responded
+  // Only show action indicator if there's an unreplied handoff (pause)
+  // Compare dispatch_seq vs reply_seq to check if user has responded
   const ticketState = thread.ticket_state;
-  const outboxSeq = ticketState?.outbox_seq ?? 0;
+  const dispatchSeq = ticketState?.dispatch_seq ?? 0;
   const replySeq = ticketState?.reply_seq ?? 0;
-  const hasUnrepliedPause = isPaused && (outboxSeq > replySeq || (latest?.mode === "pause" && replySeq === 0));
+  const hasUnrepliedHandoff = isPaused && (dispatchSeq > replySeq || (isHandoff && replySeq === 0));
 
-  const indicator = hasUnrepliedPause ? `<span class="messages-thread-indicator" title="Action required"></span>` : "";
-  const handoffs = thread.handoff_count ?? 0;
+  const indicator = hasUnrepliedHandoff ? `<span class="messages-thread-indicator" title="Action required"></span>` : "";
+  const dispatches = thread.dispatch_count ?? 0;
   const replies = thread.reply_count ?? 0;
-  const metaLine = `${handoffs} handoff${handoffs !== 1 ? "s" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
+  const metaLine = `${dispatches} dispatch${dispatches !== 1 ? "es" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
   return `
     <button class="messages-thread" data-run-id="${escapeHtml(thread.run_id)}">
       <div class="messages-thread-title">${indicator}${escapeHtml(title)}</div>
@@ -200,17 +211,17 @@ async function loadThreads(): Promise<void> {
     return;
   }
 
-  const threads = res?.threads || [];
-  if (!threads.length) {
-    threadsEl.innerHTML = "<div class=\"muted\">No messages</div>";
+  const conversations = res?.conversations || [];
+  if (!conversations.length) {
+    threadsEl.innerHTML = "<div class=\"muted\">No dispatches</div>";
     return;
   }
-  threadsEl.innerHTML = threads.map(renderThreadItem).join("");
+  threadsEl.innerHTML = conversations.map(renderThreadItem).join("");
   threadsEl.querySelectorAll<HTMLButtonElement>(".messages-thread").forEach((btn) => {
     btn.addEventListener("click", () => {
       const runId = btn.dataset.runId || "";
       if (!runId) return;
-      updateUrlParams({ tab: "messages", run_id: runId });
+      updateUrlParams({ tab: "inbox", run_id: runId });
       void loadThread(runId);
     });
   });
@@ -305,35 +316,35 @@ function renderFiles(files: Array<{ name: string; url: string; size?: number | n
   return `<ul class="messages-files">${items}</ul>`;
 }
 
-function renderHandoff(
-  entry: { seq: number; message?: AgentMessage | null; files?: FileAttachment[]; created_at?: string | null },
+function renderDispatch(
+  entry: DispatchHistoryEntry,
   isLatest: boolean,
   runStatus: string
 ): string {
-  const msg = entry.message;
-  const title = msg?.title || "Agent handoff";
-  const isPause = msg?.mode === "pause";
+  const dispatch = entry.dispatch;
+  const isHandoff = dispatch?.is_handoff || dispatch?.mode === "pause";
+  const title = dispatch?.title || (isHandoff ? "Handoff" : "Agent update");
   
   let modeClass = "pill-info";
   let modeLabel = "INFO";
 
-  if (isPause) {
-    // Only show "ACTION REQUIRED" if this is the latest message AND the run is actually paused.
-    // Otherwise, show "PAUSED" to indicate a historical pause point.
+  if (isHandoff) {
+    // Only show "ACTION REQUIRED" if this is the latest dispatch AND the run is actually paused.
+    // Otherwise, show "HANDOFF" to indicate a historical pause point.
     if (isLatest && runStatus === "paused") {
       modeClass = "pill-action";
       modeLabel = "ACTION REQUIRED";
     } else {
       modeClass = "pill-idle";
-      modeLabel = "PAUSED";
+      modeLabel = "HANDOFF";
     }
   }
 
-  const modePill = msg?.mode ? ` <span class="pill pill-small ${modeClass}">${escapeHtml(modeLabel)}</span>` : "";
-  const body = msg?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(msg.body)}</div>` : "";
+  const modePill = dispatch?.mode ? ` <span class="pill pill-small ${modeClass}">${escapeHtml(modeLabel)}</span>` : "";
+  const body = dispatch?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(dispatch.body)}</div>` : "";
   const ts = entry.created_at ? formatTimestamp(entry.created_at) : "";
   return `
-    <div class="messages-entry" data-seq="${entry.seq}" data-type="handoff" data-created="${escapeHtml(entry.created_at || "")}">
+    <div class="messages-entry" data-seq="${entry.seq}" data-type="dispatch" data-created="${escapeHtml(entry.created_at || "")}">
       <div class="messages-entry-header">
         <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
         <span class="messages-entry-title">${escapeHtml(title)}</span>
@@ -370,30 +381,30 @@ function renderReply(entry: { seq: number; reply?: ReplyMessage | null; files?: 
 }
 
 interface TimelineEntry {
-  type: "handoff" | "reply";
+  type: "dispatch" | "reply";
   seq: number;
   created_at: string | null;
-  handoff?: { seq: number; message?: AgentMessage | null; files?: FileAttachment[]; created_at?: string | null };
-  reply?: { seq: number; reply?: ReplyMessage | null; files?: FileAttachment[]; created_at?: string | null };
+  dispatch?: DispatchHistoryEntry;
+  reply?: ReplyHistoryEntry;
 }
 
 function buildThreadedTimeline(
-  handoffs: Array<{ seq: number; message?: AgentMessage | null; files?: FileAttachment[]; created_at?: string | null }>,
-  replies: Array<{ seq: number; reply?: ReplyMessage | null; files?: FileAttachment[]; created_at?: string | null }>,
+  dispatches: DispatchHistoryEntry[],
+  replies: ReplyHistoryEntry[],
   runStatus: string
 ): string {
   // Combine all entries into a single timeline
   const timeline: TimelineEntry[] = [];
 
-  // Find the latest handoff sequence number to identify the most recent agent message
-  let maxHandoffSeq = -1;
-  handoffs.forEach((h) => {
-    if (h.seq > maxHandoffSeq) maxHandoffSeq = h.seq;
+  // Find the latest dispatch sequence number to identify the most recent agent message
+  let maxDispatchSeq = -1;
+  dispatches.forEach((d) => {
+    if (d.seq > maxDispatchSeq) maxDispatchSeq = d.seq;
     timeline.push({
-      type: "handoff",
-      seq: h.seq,
-      created_at: h.created_at || null,
-      handoff: h,
+      type: "dispatch",
+      seq: d.seq,
+      created_at: d.created_at || null,
+      dispatch: d,
     });
   });
 
@@ -414,17 +425,17 @@ function buildThreadedTimeline(
     return a.seq - b.seq;
   });
 
-  // Render timeline, associating replies with preceding handoffs
-  let lastHandoffSeq: number | undefined;
+  // Render timeline, associating replies with preceding dispatches
+  let lastDispatchSeq: number | undefined;
   const rendered: string[] = [];
 
   timeline.forEach((entry) => {
-    if (entry.type === "handoff" && entry.handoff) {
-      lastHandoffSeq = entry.handoff.seq;
-      const isLatest = entry.handoff.seq === maxHandoffSeq;
-      rendered.push(renderHandoff(entry.handoff, isLatest, runStatus));
+    if (entry.type === "dispatch" && entry.dispatch) {
+      lastDispatchSeq = entry.dispatch.seq;
+      const isLatest = entry.dispatch.seq === maxDispatchSeq;
+      rendered.push(renderDispatch(entry.dispatch, isLatest, runStatus));
     } else if (entry.type === "reply" && entry.reply) {
-      rendered.push(renderReply(entry.reply, lastHandoffSeq));
+      rendered.push(renderReply(entry.reply, lastDispatchSeq));
     }
   });
 
@@ -450,8 +461,10 @@ async function loadThread(runId: string): Promise<void> {
 
   const runStatus = (detail.run?.status || "").toString();
   const isPaused = runStatus === "paused";
-  const handoffCount = detail.handoff_count ?? (detail.handoff_history || []).length;
-  const replyCount = detail.reply_count ?? (detail.reply_history || []).length;
+  const dispatchHistory = detail.dispatch_history || [];
+  const replyHistory = detail.reply_history || [];
+  const dispatchCount = detail.dispatch_count ?? dispatchHistory.length;
+  const replyCount = detail.reply_count ?? replyHistory.length;
   const ticketState = detail.ticket_state;
   const turns = ticketState?.total_turns ?? null;
 
@@ -460,7 +473,7 @@ async function loadThread(runId: string): Promise<void> {
 
   // Build compact stats line
   const statsParts: string[] = [];
-  statsParts.push(`${handoffCount} handoff${handoffCount !== 1 ? "s" : ""}`);
+  statsParts.push(`${dispatchCount} dispatch${dispatchCount !== 1 ? "es" : ""}`);
   statsParts.push(`${replyCount} repl${replyCount !== 1 ? "ies" : "y"}`);
   if (turns != null) statsParts.push(`${turns} turn${turns !== 1 ? "s" : ""}`);
   const statsLine = statsParts.join(" · ");
@@ -471,14 +484,14 @@ async function loadThread(runId: string): Promise<void> {
 
   // Build threaded timeline
   const threadedContent = buildThreadedTimeline(
-    detail.handoff_history || [],
-    detail.reply_history || [],
+    dispatchHistory,
+    replyHistory,
     runStatus
   );
 
   detailEl.innerHTML = `
     <div class="messages-thread-history">
-      ${threadedContent || '<div class="muted">No handoffs yet</div>'}
+      ${threadedContent || '<div class="muted">No dispatches yet</div>'}
     </div>
     <div class="messages-thread-footer">
       <code title="${escapeHtml(runId)}">${escapeHtml(shortRunId)}</code>
@@ -568,7 +581,7 @@ export function initMessages(): void {
   });
 
   subscribe("tab:change", (tabId: unknown) => {
-    if (tabId === "messages") {
+    if (tabId === "inbox") {
       void refreshBell();
       void loadThreads();
       const params = getUrlParams();

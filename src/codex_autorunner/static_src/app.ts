@@ -38,7 +38,7 @@ async function initRepoShell(): Promise<void> {
   const defaultTab = REPO_ID ? "tickets" : "analytics";
 
   registerTab("tickets", "Tickets");
-  registerTab("messages", "Inbox");
+  registerTab("inbox", "Inbox");
   registerTab("analytics", "Analytics");
   registerTab("workspace", "Workspace");
   registerTab("terminal", "Terminal");
@@ -48,7 +48,7 @@ async function initRepoShell(): Promise<void> {
     if (initializedTabs.has(tabId)) return;
     if (tabId === "workspace") {
       initWorkspace();
-    } else if (tabId === "messages") {
+    } else if (tabId === "inbox" || tabId === "messages") {
       initMessages();
     } else if (tabId === "analytics") {
       initDashboard();

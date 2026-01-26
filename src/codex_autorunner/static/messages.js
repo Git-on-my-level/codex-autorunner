@@ -20,7 +20,7 @@ function formatTimestamp(ts) {
     return date.toLocaleString();
 }
 function setBadge(count) {
-    const badge = document.getElementById("tab-badge-messages");
+    const badge = document.getElementById("tab-badge-inbox");
     if (!badge)
         return;
     if (count > 0) {
@@ -76,20 +76,21 @@ export function initMessageBell() {
     });
 }
 function renderThreadItem(thread) {
-    const latest = thread.latest?.message;
-    const title = latest?.title || latest?.mode || "Handoff";
-    const subtitle = latest?.body ? latest.body.slice(0, 120) : "";
+    const latestDispatch = thread.latest?.dispatch;
+    const isHandoff = latestDispatch?.is_handoff || latestDispatch?.mode === "pause";
+    const title = latestDispatch?.title || (isHandoff ? "Handoff" : "Dispatch");
+    const subtitle = latestDispatch?.body ? latestDispatch.body.slice(0, 120) : "";
     const isPaused = thread.status === "paused";
-    // Only show action indicator if there's an unreplied pause
-    // Compare outbox_seq (handoff count) vs reply_seq to check if user has responded
+    // Only show action indicator if there's an unreplied handoff (pause)
+    // Compare dispatch_seq vs reply_seq to check if user has responded
     const ticketState = thread.ticket_state;
-    const outboxSeq = ticketState?.outbox_seq ?? 0;
+    const dispatchSeq = ticketState?.dispatch_seq ?? 0;
     const replySeq = ticketState?.reply_seq ?? 0;
-    const hasUnrepliedPause = isPaused && (outboxSeq > replySeq || (latest?.mode === "pause" && replySeq === 0));
-    const indicator = hasUnrepliedPause ? `<span class="messages-thread-indicator" title="Action required"></span>` : "";
-    const handoffs = thread.handoff_count ?? 0;
+    const hasUnrepliedHandoff = isPaused && (dispatchSeq > replySeq || (isHandoff && replySeq === 0));
+    const indicator = hasUnrepliedHandoff ? `<span class="messages-thread-indicator" title="Action required"></span>` : "";
+    const dispatches = thread.dispatch_count ?? 0;
     const replies = thread.reply_count ?? 0;
-    const metaLine = `${handoffs} handoff${handoffs !== 1 ? "s" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
+    const metaLine = `${dispatches} dispatch${dispatches !== 1 ? "es" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
     return `
     <button class="messages-thread" data-run-id="${escapeHtml(thread.run_id)}">
       <div class="messages-thread-title">${indicator}${escapeHtml(title)}</div>
@@ -115,18 +116,18 @@ async function loadThreads() {
         flash("Failed to load inbox", "error");
         return;
     }
-    const threads = res?.threads || [];
-    if (!threads.length) {
-        threadsEl.innerHTML = "<div class=\"muted\">No messages</div>";
+    const conversations = res?.conversations || [];
+    if (!conversations.length) {
+        threadsEl.innerHTML = "<div class=\"muted\">No dispatches</div>";
         return;
     }
-    threadsEl.innerHTML = threads.map(renderThreadItem).join("");
+    threadsEl.innerHTML = conversations.map(renderThreadItem).join("");
     threadsEl.querySelectorAll(".messages-thread").forEach((btn) => {
         btn.addEventListener("click", () => {
             const runId = btn.dataset.runId || "";
             if (!runId)
                 return;
-            updateUrlParams({ tab: "messages", run_id: runId });
+            updateUrlParams({ tab: "inbox", run_id: runId });
             void loadThread(runId);
         });
     });
@@ -220,29 +221,29 @@ function renderFiles(files) {
         .join("");
     return `<ul class="messages-files">${items}</ul>`;
 }
-function renderHandoff(entry, isLatest, runStatus) {
-    const msg = entry.message;
-    const title = msg?.title || "Agent handoff";
-    const isPause = msg?.mode === "pause";
+function renderDispatch(entry, isLatest, runStatus) {
+    const dispatch = entry.dispatch;
+    const isHandoff = dispatch?.is_handoff || dispatch?.mode === "pause";
+    const title = dispatch?.title || (isHandoff ? "Handoff" : "Agent update");
     let modeClass = "pill-info";
     let modeLabel = "INFO";
-    if (isPause) {
-        // Only show "ACTION REQUIRED" if this is the latest message AND the run is actually paused.
-        // Otherwise, show "PAUSED" to indicate a historical pause point.
+    if (isHandoff) {
+        // Only show "ACTION REQUIRED" if this is the latest dispatch AND the run is actually paused.
+        // Otherwise, show "HANDOFF" to indicate a historical pause point.
         if (isLatest && runStatus === "paused") {
             modeClass = "pill-action";
             modeLabel = "ACTION REQUIRED";
         }
         else {
             modeClass = "pill-idle";
-            modeLabel = "PAUSED";
+            modeLabel = "HANDOFF";
         }
     }
-    const modePill = msg?.mode ? ` <span class="pill pill-small ${modeClass}">${escapeHtml(modeLabel)}</span>` : "";
-    const body = msg?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(msg.body)}</div>` : "";
+    const modePill = dispatch?.mode ? ` <span class="pill pill-small ${modeClass}">${escapeHtml(modeLabel)}</span>` : "";
+    const body = dispatch?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(dispatch.body)}</div>` : "";
     const ts = entry.created_at ? formatTimestamp(entry.created_at) : "";
     return `
-    <div class="messages-entry" data-seq="${entry.seq}" data-type="handoff" data-created="${escapeHtml(entry.created_at || "")}">
+    <div class="messages-entry" data-seq="${entry.seq}" data-type="dispatch" data-created="${escapeHtml(entry.created_at || "")}">
       <div class="messages-entry-header">
         <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
         <span class="messages-entry-title">${escapeHtml(title)}</span>
@@ -276,19 +277,19 @@ function renderReply(entry, parentSeq) {
     </div>
   `;
 }
-function buildThreadedTimeline(handoffs, replies, runStatus) {
+function buildThreadedTimeline(dispatches, replies, runStatus) {
     // Combine all entries into a single timeline
     const timeline = [];
-    // Find the latest handoff sequence number to identify the most recent agent message
-    let maxHandoffSeq = -1;
-    handoffs.forEach((h) => {
-        if (h.seq > maxHandoffSeq)
-            maxHandoffSeq = h.seq;
+    // Find the latest dispatch sequence number to identify the most recent agent message
+    let maxDispatchSeq = -1;
+    dispatches.forEach((d) => {
+        if (d.seq > maxDispatchSeq)
+            maxDispatchSeq = d.seq;
         timeline.push({
-            type: "handoff",
-            seq: h.seq,
-            created_at: h.created_at || null,
-            handoff: h,
+            type: "dispatch",
+            seq: d.seq,
+            created_at: d.created_at || null,
+            dispatch: d,
         });
     });
     replies.forEach((r) => {
@@ -306,17 +307,17 @@ function buildThreadedTimeline(handoffs, replies, runStatus) {
         }
         return a.seq - b.seq;
     });
-    // Render timeline, associating replies with preceding handoffs
-    let lastHandoffSeq;
+    // Render timeline, associating replies with preceding dispatches
+    let lastDispatchSeq;
     const rendered = [];
     timeline.forEach((entry) => {
-        if (entry.type === "handoff" && entry.handoff) {
-            lastHandoffSeq = entry.handoff.seq;
-            const isLatest = entry.handoff.seq === maxHandoffSeq;
-            rendered.push(renderHandoff(entry.handoff, isLatest, runStatus));
+        if (entry.type === "dispatch" && entry.dispatch) {
+            lastDispatchSeq = entry.dispatch.seq;
+            const isLatest = entry.dispatch.seq === maxDispatchSeq;
+            rendered.push(renderDispatch(entry.dispatch, isLatest, runStatus));
         }
         else if (entry.type === "reply" && entry.reply) {
-            rendered.push(renderReply(entry.reply, lastHandoffSeq));
+            rendered.push(renderReply(entry.reply, lastDispatchSeq));
         }
     });
     return rendered.join("");
@@ -341,15 +342,17 @@ async function loadThread(runId) {
     }
     const runStatus = (detail.run?.status || "").toString();
     const isPaused = runStatus === "paused";
-    const handoffCount = detail.handoff_count ?? (detail.handoff_history || []).length;
-    const replyCount = detail.reply_count ?? (detail.reply_history || []).length;
+    const dispatchHistory = detail.dispatch_history || [];
+    const replyHistory = detail.reply_history || [];
+    const dispatchCount = detail.dispatch_count ?? dispatchHistory.length;
+    const replyCount = detail.reply_count ?? replyHistory.length;
     const ticketState = detail.ticket_state;
     const turns = ticketState?.total_turns ?? null;
     // Truncate run ID for display
     const shortRunId = runId.length > 12 ? runId.slice(0, 8) + "…" : runId;
     // Build compact stats line
     const statsParts = [];
-    statsParts.push(`${handoffCount} handoff${handoffCount !== 1 ? "s" : ""}`);
+    statsParts.push(`${dispatchCount} dispatch${dispatchCount !== 1 ? "es" : ""}`);
     statsParts.push(`${replyCount} repl${replyCount !== 1 ? "ies" : "y"}`);
     if (turns != null)
         statsParts.push(`${turns} turn${turns !== 1 ? "s" : ""}`);
@@ -358,10 +361,10 @@ async function loadThread(runId) {
     const statusPillClass = isPaused ? "pill-action" : "pill-idle";
     const statusLabel = isPaused ? "paused" : runStatus || "idle";
     // Build threaded timeline
-    const threadedContent = buildThreadedTimeline(detail.handoff_history || [], detail.reply_history || [], runStatus);
+    const threadedContent = buildThreadedTimeline(dispatchHistory, replyHistory, runStatus);
     detailEl.innerHTML = `
     <div class="messages-thread-history">
-      ${threadedContent || '<div class="muted">No handoffs yet</div>'}
+      ${threadedContent || '<div class="muted">No dispatches yet</div>'}
     </div>
     <div class="messages-thread-footer">
       <code title="${escapeHtml(runId)}">${escapeHtml(shortRunId)}</code>
@@ -449,7 +452,7 @@ export function initMessages() {
         }
     });
     subscribe("tab:change", (tabId) => {
-        if (tabId === "messages") {
+        if (tabId === "inbox") {
             void refreshBell();
             void loadThreads();
             const params = getUrlParams();

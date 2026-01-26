@@ -143,9 +143,11 @@ def test_ticket_runner_workspace_doc_injection(hub_env, repo: Path):
 
     # Mock outbox paths for _build_prompt
     outbox_paths = MagicMock()
-    outbox_paths.handoff_dir = repo / ".codex-autorunner" / "runs" / "run-1" / "handoff"
-    outbox_paths.user_message_path = (
-        repo / ".codex-autorunner" / "runs" / "run-1" / "USER_MESSAGE.md"
+    outbox_paths.dispatch_dir = (
+        repo / ".codex-autorunner" / "runs" / "run-1" / "dispatch"
+    )
+    outbox_paths.dispatch_path = (
+        repo / ".codex-autorunner" / "runs" / "run-1" / "DISPATCH.md"
     )
 
     # Test prompt building
@@ -207,9 +209,11 @@ def test_ticket_runner_workspace_doc_injection_missing(hub_env, repo: Path):
 
     # Mock outbox paths
     outbox_paths = MagicMock()
-    outbox_paths.handoff_dir = repo / ".codex-autorunner" / "runs" / "run-1" / "handoff"
-    outbox_paths.user_message_path = (
-        repo / ".codex-autorunner" / "runs" / "run-1" / "USER_MESSAGE.md"
+    outbox_paths.dispatch_dir = (
+        repo / ".codex-autorunner" / "runs" / "run-1" / "dispatch"
+    )
+    outbox_paths.dispatch_path = (
+        repo / ".codex-autorunner" / "runs" / "run-1" / "DISPATCH.md"
     )
 
     # Test prompt building

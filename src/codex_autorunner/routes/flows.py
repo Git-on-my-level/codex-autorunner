@@ -39,7 +39,7 @@ from ..tickets.files import (
 )
 from ..tickets.frontmatter import parse_markdown_frontmatter
 from ..tickets.lint import lint_ticket_frontmatter
-from ..tickets.outbox import parse_user_message, resolve_outbox_paths
+from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..web.schemas import (
     TicketCreateRequest,
     TicketDeleteResponse,
@@ -469,8 +469,10 @@ You are the first ticket in a new ticket_flow run.
   - `decisions.md` for decisions/rationale
   - `spec.md` for requirements and constraints
 - Break the work into additional `TICKET-00X.md` files with clear owners/goals; keep this ticket open until they exist.
-- Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/handoff/` if needed.
-- Write `USER_MESSAGE.md` with `mode: pause` (wait for user response) summarizing the ticket plan and requesting user review before proceeding. Use `mode: notify` if you want to message the user but keep running.
+- Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/dispatch/` if needed.
+- Write `DISPATCH.md` to dispatch a message to the user:
+  - Use `mode: pause` (handoff) to wait for user response. This pauses execution.
+  - Use `mode: notify` (informational) to message the user but keep running.
 """
             ticket_path.write_text(template, encoding="utf-8")
             seeded = True
@@ -688,7 +690,7 @@ You are the first ticket in a new ticket_flow run.
             shutil.move(str(ticket_path), str(dest))
             archived_count += 1
 
-        # Archive runs directory (handoff_history, reply_history, etc.) to dismiss notifications
+        # Archive runs directory (dispatch_history, reply_history, etc.) to dismiss notifications
         outbox_paths = _resolve_outbox_for_record(record, repo_root)
         run_dir = outbox_paths.run_dir
         if run_dir.exists() and run_dir.is_dir():
@@ -753,31 +755,37 @@ You are the first ticket in a new ticket_flow run.
             },
         )
 
-    @router.get("/{run_id}/handoff_history")
-    async def get_handoff_history(run_id: str):
+    @router.get("/{run_id}/dispatch_history")
+    async def get_dispatch_history(run_id: str):
+        """Get dispatch history for a flow run.
+
+        Returns all dispatches (agent->human communications) for this run.
+        """
         normalized = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, normalized)
         paths = _resolve_outbox_for_record(record, repo_root)
 
         history_entries = []
-        history_dir = paths.handoff_history_dir
+        history_dir = paths.dispatch_history_dir
         if history_dir.exists() and history_dir.is_dir():
             for entry in sorted(
                 [p for p in history_dir.iterdir() if p.is_dir()],
                 key=lambda p: p.name,
                 reverse=True,
             ):
-                msg_path = entry / "USER_MESSAGE.md"
-                message, errors = (
-                    parse_user_message(msg_path)
-                    if msg_path.exists()
-                    else (None, ["USER_MESSAGE.md missing"])
+                dispatch_path = entry / "DISPATCH.md"
+                dispatch, errors = (
+                    parse_dispatch(dispatch_path)
+                    if dispatch_path.exists()
+                    else (None, ["Dispatch file missing"])
                 )
-                msg_dict = asdict(message) if message else None
+                dispatch_dict = asdict(dispatch) if dispatch else None
+                if dispatch_dict and dispatch:
+                    dispatch_dict["is_handoff"] = dispatch.is_handoff
                 attachments = []
                 for child in sorted(entry.rglob("*")):
-                    if child.name == "USER_MESSAGE.md":
+                    if child.name == "DISPATCH.md":
                         continue
                     rel = child.relative_to(entry).as_posix()
                     if any(part.startswith(".") for part in Path(rel).parts):
@@ -790,14 +798,13 @@ You are the first ticket in a new ticket_flow run.
                             "rel_path": rel,
                             "path": safe_relpath(child, repo_root),
                             "size": child.stat().st_size if child.is_file() else None,
-                            # Use a relative URL so hub-mode mounts under `/repos/<id>/` work.
-                            "url": f"api/flows/{normalized}/handoff_history/{entry.name}/{quote(rel)}",
+                            "url": f"api/flows/{normalized}/dispatch_history/{entry.name}/{quote(rel)}",
                         }
                     )
                 history_entries.append(
                     {
                         "seq": entry.name,
-                        "message": msg_dict,
+                        "dispatch": dispatch_dict,
                         "errors": errors,
                         "attachments": attachments,
                         "path": safe_relpath(entry, repo_root),
@@ -843,34 +850,35 @@ You are the first ticket in a new ticket_flow run.
             raise HTTPException(status_code=404, detail="File not found")
         return FileResponse(path=str(target), filename=filename)
 
-    @router.get("/{run_id}/handoff_history/{seq}/{file_path:path}")
-    async def get_handoff_file(run_id: str, seq: str, file_path: str):
+    @router.get("/{run_id}/dispatch_history/{seq}/{file_path:path}")
+    async def get_dispatch_file(run_id: str, seq: str, file_path: str):
+        """Get an attachment file from a dispatch history entry."""
         normalized = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, normalized)
         paths = _resolve_outbox_for_record(record, repo_root)
 
-        base_history = paths.handoff_history_dir.resolve()
+        base_history = paths.dispatch_history_dir.resolve()
 
         seq_clean = seq.strip()
         if not re.fullmatch(r"[0-9]{4}", seq_clean):
             raise HTTPException(
-                status_code=400, detail="Invalid handoff history sequence"
+                status_code=400, detail="Invalid dispatch history sequence"
             )
 
         history_dir = (base_history / seq_clean).resolve()
         if not history_dir.is_relative_to(base_history) or not history_dir.is_dir():
             raise HTTPException(
-                status_code=404, detail=f"Handoff history not found for run {run_id}"
+                status_code=404, detail=f"Dispatch history not found for run {run_id}"
             )
 
         file_rel = PurePosixPath(file_path)
         if file_rel.is_absolute() or ".." in file_rel.parts or "\\" in file_path:
-            raise HTTPException(status_code=400, detail="Invalid handoff file path")
+            raise HTTPException(status_code=400, detail="Invalid dispatch file path")
 
         safe_parts = [part for part in file_rel.parts if part not in {"", "."}]
         if any(not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in safe_parts):
-            raise HTTPException(status_code=400, detail="Invalid handoff file path")
+            raise HTTPException(status_code=400, detail="Invalid dispatch file path")
 
         target = (history_dir / Path(*safe_parts)).resolve()
         try:
@@ -884,7 +892,7 @@ You are the first ticket in a new ticket_flow run.
         if not resolved.is_relative_to(history_dir):
             raise HTTPException(
                 status_code=403,
-                detail="Access denied: file outside handoff history directory",
+                detail="Access denied: file outside dispatch history directory",
             )
 
         return FileResponse(resolved, filename=resolved.name)

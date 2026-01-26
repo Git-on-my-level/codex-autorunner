@@ -220,6 +220,10 @@
   outline: none;
 }
 
+html {
+  height: 100%;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -230,7 +234,9 @@ body {
   /* Firefox scrollbar */
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+  min-height: 100%;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -266,10 +272,11 @@ body {
   max-width: 1400px;
   margin: 0 auto;
   padding: 8px;
-  flex: 1;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   width: 100%;
+  min-height: 0;
   box-sizing: border-box;
   overflow: hidden;
 }
@@ -398,10 +405,13 @@ body {
 }
 
 main {
-  flex: 1;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Ensure main fills remaining space after nav */
+  height: calc(100vh - 60px);
+  height: calc(100dvh - 60px);
 }
 
 .panel {
@@ -1700,8 +1710,8 @@ button.icon-btn {
   align-content: start;
 }
 
-/* Handoff history specific styling for graceful overflow */
-#ticket-handoff-history {
+/* Dispatch history specific styling for graceful overflow */
+#ticket-dispatch-history {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -1711,17 +1721,17 @@ button.icon-btn {
   padding: 4px 4px 16px 4px;
 }
 
-#ticket-handoff-history::-webkit-scrollbar {
+#ticket-dispatch-history::-webkit-scrollbar {
   width: 6px;
 }
 
-#ticket-handoff-history::-webkit-scrollbar-thumb {
+#ticket-dispatch-history::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
   border-radius: 3px;
 }
 
-/* Compact handoff items that don't stack */
-.handoff-item {
+/* Compact dispatch items that don't stack */
+.dispatch-item {
   flex-shrink: 0;
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.03);
@@ -1731,12 +1741,12 @@ button.icon-btn {
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.handoff-item:hover {
+.dispatch-item:hover {
   background: rgba(255, 255, 255, 0.06);
   border-color: var(--accent);
 }
 
-.handoff-item-head {
+.dispatch-item-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1744,13 +1754,13 @@ button.icon-btn {
   margin-bottom: 6px;
 }
 
-.handoff-item .ticket-name {
+.dispatch-item .ticket-name {
   font-size: 13px;
   font-weight: 600;
   color: #e0e0e0;
 }
 
-.handoff-item .ticket-agent {
+.dispatch-item .ticket-agent {
   font-size: 10px;
   padding: 2px 6px;
   border-radius: 4px;
@@ -1758,50 +1768,50 @@ button.icon-btn {
   color: #a8b4ff;
 }
 
-/* Full content display in handoff items */
-.handoff-item .ticket-body {
+/* Full content display in dispatch items */
+.dispatch-item .ticket-body {
   font-size: 12px;
   line-height: 1.5;
   color: #b8c0d0;
   word-break: break-word;
 }
 
-.handoff-item .ticket-handoff-title {
+.dispatch-item .ticket-dispatch-title {
   font-weight: 600;
   color: #e0e6f0;
   margin-bottom: 6px;
 }
 
-.handoff-item .ticket-handoff-body {
+.dispatch-item .ticket-dispatch-body {
   color: #a0a8b8;
 }
 
-/* Markdown rendering in handoff items */
-.handoff-item .messages-markdown p {
+/* Markdown rendering in dispatch items */
+.dispatch-item .messages-markdown p {
   margin: 0 0 8px 0;
 }
 
-.handoff-item .messages-markdown p:last-child {
+.dispatch-item .messages-markdown p:last-child {
   margin-bottom: 0;
 }
 
-.handoff-item .messages-markdown ul {
+.dispatch-item .messages-markdown ul {
   margin: 4px 0;
   padding-left: 20px;
 }
 
-.handoff-item .messages-markdown li {
+.dispatch-item .messages-markdown li {
   margin: 2px 0;
 }
 
-.handoff-item .messages-markdown code {
+.dispatch-item .messages-markdown code {
   background: rgba(255, 255, 255, 0.08);
   padding: 1px 4px;
   border-radius: 3px;
   font-size: 11px;
 }
 
-#ticket-handoff-history .messages-markdown pre.md-code {
+#ticket-dispatch-history .messages-markdown pre.md-code {
   background: rgba(0, 0, 0, 0.3);
   padding: 8px 10px;
   border-radius: 6px;
@@ -1809,7 +1819,7 @@ button.icon-btn {
   margin: 6px 0;
 }
 
-#ticket-handoff-history .messages-markdown pre.md-code code {
+#ticket-dispatch-history .messages-markdown pre.md-code code {
   background: none;
   padding: 0;
   font-size: 11px;
@@ -2929,12 +2939,13 @@ button.icon-btn {
 .terminal-toolbar {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 10px 12px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin-bottom: 6px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
 }
 
 .terminal-toolbar-row {
@@ -4457,14 +4468,23 @@ label {
   transform: translateY(0);
 }
 
-/* Terminal - maximize space */
+/* Terminal panel - flex layout to fill available space */
+#terminal.panel.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Terminal - maximize space using flex */
 .terminal-container {
   position: relative;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg);
-  height: calc(100vh - 100px);
-  height: calc(100dvh - 100px);
+  flex: 1 1 auto;
+  min-height: 200px;
   overflow: hidden;
   overscroll-behavior-y: contain;
   touch-action: pan-y;
@@ -4480,13 +4500,28 @@ label {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
-  background: rgba(10, 12, 18, 0.95);
+  background: var(--bg);
   color: var(--muted);
   z-index: 2;
-  padding: 20px;
+  padding: 40px 20px;
+  gap: 16px;
+}
+
+.terminal-overlay p {
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 400px;
+  margin: 0;
+}
+
+.terminal-overlay .terminal-overlay-hint {
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0.7;
 }
 
 .terminal-container .xterm {
@@ -4591,10 +4626,10 @@ button.terminal-text-send-icon.disconnected {
   cursor: pointer;
 }
 
-/* When the panel is open, shrink xterm height to keep controls visible (JS toggles the class). */
+/* When the text input panel is open, terminal still uses flex but may need more space for controls */
 #terminal.text-input-open .terminal-container {
-  height: max(180px, calc(100vh - 260px));
-  height: max(180px, calc(100dvh - 260px));
+  flex: 1 1 auto;
+  min-height: 180px;
 }
 
 /* Toast */
@@ -6542,13 +6577,13 @@ button.loading::after {
 /* Ultra-small screens */
 @media (max-width: 400px) {
   .terminal-container {
-    height: calc(100vh - 200px);
-    height: calc(100dvh - 200px);
+    flex: 1 1 auto;
+    min-height: 100px;
   }
 
   #terminal.text-input-open .terminal-container {
-    height: max(100px, calc(100vh - 340px));
-    height: max(100px, calc(100dvh - 340px));
+    flex: 1 1 auto;
+    min-height: 80px;
   }
 
   .terminal-mobile-controls {

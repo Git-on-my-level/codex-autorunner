@@ -75,7 +75,7 @@ class FormattingHelpers:
     def _build_compact_seed_prompt(self, summary_text: str) -> str:
         summary_text = summary_text.strip() or "(no summary)"
         return (
-            "Context handoff from previous thread:\n\n"
+            "Context from previous thread:\n\n"
             f"{summary_text}\n\n"
             "Continue from this context. Ask for missing info if needed."
         )

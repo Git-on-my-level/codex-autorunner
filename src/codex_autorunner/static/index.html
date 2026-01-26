@@ -155,8 +155,8 @@
                 <p class="metric" id="total-turns">–</p>
               </div>
               <div>
-                <p class="muted">Handoffs</p>
-                <p class="metric" id="message-handoffs">–</p>
+                <p class="muted">Dispatches</p>
+                <p class="metric" id="message-dispatches">–</p>
               </div>
               <div>
                 <p class="muted">Replies</p>
@@ -246,7 +246,7 @@
 
         <!-- Legacy analytics section removed -->
       </section>
-      <section class="panel" id="messages">
+      <section class="panel" id="inbox">
         <div class="cards">
           <div class="card">
             <div class="messages-layout">
@@ -439,10 +439,10 @@
             </div>
             <div class="ticket-panel">
               <div class="ticket-panel-header">
-                <span class="muted">Handoff history</span>
-                <span class="muted small" id="ticket-handoff-note">–</span>
+                <span class="muted">Dispatch history</span>
+                <span class="muted small" id="ticket-dispatch-note">–</span>
               </div>
-              <div class="ticket-list" id="ticket-handoff-history">No handoffs yet.</div>
+              <div class="ticket-list" id="ticket-dispatch-history">No dispatches yet.</div>
             </div>
           </div>
         </div>
@@ -584,7 +584,8 @@
     </div>
     <div class="terminal-container" id="terminal-container">
       <div class="terminal-overlay" id="terminal-overlay">
-        <p class="muted">Press New or Resume to launch the agent TUI</p>
+        <p>Click <strong>New</strong> to start a fresh agent session, or <strong>Resume</strong> to continue an existing one.</p>
+        <p class="terminal-overlay-hint">Use the agent dropdown above to switch between different agents.</p>
       </div>
       <button class="terminal-jump-btn hidden" id="terminal-jump-bottom" title="Jump to latest">
         ↓ Latest

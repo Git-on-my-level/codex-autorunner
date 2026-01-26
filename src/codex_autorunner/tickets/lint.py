@@ -84,10 +84,10 @@ def lint_ticket_frontmatter(
     )
 
 
-def lint_user_message_frontmatter(
+def lint_dispatch_frontmatter(
     data: dict[str, Any],
 ) -> Tuple[dict[str, Any], list[str]]:
-    """Validate USER_MESSAGE.md frontmatter.
+    """Validate DISPATCH.md frontmatter.
 
     Keys:
     - mode: "notify" | "pause" (defaults to notify)

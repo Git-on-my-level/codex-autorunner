@@ -33,17 +33,36 @@ class TicketDoc:
 
 
 @dataclass(frozen=True)
-class UserMessage:
+class Dispatch:
+    """Agent-to-human communication dispatched via the outbox.
+
+    A Dispatch is the canonical unit of agent→human communication. The mode
+    determines whether it's informational or requires human action:
+      - "notify": FYI, agent continues working
+      - "pause": Handoff, agent yields and awaits human reply
+    """
+
     mode: str  # "notify" | "pause"
     body: str
     title: Optional[str] = None
     extra: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def is_handoff(self) -> bool:
+        """True if this dispatch requires human action (mode='pause')."""
+        return self.mode == "pause"
+
 
 @dataclass(frozen=True)
-class OutboxDispatch:
+class DispatchRecord:
+    """Archived dispatch with sequence number and file references.
+
+    This is the envelope/record created when a Dispatch is archived to the
+    dispatch history directory.
+    """
+
     seq: int
-    message: UserMessage
+    dispatch: Dispatch
     archived_dir: Path
     archived_files: tuple[Path, ...]
 
@@ -69,7 +88,7 @@ class TicketResult:
     state: dict[str, Any]
     reason: Optional[str] = None
     reason_details: Optional[str] = None  # Technical details (git status, etc.)
-    dispatch: Optional[OutboxDispatch] = None
+    dispatch: Optional[DispatchRecord] = None
     current_ticket: Optional[str] = None
     agent_output: Optional[str] = None
     agent_id: Optional[str] = None
