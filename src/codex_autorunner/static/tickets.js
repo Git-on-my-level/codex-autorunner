@@ -17,7 +17,6 @@ let flowStartedAt = null;
 let eventSource = null;
 let lastActivityTime = null;
 let lastActivityTimerId = null;
-let liveOutputPanelExpanded = true; // Panel expanded by default showing summary
 let liveOutputDetailExpanded = false; // Start with summary view, one click for full
 let liveOutputBuffer = [];
 const MAX_OUTPUT_LINES = 200;
@@ -116,13 +115,11 @@ function appendToLiveOutput(text) {
     }
     // Update display
     outputEl.textContent = liveOutputBuffer.join("\n");
-    // Auto-scroll to bottom
-    const contentEl = document.getElementById("ticket-live-output-content");
-    if (contentEl) {
-        contentEl.scrollTop = contentEl.scrollHeight;
+    // Auto-scroll to bottom when detail view is showing
+    const detailEl = document.getElementById("ticket-live-output-detail");
+    if (detailEl && liveOutputDetailExpanded) {
+        detailEl.scrollTop = detailEl.scrollHeight;
     }
-    // Update inline preview for collapsed state
-    updateInlinePreview();
 }
 function addLiveOutputEvent(parsed) {
     const { event, mergeStrategy } = parsed;
@@ -207,67 +204,30 @@ function renderLiveOutputCompact() {
     const text = liveOutputEvents.length ? renderCompactSummary(summary) : "";
     compactEl.textContent = text || "Waiting for agent output...";
 }
-function updateInlinePreview() {
-    const previewEl = document.getElementById("ticket-live-output-preview");
-    if (!previewEl)
-        return;
-    // Only show preview when panel is collapsed and there are events
-    if (liveOutputPanelExpanded || liveOutputEvents.length === 0) {
-        previewEl.textContent = "";
-        return;
-    }
-    // Get the most recent event for inline preview
-    const lastEvent = liveOutputEvents[liveOutputEvents.length - 1];
-    let preview = "";
-    if (lastEvent.title) {
-        preview = lastEvent.title;
-        if (lastEvent.summary) {
-            const summarySnippet = lastEvent.summary.split("\n")[0].slice(0, 50);
-            preview += `: ${summarySnippet}`;
-        }
-    }
-    else if (lastEvent.method) {
-        preview = lastEvent.method;
-    }
-    else if (liveOutputBuffer.length > 0) {
-        // Fall back to last line of output buffer
-        const lastLine = liveOutputBuffer[liveOutputBuffer.length - 1].trim();
-        preview = lastLine.slice(0, 60);
-    }
-    previewEl.textContent = preview;
-}
 function updateLiveOutputViewToggle() {
     const viewToggle = document.getElementById("ticket-live-output-view-toggle");
     if (!viewToggle)
         return;
-    const iconEl = viewToggle.querySelector(".view-toggle-icon");
-    const labelEl = viewToggle.querySelector(".view-toggle-label");
     if (liveOutputDetailExpanded) {
         viewToggle.classList.add("active");
-        if (iconEl)
-            iconEl.textContent = "≡";
-        if (labelEl)
-            labelEl.textContent = "Summary";
-        viewToggle.title = "Show compact summary";
+        viewToggle.textContent = "≡";
+        viewToggle.title = "Show summary";
     }
     else {
         viewToggle.classList.remove("active");
-        if (iconEl)
-            iconEl.textContent = "⋯";
-        if (labelEl)
-            labelEl.textContent = "Details";
-        viewToggle.title = "Show full output with tool calls";
+        viewToggle.textContent = "⋯";
+        viewToggle.title = "Show full output";
     }
 }
 function renderLiveOutputView() {
     const compactEl = document.getElementById("ticket-live-output-compact");
-    const outputEl = document.getElementById("ticket-live-output-text");
+    const detailEl = document.getElementById("ticket-live-output-detail");
     const eventsEl = document.getElementById("ticket-live-output-events");
     if (compactEl) {
         compactEl.classList.toggle("hidden", liveOutputDetailExpanded);
     }
-    if (outputEl) {
-        outputEl.classList.toggle("hidden", !liveOutputDetailExpanded);
+    if (detailEl) {
+        detailEl.classList.toggle("hidden", !liveOutputDetailExpanded);
     }
     if (eventsEl) {
         eventsEl.classList.toggle("hidden", !liveOutputDetailExpanded);
@@ -275,7 +235,6 @@ function renderLiveOutputView() {
     renderLiveOutputCompact();
     renderLiveOutputEvents();
     updateLiveOutputViewToggle();
-    updateInlinePreview();
 }
 function clearLiveOutput() {
     liveOutputBuffer = [];
@@ -374,39 +333,16 @@ function disconnectEventStream() {
     setLiveOutputStatus("disconnected");
 }
 function initLiveOutputPanel() {
-    const collapseBtn = document.getElementById("ticket-live-output-collapse");
     const viewToggleBtn = document.getElementById("ticket-live-output-view-toggle");
-    const contentEl = document.getElementById("ticket-live-output-content");
-    const panelEl = document.getElementById("ticket-live-output-panel");
-    // Collapse/expand the entire panel (subtle, secondary action)
-    const toggleCollapse = () => {
-        liveOutputPanelExpanded = !liveOutputPanelExpanded;
-        if (contentEl) {
-            contentEl.classList.toggle("hidden", !liveOutputPanelExpanded);
-        }
-        if (panelEl) {
-            panelEl.classList.toggle("expanded", liveOutputPanelExpanded);
-        }
-        updateInlinePreview();
-    };
-    // Toggle between summary and full view (primary action - one click)
+    // Toggle between summary and full view (one click)
     const toggleView = () => {
         liveOutputDetailExpanded = !liveOutputDetailExpanded;
         renderLiveOutputView();
     };
-    if (collapseBtn) {
-        collapseBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            toggleCollapse();
-        });
-    }
     if (viewToggleBtn) {
-        viewToggleBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            toggleView();
-        });
+        viewToggleBtn.addEventListener("click", toggleView);
     }
-    // Initial render with correct state
+    // Initial render
     updateLiveOutputViewToggle();
     renderLiveOutputView();
 }

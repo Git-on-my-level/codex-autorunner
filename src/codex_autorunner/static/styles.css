@@ -2076,12 +2076,12 @@ button.icon-btn {
   display: inline;
 }
 
-/* Live Agent Output Panel */
+/* Live Agent Output Panel - Compact inline design */
 .ticket-live-output-panel {
-  margin-top: 8px;
+  margin-top: 6px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.02), rgba(26, 33, 48, 0.7));
+  border-radius: 6px;
+  background: rgba(10, 12, 18, 0.4);
   overflow: hidden;
 }
 
@@ -2089,181 +2089,81 @@ button.icon-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.03);
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.02);
   user-select: none;
-  min-height: 32px;
+  border-bottom: 1px solid var(--border);
 }
 
 .ticket-live-output-spacer {
   flex: 1;
-  min-width: 8px;
-}
-
-.ticket-live-output-header:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-/* Subtle collapse button on the left */
-.ticket-live-output-collapse {
-  background: none;
-  border: none;
-  padding: 2px 4px;
-  margin: 0;
-  font-size: 10px;
-  color: var(--muted);
-  cursor: pointer;
-  opacity: 0.6;
-  transition: opacity 0.15s, transform 0.2s;
-  line-height: 1;
-}
-
-.ticket-live-output-collapse:hover {
-  opacity: 1;
-  color: var(--fg);
-}
-
-/* Rotate chevron when collapsed */
-.ticket-live-output-panel:not(.expanded) .ticket-live-output-collapse {
-  transform: rotate(-90deg);
+  min-width: 4px;
 }
 
 .ticket-live-output-title {
   font-weight: 600;
-  font-size: 12px;
-  flex-shrink: 0;
-  cursor: default;
-}
-
-/* Inline preview shown when panel is collapsed */
-.ticket-live-output-preview {
-  flex: 0 1 auto;
-  max-width: 50%;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 11px;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0.8;
-}
-
-.ticket-live-output-preview:empty {
-  display: none;
-}
-
-/* Hide preview when panel is expanded */
-.ticket-live-output-panel.expanded .ticket-live-output-preview {
-  display: none;
-}
-
-/* Collapsed panel styling */
-.ticket-live-output-panel:not(.expanded) {
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.ticket-live-output-panel:not(.expanded) .ticket-live-output-header {
-  border-bottom: none;
-}
-
-/* Hide view toggle when collapsed (no content to toggle) */
-.ticket-live-output-panel:not(.expanded) .ticket-live-output-view-toggle {
-  display: none;
+  flex-shrink: 0;
 }
 
 .ticket-live-output-status {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
   color: var(--muted);
   flex-shrink: 0;
 }
 
 .ticket-live-output-status.connected {
-  background: rgba(63, 185, 80, 0.2);
+  background: rgba(63, 185, 80, 0.15);
   color: #3fb950;
 }
 
 .ticket-live-output-status.streaming {
-  background: rgba(108, 245, 216, 0.2);
+  background: rgba(108, 245, 216, 0.15);
   color: var(--accent);
   animation: pulse-running 1.5s ease-in-out infinite;
 }
 
-/* Primary view toggle button - the one-click action */
+/* Simple toggle button */
 .ticket-live-output-view-toggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: rgba(108, 245, 216, 0.08);
-  border: 1px solid rgba(108, 245, 216, 0.2);
-  border-radius: 6px;
-  padding: 4px 10px;
+  background: none;
+  border: 1px solid rgba(108, 245, 216, 0.25);
+  border-radius: 4px;
+  padding: 2px 8px;
   font-size: 11px;
   color: var(--accent);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.12s ease;
   flex-shrink: 0;
+  line-height: 1.2;
 }
 
 .ticket-live-output-view-toggle:hover {
-  background: rgba(108, 245, 216, 0.15);
-  border-color: rgba(108, 245, 216, 0.35);
+  background: rgba(108, 245, 216, 0.1);
+  border-color: rgba(108, 245, 216, 0.4);
 }
 
-.ticket-live-output-view-toggle:active {
-  transform: scale(0.97);
-}
-
-.ticket-live-output-view-toggle .view-toggle-icon {
-  font-size: 12px;
-  line-height: 1;
-}
-
-.ticket-live-output-view-toggle .view-toggle-label {
-  font-weight: 500;
-}
-
-/* Active state when showing full output */
 .ticket-live-output-view-toggle.active {
-  background: rgba(108, 245, 216, 0.2);
+  background: rgba(108, 245, 216, 0.15);
   border-color: var(--accent);
 }
 
-.ticket-live-output-content {
-  max-height: 300px;
-  overflow: auto;
-  border-top: 1px solid var(--border);
-}
-
-.ticket-live-output-content.hidden {
-  display: none;
-}
-
-.ticket-live-output-text {
-  margin: 0;
-  padding: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #c3c8d4;
-  min-height: 60px;
-}
-
+/* Compact summary - max 2 lines */
 .ticket-live-output-compact {
   margin: 0;
-  padding: 12px;
+  padding: 6px 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #c3c8d4;
-  background: rgba(10, 12, 18, 0.35);
-  min-height: 40px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #a8adb8;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  max-height: calc(2 * 1.4em + 12px); /* 2 lines + padding */
 }
 
 .ticket-live-output-compact:empty::before {
@@ -2276,6 +2176,29 @@ button.icon-btn {
   display: none;
 }
 
+/* Detail view (full output) */
+.ticket-live-output-detail {
+  max-height: 280px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}
+
+.ticket-live-output-detail.hidden {
+  display: none;
+}
+
+.ticket-live-output-text {
+  margin: 0;
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #c3c8d4;
+  min-height: 40px;
+}
+
 .ticket-live-output-text:empty::before {
   content: "Waiting for agent output...";
   color: var(--muted);
@@ -2283,8 +2206,8 @@ button.icon-btn {
 }
 
 .ticket-live-output-events {
-  padding: 10px 12px 4px;
-  border-top: 1px solid var(--border);
+  padding: 6px 8px 4px;
+  border-bottom: 1px solid var(--border);
 }
 
 .ticket-live-output-events.hidden {
@@ -2294,17 +2217,17 @@ button.icon-btn {
 .ticket-live-output-events-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 11px;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 10px;
 }
 
 .ticket-live-output-events-count {
-  padding: 2px 6px;
+  padding: 1px 5px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 9px;
 }
 
 .chat-events-compact {

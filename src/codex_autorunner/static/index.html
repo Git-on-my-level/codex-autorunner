@@ -413,22 +413,16 @@
             </div>
           </div>
           <!-- Live Agent Output Panel -->
-          <div class="ticket-live-output-panel expanded" id="ticket-live-output-panel">
+          <div class="ticket-live-output-panel" id="ticket-live-output-panel">
             <div class="ticket-live-output-header">
-              <button class="ticket-live-output-collapse" id="ticket-live-output-collapse"
-                title="Collapse panel">▾</button>
-              <span class="ticket-live-output-title" id="ticket-live-output-toggle">Live Agent Output</span>
-              <span class="ticket-live-output-preview" id="ticket-live-output-preview"></span>
-              <span class="ticket-live-output-spacer"></span>
+              <span class="ticket-live-output-title">Agent</span>
               <span class="ticket-live-output-status" id="ticket-live-output-status">Disconnected</span>
+              <span class="ticket-live-output-spacer"></span>
               <button class="ticket-live-output-view-toggle" id="ticket-live-output-view-toggle"
-                title="Show full output">
-                <span class="view-toggle-icon">⋯</span>
-                <span class="view-toggle-label">Details</span>
-              </button>
+                title="Show full output">⋯</button>
             </div>
-            <div class="ticket-live-output-content" id="ticket-live-output-content">
-              <pre class="ticket-live-output-compact" id="ticket-live-output-compact"></pre>
+            <pre class="ticket-live-output-compact" id="ticket-live-output-compact"></pre>
+            <div class="ticket-live-output-detail hidden" id="ticket-live-output-detail">
               <div class="ticket-live-output-events hidden" id="ticket-live-output-events">
                 <div class="ticket-live-output-events-header">
                   <span class="muted">Events</span>
@@ -436,7 +430,7 @@
                 </div>
                 <div class="ticket-chat-events-list" id="ticket-live-output-events-list"></div>
               </div>
-              <pre class="ticket-live-output-text hidden" id="ticket-live-output-text"></pre>
+              <pre class="ticket-live-output-text" id="ticket-live-output-text"></pre>
             </div>
           </div>
           <div class="ticket-flow-grid">
