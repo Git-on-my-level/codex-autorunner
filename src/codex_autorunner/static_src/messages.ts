@@ -160,7 +160,7 @@ export function initMessageBell(): void {
 
 function renderThreadItem(thread: ThreadSummary): string {
   const latest = thread.latest?.message;
-  const title = latest?.title || latest?.mode || "Message";
+  const title = latest?.title || latest?.mode || "Handoff";
   const subtitle = latest?.body ? latest.body.slice(0, 120) : "";
   const isPaused = thread.status === "paused";
 
@@ -174,7 +174,7 @@ function renderThreadItem(thread: ThreadSummary): string {
   const indicator = hasUnrepliedPause ? `<span class="messages-thread-indicator" title="Action required"></span>` : "";
   const handoffs = thread.handoff_count ?? 0;
   const replies = thread.reply_count ?? 0;
-  const metaLine = `${handoffs} message${handoffs !== 1 ? "s" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
+  const metaLine = `${handoffs} handoff${handoffs !== 1 ? "s" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
   return `
     <button class="messages-thread" data-run-id="${escapeHtml(thread.run_id)}">
       <div class="messages-thread-title">${indicator}${escapeHtml(title)}</div>
@@ -311,7 +311,7 @@ function renderHandoff(
   runStatus: string
 ): string {
   const msg = entry.message;
-  const title = msg?.title || "Agent message";
+  const title = msg?.title || "Agent handoff";
   const isPause = msg?.mode === "pause";
   
   let modeClass = "pill-info";
@@ -460,7 +460,7 @@ async function loadThread(runId: string): Promise<void> {
 
   // Build compact stats line
   const statsParts: string[] = [];
-  statsParts.push(`${handoffCount} message${handoffCount !== 1 ? "s" : ""}`);
+  statsParts.push(`${handoffCount} handoff${handoffCount !== 1 ? "s" : ""}`);
   statsParts.push(`${replyCount} repl${replyCount !== 1 ? "ies" : "y"}`);
   if (turns != null) statsParts.push(`${turns} turn${turns !== 1 ? "s" : ""}`);
   const statsLine = statsParts.join(" · ");
@@ -478,7 +478,7 @@ async function loadThread(runId: string): Promise<void> {
 
   detailEl.innerHTML = `
     <div class="messages-thread-history">
-      ${threadedContent || '<div class="muted">No messages yet</div>'}
+      ${threadedContent || '<div class="muted">No handoffs yet</div>'}
     </div>
     <div class="messages-thread-footer">
       <code title="${escapeHtml(runId)}">${escapeHtml(shortRunId)}</code>

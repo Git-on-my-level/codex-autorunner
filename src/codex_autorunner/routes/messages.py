@@ -342,7 +342,12 @@ def build_messages_routes() -> APIRouter:
             except Exception:
                 pass
         if not record:
-            raise HTTPException(status_code=404, detail="Run not found")
+            return {
+                "handoff_history": [],
+                "reply_history": [],
+                "handoff_count": 0,
+                "reply_count": 0,
+            }
         input_data = dict(record.input_data or {})
         handoff_history = _collect_handoff_history(
             repo_root=repo_root, run_id=run_id, record_input=input_data

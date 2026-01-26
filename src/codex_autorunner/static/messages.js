@@ -77,7 +77,7 @@ export function initMessageBell() {
 }
 function renderThreadItem(thread) {
     const latest = thread.latest?.message;
-    const title = latest?.title || latest?.mode || "Message";
+    const title = latest?.title || latest?.mode || "Handoff";
     const subtitle = latest?.body ? latest.body.slice(0, 120) : "";
     const isPaused = thread.status === "paused";
     // Only show action indicator if there's an unreplied pause
@@ -89,7 +89,7 @@ function renderThreadItem(thread) {
     const indicator = hasUnrepliedPause ? `<span class="messages-thread-indicator" title="Action required"></span>` : "";
     const handoffs = thread.handoff_count ?? 0;
     const replies = thread.reply_count ?? 0;
-    const metaLine = `${handoffs} message${handoffs !== 1 ? "s" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
+    const metaLine = `${handoffs} handoff${handoffs !== 1 ? "s" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
     return `
     <button class="messages-thread" data-run-id="${escapeHtml(thread.run_id)}">
       <div class="messages-thread-title">${indicator}${escapeHtml(title)}</div>
@@ -222,7 +222,7 @@ function renderFiles(files) {
 }
 function renderHandoff(entry, isLatest, runStatus) {
     const msg = entry.message;
-    const title = msg?.title || "Agent message";
+    const title = msg?.title || "Agent handoff";
     const isPause = msg?.mode === "pause";
     let modeClass = "pill-info";
     let modeLabel = "INFO";
@@ -349,7 +349,7 @@ async function loadThread(runId) {
     const shortRunId = runId.length > 12 ? runId.slice(0, 8) + "…" : runId;
     // Build compact stats line
     const statsParts = [];
-    statsParts.push(`${handoffCount} message${handoffCount !== 1 ? "s" : ""}`);
+    statsParts.push(`${handoffCount} handoff${handoffCount !== 1 ? "s" : ""}`);
     statsParts.push(`${replyCount} repl${replyCount !== 1 ? "ies" : "y"}`);
     if (turns != null)
         statsParts.push(`${turns} turn${turns !== 1 ? "s" : ""}`);
@@ -361,7 +361,7 @@ async function loadThread(runId) {
     const threadedContent = buildThreadedTimeline(detail.handoff_history || [], detail.reply_history || [], runStatus);
     detailEl.innerHTML = `
     <div class="messages-thread-history">
-      ${threadedContent || '<div class="muted">No messages yet</div>'}
+      ${threadedContent || '<div class="muted">No handoffs yet</div>'}
     </div>
     <div class="messages-thread-footer">
       <code title="${escapeHtml(runId)}">${escapeHtml(shortRunId)}</code>
