@@ -154,18 +154,12 @@ def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
 
 
 def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
-    return next(
-        (
-            rec
-            for rec in records
-            if rec.status
-            in (
-                FlowRunStatus.RUNNING,
-                FlowRunStatus.PAUSED,
-            )
-        ),
-        None,
-    )
+    if not records:
+        return None
+    latest = records[0]
+    if latest.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
+        return latest
+    return None
 
 
 def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
@@ -408,18 +402,7 @@ def build_flow_routes() -> APIRouter:
 
         if not force_new:
             records = _safe_list_flow_runs(repo_root, flow_type="ticket_flow")
-            active = next(
-                (
-                    rec
-                    for rec in records
-                    if rec.status
-                    in (
-                        FlowRunStatus.RUNNING,
-                        FlowRunStatus.PAUSED,
-                    )
-                ),
-                None,
-            )
+            active = _active_or_paused_run(records)
             if active:
                 _reap_dead_worker(active.id)
                 _start_flow_worker(repo_root, active.id)
