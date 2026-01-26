@@ -214,7 +214,7 @@ class AgentPool:
             or "yolo"
         ).strip()
         approval_policy = "never" if approval_mode == "yolo" else "on-request"
-        sandbox = "workspace-write"
+        sandbox = "danger-full-access" if approval_mode == "yolo" else "workspace-write"
 
         thread_id = req.conversation_id
         if thread_id:
