@@ -39,13 +39,22 @@ def _load_flow_store(repo_root: Path) -> Optional[FlowStore]:
 
 
 def _select_primary_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
-    for rec in records:
-        if (
-            FlowRunStatus(rec.status).is_active()
-            or FlowRunStatus(rec.status).is_paused()
-        ):
-            return rec
-    return records[0] if records else None
+    """Select the primary run for analytics display.
+
+    Only considers the newest run (records[0]). If it's active or paused, return it.
+    If the newest run is terminal (completed/stopped/failed), return None to show idle.
+    This matches the backend's _active_or_paused_run() logic and prevents showing
+    stale data from old paused runs when newer runs have completed.
+    """
+    if not records:
+        return None
+    newest = records[0]
+    if (
+        FlowRunStatus(newest.status).is_active()
+        or FlowRunStatus(newest.status).is_paused()
+    ):
+        return newest
+    return None
 
 
 def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:

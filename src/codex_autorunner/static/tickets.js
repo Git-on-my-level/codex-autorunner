@@ -515,7 +515,7 @@ function renderHandoffHistory(runId, data) {
         handoffNote.textContent = `Latest #${entries[0]?.seq ?? "–"}`;
     entries.forEach((entry) => {
         const container = document.createElement("div");
-        container.className = "ticket-item clickable";
+        container.className = "handoff-item clickable";
         container.title = "Click to view in Inbox";
         // Add click handler to navigate to inbox
         container.addEventListener("click", () => {
@@ -529,7 +529,7 @@ function renderHandoffHistory(runId, data) {
             }
         });
         const head = document.createElement("div");
-        head.className = "ticket-item-head";
+        head.className = "handoff-item-head";
         const seq = document.createElement("span");
         seq.className = "ticket-name";
         seq.textContent = `#${entry.seq || "?"}`;
@@ -695,9 +695,13 @@ async function loadTicketFlow() {
     }
     try {
         const runs = (await api("/api/flows/runs?flow_type=ticket_flow"));
-        // Treat only non-terminal runs as the current run; terminal runs indicate idle state
+        // Only consider the newest run - if it's terminal, flow is idle.
+        // This matches the backend's _active_or_paused_run() logic which only checks runs[0].
+        // Using find() would incorrectly pick up older paused runs when a newer run has completed.
+        const newest = runs?.[0] || null;
         const terminalStatuses = ["completed", "stopped", "failed"];
-        const latest = runs?.find((r) => !terminalStatuses.includes(r.status)) || null;
+        const isActive = newest && !terminalStatuses.includes(newest.status);
+        const latest = isActive ? newest : null;
         currentRunId = latest?.id || null;
         currentFlowStatus = latest?.status || null;
         // Extract ticket engine state
@@ -748,12 +752,11 @@ async function loadTicketFlow() {
             stopBtn.disabled = !latest?.id || !stoppable;
         }
         await loadTicketFiles();
-        // Calculate and display ticket progress
+        // Calculate and display ticket progress (scoped to tickets container only)
         if (progress) {
-            const doneCount = ticketsExist ?
-                document.querySelectorAll(".ticket-item.done").length : 0;
-            const totalCount = ticketsExist ?
-                document.querySelectorAll(".ticket-item").length : 0;
+            const ticketsContainer = document.getElementById("ticket-flow-tickets");
+            const doneCount = ticketsContainer?.querySelectorAll(".ticket-item.done").length ?? 0;
+            const totalCount = ticketsContainer?.querySelectorAll(".ticket-item").length ?? 0;
             if (totalCount > 0) {
                 progress.textContent = `${doneCount} of ${totalCount} done`;
             }
