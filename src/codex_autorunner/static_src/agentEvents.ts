@@ -140,10 +140,6 @@ function extractErrorMessage(params: PayloadParams | null | undefined): string {
   return "";
 }
 
-function normalizeText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
 function hasMeaningfulText(summary: string, detail: string): boolean {
   return Boolean(summary.trim() || detail.trim());
 }
@@ -287,9 +283,9 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
     summary = params.delta;
   }
 
-  const normalizedSummary = normalizeText(String(summary || ""));
-  const normalizedDetail = normalizeText(String(detail || ""));
-  const meaningful = hasMeaningfulText(normalizedSummary, normalizedDetail);
+  const summaryText = typeof summary === "string" ? summary : String(summary ?? "");
+  const detailText = typeof detail === "string" ? detail : String(detail ?? "");
+  const meaningful = hasMeaningfulText(summaryText, detailText);
   const isStarted = method.includes("item/started");
   if (!meaningful && isStarted) {
     return null;
@@ -302,8 +298,8 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
   const event: AgentEvent = {
     id: (payload as EventPayload)?.id || `${Date.now()}`,
     title,
-    summary: normalizedSummary,
-    detail: normalizedDetail,
+    summary: summaryText,
+    detail: detailText,
     kind,
     isSignificant,
     time: receivedAt,

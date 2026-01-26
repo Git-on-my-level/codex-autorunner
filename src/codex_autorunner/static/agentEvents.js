@@ -65,9 +65,6 @@ function extractErrorMessage(params) {
         return params.message;
     return "";
 }
-function normalizeText(value) {
-    return value.replace(/\s+/g, " ").trim();
-}
 function hasMeaningfulText(summary, detail) {
     return Boolean(summary.trim() || detail.trim());
 }
@@ -224,9 +221,9 @@ export function parseAppServerEvent(payload) {
         title = "Delta";
         summary = params.delta;
     }
-    const normalizedSummary = normalizeText(String(summary || ""));
-    const normalizedDetail = normalizeText(String(detail || ""));
-    const meaningful = hasMeaningfulText(normalizedSummary, normalizedDetail);
+    const summaryText = typeof summary === "string" ? summary : String(summary ?? "");
+    const detailText = typeof detail === "string" ? detail : String(detail ?? "");
+    const meaningful = hasMeaningfulText(summaryText, detailText);
     const isStarted = method.includes("item/started");
     if (!meaningful && isStarted) {
         return null;
@@ -238,8 +235,8 @@ export function parseAppServerEvent(payload) {
     const event = {
         id: payload?.id || `${Date.now()}`,
         title,
-        summary: normalizedSummary,
-        detail: normalizedDetail,
+        summary: summaryText,
+        detail: detailText,
         kind,
         isSignificant,
         time: receivedAt,

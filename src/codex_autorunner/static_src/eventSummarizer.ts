@@ -56,11 +56,11 @@ function deriveHeaderLabel(events: AgentEvent[]): string {
 }
 
 function eventToAction(event: AgentEvent, maxTextLength: number): CompactAction | null {
-  if (!event.isSignificant && event.kind !== "thinking") {
+  if (event.isSignificant === false && event.kind !== "thinking") {
     return null;
   }
   const rawText = normalizeText(event.summary || event.detail || "");
-  if (!rawText && event.kind !== "thinking") return null;
+  if (!rawText) return null;
 
   let label: string = event.kind;
   let status: CompactActionStatus = "update";

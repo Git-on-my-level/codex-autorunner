@@ -38,11 +38,11 @@ function deriveHeaderLabel(events) {
     return "working";
 }
 function eventToAction(event, maxTextLength) {
-    if (!event.isSignificant && event.kind !== "thinking") {
+    if (event.isSignificant === false && event.kind !== "thinking") {
         return null;
     }
     const rawText = normalizeText(event.summary || event.detail || "");
-    if (!rawText && event.kind !== "thinking")
+    if (!rawText)
         return null;
     let label = event.kind;
     let status = "update";
