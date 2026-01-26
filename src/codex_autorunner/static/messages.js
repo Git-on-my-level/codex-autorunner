@@ -220,12 +220,24 @@ function renderFiles(files) {
         .join("");
     return `<ul class="messages-files">${items}</ul>`;
 }
-function renderHandoff(entry) {
+function renderHandoff(entry, isLatest, runStatus) {
     const msg = entry.message;
     const title = msg?.title || "Agent message";
     const isPause = msg?.mode === "pause";
-    const modeClass = isPause ? "pill-action" : "pill-info";
-    const modeLabel = isPause ? "ACTION REQUIRED" : "INFO";
+    let modeClass = "pill-info";
+    let modeLabel = "INFO";
+    if (isPause) {
+        // Only show "ACTION REQUIRED" if this is the latest message AND the run is actually paused.
+        // Otherwise, show "PAUSED" to indicate a historical pause point.
+        if (isLatest && runStatus === "paused") {
+            modeClass = "pill-action";
+            modeLabel = "ACTION REQUIRED";
+        }
+        else {
+            modeClass = "pill-idle";
+            modeLabel = "PAUSED";
+        }
+    }
     const modePill = msg?.mode ? ` <span class="pill pill-small ${modeClass}">${escapeHtml(modeLabel)}</span>` : "";
     const body = msg?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(msg.body)}</div>` : "";
     const ts = entry.created_at ? formatTimestamp(entry.created_at) : "";
@@ -264,10 +276,14 @@ function renderReply(entry, parentSeq) {
     </div>
   `;
 }
-function buildThreadedTimeline(handoffs, replies) {
+function buildThreadedTimeline(handoffs, replies, runStatus) {
     // Combine all entries into a single timeline
     const timeline = [];
+    // Find the latest handoff sequence number to identify the most recent agent message
+    let maxHandoffSeq = -1;
     handoffs.forEach((h) => {
+        if (h.seq > maxHandoffSeq)
+            maxHandoffSeq = h.seq;
         timeline.push({
             type: "handoff",
             seq: h.seq,
@@ -296,7 +312,8 @@ function buildThreadedTimeline(handoffs, replies) {
     timeline.forEach((entry) => {
         if (entry.type === "handoff" && entry.handoff) {
             lastHandoffSeq = entry.handoff.seq;
-            rendered.push(renderHandoff(entry.handoff));
+            const isLatest = entry.handoff.seq === maxHandoffSeq;
+            rendered.push(renderHandoff(entry.handoff, isLatest, runStatus));
         }
         else if (entry.type === "reply" && entry.reply) {
             rendered.push(renderReply(entry.reply, lastHandoffSeq));
@@ -341,7 +358,7 @@ async function loadThread(runId) {
     const statusPillClass = isPaused ? "pill-action" : "pill-idle";
     const statusLabel = isPaused ? "paused" : runStatus || "idle";
     // Build threaded timeline
-    const threadedContent = buildThreadedTimeline(detail.handoff_history || [], detail.reply_history || []);
+    const threadedContent = buildThreadedTimeline(detail.handoff_history || [], detail.reply_history || [], runStatus);
     detailEl.innerHTML = `
     <div class="messages-thread-header">
       <div class="messages-header-info">

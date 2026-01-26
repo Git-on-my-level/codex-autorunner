@@ -305,12 +305,30 @@ function renderFiles(files: Array<{ name: string; url: string; size?: number | n
   return `<ul class="messages-files">${items}</ul>`;
 }
 
-function renderHandoff(entry: { seq: number; message?: AgentMessage | null; files?: FileAttachment[]; created_at?: string | null }): string {
+function renderHandoff(
+  entry: { seq: number; message?: AgentMessage | null; files?: FileAttachment[]; created_at?: string | null },
+  isLatest: boolean,
+  runStatus: string
+): string {
   const msg = entry.message;
   const title = msg?.title || "Agent message";
   const isPause = msg?.mode === "pause";
-  const modeClass = isPause ? "pill-action" : "pill-info";
-  const modeLabel = isPause ? "ACTION REQUIRED" : "INFO";
+  
+  let modeClass = "pill-info";
+  let modeLabel = "INFO";
+
+  if (isPause) {
+    // Only show "ACTION REQUIRED" if this is the latest message AND the run is actually paused.
+    // Otherwise, show "PAUSED" to indicate a historical pause point.
+    if (isLatest && runStatus === "paused") {
+      modeClass = "pill-action";
+      modeLabel = "ACTION REQUIRED";
+    } else {
+      modeClass = "pill-idle";
+      modeLabel = "PAUSED";
+    }
+  }
+
   const modePill = msg?.mode ? ` <span class="pill pill-small ${modeClass}">${escapeHtml(modeLabel)}</span>` : "";
   const body = msg?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(msg.body)}</div>` : "";
   const ts = entry.created_at ? formatTimestamp(entry.created_at) : "";
@@ -361,12 +379,16 @@ interface TimelineEntry {
 
 function buildThreadedTimeline(
   handoffs: Array<{ seq: number; message?: AgentMessage | null; files?: FileAttachment[]; created_at?: string | null }>,
-  replies: Array<{ seq: number; reply?: ReplyMessage | null; files?: FileAttachment[]; created_at?: string | null }>
+  replies: Array<{ seq: number; reply?: ReplyMessage | null; files?: FileAttachment[]; created_at?: string | null }>,
+  runStatus: string
 ): string {
   // Combine all entries into a single timeline
   const timeline: TimelineEntry[] = [];
 
+  // Find the latest handoff sequence number to identify the most recent agent message
+  let maxHandoffSeq = -1;
   handoffs.forEach((h) => {
+    if (h.seq > maxHandoffSeq) maxHandoffSeq = h.seq;
     timeline.push({
       type: "handoff",
       seq: h.seq,
@@ -399,7 +421,8 @@ function buildThreadedTimeline(
   timeline.forEach((entry) => {
     if (entry.type === "handoff" && entry.handoff) {
       lastHandoffSeq = entry.handoff.seq;
-      rendered.push(renderHandoff(entry.handoff));
+      const isLatest = entry.handoff.seq === maxHandoffSeq;
+      rendered.push(renderHandoff(entry.handoff, isLatest, runStatus));
     } else if (entry.type === "reply" && entry.reply) {
       rendered.push(renderReply(entry.reply, lastHandoffSeq));
     }
@@ -449,7 +472,8 @@ async function loadThread(runId: string): Promise<void> {
   // Build threaded timeline
   const threadedContent = buildThreadedTimeline(
     detail.handoff_history || [],
-    detail.reply_history || []
+    detail.reply_history || [],
+    runStatus
   );
 
   detailEl.innerHTML = `
