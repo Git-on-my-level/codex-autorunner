@@ -537,10 +537,17 @@ class TicketRunner:
 
     def _missing_required_inputs(self, requires: tuple[str, ...]) -> list[str]:
         missing: list[str] = []
+        ticket_dir = self._workspace_root / self._config.ticket_dir
         for rel in requires:
             abs_path = self._workspace_root / rel
-            if not abs_path.exists():
-                missing.append(rel)
+            if abs_path.exists():
+                continue
+            # Also check relative to ticket directory for ticket-like filenames
+            # (e.g., "TICKET-001.md" -> ".codex-autorunner/tickets/TICKET-001.md")
+            ticket_path = ticket_dir / rel
+            if ticket_path.exists():
+                continue
+            missing.append(rel)
         return missing
 
     def _recheck_ticket_frontmatter(self, ticket_path: Path):

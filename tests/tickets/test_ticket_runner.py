@@ -530,3 +530,58 @@ async def test_ticket_runner_resumes_after_requires_created(tmp_path: Path) -> N
     assert len(pool.requests) == 1
     assert resumed.status == "continue"
     assert completed.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_resolves_ticket_requires_relative_to_ticket_dir(
+    tmp_path: Path,
+) -> None:
+    """Test that requires can reference other tickets by filename only.
+
+    When a ticket has `requires: [TICKET-001.md]`, the runner should find
+    the file at `.codex-autorunner/tickets/TICKET-001.md` even though only
+    the filename is specified (not the full relative path).
+    """
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create TICKET-001.md (marked as done)
+    ticket_001 = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_001, done=True)
+
+    # Create TICKET-002.md that requires TICKET-001.md by filename only
+    ticket_002 = ticket_dir / "TICKET-002.md"
+    _write_ticket(ticket_002, requires=["TICKET-001.md"])
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        _set_ticket_done(ticket_002, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv-1",
+            turn_id="t1",
+            text="processed ticket 2",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    # Should NOT pause for missing requires since TICKET-001.md exists in ticket_dir
+    result = await runner.step({})
+    assert (
+        result.status == "continue"
+    ), f"Expected continue, got {result.status}: {result.reason}"
+    assert len(pool.requests) == 1
+
+    # Complete the flow
+    completed = await runner.step(result.state)
+    assert completed.status == "completed"

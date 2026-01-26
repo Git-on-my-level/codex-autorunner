@@ -2151,7 +2151,7 @@ button.icon-btn {
   border-color: var(--accent);
 }
 
-/* Compact summary - max 2 lines */
+/* Compact summary - max 3 lines */
 .ticket-live-output-compact {
   margin: 0;
   padding: 6px 8px;
@@ -2161,9 +2161,9 @@ button.icon-btn {
   color: #a8adb8;
   overflow: hidden;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
-  max-height: calc(2 * 1.4em + 12px); /* 2 lines + padding */
+  max-height: calc(3 * 1.4em + 12px); /* 3 lines + padding */
 }
 
 .ticket-live-output-compact:empty::before {
