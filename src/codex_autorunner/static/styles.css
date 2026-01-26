@@ -7499,13 +7499,14 @@ button.loading::after {
 
 #messages .card {
   max-width: none;
+  padding: 8px 10px;
 }
 
 .messages-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) 1fr;
-  gap: 24px;
-  height: calc(100vh - 180px);
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  gap: 16px;
+  height: calc(100vh - 160px);
   min-height: 400px;
 }
 
@@ -7582,7 +7583,7 @@ button.loading::after {
 .messages-thread-detail {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 12px;
   background: rgba(255, 255, 255, 0.02);
   overflow-y: auto;
   flex: 1;
@@ -7598,13 +7599,17 @@ button.loading::after {
 .messages-entry {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px 14px;
+  padding: 10px 12px;
   background: var(--panel);
-  margin-top: 12px;
+  margin-top: 10px;
+}
+
+.messages-entry:first-child {
+  margin-top: 0;
 }
 
 .messages-entry.messages-entry-reply {
-  margin-left: 24px;
+  margin-left: 20px;
   border-left: 2px solid rgba(108, 168, 255, 0.4);
   background: rgba(108, 168, 255, 0.04);
 }
@@ -7700,9 +7705,10 @@ button.loading::after {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 0;
-  border-top: 1px solid var(--border);
-  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-top: 10px;
   font-size: 11px;
   flex-wrap: nowrap;
   position: sticky;

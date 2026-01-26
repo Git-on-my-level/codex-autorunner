@@ -930,23 +930,61 @@ async function archiveTicketFlow() {
         const count = res?.tickets_archived ?? 0;
         flash(`Archived ${count} ticket${count !== 1 ? "s" : ""}`);
         clearLiveOutput();
+        // Reset all state variables
         currentRunId = null;
-        // Clear UI elements immediately after archive
-        renderHandoffHistory(null, null);
+        currentFlowStatus = null;
+        currentActiveTicket = null;
+        currentReasonFull = null;
+        // Reset all UI elements to idle state directly (avoid re-fetching stale data)
+        const { status, run, current, turn, elapsed, progress, lastActivity, bootstrapBtn, resumeBtn, stopBtn, restartBtn } = els();
+        if (status)
+            statusPill(status, "idle");
+        if (run)
+            run.textContent = "–";
+        if (current)
+            current.textContent = "–";
+        if (turn)
+            turn.textContent = "–";
+        if (elapsed)
+            elapsed.textContent = "–";
+        if (progress)
+            progress.textContent = "–";
+        if (lastActivity)
+            lastActivity.textContent = "–";
         if (reason) {
             reason.textContent = "No ticket flow run yet.";
             reason.classList.remove("has-details");
         }
-        currentReasonFull = null;
-        // Refresh inbox badge to reflect no active paused runs
+        renderHandoffHistory(null, null);
+        // Stop timers and disconnect event stream
+        disconnectEventStream();
+        stopElapsedTimer();
+        stopLastActivityTimer();
+        // Update button states for no active run
+        if (bootstrapBtn) {
+            bootstrapBtn.disabled = false;
+            bootstrapBtn.textContent = "Start Ticket Flow";
+            bootstrapBtn.title = "";
+        }
+        if (resumeBtn)
+            resumeBtn.disabled = true;
+        if (stopBtn)
+            stopBtn.disabled = true;
+        if (restartBtn)
+            restartBtn.style.display = "none";
+        if (archiveBtn)
+            archiveBtn.style.display = "none";
+        // Refresh inbox badge and ticket list (tickets were archived/moved)
         void refreshBell();
-        await loadTicketFlow();
+        await loadTicketFiles();
     }
     catch (err) {
         flash(err.message || "Failed to archive ticket flow", "error");
     }
     finally {
-        archiveBtn.textContent = "Archive Flow";
+        if (archiveBtn) {
+            archiveBtn.textContent = "Archive Flow";
+        }
         setButtonsDisabled(false);
     }
 }
