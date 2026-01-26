@@ -12,15 +12,10 @@ mode: hub
 repo_defaults:
   docs:
     # Paths are relative to the repo root.
-    # Example: .codex-autorunner/TODO.md → /repo/root/.codex-autorunner/TODO.md
     # Note: Absolute paths and ~ expansion are NOT allowed for docs.*
-    todo: .codex-autorunner/TODO.md
-    progress: .codex-autorunner/PROGRESS.md
-    opinions: .codex-autorunner/OPINIONS.md
-    spec: .codex-autorunner/SPEC.md
-    summary: .codex-autorunner/SUMMARY.md
-    snapshot: .codex-autorunner/SNAPSHOT.md
-    snapshot_state: .codex-autorunner/snapshot_state.json
+    active_context: .codex-autorunner/workspace/active_context.md
+    decisions: .codex-autorunner/workspace/decisions.md
+    spec: .codex-autorunner/workspace/spec.md
 
   codex:
     # Codex CLI binary to invoke.

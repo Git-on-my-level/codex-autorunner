@@ -46,11 +46,22 @@ echo "Buckets"
 main_logs=("$ROOT"/codex-autorunner.log*)
 print_group "Main logs" "${main_logs[@]}"
 
-run_logs=("$ROOT"/runs/*.log)
-print_group "Run logs" "${run_logs[@]}"
+# Use a temporary variable to check for existence before accessing the array
+# This avoids "unbound variable" errors under set -u when no matches are found.
+run_logs_glob="$ROOT/runs/*.log"
+run_logs=($run_logs_glob)
+if [ "${run_logs[0]}" != "$run_logs_glob" ]; then
+  print_group "Run logs" "${run_logs[@]}"
+else
+  printf "%-24s %s\n" "Run logs" "0B"
+fi
 
 uploads=("$ROOT"/uploads)
-print_group "Uploads" "${uploads[@]}"
+if [ -d "$uploads" ]; then
+  print_group "Uploads" "${uploads[@]}"
+else
+  printf "%-24s %s\n" "Uploads" "0B"
+fi
 
 static_cache=("$ROOT"/static-cache)
 print_group "Static cache" "${static_cache[@]}"
@@ -59,21 +70,22 @@ server_logs=("$ROOT"/codex-server.log)
 print_group "Server log" "${server_logs[@]}"
 
 context_cache=("$ROOT"/github_context)
-print_group "GitHub context" "${context_cache[@]}"
+if [ -d "$context_cache" ]; then
+  print_group "GitHub context" "${context_cache[@]}"
+else
+  printf "%-24s %s\n" "GitHub context" "0B"
+fi
 
 work_docs=()
-add_if_exists work_docs "$ROOT/TODO.md"
-add_if_exists work_docs "$ROOT/PROGRESS.md"
-add_if_exists work_docs "$ROOT/OPINIONS.md"
-add_if_exists work_docs "$ROOT/SPEC.md"
-add_if_exists work_docs "$ROOT/SUMMARY.md"
-add_if_exists work_docs "$ROOT/SNAPSHOT.md"
+add_if_exists work_docs "$ROOT/workspace/active_context.md"
+add_if_exists work_docs "$ROOT/workspace/decisions.md"
+add_if_exists work_docs "$ROOT/workspace/spec.md"
 add_if_exists work_docs "$ROOT/ABOUT_CAR.md"
 add_if_exists work_docs "$ROOT/config.yml"
 add_if_exists work_docs "$ROOT/state.sqlite3"
 add_if_exists work_docs "$ROOT/telegram_state.sqlite3"
-add_if_exists work_docs "$ROOT/snapshot_state.json"
 add_if_exists work_docs "$ROOT/github.json"
+add_if_exists work_docs "$ROOT/tickets"
 print_group "Work docs/state" "${work_docs[@]}"
 
 echo

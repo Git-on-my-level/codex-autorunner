@@ -1381,13 +1381,12 @@ class Engine:
         msg = self.config.git_commit_message_template.replace(
             "{run_id}", str(run_id)
         ).replace("#{run_id}", str(run_id))
-        paths = [
-            self.config.doc_path("todo"),
-            self.config.doc_path("progress"),
-            self.config.doc_path("opinions"),
-            self.config.doc_path("spec"),
-            self.config.doc_path("summary"),
-        ]
+        paths = []
+        for key in ("active_context", "decisions", "spec"):
+            try:
+                paths.append(self.config.doc_path(key))
+            except KeyError:
+                pass
         add_paths = [str(p.relative_to(self.repo_root)) for p in paths if p.exists()]
         if not add_paths:
             return
