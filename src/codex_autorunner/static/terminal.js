@@ -5,18 +5,21 @@ export function getTerminalManager() {
 }
 export function initTerminal() {
     if (terminalManager) {
-        terminalManager.fit();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (typeof terminalManager.fit === "function") {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            terminalManager.fit();
+        }
         return;
     }
     terminalManager = new TerminalManager();
     terminalManager.init();
     // Ensure terminal is resized to fit container after initialization
     if (terminalManager) {
-        terminalManager.fit();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (typeof terminalManager.fit === "function") {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            terminalManager.fit();
+        }
     }
 }
-// export function fitTerminal(): void {
-//   if (terminalManager) {
-//     terminalManager.fit();
-//   }
-// }
