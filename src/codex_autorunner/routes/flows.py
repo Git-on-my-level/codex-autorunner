@@ -689,10 +689,11 @@ You are the first ticket in a new ticket_flow run.
             archived_count += 1
 
         # Archive runs directory (handoff_history, reply_history, etc.) to dismiss notifications
-        runs_dir = repo_root / ".codex-autorunner" / "runs" / run_id
-        if runs_dir.exists() and runs_dir.is_dir():
+        outbox_paths = _resolve_outbox_for_record(record, repo_root)
+        run_dir = outbox_paths.run_dir
+        if run_dir.exists() and run_dir.is_dir():
             archived_runs_dir = artifacts_root / run_id / "archived_runs"
-            shutil.move(str(runs_dir), str(archived_runs_dir))
+            shutil.move(str(run_dir), str(archived_runs_dir))
 
         # Delete run record if requested
         if delete_run:
