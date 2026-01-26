@@ -5,7 +5,7 @@ This package splits monolithic api_routes.py into focused modules:
 - base: Index, WebSocket terminal, and general endpoints
 - agents: Agent harness models and event streaming
 - app_server: App-server thread registry endpoints
-- docs: Document management (read/write) and chat
+- workspace: Optional workspace docs (active_context/decisions/spec)
 - flows: Flow runtime management (start/stop/resume/status/events/artifacts)
 - messages: Inbox/message wrappers over ticket_flow handoff + reply histories
 - repos: Run control (start/stop/resume/reset)

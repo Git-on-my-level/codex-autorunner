@@ -94,7 +94,7 @@ docs:
 
 ```yaml
 docs:
-  todo: .codex-autorunner/TODO.md  # Relative to repo root
+  active_context: .codex-autorunner/workspace/active_context.md  # Relative to repo root
 ```
 
 ### Empty Paths
@@ -105,8 +105,8 @@ Empty or whitespace-only paths are rejected.
 
 ```yaml
 docs:
-  todo: ""  # Rejected
-  progress: "   "  # Rejected (whitespace only)
+  active_context: ""  # Rejected
+  decisions: "   "  # Rejected (whitespace only)
 ```
 
 ## Configuration Sections
@@ -119,13 +119,9 @@ All `docs.*` paths must be **relative to repo root** (no `~` or absolute paths a
 
 ```yaml
 docs:
-  todo: .codex-autorunner/TODO.md
-  progress: .codex-autorunner/PROGRESS.md
-  opinions: .codex-autorunner/OPINIONS.md
-  spec: .codex-autorunner/SPEC.md
-  summary: .codex-autorunner/SUMMARY.md
-  snapshot: .codex-autorunner/SNAPSHOT.md
-  snapshot_state: .codex-autorunner/snapshot_state.json
+  active_context: .codex-autorunner/workspace/active_context.md
+  decisions: .codex-autorunner/workspace/decisions.md
+  spec: .codex-autorunner/workspace/spec.md
 ```
 
 ### log and server_log

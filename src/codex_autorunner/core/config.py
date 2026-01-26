@@ -117,8 +117,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "reasoning": None,
             "max_wallclock_seconds": None,
             "context": {
-                "primary_docs": ["spec", "progress"],
-                "include_docs": ["todo", "summary"],
+                "primary_docs": ["spec", "decisions"],
+                "include_docs": ["active_context"],
                 "include_last_run_artifacts": True,
                 "max_doc_chars": 20000,
             },
@@ -155,6 +155,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "turn_stall_recovery_min_interval_seconds": 10,
         "request_timeout": None,
         "prompts": {
+            # NOTE: These keys are legacy names kept for config compatibility.
+            # The workspace cutover uses tickets + workspace docs + unified file chat; only
+            # the "autorunner" prompt is currently used by the app-server prompt builder.
             "doc_chat": {
                 "max_chars": 12000,
                 "message_max_chars": 2000,
