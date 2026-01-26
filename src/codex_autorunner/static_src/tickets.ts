@@ -770,7 +770,9 @@ async function loadTicketFlow(): Promise<void> {
   }
   try {
     const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
-    const latest = (runs && runs[0]) || null;
+    // Treat only non-terminal runs as the current run; terminal runs indicate idle state
+    const terminalStatuses = ["completed", "stopped", "failed"];
+    const latest = runs?.find((r) => !terminalStatuses.includes(r.status as string)) || null;
     currentRunId = (latest?.id as string) || null;
     currentFlowStatus = (latest?.status as string) || null;
     

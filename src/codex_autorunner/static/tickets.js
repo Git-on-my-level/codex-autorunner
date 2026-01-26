@@ -650,7 +650,9 @@ async function loadTicketFlow() {
     }
     try {
         const runs = (await api("/api/flows/runs?flow_type=ticket_flow"));
-        const latest = (runs && runs[0]) || null;
+        // Treat only non-terminal runs as the current run; terminal runs indicate idle state
+        const terminalStatuses = ["completed", "stopped", "failed"];
+        const latest = runs?.find((r) => !terminalStatuses.includes(r.status)) || null;
         currentRunId = latest?.id || null;
         currentFlowStatus = latest?.status || null;
         // Extract ticket engine state
