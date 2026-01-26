@@ -168,7 +168,8 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
             current_ticket = ticket_state.get("current_ticket")  # type: ignore[assignment]
             agent_id = ticket_state.get("last_agent_id")  # type: ignore[assignment]
 
-        workspace_root = Path(run_record.input_data.get("workspace_root") or repo_root)
+        workspace_value = run_record.input_data.get("workspace_root")
+        workspace_root = Path(workspace_value) if workspace_value else repo_root
         runs_dir = Path(
             run_record.input_data.get("runs_dir") or ".codex-autorunner/runs"
         )
