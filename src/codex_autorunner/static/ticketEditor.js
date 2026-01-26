@@ -13,6 +13,8 @@ const DEFAULT_FRONTMATTER = {
     agent: "codex",
     done: false,
     title: "",
+    model: "",
+    reasoning: "",
 };
 const state = {
     isOpen: false,
@@ -40,6 +42,8 @@ function els() {
         autosaveStatus: document.getElementById("ticket-autosave-status"),
         // Frontmatter form elements
         fmAgent: document.getElementById("ticket-fm-agent"),
+        fmModel: document.getElementById("ticket-fm-model"),
+        fmReasoning: document.getElementById("ticket-fm-reasoning"),
         fmDone: document.getElementById("ticket-fm-done"),
         fmTitle: document.getElementById("ticket-fm-title"),
         // Chat elements
@@ -139,7 +143,9 @@ function pushUndoState() {
     if (last && last.body === body &&
         last.frontmatter.agent === fm.agent &&
         last.frontmatter.done === fm.done &&
-        last.frontmatter.title === fm.title) {
+        last.frontmatter.title === fm.title &&
+        last.frontmatter.model === fm.model &&
+        last.frontmatter.reasoning === fm.reasoning) {
         return;
     }
     state.undoStack.push({ body, frontmatter: { ...fm } });
@@ -186,20 +192,26 @@ function updateUndoButton() {
  * Get current frontmatter values from form fields
  */
 function getFrontmatterFromForm() {
-    const { fmAgent, fmDone, fmTitle } = els();
+    const { fmAgent, fmModel, fmReasoning, fmDone, fmTitle } = els();
     return {
         agent: fmAgent?.value || "codex",
         done: fmDone?.checked || false,
         title: fmTitle?.value || "",
+        model: fmModel?.value || "",
+        reasoning: fmReasoning?.value || "",
     };
 }
 /**
  * Set frontmatter form fields from values
  */
 function setFrontmatterForm(fm) {
-    const { fmAgent, fmDone, fmTitle } = els();
+    const { fmAgent, fmModel, fmReasoning, fmDone, fmTitle } = els();
     if (fmAgent)
         fmAgent.value = fm.agent;
+    if (fmModel)
+        fmModel.value = fm.model;
+    if (fmReasoning)
+        fmReasoning.value = fm.reasoning;
     if (fmDone)
         fmDone.checked = fm.done;
     if (fmTitle)
@@ -214,6 +226,8 @@ function extractFrontmatter(ticket) {
         agent: fm.agent || "codex",
         done: Boolean(fm.done),
         title: fm.title || "",
+        model: fm.model || "",
+        reasoning: fm.reasoning || "",
     };
 }
 /**
@@ -229,10 +243,96 @@ function buildTicketContent() {
     lines.push(`done: ${fm.done}`);
     if (fm.title)
         lines.push(`title: ${fm.title}`);
+    if (fm.model)
+        lines.push(`model: ${fm.model}`);
+    if (fm.reasoning)
+        lines.push(`reasoning: ${fm.reasoning}`);
     lines.push("---");
     lines.push("");
     lines.push(body);
     return lines.join("\n");
+}
+// Model catalog cache for frontmatter selects
+const fmModelCatalogs = new Map();
+/**
+ * Load and populate the frontmatter model/reasoning selects based on the selected agent
+ */
+async function refreshFmModelOptions(agent, preserveSelection = false) {
+    const { fmModel, fmReasoning } = els();
+    if (!fmModel || !fmReasoning)
+        return;
+    const currentModel = preserveSelection ? fmModel.value : "";
+    const currentReasoning = preserveSelection ? fmReasoning.value : "";
+    // Fetch catalog if not cached
+    if (!fmModelCatalogs.has(agent)) {
+        try {
+            const data = await api(`/api/agents/${encodeURIComponent(agent)}/models`, { method: "GET" });
+            const models = Array.isArray(data?.models) ? data.models : [];
+            const catalog = {
+                default_model: data?.default_model || "",
+                models,
+            };
+            fmModelCatalogs.set(agent, catalog);
+        }
+        catch {
+            fmModelCatalogs.set(agent, null);
+        }
+    }
+    const catalog = fmModelCatalogs.get(agent);
+    // Populate model select
+    fmModel.innerHTML = "";
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = "(default)";
+    fmModel.appendChild(defaultOption);
+    if (catalog?.models?.length) {
+        fmModel.disabled = false;
+        for (const m of catalog.models) {
+            const opt = document.createElement("option");
+            opt.value = m.id;
+            opt.textContent = m.display_name && m.display_name !== m.id ? `${m.display_name} (${m.id})` : m.id;
+            fmModel.appendChild(opt);
+        }
+        // Restore selection if valid
+        if (currentModel && catalog.models.some((m) => m.id === currentModel)) {
+            fmModel.value = currentModel;
+        }
+    }
+    else {
+        fmModel.disabled = true;
+    }
+    // Populate reasoning select based on selected model
+    refreshFmReasoningOptions(catalog, fmModel.value, currentReasoning);
+}
+/**
+ * Populate reasoning options based on selected model
+ */
+function refreshFmReasoningOptions(catalog, modelId, currentReasoning = "") {
+    const { fmReasoning } = els();
+    if (!fmReasoning)
+        return;
+    fmReasoning.innerHTML = "";
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = "(default)";
+    fmReasoning.appendChild(defaultOption);
+    const model = catalog?.models?.find((m) => m.id === modelId);
+    if (model?.supports_reasoning && model.reasoning_options?.length) {
+        fmReasoning.disabled = false;
+        for (const r of model.reasoning_options) {
+            const opt = document.createElement("option");
+            opt.value = r;
+            opt.textContent = r;
+            fmReasoning.appendChild(opt);
+        }
+        // Restore selection if valid
+        if (currentReasoning && model.reasoning_options.includes(currentReasoning)) {
+            fmReasoning.value = currentReasoning;
+        }
+    }
+    else {
+        fmReasoning.disabled = true;
+    }
 }
 /**
  * Check if there are unsaved changes (compared to last saved state)
@@ -244,7 +344,9 @@ function hasUnsavedChanges() {
     return (currentBody !== state.lastSavedBody ||
         currentFm.agent !== state.lastSavedFrontmatter.agent ||
         currentFm.done !== state.lastSavedFrontmatter.done ||
-        currentFm.title !== state.lastSavedFrontmatter.title);
+        currentFm.title !== state.lastSavedFrontmatter.title ||
+        currentFm.model !== state.lastSavedFrontmatter.model ||
+        currentFm.reasoning !== state.lastSavedFrontmatter.reasoning);
 }
 /**
  * Schedule autosave with debounce
@@ -345,6 +447,17 @@ export function openTicketEditor(ticket) {
         state.originalFrontmatter = { ...fm };
         state.lastSavedFrontmatter = { ...fm };
         setFrontmatterForm(fm);
+        // Load model/reasoning options for the agent, then restore selections
+        void refreshFmModelOptions(fm.agent, false).then(() => {
+            const { fmModel, fmReasoning } = els();
+            if (fmModel && fm.model)
+                fmModel.value = fm.model;
+            if (fmReasoning && fm.reasoning) {
+                // Refresh reasoning options based on selected model first
+                const catalog = fmModelCatalogs.get(fm.agent);
+                refreshFmReasoningOptions(catalog, fm.model, fm.reasoning);
+            }
+        });
         // Set body (without frontmatter)
         let body = ticket.body || "";
         // If the body itself contains frontmatter, strip it if it's well-formed
@@ -379,6 +492,8 @@ export function openTicketEditor(ticket) {
         state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
         state.lastSavedFrontmatter = { ...DEFAULT_FRONTMATTER };
         setFrontmatterForm(DEFAULT_FRONTMATTER);
+        // Load model/reasoning options for the default agent
+        void refreshFmModelOptions(DEFAULT_FRONTMATTER.agent, false);
         // Clear body
         state.originalBody = "";
         state.lastSavedBody = "";
@@ -502,14 +617,14 @@ export async function deleteTicket() {
  * Initialize the ticket editor - wire up event listeners
  */
 export function initTicketEditor() {
-    const { modal, content, deleteBtn, closeBtn, newBtn, insertCheckboxBtn, undoBtn, fmAgent, fmDone, fmTitle, chatInput, chatSendBtn, chatCancelBtn, patchApplyBtn, patchDiscardBtn, agentSelect, modelSelect, reasoningSelect, } = els();
+    const { modal, content, deleteBtn, closeBtn, newBtn, insertCheckboxBtn, undoBtn, fmAgent, fmModel, fmReasoning, fmDone, fmTitle, chatInput, chatSendBtn, chatCancelBtn, patchApplyBtn, patchDiscardBtn, agentSelect, modelSelect, reasoningSelect, } = els();
     if (!modal)
         return;
     // Prevent double initialization
     if (modal.dataset.editorInitialized === "1")
         return;
     modal.dataset.editorInitialized = "1";
-    // Initialize agent controls (populates agent/model/reasoning selects)
+    // Initialize agent controls for ticket chat (populates agent/model/reasoning selects)
     initAgentControls({
         agentSelect,
         modelSelect,
@@ -535,8 +650,23 @@ export function initTicketEditor() {
         content.addEventListener("input", onContentChange);
     }
     // Autosave on frontmatter changes
-    if (fmAgent)
-        fmAgent.addEventListener("change", onFrontmatterChange);
+    if (fmAgent) {
+        fmAgent.addEventListener("change", () => {
+            // Refresh model/reasoning options when agent changes
+            void refreshFmModelOptions(fmAgent.value, false);
+            onFrontmatterChange();
+        });
+    }
+    if (fmModel) {
+        fmModel.addEventListener("change", () => {
+            // Refresh reasoning options when model changes
+            const catalog = fmModelCatalogs.get(fmAgent?.value || "codex");
+            refreshFmReasoningOptions(catalog, fmModel.value, fmReasoning?.value || "");
+            onFrontmatterChange();
+        });
+    }
+    if (fmReasoning)
+        fmReasoning.addEventListener("change", onFrontmatterChange);
     if (fmDone)
         fmDone.addEventListener("change", onFrontmatterChange);
     if (fmTitle)

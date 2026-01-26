@@ -56,8 +56,12 @@ def lint_ticket_frontmatter(
         data.get("requires") if isinstance(data, dict) else None
     )
 
+    # Optional model/reasoning overrides.
+    model = _as_optional_str(data.get("model"))
+    reasoning = _as_optional_str(data.get("reasoning"))
+
     # Remove normalized keys from extra.
-    for key in ("agent", "done", "title", "goal", "requires"):
+    for key in ("agent", "done", "title", "goal", "requires", "model", "reasoning"):
         extra.pop(key, None)
 
     if errors:
@@ -72,6 +76,8 @@ def lint_ticket_frontmatter(
             title=title,
             goal=goal,
             requires=requires,
+            model=model,
+            reasoning=reasoning,
             extra=extra,
         ),
         [],

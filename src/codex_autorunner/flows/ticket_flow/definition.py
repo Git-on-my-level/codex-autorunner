@@ -39,17 +39,6 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         auto_commit = bool(
             input_data.get("auto_commit") if "auto_commit" in input_data else True
         )
-        # Optional model/reasoning overrides for agent turns.
-        model = (
-            input_data.get("model")
-            if isinstance(input_data.get("model"), str)
-            else None
-        )
-        reasoning = (
-            input_data.get("reasoning")
-            if isinstance(input_data.get("reasoning"), str)
-            else None
-        )
 
         runner = TicketRunner(
             workspace_root=workspace_root,
@@ -61,8 +50,6 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 max_lint_retries=max_lint_retries,
                 max_commit_retries=max_commit_retries,
                 auto_commit=auto_commit,
-                model=model,
-                reasoning=reasoning,
             ),
             agent_pool=agent_pool,
         )
@@ -98,14 +85,6 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 "max_lint_retries": {"type": "integer"},
                 "max_commit_retries": {"type": "integer"},
                 "auto_commit": {"type": "boolean"},
-                "model": {
-                    "type": "string",
-                    "description": "Model override for agent turns",
-                },
-                "reasoning": {
-                    "type": "string",
-                    "description": "Reasoning effort override",
-                },
             },
         },
         steps={"ticket_turn": _ticket_turn_step},

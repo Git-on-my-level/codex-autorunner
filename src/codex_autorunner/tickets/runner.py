@@ -287,12 +287,12 @@ class TicketRunner:
         )
 
         # Execute turn.
-        # Build options dict with model/reasoning from config if set.
+        # Build options dict with model/reasoning from ticket frontmatter if set.
         turn_options: dict[str, Any] = {}
-        if self._config.model:
-            turn_options["model"] = self._config.model
-        if self._config.reasoning:
-            turn_options["reasoning"] = self._config.reasoning
+        if ticket_doc.frontmatter.model:
+            turn_options["model"] = ticket_doc.frontmatter.model
+        if ticket_doc.frontmatter.reasoning:
+            turn_options["reasoning"] = ticket_doc.frontmatter.reasoning
         req = AgentTurnRequest(
             agent_id=ticket_doc.frontmatter.agent,
             prompt=prompt,

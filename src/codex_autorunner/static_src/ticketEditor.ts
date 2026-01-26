@@ -32,6 +32,8 @@ type FrontmatterState = {
   agent: string;
   done: boolean;
   title: string;
+  model: string;
+  reasoning: string;
 };
 
 type EditorState = {
@@ -50,6 +52,8 @@ const DEFAULT_FRONTMATTER: FrontmatterState = {
   agent: "codex",
   done: false,
   title: "",
+  model: "",
+  reasoning: "",
 };
 
 const state: EditorState = {
@@ -79,6 +83,8 @@ function els(): {
   autosaveStatus: HTMLElement | null;
   // Frontmatter form elements
   fmAgent: HTMLSelectElement | null;
+  fmModel: HTMLSelectElement | null;
+  fmReasoning: HTMLSelectElement | null;
   fmDone: HTMLInputElement | null;
   fmTitle: HTMLInputElement | null;
   // Chat elements
@@ -106,6 +112,8 @@ function els(): {
     autosaveStatus: document.getElementById("ticket-autosave-status"),
     // Frontmatter form elements
     fmAgent: document.getElementById("ticket-fm-agent") as HTMLSelectElement | null,
+    fmModel: document.getElementById("ticket-fm-model") as HTMLSelectElement | null,
+    fmReasoning: document.getElementById("ticket-fm-reasoning") as HTMLSelectElement | null,
     fmDone: document.getElementById("ticket-fm-done") as HTMLInputElement | null,
     fmTitle: document.getElementById("ticket-fm-title") as HTMLInputElement | null,
     // Chat elements
@@ -211,7 +219,9 @@ function pushUndoState(): void {
   if (last && last.body === body && 
       last.frontmatter.agent === fm.agent &&
       last.frontmatter.done === fm.done &&
-      last.frontmatter.title === fm.title) {
+      last.frontmatter.title === fm.title &&
+      last.frontmatter.model === fm.model &&
+      last.frontmatter.reasoning === fm.reasoning) {
     return;
   }
   
@@ -265,11 +275,13 @@ function updateUndoButton(): void {
  * Get current frontmatter values from form fields
  */
 function getFrontmatterFromForm(): FrontmatterState {
-  const { fmAgent, fmDone, fmTitle } = els();
+  const { fmAgent, fmModel, fmReasoning, fmDone, fmTitle } = els();
   return {
     agent: fmAgent?.value || "codex",
     done: fmDone?.checked || false,
     title: fmTitle?.value || "",
+    model: fmModel?.value || "",
+    reasoning: fmReasoning?.value || "",
   };
 }
 
@@ -277,8 +289,10 @@ function getFrontmatterFromForm(): FrontmatterState {
  * Set frontmatter form fields from values
  */
 function setFrontmatterForm(fm: FrontmatterState): void {
-  const { fmAgent, fmDone, fmTitle } = els();
+  const { fmAgent, fmModel, fmReasoning, fmDone, fmTitle } = els();
   if (fmAgent) fmAgent.value = fm.agent;
+  if (fmModel) fmModel.value = fm.model;
+  if (fmReasoning) fmReasoning.value = fm.reasoning;
   if (fmDone) fmDone.checked = fm.done;
   if (fmTitle) fmTitle.value = fm.title;
 }
@@ -292,6 +306,8 @@ function extractFrontmatter(ticket: TicketData): FrontmatterState {
     agent: (fm.agent as string) || "codex",
     done: Boolean(fm.done),
     title: (fm.title as string) || "",
+    model: (fm.model as string) || "",
+    reasoning: (fm.reasoning as string) || "",
   };
 }
 
@@ -309,12 +325,106 @@ function buildTicketContent(): string {
   lines.push(`agent: ${fm.agent}`);
   lines.push(`done: ${fm.done}`);
   if (fm.title) lines.push(`title: ${fm.title}`);
+  if (fm.model) lines.push(`model: ${fm.model}`);
+  if (fm.reasoning) lines.push(`reasoning: ${fm.reasoning}`);
 
   lines.push("---");
   lines.push("");
   lines.push(body);
 
   return lines.join("\n");
+}
+
+// Model catalog cache for frontmatter selects
+const fmModelCatalogs = new Map<string, { default_model: string; models: Array<{ id: string; display_name?: string; supports_reasoning: boolean; reasoning_options: string[] }> } | null>();
+
+/**
+ * Load and populate the frontmatter model/reasoning selects based on the selected agent
+ */
+async function refreshFmModelOptions(agent: string, preserveSelection: boolean = false): Promise<void> {
+  const { fmModel, fmReasoning } = els();
+  if (!fmModel || !fmReasoning) return;
+
+  const currentModel = preserveSelection ? fmModel.value : "";
+  const currentReasoning = preserveSelection ? fmReasoning.value : "";
+
+  // Fetch catalog if not cached
+  if (!fmModelCatalogs.has(agent)) {
+    try {
+      const data = await api(`/api/agents/${encodeURIComponent(agent)}/models`, { method: "GET" }) as Record<string, unknown>;
+      const models = Array.isArray(data?.models) ? data.models as Array<{ id: string; display_name?: string; supports_reasoning: boolean; reasoning_options: string[] }> : [];
+      const catalog = {
+        default_model: (data?.default_model as string) || "",
+        models,
+      };
+      fmModelCatalogs.set(agent, catalog);
+    } catch {
+      fmModelCatalogs.set(agent, null);
+    }
+  }
+
+  const catalog = fmModelCatalogs.get(agent);
+
+  // Populate model select
+  fmModel.innerHTML = "";
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = "(default)";
+  fmModel.appendChild(defaultOption);
+
+  if (catalog?.models?.length) {
+    fmModel.disabled = false;
+    for (const m of catalog.models) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.display_name && m.display_name !== m.id ? `${m.display_name} (${m.id})` : m.id;
+      fmModel.appendChild(opt);
+    }
+    // Restore selection if valid
+    if (currentModel && catalog.models.some((m) => m.id === currentModel)) {
+      fmModel.value = currentModel;
+    }
+  } else {
+    fmModel.disabled = true;
+  }
+
+  // Populate reasoning select based on selected model
+  refreshFmReasoningOptions(catalog, fmModel.value, currentReasoning);
+}
+
+/**
+ * Populate reasoning options based on selected model
+ */
+function refreshFmReasoningOptions(
+  catalog: { models: Array<{ id: string; supports_reasoning: boolean; reasoning_options: string[] }> } | null | undefined,
+  modelId: string,
+  currentReasoning: string = ""
+): void {
+  const { fmReasoning } = els();
+  if (!fmReasoning) return;
+
+  fmReasoning.innerHTML = "";
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = "(default)";
+  fmReasoning.appendChild(defaultOption);
+
+  const model = catalog?.models?.find((m) => m.id === modelId);
+  if (model?.supports_reasoning && model.reasoning_options?.length) {
+    fmReasoning.disabled = false;
+    for (const r of model.reasoning_options) {
+      const opt = document.createElement("option");
+      opt.value = r;
+      opt.textContent = r;
+      fmReasoning.appendChild(opt);
+    }
+    // Restore selection if valid
+    if (currentReasoning && model.reasoning_options.includes(currentReasoning)) {
+      fmReasoning.value = currentReasoning;
+    }
+  } else {
+    fmReasoning.disabled = true;
+  }
 }
 
 /**
@@ -329,7 +439,9 @@ function hasUnsavedChanges(): boolean {
     currentBody !== state.lastSavedBody ||
     currentFm.agent !== state.lastSavedFrontmatter.agent ||
     currentFm.done !== state.lastSavedFrontmatter.done ||
-    currentFm.title !== state.lastSavedFrontmatter.title
+    currentFm.title !== state.lastSavedFrontmatter.title ||
+    currentFm.model !== state.lastSavedFrontmatter.model ||
+    currentFm.reasoning !== state.lastSavedFrontmatter.reasoning
   );
 }
 
@@ -445,6 +557,17 @@ export function openTicketEditor(ticket?: TicketData): void {
     state.lastSavedFrontmatter = { ...fm };
     setFrontmatterForm(fm);
     
+    // Load model/reasoning options for the agent, then restore selections
+    void refreshFmModelOptions(fm.agent, false).then(() => {
+      const { fmModel, fmReasoning } = els();
+      if (fmModel && fm.model) fmModel.value = fm.model;
+      if (fmReasoning && fm.reasoning) {
+        // Refresh reasoning options based on selected model first
+        const catalog = fmModelCatalogs.get(fm.agent);
+        refreshFmReasoningOptions(catalog, fm.model, fm.reasoning);
+      }
+    });
+    
     // Set body (without frontmatter)
     let body = ticket.body || "";
     
@@ -480,6 +603,9 @@ export function openTicketEditor(ticket?: TicketData): void {
     state.originalFrontmatter = { ...DEFAULT_FRONTMATTER };
     state.lastSavedFrontmatter = { ...DEFAULT_FRONTMATTER };
     setFrontmatterForm(DEFAULT_FRONTMATTER);
+    
+    // Load model/reasoning options for the default agent
+    void refreshFmModelOptions(DEFAULT_FRONTMATTER.agent, false);
     
     // Clear body
     state.originalBody = "";
@@ -631,6 +757,8 @@ export function initTicketEditor(): void {
     insertCheckboxBtn,
     undoBtn,
     fmAgent,
+    fmModel,
+    fmReasoning,
     fmDone,
     fmTitle,
     chatInput,
@@ -648,7 +776,7 @@ export function initTicketEditor(): void {
   if (modal.dataset.editorInitialized === "1") return;
   modal.dataset.editorInitialized = "1";
 
-  // Initialize agent controls (populates agent/model/reasoning selects)
+  // Initialize agent controls for ticket chat (populates agent/model/reasoning selects)
   initAgentControls({
     agentSelect,
     modelSelect,
@@ -674,7 +802,22 @@ export function initTicketEditor(): void {
   }
   
   // Autosave on frontmatter changes
-  if (fmAgent) fmAgent.addEventListener("change", onFrontmatterChange);
+  if (fmAgent) {
+    fmAgent.addEventListener("change", () => {
+      // Refresh model/reasoning options when agent changes
+      void refreshFmModelOptions(fmAgent.value, false);
+      onFrontmatterChange();
+    });
+  }
+  if (fmModel) {
+    fmModel.addEventListener("change", () => {
+      // Refresh reasoning options when model changes
+      const catalog = fmModelCatalogs.get(fmAgent?.value || "codex");
+      refreshFmReasoningOptions(catalog, fmModel.value, fmReasoning?.value || "");
+      onFrontmatterChange();
+    });
+  }
+  if (fmReasoning) fmReasoning.addEventListener("change", onFrontmatterChange);
   if (fmDone) fmDone.addEventListener("change", onFrontmatterChange);
   if (fmTitle) fmTitle.addEventListener("input", onFrontmatterChange);
 

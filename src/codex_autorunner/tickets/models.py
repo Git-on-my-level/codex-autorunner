@@ -18,6 +18,9 @@ class TicketFrontmatter:
     title: Optional[str] = None
     goal: Optional[str] = None
     requires: tuple[str, ...] = ()
+    # Optional model/reasoning overrides for this ticket.
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -56,9 +59,6 @@ class TicketRunConfig:
     checkpoint_message_template: str = (
         "CAR checkpoint: run={run_id} turn={turn} agent={agent}"
     )
-    # Optional model/reasoning overrides for the ticket flow.
-    model: Optional[str] = None
-    reasoning: Optional[str] = None
 
 
 @dataclass(frozen=True)
