@@ -13,3 +13,9 @@ export function initTerminal(): void {
   terminalManager = new TerminalManager();
   terminalManager.init();
 }
+
+export function fitTerminal(): void {
+  if (terminalManager) {
+    terminalManager.fit();
+  }
+}

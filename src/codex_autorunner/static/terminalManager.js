@@ -442,6 +442,12 @@ export class TerminalManager {
         }
     }
     /**
+     * Force resize terminal to fit container
+     */
+    fit() {
+        this._handleResize();
+    }
+    /**
      * Set terminal status message
      */
     _setStatus(message) {

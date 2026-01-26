@@ -10,3 +10,8 @@ export function initTerminal() {
     terminalManager = new TerminalManager();
     terminalManager.init();
 }
+export function fitTerminal() {
+    if (terminalManager) {
+        terminalManager.fit();
+    }
+}
