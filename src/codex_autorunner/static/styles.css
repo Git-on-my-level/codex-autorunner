@@ -1675,7 +1675,7 @@ button.icon-btn {
   font-size: 11px;
 }
 
-.ticket-card .ticket-flow-meta > div {
+.ticket-card .ticket-flow-meta>div {
   display: flex;
   align-items: baseline;
   gap: 4px;
@@ -1698,13 +1698,15 @@ button.icon-btn {
 
 .ticket-card .ticket-panel {
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 8px;
+  border-radius: 10px;
+  padding: 10px;
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.02), rgba(26, 33, 48, 0.7));
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-height: 0;
+  container-type: inline-size;
+  container-name: ticket-panel;
 }
 
 .ticket-card .ticket-panel-header {
@@ -1712,15 +1714,31 @@ button.icon-btn {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding: 2px 2px 6px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 2px;
 }
 
 .ticket-card .ticket-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   flex: 1;
   overflow: auto;
-  padding: 4px;
+  padding: 4px 4px 8px 4px;
   align-content: start;
+}
+
+.ticket-card .ticket-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.ticket-card .ticket-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.ticket-card .ticket-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
 }
 
 /* Dispatch history specific styling for graceful overflow */
@@ -1841,18 +1859,29 @@ button.icon-btn {
 
 .ticket-card .ticket-item {
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 8px;
+  border-radius: 8px;
+  padding: 8px 10px 10px;
   background: rgba(255, 255, 255, 0.02);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   min-height: 0;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .ticket-card .ticket-item.done {
   border-color: #3fb950;
-  background: rgba(63, 185, 80, 0.08);
+  background: rgba(63, 185, 80, 0.06);
+  opacity: 0.85;
+}
+
+.ticket-card .ticket-item.done .ticket-name {
+  color: #8dc896;
+}
+
+.ticket-card .ticket-item.done .ticket-title,
+.ticket-card .ticket-item.done .ticket-body {
+  color: #7fa888;
 }
 
 .ticket-card .ticket-item.active {
@@ -1883,14 +1912,15 @@ button.icon-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 6px;
+  padding: 2px 8px;
   border-radius: 6px;
   font-size: 10px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
-  background: rgba(240, 180, 41, 0.3);
+  letter-spacing: 0.04em;
+  background: rgba(240, 180, 41, 0.35);
   color: #fff3cd;
-  margin-left: 6px;
+  white-space: nowrap;
 }
 
 .ticket-card .ticket-item.active .ticket-working-badge::before {
@@ -1919,22 +1949,39 @@ button.icon-btn {
 .ticket-card .ticket-item .ticket-item-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+  /* Allow flex children to shrink */
 }
 
 .ticket-card .ticket-item .ticket-name {
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
+  color: #b8c0d0;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-card .ticket-item .ticket-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .ticket-card .ticket-item .ticket-agent {
-  padding: 2px 6px;
+  padding: 2px 8px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   background: rgba(111, 137, 255, 0.18);
   color: #dbe4ff;
+  white-space: nowrap;
 }
 
 .ticket-card .ticket-item.done .ticket-agent {
@@ -1942,16 +1989,68 @@ button.icon-btn {
   color: #d6ffe1;
 }
 
-.ticket-card .ticket-item .ticket-body {
+.ticket-card .ticket-item.done .ticket-done-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(63, 185, 80, 0.25);
+  color: #a8e6b4;
+  white-space: nowrap;
+}
+
+.ticket-card .ticket-item.done .ticket-done-badge::before {
+  content: "✓";
+  font-size: 9px;
+}
+
+.ticket-card .ticket-item .ticket-title {
   font-size: 12px;
-  color: #c3c8d4;
+  font-weight: 500;
+  color: #e0e6f0;
+  line-height: 1.35;
+}
+
+.ticket-card .ticket-item .ticket-body {
+  font-size: 11px;
+  color: #9098a8;
   line-height: 1.4;
+  max-height: 2.8em;
+  /* ~2 lines */
+  overflow: hidden;
+  word-break: break-word;
+  -webkit-mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
+  mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
+}
+
+/* Compact mode when panel is narrow */
+@container ticket-panel (max-width: 350px) {
+  .ticket-item .ticket-body {
+    display: none;
+  }
+
+  .ticket-item .ticket-name {
+    font-size: 11px;
+  }
+
+  .ticket-item .ticket-title {
+    font-size: 11px;
+  }
 }
 
 .ticket-card .ticket-errors {
   color: #ffb4a2;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.4;
+  padding: 4px 8px;
+  background: rgba(255, 100, 80, 0.1);
+  border-radius: 6px;
+  border-left: 2px solid #ff6450;
 }
 
 .ticket-card .ticket-attachments {
@@ -1989,10 +2088,9 @@ button.icon-btn {
 .ticket-live-output-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 6px 10px;
   background: rgba(255, 255, 255, 0.03);
-  cursor: pointer;
   user-select: none;
   min-height: 32px;
 }
@@ -2006,10 +2104,35 @@ button.icon-btn {
   background: rgba(255, 255, 255, 0.05);
 }
 
+/* Subtle collapse button on the left */
+.ticket-live-output-collapse {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  margin: 0;
+  font-size: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, transform 0.2s;
+  line-height: 1;
+}
+
+.ticket-live-output-collapse:hover {
+  opacity: 1;
+  color: var(--fg);
+}
+
+/* Rotate chevron when collapsed */
+.ticket-live-output-panel:not(.expanded) .ticket-live-output-collapse {
+  transform: rotate(-90deg);
+}
+
 .ticket-live-output-title {
   font-weight: 600;
   font-size: 12px;
   flex-shrink: 0;
+  cursor: default;
 }
 
 /* Inline preview shown when panel is collapsed */
@@ -2034,6 +2157,20 @@ button.icon-btn {
   display: none;
 }
 
+/* Collapsed panel styling */
+.ticket-live-output-panel:not(.expanded) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ticket-live-output-panel:not(.expanded) .ticket-live-output-header {
+  border-bottom: none;
+}
+
+/* Hide view toggle when collapsed (no content to toggle) */
+.ticket-live-output-panel:not(.expanded) .ticket-live-output-view-toggle {
+  display: none;
+}
+
 .ticket-live-output-status {
   font-size: 10px;
   padding: 2px 6px;
@@ -2052,6 +2189,46 @@ button.icon-btn {
   background: rgba(108, 245, 216, 0.2);
   color: var(--accent);
   animation: pulse-running 1.5s ease-in-out infinite;
+}
+
+/* Primary view toggle button - the one-click action */
+.ticket-live-output-view-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(108, 245, 216, 0.08);
+  border: 1px solid rgba(108, 245, 216, 0.2);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.ticket-live-output-view-toggle:hover {
+  background: rgba(108, 245, 216, 0.15);
+  border-color: rgba(108, 245, 216, 0.35);
+}
+
+.ticket-live-output-view-toggle:active {
+  transform: scale(0.97);
+}
+
+.ticket-live-output-view-toggle .view-toggle-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.ticket-live-output-view-toggle .view-toggle-label {
+  font-weight: 500;
+}
+
+/* Active state when showing full output */
+.ticket-live-output-view-toggle.active {
+  background: rgba(108, 245, 216, 0.2);
+  border-color: var(--accent);
 }
 
 .ticket-live-output-content {
@@ -2085,9 +2262,14 @@ button.icon-btn {
   white-space: pre-wrap;
   word-break: break-word;
   color: #c3c8d4;
-  border-bottom: 1px solid var(--border);
   background: rgba(10, 12, 18, 0.35);
   min-height: 40px;
+}
+
+.ticket-live-output-compact:empty::before {
+  content: "Waiting for agent output...";
+  color: var(--muted);
+  font-style: italic;
 }
 
 .ticket-live-output-compact.hidden {
@@ -2102,6 +2284,7 @@ button.icon-btn {
 
 .ticket-live-output-events {
   padding: 10px 12px 4px;
+  border-top: 1px solid var(--border);
 }
 
 .ticket-live-output-events.hidden {
@@ -2122,14 +2305,6 @@ button.icon-btn {
   background: rgba(255, 255, 255, 0.08);
   color: var(--muted);
   font-size: 10px;
-}
-
-.ticket-live-output-panel #ticket-live-output-expand {
-  transition: transform 0.2s;
-}
-
-.ticket-live-output-panel.expanded #ticket-live-output-expand {
-  transform: rotate(180deg);
 }
 
 .chat-events-compact {
@@ -8321,11 +8496,15 @@ button.loading::after {
 /* Clickable ticket items */
 .ticket-item.clickable {
   cursor: pointer;
-  transition: border-color 0.15s ease;
 }
 
 .ticket-item.clickable:hover {
   border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ticket-item.clickable:active {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 /* ===== Ticket Chat Panel (matches Docs chat) ===== */
@@ -8812,6 +8991,7 @@ button.loading::after {
 
 /* ===== Ticket Chat Large Screen (Telegram-style left-aligned messages) ===== */
 @media (min-width: 900px) {
+
   /* Both user and assistant messages align left like Telegram */
   .ticket-chat-message.user {
     margin-left: 0;

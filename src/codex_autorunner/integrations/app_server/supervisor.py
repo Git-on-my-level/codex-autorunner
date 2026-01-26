@@ -94,7 +94,8 @@ class WorkspaceAppServerSupervisor:
                     last_used_at=handle.last_used_at,
                 )
                 await handle.client.close()
-            except Exception:
+            except Exception as exc:
+                self._logger.debug("Failed to close handle: %s", exc)
                 continue
 
     async def prune_idle(self) -> int:
@@ -116,7 +117,8 @@ class WorkspaceAppServerSupervisor:
                 )
                 await handle.client.close()
                 closed += 1
-            except Exception:
+            except Exception as exc:
+                self._logger.debug("Failed to prune handle: %s", exc)
                 continue
         return closed
 
@@ -176,7 +178,8 @@ class WorkspaceAppServerSupervisor:
                     last_used_at=handle.last_used_at,
                 )
                 await handle.client.close()
-            except Exception:
+            except Exception as exc:
+                self._logger.debug("Failed to close handle: %s", exc)
                 continue
         return handle
 

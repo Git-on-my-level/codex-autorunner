@@ -60,8 +60,8 @@ let flowStartedAt: Date | null = null;
 let eventSource: EventSource | null = null;
 let lastActivityTime: Date | null = null;
 let lastActivityTimerId: ReturnType<typeof setInterval> | null = null;
-let liveOutputPanelExpanded = false;
-let liveOutputDetailExpanded = false;
+let liveOutputPanelExpanded = true;  // Panel expanded by default showing summary
+let liveOutputDetailExpanded = false; // Start with summary view, one click for full
 let liveOutputBuffer: string[] = [];
 const MAX_OUTPUT_LINES = 200;
 const LIVE_EVENT_MAX = 50;
@@ -303,25 +303,44 @@ function updateInlinePreview(): void {
   previewEl.textContent = preview;
 }
 
-function updateLiveOutputDetailToggle(): void {
-  const detailBtn = document.getElementById("ticket-live-output-detail");
-  if (!detailBtn) return;
-  detailBtn.textContent = liveOutputDetailExpanded ? "≡" : "⋯";
-  detailBtn.title = liveOutputDetailExpanded ? "Show compact summary" : "Show details";
+function updateLiveOutputViewToggle(): void {
+  const viewToggle = document.getElementById("ticket-live-output-view-toggle");
+  if (!viewToggle) return;
+  
+  const iconEl = viewToggle.querySelector(".view-toggle-icon");
+  const labelEl = viewToggle.querySelector(".view-toggle-label");
+  
+  if (liveOutputDetailExpanded) {
+    viewToggle.classList.add("active");
+    if (iconEl) iconEl.textContent = "≡";
+    if (labelEl) labelEl.textContent = "Summary";
+    viewToggle.title = "Show compact summary";
+  } else {
+    viewToggle.classList.remove("active");
+    if (iconEl) iconEl.textContent = "⋯";
+    if (labelEl) labelEl.textContent = "Details";
+    viewToggle.title = "Show full output with tool calls";
+  }
 }
 
 function renderLiveOutputView(): void {
   const compactEl = document.getElementById("ticket-live-output-compact");
   const outputEl = document.getElementById("ticket-live-output-text");
+  const eventsEl = document.getElementById("ticket-live-output-events");
+  
   if (compactEl) {
     compactEl.classList.toggle("hidden", liveOutputDetailExpanded);
   }
   if (outputEl) {
     outputEl.classList.toggle("hidden", !liveOutputDetailExpanded);
   }
+  if (eventsEl) {
+    eventsEl.classList.toggle("hidden", !liveOutputDetailExpanded);
+  }
+  
   renderLiveOutputCompact();
   renderLiveOutputEvents();
-  updateLiveOutputDetailToggle();
+  updateLiveOutputViewToggle();
   updateInlinePreview();
 }
 
@@ -434,13 +453,13 @@ function disconnectEventStream(): void {
 }
 
 function initLiveOutputPanel(): void {
-  const toggleBtn = document.getElementById("ticket-live-output-toggle");
-  const expandBtn = document.getElementById("ticket-live-output-expand");
-  const detailBtn = document.getElementById("ticket-live-output-detail");
+  const collapseBtn = document.getElementById("ticket-live-output-collapse");
+  const viewToggleBtn = document.getElementById("ticket-live-output-view-toggle");
   const contentEl = document.getElementById("ticket-live-output-content");
   const panelEl = document.getElementById("ticket-live-output-panel");
   
-  const toggle = () => {
+  // Collapse/expand the entire panel (subtle, secondary action)
+  const toggleCollapse = () => {
     liveOutputPanelExpanded = !liveOutputPanelExpanded;
     if (contentEl) {
       contentEl.classList.toggle("hidden", !liveOutputPanelExpanded);
@@ -451,23 +470,28 @@ function initLiveOutputPanel(): void {
     updateInlinePreview();
   };
   
-  if (toggleBtn) {
-    toggleBtn.addEventListener("click", toggle);
-  }
-  if (expandBtn) {
-    expandBtn.addEventListener("click", (e) => {
+  // Toggle between summary and full view (primary action - one click)
+  const toggleView = () => {
+    liveOutputDetailExpanded = !liveOutputDetailExpanded;
+    renderLiveOutputView();
+  };
+  
+  if (collapseBtn) {
+    collapseBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      toggle();
+      toggleCollapse();
     });
   }
-  if (detailBtn) {
-    detailBtn.addEventListener("click", (e) => {
+  
+  if (viewToggleBtn) {
+    viewToggleBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      liveOutputDetailExpanded = !liveOutputDetailExpanded;
-      renderLiveOutputView();
+      toggleView();
     });
   }
-  updateLiveOutputDetailToggle();
+  
+  // Initial render with correct state
+  updateLiveOutputViewToggle();
   renderLiveOutputView();
 }
 
@@ -602,23 +626,38 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
     const name = document.createElement("span");
     name.className = "ticket-name";
     name.textContent = ticket.path || "TICKET";
-    const agent = document.createElement("span");
-    agent.className = "ticket-agent";
-    agent.textContent = (fm?.agent as string) || "codex";
     head.appendChild(name);
-    head.appendChild(agent);
-    // Add WORKING badge for active ticket
+
+    // Badge container for status + agent badges
+    const badges = document.createElement("span");
+    badges.className = "ticket-badges";
+    
+    // Add WORKING badge for active ticket (to the left of agent badge)
     if (isActive) {
       const workingBadge = document.createElement("span");
       workingBadge.className = "ticket-working-badge";
       workingBadge.textContent = "Working";
-      head.appendChild(workingBadge);
+      badges.appendChild(workingBadge);
     }
+    
+    // Add DONE badge for completed tickets
+    if (done && !isActive) {
+      const doneBadge = document.createElement("span");
+      doneBadge.className = "ticket-done-badge";
+      doneBadge.textContent = "Done";
+      badges.appendChild(doneBadge);
+    }
+    
+    const agent = document.createElement("span");
+    agent.className = "ticket-agent";
+    agent.textContent = (fm?.agent as string) || "codex";
+    badges.appendChild(agent);
+    head.appendChild(badges);
     item.appendChild(head);
 
     if (fm?.title) {
       const title = document.createElement("div");
-      title.className = "ticket-body";
+      title.className = "ticket-title";
       title.textContent = String(fm.title);
       item.appendChild(title);
     }

@@ -836,7 +836,8 @@ async def handle_media_message(
                     data = await handlers._bot.download_file(file_info.file_path)
                     filename = f"photo_{best.file_id}.jpg"
                     files.append((filename, data))
-                except Exception:
+                except Exception as exc:
+                    handlers._logger.debug("Failed to download photo: %s", exc)
                     pass
         elif message.document:
             try:
@@ -846,7 +847,8 @@ async def handle_media_message(
                     message.document.file_name or f"document_{message.document.file_id}"
                 )
                 files.append((filename, data))
-            except Exception:
+            except Exception as exc:
+                handlers._logger.debug("Failed to download document: %s", exc)
                 pass
         success, result = await handlers._write_user_reply_from_telegram(
             workspace_root, run_id, run_record, message, caption_text, files

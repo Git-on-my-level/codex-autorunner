@@ -401,7 +401,9 @@ def build_flow_routes() -> APIRouter:
 
         # Reuse an active/paused run unless force_new is requested.
         if not force_new:
-            runs = controller.list_runs()
+            runs = _safe_list_flow_runs(
+                repo_root, flow_type=flow_type, recover_stuck=True
+            )
             active = _active_or_paused_run(runs)
             if active:
                 _reap_dead_worker(active.id)
@@ -440,7 +442,9 @@ def build_flow_routes() -> APIRouter:
         force_new = bool(meta.get("force_new"))
 
         if not force_new:
-            records = _safe_list_flow_runs(repo_root, flow_type="ticket_flow")
+            records = _safe_list_flow_runs(
+                repo_root, flow_type="ticket_flow", recover_stuck=True
+            )
             active = _active_or_paused_run(records)
             if active:
                 _reap_dead_worker(active.id)

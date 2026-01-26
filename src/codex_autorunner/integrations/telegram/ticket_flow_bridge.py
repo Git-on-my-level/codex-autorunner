@@ -139,7 +139,8 @@ class TelegramTicketFlowBridge:
         primary_key, _primary_record = primary
         try:
             chat_id, thread_id, _scope = parse_topic_key(primary_key)
-        except Exception:
+        except Exception as exc:
+            self._logger.debug("Failed to parse topic key: %s", exc)
             for key, previous in updates:
                 await self._store.update_topic(
                     key, self._set_ticket_dispatch_marker(previous)

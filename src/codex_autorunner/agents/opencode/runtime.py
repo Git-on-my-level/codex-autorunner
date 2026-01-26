@@ -128,14 +128,16 @@ def extract_session_id(
             return value
     properties = payload.get("properties")
     if isinstance(properties, dict):
-        value = properties.get("sessionID")
-        if isinstance(value, str) and value:
-            return value
-        part = properties.get("part")
-        if isinstance(part, dict):
-            value = part.get("sessionID")
+        for key in ("sessionID", "sessionId", "session_id"):
+            value = properties.get(key)
             if isinstance(value, str) and value:
                 return value
+        part = properties.get("part")
+        if isinstance(part, dict):
+            for key in ("sessionID", "sessionId", "session_id"):
+                value = part.get(key)
+                if isinstance(value, str) and value:
+                    return value
     session = payload.get("session")
     if isinstance(session, dict):
         return extract_session_id(session, allow_fallback_id=True)

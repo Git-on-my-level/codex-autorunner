@@ -258,7 +258,8 @@
                   <div class="messages-empty-state">
                     <div class="messages-empty-icon">💬</div>
                     <div class="messages-empty-title">Select a conversation</div>
-                    <div class="messages-empty-hint">Choose a session from the left to view dispatches and replies.</div>
+                    <div class="messages-empty-hint">Choose a session from the left to view dispatches and replies.
+                    </div>
                   </div>
                 </div>
                 <div class="messages-reply-box">
@@ -412,16 +413,21 @@
             </div>
           </div>
           <!-- Live Agent Output Panel -->
-          <div class="ticket-live-output-panel" id="ticket-live-output-panel">
-            <div class="ticket-live-output-header" id="ticket-live-output-toggle">
-              <span class="ticket-live-output-title">Live Agent Output</span>
+          <div class="ticket-live-output-panel expanded" id="ticket-live-output-panel">
+            <div class="ticket-live-output-header">
+              <button class="ticket-live-output-collapse" id="ticket-live-output-collapse"
+                title="Collapse panel">▾</button>
+              <span class="ticket-live-output-title" id="ticket-live-output-toggle">Live Agent Output</span>
               <span class="ticket-live-output-preview" id="ticket-live-output-preview"></span>
               <span class="ticket-live-output-spacer"></span>
-              <button class="ghost sm icon-btn" id="ticket-live-output-detail" title="Show details">⋯</button>
               <span class="ticket-live-output-status" id="ticket-live-output-status">Disconnected</span>
-              <button class="ghost sm icon-btn" id="ticket-live-output-expand" title="Toggle panel">▼</button>
+              <button class="ticket-live-output-view-toggle" id="ticket-live-output-view-toggle"
+                title="Show full output">
+                <span class="view-toggle-icon">⋯</span>
+                <span class="view-toggle-label">Details</span>
+              </button>
             </div>
-            <div class="ticket-live-output-content hidden" id="ticket-live-output-content">
+            <div class="ticket-live-output-content" id="ticket-live-output-content">
               <pre class="ticket-live-output-compact" id="ticket-live-output-compact"></pre>
               <div class="ticket-live-output-events hidden" id="ticket-live-output-events">
                 <div class="ticket-live-output-events-header">
@@ -430,7 +436,7 @@
                 </div>
                 <div class="ticket-chat-events-list" id="ticket-live-output-events-list"></div>
               </div>
-              <pre class="ticket-live-output-text" id="ticket-live-output-text"></pre>
+              <pre class="ticket-live-output-text hidden" id="ticket-live-output-text"></pre>
             </div>
           </div>
           <div class="ticket-flow-grid">
@@ -553,87 +559,88 @@
       </section>
       <section class="panel" id="terminal">
         <div class="terminal-toolbar">
-        <div class="terminal-toolbar-row terminal-toolbar-main">
-        <span class="terminal-status muted" id="terminal-status">Disconnected</span>
-        <div class="terminal-actions">
-          <button class="primary sm" id="terminal-connect">New</button>
-          <button class="ghost sm" id="terminal-resume">Resume</button>
-          <button class="ghost sm" id="terminal-disconnect">Disconnect</button>
-        </div>
-      </div>
-      <div class="terminal-toolbar-row terminal-toolbar-config">
-        <div class="terminal-agent-controls">
-          <select id="terminal-agent-select" title="Agent"></select>
-          <select id="terminal-model-select" title="Model"></select>
-          <select id="terminal-reasoning-select" title="Reasoning"></select>
-        </div>
-        <div class="terminal-toolbar-extras">
-          <button aria-controls="terminal-text-input" aria-expanded="false" class="ghost sm terminal-text-toggle"
-            id="terminal-text-input-toggle" title="Text input" type="button">
-            <svg fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              viewbox="0 0 24 24">
-              <rect height="18" rx="2" width="18" x="3" y="3"></rect>
-              <line x1="7" x2="17" y1="12" y2="12"></line>
-              <line x1="7" x2="13" y1="8" y2="8"></line>
-              <line x1="7" x2="15" y1="16" y2="16"></line>
-            </svg>
-            <span class="terminal-text-toggle-label">Text</span>
-          </button>
-          <div class="terminal-voice">
-            <button class="ghost sm voice-button" id="terminal-voice" title="Hold to talk"></button>
-            <span class="muted small hidden voice-status" id="terminal-voice-status"></span>
+          <div class="terminal-toolbar-row terminal-toolbar-main">
+            <span class="terminal-status muted" id="terminal-status">Disconnected</span>
+            <div class="terminal-actions">
+              <button class="primary sm" id="terminal-connect">New</button>
+              <button class="ghost sm" id="terminal-resume">Resume</button>
+              <button class="ghost sm" id="terminal-disconnect">Disconnect</button>
+            </div>
+          </div>
+          <div class="terminal-toolbar-row terminal-toolbar-config">
+            <div class="terminal-agent-controls">
+              <select id="terminal-agent-select" title="Agent"></select>
+              <select id="terminal-model-select" title="Model"></select>
+              <select id="terminal-reasoning-select" title="Reasoning"></select>
+            </div>
+            <div class="terminal-toolbar-extras">
+              <button aria-controls="terminal-text-input" aria-expanded="false" class="ghost sm terminal-text-toggle"
+                id="terminal-text-input-toggle" title="Text input" type="button">
+                <svg fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  viewbox="0 0 24 24">
+                  <rect height="18" rx="2" width="18" x="3" y="3"></rect>
+                  <line x1="7" x2="17" y1="12" y2="12"></line>
+                  <line x1="7" x2="13" y1="8" y2="8"></line>
+                  <line x1="7" x2="15" y1="16" y2="16"></line>
+                </svg>
+                <span class="terminal-text-toggle-label">Text</span>
+              </button>
+              <div class="terminal-voice">
+                <button class="ghost sm voice-button" id="terminal-voice" title="Hold to talk"></button>
+                <span class="muted small hidden voice-status" id="terminal-voice-status"></span>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-    </div>
-    <div class="terminal-container" id="terminal-container">
-      <div class="terminal-overlay" id="terminal-overlay">
-        <p>Click <strong>New</strong> to start a fresh agent session, or <strong>Resume</strong> to continue an existing one.</p>
-        <p class="terminal-overlay-hint">Use the agent dropdown above to switch between different agents.</p>
-      </div>
-      <button class="terminal-jump-btn hidden" id="terminal-jump-bottom" title="Jump to latest">
-        ↓ Latest
-      </button>
-    </div>
-    <!-- Mobile control bar - touch-friendly special keys (above text input) -->
-    <div class="terminal-mobile-controls" id="terminal-mobile-controls">
-      <div class="tmb-row">
-        <button class="tmb-key tmb-mod" data-key="ctrl" id="tmb-ctrl">Ctrl</button>
-        <button class="tmb-key tmb-mod" data-key="alt" id="tmb-alt">Alt</button>
-        <button class="tmb-key" data-seq="">Esc</button>
-        <button class="tmb-key" data-seq="	">Tab</button>
-        <button class="tmb-key tmb-primary" data-seq="
-">Enter</button>
-      </div>
-      <div class="tmb-row">
-        <button class="tmb-key tmb-ctrl-combo" data-ctrl="c">^C</button>
-        <button class="tmb-key tmb-ctrl-combo" data-ctrl="d">^D</button>
-        <button class="tmb-key tmb-ctrl-combo" data-ctrl="z">^Z</button>
-        <button class="tmb-key tmb-bksp" data-seq="">Bksp</button>
-        <button class="tmb-key tmb-arrow" data-seq="[D">←</button>
-        <button class="tmb-key tmb-arrow" data-seq="[A">↑</button>
-        <button class="tmb-key tmb-arrow" data-seq="[B">↓</button>
-        <button class="tmb-key tmb-arrow" data-seq="[C">→</button>
-      </div>
-    </div>
-    <div aria-hidden="true" class="terminal-text-input compose-panel hidden" id="terminal-text-input">
-      <label class="terminal-text-input-title" for="terminal-textarea">Text input</label>
-      <div class="terminal-text-input-row compose-row">
-        <textarea autocapitalize="off" autocomplete="off" enterkeyhint="enter" id="terminal-textarea"
-          placeholder="Type or paste text/images to send to the terminal…" rows="2" spellcheck="false"></textarea>
-        <div class="terminal-text-input-buttons compose-buttons">
-          <button aria-label="Attach image" class="ghost sm terminal-text-image" id="terminal-text-image"
-            title="Attach image" type="button">Img</button>
-          <input accept="image/*" class="hidden" id="terminal-text-image-input" type="file" />
-          <button class="ghost sm voice-button terminal-text-voice" data-voice-mode="waveform" id="terminal-text-voice"
-            title="Hold to talk" type="button"></button>
-          <button aria-label="Send" class="primary terminal-text-send-icon" id="terminal-text-send"
-            type="button">→</button>
+        <div class="terminal-container" id="terminal-container">
+          <div class="terminal-overlay" id="terminal-overlay">
+            <p>Click <strong>New</strong> to start a fresh agent session, or <strong>Resume</strong> to continue an
+              existing one.</p>
+            <p class="terminal-overlay-hint">Use the agent dropdown above to switch between different agents.</p>
+          </div>
+          <button class="terminal-jump-btn hidden" id="terminal-jump-bottom" title="Jump to latest">
+            ↓ Latest
+          </button>
         </div>
-      </div>
-    </div>
-  </section>
-  </main>
+        <!-- Mobile control bar - touch-friendly special keys (above text input) -->
+        <div class="terminal-mobile-controls" id="terminal-mobile-controls">
+          <div class="tmb-row">
+            <button class="tmb-key tmb-mod" data-key="ctrl" id="tmb-ctrl">Ctrl</button>
+            <button class="tmb-key tmb-mod" data-key="alt" id="tmb-alt">Alt</button>
+            <button class="tmb-key" data-seq="">Esc</button>
+            <button class="tmb-key" data-seq="	">Tab</button>
+            <button class="tmb-key tmb-primary" data-seq="
+">Enter</button>
+          </div>
+          <div class="tmb-row">
+            <button class="tmb-key tmb-ctrl-combo" data-ctrl="c">^C</button>
+            <button class="tmb-key tmb-ctrl-combo" data-ctrl="d">^D</button>
+            <button class="tmb-key tmb-ctrl-combo" data-ctrl="z">^Z</button>
+            <button class="tmb-key tmb-bksp" data-seq="">Bksp</button>
+            <button class="tmb-key tmb-arrow" data-seq="[D">←</button>
+            <button class="tmb-key tmb-arrow" data-seq="[A">↑</button>
+            <button class="tmb-key tmb-arrow" data-seq="[B">↓</button>
+            <button class="tmb-key tmb-arrow" data-seq="[C">→</button>
+          </div>
+        </div>
+        <div aria-hidden="true" class="terminal-text-input compose-panel hidden" id="terminal-text-input">
+          <label class="terminal-text-input-title" for="terminal-textarea">Text input</label>
+          <div class="terminal-text-input-row compose-row">
+            <textarea autocapitalize="off" autocomplete="off" enterkeyhint="enter" id="terminal-textarea"
+              placeholder="Type or paste text/images to send to the terminal…" rows="2" spellcheck="false"></textarea>
+            <div class="terminal-text-input-buttons compose-buttons">
+              <button aria-label="Attach image" class="ghost sm terminal-text-image" id="terminal-text-image"
+                title="Attach image" type="button">Img</button>
+              <input accept="image/*" class="hidden" id="terminal-text-image-input" type="file" />
+              <button class="ghost sm voice-button terminal-text-voice" data-voice-mode="waveform"
+                id="terminal-text-voice" title="Hold to talk" type="button"></button>
+              <button aria-label="Send" class="primary terminal-text-send-icon" id="terminal-text-send"
+                type="button">→</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
   <div class="toast" id="toast"></div>
   <!-- Confirmation Modal -->

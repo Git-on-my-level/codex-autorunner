@@ -865,6 +865,7 @@ class CodexAppServerClient:
                 handled=False,
                 exc=exc,
             )
+            self._logger.debug("Notification handler failed: %s", exc)
 
     async def _drain_stderr(self) -> None:
         if not self._process or not self._process.stderr:
@@ -888,7 +889,8 @@ class CodexAppServerClient:
                         line_len=len(text),
                         tail_size=len(self._stderr_tail),
                     )
-        except Exception:
+        except Exception as exc:
+            self._logger.debug("Failed to read stderr: %s", exc)
             return
 
     async def _handle_message(self, message: Dict[str, Any]) -> None:
@@ -1888,7 +1890,8 @@ async def _close_all_clients() -> None:
     for client in list(_CLIENT_INSTANCES):
         try:
             await client.close()
-        except Exception:
+        except Exception as exc:
+            self._logger.debug("Failed to close client: %s", exc)
             continue
 
 

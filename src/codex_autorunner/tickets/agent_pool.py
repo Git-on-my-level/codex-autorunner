@@ -58,7 +58,7 @@ class AgentPool:
     def _extract_turn_id(params: Any) -> Optional[str]:
         if not isinstance(params, dict):
             return None
-        for key in ("turnId", "turn_id"):
+        for key in ("turnId", "turn_id", "id"):
             value = params.get(key)
             if isinstance(value, str) and value:
                 return value
@@ -70,7 +70,7 @@ class AgentPool:
                     return value
         item = params.get("item")
         if isinstance(item, dict):
-            for key in ("turnId", "turn_id"):
+            for key in ("turnId", "turn_id", "id"):
                 value = item.get(key)
                 if isinstance(value, str) and value:
                     return value
@@ -276,9 +276,14 @@ class AgentPool:
 
         prompt_response = await client.prompt_async(session_id, message=req.prompt)
 
+        import uuid
+
         turn_id = str(
             prompt_response.get("id") if isinstance(prompt_response, dict) else ""
         )
+        if not turn_id:
+            turn_id = str(uuid.uuid4())
+        text_item_id = f"text-{turn_id}"
 
         async def _part_handler(
             part_type: str, part: dict[str, Any], delta: Optional[str]
@@ -289,6 +294,34 @@ class AgentPool:
                 req.emit_event(
                     FlowEventType.AGENT_STREAM_DELTA,
                     {"delta": delta, "turn_id": turn_id, "part_type": part_type},
+                )
+                # Also emit app-server event for summary view
+                message = {
+                    "method": "outputDelta",
+                    "params": {
+                        "delta": delta,
+                        "turnId": turn_id,
+                        "itemId": text_item_id,
+                    },
+                }
+                req.emit_event(
+                    FlowEventType.APP_SERVER_EVENT,
+                    {"message": message, "turn_id": turn_id},
+                )
+            elif part_type == "reasoning" and isinstance(delta, str) and delta:
+                # Emit reasoning as app-server event for summary view
+                # Use item/reasoning/summaryTextDelta for merging behavior
+                message = {
+                    "method": "item/reasoning/summaryTextDelta",
+                    "params": {
+                        "delta": delta,
+                        "turnId": turn_id,
+                        "itemId": f"reasoning-{turn_id}",
+                    },
+                }
+                req.emit_event(
+                    FlowEventType.APP_SERVER_EVENT,
+                    {"message": message, "turn_id": turn_id},
                 )
             elif part_type == "usage":
                 req.emit_event(
@@ -302,6 +335,25 @@ class AgentPool:
             workspace_path=directory,
             part_handler=_part_handler if req.emit_event is not None else None,
         )
+
+        if req.emit_event is not None and output.text:
+            # Emit item/completed for the full text to ensure final state is correct
+            message = {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "agentMessage",
+                        "text": output.text,
+                        "id": text_item_id,
+                    },
+                    "turnId": turn_id,
+                },
+            }
+            req.emit_event(
+                FlowEventType.APP_SERVER_EVENT,
+                {"message": message, "turn_id": turn_id},
+            )
+
         if output.error:
             return AgentTurnResult(
                 agent_id=req.agent_id,
