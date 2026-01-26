@@ -860,9 +860,8 @@ async function loadTicketFlow(): Promise<void> {
     // This matches the backend's _active_or_paused_run() logic which only checks runs[0].
     // Using find() would incorrectly pick up older paused runs when a newer run has completed.
     const newest = runs?.[0] || null;
-    const terminalStatuses = ["completed", "stopped", "failed"];
-    const isActive = newest && !terminalStatuses.includes(newest.status as string);
-    const latest = isActive ? newest : null;
+    // Keep the newest run even if terminal, so we can archive it or see its final state
+    const latest = newest;
     currentRunId = (latest?.id as string) || null;
     currentFlowStatus = (latest?.status as string) || null;
     
