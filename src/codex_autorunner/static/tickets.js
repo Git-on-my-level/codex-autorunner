@@ -7,6 +7,7 @@ import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor } from "./ticketEditor.js";
 import { parseAppServerEvent } from "./agentEvents.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
+import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 let currentRunId = null;
 let ticketsExist = false;
 let currentActiveTicket = null;
@@ -360,6 +361,9 @@ function els() {
         stopBtn: document.getElementById("ticket-flow-stop"),
         restartBtn: document.getElementById("ticket-flow-restart"),
         archiveBtn: document.getElementById("ticket-flow-archive"),
+        agentSelect: document.getElementById("ticket-flow-agent-select"),
+        modelSelect: document.getElementById("ticket-flow-model-select"),
+        reasoningSelect: document.getElementById("ticket-flow-reasoning-select"),
     };
 }
 function setButtonsDisabled(disabled) {
@@ -787,9 +791,19 @@ async function bootstrapTicketFlow() {
     setButtonsDisabled(true);
     bootstrapBtn.textContent = "Starting…";
     try {
+        // Get selected agent/model/reasoning from picker
+        const agent = getSelectedAgent();
+        const model = getSelectedModel(agent) || undefined;
+        const reasoning = getSelectedReasoning(agent) || undefined;
+        // Build input_data with model/reasoning if selected
+        const inputData = {};
+        if (model)
+            inputData.model = model;
+        if (reasoning)
+            inputData.reasoning = reasoning;
         const res = (await api("/api/flows/ticket_flow/bootstrap", {
             method: "POST",
-            body: {},
+            body: { input_data: inputData },
         }));
         currentRunId = res?.id || null;
         if (res?.state?.hint === "active_run_reused") {
@@ -951,10 +965,16 @@ async function archiveTicketFlow() {
     }
 }
 export function initTicketFlow() {
-    const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn } = els();
+    const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn, agentSelect, modelSelect, reasoningSelect } = els();
     if (!card || card.dataset.ticketInitialized === "1")
         return;
     card.dataset.ticketInitialized = "1";
+    // Initialize agent/model/reasoning picker for ticket flow
+    initAgentControls({
+        agentSelect,
+        modelSelect,
+        reasoningSelect,
+    });
     if (bootstrapBtn)
         bootstrapBtn.addEventListener("click", bootstrapTicketFlow);
     if (resumeBtn)

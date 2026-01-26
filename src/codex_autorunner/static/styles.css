@@ -1649,6 +1649,11 @@ button.icon-btn {
   margin: 8px 0;
 }
 
+.ticket-card .ticket-flow-actions .agent-controls {
+  flex-basis: 100%;
+  margin-bottom: 0;
+}
+
 .ticket-card .ticket-flow-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -2841,8 +2846,9 @@ button.icon-btn {
   gap: 2px;
 }
 
-/* Shared agent controls styling (docs + terminal) */
-.doc-agent-controls {
+/* Shared agent controls styling (docs, terminal, ticket flow) */
+.doc-agent-controls,
+.agent-controls {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2850,7 +2856,8 @@ button.icon-btn {
   flex-wrap: wrap;
 }
 
-.doc-agent-controls select {
+.doc-agent-controls select,
+.agent-controls select {
   min-height: 28px;
   padding: 4px 8px;
   font-size: 11px;
@@ -2864,17 +2871,20 @@ button.icon-btn {
   max-width: 140px;
 }
 
-.doc-agent-controls select:hover {
+.doc-agent-controls select:hover,
+.agent-controls select:hover {
   border-color: var(--accent);
 }
 
-.doc-agent-controls select:focus {
+.doc-agent-controls select:focus,
+.agent-controls select:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(108, 245, 216, 0.15);
 }
 
-.doc-agent-controls select:disabled {
+.doc-agent-controls select:disabled,
+.agent-controls select:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -5996,12 +6006,14 @@ button.loading::after {
     gap: 2px;
   }
 
-  .doc-agent-controls {
+  .doc-agent-controls,
+  .agent-controls {
     gap: 4px;
     margin-bottom: 4px;
   }
 
-  .doc-agent-controls select {
+  .doc-agent-controls select,
+  .agent-controls select {
     min-height: 30px;
     padding: 4px 6px;
     font-size: 11px;

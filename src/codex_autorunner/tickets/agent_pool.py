@@ -234,7 +234,14 @@ class AgentPool:
             thread_id,
             len(req.prompt),
         )
-        turn_handle = await client.turn_start(thread_id, req.prompt)
+        # Extract model/reasoning from options if provided.
+        turn_kwargs: dict[str, Any] = {}
+        if req.options:
+            if req.options.get("model"):
+                turn_kwargs["model"] = req.options["model"]
+            if req.options.get("reasoning"):
+                turn_kwargs["effort"] = req.options["reasoning"]
+        turn_handle = await client.turn_start(thread_id, req.prompt, **turn_kwargs)
         if req.emit_event is not None:
             self._active_emitters[turn_handle.turn_id] = req.emit_event
         try:

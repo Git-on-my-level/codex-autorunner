@@ -1,6 +1,6 @@
 import { api, flash } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
-import { ingestSpecToTickets, listTickets, listWorkspaceFiles, } from "./workspaceApi.js";
+import { fetchWorkspace, ingestSpecToTickets, listTickets, listWorkspaceFiles, writeWorkspace, } from "./workspaceApi.js";
 import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
 import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
@@ -21,6 +21,7 @@ const state = {
     docEditor: null,
     browser: null,
 };
+const WORKSPACE_DOC_KINDS = new Set(["active_context", "decisions", "spec"]);
 function els() {
     return {
         fileList: document.getElementById("workspace-file-list"),
@@ -51,6 +52,37 @@ function els() {
         modelSelect: document.getElementById("workspace-chat-model-select"),
         reasoningSelect: document.getElementById("workspace-chat-reasoning-select"),
     };
+}
+function workspaceKindFromPath(path) {
+    const normalized = (path || "").replace(/\\/g, "/").trim();
+    if (!normalized)
+        return null;
+    const baseName = normalized.split("/").pop() || normalized;
+    const match = baseName.match(/^([a-z_]+)\.md$/i);
+    const kind = match ? match[1].toLowerCase() : "";
+    if (WORKSPACE_DOC_KINDS.has(kind)) {
+        return kind;
+    }
+    return null;
+}
+async function readWorkspaceContent(path) {
+    const kind = workspaceKindFromPath(path);
+    if (kind) {
+        const res = await fetchWorkspace();
+        return res[kind] || "";
+    }
+    return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`));
+}
+async function writeWorkspaceContent(path, content) {
+    const kind = workspaceKindFromPath(path);
+    if (kind) {
+        const res = await writeWorkspace(kind, content);
+        return res[kind] || "";
+    }
+    return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
+        method: "PUT",
+        body: { content },
+    }));
 }
 function target() {
     if (!state.target)
@@ -142,7 +174,7 @@ async function loadWorkspaceFile(path) {
     state.loading = true;
     setStatus("Loading…");
     try {
-        const text = await api(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+        const text = await readWorkspaceContent(path);
         state.content = text;
         if (state.docEditor) {
             state.docEditor.destroy();
@@ -157,11 +189,11 @@ async function loadWorkspaceFile(path) {
             statusEl: status,
             onLoad: async () => text,
             onSave: async (content) => {
-                await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
-                    method: "PUT",
-                    body: { content },
-                });
-                state.content = content;
+                const saved = await writeWorkspaceContent(path, content);
+                state.content = saved;
+                if (saved !== content) {
+                    textarea.value = saved;
+                }
             },
         });
         await loadPendingDraft();
@@ -280,7 +312,19 @@ async function sendChat() {
                 renderChat();
             },
             onUpdate: (update) => {
-                if (update.patch || update.content) {
+                const hasDraft = update.has_draft ??
+                    update.hasDraft;
+                if (hasDraft === false) {
+                    state.draft = null;
+                    if (typeof update.content === "string") {
+                        state.content = update.content;
+                        const textarea = els().textarea;
+                        if (textarea)
+                            textarea.value = state.content;
+                    }
+                    renderPatch();
+                }
+                else if (hasDraft === true || update.patch || update.content) {
                     state.draft = {
                         target: target(),
                         content: update.content || "",

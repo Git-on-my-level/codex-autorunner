@@ -7,6 +7,7 @@ import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor, TicketData } from "./ticketEditor.js";
 import { parseAppServerEvent, type AgentEvent, type ParsedAgentEvent } from "./agentEvents.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
+import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 
 type FlowEvent = {
   event_type: string;
@@ -442,6 +443,9 @@ function els(): {
   stopBtn: HTMLButtonElement | null;
   restartBtn: HTMLButtonElement | null;
   archiveBtn: HTMLButtonElement | null;
+  agentSelect: HTMLSelectElement | null;
+  modelSelect: HTMLSelectElement | null;
+  reasoningSelect: HTMLSelectElement | null;
 } {
   return {
     card: document.getElementById("ticket-card"),
@@ -463,6 +467,9 @@ function els(): {
     stopBtn: document.getElementById("ticket-flow-stop") as HTMLButtonElement | null,
     restartBtn: document.getElementById("ticket-flow-restart") as HTMLButtonElement | null,
     archiveBtn: document.getElementById("ticket-flow-archive") as HTMLButtonElement | null,
+    agentSelect: document.getElementById("ticket-flow-agent-select") as HTMLSelectElement | null,
+    modelSelect: document.getElementById("ticket-flow-model-select") as HTMLSelectElement | null,
+    reasoningSelect: document.getElementById("ticket-flow-reasoning-select") as HTMLSelectElement | null,
   };
 }
 
@@ -914,9 +921,19 @@ async function bootstrapTicketFlow(): Promise<void> {
   setButtonsDisabled(true);
   bootstrapBtn.textContent = "Starting…";
   try {
+    // Get selected agent/model/reasoning from picker
+    const agent = getSelectedAgent();
+    const model = getSelectedModel(agent) || undefined;
+    const reasoning = getSelectedReasoning(agent) || undefined;
+
+    // Build input_data with model/reasoning if selected
+    const inputData: Record<string, string> = {};
+    if (model) inputData.model = model;
+    if (reasoning) inputData.reasoning = reasoning;
+
     const res = (await api("/api/flows/ticket_flow/bootstrap", {
       method: "POST",
-      body: {},
+      body: { input_data: inputData },
     })) as BootstrapResponse;
     currentRunId = res?.id || null;
     if (res?.state?.hint === "active_run_reused") {
@@ -1068,9 +1085,16 @@ async function archiveTicketFlow(): Promise<void> {
 }
 
 export function initTicketFlow(): void {
-  const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn } = els();
+  const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn, agentSelect, modelSelect, reasoningSelect } = els();
   if (!card || card.dataset.ticketInitialized === "1") return;
   card.dataset.ticketInitialized = "1";
+
+  // Initialize agent/model/reasoning picker for ticket flow
+  initAgentControls({
+    agentSelect,
+    modelSelect,
+    reasoningSelect,
+  });
 
   if (bootstrapBtn) bootstrapBtn.addEventListener("click", bootstrapTicketFlow);
   if (resumeBtn) resumeBtn.addEventListener("click", resumeTicketFlow);

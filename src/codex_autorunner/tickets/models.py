@@ -56,6 +56,9 @@ class TicketRunConfig:
     checkpoint_message_template: str = (
         "CAR checkpoint: run={run_id} turn={turn} agent={agent}"
     )
+    # Optional model/reasoning overrides for the ticket flow.
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
 
 
 @dataclass(frozen=True)

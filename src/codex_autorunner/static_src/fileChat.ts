@@ -21,6 +21,8 @@ export interface FileChatUpdate {
   agent_message?: string;
   patch?: string;
   content?: string;
+  has_draft?: boolean;
+  hasDraft?: boolean;
   created_at?: string;
   base_hash?: string;
   raw_events?: unknown[];

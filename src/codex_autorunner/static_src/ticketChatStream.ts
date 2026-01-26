@@ -284,7 +284,11 @@ function applyTicketChatResult(payload: unknown): void {
   }
 
   // Check for draft/patch in response
-  if (result.draft || result.patch || result.content) {
+  const hasDraft =
+    (result.has_draft as boolean | undefined) ?? (result.hasDraft as boolean | undefined);
+  if (hasDraft === false) {
+    ticketChatState.draft = null;
+  } else if (hasDraft === true || result.draft || result.patch || result.content) {
     ticketChatState.draft = {
       content: (result.content as string) || "",
       patch: (result.patch as string) || "",

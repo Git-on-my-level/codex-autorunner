@@ -232,7 +232,11 @@ function applyTicketChatResult(payload) {
             result.agent_message || result.agentMessage || "";
     }
     // Check for draft/patch in response
-    if (result.draft || result.patch || result.content) {
+    const hasDraft = result.has_draft ?? result.hasDraft;
+    if (hasDraft === false) {
+        ticketChatState.draft = null;
+    }
+    else if (hasDraft === true || result.draft || result.patch || result.content) {
         ticketChatState.draft = {
             content: result.content || "",
             patch: result.patch || "",

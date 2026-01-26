@@ -1,10 +1,13 @@
 import { api, flash } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 import {
+  fetchWorkspace,
   ingestSpecToTickets,
   listTickets,
   listWorkspaceFiles,
+  WorkspaceKind,
   WorkspaceFileListItem,
+  writeWorkspace,
 } from "./workspaceApi.js";
 import {
   applyDraft,
@@ -58,6 +61,8 @@ const state: WorkspaceState = {
   browser: null,
 };
 
+const WORKSPACE_DOC_KINDS = new Set<WorkspaceKind>(["active_context", "decisions", "spec"]);
+
 function els() {
   return {
     fileList: document.getElementById("workspace-file-list") as HTMLElement | null,
@@ -88,6 +93,39 @@ function els() {
     modelSelect: document.getElementById("workspace-chat-model-select") as HTMLSelectElement | null,
     reasoningSelect: document.getElementById("workspace-chat-reasoning-select") as HTMLSelectElement | null,
   };
+}
+
+function workspaceKindFromPath(path: string): WorkspaceKind | null {
+  const normalized = (path || "").replace(/\\/g, "/").trim();
+  if (!normalized) return null;
+  const baseName = normalized.split("/").pop() || normalized;
+  const match = baseName.match(/^([a-z_]+)\.md$/i);
+  const kind = match ? match[1].toLowerCase() : "";
+  if (WORKSPACE_DOC_KINDS.has(kind as WorkspaceKind)) {
+    return kind as WorkspaceKind;
+  }
+  return null;
+}
+
+async function readWorkspaceContent(path: string): Promise<string> {
+  const kind = workspaceKindFromPath(path);
+  if (kind) {
+    const res = await fetchWorkspace();
+    return (res[kind] as string) || "";
+  }
+  return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`)) as string;
+}
+
+async function writeWorkspaceContent(path: string, content: string): Promise<string> {
+  const kind = workspaceKindFromPath(path);
+  if (kind) {
+    const res = await writeWorkspace(kind, content);
+    return (res[kind] as string) || "";
+  }
+  return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
+    method: "PUT",
+    body: { content },
+  })) as string;
 }
 
 function target(): string {
@@ -180,7 +218,7 @@ async function loadWorkspaceFile(path: string): Promise<void> {
   state.loading = true;
   setStatus("Loading…");
   try {
-    const text = await api(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+    const text = await readWorkspaceContent(path);
     state.content = text as string;
     if (state.docEditor) {
       state.docEditor.destroy();
@@ -194,11 +232,11 @@ async function loadWorkspaceFile(path: string): Promise<void> {
       statusEl: status,
       onLoad: async () => text as string,
       onSave: async (content) => {
-        await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
-          method: "PUT",
-          body: { content },
-        });
-        state.content = content;
+        const saved = await writeWorkspaceContent(path, content);
+        state.content = saved;
+        if (saved !== content) {
+          textarea.value = saved;
+        }
       },
     });
     await loadPendingDraft();
@@ -323,7 +361,18 @@ async function sendChat(): Promise<void> {
           renderChat();
         },
         onUpdate: (update) => {
-          if (update.patch || update.content) {
+          const hasDraft =
+            (update.has_draft as boolean | undefined) ??
+            (update.hasDraft as boolean | undefined);
+          if (hasDraft === false) {
+            state.draft = null;
+            if (typeof update.content === "string") {
+              state.content = update.content as string;
+              const textarea = els().textarea;
+              if (textarea) textarea.value = state.content;
+            }
+            renderPatch();
+          } else if (hasDraft === true || update.patch || update.content) {
             state.draft = {
               target: target(),
               content: (update.content as string) || "",
