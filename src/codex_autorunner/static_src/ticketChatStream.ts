@@ -188,7 +188,7 @@ function handleTicketStreamEvent(event: string, rawData: string): void {
     case "event":
     case "app-server": {
       // App-server events (thinking, tool calls, etc.)
-      applyTicketEvent(ticketChatState, parsed);
+      applyTicketEvent(parsed);
       renderTicketEvents();
       break;
     }
@@ -239,7 +239,7 @@ function handleTicketStreamEvent(event: string, rawData: string): void {
       if (typeof parsed === "object" && parsed !== null) {
         const messageObj = parsed as Record<string, unknown>;
         if (messageObj.method || messageObj.message) {
-          applyTicketEvent(ticketChatState, parsed);
+          applyTicketEvent(parsed);
           renderTicketEvents();
         }
       }

@@ -19,6 +19,8 @@ import {
 } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
 import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
+import { createDocChat, type ChatState } from "./docChatCore.js";
+import { initDocChatVoice } from "./docChatVoice.js";
 
 type WorkspaceTarget = {
   path: string; // relative to workspace dir
@@ -30,13 +32,6 @@ interface WorkspaceState {
   content: string;
   draft: FileDraft | null;
   loading: boolean;
-  chatStatus: "idle" | "running" | "done" | "error" | "interrupted";
-  streamText: string;
-  statusText: string;
-  error: string;
-  controller: AbortController | null;
-  messages: { role: "user" | "assistant"; content: string }[];
-  events: { summary: string }[];
   hasTickets: boolean;
   files: WorkspaceFileListItem[];
   docEditor: DocEditor | null;
@@ -48,18 +43,37 @@ const state: WorkspaceState = {
   content: "",
   draft: null,
   loading: false,
-  chatStatus: "idle",
-  streamText: "",
-  statusText: "",
-  error: "",
-  controller: null,
-  messages: [],
-  events: [],
   hasTickets: true,
   files: [],
   docEditor: null,
   browser: null,
 };
+
+const WORKSPACE_CHAT_EVENT_LIMIT = 8;
+const WORKSPACE_CHAT_EVENT_MAX = 50;
+
+const workspaceChat = createDocChat({
+  idPrefix: "workspace-chat",
+  storage: { keyPrefix: "car-workspace-chat-", maxMessages: 50, version: 1 },
+  limits: { eventVisible: WORKSPACE_CHAT_EVENT_LIMIT, eventMax: WORKSPACE_CHAT_EVENT_MAX },
+  styling: {
+    eventClass: "doc-chat-event",
+    eventTitleClass: "doc-chat-event-title",
+    eventSummaryClass: "doc-chat-event-summary",
+    eventDetailClass: "doc-chat-event-detail",
+    eventMetaClass: "doc-chat-event-meta",
+    eventsEmptyClass: "doc-chat-events-empty",
+    eventsHiddenClass: "hidden",
+    messagesClass: "doc-chat-message",
+    messageRoleClass: "doc-chat-message-role",
+    messageContentClass: "doc-chat-message-content",
+    messageMetaClass: "doc-chat-message-meta",
+    messageUserClass: "user",
+    messageAssistantClass: "assistant",
+    messageAssistantThinkingClass: "streaming",
+    messageAssistantFinalClass: "final",
+  },
+});
 
 const WORKSPACE_DOC_KINDS = new Set<WorkspaceKind>(["active_context", "decisions", "spec"]);
 
@@ -165,53 +179,7 @@ function renderPatch(): void {
 }
 
 function renderChat(): void {
-  const { chatStatus, chatError, chatMessages, chatEvents, chatEventsList } = els();
-  if (chatStatus) {
-    chatStatus.textContent = state.chatStatus;
-    chatStatus.classList.toggle("error", state.chatStatus === "error");
-  }
-  if (chatError) {
-    chatError.textContent = state.error;
-    chatError.classList.toggle("hidden", !state.error);
-  }
-  if (chatMessages) {
-    chatMessages.innerHTML = "";
-    state.messages.forEach((m) => {
-      const div = document.createElement("div");
-      div.className = `doc-chat-message ${m.role}`;
-      div.textContent = m.content;
-      chatMessages.appendChild(div);
-    });
-    if (state.streamText) {
-      const streaming = document.createElement("div");
-      streaming.className = "doc-chat-message assistant streaming";
-      streaming.textContent = state.streamText;
-      chatMessages.appendChild(streaming);
-    }
-  }
-  if (chatEvents && chatEventsList) {
-    chatEventsList.innerHTML = "";
-    state.events.forEach((e) => {
-      const row = document.createElement("div");
-      row.className = "doc-chat-event";
-      row.textContent = e.summary;
-      chatEventsList.appendChild(row);
-    });
-    chatEvents.classList.toggle("hidden", state.events.length === 0);
-  }
-}
-
-function addMessage(role: "user" | "assistant", content: string): void {
-  state.messages.push({ role, content });
-}
-
-function resetChat(): void {
-  state.chatStatus = "idle";
-  state.error = "";
-  state.streamText = "";
-  state.statusText = "";
-  state.controller = null;
-  state.events = [];
+  workspaceChat.render();
 }
 
 async function loadWorkspaceFile(path: string): Promise<void> {
@@ -325,15 +293,20 @@ async function sendChat(): Promise<void> {
   const message = (chatInput?.value || "").trim();
   if (!message) return;
 
-  // Abort any in-flight chat first
-  if (state.controller) state.controller.abort();
+  const chatState = workspaceChat.state as ChatState;
 
-  state.controller = new AbortController();
-  resetChat();
-  state.chatStatus = "running";
-  addMessage("user", message);
+  // Abort any in-flight chat first
+  if (chatState.controller) chatState.controller.abort();
+
+  chatState.controller = new AbortController();
+  chatState.status = "running";
+  chatState.error = "";
+  chatState.statusText = "queued";
+  chatState.streamText = "";
+  workspaceChat.clearEvents();
+  workspaceChat.addUserMessage(message);
   renderChat();
-  chatInput!.value = "";
+  if (chatInput) chatInput.value = "";
   chatSend?.setAttribute("disabled", "true");
   chatCancel?.classList.remove("hidden");
 
@@ -345,27 +318,26 @@ async function sendChat(): Promise<void> {
     await sendFileChat(
       target(),
       message,
-      state.controller,
+      chatState.controller,
       {
         onStatus: (status) => {
-          state.statusText = status;
+          chatState.statusText = status;
           setStatus(status || "Running…");
+          renderChat();
         },
         onToken: (token) => {
-          state.streamText = (state.streamText || "") + token;
-          renderChat();
+          chatState.streamText = (chatState.streamText || "") + token;
+          workspaceChat.renderMessages();
         },
         onEvent: (event) => {
-          state.events.push({ summary: JSON.stringify(event) });
-          if (state.events.length > 20) state.events.shift();
-          renderChat();
+          workspaceChat.applyAppEvent(event);
+          workspaceChat.renderEvents();
         },
         onUpdate: (update) => {
           const hasDraft =
-            (update.has_draft as boolean | undefined) ??
-            (update.hasDraft as boolean | undefined);
+            (update.has_draft as boolean | undefined) ?? (update.hasDraft as boolean | undefined);
           if (hasDraft === false) {
-            state.draft = null;
+            chatState.draft = null;
             if (typeof update.content === "string") {
               state.content = update.content as string;
               const textarea = els().textarea;
@@ -385,29 +357,29 @@ async function sendChat(): Promise<void> {
           }
           if (update.message || update.agent_message) {
             const text = (update.message as string) || (update.agent_message as string) || "";
-            if (text) addMessage("assistant", text);
+            if (text) workspaceChat.addAssistantMessage(text);
           }
           renderChat();
         },
         onError: (msg) => {
-          state.chatStatus = "error";
-          state.error = msg;
+          chatState.status = "error";
+          chatState.error = msg;
           renderChat();
           flash(msg, "error");
         },
         onInterrupted: (msg) => {
-          state.chatStatus = "interrupted";
-          state.error = "";
-          state.streamText = "";
+          chatState.status = "interrupted";
+          chatState.error = "";
+          chatState.streamText = "";
           renderChat();
           flash(msg, "info");
         },
         onDone: () => {
-          if (state.streamText) {
-            addMessage("assistant", state.streamText);
-            state.streamText = "";
+          if (chatState.streamText) {
+            workspaceChat.addAssistantMessage(chatState.streamText);
+            chatState.streamText = "";
           }
-          state.chatStatus = "done";
+          chatState.status = "done";
           renderChat();
         },
       },
@@ -415,44 +387,45 @@ async function sendChat(): Promise<void> {
     );
   } catch (err) {
     const msg = (err as Error).message || "Chat failed";
-    state.chatStatus = "error";
-    state.error = msg;
+    const chatStateLocal = workspaceChat.state as ChatState;
+    chatStateLocal.status = "error";
+    chatStateLocal.error = msg;
     renderChat();
     flash(msg, "error");
   } finally {
     chatSend?.removeAttribute("disabled");
     chatCancel?.classList.add("hidden");
-    state.controller = null;
+    const chatStateLocal = workspaceChat.state as ChatState;
+    chatStateLocal.controller = null;
   }
 }
 
 async function cancelChat(): Promise<void> {
-  if (state.controller) {
-    state.controller.abort();
+  const chatState = workspaceChat.state as ChatState;
+  if (chatState.controller) {
+    chatState.controller.abort();
   }
   try {
     await interruptFileChat(target());
   } catch {
     // ignore
   }
-  state.chatStatus = "interrupted";
-  state.streamText = "";
+  chatState.status = "interrupted";
+  chatState.streamText = "";
   renderChat();
 }
 
 async function resetThread(): Promise<void> {
   if (!state.target) return;
   try {
-    await api(
-      "/api/app-server/threads/reset",
-      {
-        method: "POST",
-        body: { key: `file_chat.workspace.${state.target.path}` },
-      }
-    );
-    state.messages = [];
-    state.events = [];
-    resetChat();
+    await api("/api/app-server/threads/reset", {
+      method: "POST",
+      body: { key: `file_chat.workspace.${state.target.path}` },
+    });
+    const chatState = workspaceChat.state as ChatState;
+    chatState.messages = [];
+    chatState.streamText = "";
+    workspaceChat.clearEvents();
     renderChat();
     flash("New workspace chat thread", "success");
   } catch (err) {
@@ -470,11 +443,15 @@ async function loadFiles(): Promise<void> {
     selectEl: fileSelect,
     onSelect: (file) => {
       state.target = { path: file.path, isPinned: file.is_pinned };
+      workspaceChat.setTarget(target());
       void loadWorkspaceFile(file.path);
     },
   });
   state.browser = browser;
   browser.setFiles(files, files.find((f) => f.is_pinned)?.path);
+  if (state.target) {
+    workspaceChat.setTarget(target());
+  }
 }
 
 export async function initWorkspace(): Promise<void> {
@@ -495,9 +472,14 @@ export async function initWorkspace(): Promise<void> {
     modelSelect: els().modelSelect,
     reasoningSelect: els().reasoningSelect,
   });
+  await initDocChatVoice({
+    buttonId: "workspace-chat-voice",
+    inputId: "workspace-chat-input",
+  });
 
   await maybeShowGenerate();
   await loadFiles();
+  workspaceChat.setTarget(target());
 
   els().saveBtn?.addEventListener("click", () => void state.docEditor?.save(true));
   els().reloadBtn?.addEventListener("click", () => void reloadWorkspace());

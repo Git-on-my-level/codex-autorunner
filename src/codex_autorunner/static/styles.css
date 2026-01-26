@@ -3340,6 +3340,10 @@ button.icon-btn {
   display: none;
 }
 
+.chat-history-empty {
+  display: none;
+}
+
 .doc-chat-events-list {
   display: flex;
   flex-direction: column;
@@ -3397,6 +3401,44 @@ button.icon-btn {
   padding: 10px 8px;
   font-size: 10px;
   opacity: 0.7;
+}
+
+.doc-chat-message {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.doc-chat-message-role {
+  font-weight: 600;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.doc-chat-message-content {
+  color: var(--text);
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.doc-chat-message-meta {
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.doc-chat-message.assistant.streaming .doc-chat-message-content {
+  color: var(--accent);
+}
+
+.doc-chat-message.assistant.final .doc-chat-message-role {
+  color: var(--accent);
 }
 
 .doc-chat-entry {
@@ -8162,13 +8204,15 @@ button.loading::after {
   opacity: 0.7;
 }
 
-.ticket-chat-input-buttons {
+.ticket-chat-input-buttons,
+.doc-chat-input-buttons {
   display: flex;
   gap: 4px;
   align-items: center;
 }
 
-.ticket-chat-input-buttons .voice-button {
+.ticket-chat-input-buttons .voice-button,
+.doc-chat-input-buttons .voice-button {
   width: 32px;
   height: 32px;
   padding: 0;
@@ -8179,7 +8223,8 @@ button.loading::after {
   background: transparent;
 }
 
-.ticket-chat-input-buttons .voice-button.recording {
+.ticket-chat-input-buttons .voice-button.recording,
+.doc-chat-input-buttons .voice-button.recording {
   background: rgba(255, 100, 100, 0.2);
   color: #ff6b6b;
 }

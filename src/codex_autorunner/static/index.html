@@ -324,6 +324,7 @@
                   <textarea enterkeyhint="enter" id="workspace-chat-input"
                     placeholder="Ask AI to edit this workspace doc..." rows="1" spellcheck="false"></textarea>
                   <div class="doc-chat-input-buttons compose-buttons">
+                    <button class="ghost sm voice-button" id="workspace-chat-voice" title="Hold to talk"></button>
                     <button class="primary sm" id="workspace-chat-send" title="Send">↑</button>
                   </div>
                 </div>
@@ -353,7 +354,7 @@
                   </div>
                   <div class="doc-chat-events-list" id="workspace-chat-events-list"></div>
                 </div>
-                <div class="doc-chat-section-header">
+                <div class="doc-chat-section-header" id="workspace-chat-history-header">
                   <div class="doc-chat-section-title">History</div>
                 </div>
                 <div class="doc-chat-history" id="workspace-chat-history"></div>
