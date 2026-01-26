@@ -149,16 +149,18 @@ export async function fetchPendingDraft(target) {
             agent_message: res.agent_message || undefined,
             created_at: res.created_at || undefined,
             base_hash: res.base_hash || undefined,
+            current_hash: res.current_hash || undefined,
+            is_stale: Boolean(res.is_stale),
         };
     }
     catch {
         return null;
     }
 }
-export async function applyDraft(target) {
+export async function applyDraft(target, options = {}) {
     const res = (await api("/api/file-chat/apply", {
         method: "POST",
-        body: { target },
+        body: { target, force: Boolean(options.force) },
     }));
     return {
         content: res.content || "",

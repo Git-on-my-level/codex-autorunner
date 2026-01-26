@@ -13,6 +13,8 @@ export interface FileDraft {
   agent_message?: string;
   created_at?: string;
   base_hash?: string;
+  current_hash?: string;
+  is_stale?: boolean;
 }
 
 export interface FileChatUpdate {
@@ -25,6 +27,8 @@ export interface FileChatUpdate {
   hasDraft?: boolean;
   created_at?: string;
   base_hash?: string;
+  current_hash?: string;
+  is_stale?: boolean;
   raw_events?: unknown[];
   target?: string;
   detail?: string;
@@ -198,16 +202,21 @@ export async function fetchPendingDraft(target: string): Promise<FileDraft | nul
       agent_message: (res.agent_message as string) || undefined,
       created_at: (res.created_at as string) || undefined,
       base_hash: (res.base_hash as string) || undefined,
+      current_hash: (res.current_hash as string) || undefined,
+      is_stale: Boolean(res.is_stale),
     };
   } catch {
     return null;
   }
 }
 
-export async function applyDraft(target: string): Promise<{ content: string; agent_message?: string }> {
+export async function applyDraft(
+  target: string,
+  options: { force?: boolean } = {}
+): Promise<{ content: string; agent_message?: string }> {
   const res = (await api("/api/file-chat/apply", {
     method: "POST",
-    body: { target },
+    body: { target, force: Boolean(options.force) },
   })) as Record<string, unknown>;
   return {
     content: (res.content as string) || "",

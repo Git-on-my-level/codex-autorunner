@@ -6,6 +6,7 @@ import { DocEditor } from "./docEditor.js";
 import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
 import { createDocChat } from "./docChatCore.js";
 import { initDocChatVoice } from "./docChatVoice.js";
+import { renderDiff } from "./diffRenderer.js";
 const state = {
     target: null,
     content: "",
@@ -120,15 +121,27 @@ function renderPatch() {
     const draft = state.draft;
     if (draft) {
         patchMain.classList.remove("hidden");
-        patchBody.textContent = draft.patch || "(no diff)";
-        if (patchSummary)
-            patchSummary.textContent = draft.agent_message || "Changes ready";
-        if (patchMeta)
-            patchMeta.textContent = draft.created_at || "";
+        patchMain.classList.toggle("stale", Boolean(draft.is_stale));
+        renderDiff(draft.patch || "(no diff)", patchBody);
+        if (patchSummary) {
+            patchSummary.textContent = draft.is_stale
+                ? "Stale draft — file changed since this draft was created."
+                : draft.agent_message || "Changes ready";
+            patchSummary.classList.toggle("warn", Boolean(draft.is_stale));
+        }
+        if (patchMeta) {
+            const created = draft.created_at || "";
+            patchMeta.textContent = draft.is_stale
+                ? `${created} · base ${draft.base_hash || ""} vs current ${draft.current_hash || ""}`.trim()
+                : created;
+        }
         if (textarea) {
             textarea.classList.add("hidden");
             textarea.disabled = true;
         }
+        const patchApply = els().patchApply;
+        if (patchApply)
+            patchApply.textContent = draft.is_stale ? "Force Apply" : "Apply Draft";
         saveBtn?.setAttribute("disabled", "true");
         reloadBtn?.setAttribute("disabled", "true");
     }
@@ -222,7 +235,13 @@ async function generateTickets() {
 }
 async function applyWorkspaceDraft() {
     try {
-        const res = await applyDraft(target());
+        const isStale = Boolean(state.draft?.is_stale);
+        if (isStale) {
+            const confirmForce = window.confirm("This draft is stale because the file changed after it was created. Force apply anyway?");
+            if (!confirmForce)
+                return;
+        }
+        const res = await applyDraft(target(), { force: isStale });
         const textarea = els().textarea;
         if (textarea) {
             textarea.value = res.content || "";
@@ -310,6 +329,8 @@ async function sendChat() {
                         agent_message: update.agent_message,
                         created_at: update.created_at,
                         base_hash: update.base_hash,
+                        current_hash: update.current_hash,
+                        is_stale: Boolean(update.is_stale),
                     };
                     renderPatch();
                 }

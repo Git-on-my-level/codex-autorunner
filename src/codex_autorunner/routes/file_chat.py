@@ -11,8 +11,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import difflib
-import hashlib
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
@@ -21,13 +19,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ..agents.registry import validate_agent_id
+from ..core import drafts as draft_utils
 from ..core.app_server_events import format_sse
 from ..core.state import now_iso
 from ..core.utils import atomic_write, find_repo_root
 from ..workspace.paths import WORKSPACE_DOC_KINDS, workspace_dir, workspace_doc_path
 from .shared import SSE_HEADERS
 
-FILE_CHAT_STATE_NAME = "file_chat_state.json"
+FILE_CHAT_STATE_NAME = draft_utils.FILE_CHAT_STATE_NAME
 FILE_CHAT_TIMEOUT_SECONDS = 180
 
 
@@ -46,27 +45,33 @@ class _Target:
 
 
 def _state_path(repo_root: Path) -> Path:
-    return repo_root / ".codex-autorunner" / FILE_CHAT_STATE_NAME
+    return draft_utils.state_path(repo_root)
 
 
 def _load_state(repo_root: Path) -> Dict[str, Any]:
-    path = _state_path(repo_root)
-    if not path.exists():
-        return {"drafts": {}}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {"drafts": {}}
+    return draft_utils.load_state(repo_root)
 
 
 def _save_state(repo_root: Path, state: Dict[str, Any]) -> None:
-    path = _state_path(repo_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(path, json.dumps(state, indent=2) + "\n")
+    draft_utils.save_state(repo_root, state)
 
 
 def _hash_content(content: str) -> str:
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return draft_utils.hash_content(content)
+
+
+def _resolve_repo_root(request: Optional[Request] = None) -> Path:
+    if request is not None:
+        engine = getattr(request.app.state, "engine", None)
+        repo_root = getattr(engine, "repo_root", None)
+        if isinstance(repo_root, Path):
+            return repo_root
+        if isinstance(repo_root, str):
+            try:
+                return Path(repo_root)
+            except Exception:
+                pass
+    return find_repo_root()
 
 
 def _ticket_path(repo_root: Path, index: int) -> Path:
@@ -184,7 +189,7 @@ def build_file_chat_routes() -> APIRouter:
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
 
-        repo_root = find_repo_root()
+        repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, str(target_raw or ""))
 
         # Ensure target directory exists for workspace docs (write on demand)
@@ -604,8 +609,8 @@ def build_file_chat_routes() -> APIRouter:
         return (first_line[:97] + "...") if len(first_line) > 100 else first_line
 
     @router.get("/file-chat/pending")
-    async def pending_file_patch(target: str):
-        repo_root = find_repo_root()
+    async def pending_file_patch(request: Request, target: str):
+        repo_root = _resolve_repo_root(request)
         resolved = _parse_target(repo_root, target)
         state = _load_state(repo_root)
         drafts = (
@@ -614,6 +619,8 @@ def build_file_chat_routes() -> APIRouter:
         draft = drafts.get(resolved.state_key)
         if not draft:
             raise HTTPException(status_code=404, detail="No pending patch")
+        current_content = _read_file(resolved.path)
+        current_hash = _hash_content(current_content)
         return {
             "status": "ok",
             "target": resolved.target,
@@ -622,13 +629,17 @@ def build_file_chat_routes() -> APIRouter:
             "agent_message": draft.get("agent_message", ""),
             "created_at": draft.get("created_at", ""),
             "base_hash": draft.get("base_hash", ""),
+            "current_hash": current_hash,
+            "is_stale": draft.get("base_hash") not in (None, "")
+            and draft.get("base_hash") != current_hash,
         }
 
     @router.post("/file-chat/apply")
     async def apply_file_patch(request: Request):
         body = await request.json()
-        repo_root = find_repo_root()
+        repo_root = _resolve_repo_root(request)
         resolved = _parse_target(repo_root, str(body.get("target") or ""))
+        force = bool(body.get("force", False))
         state = _load_state(repo_root)
         drafts = (
             state.get("drafts", {}) if isinstance(state.get("drafts"), dict) else {}
@@ -638,7 +649,11 @@ def build_file_chat_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="No pending patch")
 
         current = _read_file(resolved.path)
-        if draft.get("base_hash") and _hash_content(current) != draft["base_hash"]:
+        if (
+            not force
+            and draft.get("base_hash")
+            and _hash_content(current) != draft["base_hash"]
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="File changed since draft created; reload before applying.",
@@ -662,7 +677,7 @@ def build_file_chat_routes() -> APIRouter:
     @router.post("/file-chat/discard")
     async def discard_file_patch(request: Request):
         body = await request.json()
-        repo_root = find_repo_root()
+        repo_root = _resolve_repo_root(request)
         resolved = _parse_target(repo_root, str(body.get("target") or ""))
         state = _load_state(repo_root)
         drafts = (
@@ -680,7 +695,7 @@ def build_file_chat_routes() -> APIRouter:
     @router.post("/file-chat/interrupt")
     async def interrupt_file_chat(request: Request):
         body = await request.json()
-        repo_root = find_repo_root()
+        repo_root = _resolve_repo_root(request)
         resolved = _parse_target(repo_root, str(body.get("target") or ""))
         async with _chat_lock:
             ev = _active_chats.get(resolved.state_key)
@@ -703,7 +718,7 @@ def build_file_chat_routes() -> APIRouter:
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
 
-        repo_root = find_repo_root()
+        repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, f"ticket:{int(index)}")
 
         async with _chat_lock:
@@ -743,13 +758,18 @@ def build_file_chat_routes() -> APIRouter:
             await _clear_interrupt_event(target.state_key)
 
     @router.get("/tickets/{index}/chat/pending")
-    async def pending_ticket_patch(index: int):
-        return await pending_file_patch(target=f"ticket:{int(index)}")
+    async def pending_ticket_patch(index: int, request: Request):
+        return await pending_file_patch(request, target=f"ticket:{int(index)}")
 
     @router.post("/tickets/{index}/chat/apply")
-    async def apply_ticket_patch(index: int):
-        repo_root = find_repo_root()
+    async def apply_ticket_patch(index: int, request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, f"ticket:{int(index)}")
+        force = bool(body.get("force", False)) if isinstance(body, dict) else False
         state = _load_state(repo_root)
         drafts = (
             state.get("drafts", {}) if isinstance(state.get("drafts"), dict) else {}
@@ -759,7 +779,11 @@ def build_file_chat_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="No pending patch")
 
         current = _read_file(target.path)
-        if draft.get("base_hash") and _hash_content(current) != draft["base_hash"]:
+        if (
+            not force
+            and draft.get("base_hash")
+            and _hash_content(current) != draft["base_hash"]
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="Ticket changed since draft created; reload before applying.",
@@ -782,7 +806,7 @@ def build_file_chat_routes() -> APIRouter:
 
     @router.post("/tickets/{index}/chat/discard")
     async def discard_ticket_patch(index: int):
-        repo_root = find_repo_root()
+        repo_root = _resolve_repo_root()
         target = _parse_target(repo_root, f"ticket:{int(index)}")
         state = _load_state(repo_root)
         drafts = (
@@ -799,7 +823,7 @@ def build_file_chat_routes() -> APIRouter:
 
     @router.post("/tickets/{index}/chat/interrupt")
     async def interrupt_ticket_chat(index: int):
-        repo_root = find_repo_root()
+        repo_root = _resolve_repo_root()
         target = _parse_target(repo_root, f"ticket:{int(index)}")
         async with _chat_lock:
             ev = _active_chats.get(target.state_key)

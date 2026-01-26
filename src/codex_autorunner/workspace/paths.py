@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, cast
 
+from ..core import drafts as draft_utils
+
 WorkspaceDocKind = Literal["active_context", "decisions", "spec"]
 WORKSPACE_DOC_KINDS: tuple[WorkspaceDocKind, ...] = (
     "active_context",
@@ -61,6 +63,14 @@ def write_workspace_file(repo_root: Path, rel_path: str, content: str) -> str:
         raise ValueError("path points to a directory")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content or "", encoding="utf-8")
+    try:
+        rel = path.relative_to(repo_root).as_posix()
+        draft_utils.invalidate_drafts_for_path(repo_root, rel)
+        state_key = f"workspace_{rel.replace('/', '_')}"
+        draft_utils.remove_draft(repo_root, state_key)
+    except Exception:
+        # best effort; do not block writes
+        pass
     return path.read_text(encoding="utf-8")
 
 
@@ -75,6 +85,13 @@ def write_workspace_doc(repo_root: Path, kind: str, content: str) -> str:
     path = workspace_doc_path(repo_root, kind)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content or "", encoding="utf-8")
+    try:
+        rel = path.relative_to(repo_root).as_posix()
+        draft_utils.invalidate_drafts_for_path(repo_root, rel)
+        state_key = f"workspace_{rel.replace('/', '_')}"
+        draft_utils.remove_draft(repo_root, state_key)
+    except Exception:
+        pass
     return path.read_text(encoding="utf-8")
 
 

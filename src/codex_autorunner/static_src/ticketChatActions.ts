@@ -7,6 +7,7 @@ import { renderTicketMessages } from "./ticketChatEvents.js";
 import { publish } from "./bus.js";
 import { createDocChat, type ChatState, type ChatStatus } from "./docChatCore.js";
 import { saveTicketChatHistory } from "./ticketChatStorage.js";
+import { renderDiff } from "./diffRenderer.js";
 
 export type TicketChatStatus = ChatStatus;
 
@@ -181,7 +182,7 @@ export function renderTicketChat(): void {
     els.patchMain.classList.toggle("hidden", !hasDraft);
     if (hasDraft) {
       if (els.patchBody) {
-        els.patchBody.textContent = ticketChatState.draft!.patch || "(no changes)";
+        renderDiff(ticketChatState.draft!.patch || "(no changes)", els.patchBody);
       }
       if (els.patchStatus) {
         els.patchStatus.textContent = ticketChatState.draft!.agentMessage || "";

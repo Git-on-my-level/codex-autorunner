@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
+from ..core import drafts as draft_utils
 from ..tickets.spec_ingest import (
     SpecIngestTicketsError,
     ingest_workspace_spec_to_tickets,
@@ -20,6 +22,8 @@ from ..workspace.paths import (
     list_workspace_files,
     read_workspace_doc,
     read_workspace_file,
+    workspace_dir,
+    workspace_doc_path,
     write_workspace_doc,
     write_workspace_file,
 )
@@ -44,6 +48,14 @@ def build_workspace_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail="invalid workspace doc kind")
         repo_root = request.app.state.engine.repo_root
         write_workspace_doc(repo_root, key, payload.content)
+        try:
+            rel_path = workspace_doc_path(repo_root, key).relative_to(repo_root)
+            draft_utils.invalidate_drafts_for_path(repo_root, rel_path.as_posix())
+            state_key = f"workspace_{rel_path.name}"
+            draft_utils.remove_draft(repo_root, state_key)
+        except Exception:
+            # best-effort invalidation; avoid blocking writes
+            pass
         return {
             "active_context": read_workspace_doc(repo_root, "active_context"),
             "decisions": read_workspace_doc(repo_root, "decisions"),
@@ -64,6 +76,19 @@ def build_workspace_routes() -> APIRouter:
         repo_root = request.app.state.engine.repo_root
         try:
             content = write_workspace_file(repo_root, path, payload.content)
+            try:
+                rel_path_path = (
+                    workspace_dir(repo_root)
+                    .joinpath(Path(path).as_posix())
+                    .resolve()
+                    .relative_to(repo_root)
+                )
+                rel_path = rel_path_path.as_posix()
+                draft_utils.invalidate_drafts_for_path(repo_root, rel_path)
+                state_key = f"workspace_{rel_path.replace('/', '_')}"
+                draft_utils.remove_draft(repo_root, state_key)
+            except Exception:
+                pass
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return PlainTextResponse(content)

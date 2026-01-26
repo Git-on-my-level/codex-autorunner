@@ -7,6 +7,7 @@ import { renderTicketMessages } from "./ticketChatEvents.js";
 import { publish } from "./bus.js";
 import { createDocChat } from "./docChatCore.js";
 import { saveTicketChatHistory } from "./ticketChatStorage.js";
+import { renderDiff } from "./diffRenderer.js";
 // Limits for events display
 export const TICKET_CHAT_EVENT_LIMIT = 8;
 export const TICKET_CHAT_EVENT_MAX = 50;
@@ -151,7 +152,7 @@ export function renderTicketChat() {
         els.patchMain.classList.toggle("hidden", !hasDraft);
         if (hasDraft) {
             if (els.patchBody) {
-                els.patchBody.textContent = ticketChatState.draft.patch || "(no changes)";
+                renderDiff(ticketChatState.draft.patch || "(no changes)", els.patchBody);
             }
             if (els.patchStatus) {
                 els.patchStatus.textContent = ticketChatState.draft.agentMessage || "";
