@@ -168,6 +168,18 @@
               </div>
             </div>
           </div>
+          <details class="card" id="run-history">
+            <summary class="card-header">
+              <div class="card-header-left">
+                <span class="label">Run History</span>
+                <span class="muted small">Last 10 runs</span>
+              </div>
+              <button class="ghost sm icon-btn" id="analytics-refresh" title="Refresh analytics">↻</button>
+            </summary>
+            <div class="run-history-list" id="run-history-list">
+              <div class="muted">Loading…</div>
+            </div>
+          </details>
           <div class="card usage-card-compact">
             <div class="usage-header">
               <span class="label">Usage</span>
@@ -232,7 +244,7 @@
           </div>
         </div>
 
-        <div class="analytics-subsection" id="analytics-runs" hidden>
+        <!-- Legacy analytics section removed -->
       </section>
       <section class="panel" id="messages">
         <div class="cards">

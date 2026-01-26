@@ -21,6 +21,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from .agents import build_agents_routes
+from .analytics import build_analytics_routes
 from .app_server import build_app_server_routes
 from .base import build_base_routes
 from .file_chat import build_file_chat_routes
@@ -51,6 +52,7 @@ def build_repo_router(static_dir: Path) -> APIRouter:
 
     # Include all route modules
     router.include_router(build_base_routes(static_dir))
+    router.include_router(build_analytics_routes())
     router.include_router(build_agents_routes())
     router.include_router(build_app_server_routes())
     router.include_router(build_workspace_routes())

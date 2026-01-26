@@ -1,4 +1,4 @@
-import { api, flash, confirmModal, openModal } from "./utils.js";
+import { api, flash, confirmModal, openModal, statusPill } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { saveToCache, loadFromCache } from "./cache.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
@@ -13,6 +13,7 @@ const usageChartState = {
 let usageSeriesRetryTimer = null;
 let usageSummaryRetryTimer = null;
 let latestMessageStats = null;
+let latestRunHistory = [];
 function updateTodoPreview(_content) {
     // Docs UI removed; keep stub for backward compatibility.
 }
@@ -157,6 +158,137 @@ async function loadMessageStats() {
         latestMessageStats = latestMessageStats || null;
     }
     renderMessageStats();
+}
+async function loadTicketAnalytics() {
+    try {
+        const data = (await api("/api/analytics/summary"));
+        renderTicketAnalytics(data);
+    }
+    catch (err) {
+        flash(err.message || "Failed to load analytics", "error");
+    }
+}
+function formatDuration(seconds) {
+    if (seconds === null || Number.isNaN(seconds))
+        return "–";
+    if (seconds < 60)
+        return `${Math.round(seconds)}s`;
+    const mins = seconds / 60;
+    if (mins < 60)
+        return `${Math.round(mins)}m`;
+    const hours = mins / 60;
+    return `${hours.toFixed(1)}h`;
+}
+function renderTicketAnalytics(data) {
+    const run = data?.run;
+    const tickets = data?.tickets;
+    const turns = data?.turns;
+    const agent = data?.agent;
+    const statusEl = document.getElementById("runner-status");
+    if (statusEl && run) {
+        statusPill(statusEl, run.status || "idle");
+        statusEl.textContent = run.status || "idle";
+    }
+    const lastStart = document.getElementById("last-start");
+    const lastFinish = document.getElementById("last-finish");
+    const lastDuration = document.getElementById("last-duration");
+    const todoCount = document.getElementById("todo-count");
+    const doneCount = document.getElementById("done-count");
+    const ticketActive = document.getElementById("ticket-active");
+    const ticketTurns = document.getElementById("ticket-turns");
+    const handoffsEl = document.getElementById("message-handoffs");
+    const repliesEl = document.getElementById("message-replies");
+    const runIdEl = document.getElementById("last-run-id");
+    const lastExitEl = document.getElementById("last-exit-code");
+    if (lastStart)
+        lastStart.textContent = run?.started_at || "–";
+    if (lastFinish)
+        lastFinish.textContent = run?.finished_at || "–";
+    if (lastDuration)
+        lastDuration.textContent = formatDuration(run?.duration_seconds ?? null);
+    if (todoCount)
+        todoCount.textContent = tickets ? String(tickets.todo_count) : "–";
+    if (doneCount)
+        doneCount.textContent = tickets ? String(tickets.done_count) : "–";
+    if (ticketActive)
+        ticketActive.textContent = tickets?.current_ticket || "–";
+    if (ticketTurns)
+        ticketTurns.textContent = turns?.current_ticket != null ? String(turns.current_ticket) : "–";
+    if (handoffsEl)
+        handoffsEl.textContent = turns?.handoffs != null ? String(turns.handoffs) : "0";
+    if (repliesEl)
+        repliesEl.textContent = turns?.replies != null ? String(turns.replies) : "0";
+    if (runIdEl)
+        runIdEl.textContent = run?.short_id || run?.id || "–";
+    if (lastExitEl)
+        lastExitEl.textContent = run?.status ?? "–";
+    // Agent chip (optional future use)
+    const agentEl = document.getElementById("ticket-agent");
+    if (agentEl) {
+        agentEl.textContent = agent?.id || "–";
+    }
+}
+async function loadRunHistory() {
+    try {
+        const runs = (await api("/api/flows/runs?flow_type=ticket_flow"));
+        latestRunHistory = Array.isArray(runs) ? runs.slice(0, 10) : [];
+        renderRunHistory(latestRunHistory);
+    }
+    catch (err) {
+        flash(err.message || "Failed to load run history", "error");
+    }
+}
+function formatIso(iso) {
+    if (!iso)
+        return "–";
+    const dt = new Date(iso);
+    if (Number.isNaN(dt.getTime()))
+        return iso;
+    return dt.toLocaleString();
+}
+function calcDurationFromRun(run) {
+    const started = run.started_at;
+    const finished = run.finished_at;
+    if (!started)
+        return "–";
+    const start = new Date(started).getTime();
+    const end = finished && !Number.isNaN(new Date(finished).getTime())
+        ? new Date(finished).getTime()
+        : Date.now();
+    if (Number.isNaN(start) || Number.isNaN(end))
+        return "–";
+    return formatDuration((end - start) / 1000);
+}
+function renderRunHistory(runs) {
+    const container = document.getElementById("run-history-list");
+    if (!container)
+        return;
+    if (!runs || !runs.length) {
+        container.innerHTML = '<div class="muted">No runs yet.</div>';
+        return;
+    }
+    const items = runs.map((run) => {
+        const shortId = run.id ? run.id.split("-")[0] : "–";
+        const status = run.status || "unknown";
+        const duration = calcDurationFromRun(run);
+        const started = formatIso(run.started_at);
+        const current = run.current_step || "–";
+        return `
+      <div class="run-history-row">
+        <div class="run-history-id">${shortId}</div>
+        <div class="run-history-status">${status}</div>
+        <div class="run-history-duration">${duration}</div>
+        <div class="run-history-start">${started}</div>
+        <div class="run-history-step">${current}</div>
+      </div>
+    `;
+    });
+    container.innerHTML = `
+    <div class="run-history-head run-history-row">
+      <div>ID</div><div>Status</div><div>Duration</div><div>Started</div><div>Step</div>
+    </div>
+    ${items.join("")}
+  `;
 }
 function renderMessageStats() {
     const stats = latestMessageStats;
@@ -657,6 +789,10 @@ export function initDashboard() {
     });
     bindAction("usage-refresh", loadUsage);
     bindAction("refresh-preview", loadTodoPreview);
+    bindAction("analytics-refresh", async () => {
+        await loadTicketAnalytics();
+        await loadRunHistory();
+    });
     const cachedUsage = loadFromCache("usage");
     if (cachedUsage)
         renderUsage(cachedUsage);
@@ -679,6 +815,8 @@ export function initDashboard() {
         });
     }
     loadUsage();
+    loadTicketAnalytics();
+    loadRunHistory();
     loadTodoPreview();
     loadVersion();
     checkUpdateStatus();
@@ -692,6 +830,16 @@ export function initDashboard() {
     });
     registerAutoRefresh("message-stats", {
         callback: loadMessageStats,
+        tabId: "analytics",
+        interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
+        refreshOnActivation: true,
+        immediate: true,
+    });
+    registerAutoRefresh("dashboard-analytics", {
+        callback: async () => {
+            await loadTicketAnalytics();
+            await loadRunHistory();
+        },
         tabId: "analytics",
         interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
         refreshOnActivation: true,

@@ -11,37 +11,9 @@ import { flash } from "./utils.js";
 import { initLiveUpdates } from "./liveUpdates.js";
 import { initHealthGate } from "./health.js";
 import { initWorkspace } from "./workspace.js";
-function disableLegacyAnalyticsUI() {
-    // Ticket-first: these panels and their API calls are deprecated.
-    const legacyIds = [
-        "runner-controls",
-        "analytics-runs",
-        "analytics-logs",
-    ];
-    for (const id of legacyIds) {
-        const el = document.getElementById(id);
-        if (el)
-            el.classList.add("hidden");
-    }
-    const panel = document.getElementById("analytics");
-    if (!panel)
-        return;
-    if (document.getElementById("ticket-first-analytics-note"))
-        return;
-    const note = document.createElement("div");
-    note.id = "ticket-first-analytics-note";
-    note.className = "status-card";
-    const title = document.createElement("h3");
-    title.textContent = "Ticket-first mode";
-    const body = document.createElement("p");
-    body.textContent =
-        "Legacy autorunner / GitHub / PR flow panels have been disabled. Analytics will be rebuilt around ticket_flow.";
-    note.append(title, body);
-    panel.insertBefore(note, panel.firstChild);
-}
+import { initDashboard } from "./dashboard.js";
 async function initRepoShell() {
     await initHealthGate();
-    disableLegacyAnalyticsUI();
     if (REPO_ID) {
         const navBar = document.querySelector(".nav-bar");
         if (navBar) {
@@ -77,9 +49,7 @@ async function initRepoShell() {
             initMessages();
         }
         else if (tabId === "analytics") {
-            // Ticket-first: keep Analytics as a stub panel for now and avoid all legacy
-            // dashboard / GitHub / PR flow boot paths.
-            disableLegacyAnalyticsUI();
+            initDashboard();
         }
         else if (tabId === "tickets") {
             initTicketFlow();
