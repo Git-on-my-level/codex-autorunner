@@ -9,6 +9,8 @@ CAR supports multiple AI agents through a registry and capability model. Each ag
 - **Supervisor**: Manages agent process lifecycle (for agents that run as subprocesses)
 - **Registry**: Central registration with capabilities
 
+**Canonical boundary (Jan 2026):** Agent integrations belong under `src/codex_autorunner/agents/` using the harness + supervisor + registry stack. The experimental `integrations/agents` backend abstraction was removed because it duplicated this seam; avoid adding new agent adapters elsewhere to keep the boundary singular.
+
 ## Prerequisites
 
 Before adding a new agent, ensure:
