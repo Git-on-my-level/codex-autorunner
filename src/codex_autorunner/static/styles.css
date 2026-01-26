@@ -363,8 +363,8 @@ body {
   font-size: 11px;
   line-height: 16px;
   text-align: center;
-  background: var(--accent);
-  color: var(--bg);
+  background: #ff9500;
+  color: #000;
 }
 
 .tab {
@@ -1694,6 +1694,118 @@ button.icon-btn {
   padding: 4px;
   align-content: start;
 }
+
+/* Handoff history specific styling for graceful overflow */
+#ticket-handoff-history {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 4px 16px 4px;
+}
+
+#ticket-handoff-history::-webkit-scrollbar {
+  width: 6px;
+}
+
+#ticket-handoff-history::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+/* Compact handoff items that don't stack */
+#ticket-handoff-history .ticket-item {
+  flex-shrink: 0;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+#ticket-handoff-history .ticket-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--accent);
+}
+
+#ticket-handoff-history .ticket-item-head {
+  margin-bottom: 6px;
+}
+
+#ticket-handoff-history .ticket-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+#ticket-handoff-history .ticket-agent {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(111, 137, 255, 0.2);
+  color: #a8b4ff;
+}
+
+/* Full content display in handoff items */
+#ticket-handoff-history .ticket-body {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b8c0d0;
+  word-break: break-word;
+}
+
+#ticket-handoff-history .ticket-handoff-title {
+  font-weight: 600;
+  color: #e0e6f0;
+  margin-bottom: 6px;
+}
+
+#ticket-handoff-history .ticket-handoff-body {
+  color: #a0a8b8;
+}
+
+/* Markdown rendering in handoff items */
+#ticket-handoff-history .messages-markdown p {
+  margin: 0 0 8px 0;
+}
+
+#ticket-handoff-history .messages-markdown p:last-child {
+  margin-bottom: 0;
+}
+
+#ticket-handoff-history .messages-markdown ul {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+#ticket-handoff-history .messages-markdown li {
+  margin: 2px 0;
+}
+
+#ticket-handoff-history .messages-markdown code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+#ticket-handoff-history .messages-markdown pre.md-code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+
+#ticket-handoff-history .messages-markdown pre.md-code code {
+  background: none;
+  padding: 0;
+  font-size: 11px;
+}
+
 
 .ticket-card .ticket-item {
   border: 1px solid var(--border);

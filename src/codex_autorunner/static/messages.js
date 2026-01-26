@@ -32,7 +32,7 @@ function setBadge(count) {
         badge.classList.add("hidden");
     }
 }
-async function refreshBell() {
+export async function refreshBell() {
     if (!isRepoHealthy()) {
         activeRunId = null;
         setBadge(0);
@@ -140,7 +140,7 @@ function formatBytes(size) {
         return `${(size / 1000).toFixed(0)} KB`;
     return `${size} B`;
 }
-function renderMarkdown(body) {
+export function renderMarkdown(body) {
     if (!body)
         return "";
     let text = escapeHtml(body);
@@ -376,6 +376,12 @@ async function loadThread(runId) {
     if (replyBoxEl) {
         replyBoxEl.classList.toggle("hidden", !isPaused);
     }
+    // Always scroll to bottom of the thread detail (the scrollable container)
+    requestAnimationFrame(() => {
+        if (detailEl) {
+            detailEl.scrollTop = detailEl.scrollHeight;
+        }
+    });
 }
 async function sendReply() {
     const runId = selectedRunId;

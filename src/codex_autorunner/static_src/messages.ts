@@ -116,7 +116,7 @@ function setBadge(count: number): void {
   }
 }
 
-async function refreshBell(): Promise<void> {
+export async function refreshBell(): Promise<void> {
   if (!isRepoHealthy()) {
     activeRunId = null;
     setBadge(0);
@@ -223,7 +223,7 @@ function formatBytes(size?: number | null): string {
   return `${size} B`;
 }
 
-function renderMarkdown(body?: string | null): string {
+export function renderMarkdown(body?: string | null): string {
   if (!body) return "";
   let text = escapeHtml(body);
 
@@ -494,6 +494,13 @@ async function loadThread(runId: string): Promise<void> {
   if (replyBoxEl) {
     replyBoxEl.classList.toggle("hidden", !isPaused);
   }
+
+  // Always scroll to bottom of the thread detail (the scrollable container)
+  requestAnimationFrame(() => {
+    if (detailEl) {
+      detailEl.scrollTop = detailEl.scrollHeight;
+    }
+  });
 }
 
 async function sendReply(): Promise<void> {

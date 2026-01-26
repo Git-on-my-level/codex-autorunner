@@ -76,13 +76,18 @@ def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
 
 
 def _safe_list_flow_runs(
-    repo_root: Path, flow_type: Optional[str] = None
+    repo_root: Path, flow_type: Optional[str] = None, *, recover_stuck: bool = False
 ) -> list[FlowRunRecord]:
     db_path, _ = _flow_paths(repo_root)
     store = FlowStore(db_path)
     try:
         store.initialize()
         records = store.list_flow_runs(flow_type=flow_type)
+        if recover_stuck:
+            # Recover any flows stuck in active states with dead workers
+            records = [
+                _maybe_recover_stuck_flow(repo_root, rec, store) for rec in records
+            ]
         return records
     except Exception as exc:
         _logger.debug("FlowStore list runs failed: %s", exc)
@@ -211,6 +216,38 @@ def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
             _logger.debug("Failed to clear worker metadata: %s", health.artifact_path)
 
 
+def _maybe_recover_stuck_flow(
+    repo_root: Path, record: FlowRunRecord, store: FlowStore
+) -> FlowRunRecord:
+    """Recover flows stuck in active states when worker is dead.
+
+    If a flow is in RUNNING or STOPPING state but the worker process is dead,
+    transition it to FAILED or STOPPED respectively so users can archive/restart.
+    """
+    if record.status not in (FlowRunStatus.RUNNING, FlowRunStatus.STOPPING):
+        return record
+
+    health = check_worker_health(repo_root, record.id)
+    if health.is_alive:
+        return record
+
+    # Worker is dead but status claims it's still active -> recover
+    new_status = (
+        FlowRunStatus.STOPPED
+        if record.status == FlowRunStatus.STOPPING
+        else FlowRunStatus.FAILED
+    )
+    _logger.info(
+        "Recovering stuck flow %s: %s -> %s (worker dead)",
+        record.id,
+        record.status.value,
+        new_status.value,
+    )
+    updated = store.update_flow_run_status(run_id=record.id, status=new_status)
+    _ensure_worker_not_stale(health)
+    return updated or record
+
+
 class FlowStartRequest(BaseModel):
     input_data: Dict = Field(default_factory=dict)
     metadata: Optional[Dict] = None
@@ -336,7 +373,9 @@ def build_flow_routes() -> APIRouter:
     @router.get("/runs", response_model=list[FlowStatusResponse])
     async def list_runs(flow_type: Optional[str] = None):
         repo_root = find_repo_root()
-        records = _safe_list_flow_runs(repo_root, flow_type=flow_type)
+        records = _safe_list_flow_runs(
+            repo_root, flow_type=flow_type, recover_stuck=True
+        )
         return [FlowStatusResponse.from_record(rec) for rec in records]
 
     @router.get("/{flow_type}")
@@ -605,18 +644,37 @@ You are the first ticket in a new ticket_flow run.
         return FlowStatusResponse.from_record(updated)
 
     @router.post("/{run_id}/archive")
-    async def archive_flow(run_id: uuid.UUID, delete_run: bool = True):
-        """Archive a completed flow by moving tickets to the run's artifact directory."""
+    async def archive_flow(
+        run_id: uuid.UUID, delete_run: bool = True, force: bool = False
+    ):
+        """Archive a completed flow by moving tickets to the run's artifact directory.
+
+        Args:
+            run_id: The flow run to archive.
+            delete_run: Whether to delete the run record after archiving.
+            force: If True, allow archiving flows stuck in stopping/paused state
+                   by force-stopping the worker first.
+        """
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
 
-        # Only allow archiving terminal flows
+        # Allow archiving terminal flows, or force-archiving stuck flows
         if not FlowRunStatus(record.status).is_terminal():
-            raise HTTPException(
-                status_code=400,
-                detail="Can only archive completed/stopped/failed flows",
-            )
+            if force and record.status in (
+                FlowRunStatus.STOPPING,
+                FlowRunStatus.PAUSED,
+            ):
+                # Force-stop any remaining worker before archiving
+                _stop_worker(run_id, timeout=2.0)
+                _logger.info(
+                    "Force-archiving flow %s in %s state", run_id, record.status.value
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Can only archive completed/stopped/failed flows (use force=true for stuck flows)",
+                )
 
         # Move tickets to run artifacts directory
         _, artifacts_root = _flow_paths(repo_root)
@@ -629,6 +687,12 @@ You are the first ticket in a new ticket_flow run.
             dest = archive_dir / ticket_path.name
             shutil.move(str(ticket_path), str(dest))
             archived_count += 1
+
+        # Archive runs directory (handoff_history, reply_history, etc.) to dismiss notifications
+        runs_dir = repo_root / ".codex-autorunner" / "runs" / run_id
+        if runs_dir.exists() and runs_dir.is_dir():
+            archived_runs_dir = artifacts_root / run_id / "archived_runs"
+            shutil.move(str(runs_dir), str(archived_runs_dir))
 
         # Delete run record if requested
         if delete_run:
@@ -652,10 +716,13 @@ You are the first ticket in a new ticket_flow run.
 
         record = _get_flow_record(repo_root, run_id)
 
-        # If the worker died but metadata still claims it exists, clear it so status
-        # callers get a clean view next time they start/resume.
-        health = check_worker_health(repo_root, run_id)
-        _ensure_worker_not_stale(health)
+        # If the worker died but status claims it's still active, recover the flow
+        store = _require_flow_store(repo_root)
+        if store:
+            try:
+                record = _maybe_recover_stuck_flow(repo_root, record, store)
+            finally:
+                store.close()
 
         return FlowStatusResponse.from_record(record)
 

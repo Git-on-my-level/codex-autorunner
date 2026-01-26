@@ -1,10 +1,12 @@
 import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal } from "./utils.js";
+import { activateTab } from "./tabs.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor, TicketData } from "./ticketEditor.js";
 import { parseAppServerEvent, type AgentEvent, type ParsedAgentEvent } from "./agentEvents.js";
+import { refreshBell, renderMarkdown } from "./messages.js";
 
 type FlowEvent = {
   event_type: string;
@@ -471,7 +473,7 @@ function setButtonsDisabled(disabled: boolean): void {
   });
 }
 
-function truncate(text: string, max = 220): string {
+function truncate(text: string, max = 100): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max).trim()}…`;
 }
@@ -583,7 +585,20 @@ function renderHandoffHistory(
 
   entries.forEach((entry) => {
     const container = document.createElement("div");
-    container.className = "ticket-item";
+    container.className = "ticket-item clickable";
+    container.title = "Click to view in Inbox";
+
+    // Add click handler to navigate to inbox
+    container.addEventListener("click", () => {
+      if (runId) {
+        // Update URL with run_id so messages tab loads the right thread
+        const url = new URL(window.location.href);
+        url.searchParams.set("run_id", runId);
+        window.history.replaceState({}, "", url.toString());
+        // Switch to messages tab
+        activateTab("messages");
+      }
+    });
 
     const head = document.createElement("div");
     head.className = "ticket-item-head";
@@ -606,7 +621,7 @@ function renderHandoffHistory(
     const title = entry.message?.title as string | undefined;
     if (title) {
       const titleEl = document.createElement("div");
-      titleEl.className = "ticket-body";
+      titleEl.className = "ticket-body ticket-handoff-title";
       titleEl.textContent = title;
       container.appendChild(titleEl);
     }
@@ -614,8 +629,8 @@ function renderHandoffHistory(
     const bodyText = entry.message?.body as string | undefined;
     if (bodyText) {
       const body = document.createElement("div");
-      body.className = "ticket-body";
-      body.textContent = truncate(bodyText.replace(/\s+/g, " ").trim());
+      body.className = "ticket-body ticket-handoff-body messages-markdown";
+      body.innerHTML = renderMarkdown(bodyText);
       container.appendChild(body);
     }
 
@@ -852,27 +867,29 @@ async function loadTicketFlow(): Promise<void> {
       }
     }
     
-    // Show restart button when flow is paused or in terminal state (allows starting fresh)
+    // Show restart button when flow is paused, stopping, or in terminal state (allows starting fresh)
     const { restartBtn } = els();
     if (restartBtn) {
       const isPaused = latest?.status === "paused";
+      const isStopping = latest?.status === "stopping";
       const isTerminal =
         latest?.status === "completed" ||
         latest?.status === "stopped" ||
         latest?.status === "failed";
-      const canRestart = (isPaused || isTerminal) && ticketsExist && Boolean(currentRunId);
+      const canRestart = (isPaused || isStopping || isTerminal) && ticketsExist && Boolean(currentRunId);
       restartBtn.style.display = canRestart ? "" : "none";
       restartBtn.disabled = !canRestart;
     }
     
-    // Show archive button when flow is paused or in terminal state and has tickets
+    // Show archive button when flow is paused, stopping, or in terminal state and has tickets
     if (archiveBtn) {
       const isPaused = latest?.status === "paused";
+      const isStopping = latest?.status === "stopping";
       const isTerminal =
         latest?.status === "completed" ||
         latest?.status === "stopped" ||
         latest?.status === "failed";
-      const canArchive = (isPaused || isTerminal) && ticketsExist && Boolean(currentRunId);
+      const canArchive = (isPaused || isStopping || isTerminal) && ticketsExist && Boolean(currentRunId);
       archiveBtn.style.display = canArchive ? "" : "none";
       archiveBtn.disabled = !canArchive;
     }
@@ -1006,7 +1023,7 @@ async function restartTicketFlow(): Promise<void> {
 }
 
 async function archiveTicketFlow(): Promise<void> {
-  const { archiveBtn } = els();
+  const { archiveBtn, reason } = els();
   if (!archiveBtn) return;
   if (!isRepoHealthy()) {
     flash("Repo offline; cannot archive ticket flow.", "error");
@@ -1022,7 +1039,9 @@ async function archiveTicketFlow(): Promise<void> {
   setButtonsDisabled(true);
   archiveBtn.textContent = "Archiving…";
   try {
-    const res = (await api(`/api/flows/${currentRunId}/archive`, {
+    // Force archive if flow is stuck in stopping or paused state
+    const force = currentFlowStatus === "stopping" || currentFlowStatus === "paused";
+    const res = (await api(`/api/flows/${currentRunId}/archive?force=${force}`, {
       method: "POST",
       body: {},
     })) as { status?: string; tickets_archived?: number };
@@ -1030,6 +1049,15 @@ async function archiveTicketFlow(): Promise<void> {
     flash(`Archived ${count} ticket${count !== 1 ? "s" : ""}`);
     clearLiveOutput();
     currentRunId = null;
+    // Clear UI elements immediately after archive
+    renderHandoffHistory(null, null);
+    if (reason) {
+      reason.textContent = "No ticket flow run yet.";
+      reason.classList.remove("has-details");
+    }
+    currentReasonFull = null;
+    // Refresh inbox badge to reflect no active paused runs
+    void refreshBell();
     await loadTicketFlow();
   } catch (err) {
     flash((err as Error).message || "Failed to archive ticket flow", "error");
