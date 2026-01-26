@@ -19,6 +19,7 @@ export interface AgentEvent {
   summary: string;
   detail: string;
   kind: AgentEventKind;
+  isSignificant: boolean;
   time: number;
   itemId: string | null;
   method: string;
@@ -139,6 +140,22 @@ function extractErrorMessage(params: PayloadParams | null | undefined): string {
   return "";
 }
 
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function hasMeaningfulText(summary: string, detail: string): boolean {
+  return Boolean(summary.trim() || detail.trim());
+}
+
+function inferSignificance(kind: AgentEventKind, method: string): boolean {
+  if (kind === "thinking") return true;
+  if (kind === "error") return true;
+  if (["tool", "command", "file", "output"].includes(kind)) return true;
+  if (method.includes("requestApproval")) return true;
+  return false;
+}
+
 /**
  * Extract output delta text from an event payload.
  */
@@ -180,6 +197,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
       summary: delta,
       detail: "",
       kind: "thinking",
+      isSignificant: true,
       time: receivedAt,
       itemId,
       method,
@@ -195,6 +213,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
       summary: "",
       detail: "",
       kind: "thinking",
+      isSignificant: true,
       time: receivedAt,
       itemId,
       method,
@@ -268,12 +287,25 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
     summary = params.delta;
   }
 
+  const normalizedSummary = normalizeText(String(summary || ""));
+  const normalizedDetail = normalizeText(String(detail || ""));
+  const meaningful = hasMeaningfulText(normalizedSummary, normalizedDetail);
+  const isStarted = method.includes("item/started");
+  if (!meaningful && isStarted) {
+    return null;
+  }
+  if (!meaningful) {
+    return null;
+  }
+  const isSignificant = inferSignificance(kind, method);
+
   const event: AgentEvent = {
     id: (payload as EventPayload)?.id || `${Date.now()}`,
     title,
-    summary: summary || "(no details)",
-    detail,
+    summary: normalizedSummary,
+    detail: normalizedDetail,
     kind,
+    isSignificant,
     time: receivedAt,
     itemId,
     method,

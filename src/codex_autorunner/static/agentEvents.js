@@ -65,6 +65,23 @@ function extractErrorMessage(params) {
         return params.message;
     return "";
 }
+function normalizeText(value) {
+    return value.replace(/\s+/g, " ").trim();
+}
+function hasMeaningfulText(summary, detail) {
+    return Boolean(summary.trim() || detail.trim());
+}
+function inferSignificance(kind, method) {
+    if (kind === "thinking")
+        return true;
+    if (kind === "error")
+        return true;
+    if (["tool", "command", "file", "output"].includes(kind))
+        return true;
+    if (method.includes("requestApproval"))
+        return true;
+    return false;
+}
 /**
  * Extract output delta text from an event payload.
  */
@@ -110,6 +127,7 @@ export function parseAppServerEvent(payload) {
             summary: delta,
             detail: "",
             kind: "thinking",
+            isSignificant: true,
             time: receivedAt,
             itemId,
             method,
@@ -124,6 +142,7 @@ export function parseAppServerEvent(payload) {
             summary: "",
             detail: "",
             kind: "thinking",
+            isSignificant: true,
             time: receivedAt,
             itemId,
             method,
@@ -205,12 +224,24 @@ export function parseAppServerEvent(payload) {
         title = "Delta";
         summary = params.delta;
     }
+    const normalizedSummary = normalizeText(String(summary || ""));
+    const normalizedDetail = normalizeText(String(detail || ""));
+    const meaningful = hasMeaningfulText(normalizedSummary, normalizedDetail);
+    const isStarted = method.includes("item/started");
+    if (!meaningful && isStarted) {
+        return null;
+    }
+    if (!meaningful) {
+        return null;
+    }
+    const isSignificant = inferSignificance(kind, method);
     const event = {
         id: payload?.id || `${Date.now()}`,
         title,
-        summary: summary || "(no details)",
-        detail,
+        summary: normalizedSummary,
+        detail: normalizedDetail,
         kind,
+        isSignificant,
         time: receivedAt,
         itemId,
         method,

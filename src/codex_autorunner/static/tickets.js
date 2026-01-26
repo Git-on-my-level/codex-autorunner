@@ -6,6 +6,7 @@ import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor } from "./ticketEditor.js";
 import { parseAppServerEvent } from "./agentEvents.js";
+import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
 let currentRunId = null;
 let ticketsExist = false;
@@ -16,7 +17,8 @@ let flowStartedAt = null;
 let eventSource = null;
 let lastActivityTime = null;
 let lastActivityTimerId = null;
-let liveOutputExpanded = false;
+let liveOutputPanelExpanded = false;
+let liveOutputDetailExpanded = false;
 let liveOutputBuffer = [];
 const MAX_OUTPUT_LINES = 200;
 const LIVE_EVENT_MAX = 50;
@@ -155,10 +157,10 @@ function renderLiveOutputEvents() {
     if (!container || !list || !count)
         return;
     const hasEvents = liveOutputEvents.length > 0;
-    container.classList.toggle("hidden", !hasEvents);
     count.textContent = String(liveOutputEvents.length);
+    container.classList.toggle("hidden", !hasEvents || !liveOutputDetailExpanded);
     list.innerHTML = "";
-    if (!hasEvents)
+    if (!hasEvents || !liveOutputDetailExpanded)
         return;
     liveOutputEvents.forEach((entry) => {
         const wrapper = document.createElement("div");
@@ -166,11 +168,13 @@ function renderLiveOutputEvents() {
         const title = document.createElement("div");
         title.className = "ticket-chat-event-title";
         title.textContent = entry.title || entry.method || "Update";
-        const summary = document.createElement("div");
-        summary.className = "ticket-chat-event-summary";
-        summary.textContent = entry.summary || "(no details)";
         wrapper.appendChild(title);
-        wrapper.appendChild(summary);
+        if (entry.summary) {
+            const summary = document.createElement("div");
+            summary.className = "ticket-chat-event-summary";
+            summary.textContent = entry.summary;
+            wrapper.appendChild(summary);
+        }
         if (entry.detail) {
             const detail = document.createElement("div");
             detail.className = "ticket-chat-event-detail";
@@ -190,6 +194,37 @@ function renderLiveOutputEvents() {
     });
     list.scrollTop = list.scrollHeight;
 }
+function renderLiveOutputCompact() {
+    const compactEl = document.getElementById("ticket-live-output-compact");
+    if (!compactEl)
+        return;
+    const summary = summarizeEvents(liveOutputEvents, {
+        maxActions: COMPACT_MAX_ACTIONS,
+        maxTextLength: COMPACT_MAX_TEXT_LENGTH,
+    });
+    const text = liveOutputEvents.length ? renderCompactSummary(summary) : "";
+    compactEl.textContent = text || "Waiting for agent output...";
+}
+function updateLiveOutputDetailToggle() {
+    const detailBtn = document.getElementById("ticket-live-output-detail");
+    if (!detailBtn)
+        return;
+    detailBtn.textContent = liveOutputDetailExpanded ? "≡" : "⋯";
+    detailBtn.title = liveOutputDetailExpanded ? "Show compact summary" : "Show details";
+}
+function renderLiveOutputView() {
+    const compactEl = document.getElementById("ticket-live-output-compact");
+    const outputEl = document.getElementById("ticket-live-output-text");
+    if (compactEl) {
+        compactEl.classList.toggle("hidden", liveOutputDetailExpanded);
+    }
+    if (outputEl) {
+        outputEl.classList.toggle("hidden", !liveOutputDetailExpanded);
+    }
+    renderLiveOutputCompact();
+    renderLiveOutputEvents();
+    updateLiveOutputDetailToggle();
+}
 function clearLiveOutput() {
     liveOutputBuffer = [];
     const outputEl = document.getElementById("ticket-live-output-text");
@@ -197,7 +232,7 @@ function clearLiveOutput() {
         outputEl.textContent = "";
     liveOutputEvents = [];
     liveOutputEventIndex = {};
-    renderLiveOutputEvents();
+    renderLiveOutputView();
 }
 function setLiveOutputStatus(status) {
     const statusEl = document.getElementById("ticket-live-output-status");
@@ -235,7 +270,7 @@ function handleFlowEvent(event) {
         const parsed = parseAppServerEvent(event.data);
         if (parsed) {
             addLiveOutputEvent(parsed);
-            renderLiveOutputEvents();
+            renderLiveOutputView();
         }
     }
     // Handle flow lifecycle events
@@ -289,15 +324,16 @@ function disconnectEventStream() {
 function initLiveOutputPanel() {
     const toggleBtn = document.getElementById("ticket-live-output-toggle");
     const expandBtn = document.getElementById("ticket-live-output-expand");
+    const detailBtn = document.getElementById("ticket-live-output-detail");
     const contentEl = document.getElementById("ticket-live-output-content");
     const panelEl = document.getElementById("ticket-live-output-panel");
     const toggle = () => {
-        liveOutputExpanded = !liveOutputExpanded;
+        liveOutputPanelExpanded = !liveOutputPanelExpanded;
         if (contentEl) {
-            contentEl.classList.toggle("hidden", !liveOutputExpanded);
+            contentEl.classList.toggle("hidden", !liveOutputPanelExpanded);
         }
         if (panelEl) {
-            panelEl.classList.toggle("expanded", liveOutputExpanded);
+            panelEl.classList.toggle("expanded", liveOutputPanelExpanded);
         }
     };
     if (toggleBtn) {
@@ -309,6 +345,15 @@ function initLiveOutputPanel() {
             toggle();
         });
     }
+    if (detailBtn) {
+        detailBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            liveOutputDetailExpanded = !liveOutputDetailExpanded;
+            renderLiveOutputView();
+        });
+    }
+    updateLiveOutputDetailToggle();
+    renderLiveOutputView();
 }
 /**
  * Initialize the reason modal click handler.

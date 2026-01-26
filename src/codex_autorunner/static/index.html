@@ -412,10 +412,13 @@
           <div class="ticket-live-output-panel" id="ticket-live-output-panel">
             <div class="ticket-live-output-header" id="ticket-live-output-toggle">
               <span class="ticket-live-output-title">Live Agent Output</span>
+              <span class="ticket-live-output-spacer"></span>
+              <button class="ghost sm icon-btn" id="ticket-live-output-detail" title="Show details">⋯</button>
               <span class="ticket-live-output-status" id="ticket-live-output-status">Disconnected</span>
               <button class="ghost sm icon-btn" id="ticket-live-output-expand" title="Toggle panel">▼</button>
             </div>
             <div class="ticket-live-output-content hidden" id="ticket-live-output-content">
+              <pre class="ticket-live-output-compact" id="ticket-live-output-compact"></pre>
               <div class="ticket-live-output-events hidden" id="ticket-live-output-events">
                 <div class="ticket-live-output-events-header">
                   <span class="muted">Events</span>

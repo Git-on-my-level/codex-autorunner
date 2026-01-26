@@ -1,4 +1,5 @@
 import { parseAppServerEvent } from "./agentEvents.js";
+import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { saveChatHistory, loadChatHistory } from "./docChatStorage.js";
 function getElements(prefix) {
     return {
@@ -119,6 +120,8 @@ export function createDocChat(config) {
         const hasEvents = state.events.length > 0;
         const isRunning = state.status === "running";
         const showEvents = hasEvents || isRunning;
+        const compactMode = !!config.compactMode;
+        const expanded = !!state.eventsExpanded;
         if (config.styling.eventsHiddenClass) {
             eventsMain.classList.toggle(config.styling.eventsHiddenClass, !showEvents);
         }
@@ -130,14 +133,27 @@ export function createDocChat(config) {
             eventsList.innerHTML = "";
             return;
         }
+        if (compactMode && !expanded) {
+            renderCompactEvents();
+            if (eventsToggle) {
+                eventsToggle.classList.toggle("hidden", !hasEvents);
+                eventsToggle.textContent = "Show details";
+            }
+            return;
+        }
         const limit = config.limits.eventVisible;
-        const expanded = !!state.eventsExpanded;
-        const showCount = expanded ? state.events.length : Math.min(state.events.length, limit);
+        const showCount = compactMode ? state.events.length : expanded ? state.events.length : Math.min(state.events.length, limit);
         const visible = state.events.slice(-showCount);
         if (eventsToggle) {
-            const hiddenCount = Math.max(0, state.events.length - showCount);
-            eventsToggle.classList.toggle("hidden", hiddenCount === 0);
-            eventsToggle.textContent = expanded ? "Show recent" : `Show more (${hiddenCount})`;
+            if (compactMode) {
+                eventsToggle.classList.toggle("hidden", !hasEvents);
+                eventsToggle.textContent = "Show compact";
+            }
+            else {
+                const hiddenCount = Math.max(0, state.events.length - showCount);
+                eventsToggle.classList.toggle("hidden", hiddenCount === 0);
+                eventsToggle.textContent = expanded ? "Show recent" : `Show more (${hiddenCount})`;
+            }
         }
         eventsList.innerHTML = "";
         if (!hasEvents && isRunning) {
@@ -154,11 +170,13 @@ export function createDocChat(config) {
             const title = document.createElement("div");
             title.className = config.styling.eventTitleClass;
             title.textContent = entry.title || entry.method || "Update";
-            const summary = document.createElement("div");
-            summary.className = config.styling.eventSummaryClass;
-            summary.textContent = entry.summary || "(no details)";
             wrapper.appendChild(title);
-            wrapper.appendChild(summary);
+            if (entry.summary) {
+                const summary = document.createElement("div");
+                summary.className = config.styling.eventSummaryClass;
+                summary.textContent = entry.summary;
+                wrapper.appendChild(summary);
+            }
             if (entry.detail) {
                 const detail = document.createElement("div");
                 detail.className = config.styling.eventDetailClass;
@@ -174,6 +192,21 @@ export function createDocChat(config) {
             eventsList.appendChild(wrapper);
         });
         eventsList.scrollTop = eventsList.scrollHeight;
+    }
+    function renderCompactEvents() {
+        const { eventsList } = elements;
+        if (!eventsList)
+            return;
+        eventsList.innerHTML = "";
+        const summary = summarizeEvents(state.events, {
+            maxActions: config.compactOptions?.maxActions ?? COMPACT_MAX_ACTIONS,
+            maxTextLength: config.compactOptions?.maxTextLength ?? COMPACT_MAX_TEXT_LENGTH,
+        });
+        const text = state.events.length ? renderCompactSummary(summary) : "";
+        const wrapper = document.createElement("pre");
+        wrapper.className = "chat-events-compact";
+        wrapper.textContent = text || (state.status === "running" ? "Processing..." : "No events yet.");
+        eventsList.appendChild(wrapper);
     }
     function renderMessages() {
         const { messagesEl, historyHeader } = elements;
@@ -280,6 +313,7 @@ export function createDocChat(config) {
         render,
         renderMessages,
         renderEvents,
+        renderCompactEvents,
         clearEvents,
         applyAppEvent,
         addUserMessage,

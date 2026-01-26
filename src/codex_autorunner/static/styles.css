@@ -1971,7 +1971,7 @@ button.icon-btn {
   user-select: none;
 }
 
-.ticket-live-output-header .icon-btn {
+.ticket-live-output-spacer {
   margin-left: auto;
 }
 
@@ -2025,6 +2025,24 @@ button.icon-btn {
   min-height: 60px;
 }
 
+.ticket-live-output-compact {
+  margin: 0;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #c3c8d4;
+  border-bottom: 1px solid var(--border);
+  background: rgba(10, 12, 18, 0.35);
+  min-height: 40px;
+}
+
+.ticket-live-output-compact.hidden {
+  display: none;
+}
+
 .ticket-live-output-text:empty::before {
   content: "Waiting for agent output...";
   color: var(--muted);
@@ -2061,6 +2079,20 @@ button.icon-btn {
 
 .ticket-live-output-panel.expanded #ticket-live-output-expand {
   transform: rotate(180deg);
+}
+
+.chat-events-compact {
+  margin: 0;
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted);
+  background: rgba(10, 12, 18, 0.25);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
 /* Review card */

@@ -1,4 +1,5 @@
-import { parseAppServerEvent, type ParsedAgentEvent } from "./agentEvents.js";
+import { parseAppServerEvent, type ParsedAgentEvent, type AgentEvent } from "./agentEvents.js";
+import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { saveChatHistory, loadChatHistory, type ChatStorageConfig } from "./docChatStorage.js";
 
 export type ChatStatus = "idle" | "running" | "done" | "error" | "interrupted";
@@ -83,6 +84,8 @@ export interface ChatConfig {
   storage?: ChatStorageConfig;
   limits: ChatLimits;
   styling: ChatStyling;
+  compactMode?: boolean;
+  compactOptions?: { maxActions?: number; maxTextLength?: number };
 }
 
 export interface DocChatInstance {
@@ -91,6 +94,7 @@ export interface DocChatInstance {
   render(): void;
   renderMessages(): void;
   renderEvents(): void;
+  renderCompactEvents(): void;
   clearEvents(): void;
   applyAppEvent(payload: unknown): void;
   addUserMessage(content: string): void;
@@ -224,6 +228,8 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     const hasEvents = state.events.length > 0;
     const isRunning = state.status === "running";
     const showEvents = hasEvents || isRunning;
+    const compactMode = !!config.compactMode;
+    const expanded = !!state.eventsExpanded;
 
     if (config.styling.eventsHiddenClass) {
       eventsMain.classList.toggle(config.styling.eventsHiddenClass, !showEvents);
@@ -237,15 +243,28 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
       return;
     }
 
+    if (compactMode && !expanded) {
+      renderCompactEvents();
+      if (eventsToggle) {
+        eventsToggle.classList.toggle("hidden", !hasEvents);
+        eventsToggle.textContent = "Show details";
+      }
+      return;
+    }
+
     const limit = config.limits.eventVisible;
-    const expanded = !!state.eventsExpanded;
-    const showCount = expanded ? state.events.length : Math.min(state.events.length, limit);
+    const showCount = compactMode ? state.events.length : expanded ? state.events.length : Math.min(state.events.length, limit);
     const visible = state.events.slice(-showCount);
 
     if (eventsToggle) {
-      const hiddenCount = Math.max(0, state.events.length - showCount);
-      eventsToggle.classList.toggle("hidden", hiddenCount === 0);
-      eventsToggle.textContent = expanded ? "Show recent" : `Show more (${hiddenCount})`;
+      if (compactMode) {
+        eventsToggle.classList.toggle("hidden", !hasEvents);
+        eventsToggle.textContent = "Show compact";
+      } else {
+        const hiddenCount = Math.max(0, state.events.length - showCount);
+        eventsToggle.classList.toggle("hidden", hiddenCount === 0);
+        eventsToggle.textContent = expanded ? "Show recent" : `Show more (${hiddenCount})`;
+      }
     }
 
     eventsList.innerHTML = "";
@@ -267,12 +286,13 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
       title.className = config.styling.eventTitleClass;
       title.textContent = entry.title || entry.method || "Update";
 
-      const summary = document.createElement("div");
-      summary.className = config.styling.eventSummaryClass;
-      summary.textContent = entry.summary || "(no details)";
-
       wrapper.appendChild(title);
-      wrapper.appendChild(summary);
+      if (entry.summary) {
+        const summary = document.createElement("div");
+        summary.className = config.styling.eventSummaryClass;
+        summary.textContent = entry.summary;
+        wrapper.appendChild(summary);
+      }
 
       if (entry.detail) {
         const detail = document.createElement("div");
@@ -292,6 +312,21 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     });
 
     eventsList.scrollTop = eventsList.scrollHeight;
+  }
+
+  function renderCompactEvents(): void {
+    const { eventsList } = elements;
+    if (!eventsList) return;
+    eventsList.innerHTML = "";
+    const summary = summarizeEvents(state.events as unknown as AgentEvent[], {
+      maxActions: config.compactOptions?.maxActions ?? COMPACT_MAX_ACTIONS,
+      maxTextLength: config.compactOptions?.maxTextLength ?? COMPACT_MAX_TEXT_LENGTH,
+    });
+    const text = state.events.length ? renderCompactSummary(summary) : "";
+    const wrapper = document.createElement("pre");
+    wrapper.className = "chat-events-compact";
+    wrapper.textContent = text || (state.status === "running" ? "Processing..." : "No events yet.");
+    eventsList.appendChild(wrapper);
   }
 
   function renderMessages(): void {
@@ -426,6 +461,7 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     render,
     renderMessages,
     renderEvents,
+    renderCompactEvents,
     clearEvents,
     applyAppEvent,
     addUserMessage,
