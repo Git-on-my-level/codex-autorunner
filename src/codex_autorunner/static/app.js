@@ -1,7 +1,7 @@
 import { REPO_ID, HUB_BASE } from "./env.js";
 import { initHub } from "./hub.js";
 import { initTabs, registerTab } from "./tabs.js";
-import { initTerminal, fitTerminal } from "./terminal.js";
+import { initTerminal } from "./terminal.js";
 import { initTicketFlow } from "./tickets.js";
 import { initMessages, initMessageBell } from "./messages.js";
 import { initMobileCompact } from "./mobileCompact.js";
@@ -59,8 +59,6 @@ async function initRepoShell() {
     subscribe("tab:change", (tabId) => {
         if (tabId === "terminal") {
             initTerminal();
-            // Ensure terminal is resized to fit container after tab switch
-            setTimeout(() => fitTerminal(), 0);
         }
         lazyInit(tabId);
     });

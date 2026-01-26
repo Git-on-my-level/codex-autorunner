@@ -601,7 +601,14 @@ export class TerminalManager {
    * Force resize terminal to fit container
    */
   fit() {
-    this._handleResize();
+    if (this.fitAddon && this.term) {
+      try {
+        this.fitAddon.fit();
+        this._handleResize(); // Send resize to server
+      } catch (e) {
+        // ignore
+      }
+    }
   }
 
   /**
@@ -2037,6 +2044,13 @@ export class TerminalManager {
     this.term.onScroll(() => this._updateJumpBottomVisibility());
     this.term.onRender(() => this._scheduleMobileViewRender());
     this._updateJumpBottomVisibility();
+
+    // Initial fit
+    try {
+      this.fitAddon.fit();
+    } catch (e) {
+      // ignore fit errors when not visible
+    }
 
     if (!this.inputDisposable) {
       this.inputDisposable = this.term.onData((data) => {

@@ -5,13 +5,18 @@ export function getTerminalManager() {
 }
 export function initTerminal() {
     if (terminalManager) {
+        terminalManager.fit();
         return;
     }
     terminalManager = new TerminalManager();
     terminalManager.init();
-}
-export function fitTerminal() {
+    // Ensure terminal is resized to fit container after initialization
     if (terminalManager) {
         terminalManager.fit();
     }
 }
+// export function fitTerminal(): void {
+//   if (terminalManager) {
+//     terminalManager.fit();
+//   }
+// }

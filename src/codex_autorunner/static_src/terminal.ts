@@ -8,14 +8,19 @@ export function getTerminalManager(): TerminalManager | null {
 
 export function initTerminal(): void {
   if (terminalManager) {
+    terminalManager.fit();
     return;
   }
   terminalManager = new TerminalManager();
   terminalManager.init();
-}
-
-export function fitTerminal(): void {
+  // Ensure terminal is resized to fit container after initialization
   if (terminalManager) {
     terminalManager.fit();
   }
 }
+
+// export function fitTerminal(): void {
+//   if (terminalManager) {
+//     terminalManager.fit();
+//   }
+// }
