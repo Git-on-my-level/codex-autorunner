@@ -258,7 +258,7 @@ export class WorkspaceFileBrowser {
 
         const actions = document.createElement("div");
         actions.className = "workspace-item-actions";
-        if (node.type === "file") {
+        if (node.type === "file" && !node.is_pinned) {
           const delBtn = document.createElement("button");
           delBtn.type = "button";
           delBtn.className = "ghost sm danger";
@@ -279,7 +279,7 @@ export class WorkspaceFileBrowser {
             }
           });
           actions.appendChild(delBtn);
-        } else {
+        } else if (node.type === "folder") {
           const delBtn = document.createElement("button");
           delBtn.type = "button";
           delBtn.className = "ghost sm danger";
@@ -367,29 +367,34 @@ export class WorkspaceFileBrowser {
 
       const actions = document.createElement("span");
       actions.className = "file-picker-actions";
-      const delBtn = document.createElement("button");
-      delBtn.type = "button";
-      delBtn.className = "ghost sm danger";
-      delBtn.textContent = "✕";
-      delBtn.title = `Delete ${node.type}`;
-      delBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        if (!confirm(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`)) return;
-        try {
-          if (node.type === "folder") {
-            await deleteWorkspaceFolder(node.path);
-          } else {
-            await deleteWorkspaceFile(node.path);
-            if (this.selectedPath === node.path) this.selectedPath = null;
+      if (!(node.type === "file" && node.is_pinned)) {
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "ghost sm danger";
+        delBtn.textContent = "✕";
+        delBtn.title = `Delete ${node.type}`;
+        delBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const ok = this.onConfirm
+            ? await this.onConfirm(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`)
+            : confirm(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`);
+          if (!ok) return;
+          try {
+            if (node.type === "folder") {
+              await deleteWorkspaceFolder(node.path);
+            } else {
+              await deleteWorkspaceFile(node.path);
+              if (this.selectedPath === node.path) this.selectedPath = null;
+            }
+            await this.onRefresh();
+            this.render();
+            this.renderModal();
+          } catch (err) {
+            flash((err as Error).message || "Failed to delete", "error");
           }
-          await this.onRefresh();
-          this.render();
-          this.renderModal();
-        } catch (err) {
-          flash((err as Error).message || "Failed to delete", "error");
-        }
-      });
-      actions.appendChild(delBtn);
+        });
+        actions.appendChild(delBtn);
+      }
       item.appendChild(actions);
 
       if (node.type === "folder") {
