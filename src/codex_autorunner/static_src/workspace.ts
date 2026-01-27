@@ -123,6 +123,7 @@ function els() {
     createTitle: document.getElementById("workspace-create-title") as HTMLElement | null,
     createInput: document.getElementById("workspace-create-name") as HTMLInputElement | null,
     createHint: document.getElementById("workspace-create-hint") as HTMLElement | null,
+    createPath: document.getElementById("workspace-create-path") as HTMLSelectElement | null,
     createClose: document.getElementById("workspace-create-close") as HTMLButtonElement | null,
     createCancel: document.getElementById("workspace-create-cancel") as HTMLButtonElement | null,
     createSubmit: document.getElementById("workspace-create-submit") as HTMLButtonElement | null,
@@ -219,9 +220,22 @@ function renderChat(): void {
 type CreateMode = "folder" | "file";
 let createMode: CreateMode | null = null;
 
+function listFolderPaths(nodes: WorkspaceNode[], base = ""): string[] {
+  const paths: string[] = [];
+  nodes.forEach((node) => {
+    if (node.type !== "folder") return;
+    const current = base ? `${base}/${node.name}` : node.name;
+    paths.push(current);
+    if (node.children?.length) {
+      paths.push(...listFolderPaths(node.children, current));
+    }
+  });
+  return paths;
+}
+
 function openCreateModal(mode: CreateMode): void {
-  const { createModal, createTitle, createInput, createHint } = els();
-  if (!createModal || !createInput || !createTitle || !createHint) return;
+  const { createModal, createTitle, createInput, createHint, createPath } = els();
+  if (!createModal || !createInput || !createTitle || !createHint || !createPath) return;
   createMode = mode;
   createTitle.textContent = mode === "folder" ? "New Folder" : "New Markdown File";
   createInput.value = "";
@@ -230,6 +244,24 @@ function openCreateModal(mode: CreateMode): void {
     mode === "folder"
       ? "Folder will be created under the current path"
       : "File will be created under the current path ('.md' appended if missing)";
+  // Populate location selector with root + folders
+  createPath.innerHTML = "";
+  const rootOption = document.createElement("option");
+  rootOption.value = "";
+  rootOption.textContent = "Workspace (root)";
+  createPath.appendChild(rootOption);
+  const folders = listFolderPaths(state.files);
+  folders.forEach((path) => {
+    const opt = document.createElement("option");
+    opt.value = path;
+    opt.textContent = path;
+    createPath.appendChild(opt);
+  });
+  const currentPath = state.browser?.getCurrentPath() || "";
+  createPath.value = currentPath;
+  if (createPath.value !== currentPath) {
+    createPath.value = "";
+  }
   createModal.hidden = false;
   setTimeout(() => createInput.focus(), 10);
 }
@@ -241,14 +273,14 @@ function closeCreateModal(): void {
 }
 
 async function handleCreateSubmit(): Promise<void> {
-  const { createInput } = els();
-  if (!createMode || !createInput) return;
+  const { createInput, createPath } = els();
+  if (!createMode || !createInput || !createPath) return;
   const rawName = (createInput.value || "").trim();
   if (!rawName) {
     flash("Name is required", "error");
     return;
   }
-  const base = state.browser?.getCurrentPath() || "";
+  const base = createPath.value ?? state.browser?.getCurrentPath() ?? "";
   const name = createMode === "file" && !rawName.toLowerCase().endsWith(".md") ? `${rawName}.md` : rawName;
   const path = base ? `${base}/${name}` : name;
   try {

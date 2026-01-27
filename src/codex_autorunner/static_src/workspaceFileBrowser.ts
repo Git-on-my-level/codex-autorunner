@@ -239,11 +239,6 @@ export class WorkspaceFileBrowser {
           caret.className = "workspace-tree-caret";
           caret.textContent = this.expanded.has(node.path) ? "▾" : "▸";
           main.appendChild(caret);
-        } else {
-          const bullet = document.createElement("span");
-          bullet.className = "workspace-tree-dot";
-          bullet.textContent = "•";
-          main.appendChild(bullet);
         }
 
         const name = document.createElement("button");

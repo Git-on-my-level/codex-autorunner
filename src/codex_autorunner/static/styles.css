@@ -3321,6 +3321,8 @@ button.icon-btn {
   font-size: 12px;
   padding: 0;
   text-align: left;
+  display: inline-flex;
+  align-items: center;
 }
 
 .workspace-tree-name.pinned {
