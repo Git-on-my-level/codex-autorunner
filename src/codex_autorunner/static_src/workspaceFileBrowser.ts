@@ -1,4 +1,5 @@
-import { WorkspaceNode } from "./workspaceApi.js";
+import { WorkspaceNode, deleteWorkspaceFile, deleteWorkspaceFolder } from "./workspaceApi.js";
+import { flash } from "./utils.js";
 
 type ChangeHandler = (file: WorkspaceNode) => void;
 
@@ -8,6 +9,7 @@ interface BrowserOptions {
   breadcrumbsEl?: HTMLElement | null;
   onSelect: ChangeHandler;
   onPathChange?: (path: string) => void;
+  onRefresh?: () => Promise<void> | void;
 }
 
 export class WorkspaceFileBrowser {
@@ -19,6 +21,7 @@ export class WorkspaceFileBrowser {
   private readonly breadcrumbsEl: HTMLElement | null;
   private readonly onSelect: ChangeHandler;
   private readonly onPathChange?: (path: string) => void;
+  private readonly onRefresh: () => Promise<void> | void;
   private readonly fileBtnEl: HTMLElement | null;
   private readonly fileBtnNameEl: HTMLElement | null;
   private readonly modalEl: HTMLElement | null;
@@ -31,6 +34,7 @@ export class WorkspaceFileBrowser {
     this.breadcrumbsEl = options.breadcrumbsEl ?? null;
     this.onSelect = options.onSelect;
     this.onPathChange = options.onPathChange;
+    this.onRefresh = options.onRefresh ?? (() => {});
 
     this.fileBtnEl = document.getElementById("workspace-file-pill");
     this.fileBtnNameEl = document.getElementById("workspace-file-pill-name");
@@ -249,7 +253,49 @@ export class WorkspaceFileBrowser {
         }
         if (meta.textContent) label.appendChild(meta);
 
+        const actions = document.createElement("div");
+        actions.className = "workspace-item-actions";
+        if (node.type === "file") {
+          const delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "ghost sm danger";
+          delBtn.textContent = "✕";
+          delBtn.title = "Delete file";
+          delBtn.addEventListener("click", async (evt) => {
+            evt.stopPropagation();
+            if (!confirm(`Delete ${node.name}?`)) return;
+            try {
+              await deleteWorkspaceFile(node.path);
+              if (this.selectedPath === node.path) {
+                this.selectedPath = null;
+              }
+              await this.onRefresh();
+            } catch (err) {
+              flash((err as Error).message || "Failed to delete file", "error");
+            }
+          });
+          actions.appendChild(delBtn);
+        } else {
+          const delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "ghost sm danger";
+          delBtn.textContent = "✕";
+          delBtn.title = "Delete folder";
+          delBtn.addEventListener("click", async (evt) => {
+            evt.stopPropagation();
+            if (!confirm(`Delete folder ${node.name}? (must be empty)`)) return;
+            try {
+              await deleteWorkspaceFolder(node.path);
+              await this.onRefresh();
+            } catch (err) {
+              flash((err as Error).message || "Failed to delete folder", "error");
+            }
+          });
+          actions.appendChild(delBtn);
+        }
+
         row.appendChild(label);
+        if (actions.childElementCount) row.appendChild(actions);
         this.container.appendChild(row);
       });
     };

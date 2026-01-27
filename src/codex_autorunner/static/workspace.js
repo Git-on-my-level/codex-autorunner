@@ -566,6 +566,7 @@ async function loadFiles(defaultPath) {
                 void loadWorkspaceFile(file.path);
             },
             onPathChange: () => updateDownloadButtons(),
+            onRefresh: () => loadFiles(state.target?.path),
         });
     }
     state.browser.setTree(tree, defaultPath || state.target?.path || undefined);

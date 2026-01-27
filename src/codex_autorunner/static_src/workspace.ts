@@ -608,6 +608,7 @@ async function loadFiles(defaultPath?: string): Promise<void> {
         void loadWorkspaceFile(file.path);
       },
       onPathChange: () => updateDownloadButtons(),
+      onRefresh: () => loadFiles(state.target?.path),
     });
   }
 
