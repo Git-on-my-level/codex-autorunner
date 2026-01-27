@@ -138,11 +138,17 @@ class TicketRunner:
             state["ticket_turns"] = 0
             state.pop("last_agent_output", None)
             state.pop("lint", None)
-            state.pop("commit", None)
+        state.pop("commit", None)
 
         # Determine lint-retry mode early. When lint state is present, we allow the
         # agent to fix the ticket frontmatter even if the ticket is currently
         # unparsable by the strict lint rules.
+        if state.get("status") == "paused":
+            # Clear stale pause markers so upgraded logic can proceed without manual DB edits.
+            state["status"] = "running"
+            state.pop("reason", None)
+            state.pop("reason_details", None)
+
         _lint_raw = state.get("lint")
         lint_state: dict[str, Any] = _lint_raw if isinstance(_lint_raw, dict) else {}
         _lint_errors_raw = lint_state.get("errors")

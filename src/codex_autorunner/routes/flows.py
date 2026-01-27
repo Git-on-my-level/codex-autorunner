@@ -227,7 +227,11 @@ def _maybe_recover_stuck_flow(
     Also reconcile cases where the inner ticket_engine has already paused or completed
     but the outer flow status remains RUNNING.
     """
-    if record.status not in (FlowRunStatus.RUNNING, FlowRunStatus.STOPPING):
+    if record.status not in (
+        FlowRunStatus.RUNNING,
+        FlowRunStatus.STOPPING,
+        FlowRunStatus.PAUSED,
+    ):
         return record
 
     health = check_worker_health(repo_root, record.id)
@@ -249,7 +253,7 @@ def _maybe_recover_stuck_flow(
         return updated or record
 
     # Worker appears alive; check for inner/outer status inconsistency.
-    if record.status == FlowRunStatus.RUNNING:
+    if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
         state = record.state or {}
         ticket_engine = state.get("ticket_engine") if isinstance(state, dict) else {}
         ticket_engine = ticket_engine if isinstance(ticket_engine, dict) else {}
@@ -276,6 +280,24 @@ def _maybe_recover_stuck_flow(
                 run_id=record.id,
                 status=FlowRunStatus.COMPLETED,
                 finished_at=now_iso(),
+                state=state,
+            )
+            return updated or record
+
+        if record.status == FlowRunStatus.PAUSED and inner_status in (None, "running"):
+            # Flow was marked paused, but the inner engine is active again (or was never paused).
+            _logger.warning(
+                "Recovering inconsistent flow %s: flow=paused but ticket_engine=%s (worker alive)",
+                record.id,
+                inner_status or "unset",
+            )
+            ticket_engine.pop("reason", None)
+            ticket_engine.pop("reason_details", None)
+            ticket_engine["status"] = "running"
+            state["ticket_engine"] = ticket_engine
+            updated = store.update_flow_run_status(
+                run_id=record.id,
+                status=FlowRunStatus.RUNNING,
                 state=state,
             )
             return updated or record
