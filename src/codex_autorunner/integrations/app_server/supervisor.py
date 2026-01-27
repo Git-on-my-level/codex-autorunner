@@ -41,6 +41,12 @@ class WorkspaceAppServerSupervisor:
         turn_stall_timeout_seconds: Optional[float] = None,
         turn_stall_poll_interval_seconds: Optional[float] = None,
         turn_stall_recovery_min_interval_seconds: Optional[float] = None,
+        max_message_bytes: Optional[int] = None,
+        oversize_preview_bytes: Optional[int] = None,
+        max_oversize_drain_bytes: Optional[int] = None,
+        restart_backoff_initial_seconds: Optional[float] = None,
+        restart_backoff_max_seconds: Optional[float] = None,
+        restart_backoff_jitter_ratio: Optional[float] = None,
         default_approval_decision: str = "cancel",
         max_handles: Optional[int] = None,
         idle_ttl_seconds: Optional[float] = None,
@@ -66,6 +72,12 @@ class WorkspaceAppServerSupervisor:
         self._turn_stall_recovery_min_interval_seconds = (
             turn_stall_recovery_min_interval_seconds
         )
+        self._max_message_bytes = max_message_bytes
+        self._oversize_preview_bytes = oversize_preview_bytes
+        self._max_oversize_drain_bytes = max_oversize_drain_bytes
+        self._restart_backoff_initial_seconds = restart_backoff_initial_seconds
+        self._restart_backoff_max_seconds = restart_backoff_max_seconds
+        self._restart_backoff_jitter_ratio = restart_backoff_jitter_ratio
         self._default_approval_decision = default_approval_decision
         self._max_handles = max_handles
         self._idle_ttl_seconds = idle_ttl_seconds
@@ -152,6 +164,12 @@ class WorkspaceAppServerSupervisor:
                 turn_stall_timeout_seconds=self._turn_stall_timeout_seconds,
                 turn_stall_poll_interval_seconds=self._turn_stall_poll_interval_seconds,
                 turn_stall_recovery_min_interval_seconds=self._turn_stall_recovery_min_interval_seconds,
+                max_message_bytes=self._max_message_bytes,
+                oversize_preview_bytes=self._oversize_preview_bytes,
+                max_oversize_drain_bytes=self._max_oversize_drain_bytes,
+                restart_backoff_initial_seconds=self._restart_backoff_initial_seconds,
+                restart_backoff_max_seconds=self._restart_backoff_max_seconds,
+                restart_backoff_jitter_ratio=self._restart_backoff_jitter_ratio,
                 notification_handler=self._notification_handler,
                 logger=self._logger,
             )

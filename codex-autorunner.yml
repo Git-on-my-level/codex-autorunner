@@ -188,6 +188,21 @@ telegram_bot:
     timeout_ms: 120000
     # Max output characters to show inline before attaching full output.
     max_output_chars: 3800
+  cache:
+    # Cache cleanup cadence (seconds).
+    cleanup_interval_seconds: 300
+    # TTLs for in-memory Telegram state (seconds).
+    coalesce_buffer_ttl_seconds: 60
+    media_batch_buffer_ttl_seconds: 60
+    model_pending_ttl_seconds: 1800
+    pending_approval_ttl_seconds: 600
+    pending_question_ttl_seconds: 600
+    reasoning_buffer_ttl_seconds: 900
+    selection_state_ttl_seconds: 1800
+    turn_preview_ttl_seconds: 900
+    progress_stream_ttl_seconds: 900
+    oversize_warning_ttl_seconds: 3600
+    update_id_persist_interval_seconds: 60
   command_registration:
     # Auto-register bot commands so Telegram shows the slash command menu.
     enabled: true
@@ -264,6 +279,18 @@ app_server:
   turn_timeout_seconds: 28800
   # Per-request timeout (seconds); null/<=0 uses the client default.
   request_timeout: null
+  client:
+    # Max bytes for a single JSON-RPC message from the app-server.
+    max_message_bytes: 52428800
+    # Max bytes kept for oversize message previews.
+    oversize_preview_bytes: 4096
+    # Cap bytes drained when discarding oversized messages.
+    max_oversize_drain_bytes: 104857600
+    # Restart backoff tuning (seconds).
+    restart_backoff_initial_seconds: 0.5
+    restart_backoff_max_seconds: 30.0
+    # Jitter ratio applied to restart delays (0 disables jitter).
+    restart_backoff_jitter_ratio: 0.1
   # Prompt limits for app-server flows (doc chat, spec ingest, autorunner).
   prompts:
     doc_chat:

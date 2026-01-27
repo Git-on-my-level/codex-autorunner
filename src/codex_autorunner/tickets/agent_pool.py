@@ -144,6 +144,12 @@ class AgentPool:
             turn_stall_timeout_seconds=app_server_cfg.turn_stall_timeout_seconds,
             turn_stall_poll_interval_seconds=app_server_cfg.turn_stall_poll_interval_seconds,
             turn_stall_recovery_min_interval_seconds=app_server_cfg.turn_stall_recovery_min_interval_seconds,
+            max_message_bytes=app_server_cfg.client.max_message_bytes,
+            oversize_preview_bytes=app_server_cfg.client.oversize_preview_bytes,
+            max_oversize_drain_bytes=app_server_cfg.client.max_oversize_drain_bytes,
+            restart_backoff_initial_seconds=app_server_cfg.client.restart_backoff_initial_seconds,
+            restart_backoff_max_seconds=app_server_cfg.client.restart_backoff_max_seconds,
+            restart_backoff_jitter_ratio=app_server_cfg.client.restart_backoff_jitter_ratio,
             default_approval_decision=default_approval_decision,
         )
         return self._app_server_supervisor

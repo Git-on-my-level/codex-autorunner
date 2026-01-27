@@ -158,6 +158,14 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "turn_stall_poll_interval_seconds": 2,
         "turn_stall_recovery_min_interval_seconds": 10,
         "request_timeout": None,
+        "client": {
+            "max_message_bytes": 50 * 1024 * 1024,
+            "oversize_preview_bytes": 4096,
+            "max_oversize_drain_bytes": 100 * 1024 * 1024,
+            "restart_backoff_initial_seconds": 0.5,
+            "restart_backoff_max_seconds": 30.0,
+            "restart_backoff_jitter_ratio": 0.1,
+        },
         "prompts": {
             # NOTE: These keys are legacy names kept for config compatibility.
             # The workspace cutover uses tickets + workspace docs + unified file chat; only
@@ -246,6 +254,20 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "enabled": True,
             "timeout_ms": 120000,
             "max_output_chars": 3800,
+        },
+        "cache": {
+            "cleanup_interval_seconds": 300,
+            "coalesce_buffer_ttl_seconds": 60,
+            "media_batch_buffer_ttl_seconds": 60,
+            "model_pending_ttl_seconds": 1800,
+            "pending_approval_ttl_seconds": 600,
+            "pending_question_ttl_seconds": 600,
+            "reasoning_buffer_ttl_seconds": 900,
+            "selection_state_ttl_seconds": 1800,
+            "turn_preview_ttl_seconds": 900,
+            "progress_stream_ttl_seconds": 900,
+            "oversize_warning_ttl_seconds": 3600,
+            "update_id_persist_interval_seconds": 60,
         },
         "command_registration": {
             "enabled": True,
@@ -484,6 +506,20 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "timeout_ms": 120000,
             "max_output_chars": 3800,
         },
+        "cache": {
+            "cleanup_interval_seconds": 300,
+            "coalesce_buffer_ttl_seconds": 60,
+            "media_batch_buffer_ttl_seconds": 60,
+            "model_pending_ttl_seconds": 1800,
+            "pending_approval_ttl_seconds": 600,
+            "pending_question_ttl_seconds": 600,
+            "reasoning_buffer_ttl_seconds": 900,
+            "selection_state_ttl_seconds": 1800,
+            "turn_preview_ttl_seconds": 900,
+            "progress_stream_ttl_seconds": 900,
+            "oversize_warning_ttl_seconds": 3600,
+            "update_id_persist_interval_seconds": 60,
+        },
         "command_registration": {
             "enabled": True,
             "scopes": [
@@ -536,6 +572,14 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "turn_stall_poll_interval_seconds": 2,
         "turn_stall_recovery_min_interval_seconds": 10,
         "request_timeout": None,
+        "client": {
+            "max_message_bytes": 50 * 1024 * 1024,
+            "oversize_preview_bytes": 4096,
+            "max_oversize_drain_bytes": 100 * 1024 * 1024,
+            "restart_backoff_initial_seconds": 0.5,
+            "restart_backoff_max_seconds": 30.0,
+            "restart_backoff_jitter_ratio": 0.1,
+        },
         "prompts": {
             "doc_chat": {
                 "max_chars": 12000,
@@ -717,6 +761,16 @@ class AppServerPromptsConfig:
 
 
 @dataclasses.dataclass
+class AppServerClientConfig:
+    max_message_bytes: int
+    oversize_preview_bytes: int
+    max_oversize_drain_bytes: int
+    restart_backoff_initial_seconds: float
+    restart_backoff_max_seconds: float
+    restart_backoff_jitter_ratio: float
+
+
+@dataclasses.dataclass
 class AppServerConfig:
     command: List[str]
     state_root: Path
@@ -728,6 +782,7 @@ class AppServerConfig:
     turn_stall_poll_interval_seconds: Optional[float]
     turn_stall_recovery_min_interval_seconds: Optional[float]
     request_timeout: Optional[float]
+    client: AppServerClientConfig
     prompts: AppServerPromptsConfig
 
 
@@ -1121,6 +1176,25 @@ def _parse_app_server_config(
     )
     if request_timeout is not None and request_timeout <= 0:
         request_timeout = None
+    client_defaults = defaults.get("client")
+    client_defaults = client_defaults if isinstance(client_defaults, dict) else {}
+    client_cfg_raw = cfg.get("client")
+    client_cfg = client_cfg_raw if isinstance(client_cfg_raw, dict) else {}
+
+    def _client_int(key: str) -> int:
+        value = client_cfg.get(key, client_defaults.get(key))
+        value = int(value) if value is not None else 0
+        if value <= 0:
+            value = int(client_defaults.get(key) or 0)
+        return value
+
+    def _client_float(key: str, *, allow_zero: bool = False) -> float:
+        value = client_cfg.get(key, client_defaults.get(key))
+        value = float(value) if value is not None else 0.0
+        if value < 0 or (not allow_zero and value <= 0):
+            value = float(client_defaults.get(key) or 0.0)
+        return value
+
     prompt_defaults = defaults.get("prompts")
     prompts = _parse_app_server_prompts_config(cfg.get("prompts"), prompt_defaults)
     return AppServerConfig(
@@ -1134,6 +1208,18 @@ def _parse_app_server_config(
         turn_stall_poll_interval_seconds=turn_stall_poll_interval_seconds,
         turn_stall_recovery_min_interval_seconds=turn_stall_recovery_min_interval_seconds,
         request_timeout=request_timeout,
+        client=AppServerClientConfig(
+            max_message_bytes=_client_int("max_message_bytes"),
+            oversize_preview_bytes=_client_int("oversize_preview_bytes"),
+            max_oversize_drain_bytes=_client_int("max_oversize_drain_bytes"),
+            restart_backoff_initial_seconds=_client_float(
+                "restart_backoff_initial_seconds"
+            ),
+            restart_backoff_max_seconds=_client_float("restart_backoff_max_seconds"),
+            restart_backoff_jitter_ratio=_client_float(
+                "restart_backoff_jitter_ratio", allow_zero=True
+            ),
+        ),
         prompts=prompts,
     )
 
@@ -1663,6 +1749,39 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
         if key in app_server_cfg and app_server_cfg.get(key) is not None:
             if not isinstance(app_server_cfg.get(key), (int, float)):
                 raise ConfigError(f"app_server.{key} must be a number or null")
+    client_cfg = app_server_cfg.get("client")
+    if client_cfg is not None:
+        if not isinstance(client_cfg, dict):
+            raise ConfigError("app_server.client must be a mapping if provided")
+        for key in (
+            "max_message_bytes",
+            "oversize_preview_bytes",
+            "max_oversize_drain_bytes",
+        ):
+            if key in client_cfg:
+                value = client_cfg.get(key)
+                if not isinstance(value, int):
+                    raise ConfigError(f"app_server.client.{key} must be an integer")
+                if value <= 0:
+                    raise ConfigError(f"app_server.client.{key} must be > 0")
+        for key in (
+            "restart_backoff_initial_seconds",
+            "restart_backoff_max_seconds",
+            "restart_backoff_jitter_ratio",
+        ):
+            if key in client_cfg:
+                value = client_cfg.get(key)
+                if not isinstance(value, (int, float)):
+                    raise ConfigError(
+                        f"app_server.client.{key} must be a number if provided"
+                    )
+                if key == "restart_backoff_jitter_ratio":
+                    if value < 0:
+                        raise ConfigError(
+                            "app_server.client.restart_backoff_jitter_ratio must be >= 0"
+                        )
+                elif value <= 0:
+                    raise ConfigError(f"app_server.client.{key} must be > 0")
     prompts = app_server_cfg.get("prompts")
     if prompts is not None:
         if not isinstance(prompts, dict):
@@ -2322,6 +2441,29 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(f"telegram_bot.shell.{key} must be an integer")
             if isinstance(value, int) and value <= 0:
                 raise ConfigError(f"telegram_bot.shell.{key} must be greater than 0")
+    cache_cfg = telegram_cfg.get("cache")
+    if cache_cfg is not None and not isinstance(cache_cfg, dict):
+        raise ConfigError("telegram_bot.cache must be a mapping if provided")
+    if isinstance(cache_cfg, dict):
+        for key in (
+            "cleanup_interval_seconds",
+            "coalesce_buffer_ttl_seconds",
+            "media_batch_buffer_ttl_seconds",
+            "model_pending_ttl_seconds",
+            "pending_approval_ttl_seconds",
+            "pending_question_ttl_seconds",
+            "reasoning_buffer_ttl_seconds",
+            "selection_state_ttl_seconds",
+            "turn_preview_ttl_seconds",
+            "progress_stream_ttl_seconds",
+            "oversize_warning_ttl_seconds",
+            "update_id_persist_interval_seconds",
+        ):
+            value = cache_cfg.get(key)
+            if value is not None and not isinstance(value, (int, float)):
+                raise ConfigError(f"telegram_bot.cache.{key} must be a number")
+            if isinstance(value, (int, float)) and value <= 0:
+                raise ConfigError(f"telegram_bot.cache.{key} must be > 0")
     command_reg_cfg = telegram_cfg.get("command_registration")
     if command_reg_cfg is not None and not isinstance(command_reg_cfg, dict):
         raise ConfigError("telegram_bot.command_registration must be a mapping")

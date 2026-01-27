@@ -1448,6 +1448,12 @@ class Engine:
             turn_stall_timeout_seconds=config.turn_stall_timeout_seconds,
             turn_stall_poll_interval_seconds=config.turn_stall_poll_interval_seconds,
             turn_stall_recovery_min_interval_seconds=config.turn_stall_recovery_min_interval_seconds,
+            max_message_bytes=config.client.max_message_bytes,
+            oversize_preview_bytes=config.client.oversize_preview_bytes,
+            max_oversize_drain_bytes=config.client.max_oversize_drain_bytes,
+            restart_backoff_initial_seconds=config.client.restart_backoff_initial_seconds,
+            restart_backoff_max_seconds=config.client.restart_backoff_max_seconds,
+            restart_backoff_jitter_ratio=config.client.restart_backoff_jitter_ratio,
         )
 
     def _ensure_app_server_supervisor(
