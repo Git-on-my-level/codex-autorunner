@@ -1889,11 +1889,12 @@ async def _close_all_clients() -> None:
     This is primarily used in tests to avoid pending restart tasks keeping
     subprocess transports alive when the event loop shuts down.
     """
+    logger = logging.getLogger(__name__)
     for client in list(_CLIENT_INSTANCES):
         try:
             await client.close()
         except Exception as exc:
-            self._logger.debug("Failed to close client: %s", exc)
+            logger.debug("Failed to close client: %s", exc)
             continue
 
 
