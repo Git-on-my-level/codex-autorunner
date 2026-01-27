@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Optional, Tuple
 
 from ..agents.registry import validate_agent_id
-from .models import TicketFrontmatter, normalize_requires
+from .models import TicketFrontmatter
 
 
 def _as_optional_str(value: Any) -> Optional[str]:
@@ -52,16 +52,12 @@ def lint_ticket_frontmatter(
     title = _as_optional_str(data.get("title"))
     goal = _as_optional_str(data.get("goal"))
 
-    requires = normalize_requires(
-        data.get("requires") if isinstance(data, dict) else None
-    )
-
     # Optional model/reasoning overrides.
     model = _as_optional_str(data.get("model"))
     reasoning = _as_optional_str(data.get("reasoning"))
 
     # Remove normalized keys from extra.
-    for key in ("agent", "done", "title", "goal", "requires", "model", "reasoning"):
+    for key in ("agent", "done", "title", "goal", "model", "reasoning"):
         extra.pop(key, None)
 
     if errors:
@@ -75,7 +71,6 @@ def lint_ticket_frontmatter(
             done=done,
             title=title,
             goal=goal,
-            requires=requires,
             model=model,
             reasoning=reasoning,
             extra=extra,
