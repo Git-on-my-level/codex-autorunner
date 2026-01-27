@@ -993,6 +993,20 @@ class TelegramStateStore:
                 )
                 """
             )
+            # Ensure legacy DBs gain the newer columns before creating indexes that
+            # reference them. The ALTERs are idempotent and cheap.
+            for col, col_type in [
+                ("next_attempt_at", "TEXT"),
+                ("operation", "TEXT"),
+                ("message_id", "INTEGER"),
+                ("outbox_key", "TEXT"),
+            ]:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE telegram_outbox ADD COLUMN {col} {col_type}"
+                    )
+                except sqlite3.OperationalError:
+                    pass
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_tg_outbox_created
@@ -1006,18 +1020,6 @@ class TelegramStateStore:
                     WHERE outbox_key IS NOT NULL
                 """
             )
-            for col, col_type in [
-                ("next_attempt_at", "TEXT"),
-                ("operation", "TEXT"),
-                ("message_id", "INTEGER"),
-                ("outbox_key", "TEXT"),
-            ]:
-                try:
-                    conn.execute(
-                        f"ALTER TABLE telegram_outbox ADD COLUMN {col} {col_type}"
-                    )
-                except sqlite3.OperationalError:
-                    pass
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS telegram_pending_voice (

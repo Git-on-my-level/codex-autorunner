@@ -19,11 +19,13 @@ from .core.config import (
     CONFIG_FILENAME,
     ConfigError,
     HubConfig,
+    RepoConfig,
     _normalize_base_path,
+    derive_repo_config,
     find_nearest_hub_config_path,
     load_hub_config,
 )
-from .core.engine import Engine, LockError, clear_stale_lock, doctor
+from .core.engine import DoctorReport, Engine, LockError, clear_stale_lock, doctor
 from .core.git_utils import GitError, run_git
 from .core.hub import HubSupervisor
 from .core.logging_utils import log_event, setup_rotating_logger
@@ -38,12 +40,14 @@ from .core.usage import (
 )
 from .core.utils import RepoNotFoundError, default_editor, find_repo_root
 from .integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
+from .integrations.telegram.doctor import telegram_doctor_checks
 from .integrations.telegram.service import (
     TelegramBotConfig,
     TelegramBotConfigError,
     TelegramBotLockError,
     TelegramBotService,
 )
+from .integrations.telegram.state import TelegramStateStore
 from .manifest import load_manifest
 from .server import create_hub_app
 from .voice import VoiceConfig
@@ -778,7 +782,19 @@ def doctor_cmd(
 ):
     """Validate repo or hub setup."""
     try:
-        report = doctor(repo or Path.cwd())
+        start_path = repo or Path.cwd()
+        report = doctor(start_path)
+
+        hub_config = load_hub_config(start_path)
+        repo_config: Optional[RepoConfig] = None
+        try:
+            repo_root = find_repo_root(start_path)
+            repo_config = derive_repo_config(hub_config, repo_root)
+        except RepoNotFoundError:
+            repo_config = None
+
+        telegram_checks = telegram_doctor_checks(repo_config or hub_config)
+        report = DoctorReport(checks=report.checks + telegram_checks)
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
     if json_output:
@@ -1022,8 +1038,35 @@ def telegram_health(
         asyncio.run(_run())
     except TelegramAPIError as exc:
         _raise_exit(f"Telegram health check failed: {exc}", cause=exc)
-    except Exception as exc:
-        _raise_exit(f"Telegram health check failed: {exc}", cause=exc)
+
+
+@telegram_app.command("state-check")
+def telegram_state_check(
+    path: Optional[Path] = typer.Option(None, "--path", help="Repo or hub root path"),
+):
+    """Open the Telegram state DB and ensure schema migrations apply."""
+    try:
+        config = load_hub_config(path or Path.cwd())
+    except ConfigError as exc:
+        _raise_exit(str(exc), cause=exc)
+    telegram_cfg = TelegramBotConfig.from_raw(
+        config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
+        root=config.root,
+        agent_binaries=getattr(config, "agents", None)
+        and {name: agent.binary for name, agent in config.agents.items()},
+    )
+    if not telegram_cfg.enabled:
+        _raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
+
+    try:
+        store = TelegramStateStore(
+            telegram_cfg.state_file,
+            default_approval_mode=telegram_cfg.defaults.approval_mode,
+        )
+        # This will open the DB and apply schema/migrations.
+        store._connection_sync()  # type: ignore[attr-defined]
+    except Exception as exc:  # pragma: no cover - defensive runtime check
+        _raise_exit(f"Telegram state check failed: {exc}", cause=exc)
 
 
 @app.command()
