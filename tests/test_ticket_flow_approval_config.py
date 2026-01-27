@@ -51,7 +51,7 @@ class _CaptureSupervisor:
         self.client = _DummyClient()
 
     async def get_client(self, workspace_root: Path):
-        return SimpleNamespace(client=self.client)
+        return self.client
 
 
 @pytest.mark.asyncio
@@ -95,7 +95,7 @@ async def test_agent_pool_uses_yolo_policy_for_ticket_flow(monkeypatch, tmp_path
     supervisor = _CaptureSupervisor()
 
     async def _dummy_get_client(_self, workspace_root):
-        return SimpleNamespace(client=supervisor.client)
+        return supervisor.client
 
     monkeypatch.setattr(
         WorkspaceAppServerSupervisor,

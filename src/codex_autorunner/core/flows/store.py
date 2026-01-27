@@ -436,6 +436,12 @@ class FlowStore:
             return None
         return self._row_to_flow_artifact(row)
 
+    def delete_flow_run(self, run_id: str) -> bool:
+        """Delete a flow run and its events/artifacts (cascading)."""
+        with self.transaction() as conn:
+            cursor = conn.execute("DELETE FROM flow_runs WHERE id = ?", (run_id,))
+            return cursor.rowcount > 0
+
     def _row_to_flow_run(self, row: sqlite3.Row) -> FlowRunRecord:
         return FlowRunRecord(
             id=row["id"],

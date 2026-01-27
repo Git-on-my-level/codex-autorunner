@@ -4,15 +4,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from .constants import COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH, STATUS_ICONS
 from .helpers import _truncate_text
-
-STATUS_ICONS = {
-    "running": "▸",
-    "update": "↻",
-    "done": "✓",
-    "fail": "✗",
-    "warn": "⚠",
-}
 
 
 def format_elapsed(seconds: float) -> str:
@@ -45,8 +38,8 @@ class TurnProgressTracker:
     agent: str
     model: str
     label: str
-    max_actions: int
-    max_output_chars: int
+    max_actions: int = COMPACT_MAX_ACTIONS
+    max_output_chars: int = COMPACT_MAX_TEXT_LENGTH
     actions: list[ProgressAction] = field(default_factory=list)
     step: int = 0
     last_output_index: Optional[int] = None

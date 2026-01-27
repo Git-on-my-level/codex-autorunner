@@ -1,10 +1,15 @@
-"""Message / inbox endpoints.
+"""Inbox endpoints for agent dispatches and human replies.
 
 These endpoints provide a thin wrapper over the durable on-disk ticket_flow
-handoff history (agent -> human) and reply history (human -> agent).
+dispatch history (agent -> human) and reply history (human -> agent).
+
+Domain terminology:
+- Dispatch: Agent-to-human communication (mode: "notify" for FYI, "pause" for handoff)
+- Reply: Human-to-agent response
+- Handoff: A dispatch with mode="pause" that requires human action
 
 The UI contract is intentionally filesystem-backed:
-* Agent messages come from `.codex-autorunner/runs/<run_id>/handoff_history/<seq>/`.
+* Dispatches come from `.codex-autorunner/runs/<run_id>/dispatch_history/<seq>/`.
 * Human replies are written to USER_REPLY.md + reply/* and immediately archived
   into `.codex-autorunner/runs/<run_id>/reply_history/<seq>/`.
 """
@@ -21,13 +26,12 @@ from urllib.parse import quote
 
 import yaml
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
 
 from ..core.flows.models import FlowRunRecord, FlowRunStatus
 from ..core.flows.store import FlowStore
 from ..core.utils import find_repo_root
 from ..tickets.files import safe_relpath
-from ..tickets.outbox import parse_user_message, resolve_outbox_paths
+from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..tickets.replies import (
     dispatch_reply,
     ensure_reply_dirs,
@@ -95,30 +99,31 @@ def _iter_seq_dirs(history_dir: Path) -> list[tuple[int, Path]]:
     return out
 
 
-def _collect_handoff_history(
+def _collect_dispatch_history(
     *, repo_root: Path, run_id: str, record_input: dict[str, Any]
 ) -> list[dict[str, Any]]:
+    """Collect all dispatches from the dispatch history directory."""
     workspace_root = Path(record_input.get("workspace_root") or repo_root)
     runs_dir = Path(record_input.get("runs_dir") or ".codex-autorunner/runs")
     outbox_paths = resolve_outbox_paths(
         workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
     )
     history: list[dict[str, Any]] = []
-    for seq, entry_dir in reversed(_iter_seq_dirs(outbox_paths.handoff_history_dir)):
-        msg_path = entry_dir / "USER_MESSAGE.md"
-        msg, errors = parse_user_message(msg_path)
+    for seq, entry_dir in reversed(_iter_seq_dirs(outbox_paths.dispatch_history_dir)):
+        dispatch_path = entry_dir / "DISPATCH.md"
+        dispatch, errors = parse_dispatch(dispatch_path)
         files: list[dict[str, str]] = []
         try:
             for child in sorted(entry_dir.iterdir(), key=lambda p: p.name):
                 try:
                     if child.name.startswith("."):
                         continue
-                    if child.name == "USER_MESSAGE.md":
+                    if child.name == "DISPATCH.md":
                         continue
                     if child.is_dir():
                         continue
                     rel = child.name
-                    url = f"/api/flows/{run_id}/handoff_history/{seq:04d}/{quote(rel)}"
+                    url = f"api/flows/{run_id}/dispatch_history/{seq:04d}/{quote(rel)}"
                     size = None
                     try:
                         size = child.stat().st_size
@@ -129,20 +134,21 @@ def _collect_handoff_history(
                     continue
         except OSError:
             files = []
-        created_at = _timestamp(msg_path) or _timestamp(entry_dir)
+        created_at = _timestamp(dispatch_path) or _timestamp(entry_dir)
         history.append(
             {
                 "seq": seq,
                 "dir": safe_relpath(entry_dir, workspace_root),
                 "created_at": created_at,
-                "message": (
+                "dispatch": (
                     {
-                        "mode": msg.mode,
-                        "title": msg.title,
-                        "body": msg.body,
-                        "extra": msg.extra,
+                        "mode": dispatch.mode,
+                        "title": dispatch.title,
+                        "body": dispatch.body,
+                        "extra": dispatch.extra,
+                        "is_handoff": dispatch.is_handoff,
                     }
-                    if msg
+                    if dispatch
                     else None
                 ),
                 "errors": errors,
@@ -179,7 +185,7 @@ def _collect_reply_history(
                     if child.is_dir():
                         continue
                     rel = child.name
-                    url = f"/api/messages/{run_id}/reply_history/{seq:04d}/{quote(rel)}"
+                    url = f"api/flows/{run_id}/reply_history/{seq:04d}/{quote(rel)}"
                     size = None
                     try:
                         size = child.stat().st_size
@@ -217,7 +223,7 @@ def _ticket_state_snapshot(record: FlowRunRecord) -> dict[str, Any]:
         "current_ticket",
         "total_turns",
         "ticket_turns",
-        "outbox_seq",
+        "dispatch_seq",
         "reply_seq",
         "reason",
         "status",
@@ -248,11 +254,11 @@ def build_messages_routes() -> APIRouter:
             return {"active": False}
 
         # Walk paused runs (newest first as returned by FlowStore) until we find
-        # one with at least one archived handoff message. This avoids hiding
+        # one with at least one archived dispatch. This avoids hiding
         # older paused runs that do have history when the newest paused run
-        # hasn't yet written USER_MESSAGE.md.
+        # hasn't yet written DISPATCH.md.
         for record in paused:
-            history = _collect_handoff_history(
+            history = _collect_dispatch_history(
                 repo_root=repo_root,
                 run_id=str(record.id),
                 record_input=dict(record.input_data or {}),
@@ -262,14 +268,13 @@ def build_messages_routes() -> APIRouter:
             latest = history[0]
             return {
                 "active": True,
-                "repo_id": request.app.state.repo_id,
                 "run_id": record.id,
                 "flow_type": record.flow_type,
                 "status": record.status.value,
                 "seq": latest.get("seq"),
-                "message": latest.get("message"),
+                "dispatch": latest.get("dispatch"),
                 "files": latest.get("files"),
-                "open_url": f"/?tab=messages&run_id={record.id}",
+                "open_url": f"?tab=inbox&run_id={record.id}",
             }
 
         return {"active": False}
@@ -279,30 +284,30 @@ def build_messages_routes() -> APIRouter:
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
-            return {"threads": []}
+            return {"conversations": []}
         store = FlowStore(db_path)
         try:
             store.initialize()
         except Exception:
-            return {"threads": []}
+            return {"conversations": []}
         runs = store.list_flow_runs(flow_type="ticket_flow")
-        threads: list[dict[str, Any]] = []
+        conversations: list[dict[str, Any]] = []
         for record in runs:
             record_input = dict(record.input_data or {})
-            history = _collect_handoff_history(
+            dispatch_history = _collect_dispatch_history(
                 repo_root=repo_root,
                 run_id=str(record.id),
                 record_input=record_input,
             )
-            if not history:
+            if not dispatch_history:
                 continue
-            latest = history[0]
+            latest = dispatch_history[0]
             reply_history = _collect_reply_history(
                 repo_root=repo_root,
                 run_id=str(record.id),
                 record_input=record_input,
             )
-            threads.append(
+            conversations.append(
                 {
                     "run_id": record.id,
                     "flow_type": record.flow_type,
@@ -312,25 +317,26 @@ def build_messages_routes() -> APIRouter:
                     "finished_at": record.finished_at,
                     "current_step": record.current_step,
                     "latest": latest,
-                    "handoff_count": len(history),
+                    "dispatch_count": len(dispatch_history),
                     "reply_count": len(reply_history),
                     "ticket_state": _ticket_state_snapshot(record),
-                    "open_url": f"/?tab=messages&run_id={record.id}",
+                    "open_url": f"?tab=inbox&run_id={record.id}",
                 }
             )
-        return {"threads": threads}
+        return {"conversations": conversations}
 
     @router.get("/api/messages/threads/{run_id}")
     def get_thread(run_id: str):
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
+        empty_response = {
+            "dispatch_history": [],
+            "reply_history": [],
+            "dispatch_count": 0,
+            "reply_count": 0,
+        }
         if not db_path.exists():
-            return {
-                "handoff_history": [],
-                "reply_history": [],
-                "handoff_count": 0,
-                "reply_count": 0,
-            }
+            return empty_response
         store = _load_store_or_404(db_path)
         try:
             record = store.get_flow_run(run_id)
@@ -340,9 +346,9 @@ def build_messages_routes() -> APIRouter:
             except Exception:
                 pass
         if not record:
-            raise HTTPException(status_code=404, detail="Run not found")
+            return empty_response
         input_data = dict(record.input_data or {})
-        handoff_history = _collect_handoff_history(
+        dispatch_history = _collect_dispatch_history(
             repo_root=repo_root, run_id=run_id, record_input=input_data
         )
         reply_history = _collect_reply_history(
@@ -359,48 +365,12 @@ def build_messages_routes() -> APIRouter:
                 "current_step": record.current_step,
                 "error_message": record.error_message,
             },
-            "handoff_history": handoff_history,
+            "dispatch_history": dispatch_history,
             "reply_history": reply_history,
-            "handoff_count": len(handoff_history),
+            "dispatch_count": len(dispatch_history),
             "reply_count": len(reply_history),
             "ticket_state": _ticket_state_snapshot(record),
         }
-
-    @router.get("/api/messages/{run_id}/reply_history/{seq}/{file_path:path}")
-    def get_reply_history_file(run_id: str, seq: str, file_path: str):
-        repo_root = find_repo_root()
-        db_path = _flows_db_path(repo_root)
-        if not db_path.exists():
-            raise HTTPException(status_code=404, detail="No flows database")
-        store = _load_store_or_404(db_path)
-        try:
-            record = store.get_flow_run(run_id)
-        finally:
-            try:
-                store.close()
-            except Exception:
-                pass
-        if not record:
-            raise HTTPException(status_code=404, detail="Run not found")
-
-        if not (len(seq) == 4 and seq.isdigit()):
-            raise HTTPException(status_code=400, detail="Invalid seq")
-        if ".." in file_path or file_path.startswith("/"):
-            raise HTTPException(status_code=400, detail="Invalid file path")
-        filename = os.path.basename(file_path)
-        if filename != file_path:
-            raise HTTPException(status_code=400, detail="Invalid file path")
-
-        input_data = dict(record.input_data or {})
-        workspace_root = Path(input_data.get("workspace_root") or repo_root)
-        runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
-        reply_paths = resolve_reply_paths(
-            workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
-        )
-        target = reply_paths.reply_history_dir / seq / filename
-        if not target.exists() or not target.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
-        return FileResponse(path=str(target), filename=filename)
 
     @router.post("/api/messages/{run_id}/reply")
     async def post_reply(

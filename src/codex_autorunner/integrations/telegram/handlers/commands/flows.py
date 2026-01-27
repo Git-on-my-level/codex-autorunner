@@ -113,7 +113,7 @@ requires:
   - .codex-autorunner/ISSUE.md
 ---
 
-Create SPEC.md and additional tickets under .codex-autorunner/tickets/. Then write a pause USER_MESSAGE for review.
+Create SPEC.md and additional tickets under .codex-autorunner/tickets/. Then write a pause DISPATCH.md for review.
 """,
                     encoding="utf-8",
                 )

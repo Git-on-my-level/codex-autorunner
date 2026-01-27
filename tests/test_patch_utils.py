@@ -21,10 +21,12 @@ def test_normalize_patch_text_default_target_adds_strip_prefix():
         ]
     )
     normalized, targets = normalize_patch_text(
-        patch_text, default_target="docs/TODO.md"
+        patch_text, default_target=".codex-autorunner/workspace/active_context.md"
     )
 
-    assert normalized.startswith("--- a/docs/TODO.md\n+++ b/docs/TODO.md\n")
+    assert normalized.startswith(
+        "--- a/.codex-autorunner/workspace/active_context.md\n+++ b/.codex-autorunner/workspace/active_context.md\n"
+    )
     assert infer_patch_strip(targets) == 1
 
 
@@ -32,7 +34,7 @@ def test_normalize_patch_text_apply_patch_format_infers_strip():
     patch_text = "\n".join(
         [
             "*** Begin Patch",
-            "*** Update File: docs/PROGRESS.md",
+            "*** Update File: .codex-autorunner/workspace/decisions.md",
             "@@ -1 +1 @@",
             "-old",
             "+new",
@@ -41,7 +43,9 @@ def test_normalize_patch_text_apply_patch_format_infers_strip():
     )
     normalized, targets = normalize_patch_text(patch_text)
 
-    assert normalized.startswith("--- a/docs/PROGRESS.md\n+++ b/docs/PROGRESS.md\n")
+    assert normalized.startswith(
+        "--- a/.codex-autorunner/workspace/decisions.md\n+++ b/.codex-autorunner/workspace/decisions.md\n"
+    )
     assert infer_patch_strip(targets) == 1
 
 
@@ -56,7 +60,11 @@ def test_apply_patch_file_reports_missing_patch_binary(
     patch_path.write_text("", encoding="utf-8")
 
     with pytest.raises(PatchError, match="patch command not found"):
-        apply_patch_file(tmp_path, patch_path, ["a/docs/TODO.md"])
+        apply_patch_file(
+            tmp_path,
+            patch_path,
+            ["a/.codex-autorunner/workspace/active_context.md"],
+        )
 
 
 def test_preview_patch_passes_timeout(tmp_path: Path, monkeypatch) -> None:
@@ -68,8 +76,8 @@ def test_preview_patch_passes_timeout(tmp_path: Path, monkeypatch) -> None:
     result = preview_patch(
         tmp_path,
         "@@ -1 +1 @@\n-old\n+new",
-        ["a/docs/TODO.md"],
-        base_content={"docs/TODO.md": "current"},
+        ["a/.codex-autorunner/workspace/active_context.md"],
+        base_content={".codex-autorunner/workspace/active_context.md": "current"},
     )
 
-    assert result["docs/TODO.md"] == "current"
+    assert result[".codex-autorunner/workspace/active_context.md"] == "current"

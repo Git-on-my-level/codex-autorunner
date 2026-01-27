@@ -139,6 +139,7 @@ def build_system_routes() -> APIRouter:
         # Determine URL
         repo_url = "https://github.com/Git-on-my-level/codex-autorunner.git"
         repo_ref = "main"
+        skip_checks = False
         if config and isinstance(config, HubConfig):
             configured_url = getattr(config, "update_repo_url", None)
             if configured_url:
@@ -146,6 +147,9 @@ def build_system_routes() -> APIRouter:
             configured_ref = getattr(config, "update_repo_ref", None)
             if configured_ref:
                 repo_ref = configured_ref
+            skip_checks = bool(getattr(config, "update_skip_checks", False))
+        elif config is not None:
+            skip_checks = bool(getattr(config, "update_skip_checks", False))
 
         home_dot_car = Path.home() / ".codex-autorunner"
         update_dir = home_dot_car / "update_cache"
@@ -165,6 +169,7 @@ def build_system_routes() -> APIRouter:
                 update_dir=update_dir,
                 logger=logger,
                 update_target=update_target,
+                skip_checks=skip_checks,
             )
             return {
                 "status": "ok",

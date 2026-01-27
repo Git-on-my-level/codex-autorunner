@@ -46,7 +46,8 @@ class DummyBackend(AgentBackend):
         )
 
     async def stream_events(self, session_id: str):
-        pass
+        if False:
+            yield None
 
     async def interrupt(self, session_id: str):
         pass
@@ -112,8 +113,12 @@ async def test_backend_async_interface_methods():
     import inspect
 
     assert inspect.iscoroutinefunction(backend.start_session)
-    assert inspect.iscoroutinefunction(backend.run_turn)
-    assert inspect.iscoroutinefunction(backend.stream_events)
+    assert inspect.iscoroutinefunction(backend.run_turn) or inspect.isasyncgenfunction(
+        backend.run_turn
+    )
+    assert inspect.iscoroutinefunction(
+        backend.stream_events
+    ) or inspect.isasyncgenfunction(backend.stream_events)
     assert inspect.iscoroutinefunction(backend.interrupt)
     assert inspect.iscoroutinefunction(backend.final_messages)
 

@@ -15,14 +15,14 @@ function ensureComposeEnterHint(): void {
   const inputs = Array.from(document.querySelectorAll(COMPOSE_INPUT_SELECTOR));
   for (const input of inputs) {
     if (!(input instanceof HTMLTextAreaElement)) continue;
-    (input as any).enterKeyHint = "enter";
+    (input as HTMLTextAreaElement & { enterKeyHint: string }).enterKeyHint = "enter";
     input.setAttribute("enterkeyhint", "enter");
   }
 }
 
 function isVisible(el: Element | null): boolean {
   if (!el) return false;
-  return Boolean((el as any).offsetParent || el.getClientRects().length);
+  return Boolean((el as HTMLElement).offsetParent || el.getClientRects().length);
 }
 
 function isComposeFocused(): boolean {
@@ -47,7 +47,7 @@ function updateViewportInset(): void {
   }
   let bottom = 0;
   let top = 0;
-  const vv = (window as any).visualViewport;
+  const vv = window.visualViewport;
   if (vv) {
     const layoutHeight = document.documentElement?.clientHeight || viewportHeight;
     const vvOffset = Math.max(0, vv.offsetTop);
@@ -96,7 +96,7 @@ function updateMobileControlsOffset(): void {
   if (!textInput || !mobileControls) return;
 
   // Get actual rendered height of text input panel
-  const textInputHeight = (textInput as any).offsetHeight || 0;
+  const textInputHeight = textInput.offsetHeight || 0;
 
   // Add a small gap between controls and text input
   const offset = textInputHeight + 4;
@@ -106,7 +106,7 @@ function updateMobileControlsOffset(): void {
   );
 
   // Also set total height for padding-bottom calculation
-  const controlsHeight = (mobileControls as any).offsetHeight || 0;
+  const controlsHeight = mobileControls.offsetHeight || 0;
   const totalHeight = textInputHeight + controlsHeight + 8;
   document.documentElement.style.setProperty(
     "--compose-total-height",
@@ -115,9 +115,9 @@ function updateMobileControlsOffset(): void {
 }
 
 function updateDocComposeOffset(): void {
-  const composePanel = document.querySelector("#docs .doc-chat-panel") as HTMLElement | null;
+  const composePanel = document.querySelector("#workspace .doc-chat-panel, #workspace .ticket-chat-panel") as HTMLElement | null;
   if (!composePanel || !isVisible(composePanel)) return;
-  const composeHeight = (composePanel as any).offsetHeight || 0;
+  const composeHeight = composePanel.offsetHeight || 0;
   if (!composeHeight) return;
   const offset = composeHeight + 8;
   document.documentElement.style.setProperty(

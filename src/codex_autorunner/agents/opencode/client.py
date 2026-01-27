@@ -517,35 +517,35 @@ class OpenCodeClient:
 
     async def fetch_openapi_spec(self) -> dict[str, Any]:
         """Fetch OpenAPI spec from /doc endpoint for capability negotiation."""
-        async with self._client.stream("GET", "/doc") as response:
-            response.raise_for_status()
-            content = response.content
-            try:
-                spec = json.loads(content) if content else {}
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "opencode.openapi.fetched",
-                    paths=len(spec.get("paths", {})) if isinstance(spec, dict) else 0,
-                    has_components=(
-                        "components" in spec if isinstance(spec, dict) else False
-                    ),
-                )
-                return spec
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "opencode.openapi.parse_failed",
-                    exc=exc,
-                )
-                raise OpenCodeProtocolError(
-                    f"Failed to parse OpenAPI spec: {exc}",
-                    status_code=response.status_code,
-                    content_type=(
-                        response.headers.get("content-type") if response else None
-                    ),
-                ) from exc
+        response = await self._client.get("/doc")
+        response.raise_for_status()
+        content = response.content
+        try:
+            spec = json.loads(content) if content else {}
+            log_event(
+                self._logger,
+                logging.INFO,
+                "opencode.openapi.fetched",
+                paths=len(spec.get("paths", {})) if isinstance(spec, dict) else 0,
+                has_components=(
+                    "components" in spec if isinstance(spec, dict) else False
+                ),
+            )
+            return spec
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "opencode.openapi.parse_failed",
+                exc=exc,
+            )
+            raise OpenCodeProtocolError(
+                f"Failed to parse OpenAPI spec: {exc}",
+                status_code=response.status_code,
+                content_type=(
+                    response.headers.get("content-type") if response else None
+                ),
+            ) from exc
 
     def has_endpoint(
         self, openapi_spec: dict[str, Any], method: str, path: str

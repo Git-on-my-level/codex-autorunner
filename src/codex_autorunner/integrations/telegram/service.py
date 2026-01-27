@@ -46,21 +46,9 @@ from .config import (
     TelegramMediaCandidate,
 )
 from .constants import (
-    CACHE_CLEANUP_INTERVAL_SECONDS,
-    COALESCE_BUFFER_TTL_SECONDS,
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
     DEFAULT_WORKSPACE_STATE_ROOT,
-    MEDIA_BATCH_BUFFER_TTL_SECONDS,
-    MODEL_PENDING_TTL_SECONDS,
-    OVERSIZE_WARNING_TTL_SECONDS,
-    PENDING_APPROVAL_TTL_SECONDS,
-    PENDING_QUESTION_TTL_SECONDS,
-    PROGRESS_STREAM_TTL_SECONDS,
     QUEUED_PLACEHOLDER_TEXT,
-    REASONING_BUFFER_TTL_SECONDS,
-    SELECTION_STATE_TTL_SECONDS,
-    TURN_PREVIEW_TTL_SECONDS,
-    UPDATE_ID_PERSIST_INTERVAL_SECONDS,
     TurnKey,
 )
 from .dispatch import dispatch_update
@@ -110,11 +98,11 @@ def _build_opencode_supervisor(
     *,
     logger: logging.Logger,
 ) -> Optional[OpenCodeSupervisor]:
-    raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
+    opencode_command = config.opencode_command or None
     opencode_binary = config.agent_binaries.get("opencode")
 
     supervisor = build_opencode_supervisor(
-        opencode_command=[raw_command] if raw_command else None,
+        opencode_command=opencode_command,
         opencode_binary=opencode_binary,
         workspace_root=config.root,
         logger=logger,
@@ -178,6 +166,8 @@ class TelegramBotService(
         housekeeping_config: Optional[HousekeepingConfig] = None,
         update_repo_url: Optional[str] = None,
         update_repo_ref: Optional[str] = None,
+        update_skip_checks: bool = False,
+        app_server_auto_restart: Optional[bool] = None,
     ) -> None:
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
@@ -185,6 +175,8 @@ class TelegramBotService(
         self._manifest_path = manifest_path
         self._update_repo_url = update_repo_url
         self._update_repo_ref = update_repo_ref
+        self._update_skip_checks = update_skip_checks
+        self._app_server_auto_restart = app_server_auto_restart
         self._allowlist = config.allowlist()
         self._store = TelegramStateStore(
             config.state_file, default_approval_mode=config.defaults.approval_mode
@@ -198,6 +190,7 @@ class TelegramBotService(
             approval_handler=self._handle_approval_request,
             notification_handler=self._handle_app_server_notification,
             logger=self._logger,
+            auto_restart=self._app_server_auto_restart,
             max_handles=config.app_server_max_handles,
             idle_ttl_seconds=config.app_server_idle_ttl_seconds,
         )
@@ -917,68 +910,75 @@ class TelegramBotService(
                 self._pending_questions.pop(key, None)
 
     async def _cache_cleanup_loop(self) -> None:
-        interval = max(CACHE_CLEANUP_INTERVAL_SECONDS, 1.0)
+        interval = max(self._config.cache.cleanup_interval_seconds, 1.0)
         while True:
             await asyncio.sleep(interval)
             self._evict_expired_cache_entries(
-                "reasoning_buffers", REASONING_BUFFER_TTL_SECONDS
-            )
-            self._evict_expired_cache_entries("turn_preview", TURN_PREVIEW_TTL_SECONDS)
-            self._evict_expired_cache_entries(
-                "progress_trackers", PROGRESS_STREAM_TTL_SECONDS
+                "reasoning_buffers", self._config.cache.reasoning_buffer_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "oversize_warnings", OVERSIZE_WARNING_TTL_SECONDS
+                "turn_preview", self._config.cache.turn_preview_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "coalesced_buffers", COALESCE_BUFFER_TTL_SECONDS
+                "progress_trackers", self._config.cache.progress_stream_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "media_batch_buffers", MEDIA_BATCH_BUFFER_TTL_SECONDS
+                "oversize_warnings", self._config.cache.oversize_warning_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "resume_options", SELECTION_STATE_TTL_SECONDS
+                "coalesced_buffers", self._config.cache.coalesce_buffer_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "bind_options", SELECTION_STATE_TTL_SECONDS
+                "media_batch_buffers",
+                self._config.cache.media_batch_buffer_ttl_seconds,
             )
             self._evict_expired_cache_entries(
-                "agent_options", SELECTION_STATE_TTL_SECONDS
+                "resume_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "update_options", SELECTION_STATE_TTL_SECONDS
+                "bind_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "update_confirm_options", SELECTION_STATE_TTL_SECONDS
+                "agent_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "review_commit_options", SELECTION_STATE_TTL_SECONDS
+                "update_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "review_commit_subjects", SELECTION_STATE_TTL_SECONDS
+                "update_confirm_options",
+                self._config.cache.selection_state_ttl_seconds,
             )
             self._evict_expired_cache_entries(
-                "pending_review_custom", SELECTION_STATE_TTL_SECONDS
+                "review_commit_options",
+                self._config.cache.selection_state_ttl_seconds,
             )
             self._evict_expired_cache_entries(
-                "compact_pending", SELECTION_STATE_TTL_SECONDS
+                "review_commit_subjects",
+                self._config.cache.selection_state_ttl_seconds,
             )
             self._evict_expired_cache_entries(
-                "model_options", SELECTION_STATE_TTL_SECONDS
+                "pending_review_custom",
+                self._config.cache.selection_state_ttl_seconds,
             )
             self._evict_expired_cache_entries(
-                "model_pending", MODEL_PENDING_TTL_SECONDS
+                "compact_pending", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "pending_approvals", PENDING_APPROVAL_TTL_SECONDS
+                "model_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "pending_questions", PENDING_QUESTION_TTL_SECONDS
+                "model_pending", self._config.cache.model_pending_ttl_seconds
+            )
+            self._evict_expired_cache_entries(
+                "pending_approvals", self._config.cache.pending_approval_ttl_seconds
+            )
+            self._evict_expired_cache_entries(
+                "pending_questions", self._config.cache.pending_question_ttl_seconds
             )
             now = time.monotonic()
             expired_placeholders = []
             for key, timestamp in self._queued_placeholder_timestamps.items():
-                if (now - timestamp) > PENDING_APPROVAL_TTL_SECONDS:
+                if (now - timestamp) > self._config.cache.pending_approval_ttl_seconds:
                     expired_placeholders.append(key)
             for key in expired_placeholders:
                 self._queued_placeholder_map.pop(key, None)
@@ -1000,11 +1000,11 @@ class TelegramBotService(
         return self._ticket_flow_bridge._select_ticket_flow_topic(entries)
 
     @staticmethod
-    def _set_ticket_handoff_marker(
+    def _set_ticket_dispatch_marker(
         value: Optional[str],
     ) -> "Callable[[TelegramTopicRecord], None]":
         def apply(topic: "TelegramTopicRecord") -> None:
-            topic.last_ticket_handoff_seq = value
+            topic.last_ticket_dispatch_seq = value
 
         return apply
 
@@ -1030,8 +1030,8 @@ class TelegramBotService(
     ) -> Optional[tuple[str, str, str]]:
         return self._ticket_flow_bridge._load_ticket_flow_pause(workspace_root)
 
-    def _latest_handoff_seq(self, history_dir: Path) -> Optional[str]:
-        return self._ticket_flow_bridge._latest_handoff_seq(history_dir)
+    def _latest_dispatch_seq(self, history_dir: Path) -> Optional[str]:
+        return self._ticket_flow_bridge._latest_dispatch_seq(history_dir)
 
     def _format_ticket_flow_pause_reason(self, record: "FlowRunRecord") -> str:
         return self._ticket_flow_bridge._format_ticket_flow_pause_reason(record)
@@ -1377,7 +1377,9 @@ class TelegramBotService(
     async def _maybe_persist_update_id(self, key: str, update_id: int) -> None:
         now = time.monotonic()
         last_persisted = self._last_update_persisted_at.get(key, 0.0)
-        if (now - last_persisted) < UPDATE_ID_PERSIST_INTERVAL_SECONDS:
+        if (
+            now - last_persisted
+        ) < self._config.cache.update_id_persist_interval_seconds:
             return
 
         def apply(record: "TelegramTopicRecord") -> None:

@@ -52,13 +52,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
     "mode": "repo",
     "docs": {
-        "todo": ".codex-autorunner/TODO.md",
-        "progress": ".codex-autorunner/PROGRESS.md",
-        "opinions": ".codex-autorunner/OPINIONS.md",
-        "spec": ".codex-autorunner/SPEC.md",
-        "summary": ".codex-autorunner/SUMMARY.md",
-        "snapshot": ".codex-autorunner/SNAPSHOT.md",
-        "snapshot_state": ".codex-autorunner/snapshot_state.json",
+        "active_context": ".codex-autorunner/workspace/active_context.md",
+        "decisions": ".codex-autorunner/workspace/decisions.md",
+        "spec": ".codex-autorunner/workspace/spec.md",
     },
     "review": {
         "enabled": True,
@@ -121,8 +117,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "reasoning": None,
             "max_wallclock_seconds": None,
             "context": {
-                "primary_docs": ["spec", "progress"],
-                "include_docs": ["todo", "summary"],
+                "primary_docs": ["spec", "decisions"],
+                "include_docs": ["active_context"],
                 "include_last_run_artifacts": True,
                 "max_doc_chars": 20000,
             },
@@ -148,9 +144,13 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         # Bounds the agentic sync step in GitHubService.sync_pr (seconds).
         "sync_agent_timeout_seconds": 1800,
     },
+    "update": {
+        "skip_checks": False,
+    },
     "app_server": {
         "command": ["codex", "app-server"],
         "state_root": "~/.codex-autorunner/workspaces",
+        "auto_restart": True,
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
         "turn_timeout_seconds": 28800,
@@ -158,7 +158,18 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "turn_stall_poll_interval_seconds": 2,
         "turn_stall_recovery_min_interval_seconds": 10,
         "request_timeout": None,
+        "client": {
+            "max_message_bytes": 50 * 1024 * 1024,
+            "oversize_preview_bytes": 4096,
+            "max_oversize_drain_bytes": 100 * 1024 * 1024,
+            "restart_backoff_initial_seconds": 0.5,
+            "restart_backoff_max_seconds": 30.0,
+            "restart_backoff_jitter_ratio": 0.1,
+        },
         "prompts": {
+            # NOTE: These keys are legacy names kept for config compatibility.
+            # The workspace cutover uses tickets + workspace docs + unified file chat; only
+            # the "autorunner" prompt is currently used by the app-server prompt builder.
             "doc_chat": {
                 "max_chars": 12000,
                 "message_max_chars": 2000,
@@ -244,6 +255,20 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "timeout_ms": 120000,
             "max_output_chars": 3800,
         },
+        "cache": {
+            "cleanup_interval_seconds": 300,
+            "coalesce_buffer_ttl_seconds": 60,
+            "media_batch_buffer_ttl_seconds": 60,
+            "model_pending_ttl_seconds": 1800,
+            "pending_approval_ttl_seconds": 600,
+            "pending_question_ttl_seconds": 600,
+            "reasoning_buffer_ttl_seconds": 900,
+            "selection_state_ttl_seconds": 1800,
+            "turn_preview_ttl_seconds": 900,
+            "progress_stream_ttl_seconds": 900,
+            "oversize_warning_ttl_seconds": 3600,
+            "update_id_persist_interval_seconds": 60,
+        },
         "command_registration": {
             "enabled": True,
             "scopes": [
@@ -251,6 +276,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 {"type": "all_group_chats", "language_code": ""},
             ],
         },
+        "opencode_command": None,
         "state_file": ".codex-autorunner/telegram_state.sqlite3",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
@@ -397,6 +423,7 @@ REPO_DEFAULT_KEYS = {
     "ticket_flow",
     "git",
     "github",
+    "update",
     "notifications",
     "voice",
     "log",
@@ -416,6 +443,7 @@ REPO_SHARED_KEYS = {
     "terminal",
     "static_assets",
     "housekeeping",
+    "update",
 }
 
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
@@ -478,6 +506,20 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "timeout_ms": 120000,
             "max_output_chars": 3800,
         },
+        "cache": {
+            "cleanup_interval_seconds": 300,
+            "coalesce_buffer_ttl_seconds": 60,
+            "media_batch_buffer_ttl_seconds": 60,
+            "model_pending_ttl_seconds": 1800,
+            "pending_approval_ttl_seconds": 600,
+            "pending_question_ttl_seconds": 600,
+            "reasoning_buffer_ttl_seconds": 900,
+            "selection_state_ttl_seconds": 1800,
+            "turn_preview_ttl_seconds": 900,
+            "progress_stream_ttl_seconds": 900,
+            "oversize_warning_ttl_seconds": 3600,
+            "update_id_persist_interval_seconds": 60,
+        },
         "command_registration": {
             "enabled": True,
             "scopes": [
@@ -485,6 +527,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
                 {"type": "all_group_chats", "language_code": ""},
             ],
         },
+        "opencode_command": None,
         "state_file": ".codex-autorunner/telegram_state.sqlite3",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
@@ -515,9 +558,13 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "backup_count": 3,
         },
     },
+    "update": {
+        "skip_checks": False,
+    },
     "app_server": {
         "command": ["codex", "app-server"],
         "state_root": "~/.codex-autorunner/workspaces",
+        "auto_restart": True,
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
         "turn_timeout_seconds": 28800,
@@ -525,6 +572,14 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "turn_stall_poll_interval_seconds": 2,
         "turn_stall_recovery_min_interval_seconds": 10,
         "request_timeout": None,
+        "client": {
+            "max_message_bytes": 50 * 1024 * 1024,
+            "oversize_preview_bytes": 4096,
+            "max_oversize_drain_bytes": 100 * 1024 * 1024,
+            "restart_backoff_initial_seconds": 0.5,
+            "restart_backoff_max_seconds": 30.0,
+            "restart_backoff_jitter_ratio": 0.1,
+        },
         "prompts": {
             "doc_chat": {
                 "max_chars": 12000,
@@ -706,9 +761,20 @@ class AppServerPromptsConfig:
 
 
 @dataclasses.dataclass
+class AppServerClientConfig:
+    max_message_bytes: int
+    oversize_preview_bytes: int
+    max_oversize_drain_bytes: int
+    restart_backoff_initial_seconds: float
+    restart_backoff_max_seconds: float
+    restart_backoff_jitter_ratio: float
+
+
+@dataclasses.dataclass
 class AppServerConfig:
     command: List[str]
     state_root: Path
+    auto_restart: Optional[bool]
     max_handles: Optional[int]
     idle_ttl_seconds: Optional[int]
     turn_timeout_seconds: Optional[float]
@@ -716,6 +782,7 @@ class AppServerConfig:
     turn_stall_poll_interval_seconds: Optional[float]
     turn_stall_recovery_min_interval_seconds: Optional[float]
     request_timeout: Optional[float]
+    client: AppServerClientConfig
     prompts: AppServerPromptsConfig
 
 
@@ -755,6 +822,7 @@ class RepoConfig:
     ticket_flow: Dict[str, Any]
     git_auto_commit: bool
     git_commit_message_template: str
+    update_skip_checks: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
     server_host: str
@@ -804,6 +872,7 @@ class HubConfig:
     repo_server_inherit: bool
     update_repo_url: str
     update_repo_ref: str
+    update_skip_checks: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
     server_host: str
@@ -1044,6 +1113,11 @@ def _parse_app_server_config(
         allow_home=True,
         scope="app_server.state_root",
     )
+    auto_restart_raw = cfg.get("auto_restart", defaults.get("auto_restart"))
+    if auto_restart_raw is None:
+        auto_restart = None
+    else:
+        auto_restart = bool(auto_restart_raw)
     max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
     max_handles = int(max_handles_raw) if max_handles_raw is not None else None
     if max_handles is not None and max_handles <= 0:
@@ -1102,11 +1176,31 @@ def _parse_app_server_config(
     )
     if request_timeout is not None and request_timeout <= 0:
         request_timeout = None
+    client_defaults = defaults.get("client")
+    client_defaults = client_defaults if isinstance(client_defaults, dict) else {}
+    client_cfg_raw = cfg.get("client")
+    client_cfg = client_cfg_raw if isinstance(client_cfg_raw, dict) else {}
+
+    def _client_int(key: str) -> int:
+        value = client_cfg.get(key, client_defaults.get(key))
+        value = int(value) if value is not None else 0
+        if value <= 0:
+            value = int(client_defaults.get(key) or 0)
+        return value
+
+    def _client_float(key: str, *, allow_zero: bool = False) -> float:
+        value = client_cfg.get(key, client_defaults.get(key))
+        value = float(value) if value is not None else 0.0
+        if value < 0 or (not allow_zero and value <= 0):
+            value = float(client_defaults.get(key) or 0.0)
+        return value
+
     prompt_defaults = defaults.get("prompts")
     prompts = _parse_app_server_prompts_config(cfg.get("prompts"), prompt_defaults)
     return AppServerConfig(
         command=command,
         state_root=state_root,
+        auto_restart=auto_restart,
         max_handles=max_handles,
         idle_ttl_seconds=idle_ttl_seconds,
         turn_timeout_seconds=turn_timeout_seconds,
@@ -1114,6 +1208,18 @@ def _parse_app_server_config(
         turn_stall_poll_interval_seconds=turn_stall_poll_interval_seconds,
         turn_stall_recovery_min_interval_seconds=turn_stall_recovery_min_interval_seconds,
         request_timeout=request_timeout,
+        client=AppServerClientConfig(
+            max_message_bytes=_client_int("max_message_bytes"),
+            oversize_preview_bytes=_client_int("oversize_preview_bytes"),
+            max_oversize_drain_bytes=_client_int("max_oversize_drain_bytes"),
+            restart_backoff_initial_seconds=_client_float(
+                "restart_backoff_initial_seconds"
+            ),
+            restart_backoff_max_seconds=_client_float("restart_backoff_max_seconds"),
+            restart_backoff_jitter_ratio=_client_float(
+                "restart_backoff_jitter_ratio", allow_zero=True
+            ),
+        ),
         prompts=prompts,
     )
 
@@ -1286,6 +1392,21 @@ def load_hub_config_data(config_path: Path) -> Dict[str, Any]:
 def _resolve_hub_config_path(start: Path) -> Path:
     config_path = find_nearest_hub_config_path(start)
     if not config_path:
+        # Auto-initialize hub config if missing in the current directory or parents.
+        # If we are in a git repo, we'll initialize a hub there.
+        try:
+            from .utils import find_repo_root
+
+            target_root = find_repo_root(start)
+        except Exception:
+            target_root = start
+
+        from ..bootstrap import seed_hub_files
+
+        seed_hub_files(target_root)
+        config_path = find_nearest_hub_config_path(target_root)
+
+    if not config_path:
         raise ConfigError(
             f"Missing hub config file; expected to find {CONFIG_FILENAME} in {start} or parents (use --hub to specify)"
         )
@@ -1350,15 +1471,9 @@ def load_repo_config(start: Path, hub_path: Optional[Path] = None) -> RepoConfig
 def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     root = config_path.parent.parent.resolve()
     docs = {
-        "todo": Path(cfg["docs"]["todo"]),
-        "progress": Path(cfg["docs"]["progress"]),
-        "opinions": Path(cfg["docs"]["opinions"]),
+        "active_context": Path(cfg["docs"]["active_context"]),
+        "decisions": Path(cfg["docs"]["decisions"]),
         "spec": Path(cfg["docs"]["spec"]),
-        "summary": Path(cfg["docs"]["summary"]),
-        "snapshot": Path(cfg["docs"].get("snapshot", ".codex-autorunner/SNAPSHOT.md")),
-        "snapshot_state": Path(
-            cfg["docs"].get("snapshot_state", ".codex-autorunner/snapshot_state.json")
-        ),
     }
     voice_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
     voice_cfg = cast(Dict[str, Any], voice_cfg)
@@ -1387,6 +1502,11 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     server_log_cfg = cast(
         Dict[str, Any], server_log_cfg if isinstance(server_log_cfg, dict) else {}
     )
+    update_cfg = cfg.get("update")
+    update_cfg = cast(
+        Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
+    )
+    update_skip_checks = bool(update_cfg.get("skip_checks", False))
     return RepoConfig(
         raw=cfg,
         root=root,
@@ -1407,6 +1527,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         runner_no_progress_threshold=int(cfg["runner"].get("no_progress_threshold", 3)),
         git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
         git_commit_message_template=str(cfg["git"].get("commit_message_template")),
+        update_skip_checks=update_skip_checks,
         ticket_flow=cast(Dict[str, Any], cfg.get("ticket_flow") or {}),
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
@@ -1487,6 +1608,12 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
     except ConfigPathError as exc:
         raise ConfigError(str(exc)) from exc
 
+    update_cfg = cfg.get("update")
+    update_cfg = cast(
+        Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
+    )
+    update_skip_checks = bool(update_cfg.get("skip_checks", False))
+
     return HubConfig(
         raw=cfg,
         root=root,
@@ -1502,6 +1629,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         repo_server_inherit=bool(hub_cfg.get("repo_server_inherit", True)),
         update_repo_url=str(hub_cfg.get("update_repo_url", "")),
         update_repo_ref=str(hub_cfg.get("update_repo_ref", "main")),
+        update_skip_checks=update_skip_checks,
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
             root,
@@ -1589,6 +1717,12 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
         app_server_cfg.get("state_root", ""), str
     ):
         raise ConfigError("app_server.state_root must be a string path")
+    if (
+        "auto_restart" in app_server_cfg
+        and app_server_cfg.get("auto_restart") is not None
+    ):
+        if not isinstance(app_server_cfg.get("auto_restart"), bool):
+            raise ConfigError("app_server.auto_restart must be boolean or null")
     for key in ("max_handles", "idle_ttl_seconds"):
         if key in app_server_cfg and app_server_cfg.get(key) is not None:
             if not isinstance(app_server_cfg.get(key), int):
@@ -1615,6 +1749,39 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
         if key in app_server_cfg and app_server_cfg.get(key) is not None:
             if not isinstance(app_server_cfg.get(key), (int, float)):
                 raise ConfigError(f"app_server.{key} must be a number or null")
+    client_cfg = app_server_cfg.get("client")
+    if client_cfg is not None:
+        if not isinstance(client_cfg, dict):
+            raise ConfigError("app_server.client must be a mapping if provided")
+        for key in (
+            "max_message_bytes",
+            "oversize_preview_bytes",
+            "max_oversize_drain_bytes",
+        ):
+            if key in client_cfg:
+                value = client_cfg.get(key)
+                if not isinstance(value, int):
+                    raise ConfigError(f"app_server.client.{key} must be an integer")
+                if value <= 0:
+                    raise ConfigError(f"app_server.client.{key} must be > 0")
+        for key in (
+            "restart_backoff_initial_seconds",
+            "restart_backoff_max_seconds",
+            "restart_backoff_jitter_ratio",
+        ):
+            if key in client_cfg:
+                value = client_cfg.get(key)
+                if not isinstance(value, (int, float)):
+                    raise ConfigError(
+                        f"app_server.client.{key} must be a number if provided"
+                    )
+                if key == "restart_backoff_jitter_ratio":
+                    if value < 0:
+                        raise ConfigError(
+                            "app_server.client.restart_backoff_jitter_ratio must be >= 0"
+                        )
+                elif value <= 0:
+                    raise ConfigError(f"app_server.client.{key} must be > 0")
     prompts = app_server_cfg.get("prompts")
     if prompts is not None:
         if not isinstance(prompts, dict):
@@ -1676,6 +1843,17 @@ def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
             )
 
 
+def _validate_update_config(cfg: Dict[str, Any]) -> None:
+    update_cfg = cfg.get("update")
+    if update_cfg is None:
+        return
+    if not isinstance(update_cfg, dict):
+        raise ConfigError("update section must be a mapping if provided")
+    if "skip_checks" in update_cfg and update_cfg.get("skip_checks") is not None:
+        if not isinstance(update_cfg.get("skip_checks"), bool):
+            raise ConfigError("update.skip_checks must be boolean or null")
+
+
 def _validate_agents_config(cfg: Dict[str, Any]) -> None:
     agents_cfg = cfg.get("agents")
     if agents_cfg is None:
@@ -1712,7 +1890,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             )
         except ConfigPathError as exc:
             raise ConfigError(str(exc)) from exc
-    for key in ("todo", "progress", "opinions", "spec", "summary"):
+    for key in ("active_context", "decisions", "spec"):
         if not isinstance(docs.get(key), str) or not docs[key]:
             raise ConfigError(f"docs.{key} must be a non-empty string path")
     _validate_agents_config(cfg)
@@ -1819,6 +1997,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_server_security(server)
     _validate_app_server_config(cfg)
     _validate_opencode_config(cfg)
+    _validate_update_config(cfg)
     notifications_cfg = cfg.get("notifications")
     if notifications_cfg is not None:
         if not isinstance(notifications_cfg, dict):
@@ -1963,6 +2142,7 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("repo section is no longer supported; use repo_defaults")
     _validate_agents_config(cfg)
     _validate_opencode_config(cfg)
+    _validate_update_config(cfg)
     repo_defaults = cfg.get("repo_defaults")
     if repo_defaults is not None:
         if not isinstance(repo_defaults, dict):
@@ -2261,6 +2441,29 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(f"telegram_bot.shell.{key} must be an integer")
             if isinstance(value, int) and value <= 0:
                 raise ConfigError(f"telegram_bot.shell.{key} must be greater than 0")
+    cache_cfg = telegram_cfg.get("cache")
+    if cache_cfg is not None and not isinstance(cache_cfg, dict):
+        raise ConfigError("telegram_bot.cache must be a mapping if provided")
+    if isinstance(cache_cfg, dict):
+        for key in (
+            "cleanup_interval_seconds",
+            "coalesce_buffer_ttl_seconds",
+            "media_batch_buffer_ttl_seconds",
+            "model_pending_ttl_seconds",
+            "pending_approval_ttl_seconds",
+            "pending_question_ttl_seconds",
+            "reasoning_buffer_ttl_seconds",
+            "selection_state_ttl_seconds",
+            "turn_preview_ttl_seconds",
+            "progress_stream_ttl_seconds",
+            "oversize_warning_ttl_seconds",
+            "update_id_persist_interval_seconds",
+        ):
+            value = cache_cfg.get(key)
+            if value is not None and not isinstance(value, (int, float)):
+                raise ConfigError(f"telegram_bot.cache.{key} must be a number")
+            if isinstance(value, (int, float)) and value <= 0:
+                raise ConfigError(f"telegram_bot.cache.{key} must be > 0")
     command_reg_cfg = telegram_cfg.get("command_registration")
     if command_reg_cfg is not None and not isinstance(command_reg_cfg, dict):
         raise ConfigError("telegram_bot.command_registration must be a mapping")
@@ -2298,10 +2501,20 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                     raise ConfigError(
                         "telegram_bot.command_registration.scopes.language_code must be a string or null"
                     )
+    if "trigger_mode" in telegram_cfg and not isinstance(
+        telegram_cfg.get("trigger_mode"), str
+    ):
+        raise ConfigError("telegram_bot.trigger_mode must be a string")
     if "state_file" in telegram_cfg and not isinstance(
         telegram_cfg.get("state_file"), str
     ):
         raise ConfigError("telegram_bot.state_file must be a string path")
+    if (
+        "opencode_command" in telegram_cfg
+        and not isinstance(telegram_cfg.get("opencode_command"), (list, str))
+        and telegram_cfg.get("opencode_command") is not None
+    ):
+        raise ConfigError("telegram_bot.opencode_command must be a list or string")
     if "app_server_command" in telegram_cfg and not isinstance(
         telegram_cfg.get("app_server_command"), (list, str)
     ):

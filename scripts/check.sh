@@ -64,16 +64,23 @@ echo "Type check (mypy)..."
 "$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server
 
 echo "Linting JS/TS (eslint)..."
-"$ESLINT_BIN" "src/codex_autorunner/static/**/*.js" "src/codex_autorunner/static_src/**/*.ts"
+"$ESLINT_BIN" "src/codex_autorunner/static_src/**/*.ts"
 
 echo "Build static assets (pnpm run build)..."
 pnpm run build
 
-echo "Checking static build outputs are committed..."
-if ! git diff --exit-code -- src/codex_autorunner/static >/dev/null 2>&1; then
-  echo "Static assets are out of date. Run 'pnpm run build' and commit outputs." >&2
-  git diff --stat -- src/codex_autorunner/static >&2
-  exit 1
+echo "Checking generated static assets are committed..."
+# Treat compiled JS (and maps) in the static folder as generated outputs that must stay in sync.
+GENERATED_STATIC=$(find src/codex_autorunner/static -maxdepth 1 -type f \( -name '*.js' -o -name '*.js.map' \) | sort)
+
+if [ -n "$GENERATED_STATIC" ]; then
+  # shellcheck disable=SC2086 # git diff needs separate args
+  if ! git diff --exit-code -- $GENERATED_STATIC >/dev/null 2>&1; then
+    echo "Generated static assets are out of date. Run 'pnpm run build' and commit updated JS outputs." >&2
+    # shellcheck disable=SC2086
+    git diff --stat -- $GENERATED_STATIC >&2
+    exit 1
+  fi
 fi
 
 echo "Running tests (pytest)..."

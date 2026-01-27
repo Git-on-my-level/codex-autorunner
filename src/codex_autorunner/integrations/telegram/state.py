@@ -205,7 +205,7 @@ class TelegramTopicRecord:
     rollout_path: Optional[str] = None
     approval_mode: str = APPROVAL_MODE_YOLO
     last_active_at: Optional[str] = None
-    last_ticket_handoff_seq: Optional[str] = None
+    last_ticket_dispatch_seq: Optional[str] = None
 
     @classmethod
     def from_dict(
@@ -292,11 +292,11 @@ class TelegramTopicRecord:
         last_active_at = payload.get("last_active_at") or payload.get("lastActiveAt")
         if not isinstance(last_active_at, str):
             last_active_at = None
-        last_ticket_handoff_seq = payload.get("last_ticket_handoff_seq") or payload.get(
-            "lastTicketHandoffSeq"
-        )
-        if not isinstance(last_ticket_handoff_seq, str):
-            last_ticket_handoff_seq = None
+        last_ticket_dispatch_seq = payload.get(
+            "last_ticket_dispatch_seq"
+        ) or payload.get("lastTicketDispatchSeq")
+        if not isinstance(last_ticket_dispatch_seq, str):
+            last_ticket_dispatch_seq = None
         return cls(
             repo_id=repo_id,
             workspace_path=workspace_path,
@@ -316,7 +316,7 @@ class TelegramTopicRecord:
             rollout_path=rollout_path,
             approval_mode=approval_mode,
             last_active_at=last_active_at,
-            last_ticket_handoff_seq=last_ticket_handoff_seq,
+            last_ticket_dispatch_seq=last_ticket_dispatch_seq,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -342,7 +342,7 @@ class TelegramTopicRecord:
             "rollout_path": self.rollout_path,
             "approval_mode": self.approval_mode,
             "last_active_at": self.last_active_at,
-            "last_ticket_handoff_seq": self.last_ticket_handoff_seq,
+            "last_ticket_dispatch_seq": self.last_ticket_dispatch_seq,
         }
 
 

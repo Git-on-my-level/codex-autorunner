@@ -1,6 +1,8 @@
 import json
 import logging
+import os
 import re
+import shutil
 import subprocess
 import uuid
 from dataclasses import asdict
@@ -20,17 +22,31 @@ from ..core.flows import (
     FlowRunStatus,
     FlowStore,
 )
+from ..core.flows.store import now_iso
 from ..core.flows.worker_process import (
     FlowWorkerHealth,
     check_worker_health,
     clear_worker_metadata,
     spawn_flow_worker,
 )
-from ..core.utils import find_repo_root
+from ..core.utils import atomic_write, find_repo_root
 from ..flows.ticket_flow import build_ticket_flow_definition
 from ..tickets import AgentPool
-from ..tickets.files import list_ticket_paths, read_ticket, safe_relpath
-from ..tickets.outbox import parse_user_message, resolve_outbox_paths
+from ..tickets.files import (
+    list_ticket_paths,
+    parse_ticket_index,
+    read_ticket,
+    safe_relpath,
+)
+from ..tickets.frontmatter import parse_markdown_frontmatter
+from ..tickets.lint import lint_ticket_frontmatter
+from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
+from ..web.schemas import (
+    TicketCreateRequest,
+    TicketDeleteResponse,
+    TicketResponse,
+    TicketUpdateRequest,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -61,13 +77,18 @@ def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
 
 
 def _safe_list_flow_runs(
-    repo_root: Path, flow_type: Optional[str] = None
+    repo_root: Path, flow_type: Optional[str] = None, *, recover_stuck: bool = False
 ) -> list[FlowRunRecord]:
     db_path, _ = _flow_paths(repo_root)
     store = FlowStore(db_path)
     try:
         store.initialize()
         records = store.list_flow_runs(flow_type=flow_type)
+        if recover_stuck:
+            # Recover any flows stuck in active states with dead workers
+            records = [
+                _maybe_recover_stuck_flow(repo_root, rec, store) for rec in records
+            ]
         return records
     except Exception as exc:
         _logger.debug("FlowStore list runs failed: %s", exc)
@@ -139,18 +160,12 @@ def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
 
 
 def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
-    return next(
-        (
-            rec
-            for rec in records
-            if rec.status
-            in (
-                FlowRunStatus.RUNNING,
-                FlowRunStatus.PAUSED,
-            )
-        ),
-        None,
-    )
+    if not records:
+        return None
+    latest = records[0]
+    if latest.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
+        return latest
+    return None
 
 
 def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
@@ -200,6 +215,72 @@ def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
             clear_worker_metadata(health.artifact_path.parent)
         except Exception:
             _logger.debug("Failed to clear worker metadata: %s", health.artifact_path)
+
+
+def _maybe_recover_stuck_flow(
+    repo_root: Path, record: FlowRunRecord, store: FlowStore
+) -> FlowRunRecord:
+    """Recover flows stuck in active states when worker is dead or state is inconsistent.
+
+    If a flow is in RUNNING or STOPPING state but the worker process is dead,
+    transition it to FAILED or STOPPED respectively so users can archive/restart.
+    Also reconcile cases where the inner ticket_engine has already paused or completed
+    but the outer flow status remains RUNNING.
+    """
+    if record.status not in (FlowRunStatus.RUNNING, FlowRunStatus.STOPPING):
+        return record
+
+    health = check_worker_health(repo_root, record.id)
+    if not health.is_alive:
+        # Worker is dead but status claims it's still active -> recover
+        new_status = (
+            FlowRunStatus.STOPPED
+            if record.status == FlowRunStatus.STOPPING
+            else FlowRunStatus.FAILED
+        )
+        _logger.info(
+            "Recovering stuck flow %s: %s -> %s (worker dead)",
+            record.id,
+            record.status.value,
+            new_status.value,
+        )
+        updated = store.update_flow_run_status(run_id=record.id, status=new_status)
+        _ensure_worker_not_stale(health)
+        return updated or record
+
+    # Worker appears alive; check for inner/outer status inconsistency.
+    if record.status == FlowRunStatus.RUNNING:
+        state = record.state or {}
+        ticket_engine = state.get("ticket_engine") if isinstance(state, dict) else {}
+        ticket_engine = ticket_engine if isinstance(ticket_engine, dict) else {}
+        inner_status = ticket_engine.get("status")
+
+        if inner_status == "paused":
+            _logger.warning(
+                "Recovering inconsistent flow %s: flow=running but ticket_engine=paused",
+                record.id,
+            )
+            updated = store.update_flow_run_status(
+                run_id=record.id,
+                status=FlowRunStatus.PAUSED,
+                state=state,
+            )
+            return updated or record
+
+        if inner_status == "completed":
+            _logger.warning(
+                "Recovering inconsistent flow %s: flow=running but ticket_engine=completed",
+                record.id,
+            )
+            updated = store.update_flow_run_status(
+                run_id=record.id,
+                status=FlowRunStatus.COMPLETED,
+                finished_at=now_iso(),
+                state=state,
+            )
+            return updated or record
+
+    return record
 
 
 class FlowStartRequest(BaseModel):
@@ -327,7 +408,9 @@ def build_flow_routes() -> APIRouter:
     @router.get("/runs", response_model=list[FlowStatusResponse])
     async def list_runs(flow_type: Optional[str] = None):
         repo_root = find_repo_root()
-        records = _safe_list_flow_runs(repo_root, flow_type=flow_type)
+        records = _safe_list_flow_runs(
+            repo_root, flow_type=flow_type, recover_stuck=True
+        )
         return [FlowStatusResponse.from_record(rec) for rec in records]
 
     @router.get("/{flow_type}")
@@ -353,7 +436,9 @@ def build_flow_routes() -> APIRouter:
 
         # Reuse an active/paused run unless force_new is requested.
         if not force_new:
-            runs = controller.list_runs()
+            runs = _safe_list_flow_runs(
+                repo_root, flow_type=flow_type, recover_stuck=True
+            )
             active = _active_or_paused_run(runs)
             if active:
                 _reap_dead_worker(active.id)
@@ -392,19 +477,10 @@ def build_flow_routes() -> APIRouter:
         force_new = bool(meta.get("force_new"))
 
         if not force_new:
-            records = _safe_list_flow_runs(repo_root, flow_type="ticket_flow")
-            active = next(
-                (
-                    rec
-                    for rec in records
-                    if rec.status
-                    in (
-                        FlowRunStatus.RUNNING,
-                        FlowRunStatus.PAUSED,
-                    )
-                ),
-                None,
+            records = _safe_list_flow_runs(
+                repo_root, flow_type="ticket_flow", recover_stuck=True
             )
+            active = _active_or_paused_run(records)
             if active:
                 _reap_dead_worker(active.id)
                 _start_flow_worker(repo_root, active.id)
@@ -419,7 +495,7 @@ def build_flow_routes() -> APIRouter:
 agent: codex
 done: false
 title: Bootstrap ticket plan
-goal: Create SPEC and seed follow-up tickets
+goal: Capture scope and seed follow-up tickets
 requires:
   - .codex-autorunner/ISSUE.md
 ---
@@ -427,10 +503,15 @@ requires:
 You are the first ticket in a new ticket_flow run.
 
 - Read `.codex-autorunner/ISSUE.md` (or ask for the issue/PR URL if missing).
-- Create or update `.codex-autorunner/SPEC.md` that captures goals, scope, risks, and constraints.
+- If helpful, create or update workspace docs under `.codex-autorunner/workspace/`:
+  - `active_context.md` for current context and links
+  - `decisions.md` for decisions/rationale
+  - `spec.md` for requirements and constraints
 - Break the work into additional `TICKET-00X.md` files with clear owners/goals; keep this ticket open until they exist.
-- Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/handoff/` if needed.
-- Write `USER_MESSAGE.md` with `mode: pause` summarizing the ticket plan and requesting user review before proceeding.
+- Place any supporting artifacts in `.codex-autorunner/runs/<run_id>/dispatch/` if needed.
+- Write `DISPATCH.md` to dispatch a message to the user:
+  - Use `mode: pause` (handoff) to wait for user response. This pauses execution.
+  - Use `mode: notify` (informational) to message the user but keep running.
 """
             ticket_path.write_text(template, encoding="utf-8")
             seeded = True
@@ -464,6 +545,120 @@ You are the first ticket in a new ticket_flow run.
             "tickets": tickets,
         }
 
+    @router.post("/ticket_flow/tickets", response_model=TicketResponse)
+    async def create_ticket(request: TicketCreateRequest):
+        """Create a new ticket with auto-generated index."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_dir.mkdir(parents=True, exist_ok=True)
+
+        # Find next available index
+        existing_paths = list_ticket_paths(ticket_dir)
+        existing_indices = set()
+        for p in existing_paths:
+            idx = parse_ticket_index(p.name)
+            if idx is not None:
+                existing_indices.add(idx)
+
+        next_index = 1
+        while next_index in existing_indices:
+            next_index += 1
+
+        # Build frontmatter
+        requires_block = ""
+        if request.requires:
+            req_lines = "\n".join(f"  - {r}" for r in request.requires)
+            requires_block = f"requires:\n{req_lines}\n"
+
+        title_line = f"title: {request.title}\n" if request.title else ""
+        goal_line = f"goal: {request.goal}\n" if request.goal else ""
+
+        content = (
+            "---\n"
+            f"agent: {request.agent}\n"
+            "done: false\n"
+            f"{title_line}"
+            f"{goal_line}"
+            f"{requires_block}"
+            "---\n\n"
+            f"{request.body}\n"
+        )
+
+        ticket_path = ticket_dir / f"TICKET-{next_index:03d}.md"
+        atomic_write(ticket_path, content)
+
+        # Read back to validate and return
+        doc, errors = read_ticket(ticket_path)
+        if errors or not doc:
+            raise HTTPException(
+                status_code=400, detail=f"Failed to create valid ticket: {errors}"
+            )
+
+        return TicketResponse(
+            path=safe_relpath(ticket_path, repo_root),
+            index=doc.index,
+            frontmatter=asdict(doc.frontmatter),
+            body=doc.body,
+        )
+
+    @router.put("/ticket_flow/tickets/{index}", response_model=TicketResponse)
+    async def update_ticket(index: int, request: TicketUpdateRequest):
+        """Update an existing ticket by index."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_path = ticket_dir / f"TICKET-{index:03d}.md"
+
+        if not ticket_path.exists():
+            raise HTTPException(
+                status_code=404, detail=f"Ticket TICKET-{index:03d}.md not found"
+            )
+
+        # Validate frontmatter before saving
+        data, body = parse_markdown_frontmatter(request.content)
+        _, errors = lint_ticket_frontmatter(data)
+        if errors:
+            raise HTTPException(
+                status_code=400,
+                detail={"message": "Invalid ticket frontmatter", "errors": errors},
+            )
+
+        atomic_write(ticket_path, request.content)
+
+        # Read back to return validated data
+        doc, read_errors = read_ticket(ticket_path)
+        if read_errors or not doc:
+            raise HTTPException(
+                status_code=400, detail=f"Failed to save valid ticket: {read_errors}"
+            )
+
+        return TicketResponse(
+            path=safe_relpath(ticket_path, repo_root),
+            index=doc.index,
+            frontmatter=asdict(doc.frontmatter),
+            body=doc.body,
+        )
+
+    @router.delete("/ticket_flow/tickets/{index}", response_model=TicketDeleteResponse)
+    async def delete_ticket(index: int):
+        """Delete a ticket by index."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_path = ticket_dir / f"TICKET-{index:03d}.md"
+
+        if not ticket_path.exists():
+            raise HTTPException(
+                status_code=404, detail=f"Ticket TICKET-{index:03d}.md not found"
+            )
+
+        rel_path = safe_relpath(ticket_path, repo_root)
+        ticket_path.unlink()
+
+        return TicketDeleteResponse(
+            status="deleted",
+            index=index,
+            path=rel_path,
+        )
+
     @router.post("/{run_id}/stop", response_model=FlowStatusResponse)
     async def stop_flow(run_id: uuid.UUID):
         run_id = _normalize_run_id(run_id)
@@ -489,6 +684,71 @@ You are the first ticket in a new ticket_flow run.
 
         return FlowStatusResponse.from_record(updated)
 
+    @router.post("/{run_id}/archive")
+    async def archive_flow(
+        run_id: uuid.UUID, delete_run: bool = True, force: bool = False
+    ):
+        """Archive a completed flow by moving tickets to the run's artifact directory.
+
+        Args:
+            run_id: The flow run to archive.
+            delete_run: Whether to delete the run record after archiving.
+            force: If True, allow archiving flows stuck in stopping/paused state
+                   by force-stopping the worker first.
+        """
+        run_id = _normalize_run_id(run_id)
+        repo_root = find_repo_root()
+        record = _get_flow_record(repo_root, run_id)
+
+        # Allow archiving terminal flows, or force-archiving stuck flows
+        if not FlowRunStatus(record.status).is_terminal():
+            if force and record.status in (
+                FlowRunStatus.STOPPING,
+                FlowRunStatus.PAUSED,
+            ):
+                # Force-stop any remaining worker before archiving
+                _stop_worker(run_id, timeout=2.0)
+                _logger.info(
+                    "Force-archiving flow %s in %s state", run_id, record.status.value
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Can only archive completed/stopped/failed flows (use force=true for stuck flows)",
+                )
+
+        # Move tickets to run artifacts directory
+        _, artifacts_root = _flow_paths(repo_root)
+        archive_dir = artifacts_root / run_id / "archived_tickets"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        archived_count = 0
+        for ticket_path in list_ticket_paths(ticket_dir):
+            dest = archive_dir / ticket_path.name
+            shutil.move(str(ticket_path), str(dest))
+            archived_count += 1
+
+        # Archive runs directory (dispatch_history, reply_history, etc.) to dismiss notifications
+        outbox_paths = _resolve_outbox_for_record(record, repo_root)
+        run_dir = outbox_paths.run_dir
+        if run_dir.exists() and run_dir.is_dir():
+            archived_runs_dir = artifacts_root / run_id / "archived_runs"
+            shutil.move(str(run_dir), str(archived_runs_dir))
+
+        # Delete run record if requested
+        if delete_run:
+            store = _require_flow_store(repo_root)
+            if store:
+                store.delete_flow_run(run_id)
+                store.close()
+
+        return {
+            "status": "archived",
+            "run_id": run_id,
+            "tickets_archived": archived_count,
+        }
+
     @router.get("/{run_id}/status", response_model=FlowStatusResponse)
     async def get_flow_status(run_id: uuid.UUID):
         run_id = _normalize_run_id(run_id)
@@ -498,10 +758,13 @@ You are the first ticket in a new ticket_flow run.
 
         record = _get_flow_record(repo_root, run_id)
 
-        # If the worker died but metadata still claims it exists, clear it so status
-        # callers get a clean view next time they start/resume.
-        health = check_worker_health(repo_root, run_id)
-        _ensure_worker_not_stale(health)
+        # If the worker died but status claims it's still active, recover the flow
+        store = _require_flow_store(repo_root)
+        if store:
+            try:
+                record = _maybe_recover_stuck_flow(repo_root, record, store)
+            finally:
+                store.close()
 
         return FlowStatusResponse.from_record(record)
 
@@ -531,31 +794,37 @@ You are the first ticket in a new ticket_flow run.
             },
         )
 
-    @router.get("/{run_id}/handoff_history")
-    async def get_handoff_history(run_id: str):
+    @router.get("/{run_id}/dispatch_history")
+    async def get_dispatch_history(run_id: str):
+        """Get dispatch history for a flow run.
+
+        Returns all dispatches (agent->human communications) for this run.
+        """
         normalized = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, normalized)
         paths = _resolve_outbox_for_record(record, repo_root)
 
         history_entries = []
-        history_dir = paths.handoff_history_dir
+        history_dir = paths.dispatch_history_dir
         if history_dir.exists() and history_dir.is_dir():
             for entry in sorted(
                 [p for p in history_dir.iterdir() if p.is_dir()],
                 key=lambda p: p.name,
                 reverse=True,
             ):
-                msg_path = entry / "USER_MESSAGE.md"
-                message, errors = (
-                    parse_user_message(msg_path)
-                    if msg_path.exists()
-                    else (None, ["USER_MESSAGE.md missing"])
+                dispatch_path = entry / "DISPATCH.md"
+                dispatch, errors = (
+                    parse_dispatch(dispatch_path)
+                    if dispatch_path.exists()
+                    else (None, ["Dispatch file missing"])
                 )
-                msg_dict = asdict(message) if message else None
+                dispatch_dict = asdict(dispatch) if dispatch else None
+                if dispatch_dict and dispatch:
+                    dispatch_dict["is_handoff"] = dispatch.is_handoff
                 attachments = []
                 for child in sorted(entry.rglob("*")):
-                    if child.name == "USER_MESSAGE.md":
+                    if child.name == "DISPATCH.md":
                         continue
                     rel = child.relative_to(entry).as_posix()
                     if any(part.startswith(".") for part in Path(rel).parts):
@@ -568,13 +837,13 @@ You are the first ticket in a new ticket_flow run.
                             "rel_path": rel,
                             "path": safe_relpath(child, repo_root),
                             "size": child.stat().st_size if child.is_file() else None,
-                            "url": f"/api/flows/{normalized}/handoff_history/{entry.name}/{quote(rel)}",
+                            "url": f"api/flows/{normalized}/dispatch_history/{entry.name}/{quote(rel)}",
                         }
                     )
                 history_entries.append(
                     {
                         "seq": entry.name,
-                        "message": msg_dict,
+                        "dispatch": dispatch_dict,
                         "errors": errors,
                         "attachments": attachments,
                         "path": safe_relpath(entry, repo_root),
@@ -583,34 +852,72 @@ You are the first ticket in a new ticket_flow run.
 
         return {"run_id": normalized, "history": history_entries}
 
-    @router.get("/{run_id}/handoff_history/{seq}/{file_path:path}")
-    async def get_handoff_file(run_id: str, seq: str, file_path: str):
+    @router.get("/{run_id}/reply_history/{seq}/{file_path:path}")
+    def get_reply_history_file(run_id: str, seq: str, file_path: str):
+        repo_root = find_repo_root()
+        db_path, _ = _flow_paths(repo_root)
+        store = FlowStore(db_path)
+        try:
+            store.initialize()
+            record = store.get_flow_run(run_id)
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
+        if not record:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        if not (len(seq) == 4 and seq.isdigit()):
+            raise HTTPException(status_code=400, detail="Invalid seq")
+        if ".." in file_path or file_path.startswith("/"):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+        filename = os.path.basename(file_path)
+        if filename != file_path:
+            raise HTTPException(status_code=400, detail="Invalid file path")
+
+        input_data = dict(record.input_data or {})
+        workspace_root = Path(input_data.get("workspace_root") or repo_root)
+        runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
+        from ..tickets.replies import resolve_reply_paths
+
+        reply_paths = resolve_reply_paths(
+            workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
+        )
+        target = reply_paths.reply_history_dir / seq / filename
+        if not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(path=str(target), filename=filename)
+
+    @router.get("/{run_id}/dispatch_history/{seq}/{file_path:path}")
+    async def get_dispatch_file(run_id: str, seq: str, file_path: str):
+        """Get an attachment file from a dispatch history entry."""
         normalized = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, normalized)
         paths = _resolve_outbox_for_record(record, repo_root)
 
-        base_history = paths.handoff_history_dir.resolve()
+        base_history = paths.dispatch_history_dir.resolve()
 
         seq_clean = seq.strip()
         if not re.fullmatch(r"[0-9]{4}", seq_clean):
             raise HTTPException(
-                status_code=400, detail="Invalid handoff history sequence"
+                status_code=400, detail="Invalid dispatch history sequence"
             )
 
         history_dir = (base_history / seq_clean).resolve()
         if not history_dir.is_relative_to(base_history) or not history_dir.is_dir():
             raise HTTPException(
-                status_code=404, detail=f"Handoff history not found for run {run_id}"
+                status_code=404, detail=f"Dispatch history not found for run {run_id}"
             )
 
         file_rel = PurePosixPath(file_path)
         if file_rel.is_absolute() or ".." in file_rel.parts or "\\" in file_path:
-            raise HTTPException(status_code=400, detail="Invalid handoff file path")
+            raise HTTPException(status_code=400, detail="Invalid dispatch file path")
 
         safe_parts = [part for part in file_rel.parts if part not in {"", "."}]
         if any(not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in safe_parts):
-            raise HTTPException(status_code=400, detail="Invalid handoff file path")
+            raise HTTPException(status_code=400, detail="Invalid dispatch file path")
 
         target = (history_dir / Path(*safe_parts)).resolve()
         try:
@@ -624,7 +931,7 @@ You are the first ticket in a new ticket_flow run.
         if not resolved.is_relative_to(history_dir):
             raise HTTPException(
                 status_code=403,
-                detail="Access denied: file outside handoff history directory",
+                detail="Access denied: file outside dispatch history directory",
             )
 
         return FileResponse(resolved, filename=resolved.name)

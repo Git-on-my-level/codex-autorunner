@@ -11,8 +11,12 @@ class TestResolveConfigPath:
     def test_resolve_relative_path(self, tmp_path):
         """Relative paths resolved to repo root."""
         repo_root = Path(tmp_path)
-        path = resolve_config_path(".codex-autorunner/TODO.md", repo_root)
-        assert path == repo_root / ".codex-autorunner" / "TODO.md"
+        path = resolve_config_path(
+            ".codex-autorunner/workspace/active_context.md", repo_root
+        )
+        assert (
+            path == repo_root / ".codex-autorunner" / "workspace" / "active_context.md"
+        )
         assert path.is_absolute()
 
     def test_resolve_nested_relative_path(self, tmp_path):

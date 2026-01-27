@@ -4,28 +4,9 @@ const globals = require("globals");
 
 module.exports = [
   {
-    ignores: ["src/codex_autorunner/static/vendor/**"],
+    ignores: ["src/codex_autorunner/static/**"],
   },
   js.configs.recommended,
-  {
-    files: ["src/codex_autorunner/static/**/*.js"],
-    languageOptions: {
-      ecmaVersion: 2021,
-      sourceType: "module",
-      globals: globals.browser,
-    },
-    rules: {
-      "no-unused-vars": [
-        "error",
-        {
-          argsIgnorePattern: "^_",
-          caughtErrors: "none",
-          varsIgnorePattern: "^_",
-          caughtErrorsIgnorePattern: "^_",
-        },
-      ],
-    },
-  },
   ...tseslint.configs.recommended.map((config) => ({
     ...config,
     files: ["src/codex_autorunner/static_src/**/*.ts"],
@@ -50,7 +31,7 @@ module.exports = [
           caughtErrorsIgnorePattern: "^_",
         },
       ],
-      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-explicit-any": "error",
     },
   },
 ];

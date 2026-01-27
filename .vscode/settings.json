@@ -1,0 +1,47 @@
+{
+  // Enable format on save
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  
+  // Python formatters
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  
+  // JavaScript/TypeScript formatters
+  "[javascript]": {
+    "editor.defaultFormatter": "dbaeumer.vscode-eslint",
+    "editor.formatOnSave": true
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "dbaeumer.vscode-eslint",
+    "editor.formatOnSave": true
+  },
+  
+  // Black formatter settings (matches pyproject.toml Ruff line-length)
+  "black-formatter.args": [
+    "--line-length=88"
+  ],
+  
+  // Ruff settings (for linting and import organization)
+  "ruff.args": [
+    "--fix"
+  ],
+  
+  // ESLint settings
+  "eslint.validate": [
+    "javascript",
+    "typescript"
+  ],
+  "eslint.workingDirectories": [
+    {
+      "pattern": "."
+    }
+  ]
+}

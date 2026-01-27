@@ -378,6 +378,7 @@ def _system_update_worker(
     update_dir: Path,
     logger: logging.Logger,
     update_target: str = "both",
+    skip_checks: bool = False,
 ) -> None:
     status_path = _update_status_path()
     lock_acquired = False
@@ -457,10 +458,14 @@ def _system_update_worker(
             _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
             _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
 
-        if os.environ.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1":
-            logger.info(
-                "Skipping update checks (CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1)."
-            )
+        skip_checks_env = os.environ.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1"
+        if skip_checks_env or skip_checks:
+            if skip_checks_env:
+                logger.info(
+                    "Skipping update checks (CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1)."
+                )
+            else:
+                logger.info("Skipping update checks (update.skip_checks=true).")
         else:
             logger.info("Running checks...")
             try:
@@ -526,6 +531,7 @@ def _spawn_update_process(
     update_dir: Path,
     logger: logging.Logger,
     update_target: str = "both",
+    skip_checks: bool = False,
     notify_chat_id: Optional[int] = None,
     notify_thread_id: Optional[int] = None,
     notify_reply_to: Optional[int] = None,
@@ -565,14 +571,17 @@ def _spawn_update_process(
         "--log-path",
         str(log_path),
     ]
+    if skip_checks:
+        cmd.append("--skip-checks")
     try:
-        subprocess.Popen(
-            cmd,
-            cwd=str(update_dir.parent),
-            start_new_session=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        with log_path.open("a", encoding="utf-8") as log_file:
+            subprocess.Popen(
+                cmd,
+                cwd=str(update_dir.parent),
+                start_new_session=True,
+                stdout=log_file,
+                stderr=log_file,
+            )
     except Exception:
         logger.exception("Failed to spawn update worker")
         _write_update_status(

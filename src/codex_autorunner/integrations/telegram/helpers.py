@@ -1316,7 +1316,7 @@ FIRST_USER_PREVIEW_IGNORE_PATTERNS = (
     ),
 )
 
-USER_MESSAGE_BEGIN_STRIP_RE = re.compile(
+DISPATCH_BEGIN_STRIP_RE = re.compile(
     r"(?s)^\s*(?:<prior context>\s*)?##\s*My request for Codex:\s*",
     re.IGNORECASE,
 )
@@ -1333,17 +1333,17 @@ def _is_ignored_first_user_preview(text: Optional[str]) -> bool:
     )
 
 
-def _strip_user_message_begin(text: Optional[str]) -> Optional[str]:
+def _strip_dispatch_begin(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str):
         return text
-    stripped = USER_MESSAGE_BEGIN_STRIP_RE.sub("", text)
+    stripped = DISPATCH_BEGIN_STRIP_RE.sub("", text)
     return stripped if stripped != text else text
 
 
 def _sanitize_user_preview(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str):
         return text
-    stripped = _strip_user_message_begin(text)
+    stripped = _strip_dispatch_begin(text)
     if _is_ignored_first_user_preview(stripped):
         return None
     return stripped
@@ -1365,7 +1365,7 @@ def _github_preview_matcher(text: Optional[str]) -> Optional[str]:
     return None
 
 
-COMPACT_SEED_PREFIX = "Context handoff from previous thread:"
+COMPACT_SEED_PREFIX = "Context from previous thread:"
 COMPACT_SEED_SUFFIX = "Continue from this context. Ask for missing info if needed."
 
 
@@ -1644,7 +1644,7 @@ def _extract_rollout_first_user_preview(path: Path) -> Optional[str]:
             continue
         for role, text in _iter_role_texts(payload):
             if role == "user" and text:
-                stripped = _strip_user_message_begin(text)
+                stripped = _strip_dispatch_begin(text)
                 if stripped and not _is_ignored_first_user_preview(stripped):
                     return stripped
     return None
@@ -1704,7 +1704,7 @@ def _extract_turns_first_user_preview(turns: Any) -> Optional[str]:
             for item in iterable:
                 for role, text in _iter_role_texts(item):
                     if role == "user" and text:
-                        stripped = _strip_user_message_begin(text)
+                        stripped = _strip_dispatch_begin(text)
                         if stripped and not _is_ignored_first_user_preview(stripped):
                             return stripped
     return None
@@ -1842,7 +1842,7 @@ def _extract_first_user_preview(entry: Any) -> Optional[str]:
         "initialMessage",
     )
     user_preview = _coerce_preview_field(entry, user_preview_keys)
-    user_preview = _strip_user_message_begin(user_preview)
+    user_preview = _strip_dispatch_begin(user_preview)
     if _is_ignored_first_user_preview(user_preview):
         user_preview = None
     turns = entry.get("turns")

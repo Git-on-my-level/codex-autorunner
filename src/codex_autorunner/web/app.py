@@ -33,7 +33,6 @@ from ..core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
-from ..core.doc_chat import DocChatService
 from ..core.engine import Engine, LockError
 from ..core.flows.models import FlowRunStatus
 from ..core.flows.store import FlowStore
@@ -41,7 +40,6 @@ from ..core.hub import HubSupervisor
 from ..core.logging_utils import safe_log, setup_rotating_logger
 from ..core.optional_dependencies import require_optional_dependencies
 from ..core.request_context import get_request_id
-from ..core.snapshot import SnapshotService
 from ..core.state import load_state, persist_session_registry
 from ..core.usage import (
     UsageError,
@@ -62,9 +60,8 @@ from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import load_manifest
 from ..routes import build_repo_router
 from ..routes.system import build_system_routes
-from ..spec_ingest import SpecIngestService
 from ..tickets.files import safe_relpath
-from ..tickets.outbox import parse_user_message, resolve_outbox_paths
+from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..voice import VoiceConfig, VoiceService
 from .hub_jobs import HubJobManager
 from .middleware import (
@@ -99,9 +96,6 @@ class AppContext:
     env: Mapping[str, str]
     engine: Engine
     manager: RunnerManager
-    doc_chat: DocChatService
-    spec_ingest: SpecIngestService
-    snapshot_service: SnapshotService
     app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
     app_server_prune_interval: Optional[float]
     app_server_threads: AppServerThreadRegistry
@@ -216,6 +210,25 @@ def _extract_turn_context(params: dict) -> tuple[Optional[str], Optional[str]]:
     return thread_id, turn_id
 
 
+def _path_is_allowed_for_file_write(path: str) -> bool:
+    normalized = (path or "").strip()
+    if not normalized:
+        return False
+    # Canonical allowlist for all AI-assisted file edits via app-server approval:
+    # - tickets: .codex-autorunner/tickets/**
+    # - workspace docs: .codex-autorunner/workspace/**
+    allowed_prefixes = (
+        ".codex-autorunner/tickets/",
+        ".codex-autorunner/workspace/",
+    )
+    if normalized in (".codex-autorunner/tickets", ".codex-autorunner/workspace"):
+        return True
+    return any(
+        normalized == prefix.rstrip("/") or normalized.startswith(prefix)
+        for prefix in allowed_prefixes
+    )
+
+
 def _build_app_server_supervisor(
     config: AppServerConfig,
     *,
@@ -251,12 +264,19 @@ def _build_app_server_supervisor(
         state_root=config.state_root,
         env_builder=_env_builder,
         logger=logger,
+        auto_restart=config.auto_restart,
         max_handles=config.max_handles,
         idle_ttl_seconds=config.idle_ttl_seconds,
         request_timeout=config.request_timeout,
         turn_stall_timeout_seconds=config.turn_stall_timeout_seconds,
         turn_stall_poll_interval_seconds=config.turn_stall_poll_interval_seconds,
         turn_stall_recovery_min_interval_seconds=config.turn_stall_recovery_min_interval_seconds,
+        max_message_bytes=config.client.max_message_bytes,
+        oversize_preview_bytes=config.client.oversize_preview_bytes,
+        max_oversize_drain_bytes=config.client.max_oversize_drain_bytes,
+        restart_backoff_initial_seconds=config.client.restart_backoff_initial_seconds,
+        restart_backoff_max_seconds=config.client.restart_backoff_max_seconds,
+        restart_backoff_jitter_ratio=config.client.restart_backoff_jitter_ratio,
         notification_handler=notification_handler,
         approval_handler=approval_handler,
     )
@@ -362,19 +382,8 @@ def _build_app_context(
         f"Repo server ready at {engine.repo_root}",
     )
     app_server_events = AppServerEventBuffer()
-    allowed_doc_paths = {
-        path
-        for kind in ("todo", "progress", "opinions", "spec", "summary")
-        for path in [
-            _normalize_approval_path(
-                str(engine.config.doc_path(kind).relative_to(engine.config.root)),
-                engine.config.root,
-            )
-        ]
-        if path
-    }
 
-    async def _doc_chat_approval_handler(message: dict) -> str:
+    async def _file_write_approval_handler(message: dict) -> str:
         method = message.get("method")
         params = message.get("params")
         params = params if isinstance(params, dict) else {}
@@ -395,9 +404,11 @@ def _build_app_context(
                     }
                 )
                 return "decline"
-            rejected = [path for path in normalized if path not in allowed_doc_paths]
+            rejected = [
+                path for path in normalized if not _path_is_allowed_for_file_write(path)
+            ]
             if rejected:
-                notice = "Rejected write to non-doc files: " + ", ".join(rejected)
+                notice = "Rejected write outside allowlist: " + ", ".join(rejected)
                 await app_server_events.handle_notification(
                     {
                         "method": "error",
@@ -411,7 +422,7 @@ def _build_app_context(
                 return "decline"
             return "accept"
         if method == "item/commandExecution/requestApproval":
-            notice = "Rejected command execution in doc chat session."
+            notice = "Rejected command execution in file write session."
             await app_server_events.handle_notification(
                 {
                     "method": "error",
@@ -431,7 +442,7 @@ def _build_app_context(
         event_prefix="web.app_server",
         base_env=env,
         notification_handler=app_server_events.handle_notification,
-        approval_handler=_doc_chat_approval_handler,
+        approval_handler=_file_write_approval_handler,
     )
     app_server_threads = AppServerThreadRegistry(
         default_app_server_threads_path(engine.repo_root)
@@ -452,27 +463,6 @@ def _build_app_context(
         env=env,
         subagent_models=subagent_models,
         session_stall_timeout_seconds=config.opencode.session_stall_timeout_seconds,
-    )
-    doc_chat = DocChatService(
-        engine,
-        app_server_supervisor=app_server_supervisor,
-        app_server_threads=app_server_threads,
-        app_server_events=app_server_events,
-        opencode_supervisor=opencode_supervisor,
-        env=env,
-    )
-    spec_ingest = SpecIngestService(
-        engine,
-        app_server_supervisor=app_server_supervisor,
-        app_server_threads=app_server_threads,
-        app_server_events=app_server_events,
-        opencode_supervisor=opencode_supervisor,
-        env=env,
-    )
-    snapshot_service = SnapshotService(
-        engine,
-        app_server_supervisor=app_server_supervisor,
-        app_server_threads=app_server_threads,
     )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:
@@ -576,9 +566,6 @@ def _build_app_context(
         env=env,
         engine=engine,
         manager=manager,
-        doc_chat=doc_chat,
-        spec_ingest=spec_ingest,
-        snapshot_service=snapshot_service,
         app_server_supervisor=app_server_supervisor,
         app_server_prune_interval=app_server_prune_interval,
         app_server_threads=app_server_threads,
@@ -611,9 +598,6 @@ def _apply_app_context(app: FastAPI, context: AppContext) -> None:
     app.state.engine = context.engine
     app.state.config = context.engine.config  # Expose config consistently
     app.state.manager = context.manager
-    app.state.doc_chat = context.doc_chat
-    app.state.spec_ingest = context.spec_ingest
-    app.state.snapshot_service = context.snapshot_service
     app.state.app_server_supervisor = context.app_server_supervisor
     app.state.app_server_prune_interval = context.app_server_prune_interval
     app.state.app_server_threads = context.app_server_threads
@@ -912,12 +896,82 @@ def _app_lifespan(context: AppContext):
     return lifespan
 
 
+def create_repo_app(
+    repo_root: Path,
+    server_overrides: Optional[ServerOverrides] = None,
+    hub_config: Optional[HubConfig] = None,
+) -> ASGIApp:
+    # Hub-only: repo apps are always mounted under `/repos/<id>` and must not
+    # apply their own base-path rewriting (the hub handles that globally).
+    context = _build_app_context(repo_root, base_path="", hub_config=hub_config)
+    app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
+
+    class _RepoRootContextMiddleware(BaseHTTPMiddleware):
+        """Ensure find_repo_root() resolves to the mounted repo even when cwd differs."""
+
+        def __init__(self, app, repo_root: Path):
+            super().__init__(app)
+            self.repo_root = repo_root
+
+        async def dispatch(self, request, call_next):
+            token = set_repo_root_context(self.repo_root)
+            try:
+                return await call_next(request)
+            finally:
+                reset_repo_root_context(token)
+
+    app.add_middleware(_RepoRootContextMiddleware, repo_root=context.engine.repo_root)
+    _apply_app_context(app, context)
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+    static_files = CacheStaticFiles(directory=context.static_dir)
+    app.state.static_files = static_files
+    app.state.static_assets_lock = threading.Lock()
+    app.state.hub_static_assets = (
+        hub_config.static_assets if hub_config is not None else None
+    )
+    app.mount("/static", static_files, name="static")
+    # Route handlers
+    app.include_router(build_repo_router(context.static_dir))
+
+    allowed_hosts = _resolve_allowed_hosts(
+        context.engine.config.server_host, context.engine.config.server_allowed_hosts
+    )
+    allowed_origins = context.engine.config.server_allowed_origins
+    auth_token_env = context.engine.config.server_auth_token_env
+    if server_overrides is not None:
+        if server_overrides.allowed_hosts is not None:
+            allowed_hosts = list(server_overrides.allowed_hosts)
+        if server_overrides.allowed_origins is not None:
+            allowed_origins = list(server_overrides.allowed_origins)
+        if server_overrides.auth_token_env is not None:
+            auth_token_env = server_overrides.auth_token_env
+    auth_token = _resolve_auth_token(auth_token_env, env=context.env)
+    app.state.auth_token = auth_token
+    if auth_token:
+        app.add_middleware(
+            AuthTokenMiddleware, auth_token=auth_token, base_path=context.base_path
+        )
+    app.add_middleware(
+        HostOriginMiddleware,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    return app
+
+
 def create_app(
     repo_root: Optional[Path] = None,
     base_path: Optional[str] = None,
     server_overrides: Optional[ServerOverrides] = None,
     hub_config: Optional[HubConfig] = None,
 ) -> ASGIApp:
+    """
+    Public-facing factory for standalone repo apps (non-hub) retained for backward compatibility.
+    """
+    # Respect provided base_path when running directly; hub passes base_path="".
     context = _build_app_context(repo_root, base_path, hub_config=hub_config)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
 
@@ -962,30 +1016,21 @@ def create_app(
             auth_token_env = server_overrides.auth_token_env
     auth_token = _resolve_auth_token(auth_token_env, env=context.env)
     app.state.auth_token = auth_token
-    asgi_app: ASGIApp = app
     if auth_token:
-        asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
+        app.add_middleware(
+            AuthTokenMiddleware, auth_token=auth_token, base_path=context.base_path
+        )
     if context.base_path:
-        asgi_app = BasePathRouterMiddleware(asgi_app, context.base_path)
-    asgi_app = HostOriginMiddleware(asgi_app, allowed_hosts, allowed_origins)
-    asgi_app = RequestIdMiddleware(asgi_app)
-    asgi_app = SecurityHeadersMiddleware(asgi_app)
-
-    return asgi_app
-
-
-def create_repo_app(
-    repo_root: Path,
-    server_overrides: Optional[ServerOverrides] = None,
-    hub_config: Optional[HubConfig] = None,
-) -> ASGIApp:
-    """Hub-mounted repo app helper (base path handled by hub)."""
-    return create_app(
-        repo_root,
-        base_path="",
-        server_overrides=server_overrides,
-        hub_config=hub_config,
+        app.add_middleware(BasePathRouterMiddleware, base_path=context.base_path)
+    app.add_middleware(
+        HostOriginMiddleware,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
     )
+    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    return app
 
 
 def create_hub_app(
@@ -1108,9 +1153,8 @@ def create_hub_app(
             return False
         try:
             # Hub already handles the base path; avoid reapplying it in child apps.
-            sub_app = create_app(
+            sub_app = create_repo_app(
                 repo_path,
-                base_path="",
                 server_overrides=repo_server_overrides,
                 hub_config=context.config,
             )
@@ -1138,6 +1182,9 @@ def create_hub_app(
                     exc=exc2,
                 )
             return False
+        fastapi_app = _unwrap_fastapi(sub_app)
+        if fastapi_app is not None:
+            fastapi_app.state.repo_id = prefix
         app.mount(f"/repos/{prefix}", sub_app)
         mounted_repos.add(prefix)
         repo_apps[prefix] = sub_app
@@ -1166,9 +1213,8 @@ def create_hub_app(
                     continue
                 # Hub already handles the base path; avoid reapplying it in child apps.
                 try:
-                    sub_app = create_app(
+                    sub_app = create_repo_app(
                         snap.path,
-                        base_path="",
                         server_overrides=repo_server_overrides,
                         hub_config=context.config,
                     )
@@ -1200,6 +1246,9 @@ def create_hub_app(
                             exc=exc2,
                         )
                     continue
+                fastapi_app = _unwrap_fastapi(sub_app)
+                if fastapi_app is not None:
+                    fastapi_app.state.repo_id = snap.id
                 app.mount(f"/repos/{snap.id}", sub_app)
                 mounted_repos.add(snap.id)
                 repo_apps[snap.id] = sub_app
@@ -1380,13 +1429,13 @@ def create_hub_app(
 
     @app.get("/hub/messages")
     async def hub_messages(limit: int = 100):
-        """Return paused ticket_flow messages across all repos.
+        """Return paused ticket_flow dispatches across all repos.
 
         The hub inbox is intentionally simple: it surfaces the latest archived
-        handoff message for each paused ticket_flow run.
+        dispatch for each paused ticket_flow run.
         """
 
-        def _latest_handoff(
+        def _latest_dispatch(
             repo_root: Path, run_id: str, input_data: dict
         ) -> Optional[dict]:
             try:
@@ -1395,7 +1444,7 @@ def create_hub_app(
                 outbox_paths = resolve_outbox_paths(
                     workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
                 )
-                history_dir = outbox_paths.handoff_history_dir
+                history_dir = outbox_paths.dispatch_history_dir
                 if not history_dir.exists() or not history_dir.is_dir():
                     return None
                 seq_dirs: list[Path] = []
@@ -1409,13 +1458,13 @@ def create_hub_app(
                     return None
                 latest_dir = sorted(seq_dirs, key=lambda p: p.name)[-1]
                 seq = int(latest_dir.name)
-                msg_path = latest_dir / "USER_MESSAGE.md"
-                msg, errors = parse_user_message(msg_path)
-                if errors or msg is None:
+                dispatch_path = latest_dir / "DISPATCH.md"
+                dispatch, errors = parse_dispatch(dispatch_path)
+                if errors or dispatch is None:
                     return {
                         "seq": seq,
                         "dir": safe_relpath(latest_dir, repo_root),
-                        "message": None,
+                        "dispatch": None,
                         "errors": errors,
                         "files": [],
                     }
@@ -1423,19 +1472,21 @@ def create_hub_app(
                 for child in sorted(latest_dir.iterdir(), key=lambda p: p.name):
                     if child.name.startswith("."):
                         continue
-                    if child.name == "USER_MESSAGE.md":
+                    if child.name == "DISPATCH.md":
                         continue
                     if child.is_file():
                         files.append(child.name)
+                dispatch_dict = {
+                    "mode": dispatch.mode,
+                    "title": dispatch.title,
+                    "body": dispatch.body,
+                    "extra": dispatch.extra,
+                    "is_handoff": dispatch.is_handoff,
+                }
                 return {
                     "seq": seq,
                     "dir": safe_relpath(latest_dir, repo_root),
-                    "message": {
-                        "mode": msg.mode,
-                        "title": msg.title,
-                        "body": msg.body,
-                        "extra": msg.extra,
-                    },
+                    "dispatch": dispatch_dict,
                     "errors": [],
                     "files": files,
                 }
@@ -1466,10 +1517,10 @@ def create_hub_app(
                 if not paused:
                     continue
                 for record in paused:
-                    latest = _latest_handoff(
+                    latest = _latest_dispatch(
                         repo_root, str(record.id), dict(record.input_data or {})
                     )
-                    if not latest or not latest.get("message"):
+                    if not latest or not latest.get("dispatch"):
                         continue
                     messages.append(
                         {
@@ -1480,9 +1531,9 @@ def create_hub_app(
                             "run_created_at": record.created_at,
                             "status": record.status.value,
                             "seq": latest["seq"],
-                            "message": latest["message"],
+                            "dispatch": latest["dispatch"],
                             "files": latest.get("files") or [],
-                            "open_url": f"/repos/{snap.id}/?tab=messages&run_id={record.id}",
+                            "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
                         }
                     )
             messages.sort(key=lambda m: (m.get("run_created_at") or ""), reverse=True)

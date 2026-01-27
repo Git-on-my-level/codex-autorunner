@@ -38,6 +38,7 @@ from ..integrations.app_server.client import (
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
+from ..tickets.files import list_ticket_paths, ticket_is_done
 from .about_car import ensure_about_car_file
 from .adapter_utils import handle_agent_output
 from .app_server_events import AppServerEventBuffer
@@ -267,41 +268,21 @@ class Engine:
         return None
 
     def todos_done(self) -> bool:
-        return self.docs.todos_done()
+        # Ticket-first mode: completion is determined by ticket files, not TODO.md.
+        ticket_dir = self.repo_root / ".codex-autorunner" / "tickets"
+        ticket_paths = list_ticket_paths(ticket_dir)
+        if not ticket_paths:
+            return False
+        return all(ticket_is_done(path) for path in ticket_paths)
 
     def summary_finalized(self) -> bool:
-        """Return True if SUMMARY.md contains the finalization marker."""
-        try:
-            text = self.docs.read_doc("summary")
-        except (FileNotFoundError, OSError) as exc:
-            self._app_server_logger.debug("Failed to read SUMMARY.md: %s", exc)
-            return False
-        return SUMMARY_FINALIZED_MARKER in (text or "")
+        # Legacy docs finalization no longer applies (no SUMMARY doc).
+        return True
 
     def _stamp_summary_finalized(self, run_id: int) -> None:
-        """
-        Append an idempotency marker to SUMMARY.md so the final summary job runs only once.
-        Users may remove the marker to force regeneration.
-        """
-        path = self.config.doc_path("summary")
-        try:
-            existing = path.read_text(encoding="utf-8") if path.exists() else ""
-        except (FileNotFoundError, OSError) as exc:
-            self._app_server_logger.debug(
-                "Failed to read SUMMARY.md for stamping: %s", exc
-            )
-            existing = ""
-        if SUMMARY_FINALIZED_MARKER in existing:
-            return
-        stamp = f"{SUMMARY_FINALIZED_MARKER_PREFIX} run_id={int(run_id)} -->\n"
-        new_text = existing
-        if new_text and not new_text.endswith("\n"):
-            new_text += "\n"
-        # Keep a blank line before the marker for readability.
-        if new_text and not new_text.endswith("\n\n"):
-            new_text += "\n"
-        new_text += stamp
-        atomic_write(path, new_text)
+        # No-op: summary file no longer exists.
+        _ = run_id
+        return
 
     async def _execute_run_step(
         self,
@@ -322,7 +303,9 @@ class Engine:
         try:
             todo_before = self.docs.read_doc("todo")
         except (FileNotFoundError, OSError) as exc:
-            self._app_server_logger.debug("Failed to read TODO.md before run: %s", exc)
+            self._app_server_logger.debug(
+                "Failed to read TODO.md before run %s: %s", run_id, exc
+            )
             todo_before = ""
         state = load_state(self.state_path)
         selected_agent = (state.autorunner_agent_override or "codex").strip().lower()
@@ -373,7 +356,9 @@ class Engine:
         try:
             todo_after = self.docs.read_doc("todo")
         except (FileNotFoundError, OSError) as exc:
-            self._app_server_logger.debug("Failed to read TODO.md after run: %s", exc)
+            self._app_server_logger.debug(
+                "Failed to read TODO.md after run %s: %s", run_id, exc
+            )
             todo_after = ""
         todo_delta = self._compute_todo_attribution(todo_before, todo_after)
         todo_snapshot = self._build_todo_snapshot(todo_before, todo_after)
@@ -412,7 +397,7 @@ class Engine:
                 )
             except (TypeError, ValueError) as exc:
                 self._app_server_logger.debug(
-                    "Failed to serialize plan to JSON: %s", exc
+                    "Failed to serialize plan to JSON for run %s: %s", run_id, exc
                 )
                 plan_content = json.dumps(
                     {"plan": str(telemetry.plan)}, ensure_ascii=True, indent=2
@@ -492,7 +477,7 @@ class Engine:
                 text = run_log.read_text(encoding="utf-8")
             except (FileNotFoundError, OSError) as exc:
                 self._app_server_logger.debug(
-                    "Failed to read previous run log: %s", exc
+                    "Failed to read previous run log for run %s: %s", run_id, exc
                 )
                 text = ""
             if text:
@@ -543,10 +528,12 @@ class Engine:
             try:
                 return run_log.read_text(encoding="utf-8")
             except (FileNotFoundError, OSError) as exc:
-                self._app_server_logger.debug("Failed to read run log block: %s", exc)
+                self._app_server_logger.debug(
+                    "Failed to read run log block for run %s: %s", run_id, exc
+                )
                 return None
         if index_entry:
-            block = self._read_log_range(index_entry)
+            block = self._read_log_range(run_id, index_entry)
             if block is not None:
                 return block
         if not self.log_path.exists():
@@ -590,7 +577,7 @@ class Engine:
                 return "\n".join(buf) if buf else None
         except (FileNotFoundError, OSError, ValueError) as exc:
             self._app_server_logger.debug(
-                "Failed to read full log for run block: %s", exc
+                "Failed to read full log for run %s block: %s", run_id, exc
             )
             return None
         return None
@@ -617,7 +604,7 @@ class Engine:
                 self._active_run_log.flush()
             except (OSError, IOError) as exc:
                 self._app_server_logger.warning(
-                    "Failed to write to active run log: %s", exc
+                    "Failed to write to active run log for run %s: %s", run_id, exc
                 )
         else:
             run_log = self._run_log_path(run_id)
@@ -642,7 +629,7 @@ class Engine:
                 f.write(_json.dumps(event_data) + "\n")
         except (OSError, IOError) as exc:
             self._app_server_logger.warning(
-                "Failed to write event to events log: %s", exc
+                "Failed to write event to events log for run %s: %s", run_id, exc
             )
 
     def _ensure_log_path(self) -> None:
@@ -685,7 +672,9 @@ class Engine:
                 self._active_run_log.flush()
             except (OSError, IOError) as exc:
                 self._app_server_logger.warning(
-                    "Failed to write marker to active run log: %s", exc
+                    "Failed to write marker to active run log for run %s: %s",
+                    run_id,
+                    exc,
                 )
         else:
             self._ensure_run_log_dir()
@@ -763,7 +752,7 @@ class Engine:
                     handler.close()
                 except (OSError, IOError) as exc:
                     self._app_server_logger.debug(
-                        "Failed to close run log handler: %s", exc
+                        "Failed to close run log handler for run %s: %s", run_id, exc
                     )
 
     def _start_run_telemetry(self, run_id: int) -> None:
@@ -1105,7 +1094,10 @@ class Engine:
                 entry_id = int(key)
             except (TypeError, ValueError) as exc:
                 self._app_server_logger.debug(
-                    "Failed to parse run index key '%s': %s", key, exc
+                    "Failed to parse run index key '%s' while resolving run %s: %s",
+                    key,
+                    run_id,
+                    exc,
                 )
                 continue
             if entry_id >= run_id:
@@ -1190,7 +1182,7 @@ class Engine:
         atomic_write(path, content)
         return path
 
-    def _read_log_range(self, entry: dict) -> Optional[str]:
+    def _read_log_range(self, run_id: int, entry: dict) -> Optional[str]:
         start = entry.get("start_offset")
         end = entry.get("end_offset")
         if start is None or end is None:
@@ -1199,7 +1191,9 @@ class Engine:
             start_offset = int(start)
             end_offset = int(end)
         except (TypeError, ValueError) as exc:
-            self._app_server_logger.debug("Failed to parse log range offsets: %s", exc)
+            self._app_server_logger.debug(
+                "Failed to parse log range offsets for run %s: %s", run_id, exc
+            )
             return None
         if end_offset < start_offset:
             return None
@@ -1215,7 +1209,9 @@ class Engine:
                 data = f.read(end_offset - start_offset)
             return data.decode("utf-8", errors="replace")
         except (FileNotFoundError, OSError) as exc:
-            self._app_server_logger.debug("Failed to read log range: %s", exc)
+            self._app_server_logger.debug(
+                "Failed to read log range for run %s: %s", run_id, exc
+            )
             return None
 
     def _build_app_server_prompt(self, prev_output: Optional[str]) -> str:
@@ -1400,13 +1396,12 @@ class Engine:
         msg = self.config.git_commit_message_template.replace(
             "{run_id}", str(run_id)
         ).replace("#{run_id}", str(run_id))
-        paths = [
-            self.config.doc_path("todo"),
-            self.config.doc_path("progress"),
-            self.config.doc_path("opinions"),
-            self.config.doc_path("spec"),
-            self.config.doc_path("summary"),
-        ]
+        paths = []
+        for key in ("active_context", "decisions", "spec"):
+            try:
+                paths.append(self.config.doc_path(key))
+            except KeyError:
+                pass
         add_paths = [str(p.relative_to(self.repo_root)) for p in paths if p.exists()]
         if not add_paths:
             return
@@ -1446,12 +1441,19 @@ class Engine:
             env_builder=env_builder,
             logger=self._app_server_logger,
             notification_handler=self._handle_app_server_notification,
+            auto_restart=config.auto_restart,
             max_handles=config.max_handles,
             idle_ttl_seconds=config.idle_ttl_seconds,
             request_timeout=config.request_timeout,
             turn_stall_timeout_seconds=config.turn_stall_timeout_seconds,
             turn_stall_poll_interval_seconds=config.turn_stall_poll_interval_seconds,
             turn_stall_recovery_min_interval_seconds=config.turn_stall_recovery_min_interval_seconds,
+            max_message_bytes=config.client.max_message_bytes,
+            oversize_preview_bytes=config.client.oversize_preview_bytes,
+            max_oversize_drain_bytes=config.client.max_oversize_drain_bytes,
+            restart_backoff_initial_seconds=config.client.restart_backoff_initial_seconds,
+            restart_backoff_max_seconds=config.client.restart_backoff_max_seconds,
+            restart_backoff_jitter_ratio=config.client.restart_backoff_jitter_ratio,
         )
 
     def _ensure_app_server_supervisor(
@@ -1638,8 +1640,9 @@ class Engine:
                     await client.get_session(thread_id)
                 except Exception as exc:
                     self._app_server_logger.debug(
-                        "Failed to get existing opencode session '%s': %s",
+                        "Failed to get existing opencode session '%s' for run %s: %s",
                         thread_id,
+                        run_id,
                         exc,
                     )
                     self._app_server_threads.reset_thread(key)
@@ -1873,8 +1876,10 @@ class Engine:
             )
         )
         no_progress_count = 0
-        last_outstanding_count = len(self.docs.todos()[0])
-        last_done_count = len(self.docs.todos()[1])
+        ticket_dir = self.repo_root / ".codex-autorunner" / "tickets"
+        initial_tickets = list_ticket_paths(ticket_dir)
+        last_done_count = sum(1 for path in initial_tickets if ticket_is_done(path))
+        last_outstanding_count = len(initial_tickets) - last_done_count
         exit_reason: Optional[str] = None
 
         try:
@@ -1928,9 +1933,11 @@ class Engine:
                     break
 
                 # Check for no progress across runs
-                current_outstanding, current_done = self.docs.todos()
-                current_outstanding_count = len(current_outstanding)
-                current_done_count = len(current_done)
+                current_tickets = list_ticket_paths(ticket_dir)
+                current_done_count = sum(
+                    1 for path in current_tickets if ticket_is_done(path)
+                )
+                current_outstanding_count = len(current_tickets) - current_done_count
 
                 # Check if there was any meaningful progress
                 has_progress = (
@@ -2039,12 +2046,16 @@ class Engine:
                 for line in tb.splitlines():
                     self.log_line(run_id, f"traceback: {line}")
             except (OSError, IOError) as exc:
-                self._app_server_logger.error("Failed to log run_loop crash: %s", exc)
+                self._app_server_logger.error(
+                    "Failed to log run_loop crash for run %s: %s", run_id, exc
+                )
             try:
                 self._update_state("error", run_id, 1, finished=True)
             except (OSError, IOError) as exc:
                 self._app_server_logger.error(
-                    "Failed to update state after run_loop crash: %s", exc
+                    "Failed to update state after run_loop crash for run %s: %s",
+                    run_id,
+                    exc,
                 )
         finally:
             try:
@@ -2053,7 +2064,9 @@ class Engine:
                     last_exit_code=last_exit_code,
                 )
             except Exception as exc:
-                self._app_server_logger.warning("End-of-run review failed: %s", exc)
+                self._app_server_logger.warning(
+                    "End-of-run review failed for run %s: %s", run_id, exc
+                )
             await self._close_app_server_supervisor()
             await self._close_opencode_supervisor()
         # IMPORTANT: lock ownership is managed by the caller (CLI/Hub/Server runner).
@@ -2217,8 +2230,12 @@ class Engine:
         started: bool = False,
         finished: bool = False,
     ) -> None:
+        prev_status: Optional[str] = None
+        last_run_started_at: Optional[str] = None
+        last_run_finished_at: Optional[str] = None
         with state_lock(self.state_path):
             current = load_state(self.state_path)
+            prev_status = current.status
             last_run_started_at = current.last_run_started_at
             last_run_finished_at = current.last_run_finished_at
             runner_pid = current.runner_pid
@@ -2246,6 +2263,18 @@ class Engine:
                 repo_to_session=current.repo_to_session,
             )
             save_state(self.state_path, new_state)
+        if run_id > 0 and prev_status != status:
+            payload: dict[str, Any] = {
+                "from_status": prev_status,
+                "to_status": status,
+            }
+            if exit_code is not None:
+                payload["exit_code"] = exit_code
+            if started and last_run_started_at:
+                payload["started_at"] = last_run_started_at
+            if finished and last_run_finished_at:
+                payload["finished_at"] = last_run_finished_at
+            self._emit_event(run_id, "run.state_changed", **payload)
 
 
 def clear_stale_lock(lock_path: Path) -> bool:

@@ -24,6 +24,9 @@ def test_repo_root_context_applied_when_cwd_differs(tmp_path, monkeypatch):
     def root_check():
         return {"root": str(find_repo_root())}
 
+    # Ensure the test route is matched before the catch-all UI route.
+    app.router.routes.insert(0, app.router.routes.pop())
+
     with TestClient(app) as client:
         resp = client.get("/root-check")
         assert resp.status_code == 200

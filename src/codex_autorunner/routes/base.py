@@ -31,24 +31,28 @@ from .shared import (
 ALT_SCREEN_ENTER = b"\x1b[?1049h"
 
 
+def _serve_index(request: Request, static_dir: Path):
+    active_static = getattr(request.app.state, "static_dir", static_dir)
+    index_path = active_static / "index.html"
+    if not index_path.exists():
+        if refresh_static_assets(request.app):
+            active_static = request.app.state.static_dir
+            index_path = active_static / "index.html"
+    if not index_path.exists():
+        raise HTTPException(
+            status_code=500, detail="Static UI assets missing; reinstall package"
+        )
+    html = render_index_html(active_static, request.app.state.asset_version)
+    return HTMLResponse(html, headers=index_response_headers())
+
+
 def build_base_routes(static_dir: Path) -> APIRouter:
     """Build routes for index, state, logs, and terminal WebSocket."""
     router = APIRouter()
 
     @router.get("/", include_in_schema=False)
     def index(request: Request):
-        active_static = getattr(request.app.state, "static_dir", static_dir)
-        index_path = active_static / "index.html"
-        if not index_path.exists():
-            if refresh_static_assets(request.app):
-                active_static = request.app.state.static_dir
-                index_path = active_static / "index.html"
-        if not index_path.exists():
-            raise HTTPException(
-                status_code=500, detail="Static UI assets missing; reinstall package"
-            )
-        html = render_index_html(active_static, request.app.state.asset_version)
-        return HTMLResponse(html, headers=index_response_headers())
+        return _serve_index(request, static_dir)
 
     @router.get("/api/version", response_model=VersionResponse)
     def get_version(request: Request):
@@ -569,5 +573,25 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             # Unregister websocket from active set
             if active_websockets is not None:
                 active_websockets.discard(ws)
+
+    return router
+
+
+def build_frontend_routes(static_dir: Path) -> APIRouter:
+    """Build catch-all routes for frontend tabs."""
+    router = APIRouter()
+
+    @router.get("/{tab}", include_in_schema=False)
+    def tab_route(tab: str, request: Request):
+        if tab in {
+            "workspace",
+            "tickets",
+            "messages",
+            "analytics",
+            "terminal",
+            "settings",
+        }:
+            return _serve_index(request, static_dir)
+        raise HTTPException(status_code=404, detail="Not Found")
 
     return router

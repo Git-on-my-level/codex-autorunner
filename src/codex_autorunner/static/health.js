@@ -73,12 +73,14 @@ function deriveHealthFromPayload(payload) {
     if (!payload || typeof payload !== "object") {
         return { status: "offline", detail: "Empty health response" };
     }
-    const payloadStatus = String(payload.status || "ok").toLowerCase();
+    const p = payload;
+    const payloadStatus = String(p.status || "ok").toLowerCase();
     if (payloadStatus !== "ok" && payloadStatus !== "degraded") {
-        return { status: "offline", detail: String(payload.detail || payloadStatus) };
+        return { status: "offline", detail: String(p.detail || payloadStatus) };
     }
     // Ticket-first: the only initialization requirement is `.codex-autorunner/tickets/`.
-    const ticketsStatus = String(payload.tickets?.status || "").toLowerCase();
+    const tickets = p.tickets;
+    const ticketsStatus = String(tickets?.status || "").toLowerCase();
     if (ticketsStatus && ticketsStatus !== "ok") {
         return {
             status: "degraded",
@@ -86,7 +88,8 @@ function deriveHealthFromPayload(payload) {
         };
     }
     // Flows DB is lazily created. Only treat truly unavailable storage as degraded.
-    const flowsStatus = String(payload.flows?.status || "").toLowerCase();
+    const flows = p.flows;
+    const flowsStatus = String(flows?.status || "").toLowerCase();
     if (flowsStatus && flowsStatus !== "ok" && flowsStatus !== "missing") {
         return { status: "degraded", detail: `Flows unavailable: ${flowsStatus}` };
     }
