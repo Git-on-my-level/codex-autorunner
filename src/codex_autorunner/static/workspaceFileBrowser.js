@@ -1,18 +1,14 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { createWorkspaceFolder, deleteWorkspaceFile, deleteWorkspaceFolder, downloadWorkspaceFile, downloadWorkspaceZip, } from "./workspaceApi.js";
-import { flash } from "./utils.js";
-const INDENT_PX = 14;
 export class WorkspaceFileBrowser {
     constructor(options) {
         this.tree = [];
         this.currentPath = "";
         this.selectedPath = null;
-        this.expanded = new Set();
         this.container = options.container;
         this.selectEl = options.selectEl ?? null;
         this.breadcrumbsEl = options.breadcrumbsEl ?? null;
         this.onSelect = options.onSelect;
-        this.onRefresh = options.onRefresh;
+        this.onPathChange = options.onPathChange;
         this.fileBtnEl = document.getElementById("workspace-file-pill");
         this.fileBtnNameEl = document.getElementById("workspace-file-pill-name");
         this.modalEl = document.getElementById("file-picker-modal");
@@ -24,7 +20,6 @@ export class WorkspaceFileBrowser {
         this.tree = tree || [];
         const next = this.pickInitialSelection(defaultPath);
         if (next) {
-            this.expandAncestors(next);
             const shouldTrigger = next !== this.selectedPath;
             this.select(next, shouldTrigger);
         }
@@ -36,18 +31,11 @@ export class WorkspaceFileBrowser {
         return this.currentPath;
     }
     navigateTo(path) {
-        this.expandAncestors(path);
         this.currentPath = path;
+        if (this.onPathChange)
+            this.onPathChange(this.currentPath);
         this.render();
-    }
-    async createFolder(path) {
-        try {
-            await createWorkspaceFolder(path);
-            await this.onRefresh();
-        }
-        catch (err) {
-            flash(err.message || "Failed to create folder", "error");
-        }
+        this.renderModal();
     }
     select(path, trigger = true) {
         const node = this.findNode(path);
@@ -55,7 +43,8 @@ export class WorkspaceFileBrowser {
             return;
         this.selectedPath = path;
         this.currentPath = this.parentPath(path);
-        this.expandAncestors(path);
+        if (this.onPathChange)
+            this.onPathChange(this.currentPath);
         this.updateFileName(node.name);
         this.updateSelect(path);
         this.render();
@@ -81,14 +70,6 @@ export class WorkspaceFileBrowser {
             return "";
         parts.pop();
         return parts.join("/");
-    }
-    expandAncestors(path) {
-        const parts = path.split("/").filter(Boolean);
-        let accum = "";
-        for (const part of parts.slice(0, -1)) {
-            accum = accum ? `${accum}/${part}` : part;
-            this.expanded.add(accum);
-        }
     }
     flattenFiles(nodes) {
         const acc = [];
@@ -140,18 +121,6 @@ export class WorkspaceFileBrowser {
         this.selectEl.value = path;
         this.selectEl.onchange = () => this.select(this.selectEl.value);
     }
-    makeActionButton(label, title, handler) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "ghost sm";
-        btn.title = title;
-        btn.textContent = label;
-        btn.addEventListener("click", (evt) => {
-            evt.stopPropagation();
-            void handler();
-        });
-        return btn;
-    }
     renderBreadcrumbs() {
         if (!this.breadcrumbsEl)
             return;
@@ -182,14 +151,35 @@ export class WorkspaceFileBrowser {
     render() {
         this.container.innerHTML = "";
         this.renderBreadcrumbs();
-        const renderNodes = (nodes, depth = 0) => {
-            nodes.forEach((node) => {
+        const nodes = this.getChildren(this.currentPath);
+        const renderNodes = (list) => {
+            if (this.currentPath) {
+                const upRow = document.createElement("div");
+                upRow.className = "workspace-tree-row workspace-folder-row";
+                const label = document.createElement("div");
+                label.className = "workspace-tree-label";
+                const main = document.createElement("div");
+                main.className = "workspace-tree-main";
+                const caret = document.createElement("span");
+                caret.className = "workspace-tree-caret";
+                caret.textContent = "◂";
+                main.appendChild(caret);
+                const name = document.createElement("button");
+                name.type = "button";
+                name.className = "workspace-tree-name";
+                name.textContent = "Up one level";
+                name.addEventListener("click", () => this.navigateTo(this.parentPath(this.currentPath)));
+                main.appendChild(name);
+                label.appendChild(main);
+                upRow.appendChild(label);
+                this.container.appendChild(upRow);
+            }
+            list.forEach((node) => {
                 const row = document.createElement("div");
                 row.className = `workspace-tree-row ${node.type === "folder" ? "workspace-folder-row" : "workspace-file-row"}`;
                 if (node.path === this.selectedPath)
                     row.classList.add("active");
                 row.dataset.path = node.path;
-                row.style.paddingLeft = `${depth * INDENT_PX}px`;
                 const label = document.createElement("div");
                 label.className = "workspace-tree-label";
                 const main = document.createElement("div");
@@ -197,7 +187,7 @@ export class WorkspaceFileBrowser {
                 if (node.type === "folder") {
                     const caret = document.createElement("span");
                     caret.className = "workspace-tree-caret";
-                    caret.textContent = this.expanded.has(node.path) ? "▾" : "▸";
+                    caret.textContent = "▸";
                     main.appendChild(caret);
                 }
                 const name = document.createElement("button");
@@ -208,12 +198,6 @@ export class WorkspaceFileBrowser {
                     name.classList.add("pinned");
                 if (node.type === "folder") {
                     name.addEventListener("click", () => {
-                        if (this.expanded.has(node.path)) {
-                            this.expanded.delete(node.path);
-                        }
-                        else {
-                            this.expanded.add(node.path);
-                        }
                         this.currentPath = node.path;
                         this.render();
                         this.renderModal();
@@ -235,53 +219,11 @@ export class WorkspaceFileBrowser {
                 }
                 if (meta.textContent)
                     label.appendChild(meta);
-                const actions = document.createElement("div");
-                actions.className = "workspace-item-actions";
-                if (node.type === "file") {
-                    const dlBtn = this.makeActionButton("↓", "Download", () => downloadWorkspaceFile(node.path));
-                    actions.appendChild(dlBtn);
-                    if (!node.is_pinned) {
-                        const delBtn = this.makeActionButton("✕", "Delete", async () => {
-                            if (!confirm(`Delete ${node.name}?`))
-                                return;
-                            try {
-                                await deleteWorkspaceFile(node.path);
-                                await this.onRefresh();
-                            }
-                            catch (err) {
-                                flash(err.message || "Failed to delete file", "error");
-                            }
-                        });
-                        delBtn.classList.add("danger");
-                        actions.appendChild(delBtn);
-                    }
-                }
-                else {
-                    const zipBtn = this.makeActionButton("⬇", "Download folder", () => downloadWorkspaceZip(node.path));
-                    actions.appendChild(zipBtn);
-                    const delBtn = this.makeActionButton("✕", "Delete folder", async () => {
-                        if (!confirm(`Delete folder ${node.name}? (must be empty)`))
-                            return;
-                        try {
-                            await deleteWorkspaceFolder(node.path);
-                            await this.onRefresh();
-                        }
-                        catch (err) {
-                            flash(err.message || "Failed to delete folder", "error");
-                        }
-                    });
-                    delBtn.classList.add("danger");
-                    actions.appendChild(delBtn);
-                }
                 row.appendChild(label);
-                row.appendChild(actions);
                 this.container.appendChild(row);
-                if (node.type === "folder" && this.expanded.has(node.path) && node.children?.length) {
-                    renderNodes(node.children, depth + 1);
-                }
             });
         };
-        renderNodes(this.tree, 0);
+        renderNodes(nodes);
     }
     renderModal() {
         if (!this.modalBodyEl)
@@ -335,7 +277,6 @@ export class WorkspaceFileBrowser {
                 item.classList.add("folder");
                 item.addEventListener("click", () => {
                     this.currentPath = node.path;
-                    this.expanded.add(node.path);
                     this.render();
                     this.renderModal();
                 });

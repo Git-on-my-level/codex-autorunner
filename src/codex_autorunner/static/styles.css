@@ -3244,7 +3244,7 @@ button.icon-btn {
   display: flex;
   align-items: center;
   padding: 6px 10px;
-  margin: 8px 0;
+  margin: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
@@ -3344,19 +3344,7 @@ button.icon-btn {
 }
 
 .workspace-item-actions {
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-.workspace-tree-row:hover .workspace-item-actions {
-  opacity: 1;
-}
-
-.workspace-item-actions .danger {
-  color: var(--error);
-  border-color: var(--error);
+  display: none;
 }
 
 .workspace-create-dialog {
@@ -3368,6 +3356,17 @@ button.icon-btn {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.workspace-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.workspace-path-row .workspace-breadcrumbs {
+  flex: 1;
 }
 
 @media (max-width: 720px) {

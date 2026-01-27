@@ -294,7 +294,10 @@
             <button class="primary sm" id="workspace-save">Save</button>
           </div>
         </div>
-        <nav class="workspace-breadcrumbs" id="workspace-breadcrumbs"></nav>
+        <div class="workspace-path-row">
+          <nav class="workspace-breadcrumbs" id="workspace-breadcrumbs"></nav>
+          <button class="ghost sm" id="workspace-download-current" title="Download current file/folder">Download</button>
+        </div>
         <div class="workspace-grid">
           <aside class="workspace-file-browser">
             <div class="workspace-file-mobile">
@@ -330,6 +333,7 @@
               </button>
               <div class="workspace-mobile-actions">
                 <span class="muted small" id="workspace-status-mobile"></span>
+                <button class="ghost sm" id="workspace-download-mobile" title="Download">↓</button>
                 <button class="ghost sm" id="workspace-reload-mobile" title="Reload">↻</button>
                 <button class="primary sm" id="workspace-save-mobile">Save</button>
               </div>
