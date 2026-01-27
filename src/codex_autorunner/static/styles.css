@@ -2184,11 +2184,228 @@ button.icon-btn {
   transform: rotate(180deg);
 }
 
-/* Medium screen: tickets as slim sidebar tabs, dispatch gets ~80% */
-@media (min-width: 640px) and (max-width: 1100px) {
+/* ===== Mobile (<640px): Stacked layout with full ticket info ===== */
+@media (max-width: 639px) {
+  /* Force single column stacked layout on mobile */
+  .ticket-card .ticket-flow-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Hide toggle button on mobile */
+  .ticket-panel-toggle {
+    display: none;
+  }
+
+  /* Compact ticket items for mobile - even vertical spacing */
+  .ticket-card .ticket-item {
+    padding: 8px 10px 8px 10px !important;
+    gap: 0 !important;
+    flex-direction: row !important;
+    align-items: center !important;
+  }
+
+  .ticket-card .ticket-item .ticket-item-head {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 8px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Ensure ticket name doesn't overflow */
+  .ticket-card .ticket-item .ticket-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Badges should not shrink or truncate */
+  .ticket-card .ticket-item .ticket-badges {
+    flex-shrink: 0;
+    gap: 4px;
+    display: flex !important;
+    align-items: center;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .ticket-card .ticket-item .ticket-done-badge,
+  .ticket-card .ticket-item .ticket-working-badge {
+    padding: 2px 6px !important;
+    font-size: 9px;
+    white-space: nowrap;
+    line-height: 1;
+    margin: 0 !important;
+  }
+
+  .ticket-card .ticket-item .ticket-agent {
+    padding: 2px 6px !important;
+    font-size: 9px;
+    line-height: 1;
+    margin: 0 !important;
+  }
+
+  /* Hide ticket body on mobile for compactness */
+  .ticket-card .ticket-item .ticket-body {
+    display: none !important;
+  }
+
+  /* Hide ticket title (just show name line with badges) */
+  .ticket-card .ticket-item .ticket-title {
+    display: none !important;
+  }
+
+  /* Ticket list with tighter spacing */
+  .ticket-card .ticket-list {
+    gap: 4px !important;
+  }
+
+  /* Dispatch panel full width */
+  .ticket-card .ticket-panel {
+    width: 100%;
+  }
+
+  /* Compact dispatch items on mobile */
+  .dispatch-item {
+    padding: 8px 10px;
+  }
+
+  .ticket-dispatch-body {
+    font-size: 11px;
+  }
+}
+
+/* ===== Small tablets / narrow landscape (640-900px): Compact side-by-side ===== */
+@media (min-width: 640px) and (max-width: 899px) {
+  /* Use slim tickets sidebar with compact pills */
+  .ticket-card .ticket-flow-grid {
+    grid-template-columns: auto 1fr;
+    align-items: start;
+  }
+
+  /* Hide toggle button */
+  .ticket-panel-toggle {
+    display: none;
+  }
+
+  /* Tickets panel: slim fixed-width sidebar */
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child {
+    width: 90px;
+    min-width: 90px;
+    max-width: 90px;
+    padding: 6px 4px;
+    max-height: 300px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Compact header - prevent shrinking */
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-panel-header {
+    padding: 2px 4px 4px;
+    margin-bottom: 2px;
+    flex-shrink: 0;
+  }
+
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-panel-header > span:first-child {
+    font-size: 10px;
+  }
+
+  /* Hide directory path */
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child #ticket-flow-dir {
+    display: none;
+  }
+
+  /* Ticket list scrollable */
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    gap: 3px;
+  }
+
+  /* Compact ticket pills - number only, minimal spacing, centered */
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item {
+    padding: 4px 2px !important;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid transparent;
+    gap: 0 !important;
+    min-height: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item.done {
+    border-left: 2px solid rgba(63, 185, 80, 0.6);
+    padding-left: 2px !important;
+  }
+
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item.active {
+    background: rgba(111, 137, 255, 0.15);
+    border-color: rgba(111, 137, 255, 0.4);
+  }
+
+  /* Hide everything except the number in compact view */
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item .ticket-body,
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item .ticket-title,
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item .ticket-title-text,
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item .ticket-badges {
+    display: none !important;
+  }
+
+  /* Center the ticket number - reset margins */
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item .ticket-item-head {
+    display: block !important;
+    text-align: center;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item .ticket-name {
+    display: block !important;
+    text-align: center;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item .ticket-num {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+    line-height: 1;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .ticket-card .ticket-flow-grid > .ticket-panel:first-child .ticket-item.done .ticket-num {
+    color: rgba(168, 230, 180, 0.9);
+  }
+}
+
+/* ===== Medium screens (900-1100px): Wider compact pills sidebar ===== */
+@media (min-width: 900px) and (max-width: 1100px) {
   .ticket-card .ticket-flow-grid {
     grid-template-columns: auto 1fr;
     /* Tickets slim sidebar, dispatch fills rest */
+    align-items: start;
+    /* Prevent panels from stretching to match heights */
   }
 
   /* Hide toggle button - not needed in this layout */
@@ -2196,18 +2413,23 @@ button.icon-btn {
     display: none;
   }
 
-  /* Tickets panel: slim tab sidebar */
+  /* Tickets panel: slim tab sidebar with responsive height */
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child {
     width: 120px;
     min-width: 120px;
     max-width: 120px;
     padding: 8px 6px;
+    max-height: min(400px, 50vh);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
-  /* Compact ticket header */
+  /* Compact ticket header - prevent shrinking */
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-panel-header {
     padding: 2px 4px 6px;
     margin-bottom: 4px;
+    flex-shrink: 0;
   }
 
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-panel-header>span:first-child {
@@ -2219,13 +2441,18 @@ button.icon-btn {
     display: none;
   }
 
-  /* Ticket items as elegant compact pills */
+  /* Ticket items as compact pills - minimal spacing, centered */
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item {
-    padding: 8px 6px;
-    border-radius: 8px;
+    padding: 6px 4px !important;
+    border-radius: 6px;
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid transparent;
     transition: all 0.15s ease;
+    gap: 0 !important;
+    min-height: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
   }
 
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item:hover {
@@ -2242,37 +2469,43 @@ button.icon-btn {
   /* Done tickets get subtle green left border */
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item.done {
     border-left: 3px solid rgba(63, 185, 80, 0.6);
-    padding-left: 5px;
+    padding-left: 3px !important;
   }
 
-  /* Stack number and badges vertically */
-  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-item-head {
-    flex-direction: column;
-    align-items: center;
-    gap: 2px;
-  }
-
-  /* Hide body and full title - show only number */
+  /* Hide everything except the number in compact view */
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-body,
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-title,
-  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-title-text {
-    display: none;
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-title-text,
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-badges {
+    display: none !important;
   }
 
-  /* Ticket name container */
+  /* Center the ticket number - reset margins */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-item-head {
+    display: block !important;
+    text-align: center;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-name {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: block !important;
+    text-align: center;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 
   /* Ticket number: clean monospace pill */
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-num {
-    font-size: 13px;
+    display: inline-block;
+    font-size: 12px;
     font-weight: 600;
     font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
     letter-spacing: 0.03em;
     color: var(--text);
+    line-height: 1;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 
   /* Done tickets: muted number */
@@ -2283,27 +2516,6 @@ button.icon-btn {
   /* Active ticket: bright number */
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item.active .ticket-num {
     color: #fff;
-  }
-
-  /* Compact badges layout */
-  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-badges {
-    display: flex;
-    justify-content: center;
-    gap: 4px;
-    margin-top: 4px;
-  }
-
-  /* Hide done badge and working badge - status shown via visual indicators */
-  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-done-badge,
-  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-working-badge {
-    display: none;
-  }
-
-  /* Compact agent badge */
-  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-agent {
-    padding: 2px 6px;
-    font-size: 9px;
-    border-radius: 4px;
   }
 
   /* Active/working ticket: pulsing glow animation */
@@ -2322,9 +2534,28 @@ button.icon-btn {
     }
   }
 
-  /* Ticket list: tighter gap */
+  /* Ticket list: compact scrollable */
   .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-list {
     gap: 4px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 4px;
+  }
+
+  /* Slim scrollbar for ticket list */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-list::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 2px;
+  }
+
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.25);
   }
 
   /* Dispatch panel: takes remaining space (~80%) */
