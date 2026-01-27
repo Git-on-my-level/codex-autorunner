@@ -3401,6 +3401,18 @@ button.icon-btn {
   flex: 1;
 }
 
+.workspace-download-all-btn {
+  flex-shrink: 0;
+  font-size: 1rem;
+  padding: 4px 8px;
+  opacity: 0.7;
+}
+
+.workspace-download-all-btn:hover {
+  opacity: 1;
+  color: var(--primary);
+}
+
 .file-picker-actions {
   margin-left: auto;
 }

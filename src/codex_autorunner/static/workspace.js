@@ -187,6 +187,16 @@ function renderPatch() {
 function renderChat() {
     workspaceChat.render();
 }
+function updateDownloadButton() {
+    const { downloadAllBtn } = els();
+    if (!downloadAllBtn)
+        return;
+    const currentPath = state.browser?.getCurrentPath() || "";
+    const isRoot = !currentPath;
+    const folderName = currentPath.split("/").pop() || "";
+    downloadAllBtn.title = isRoot ? "Download all as ZIP" : `Download ${folderName}/ as ZIP`;
+    downloadAllBtn.onclick = () => downloadWorkspaceZip(isRoot ? undefined : currentPath);
+}
 let createMode = null;
 function listFolderPaths(nodes, base = "") {
     const paths = [];
@@ -542,19 +552,20 @@ async function loadFiles(defaultPath) {
                 workspaceChat.setTarget(target());
                 void loadWorkspaceFile(file.path);
             },
-            onPathChange: () => { },
+            onPathChange: () => updateDownloadButton(),
             onRefresh: () => loadFiles(state.target?.path),
             onConfirm: (message) => window.workspaceConfirm?.(message) ??
                 Promise.resolve(confirm(message)),
         });
     }
     state.browser.setTree(tree, defaultPath || state.target?.path || undefined);
+    updateDownloadButton();
     if (state.target) {
         workspaceChat.setTarget(target());
     }
 }
 export async function initWorkspace() {
-    const { generateBtn, uploadBtn, uploadInput, newFolderBtn, downloadAllBtn, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();
+    const { generateBtn, uploadBtn, uploadInput, newFolderBtn, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();
     if (!document.getElementById("workspace"))
         return;
     initAgentControls({
@@ -597,7 +608,6 @@ export async function initWorkspace() {
     });
     newFolderBtn?.addEventListener("click", () => openCreateModal("folder"));
     els().newFileBtn?.addEventListener("click", () => openCreateModal("file"));
-    downloadAllBtn?.addEventListener("click", () => downloadWorkspaceZip());
     generateBtn?.addEventListener("click", () => void generateTickets());
     patchApply?.addEventListener("click", () => void applyWorkspaceDraft());
     patchDiscard?.addEventListener("click", () => void discardWorkspaceDraft());

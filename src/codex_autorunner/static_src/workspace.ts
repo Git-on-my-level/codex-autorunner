@@ -225,6 +225,16 @@ function renderChat(): void {
   workspaceChat.render();
 }
 
+function updateDownloadButton(): void {
+  const { downloadAllBtn } = els();
+  if (!downloadAllBtn) return;
+  const currentPath = state.browser?.getCurrentPath() || "";
+  const isRoot = !currentPath;
+  const folderName = currentPath.split("/").pop() || "";
+  downloadAllBtn.title = isRoot ? "Download all as ZIP" : `Download ${folderName}/ as ZIP`;
+  downloadAllBtn.onclick = () => downloadWorkspaceZip(isRoot ? undefined : currentPath);
+}
+
 
 type CreateMode = "folder" | "file";
 let createMode: CreateMode | null = null;
@@ -586,7 +596,7 @@ async function loadFiles(defaultPath?: string): Promise<void> {
         workspaceChat.setTarget(target());
         void loadWorkspaceFile(file.path);
       },
-      onPathChange: () => {},
+      onPathChange: () => updateDownloadButton(),
       onRefresh: () => loadFiles(state.target?.path),
       onConfirm: (message) =>
         (window as unknown as { workspaceConfirm?: (msg: string) => Promise<boolean> }).workspaceConfirm?.(message) ??
@@ -595,6 +605,7 @@ async function loadFiles(defaultPath?: string): Promise<void> {
   }
 
   state.browser.setTree(tree, defaultPath || state.target?.path || undefined);
+  updateDownloadButton();
   if (state.target) {
     workspaceChat.setTarget(target());
   }
@@ -606,7 +617,6 @@ export async function initWorkspace(): Promise<void> {
     uploadBtn,
     uploadInput,
     newFolderBtn,
-    downloadAllBtn,
     saveBtn,
     saveBtnMobile,
     reloadBtn,
@@ -664,7 +674,6 @@ export async function initWorkspace(): Promise<void> {
   newFolderBtn?.addEventListener("click", () => openCreateModal("folder"));
   els().newFileBtn?.addEventListener("click", () => openCreateModal("file"));
 
-  downloadAllBtn?.addEventListener("click", () => downloadWorkspaceZip());
   generateBtn?.addEventListener("click", () => void generateTickets());
   patchApply?.addEventListener("click", () => void applyWorkspaceDraft());
   patchDiscard?.addEventListener("click", () => void discardWorkspaceDraft());
