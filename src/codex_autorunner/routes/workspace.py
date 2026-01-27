@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -20,9 +19,9 @@ from ..web.schemas import (
 from ..workspace.paths import (
     WORKSPACE_DOC_KINDS,
     list_workspace_files,
+    normalize_workspace_rel_path,
     read_workspace_doc,
     read_workspace_file,
-    workspace_dir,
     workspace_doc_path,
     write_workspace_doc,
     write_workspace_file,
@@ -75,17 +74,13 @@ def build_workspace_routes() -> APIRouter:
     def write_workspace(request: Request, payload: WorkspaceWriteRequest, path: str):
         repo_root = request.app.state.engine.repo_root
         try:
+            # Normalize path the same way workspace helpers do to avoid traversal
+            safe_path, rel_posix = normalize_workspace_rel_path(repo_root, path)
             content = write_workspace_file(repo_root, path, payload.content)
             try:
-                rel_path_path = (
-                    workspace_dir(repo_root)
-                    .joinpath(Path(path).as_posix())
-                    .resolve()
-                    .relative_to(repo_root)
-                )
-                rel_path = rel_path_path.as_posix()
-                draft_utils.invalidate_drafts_for_path(repo_root, rel_path)
-                state_key = f"workspace_{rel_path.replace('/', '_')}"
+                rel_repo_path = safe_path.relative_to(repo_root).as_posix()
+                draft_utils.invalidate_drafts_for_path(repo_root, rel_repo_path)
+                state_key = f"workspace_{rel_posix.replace('/', '_')}"
                 draft_utils.remove_draft(repo_root, state_key)
             except Exception:
                 pass
