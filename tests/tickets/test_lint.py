@@ -41,18 +41,16 @@ def test_lint_ticket_frontmatter_accepts_known_agents_and_user() -> None:
     assert any("invalid" in e for e in errors)
 
 
-def test_lint_ticket_frontmatter_normalizes_requires_and_preserves_extra() -> None:
+def test_lint_ticket_frontmatter_preserves_extra() -> None:
     fm, errors = lint_ticket_frontmatter(
         {
             "agent": "codex",
             "done": False,
-            "requires": [" SPEC.md ", "SPEC.md", "", 123, "foo/bar.md"],
             "custom": {"a": 1},
         }
     )
     assert errors == []
     assert fm is not None
-    assert fm.requires == ("SPEC.md", "foo/bar.md")
     assert fm.extra.get("custom") == {"a": 1}
 
 

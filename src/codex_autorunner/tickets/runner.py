@@ -11,7 +11,7 @@ from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_frontmatter
-from .models import TicketFrontmatter, TicketResult, TicketRunConfig, normalize_requires
+from .models import TicketFrontmatter, TicketResult, TicketRunConfig
 from .outbox import (
     archive_dispatch,
     create_turn_summary,
@@ -201,7 +201,6 @@ class TicketRunner:
                         current_ticket=safe_relpath(current_path, self._workspace_root),
                     )
 
-            requires = normalize_requires(data.get("requires"))
             ticket_doc = type(
                 "_TicketDocForLintRetry",
                 (),
@@ -209,7 +208,6 @@ class TicketRunner:
                     "frontmatter": TicketFrontmatter(
                         agent=agent_id,
                         done=False,
-                        requires=requires,
                     )
                 },
             )()
@@ -236,22 +234,6 @@ class TicketRunner:
                 ),
                 current_ticket=safe_relpath(current_path, self._workspace_root),
             )
-
-        # Validate required input files (skip during lint retry; the only goal is to
-        # repair the ticket metadata so normal orchestration can resume).
-        if not lint_errors:
-            missing = self._missing_required_inputs(ticket_doc.frontmatter.requires)
-            if missing:
-                rel_missing = [
-                    safe_relpath(self._workspace_root / m, self._workspace_root)
-                    for m in missing
-                ]
-                return self._pause(
-                    state,
-                    reason="Missing required input files for this ticket.",
-                    reason_details="Missing files:\n- " + "\n- ".join(rel_missing),
-                    current_ticket=safe_relpath(current_path, self._workspace_root),
-                )
 
         ticket_turns = int(state.get("ticket_turns") or 0)
         reply_seq = int(state.get("reply_seq") or 0)
@@ -555,21 +537,6 @@ class TicketRunner:
             return path
         return None
 
-    def _missing_required_inputs(self, requires: tuple[str, ...]) -> list[str]:
-        missing: list[str] = []
-        ticket_dir = self._workspace_root / self._config.ticket_dir
-        for rel in requires:
-            abs_path = self._workspace_root / rel
-            if abs_path.exists():
-                continue
-            # Also check relative to ticket directory for ticket-like filenames
-            # (e.g., "TICKET-001.md" -> ".codex-autorunner/tickets/TICKET-001.md")
-            ticket_path = ticket_dir / rel
-            if ticket_path.exists():
-                continue
-            missing.append(rel)
-        return missing
-
     def _recheck_ticket_frontmatter(self, ticket_path: Path):
         try:
             raw = ticket_path.read_text(encoding="utf-8")
@@ -775,14 +742,6 @@ class TicketRunner:
         else:
             lint_block = ""
 
-        requires_block = ""
-        if ticket_doc.frontmatter.requires:
-            requires_block = (
-                "\n\nRequired input files for this ticket:\n- "
-                + "\n- ".join(ticket_doc.frontmatter.requires)
-                + "\n"
-            )
-
         reply_block = ""
         if reply_context:
             reply_block = (
@@ -850,7 +809,6 @@ class TicketRunner:
             + checkpoint_block
             + commit_block
             + lint_block
-            + requires_block
             + workspace_block
             + reply_block
             + prev_ticket_block

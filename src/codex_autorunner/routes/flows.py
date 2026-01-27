@@ -496,8 +496,6 @@ agent: codex
 done: false
 title: Bootstrap ticket plan
 goal: Capture scope and seed follow-up tickets
-requires:
-  - .codex-autorunner/ISSUE.md
 ---
 
 You are the first ticket in a new ticket_flow run.
@@ -565,11 +563,6 @@ You are the first ticket in a new ticket_flow run.
             next_index += 1
 
         # Build frontmatter
-        requires_block = ""
-        if request.requires:
-            req_lines = "\n".join(f"  - {r}" for r in request.requires)
-            requires_block = f"requires:\n{req_lines}\n"
-
         title_line = f"title: {request.title}\n" if request.title else ""
         goal_line = f"goal: {request.goal}\n" if request.goal else ""
 
@@ -579,7 +572,6 @@ You are the first ticket in a new ticket_flow run.
             "done: false\n"
             f"{title_line}"
             f"{goal_line}"
-            f"{requires_block}"
             "---\n\n"
             f"{request.body}\n"
         )
