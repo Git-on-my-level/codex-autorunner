@@ -172,10 +172,17 @@ export class WorkspaceFileBrowser {
                 name.type = "button";
                 name.className = "workspace-tree-name";
                 name.textContent = "Up one level";
-                name.addEventListener("click", () => this.navigateTo(this.parentPath(this.currentPath)));
+                const navigateUp = () => this.navigateTo(this.parentPath(this.currentPath));
+                name.addEventListener("click", navigateUp);
                 main.appendChild(name);
                 label.appendChild(main);
                 upRow.appendChild(label);
+                upRow.addEventListener("click", (evt) => {
+                    const target = evt.target;
+                    if (target?.closest("button"))
+                        return;
+                    navigateUp();
+                });
                 this.container.appendChild(upRow);
             }
             list.forEach((node) => {
@@ -184,6 +191,7 @@ export class WorkspaceFileBrowser {
                 if (node.path === this.selectedPath)
                     row.classList.add("active");
                 row.dataset.path = node.path;
+                row.tabIndex = 0;
                 const label = document.createElement("div");
                 label.className = "workspace-tree-label";
                 const main = document.createElement("div");
@@ -200,15 +208,21 @@ export class WorkspaceFileBrowser {
                 name.textContent = node.name;
                 if (node.is_pinned)
                     name.classList.add("pinned");
-                if (node.type === "folder") {
-                    name.addEventListener("click", () => {
+                const activateNode = () => {
+                    if (node.type === "folder") {
                         this.currentPath = node.path;
                         this.render();
                         this.renderModal();
-                    });
+                    }
+                    else {
+                        this.select(node.path);
+                    }
+                };
+                if (node.type === "folder") {
+                    name.addEventListener("click", activateNode);
                 }
                 else {
-                    name.addEventListener("click", () => this.select(node.path));
+                    name.addEventListener("click", activateNode);
                 }
                 main.appendChild(name);
                 label.appendChild(main);
@@ -303,6 +317,22 @@ export class WorkspaceFileBrowser {
                 row.appendChild(label);
                 if (actions.childElementCount)
                     row.appendChild(actions);
+                row.addEventListener("click", (evt) => {
+                    const target = evt.target;
+                    if (target?.closest(".workspace-item-actions"))
+                        return;
+                    if (target?.closest("button"))
+                        return;
+                    activateNode();
+                });
+                row.addEventListener("keydown", (evt) => {
+                    if (evt.target !== row)
+                        return;
+                    if (evt.key === "Enter" || evt.key === " ") {
+                        evt.preventDefault();
+                        activateNode();
+                    }
+                });
                 this.container.appendChild(row);
             });
         };
