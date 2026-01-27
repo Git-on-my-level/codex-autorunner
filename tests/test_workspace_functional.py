@@ -1,3 +1,5 @@
+import io
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -46,6 +48,147 @@ def test_workspace_docs_read_write(hub_env, client, repo: Path):
     assert (
         repo / ".codex-autorunner" / "workspace" / "decisions.md"
     ).read_text() == test_decisions
+
+
+def test_workspace_tree_and_metadata(hub_env, client, repo: Path):
+    ws_dir = repo / ".codex-autorunner" / "workspace"
+    ws_dir.mkdir(parents=True, exist_ok=True)
+    (ws_dir / "loose.txt").write_text("loose")
+    nested_dir = ws_dir / "docs" / "nested"
+    nested_dir.mkdir(parents=True, exist_ok=True)
+    (nested_dir / "note.txt").write_text("note")
+
+    res = client.get(f"/repos/{hub_env.repo_id}/api/workspace/tree")
+    assert res.status_code == 200
+    tree = res.json()["tree"]
+
+    def flatten(nodes):
+        for node in nodes:
+            yield node
+            for child in flatten(node.get("children") or []):
+                yield child
+
+    paths = {node["path"]: node for node in flatten(tree)}
+
+    # Pinned docs are always present
+    assert "active_context.md" in paths
+    assert paths["active_context.md"]["is_pinned"] is True
+
+    assert "loose.txt" in paths
+    assert paths["loose.txt"]["type"] == "file"
+
+    assert "docs" in paths and paths["docs"]["type"] == "folder"
+    assert "docs/nested" in paths and paths["docs/nested"]["type"] == "folder"
+    assert "docs/nested/note.txt" in paths
+
+
+def test_workspace_upload_download_and_delete(hub_env, client, repo: Path):
+    files = [
+        ("files", ("hello.txt", b"hello world", "text/plain")),
+        ("files", ("inner.txt", b"inner", "text/plain")),
+    ]
+    res = client.post(
+        f"/repos/{hub_env.repo_id}/api/workspace/upload",
+        data={"subdir": "inbox"},
+        files=files,
+    )
+    assert res.status_code == 200
+    uploaded = res.json()["uploaded"]
+    assert {item["path"] for item in uploaded} == {"inbox/hello.txt", "inbox/inner.txt"}
+
+    ws_dir = repo / ".codex-autorunner" / "workspace" / "inbox"
+    assert (ws_dir / "hello.txt").read_text() == "hello world"
+
+    res = client.get(
+        f"/repos/{hub_env.repo_id}/api/workspace/download",
+        params={"path": "inbox/hello.txt"},
+    )
+    assert res.status_code == 200
+    assert res.content == b"hello world"
+
+    res = client.delete(
+        f"/repos/{hub_env.repo_id}/api/workspace/file",
+        params={"path": "inbox/inner.txt"},
+    )
+    assert res.status_code == 200
+    assert not (ws_dir / "inner.txt").exists()
+
+    # Traversal should be blocked
+    res = client.delete(
+        f"/repos/{hub_env.repo_id}/api/workspace/file",
+        params={"path": "../secrets.txt"},
+    )
+    assert res.status_code == 400
+
+
+def test_workspace_download_zip_scoped(hub_env, client, repo: Path):
+    ws_dir = repo / ".codex-autorunner" / "workspace"
+    ws_dir.mkdir(parents=True, exist_ok=True)
+    (ws_dir / "root.txt").write_text("root")
+    folder = ws_dir / "folder"
+    (folder / "sub").mkdir(parents=True, exist_ok=True)
+    (folder / "a.txt").write_text("A")
+    (folder / "sub" / "b.txt").write_text("B")
+
+    outside = repo / "outside.txt"
+    outside.write_text("nope")
+    # symlink pointing outside workspace should be skipped
+    link = ws_dir / "folder" / "escape"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        # If symlinks unsupported, skip symlink assertion
+        link = None
+
+    res = client.get(
+        f"/repos/{hub_env.repo_id}/api/workspace/download-zip",
+        params={"path": "folder"},
+    )
+    assert res.status_code == 200
+
+    with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+        names = set(zf.namelist())
+        assert "a.txt" in names
+        assert "sub/b.txt" in names
+        assert "root.txt" not in names
+        if link:
+            assert "escape" not in names
+
+
+def test_workspace_folder_crud_and_pinned_guard(hub_env, client, repo: Path):
+    ws_dir = repo / ".codex-autorunner" / "workspace"
+    ws_dir.mkdir(parents=True, exist_ok=True)
+    (ws_dir / "active_context.md").write_text("keep")
+
+    res = client.post(
+        f"/repos/{hub_env.repo_id}/api/workspace/folder",
+        params={"path": "notes"},
+    )
+    assert res.status_code == 200
+    assert (ws_dir / "notes").is_dir()
+
+    # Non-empty delete should fail
+    (ws_dir / "notes" / "tmp.txt").write_text("tmp")
+    res = client.delete(
+        f"/repos/{hub_env.repo_id}/api/workspace/folder",
+        params={"path": "notes"},
+    )
+    assert res.status_code == 400
+
+    (ws_dir / "notes" / "tmp.txt").unlink()
+    res = client.delete(
+        f"/repos/{hub_env.repo_id}/api/workspace/folder",
+        params={"path": "notes"},
+    )
+    assert res.status_code == 200
+    assert not (ws_dir / "notes").exists()
+
+    # Pinned docs cannot be deleted
+    res = client.delete(
+        f"/repos/{hub_env.repo_id}/api/workspace/file",
+        params={"path": "active_context.md"},
+    )
+    assert res.status_code == 400
 
 
 @pytest.mark.integration

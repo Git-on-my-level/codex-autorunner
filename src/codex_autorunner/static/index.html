@@ -284,11 +284,18 @@
             <span class="muted small" id="workspace-status"></span>
           </div>
           <div class="workspace-header-actions">
-            <button class="ghost sm hidden" id="workspace-generate-tickets" title="Generate tickets from spec">Generate
-              tickets</button>
+            <input type="file" id="workspace-upload-input" multiple hidden />
+            <button class="ghost sm" id="workspace-upload" title="Upload to current folder">Upload</button>
+            <button class="ghost sm" id="workspace-new-folder" title="Create folder">New Folder</button>
+            <button class="ghost sm" id="workspace-new-file" title="Create markdown file">New File</button>
+            <button class="ghost sm hidden" id="workspace-generate-tickets" title="Generate tickets from spec">Generate tickets</button>
             <button class="ghost sm" id="workspace-reload">Reload</button>
             <button class="primary sm" id="workspace-save">Save</button>
           </div>
+        </div>
+        <div class="workspace-path-row">
+          <nav class="workspace-breadcrumbs" id="workspace-breadcrumbs"></nav>
+          <button class="ghost sm workspace-download-all-btn" id="workspace-download-all" title="Download all as ZIP">⬇</button>
         </div>
         <div class="workspace-grid">
           <aside class="workspace-file-browser">
@@ -852,6 +859,47 @@
       </div>
       <div class="file-picker-body" id="file-picker-body">
         <!-- File list rendered here by JS -->
+      </div>
+    </div>
+  </div>
+  <!-- Workspace Create Modal -->
+  <div class="modal-overlay" hidden="" id="workspace-create-modal">
+    <div aria-describedby="workspace-create-body" aria-labelledby="workspace-create-title" aria-modal="true"
+      class="modal-dialog workspace-create-dialog" role="dialog" tabindex="-1">
+      <div class="modal-header">
+        <span class="label" id="workspace-create-title">Create</span>
+        <button class="file-picker-close" id="workspace-create-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body" id="workspace-create-body">
+        <div class="form-group">
+          <label class="muted small" for="workspace-create-name">Name</label>
+          <input id="workspace-create-name" placeholder="my-note.md" type="text" />
+          <span class="form-hint" id="workspace-create-hint">Created under current folder</span>
+        </div>
+        <div class="form-group">
+          <label class="muted small" for="workspace-create-path">Location</label>
+          <select id="workspace-create-path"></select>
+        </div>
+      </div>
+      <div class="modal-actions workspace-create-actions">
+        <button class="ghost sm" id="workspace-create-cancel">Cancel</button>
+        <button class="primary sm" id="workspace-create-submit">Create</button>
+      </div>
+    </div>
+  </div>
+  <!-- Workspace Confirm Modal -->
+  <div class="modal-overlay" hidden="" id="workspace-confirm-modal">
+    <div aria-describedby="workspace-confirm-body" aria-labelledby="workspace-confirm-title" aria-modal="true"
+      class="modal-dialog workspace-confirm-dialog" role="dialog" tabindex="-1">
+      <div class="modal-header">
+        <span class="label" id="workspace-confirm-title">Confirm</span>
+      </div>
+      <div class="modal-body" id="workspace-confirm-body">
+        <p id="workspace-confirm-text"></p>
+      </div>
+      <div class="modal-actions workspace-confirm-actions">
+        <button class="ghost sm" id="workspace-confirm-cancel">Cancel</button>
+        <button class="primary sm" id="workspace-confirm-yes">Confirm</button>
       </div>
     </div>
   </div>

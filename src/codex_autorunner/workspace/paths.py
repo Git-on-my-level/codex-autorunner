@@ -35,6 +35,20 @@ def workspace_dir(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "workspace"
 
 
+PINNED_DOC_FILENAMES = {f"{kind}.md" for kind in WORKSPACE_DOC_KINDS}
+
+
+@dataclass
+class WorkspaceNode:
+    name: str
+    path: str  # relative to workspace dir
+    type: Literal["file", "folder"]
+    is_pinned: bool = False
+    modified_at: str | None = None
+    size: int | None = None  # files only
+    children: list["WorkspaceNode"] | None = None  # folders only
+
+
 def normalize_workspace_rel_path(repo_root: Path, rel_path: str) -> tuple[Path, str]:
     """Normalize a user-supplied workspace path and ensure it stays in-tree.
 
@@ -76,6 +90,28 @@ def normalize_workspace_rel_path(repo_root: Path, rel_path: str) -> tuple[Path, 
     candidate = Path(candidate_str)
     rel_posix = candidate.relative_to(base_real).as_posix()
     return candidate, rel_posix
+
+
+def sanitize_workspace_filename(filename: str) -> str:
+    """Return a safe filename for workspace uploads.
+
+    We strip any directory components, collapse whitespace, and guard against
+    empty names. Caller is responsible for applying any per-workspace policy
+    (e.g., overwrite vs. reject).
+    """
+
+    cleaned = (filename or "").strip()
+    # Drop any path fragments that may be embedded in the upload
+    base = PurePosixPath(cleaned).name
+    # Remove remaining separators/backslashes that PurePosixPath.name could keep
+    base = base.replace("/", "").replace("\\", "")
+    if base in {".", ".."}:
+        base = ""
+    # Collapse whitespace to single spaces to keep names readable
+    base = " ".join(base.split())
+    if not base:
+        return "upload"
+    return base
 
 
 def workspace_doc_path(repo_root: Path, kind: str) -> Path:
@@ -198,3 +234,86 @@ def list_workspace_files(
 
     others.sort(key=lambda f: f.path)
     return [*pinned, *others]
+
+
+def _sort_workspace_children(path: Path) -> tuple[int, str]:
+    # Folders first, then files, both alphabetized (case-insensitive)
+    return (0 if path.is_dir() else 1, path.name.lower())
+
+
+def _is_within_workspace(base_real: Path, candidate: Path) -> bool:
+    try:
+        candidate.resolve().relative_to(base_real)
+        return True
+    except Exception:
+        return False
+
+
+def _file_node(base: Path, path: Path, is_pinned: bool = False) -> WorkspaceNode:
+    rel = path.relative_to(base).as_posix()
+    size: int | None = None
+    if path.exists() and path.is_file():
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = None
+    return WorkspaceNode(
+        name=path.name,
+        path=rel,
+        type="file",
+        is_pinned=is_pinned,
+        modified_at=_format_mtime(path),
+        size=size,
+    )
+
+
+def _build_workspace_tree(base: Path, path: Path) -> WorkspaceNode:
+    is_symlink = path.is_symlink()
+    is_folder = path.is_dir() and not is_symlink
+    is_pinned = path.name in PINNED_DOC_FILENAMES and path.parent == base
+
+    if not is_folder:
+        return _file_node(base, path, is_pinned=is_pinned)
+
+    children: list[WorkspaceNode] = []
+    for child in sorted(path.iterdir(), key=_sort_workspace_children):
+        # Avoid duplicating pinned docs surfaced at the root list
+        if child.parent == base and child.name in PINNED_DOC_FILENAMES:
+            continue
+        # Skip symlink escapes that resolve outside the workspace
+        if child.is_symlink() and not _is_within_workspace(base.resolve(), child):
+            continue
+        children.append(_build_workspace_tree(base, child))
+
+    return WorkspaceNode(
+        name=path.name,
+        path=path.relative_to(base).as_posix(),
+        type="folder",
+        is_pinned=False,
+        modified_at=_format_mtime(path),
+        children=children,
+    )
+
+
+def list_workspace_tree(repo_root: Path) -> list[WorkspaceNode]:
+    """Return hierarchical workspace structure (folders + files)."""
+
+    base = workspace_dir(repo_root)
+    base.mkdir(parents=True, exist_ok=True)
+    base_real = base.resolve()
+
+    nodes: list[WorkspaceNode] = []
+
+    # Pinned docs first (even if missing)
+    for name in sorted(PINNED_DOC_FILENAMES):
+        pinned_path = base / name
+        nodes.append(_file_node(base, pinned_path, is_pinned=True))
+
+    for child in sorted(base.iterdir(), key=_sort_workspace_children):
+        if child.parent == base and child.name in PINNED_DOC_FILENAMES:
+            continue
+        if child.is_symlink() and not _is_within_workspace(base_real, child):
+            continue
+        nodes.append(_build_workspace_tree(base, child))
+
+    return nodes

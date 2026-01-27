@@ -4,9 +4,12 @@ import {
   fetchWorkspace,
   ingestSpecToTickets,
   listTickets,
-  listWorkspaceFiles,
   WorkspaceKind,
-  WorkspaceFileListItem,
+  WorkspaceNode,
+  fetchWorkspaceTree,
+  uploadWorkspaceFiles,
+  downloadWorkspaceZip,
+  createWorkspaceFolder,
   writeWorkspace,
 } from "./workspaceApi.js";
 import {
@@ -34,7 +37,7 @@ interface WorkspaceState {
   draft: FileDraft | null;
   loading: boolean;
   hasTickets: boolean;
-  files: WorkspaceFileListItem[];
+  files: WorkspaceNode[];
   docEditor: DocEditor | null;
   browser: WorkspaceFileBrowser | null;
 }
@@ -82,11 +85,20 @@ function els() {
   return {
     fileList: document.getElementById("workspace-file-list") as HTMLElement | null,
     fileSelect: document.getElementById("workspace-file-select") as HTMLSelectElement | null,
+    breadcrumbs: document.getElementById("workspace-breadcrumbs") as HTMLElement | null,
     status: document.getElementById("workspace-status"),
+    statusMobile: document.getElementById("workspace-status-mobile"),
+    uploadBtn: document.getElementById("workspace-upload") as HTMLButtonElement | null,
+    uploadInput: document.getElementById("workspace-upload-input") as HTMLInputElement | null,
+    newFolderBtn: document.getElementById("workspace-new-folder") as HTMLButtonElement | null,
+    newFileBtn: document.getElementById("workspace-new-file") as HTMLButtonElement | null,
+    downloadAllBtn: document.getElementById("workspace-download-all") as HTMLButtonElement | null,
     generateBtn: document.getElementById("workspace-generate-tickets") as HTMLButtonElement | null,
     textarea: document.getElementById("workspace-content") as HTMLTextAreaElement | null,
     saveBtn: document.getElementById("workspace-save") as HTMLButtonElement | null,
+    saveBtnMobile: document.getElementById("workspace-save-mobile") as HTMLButtonElement | null,
     reloadBtn: document.getElementById("workspace-reload") as HTMLButtonElement | null,
+    reloadBtnMobile: document.getElementById("workspace-reload-mobile") as HTMLButtonElement | null,
     patchMain: document.getElementById("workspace-patch-main") as HTMLElement | null,
     patchBody: document.getElementById("workspace-patch-body") as HTMLElement | null,
     patchSummary: document.getElementById("workspace-patch-summary") as HTMLElement | null,
@@ -107,6 +119,14 @@ function els() {
     agentSelect: document.getElementById("workspace-chat-agent-select") as HTMLSelectElement | null,
     modelSelect: document.getElementById("workspace-chat-model-select") as HTMLSelectElement | null,
     reasoningSelect: document.getElementById("workspace-chat-reasoning-select") as HTMLSelectElement | null,
+    createModal: document.getElementById("workspace-create-modal") as HTMLElement | null,
+    createTitle: document.getElementById("workspace-create-title") as HTMLElement | null,
+    createInput: document.getElementById("workspace-create-name") as HTMLInputElement | null,
+    createHint: document.getElementById("workspace-create-hint") as HTMLElement | null,
+    createPath: document.getElementById("workspace-create-path") as HTMLSelectElement | null,
+    createClose: document.getElementById("workspace-create-close") as HTMLButtonElement | null,
+    createCancel: document.getElementById("workspace-create-cancel") as HTMLButtonElement | null,
+    createSubmit: document.getElementById("workspace-create-submit") as HTMLButtonElement | null,
   };
 }
 
@@ -134,8 +154,16 @@ async function readWorkspaceContent(path: string): Promise<string> {
 async function writeWorkspaceContent(path: string, content: string): Promise<string> {
   const kind = workspaceKindFromPath(path);
   if (kind) {
-    const res = await writeWorkspace(kind, content);
-    return (res[kind] as string) || "";
+    try {
+      const res = await writeWorkspace(kind, content);
+      return (res[kind] as string) || "";
+    } catch (err) {
+      const msg = (err as Error).message || "";
+      if (!msg.toLowerCase().includes("invalid workspace doc kind")) {
+        throw err;
+      }
+      // Fallback to generic file write in case detection misfires
+    }
   }
   return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
     method: "PUT",
@@ -149,8 +177,9 @@ function target(): string {
 }
 
 function setStatus(text: string): void {
-  const statusEl = els().status;
-  if (statusEl) statusEl.textContent = text;
+  const { status, statusMobile } = els();
+  if (status) status.textContent = text;
+  if (statusMobile) statusMobile.textContent = text;
 }
 
 function renderPatch(): void {
@@ -194,6 +223,101 @@ function renderPatch(): void {
 
 function renderChat(): void {
   workspaceChat.render();
+}
+
+function updateDownloadButton(): void {
+  const { downloadAllBtn } = els();
+  if (!downloadAllBtn) return;
+  const currentPath = state.browser?.getCurrentPath() || "";
+  const isRoot = !currentPath;
+  const folderName = currentPath.split("/").pop() || "";
+  downloadAllBtn.title = isRoot ? "Download all as ZIP" : `Download ${folderName}/ as ZIP`;
+  downloadAllBtn.onclick = () => downloadWorkspaceZip(isRoot ? undefined : currentPath);
+}
+
+
+type CreateMode = "folder" | "file";
+let createMode: CreateMode | null = null;
+
+function listFolderPaths(nodes: WorkspaceNode[], base = ""): string[] {
+  const paths: string[] = [];
+  nodes.forEach((node) => {
+    if (node.type !== "folder") return;
+    const current = base ? `${base}/${node.name}` : node.name;
+    paths.push(current);
+    if (node.children?.length) {
+      paths.push(...listFolderPaths(node.children, current));
+    }
+  });
+  return paths;
+}
+
+function openCreateModal(mode: CreateMode): void {
+  const { createModal, createTitle, createInput, createHint, createPath } = els();
+  if (!createModal || !createInput || !createTitle || !createHint || !createPath) return;
+  createMode = mode;
+  createTitle.textContent = mode === "folder" ? "New Folder" : "New Markdown File";
+  createInput.value = "";
+  createInput.placeholder = mode === "folder" ? "folder-name" : "note.md";
+  createHint.textContent =
+    mode === "folder"
+      ? "Folder will be created under the current path"
+      : "File will be created under the current path ('.md' appended if missing)";
+  // Populate location selector with root + folders
+  createPath.innerHTML = "";
+  const rootOption = document.createElement("option");
+  rootOption.value = "";
+  rootOption.textContent = "Workspace (root)";
+  createPath.appendChild(rootOption);
+  const folders = listFolderPaths(state.files);
+  folders.forEach((path) => {
+    const opt = document.createElement("option");
+    opt.value = path;
+    opt.textContent = path;
+    createPath.appendChild(opt);
+  });
+  const currentPath = state.browser?.getCurrentPath() || "";
+  createPath.value = currentPath;
+  if (createPath.value !== currentPath) {
+    createPath.value = "";
+  }
+  createModal.hidden = false;
+  setTimeout(() => createInput.focus(), 10);
+}
+
+function closeCreateModal(): void {
+  const { createModal } = els();
+  createMode = null;
+  if (createModal) createModal.hidden = true;
+}
+
+async function handleCreateSubmit(): Promise<void> {
+  const { createInput, createPath } = els();
+  if (!createMode || !createInput || !createPath) return;
+  const rawName = (createInput.value || "").trim();
+  if (!rawName) {
+    flash("Name is required", "error");
+    return;
+  }
+  const base = createPath.value ?? state.browser?.getCurrentPath() ?? "";
+  const name = createMode === "file" && !rawName.toLowerCase().endsWith(".md") ? `${rawName}.md` : rawName;
+  const path = base ? `${base}/${name}` : name;
+  try {
+    if (createMode === "folder") {
+      await createWorkspaceFolder(path);
+      flash("Folder created", "success");
+    } else {
+      await writeWorkspaceContent(path, "");
+      flash("File created", "success");
+    }
+    closeCreateModal();
+    await loadFiles(createMode === "file" ? path : state.target?.path || undefined);
+    if (createMode === "file") {
+      state.browser?.select(path);
+    }
+  } catch (err) {
+    flash((err as Error).message || "Failed to create item", "error");
+  }
 }
 
 async function loadWorkspaceFile(path: string): Promise<void> {
@@ -456,22 +580,32 @@ async function resetThread(): Promise<void> {
   }
 }
 
-async function loadFiles(): Promise<void> {
-  const files = await listWorkspaceFiles();
-  state.files = files;
-  const { fileList, fileSelect } = els();
+async function loadFiles(defaultPath?: string): Promise<void> {
+  const tree = await fetchWorkspaceTree();
+  state.files = tree;
+  const { fileList, fileSelect, breadcrumbs } = els();
   if (!fileList) return;
-  const browser = new WorkspaceFileBrowser({
-    container: fileList,
-    selectEl: fileSelect,
-    onSelect: (file) => {
-      state.target = { path: file.path, isPinned: file.is_pinned };
-      workspaceChat.setTarget(target());
-      void loadWorkspaceFile(file.path);
-    },
-  });
-  state.browser = browser;
-  browser.setFiles(files, files.find((f) => f.is_pinned)?.path);
+
+  if (!state.browser) {
+    state.browser = new WorkspaceFileBrowser({
+      container: fileList,
+      selectEl: fileSelect,
+      breadcrumbsEl: breadcrumbs,
+      onSelect: (file) => {
+        state.target = { path: file.path, isPinned: Boolean(file.is_pinned) };
+        workspaceChat.setTarget(target());
+        void loadWorkspaceFile(file.path);
+      },
+      onPathChange: () => updateDownloadButton(),
+      onRefresh: () => loadFiles(state.target?.path),
+      onConfirm: (message) =>
+        (window as unknown as { workspaceConfirm?: (msg: string) => Promise<boolean> }).workspaceConfirm?.(message) ??
+        Promise.resolve(confirm(message)),
+    });
+  }
+
+  state.browser.setTree(tree, defaultPath || state.target?.path || undefined);
+  updateDownloadButton();
   if (state.target) {
     workspaceChat.setTarget(target());
   }
@@ -480,6 +614,13 @@ async function loadFiles(): Promise<void> {
 export async function initWorkspace(): Promise<void> {
   const {
     generateBtn,
+    uploadBtn,
+    uploadInput,
+    newFolderBtn,
+    saveBtn,
+    saveBtnMobile,
+    reloadBtn,
+    reloadBtnMobile,
     patchApply,
     patchDiscard,
     patchReload,
@@ -504,8 +645,35 @@ export async function initWorkspace(): Promise<void> {
   await loadFiles();
   workspaceChat.setTarget(target());
 
-  els().saveBtn?.addEventListener("click", () => void state.docEditor?.save(true));
-  els().reloadBtn?.addEventListener("click", () => void reloadWorkspace());
+  const reloadEverything = async () => {
+    await loadFiles(state.target?.path);
+    await reloadWorkspace();
+  };
+
+  saveBtn?.addEventListener("click", () => void state.docEditor?.save(true));
+  saveBtnMobile?.addEventListener("click", () => void state.docEditor?.save(true));
+  reloadBtn?.addEventListener("click", () => void reloadEverything());
+  reloadBtnMobile?.addEventListener("click", () => void reloadEverything());
+
+  uploadBtn?.addEventListener("click", () => uploadInput?.click());
+  uploadInput?.addEventListener("change", async () => {
+    const files = uploadInput.files;
+    if (!files || !files.length) return;
+    const subdir = state.browser?.getCurrentPath() || "";
+    try {
+      await uploadWorkspaceFiles(files, subdir || undefined);
+      flash(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"}`, "success");
+      await loadFiles(state.target?.path);
+    } catch (err) {
+      flash((err as Error).message || "Upload failed", "error");
+    } finally {
+      uploadInput.value = "";
+    }
+  });
+
+  newFolderBtn?.addEventListener("click", () => openCreateModal("folder"));
+  els().newFileBtn?.addEventListener("click", () => openCreateModal("file"));
+
   generateBtn?.addEventListener("click", () => void generateTickets());
   patchApply?.addEventListener("click", () => void applyWorkspaceDraft());
   patchDiscard?.addEventListener("click", () => void discardWorkspaceDraft());
@@ -522,4 +690,47 @@ export async function initWorkspace(): Promise<void> {
       }
     });
   }
+
+  const { createModal, createClose, createCancel, createSubmit } = els();
+  createClose?.addEventListener("click", () => closeCreateModal());
+  createCancel?.addEventListener("click", () => closeCreateModal());
+  createSubmit?.addEventListener("click", () => void handleCreateSubmit());
+  els().createInput?.addEventListener("keydown", (evt) => {
+    if (evt.key === "Enter") {
+      evt.preventDefault();
+      void handleCreateSubmit();
+    }
+  });
+  createModal?.addEventListener("click", (evt) => {
+    if (evt.target === createModal) closeCreateModal();
+  });
+  document.addEventListener("keydown", (evt) => {
+    if (evt.key === "Escape" && createModal && !createModal.hidden) {
+      closeCreateModal();
+    }
+  });
+
+  // Confirm modal wiring
+  const confirmModal = document.getElementById("workspace-confirm-modal");
+  const confirmText = document.getElementById("workspace-confirm-text");
+  const confirmYes = document.getElementById("workspace-confirm-yes") as HTMLButtonElement | null;
+  const confirmCancel = document.getElementById("workspace-confirm-cancel") as HTMLButtonElement | null;
+  let confirmResolver: ((val: boolean) => void) | null = null;
+  const closeConfirm = (result: boolean) => {
+    if (confirmModal) confirmModal.hidden = true;
+    confirmResolver?.(result);
+    confirmResolver = null;
+  };
+  (window as unknown as { workspaceConfirm?: (message: string) => Promise<boolean> }).workspaceConfirm = (message) =>
+    new Promise<boolean>((resolve) => {
+      confirmResolver = resolve;
+      if (confirmText) confirmText.textContent = message;
+      if (confirmModal) confirmModal.hidden = false;
+      confirmYes?.focus();
+    });
+  confirmYes?.addEventListener("click", () => closeConfirm(true));
+  confirmCancel?.addEventListener("click", () => closeConfirm(false));
+  confirmModal?.addEventListener("click", (evt) => {
+    if (evt.target === confirmModal) closeConfirm(false);
+  });
 }
