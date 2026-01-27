@@ -7,8 +7,9 @@
 
 import fs from 'fs';
 import path from 'path';
-import { glob } from 'glob';
+import glob from 'glob';
 import { fileURLToPath } from 'url';
+import { promisify } from 'util';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,8 +19,9 @@ const BANNER = '// GENERATED FILE - do not edit directly. Source: static_src/\n'
 async function main() {
   const staticDir = path.join(__dirname, '..', 'src', 'codex_autorunner', 'static');
   const pattern = path.join(staticDir, '**', '*.js').replace(/\\/g, '/');
-  
-  const files = await glob(pattern, {
+
+  const globAsync = promisify(glob);
+  const files = await globAsync(pattern, {
     ignore: ['**/vendor/**', '**/node_modules/**']
   });
   
