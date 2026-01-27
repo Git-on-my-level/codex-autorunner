@@ -21,3 +21,33 @@ export async function ingestSpecToTickets() {
 export async function listTickets() {
     return (await api("/api/flows/ticket_flow/tickets"));
 }
+export async function fetchWorkspaceTree() {
+    const res = (await api("/api/workspace/tree"));
+    return res.tree || [];
+}
+export async function uploadWorkspaceFiles(files, subdir) {
+    const fd = new FormData();
+    Array.from(files).forEach((file) => fd.append("files", file));
+    if (subdir)
+        fd.append("subdir", subdir);
+    return api("/api/workspace/upload", { method: "POST", body: fd });
+}
+export function downloadWorkspaceFile(path) {
+    const url = `/api/workspace/download?path=${encodeURIComponent(path)}`;
+    window.location.href = url;
+}
+export function downloadWorkspaceZip(path) {
+    const url = path
+        ? `/api/workspace/download-zip?path=${encodeURIComponent(path)}`
+        : "/api/workspace/download-zip";
+    window.location.href = url;
+}
+export async function createWorkspaceFolder(path) {
+    await api(`/api/workspace/folder?path=${encodeURIComponent(path)}`, { method: "POST" });
+}
+export async function deleteWorkspaceFile(path) {
+    await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+}
+export async function deleteWorkspaceFolder(path) {
+    await api(`/api/workspace/folder?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+}

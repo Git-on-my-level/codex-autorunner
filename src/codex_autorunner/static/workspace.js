@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
-import { fetchWorkspace, ingestSpecToTickets, listTickets, listWorkspaceFiles, writeWorkspace, } from "./workspaceApi.js";
+import { fetchWorkspace, ingestSpecToTickets, listTickets, fetchWorkspaceTree, uploadWorkspaceFiles, downloadWorkspaceZip, createWorkspaceFolder, writeWorkspace, } from "./workspaceApi.js";
 import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
 import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
@@ -47,11 +47,19 @@ function els() {
     return {
         fileList: document.getElementById("workspace-file-list"),
         fileSelect: document.getElementById("workspace-file-select"),
+        breadcrumbs: document.getElementById("workspace-breadcrumbs"),
         status: document.getElementById("workspace-status"),
+        statusMobile: document.getElementById("workspace-status-mobile"),
+        uploadBtn: document.getElementById("workspace-upload"),
+        uploadInput: document.getElementById("workspace-upload-input"),
+        newFolderBtn: document.getElementById("workspace-new-folder"),
+        downloadAllBtn: document.getElementById("workspace-download-all"),
         generateBtn: document.getElementById("workspace-generate-tickets"),
         textarea: document.getElementById("workspace-content"),
         saveBtn: document.getElementById("workspace-save"),
+        saveBtnMobile: document.getElementById("workspace-save-mobile"),
         reloadBtn: document.getElementById("workspace-reload"),
+        reloadBtnMobile: document.getElementById("workspace-reload-mobile"),
         patchMain: document.getElementById("workspace-patch-main"),
         patchBody: document.getElementById("workspace-patch-body"),
         patchSummary: document.getElementById("workspace-patch-summary"),
@@ -111,9 +119,11 @@ function target() {
     return `workspace:${state.target.path}`;
 }
 function setStatus(text) {
-    const statusEl = els().status;
-    if (statusEl)
-        statusEl.textContent = text;
+    const { status, statusMobile } = els();
+    if (status)
+        status.textContent = text;
+    if (statusMobile)
+        statusMobile.textContent = text;
 }
 function renderPatch() {
     const { patchMain, patchBody, patchSummary, patchMeta, textarea, saveBtn, reloadBtn } = els();
@@ -414,29 +424,32 @@ async function resetThread() {
         flash(err.message || "Failed to reset thread", "error");
     }
 }
-async function loadFiles() {
-    const files = await listWorkspaceFiles();
-    state.files = files;
-    const { fileList, fileSelect } = els();
+async function loadFiles(defaultPath) {
+    const tree = await fetchWorkspaceTree();
+    state.files = tree;
+    const { fileList, fileSelect, breadcrumbs } = els();
     if (!fileList)
         return;
-    const browser = new WorkspaceFileBrowser({
-        container: fileList,
-        selectEl: fileSelect,
-        onSelect: (file) => {
-            state.target = { path: file.path, isPinned: file.is_pinned };
-            workspaceChat.setTarget(target());
-            void loadWorkspaceFile(file.path);
-        },
-    });
-    state.browser = browser;
-    browser.setFiles(files, files.find((f) => f.is_pinned)?.path);
+    if (!state.browser) {
+        state.browser = new WorkspaceFileBrowser({
+            container: fileList,
+            selectEl: fileSelect,
+            breadcrumbsEl: breadcrumbs,
+            onSelect: (file) => {
+                state.target = { path: file.path, isPinned: Boolean(file.is_pinned) };
+                workspaceChat.setTarget(target());
+                void loadWorkspaceFile(file.path);
+            },
+            onRefresh: () => loadFiles(state.target?.path),
+        });
+    }
+    state.browser.setTree(tree, defaultPath || state.target?.path || undefined);
     if (state.target) {
         workspaceChat.setTarget(target());
     }
 }
 export async function initWorkspace() {
-    const { generateBtn, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();
+    const { generateBtn, uploadBtn, uploadInput, newFolderBtn, downloadAllBtn, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();
     if (!document.getElementById("workspace"))
         return;
     initAgentControls({
@@ -451,8 +464,48 @@ export async function initWorkspace() {
     await maybeShowGenerate();
     await loadFiles();
     workspaceChat.setTarget(target());
-    els().saveBtn?.addEventListener("click", () => void state.docEditor?.save(true));
-    els().reloadBtn?.addEventListener("click", () => void reloadWorkspace());
+    const reloadEverything = async () => {
+        await loadFiles(state.target?.path);
+        await reloadWorkspace();
+    };
+    saveBtn?.addEventListener("click", () => void state.docEditor?.save(true));
+    saveBtnMobile?.addEventListener("click", () => void state.docEditor?.save(true));
+    reloadBtn?.addEventListener("click", () => void reloadEverything());
+    reloadBtnMobile?.addEventListener("click", () => void reloadEverything());
+    uploadBtn?.addEventListener("click", () => uploadInput?.click());
+    uploadInput?.addEventListener("change", async () => {
+        const files = uploadInput.files;
+        if (!files || !files.length)
+            return;
+        const subdir = state.browser?.getCurrentPath() || "";
+        try {
+            await uploadWorkspaceFiles(files, subdir || undefined);
+            flash(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"}`, "success");
+            await loadFiles(state.target?.path);
+        }
+        catch (err) {
+            flash(err.message || "Upload failed", "error");
+        }
+        finally {
+            uploadInput.value = "";
+        }
+    });
+    newFolderBtn?.addEventListener("click", async () => {
+        const name = (prompt("Folder name:") || "").trim();
+        if (!name)
+            return;
+        const base = state.browser?.getCurrentPath() || "";
+        const path = base ? `${base}/${name}` : name;
+        try {
+            await createWorkspaceFolder(path);
+            flash("Folder created", "success");
+            await loadFiles(state.target?.path || path);
+        }
+        catch (err) {
+            flash(err.message || "Failed to create folder", "error");
+        }
+    });
+    downloadAllBtn?.addEventListener("click", () => downloadWorkspaceZip());
     generateBtn?.addEventListener("click", () => void generateTickets());
     patchApply?.addEventListener("click", () => void applyWorkspaceDraft());
     patchDiscard?.addEventListener("click", () => void discardWorkspaceDraft());

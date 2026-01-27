@@ -1,9 +1,9 @@
 {
   "findings": [
-    "python:class:src/codex_autorunner/web/schemas.py:113:GithubIssueRequest",
-    "python:class:src/codex_autorunner/web/schemas.py:117:GithubContextRequest",
-    "python:class:src/codex_autorunner/web/schemas.py:121:GithubPrSyncRequest",
-    "python:class:src/codex_autorunner/web/schemas.py:148:StateResponse",
+    "python:class:src/codex_autorunner/web/schemas.py:141:GithubIssueRequest",
+    "python:class:src/codex_autorunner/web/schemas.py:145:GithubContextRequest",
+    "python:class:src/codex_autorunner/web/schemas.py:149:GithubPrSyncRequest",
+    "python:class:src/codex_autorunner/web/schemas.py:176:StateResponse",
     "python:function:src/codex_autorunner/core/docs.py:63:validate_todo_markdown",
     "python:function:src/codex_autorunner/core/git_utils.py:110:git_ls_files",
     "python:function:src/codex_autorunner/core/git_utils.py:138:git_diff_name_status",
