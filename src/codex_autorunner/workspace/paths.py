@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -51,8 +52,9 @@ def normalize_workspace_rel_path(repo_root: Path, rel_path: str) -> tuple[Path, 
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("invalid workspace file path")
 
-    candidate = (base / relative).resolve(strict=False)
-    if not candidate.is_relative_to(base):
+    candidate = (base / relative).resolve()
+    # Ensure the resolved path stays under the workspace directory
+    if os.path.commonpath([base, candidate]) != str(base):
         raise ValueError("invalid workspace file path")
 
     rel_posix = candidate.relative_to(base).as_posix()
