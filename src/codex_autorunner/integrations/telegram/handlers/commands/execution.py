@@ -27,6 +27,7 @@ from .....agents.opencode.runtime import (
     split_model_id,
 )
 from .....agents.opencode.supervisor import OpenCodeSupervisorError
+from .....core.about_car import CAR_CONTEXT_HINT, CAR_CONTEXT_KEYWORDS
 from .....core.config import load_repo_config
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
@@ -93,20 +94,6 @@ OUTBOX_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
-CAR_CONTEXT_KEYWORDS = (
-    "car",
-    "codex",
-    "todo",
-    "progress",
-    "opinions",
-    "spec",
-    "summary",
-    "autorunner",
-    "work docs",
-)
-CAR_CONTEXT_HINT = (
-    "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules."
-)
 
 FILES_HINT_TEMPLATE = (
     "Inbox: {inbox}\n"

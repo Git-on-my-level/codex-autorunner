@@ -4,7 +4,7 @@ Pydantic request/response schemas for web and API routes.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -36,6 +36,34 @@ class WorkspaceFileItem(ResponseModel):
 
 class WorkspaceFileListResponse(ResponseModel):
     files: List[WorkspaceFileItem]
+
+
+class WorkspaceNode(ResponseModel):
+    name: str
+    path: str
+    type: Literal["file", "folder"]
+    is_pinned: bool = False
+    modified_at: Optional[str] = None
+    size: Optional[int] = None
+    children: Optional[List["WorkspaceNode"]] = None
+
+
+WorkspaceNode.model_rebuild()
+
+
+class WorkspaceTreeResponse(ResponseModel):
+    tree: List[WorkspaceNode]
+
+
+class WorkspaceUploadedItem(ResponseModel):
+    filename: str
+    path: str
+    size: int
+
+
+class WorkspaceUploadResponse(ResponseModel):
+    status: str
+    uploaded: List[WorkspaceUploadedItem]
 
 
 class SpecIngestTicketsResponse(ResponseModel):

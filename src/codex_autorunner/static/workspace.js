@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
-import { fetchWorkspace, ingestSpecToTickets, listTickets, listWorkspaceFiles, writeWorkspace, } from "./workspaceApi.js";
+import { fetchWorkspace, ingestSpecToTickets, listTickets, fetchWorkspaceTree, uploadWorkspaceFiles, downloadWorkspaceZip, createWorkspaceFolder, writeWorkspace, } from "./workspaceApi.js";
 import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
 import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
@@ -47,11 +47,20 @@ function els() {
     return {
         fileList: document.getElementById("workspace-file-list"),
         fileSelect: document.getElementById("workspace-file-select"),
+        breadcrumbs: document.getElementById("workspace-breadcrumbs"),
         status: document.getElementById("workspace-status"),
+        statusMobile: document.getElementById("workspace-status-mobile"),
+        uploadBtn: document.getElementById("workspace-upload"),
+        uploadInput: document.getElementById("workspace-upload-input"),
+        newFolderBtn: document.getElementById("workspace-new-folder"),
+        newFileBtn: document.getElementById("workspace-new-file"),
+        downloadAllBtn: document.getElementById("workspace-download-all"),
         generateBtn: document.getElementById("workspace-generate-tickets"),
         textarea: document.getElementById("workspace-content"),
         saveBtn: document.getElementById("workspace-save"),
+        saveBtnMobile: document.getElementById("workspace-save-mobile"),
         reloadBtn: document.getElementById("workspace-reload"),
+        reloadBtnMobile: document.getElementById("workspace-reload-mobile"),
         patchMain: document.getElementById("workspace-patch-main"),
         patchBody: document.getElementById("workspace-patch-body"),
         patchSummary: document.getElementById("workspace-patch-summary"),
@@ -72,6 +81,14 @@ function els() {
         agentSelect: document.getElementById("workspace-chat-agent-select"),
         modelSelect: document.getElementById("workspace-chat-model-select"),
         reasoningSelect: document.getElementById("workspace-chat-reasoning-select"),
+        createModal: document.getElementById("workspace-create-modal"),
+        createTitle: document.getElementById("workspace-create-title"),
+        createInput: document.getElementById("workspace-create-name"),
+        createHint: document.getElementById("workspace-create-hint"),
+        createPath: document.getElementById("workspace-create-path"),
+        createClose: document.getElementById("workspace-create-close"),
+        createCancel: document.getElementById("workspace-create-cancel"),
+        createSubmit: document.getElementById("workspace-create-submit"),
     };
 }
 function workspaceKindFromPath(path) {
@@ -97,8 +114,17 @@ async function readWorkspaceContent(path) {
 async function writeWorkspaceContent(path, content) {
     const kind = workspaceKindFromPath(path);
     if (kind) {
-        const res = await writeWorkspace(kind, content);
-        return res[kind] || "";
+        try {
+            const res = await writeWorkspace(kind, content);
+            return res[kind] || "";
+        }
+        catch (err) {
+            const msg = err.message || "";
+            if (!msg.toLowerCase().includes("invalid workspace doc kind")) {
+                throw err;
+            }
+            // Fallback to generic file write in case detection misfires
+        }
     }
     return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
         method: "PUT",
@@ -111,9 +137,11 @@ function target() {
     return `workspace:${state.target.path}`;
 }
 function setStatus(text) {
-    const statusEl = els().status;
-    if (statusEl)
-        statusEl.textContent = text;
+    const { status, statusMobile } = els();
+    if (status)
+        status.textContent = text;
+    if (statusMobile)
+        statusMobile.textContent = text;
 }
 function renderPatch() {
     const { patchMain, patchBody, patchSummary, patchMeta, textarea, saveBtn, reloadBtn } = els();
@@ -158,6 +186,100 @@ function renderPatch() {
 }
 function renderChat() {
     workspaceChat.render();
+}
+function updateDownloadButton() {
+    const { downloadAllBtn } = els();
+    if (!downloadAllBtn)
+        return;
+    const currentPath = state.browser?.getCurrentPath() || "";
+    const isRoot = !currentPath;
+    const folderName = currentPath.split("/").pop() || "";
+    downloadAllBtn.title = isRoot ? "Download all as ZIP" : `Download ${folderName}/ as ZIP`;
+    downloadAllBtn.onclick = () => downloadWorkspaceZip(isRoot ? undefined : currentPath);
+}
+let createMode = null;
+function listFolderPaths(nodes, base = "") {
+    const paths = [];
+    nodes.forEach((node) => {
+        if (node.type !== "folder")
+            return;
+        const current = base ? `${base}/${node.name}` : node.name;
+        paths.push(current);
+        if (node.children?.length) {
+            paths.push(...listFolderPaths(node.children, current));
+        }
+    });
+    return paths;
+}
+function openCreateModal(mode) {
+    const { createModal, createTitle, createInput, createHint, createPath } = els();
+    if (!createModal || !createInput || !createTitle || !createHint || !createPath)
+        return;
+    createMode = mode;
+    createTitle.textContent = mode === "folder" ? "New Folder" : "New Markdown File";
+    createInput.value = "";
+    createInput.placeholder = mode === "folder" ? "folder-name" : "note.md";
+    createHint.textContent =
+        mode === "folder"
+            ? "Folder will be created under the current path"
+            : "File will be created under the current path ('.md' appended if missing)";
+    // Populate location selector with root + folders
+    createPath.innerHTML = "";
+    const rootOption = document.createElement("option");
+    rootOption.value = "";
+    rootOption.textContent = "Workspace (root)";
+    createPath.appendChild(rootOption);
+    const folders = listFolderPaths(state.files);
+    folders.forEach((path) => {
+        const opt = document.createElement("option");
+        opt.value = path;
+        opt.textContent = path;
+        createPath.appendChild(opt);
+    });
+    const currentPath = state.browser?.getCurrentPath() || "";
+    createPath.value = currentPath;
+    if (createPath.value !== currentPath) {
+        createPath.value = "";
+    }
+    createModal.hidden = false;
+    setTimeout(() => createInput.focus(), 10);
+}
+function closeCreateModal() {
+    const { createModal } = els();
+    createMode = null;
+    if (createModal)
+        createModal.hidden = true;
+}
+async function handleCreateSubmit() {
+    const { createInput, createPath } = els();
+    if (!createMode || !createInput || !createPath)
+        return;
+    const rawName = (createInput.value || "").trim();
+    if (!rawName) {
+        flash("Name is required", "error");
+        return;
+    }
+    const base = createPath.value ?? state.browser?.getCurrentPath() ?? "";
+    const name = createMode === "file" && !rawName.toLowerCase().endsWith(".md") ? `${rawName}.md` : rawName;
+    const path = base ? `${base}/${name}` : name;
+    try {
+        if (createMode === "folder") {
+            await createWorkspaceFolder(path);
+            flash("Folder created", "success");
+        }
+        else {
+            await writeWorkspaceContent(path, "");
+            flash("File created", "success");
+        }
+        closeCreateModal();
+        await loadFiles(createMode === "file" ? path : state.target?.path || undefined);
+        if (createMode === "file") {
+            state.browser?.select(path);
+        }
+    }
+    catch (err) {
+        flash(err.message || "Failed to create item", "error");
+    }
 }
 async function loadWorkspaceFile(path) {
     state.loading = true;
@@ -414,29 +536,36 @@ async function resetThread() {
         flash(err.message || "Failed to reset thread", "error");
     }
 }
-async function loadFiles() {
-    const files = await listWorkspaceFiles();
-    state.files = files;
-    const { fileList, fileSelect } = els();
+async function loadFiles(defaultPath) {
+    const tree = await fetchWorkspaceTree();
+    state.files = tree;
+    const { fileList, fileSelect, breadcrumbs } = els();
     if (!fileList)
         return;
-    const browser = new WorkspaceFileBrowser({
-        container: fileList,
-        selectEl: fileSelect,
-        onSelect: (file) => {
-            state.target = { path: file.path, isPinned: file.is_pinned };
-            workspaceChat.setTarget(target());
-            void loadWorkspaceFile(file.path);
-        },
-    });
-    state.browser = browser;
-    browser.setFiles(files, files.find((f) => f.is_pinned)?.path);
+    if (!state.browser) {
+        state.browser = new WorkspaceFileBrowser({
+            container: fileList,
+            selectEl: fileSelect,
+            breadcrumbsEl: breadcrumbs,
+            onSelect: (file) => {
+                state.target = { path: file.path, isPinned: Boolean(file.is_pinned) };
+                workspaceChat.setTarget(target());
+                void loadWorkspaceFile(file.path);
+            },
+            onPathChange: () => updateDownloadButton(),
+            onRefresh: () => loadFiles(state.target?.path),
+            onConfirm: (message) => window.workspaceConfirm?.(message) ??
+                Promise.resolve(confirm(message)),
+        });
+    }
+    state.browser.setTree(tree, defaultPath || state.target?.path || undefined);
+    updateDownloadButton();
     if (state.target) {
         workspaceChat.setTarget(target());
     }
 }
 export async function initWorkspace() {
-    const { generateBtn, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();
+    const { generateBtn, uploadBtn, uploadInput, newFolderBtn, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();
     if (!document.getElementById("workspace"))
         return;
     initAgentControls({
@@ -451,8 +580,34 @@ export async function initWorkspace() {
     await maybeShowGenerate();
     await loadFiles();
     workspaceChat.setTarget(target());
-    els().saveBtn?.addEventListener("click", () => void state.docEditor?.save(true));
-    els().reloadBtn?.addEventListener("click", () => void reloadWorkspace());
+    const reloadEverything = async () => {
+        await loadFiles(state.target?.path);
+        await reloadWorkspace();
+    };
+    saveBtn?.addEventListener("click", () => void state.docEditor?.save(true));
+    saveBtnMobile?.addEventListener("click", () => void state.docEditor?.save(true));
+    reloadBtn?.addEventListener("click", () => void reloadEverything());
+    reloadBtnMobile?.addEventListener("click", () => void reloadEverything());
+    uploadBtn?.addEventListener("click", () => uploadInput?.click());
+    uploadInput?.addEventListener("change", async () => {
+        const files = uploadInput.files;
+        if (!files || !files.length)
+            return;
+        const subdir = state.browser?.getCurrentPath() || "";
+        try {
+            await uploadWorkspaceFiles(files, subdir || undefined);
+            flash(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"}`, "success");
+            await loadFiles(state.target?.path);
+        }
+        catch (err) {
+            flash(err.message || "Upload failed", "error");
+        }
+        finally {
+            uploadInput.value = "";
+        }
+    });
+    newFolderBtn?.addEventListener("click", () => openCreateModal("folder"));
+    els().newFileBtn?.addEventListener("click", () => openCreateModal("file"));
     generateBtn?.addEventListener("click", () => void generateTickets());
     patchApply?.addEventListener("click", () => void applyWorkspaceDraft());
     patchDiscard?.addEventListener("click", () => void discardWorkspaceDraft());
@@ -469,4 +624,49 @@ export async function initWorkspace() {
             }
         });
     }
+    const { createModal, createClose, createCancel, createSubmit } = els();
+    createClose?.addEventListener("click", () => closeCreateModal());
+    createCancel?.addEventListener("click", () => closeCreateModal());
+    createSubmit?.addEventListener("click", () => void handleCreateSubmit());
+    els().createInput?.addEventListener("keydown", (evt) => {
+        if (evt.key === "Enter") {
+            evt.preventDefault();
+            void handleCreateSubmit();
+        }
+    });
+    createModal?.addEventListener("click", (evt) => {
+        if (evt.target === createModal)
+            closeCreateModal();
+    });
+    document.addEventListener("keydown", (evt) => {
+        if (evt.key === "Escape" && createModal && !createModal.hidden) {
+            closeCreateModal();
+        }
+    });
+    // Confirm modal wiring
+    const confirmModal = document.getElementById("workspace-confirm-modal");
+    const confirmText = document.getElementById("workspace-confirm-text");
+    const confirmYes = document.getElementById("workspace-confirm-yes");
+    const confirmCancel = document.getElementById("workspace-confirm-cancel");
+    let confirmResolver = null;
+    const closeConfirm = (result) => {
+        if (confirmModal)
+            confirmModal.hidden = true;
+        confirmResolver?.(result);
+        confirmResolver = null;
+    };
+    window.workspaceConfirm = (message) => new Promise((resolve) => {
+        confirmResolver = resolve;
+        if (confirmText)
+            confirmText.textContent = message;
+        if (confirmModal)
+            confirmModal.hidden = false;
+        confirmYes?.focus();
+    });
+    confirmYes?.addEventListener("click", () => closeConfirm(true));
+    confirmCancel?.addEventListener("click", () => closeConfirm(false));
+    confirmModal?.addEventListener("click", (evt) => {
+        if (evt.target === confirmModal)
+            closeConfirm(false);
+    });
 }
