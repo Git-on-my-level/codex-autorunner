@@ -45,19 +45,7 @@ const XTERM_COLOR_MODE_PALETTE_16 = 0x01000000;
 const XTERM_COLOR_MODE_PALETTE_256 = 0x02000000;
 const XTERM_COLOR_MODE_RGB = 0x03000000;
 const CAR_CONTEXT_HOOK_ID = "car_context";
-const CAR_CONTEXT_KEYWORDS = [
-    "car",
-    "codex",
-    "todo",
-    "progress",
-    "opinions",
-    "spec",
-    "summary",
-    "autorunner",
-    "work docs",
-];
-const CAR_CONTEXT_HINT_TEXT = "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.";
-const CAR_CONTEXT_HINT = wrapInjectedContext(CAR_CONTEXT_HINT_TEXT);
+const CAR_CONTEXT_HINT = wrapInjectedContext(CONSTANTS.PROMPTS.CAR_CONTEXT_HINT);
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT = CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.";
 const INJECTED_CONTEXT_TAG_RE = /<injected context>/i;
@@ -633,12 +621,12 @@ export class TerminalManager {
                 if (manager._hasTextInputHookFired(CAR_CONTEXT_HOOK_ID))
                     return null;
                 const lowered = text.toLowerCase();
-                const hit = CAR_CONTEXT_KEYWORDS.some((kw) => lowered.includes(kw));
+                const hit = CONSTANTS.KEYWORDS.CAR_CONTEXT.some((kw) => lowered.includes(kw));
                 if (!hit)
                     return null;
                 if (lowered.includes("about_car.md"))
                     return null;
-                if (text.includes(CAR_CONTEXT_HINT_TEXT) ||
+                if (text.includes(CONSTANTS.PROMPTS.CAR_CONTEXT_HINT) ||
                     text.includes(CAR_CONTEXT_HINT)) {
                     return null;
                 }

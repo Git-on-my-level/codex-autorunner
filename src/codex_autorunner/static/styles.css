@@ -3344,7 +3344,19 @@ button.icon-btn {
 }
 
 .workspace-item-actions {
-  display: none;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.workspace-tree-row:hover .workspace-item-actions {
+  opacity: 1;
+}
+
+.workspace-item-actions .danger {
+  color: var(--error);
+  border-color: var(--error);
 }
 
 .workspace-create-dialog {
@@ -3367,6 +3379,14 @@ button.icon-btn {
 
 .workspace-path-row .workspace-breadcrumbs {
   flex: 1;
+}
+
+.file-picker-actions {
+  margin-left: auto;
+}
+
+.file-picker-actions .danger {
+  color: var(--error);
 }
 
 @media (max-width: 720px) {

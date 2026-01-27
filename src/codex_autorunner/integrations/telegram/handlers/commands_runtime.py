@@ -116,20 +116,7 @@ OUTBOX_CONTEXT_RE = re.compile(
     "(?:\\b(?:pdf|png|jpg|jpeg|gif|webp|svg|csv|tsv|json|yaml|yml|zip|tar|gz|tgz|xlsx|xls|docx|pptx|md|txt|log|html|xml)\\b|\\.(?:pdf|png|jpg|jpeg|gif|webp|svg|csv|tsv|json|yaml|yml|zip|tar|gz|tgz|xlsx|xls|docx|pptx|md|txt|log|html|xml)\\b|\\b(?:outbox)\\b)",
     re.IGNORECASE,
 )
-CAR_CONTEXT_KEYWORDS = (
-    "car",
-    "codex",
-    "todo",
-    "progress",
-    "opinions",
-    "spec",
-    "summary",
-    "autorunner",
-    "work docs",
-)
-CAR_CONTEXT_HINT = (
-    "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules."
-)
+
 FILES_HINT_TEMPLATE = """Inbox: {inbox}
 Outbox (pending): {outbox}
 Topic key: {topic_key}

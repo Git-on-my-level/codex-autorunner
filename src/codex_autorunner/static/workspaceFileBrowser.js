@@ -321,8 +321,41 @@ export class WorkspaceFileBrowser {
             const item = document.createElement("button");
             item.type = "button";
             item.className = "file-picker-item";
-            item.textContent = node.name;
             item.dataset.path = node.path;
+            const label = document.createElement("span");
+            label.className = "file-picker-name";
+            label.textContent = node.name;
+            item.appendChild(label);
+            const actions = document.createElement("span");
+            actions.className = "file-picker-actions";
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "ghost sm danger";
+            delBtn.textContent = "✕";
+            delBtn.title = `Delete ${node.type}`;
+            delBtn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                if (!confirm(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`))
+                    return;
+                try {
+                    if (node.type === "folder") {
+                        await deleteWorkspaceFolder(node.path);
+                    }
+                    else {
+                        await deleteWorkspaceFile(node.path);
+                        if (this.selectedPath === node.path)
+                            this.selectedPath = null;
+                    }
+                    await this.onRefresh();
+                    this.render();
+                    this.renderModal();
+                }
+                catch (err) {
+                    flash(err.message || "Failed to delete", "error");
+                }
+            });
+            actions.appendChild(delBtn);
+            item.appendChild(actions);
             if (node.type === "folder") {
                 item.classList.add("folder");
                 item.addEventListener("click", () => {
