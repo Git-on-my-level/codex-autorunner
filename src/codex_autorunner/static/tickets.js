@@ -528,9 +528,15 @@ function renderTickets(data) {
         });
         const head = document.createElement("div");
         head.className = "ticket-item-head";
+        // Extract ticket number from path (e.g., "TICKET-001" from ".codex-autorunner/tickets/TICKET-001.md")
+        const ticketPath = ticket.path || "";
+        const ticketMatch = ticketPath.match(/TICKET-\d+/);
+        const ticketNumber = ticketMatch ? ticketMatch[0] : "TICKET";
+        const ticketTitle = fm?.title ? String(fm.title) : "";
         const name = document.createElement("span");
         name.className = "ticket-name";
-        name.textContent = ticket.path || "TICKET";
+        // Combine ticket number and title on the same line
+        name.textContent = ticketTitle ? `${ticketNumber}: ${ticketTitle}` : ticketNumber;
         head.appendChild(name);
         // Badge container for status + agent badges
         const badges = document.createElement("span");
@@ -555,12 +561,6 @@ function renderTickets(data) {
         badges.appendChild(agent);
         head.appendChild(badges);
         item.appendChild(head);
-        if (fm?.title) {
-            const title = document.createElement("div");
-            title.className = "ticket-title";
-            title.textContent = String(fm.title);
-            item.appendChild(title);
-        }
         if (ticket.errors && ticket.errors.length) {
             const errors = document.createElement("div");
             errors.className = "ticket-errors";

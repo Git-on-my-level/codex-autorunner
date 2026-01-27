@@ -642,15 +642,23 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
 
     const head = document.createElement("div");
     head.className = "ticket-item-head";
+
+    // Extract ticket number from path (e.g., "TICKET-001" from ".codex-autorunner/tickets/TICKET-001.md")
+    const ticketPath = ticket.path || "";
+    const ticketMatch = ticketPath.match(/TICKET-\d+/);
+    const ticketNumber = ticketMatch ? ticketMatch[0] : "TICKET";
+    const ticketTitle = fm?.title ? String(fm.title) : "";
+
     const name = document.createElement("span");
     name.className = "ticket-name";
-    name.textContent = ticket.path || "TICKET";
+    // Combine ticket number and title on the same line
+    name.textContent = ticketTitle ? `${ticketNumber}: ${ticketTitle}` : ticketNumber;
     head.appendChild(name);
 
     // Badge container for status + agent badges
     const badges = document.createElement("span");
     badges.className = "ticket-badges";
-    
+
     // Add WORKING badge for active ticket (to the left of agent badge)
     if (isActive) {
       const workingBadge = document.createElement("span");
@@ -658,7 +666,7 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
       workingBadge.textContent = "Working";
       badges.appendChild(workingBadge);
     }
-    
+
     // Add DONE badge for completed tickets
     if (done && !isActive) {
       const doneBadge = document.createElement("span");
@@ -666,20 +674,13 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
       doneBadge.textContent = "Done";
       badges.appendChild(doneBadge);
     }
-    
+
     const agent = document.createElement("span");
     agent.className = "ticket-agent";
     agent.textContent = (fm?.agent as string) || "codex";
     badges.appendChild(agent);
     head.appendChild(badges);
     item.appendChild(head);
-
-    if (fm?.title) {
-      const title = document.createElement("div");
-      title.className = "ticket-title";
-      title.textContent = String(fm.title);
-      item.appendChild(title);
-    }
 
     if (ticket.errors && ticket.errors.length) {
       const errors = document.createElement("div");
