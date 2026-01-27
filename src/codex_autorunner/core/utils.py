@@ -1,3 +1,4 @@
+import contextvars
 import json
 import logging
 import os
@@ -23,7 +24,31 @@ class RepoNotFoundError(Exception):
     pass
 
 
+_repo_root_ctx: contextvars.ContextVar[Optional[Path]] = contextvars.ContextVar(
+    "codex_autorunner_repo_root", default=None
+)
+
+
+def set_repo_root_context(
+    repo_root: Optional[Path],
+) -> contextvars.Token[Optional[Path]]:
+    """Set the current repo root for the active context."""
+    return _repo_root_ctx.set(repo_root.resolve() if repo_root else None)
+
+
+def reset_repo_root_context(token: contextvars.Token[Optional[Path]]) -> None:
+    _repo_root_ctx.reset(token)
+
+
+def get_repo_root_context() -> Optional[Path]:
+    return _repo_root_ctx.get()
+
+
 def find_repo_root(start: Optional[Path] = None) -> Path:
+    ctx_root = get_repo_root_context()
+    if ctx_root is not None and (ctx_root / ".git").exists():
+        return ctx_root
+
     current = (start or Path.cwd()).resolve()
     for parent in [current] + list(current.parents):
         if (parent / ".git").exists():

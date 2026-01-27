@@ -11,6 +11,7 @@ from typing import Mapping, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.routing import Mount
 from starlette.types import ASGIApp
@@ -51,6 +52,8 @@ from ..core.usage import (
 )
 from ..core.utils import (
     build_opencode_supervisor,
+    reset_repo_root_context,
+    set_repo_root_context,
 )
 from ..housekeeping import run_housekeeping_once
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
@@ -917,6 +920,22 @@ def create_app(
 ) -> ASGIApp:
     context = _build_app_context(repo_root, base_path, hub_config=hub_config)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
+
+    class _RepoRootContextMiddleware(BaseHTTPMiddleware):
+        """Ensure find_repo_root() resolves to the mounted repo even when cwd differs."""
+
+        def __init__(self, app, repo_root: Path):
+            super().__init__(app)
+            self.repo_root = repo_root
+
+        async def dispatch(self, request, call_next):
+            token = set_repo_root_context(self.repo_root)
+            try:
+                return await call_next(request)
+            finally:
+                reset_repo_root_context(token)
+
+    app.add_middleware(_RepoRootContextMiddleware, repo_root=context.engine.repo_root)
     _apply_app_context(app, context)
     app.add_middleware(GZipMiddleware, minimum_size=500)
     static_files = CacheStaticFiles(directory=context.static_dir)
