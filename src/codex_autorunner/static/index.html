@@ -278,7 +278,7 @@
         </div>
       </section>
       <section class="panel" id="workspace">
-        <div class="workspace-header">
+        <div class="workspace-header workspace-header-desktop">
           <div class="workspace-header-left">
             <h3 class="workspace-title">Workspace</h3>
             <span class="muted small" id="workspace-status"></span>
@@ -318,6 +318,17 @@
               <div class="doc-patch-body" id="workspace-patch-body">(no draft)</div>
             </div>
             <textarea id="workspace-content" spellcheck="false"></textarea>
+            <!-- Mobile toolbar: file selector + actions, positioned above compose -->
+            <div class="workspace-mobile-toolbar">
+              <button class="workspace-file-btn" id="workspace-file-pill" type="button">
+                <span class="workspace-file-btn-name" id="workspace-file-pill-name">active_context.md</span>
+              </button>
+              <div class="workspace-mobile-actions">
+                <span class="muted small" id="workspace-status-mobile"></span>
+                <button class="ghost sm" id="workspace-reload-mobile" title="Reload">↻</button>
+                <button class="primary sm" id="workspace-save-mobile">Save</button>
+              </div>
+            </div>
             <div class="doc-chat-panel compose-panel">
               <div class="doc-chat-compose">
                 <div class="doc-agent-controls">
@@ -381,35 +392,50 @@
             <button class="primary sm" id="ticket-flow-bootstrap">Start Ticket Flow</button>
             <button class="ghost sm" id="ticket-flow-stop">Stop</button>
             <button class="ghost sm" id="ticket-flow-resume">Resume</button>
-            <button class="ghost sm" id="ticket-flow-restart" style="display:none;">Restart</button>
-            <button class="ghost sm" id="ticket-flow-archive" style="display:none;">Archive Flow</button>
+            <button class="ghost sm ticket-desktop-only" id="ticket-flow-restart" style="display:none;">Restart</button>
+            <button class="ghost sm ticket-desktop-only" id="ticket-flow-archive" style="display:none;">Archive Flow</button>
             <button class="ghost sm icon-btn" id="ticket-flow-refresh" title="Refresh ticket flow">↻</button>
-            <button class="ghost sm" id="ticket-new-btn" title="Create new ticket">+ New Ticket</button>
+            <!-- Overflow menu for mobile -->
+            <div class="ticket-overflow-menu">
+              <button class="ghost sm icon-btn" id="ticket-overflow-toggle" title="More actions">⋯</button>
+              <div class="ticket-overflow-dropdown hidden" id="ticket-overflow-dropdown">
+                <button class="ticket-overflow-item" id="ticket-overflow-new">+ New Ticket</button>
+                <button class="ticket-overflow-item" id="ticket-overflow-restart" style="display:none;">Restart</button>
+                <button class="ticket-overflow-item" id="ticket-overflow-archive" style="display:none;">Archive Flow</button>
+              </div>
+            </div>
+            <button class="ghost sm ticket-desktop-only" id="ticket-new-btn" title="Create new ticket">+ New Ticket</button>
           </div>
-          <div class="ticket-flow-meta">
-            <div>
-              <span class="muted">Current ticket</span>
-              <span class="ticket-mono" id="ticket-flow-current">–</span>
-            </div>
-            <div>
-              <span class="muted">Turn</span>
-              <span class="ticket-mono" id="ticket-flow-turn">–</span>
-            </div>
-            <div>
-              <span class="muted">Elapsed</span>
-              <span class="ticket-mono" id="ticket-flow-elapsed">–</span>
-            </div>
-            <div>
-              <span class="muted">Progress</span>
-              <span class="ticket-mono" id="ticket-flow-progress">–</span>
-            </div>
-            <div>
-              <span class="muted">Reason</span>
-              <span class="ticket-mono ticket-flow-reason" id="ticket-flow-reason">–</span>
-            </div>
-            <div>
-              <span class="muted">Last activity</span>
-              <span class="ticket-mono" id="ticket-flow-last-activity">–</span>
+          <div class="ticket-flow-meta" id="ticket-flow-meta">
+            <button class="ticket-meta-toggle" id="ticket-meta-toggle" title="Toggle details">
+              <span class="ticket-meta-summary" id="ticket-meta-summary">–</span>
+              <span class="ticket-meta-arrow">▾</span>
+            </button>
+            <div class="ticket-meta-details" id="ticket-meta-details">
+              <div>
+                <span class="muted">Current ticket</span>
+                <span class="ticket-mono" id="ticket-flow-current">–</span>
+              </div>
+              <div>
+                <span class="muted">Turn</span>
+                <span class="ticket-mono" id="ticket-flow-turn">–</span>
+              </div>
+              <div>
+                <span class="muted">Elapsed</span>
+                <span class="ticket-mono" id="ticket-flow-elapsed">–</span>
+              </div>
+              <div>
+                <span class="muted">Progress</span>
+                <span class="ticket-mono" id="ticket-flow-progress">–</span>
+              </div>
+              <div>
+                <span class="muted">Reason</span>
+                <span class="ticket-mono ticket-flow-reason" id="ticket-flow-reason">–</span>
+              </div>
+              <div>
+                <span class="muted">Last activity</span>
+                <span class="ticket-mono" id="ticket-flow-last-activity">–</span>
+              </div>
             </div>
           </div>
           <!-- Live Agent Output Panel -->
@@ -446,7 +472,7 @@
                 <span class="muted">Dispatch history</span>
                 <span class="muted small" id="ticket-dispatch-note">–</span>
               </div>
-              <div class="ticket-list" id="ticket-dispatch-history">No dispatches yet.</div>
+              <div class="ticket-list" id="ticket-dispatch-history">No dispatches yet. Agent messages will appear here.</div>
             </div>
           </div>
         </div>
@@ -807,6 +833,19 @@
       <pre class="reason-modal-content" id="reason-modal-content"></pre>
       <div class="modal-actions">
         <button class="ghost" id="reason-modal-close">Close</button>
+      </div>
+    </div>
+  </div>
+  <!-- File Picker Modal -->
+  <div class="modal-overlay file-picker-modal" hidden="" id="file-picker-modal">
+    <div aria-labelledby="file-picker-modal-title" aria-modal="true"
+      class="modal-dialog file-picker-dialog" role="dialog" tabindex="-1">
+      <div class="file-picker-header">
+        <span class="file-picker-title" id="file-picker-modal-title">Select File</span>
+        <button class="file-picker-close" id="file-picker-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="file-picker-body" id="file-picker-body">
+        <!-- File list rendered here by JS -->
       </div>
     </div>
   </div>

@@ -1687,6 +1687,65 @@ button.icon-btn {
   opacity: 0.6;
 }
 
+/* Ticket meta details container - desktop shows all */
+.ticket-card .ticket-meta-details {
+  display: contents;
+}
+
+.ticket-card .ticket-meta-details>div {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* Meta toggle button - hidden on desktop */
+.ticket-card .ticket-meta-toggle {
+  display: none;
+}
+
+/* Overflow menu container */
+.ticket-overflow-menu {
+  display: none;
+  position: relative;
+}
+
+.ticket-overflow-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 50;
+  min-width: 140px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  margin-top: 4px;
+}
+
+.ticket-overflow-item {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.ticket-overflow-item:hover {
+  background: rgba(108, 245, 216, 0.1);
+}
+
+.ticket-overflow-item:active {
+  background: rgba(108, 245, 216, 0.15);
+}
+
 .ticket-card .ticket-flow-grid {
   display: grid;
   gap: 8px;
@@ -2193,7 +2252,7 @@ button.icon-btn {
 }
 
 .ticket-live-output-compact:empty::before {
-  content: "Waiting for agent output...";
+  content: "Ready. Agent output will appear here.";
   color: var(--muted);
   font-style: italic;
 }
@@ -2226,7 +2285,7 @@ button.icon-btn {
 }
 
 .ticket-live-output-text:empty::before {
-  content: "Waiting for agent output...";
+  content: "Ready. Agent output will appear here.";
   color: var(--muted);
   font-style: italic;
 }
@@ -2636,6 +2695,55 @@ button.icon-btn {
 
 .workspace-file-mobile {
   display: none;
+}
+
+/* Mobile workspace toolbar - hidden on desktop, shown above compose on mobile */
+.workspace-mobile-toolbar {
+  display: none;
+}
+
+/* Mobile file selector button - clean, square aesthetic */
+.workspace-file-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.workspace-file-btn:hover,
+.workspace-file-btn:focus {
+  border-color: var(--accent);
+  background: rgba(108, 245, 216, 0.05);
+  outline: none;
+}
+
+.workspace-file-btn:active {
+  background: rgba(108, 245, 216, 0.1);
+}
+
+.workspace-file-btn-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.workspace-mobile-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .workspace-file-list {
@@ -5017,6 +5125,150 @@ button.terminal-text-send-icon.disconnected {
   margin-bottom: 20px;
 }
 
+/* File Picker Modal */
+.file-picker-modal.modal-overlay {
+  padding: 0;
+  z-index: 3100;
+}
+
+.file-picker-dialog {
+  width: 100%;
+  max-width: 400px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.file-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.file-picker-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.file-picker-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 24px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.file-picker-close:hover {
+  color: var(--text);
+  background: rgba(108, 245, 216, 0.1);
+}
+
+.file-picker-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  min-height: 0;
+}
+
+.file-picker-section {
+  margin-bottom: 12px;
+}
+
+.file-picker-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 8px 12px 6px;
+}
+
+.file-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.file-picker-item:hover,
+.file-picker-item:focus {
+  background: rgba(108, 245, 216, 0.08);
+  outline: none;
+}
+
+.file-picker-item.active {
+  background: rgba(108, 245, 216, 0.15);
+  color: var(--accent);
+}
+
+.file-picker-item.active::before {
+  content: "✓";
+  margin-right: -4px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.file-picker-item-icon {
+  font-size: 16px;
+  opacity: 0.7;
+}
+
+.file-picker-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Mobile: Full screen bottom sheet style */
+@media (max-width: 640px) {
+  .file-picker-modal.modal-overlay {
+    align-items: flex-end;
+  }
+
+  .file-picker-dialog {
+    max-width: 100%;
+    max-height: 80vh;
+    border-radius: 16px 16px 0 0;
+    margin: 0;
+  }
+
+  .file-picker-header {
+    padding: 16px 20px;
+  }
+
+  .file-picker-title {
+    font-size: 16px;
+  }
+
+  .file-picker-body {
+    padding: 8px 12px 24px;
+  }
+
+  .file-picker-item {
+    padding: 14px 16px;
+    font-size: 15px;
+  }
+}
+
 .form-group {
   display: flex;
   flex-direction: column;
@@ -5276,7 +5528,7 @@ button.loading::after {
   }
 
   .hub-stat p {
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .hub-repo-panel {
@@ -5314,7 +5566,7 @@ button.loading::after {
   }
 
   .hub-repo-info-line {
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .hub-repo-right {
@@ -5323,7 +5575,7 @@ button.loading::after {
 
   .hub-repo-right button {
     padding: 5px 8px;
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .hub-repo-note {
@@ -5343,7 +5595,7 @@ button.loading::after {
   }
 
   .hub-usage-path {
-    font-size: 8px;
+    font-size: 10px;
   }
 
   .hub-usage-grid {
@@ -5365,7 +5617,7 @@ button.loading::after {
   }
 
   .hub-usage-chip-meta {
-    font-size: 8px;
+    font-size: 10px;
   }
 
   /* Per-repo usage compact on mobile */
@@ -5402,11 +5654,11 @@ button.loading::after {
   }
 
   .usage-stat-lbl {
-    font-size: 7px;
+    font-size: 10px;
   }
 
   .usage-footer {
-    font-size: 8px;
+    font-size: 10px;
     padding-top: 3px;
   }
 
@@ -5597,21 +5849,151 @@ button.loading::after {
     padding-bottom: 8px;
   }
 
-  .grid-two {
-    grid-template-columns: repeat(3, 1fr);
+  /* Ticket flow mobile - overflow menu and collapsible meta */
+  .ticket-desktop-only {
+    display: none !important;
+  }
+
+  .ticket-overflow-menu {
+    display: block;
+  }
+
+  .ticket-card .ticket-flow-actions {
     gap: 4px;
   }
 
+  .ticket-card .ticket-flow-actions button {
+    min-height: 44px;
+    padding: 8px 12px;
+  }
+
+  .ticket-card .ticket-flow-meta {
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+  }
+
+  .ticket-card .ticket-meta-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 8px 10px;
+    background: linear-gradient(120deg, rgba(111, 137, 255, 0.12), rgba(16, 21, 33, 0.6));
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .ticket-card .ticket-meta-toggle:active {
+    background: rgba(111, 137, 255, 0.2);
+  }
+
+  .ticket-card .ticket-meta-summary {
+    font-weight: 500;
+  }
+
+  .ticket-card .ticket-meta-arrow {
+    color: var(--muted);
+    transition: transform 0.2s ease;
+  }
+
+  .ticket-card .ticket-meta-toggle.expanded .ticket-meta-arrow {
+    transform: rotate(180deg);
+  }
+
+  .ticket-card .ticket-meta-details {
+    display: none;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    padding: 8px 10px;
+    margin-top: 4px;
+    background: rgba(16, 21, 33, 0.4);
+    border-radius: 6px;
+    font-size: 11px;
+  }
+
+  .ticket-card .ticket-meta-details.expanded {
+    display: flex;
+  }
+
+  .ticket-card .ticket-meta-details>div {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    white-space: nowrap;
+  }
+
+  /* Workspace mobile - hide desktop header, show bottom toolbar */
+  .workspace-header-desktop {
+    display: none;
+  }
+
+  .workspace-mobile-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+    margin: 0;
+  }
+
+  /* Tighten spacing around toolbar */
+  #workspace-content {
+    margin-bottom: 0;
+  }
+
+  .workspace-mobile-toolbar + .compose-panel {
+    margin-top: 2px;
+  }
+
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-file-browser {
+    display: none;
+  }
+
+  #workspace.panel.active {
+    display: flex;
+    flex-direction: column;
+  }
+
+  #workspace .workspace-main {
+    flex: 1;
+    min-height: 0;
+  }
+
+  #workspace-content {
+    min-height: 150px;
+    font-size: 14px;
+  }
+
+  .grid-two {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+
   .grid-two>div {
-    padding: 6px 8px;
+    padding: 8px 10px;
+  }
+
+  /* Hide empty metrics on mobile */
+  .grid-two>div.metric-empty {
+    display: none;
   }
 
   .grid-two .muted {
-    font-size: 8px;
+    font-size: 10px;
   }
 
   .metric {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     word-break: break-all;
   }
@@ -5672,6 +6054,41 @@ button.loading::after {
     gap: 6px;
   }
 
+  /* Mobile typography - minimum readable sizes */
+  .usage-stat-lbl,
+  .usage-footer,
+  .usage-rate-label,
+  .usage-progress-label,
+  .hub-usage-path,
+  .hub-usage-chip-meta,
+  .pill-small,
+  .ticket-live-output-status,
+  .ticket-live-output-events-count,
+  .doc-patch-legend,
+  .doc-chat-event-detail,
+  .doc-chat-event-meta,
+  .doc-chat-message-meta,
+  .doc-chat-entry-header .meta,
+  .doc-chat-entry-tags,
+  .chat-time,
+  .chat-copy-btn,
+  .chat-tag {
+    font-size: 10px;
+  }
+
+  .usage-chart-label,
+  .muted.small {
+    font-size: 10px;
+  }
+
+  /* Ensure body text minimum */
+  .ticket-body,
+  .dispatch-item,
+  .messages-thread,
+  .inbox-item {
+    font-size: 12px;
+  }
+
   /* Runner config compact on mobile */
   .runner-config {
     margin-top: 8px;
@@ -5680,7 +6097,7 @@ button.loading::after {
   }
 
   .runner-config-label {
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .runner-config-value {
@@ -5690,7 +6107,7 @@ button.loading::after {
   /* Runner PID info more compact */
   #runner-pid {
     margin-top: 8px;
-    font-size: 9px;
+    font-size: 10px;
   }
 
   /* Compact inline toolbar for mobile - flex row */
@@ -6381,7 +6798,7 @@ button.loading::after {
   }
 
   .chat-tag {
-    font-size: 8px;
+    font-size: 10px;
     padding: 2px 6px;
   }
 
@@ -6809,7 +7226,7 @@ button.loading::after {
   }
 
   .grid-two .muted {
-    font-size: 7px;
+    font-size: 10px;
   }
 
   .actions {
@@ -6818,7 +7235,7 @@ button.loading::after {
   }
 
   .actions button {
-    font-size: 9px;
+    font-size: 10px;
     min-height: 40px;
     padding: 8px 4px;
   }
@@ -6847,7 +7264,7 @@ button.loading::after {
   }
 
   .inline-toolbar .chip::after {
-    font-size: 8px;
+    font-size: 10px;
   }
 
   .log-container {
@@ -6879,7 +7296,7 @@ button.loading::after {
 
   .log-jump-btn {
     padding: 4px 8px;
-    font-size: 8px;
+    font-size: 10px;
     bottom: 8px;
     right: 8px;
   }
@@ -6924,7 +7341,7 @@ button.loading::after {
 
   .doc-chat-meta-right button {
     padding: 4px 6px;
-    font-size: 8px;
+    font-size: 10px;
   }
 
 
@@ -7012,7 +7429,7 @@ button.loading::after {
   }
 
   .grid-two .muted {
-    font-size: 7px;
+    font-size: 10px;
     letter-spacing: 0;
   }
 
@@ -7025,7 +7442,7 @@ button.loading::after {
   }
 
   .actions button {
-    font-size: 8px;
+    font-size: 10px;
     min-height: 38px;
     padding: 6px 2px;
     letter-spacing: 0;
@@ -7036,7 +7453,7 @@ button.loading::after {
   }
 
   .runner-config-label {
-    font-size: 8px;
+    font-size: 10px;
   }
 
   .runner-config-value {
@@ -7767,21 +8184,34 @@ button.loading::after {
 }
 
 /* Inbox / Messages panel */
+#inbox.panel.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 #inbox .cards {
   grid-template-columns: 1fr;
+  flex: 1;
+  min-height: 0;
 }
 
 #inbox .card {
   max-width: none;
   padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .messages-layout {
   display: grid;
   grid-template-columns: minmax(260px, 340px) 1fr;
   gap: 16px;
-  height: calc(100vh - 160px);
-  min-height: 400px;
+  flex: 1;
+  min-height: 0;
 }
 
 .messages-sidebar {
@@ -7898,6 +8328,17 @@ button.loading::after {
   font-size: 12px;
   color: var(--muted);
   max-width: 280px;
+  line-height: 1.5;
+}
+
+/* Ticket list empty state styling */
+.ticket-list:empty::before,
+.ticket-list:only-child:not(:has(.ticket-item)):not(:has(.dispatch-item))::after {
+  display: block;
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -8171,18 +8612,48 @@ button.loading::after {
 }
 
 @media (max-width: 900px) {
+  /* Inbox mobile - fill height and scroll */
   .messages-layout {
-    grid-template-columns: 1fr;
-    height: auto;
-    min-height: unset;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .messages-sidebar {
+    flex-shrink: 0;
   }
 
   .messages-thread-list {
-    max-height: 200px;
+    max-height: 180px;
+    overflow-y: auto;
+  }
+
+  .messages-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
 
   .messages-thread-detail {
-    max-height: 50vh;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  #inbox .card {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
+  #inbox.panel.active {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
   }
 }
 
