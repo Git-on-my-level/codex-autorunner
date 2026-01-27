@@ -114,8 +114,17 @@ async function readWorkspaceContent(path) {
 async function writeWorkspaceContent(path, content) {
     const kind = workspaceKindFromPath(path);
     if (kind) {
-        const res = await writeWorkspace(kind, content);
-        return res[kind] || "";
+        try {
+            const res = await writeWorkspace(kind, content);
+            return res[kind] || "";
+        }
+        catch (err) {
+            const msg = err.message || "";
+            if (!msg.toLowerCase().includes("invalid workspace doc kind")) {
+                throw err;
+            }
+            // Fallback to generic file write in case detection misfires
+        }
     }
     return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
         method: "PUT",

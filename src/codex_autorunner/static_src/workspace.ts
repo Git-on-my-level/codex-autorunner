@@ -154,8 +154,16 @@ async function readWorkspaceContent(path: string): Promise<string> {
 async function writeWorkspaceContent(path: string, content: string): Promise<string> {
   const kind = workspaceKindFromPath(path);
   if (kind) {
-    const res = await writeWorkspace(kind, content);
-    return (res[kind] as string) || "";
+    try {
+      const res = await writeWorkspace(kind, content);
+      return (res[kind] as string) || "";
+    } catch (err) {
+      const msg = (err as Error).message || "";
+      if (!msg.toLowerCase().includes("invalid workspace doc kind")) {
+        throw err;
+      }
+      // Fallback to generic file write in case detection misfires
+    }
   }
   return (await api(`/api/workspace/file?path=${encodeURIComponent(path)}`, {
     method: "PUT",
