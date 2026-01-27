@@ -1856,6 +1856,32 @@ button.icon-btn {
   font-size: 11px;
 }
 
+/* Turn summary dispatch styling */
+.dispatch-item.turn-summary {
+  background: rgba(63, 185, 80, 0.06);
+  border-color: rgba(63, 185, 80, 0.3);
+}
+
+.dispatch-item.turn-summary:hover {
+  background: rgba(63, 185, 80, 0.1);
+  border-color: rgba(63, 185, 80, 0.5);
+}
+
+.dispatch-item .turn-summary-badge {
+  background: rgba(63, 185, 80, 0.25);
+  color: #8dc896;
+}
+
+/* Ticket reference in dispatch items */
+.dispatch-ticket-ref {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #a0a8b8;
+  margin-left: auto;
+}
+
 
 .ticket-card .ticket-item {
   border: 1px solid var(--border);

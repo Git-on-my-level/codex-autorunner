@@ -65,5 +65,10 @@ def test_lint_dispatch_frontmatter_defaults_notify_and_validates_mode() -> None:
     assert errors == []
     assert normalized["mode"] == "pause"
 
+    # turn_summary is valid (used for agent turn output)
+    normalized, errors = lint_dispatch_frontmatter({"mode": "turn_summary"})
+    assert errors == []
+    assert normalized["mode"] == "turn_summary"
+
     normalized, errors = lint_dispatch_frontmatter({"mode": "bad"})
     assert errors

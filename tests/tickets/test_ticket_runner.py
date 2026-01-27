@@ -200,9 +200,12 @@ async def test_ticket_runner_dispatch_pause_message(tmp_path: Path) -> None:
     assert r1.status == "paused"
     assert r1.dispatch is not None
     assert r1.dispatch.dispatch.mode == "pause"
-    assert r1.state.get("dispatch_seq") == 1
+    # dispatch_seq is 2: dispatch at seq=1, turn_summary at seq=2
+    assert r1.state.get("dispatch_seq") == 2
     assert (run_dir / "dispatch_history" / "0001" / "DISPATCH.md").exists()
     assert (run_dir / "dispatch_history" / "0001" / "review.md").exists()
+    # Turn summary should also be created
+    assert (run_dir / "dispatch_history" / "0002" / "DISPATCH.md").exists()
 
 
 @pytest.mark.asyncio
@@ -422,13 +425,19 @@ async def test_ticket_runner_notify_does_not_pause_and_pause_does(
     assert r1.dispatch is not None
     assert r1.dispatch.dispatch.mode == "notify"
     assert (dispatch_history / "0001" / "DISPATCH.md").exists()
-    assert r1.state.get("dispatch_seq") == 1
+    # dispatch_seq is 2: dispatch at seq=1, turn_summary at seq=2
+    assert r1.state.get("dispatch_seq") == 2
+    # Turn summary should also be created
+    assert (dispatch_history / "0002" / "DISPATCH.md").exists()
 
     assert r2.status == "paused"
     assert r2.dispatch is not None
     assert r2.dispatch.dispatch.mode == "pause"
-    assert (dispatch_history / "0002" / "DISPATCH.md").exists()
-    assert r2.state.get("dispatch_seq") == 2
+    # dispatch_seq is 4: previous was 2, dispatch at seq=3, turn_summary at seq=4
+    assert (dispatch_history / "0003" / "DISPATCH.md").exists()
+    assert r2.state.get("dispatch_seq") == 4
+    # Turn summary should also be created
+    assert (dispatch_history / "0004" / "DISPATCH.md").exists()
 
 
 @pytest.mark.asyncio

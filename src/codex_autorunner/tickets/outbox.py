@@ -95,8 +95,74 @@ def parse_dispatch(path: Path) -> tuple[Optional[Dispatch], list[str]]:
     )
 
 
+def create_turn_summary(
+    paths: OutboxPaths,
+    *,
+    next_seq: int,
+    agent_output: str,
+    ticket_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    turn_number: Optional[int] = None,
+) -> tuple[Optional[DispatchRecord], list[str]]:
+    """Create a turn summary dispatch record for the agent's final output.
+
+    This creates a synthetic dispatch with mode="turn_summary" to show
+    the agent's final turn output in the dispatch history panel.
+
+    Returns (DispatchRecord, []) on success.
+    Returns (None, errors) on failure.
+    """
+
+    if not agent_output or not agent_output.strip():
+        return None, []
+
+    extra: dict = {}
+    if ticket_id:
+        extra["ticket_id"] = ticket_id
+    if agent_id:
+        extra["agent_id"] = agent_id
+    if turn_number is not None:
+        extra["turn_number"] = turn_number
+    extra["is_turn_summary"] = True
+
+    dispatch = Dispatch(
+        mode="turn_summary",
+        body=agent_output.strip(),
+        title=None,
+        extra=extra,
+    )
+
+    dest = paths.dispatch_history_dir / f"{next_seq:04d}"
+    try:
+        dest.mkdir(parents=True, exist_ok=False)
+    except OSError as exc:
+        return None, [f"Failed to create turn summary dir: {exc}"]
+
+    # Write a synthetic DISPATCH.md for consistency
+    msg_dest = dest / "DISPATCH.md"
+    try:
+        # Write minimal frontmatter + body
+        content = f"---\nmode: turn_summary\n---\n\n{agent_output.strip()}\n"
+        msg_dest.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        return None, [f"Failed to write turn summary: {exc}"]
+
+    return (
+        DispatchRecord(
+            seq=next_seq,
+            dispatch=dispatch,
+            archived_dir=dest,
+            archived_files=(msg_dest,),
+        ),
+        [],
+    )
+
+
 def archive_dispatch(
-    paths: OutboxPaths, *, next_seq: int
+    paths: OutboxPaths,
+    *,
+    next_seq: int,
+    ticket_id: Optional[str] = None,
 ) -> tuple[Optional[DispatchRecord], list[str]]:
     """Archive the current dispatch and attachments to the dispatch history.
 
@@ -113,6 +179,17 @@ def archive_dispatch(
     dispatch, errors = parse_dispatch(paths.dispatch_path)
     if errors or dispatch is None:
         return None, errors
+
+    # Add ticket_id to extra if provided
+    if ticket_id and dispatch is not None:
+        extra = dict(dispatch.extra)
+        extra["ticket_id"] = ticket_id
+        dispatch = Dispatch(
+            mode=dispatch.mode,
+            body=dispatch.body,
+            title=dispatch.title,
+            extra=extra,
+        )
 
     items = _list_dispatch_items(paths.dispatch_dir)
     dest = paths.dispatch_history_dir / f"{next_seq:04d}"

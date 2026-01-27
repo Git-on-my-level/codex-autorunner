@@ -12,7 +12,12 @@ from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_frontmatter
 from .models import TicketFrontmatter, TicketResult, TicketRunConfig, normalize_requires
-from .outbox import archive_dispatch, ensure_outbox_dirs, resolve_outbox_paths
+from .outbox import (
+    archive_dispatch,
+    create_turn_summary,
+    ensure_outbox_dirs,
+    resolve_outbox_paths,
+)
 from .replies import ensure_reply_dirs, parse_user_reply, resolve_reply_paths
 
 _logger = logging.getLogger(__name__)
@@ -60,8 +65,9 @@ class TicketRunner:
         # Clear transient reason from previous pause/resume cycles.
         state.pop("reason", None)
 
-        commit_state = (
-            state.get("commit") if isinstance(state.get("commit"), dict) else {}
+        _commit_raw = state.get("commit")
+        commit_state: dict[str, Any] = (
+            _commit_raw if isinstance(_commit_raw, dict) else {}
         )
         commit_pending = bool(commit_state.get("pending"))
         commit_retries = int(commit_state.get("retries") or 0)
@@ -137,17 +143,16 @@ class TicketRunner:
         # Determine lint-retry mode early. When lint state is present, we allow the
         # agent to fix the ticket frontmatter even if the ticket is currently
         # unparsable by the strict lint rules.
-        lint_state = state.get("lint") if isinstance(state.get("lint"), dict) else {}
-        lint_errors = (
-            lint_state.get("errors")
-            if isinstance(lint_state.get("errors"), list)
-            else []
+        _lint_raw = state.get("lint")
+        lint_state: dict[str, Any] = _lint_raw if isinstance(_lint_raw, dict) else {}
+        _lint_errors_raw = lint_state.get("errors")
+        lint_errors: list[str] = (
+            _lint_errors_raw if isinstance(_lint_errors_raw, list) else []
         )
         lint_retries = int(lint_state.get("retries") or 0)
-        reuse_conversation_id = (
-            lint_state.get("conversation_id")
-            if isinstance(lint_state.get("conversation_id"), str)
-            else None
+        _conv_id_raw = lint_state.get("conversation_id")
+        reuse_conversation_id: Optional[str] = (
+            _conv_id_raw if isinstance(_conv_id_raw, str) else None
         )
 
         # Read ticket (may lint-fail). In lint-retry mode, fall back to a relaxed
@@ -363,8 +368,9 @@ class TicketRunner:
 
         # Post-turn: archive outbox if DISPATCH.md exists.
         dispatch_seq = int(state.get("dispatch_seq") or 0)
+        current_ticket_id = safe_relpath(current_path, self._workspace_root)
         dispatch, dispatch_errors = archive_dispatch(
-            outbox_paths, next_seq=dispatch_seq + 1
+            outbox_paths, next_seq=dispatch_seq + 1, ticket_id=current_ticket_id
         )
         if dispatch_errors:
             # Treat as pause: user should fix DISPATCH.md frontmatter. Keep outbox
@@ -380,6 +386,20 @@ class TicketRunner:
         if dispatch is not None:
             state["dispatch_seq"] = dispatch.seq
             state.pop("outbox_lint", None)
+
+        # Create turn summary record for the agent's final output.
+        # This appears in dispatch history as a distinct "turn summary" entry.
+        turn_summary_seq = int(state.get("dispatch_seq") or 0) + 1
+        turn_summary, turn_summary_errors = create_turn_summary(
+            outbox_paths,
+            next_seq=turn_summary_seq,
+            agent_output=result.text or "",
+            ticket_id=current_ticket_id,
+            agent_id=result.agent_id,
+            turn_number=total_turns,
+        )
+        if turn_summary is not None:
+            state["dispatch_seq"] = turn_summary.seq
 
         # Post-turn: ticket frontmatter must remain valid.
         updated_fm, fm_errors = self._recheck_ticket_frontmatter(current_path)

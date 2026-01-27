@@ -46,7 +46,13 @@ type DispatchAttachment = {
 
 type DispatchEntry = {
   seq?: string;
-  dispatch?: Record<string, unknown> | null;
+  dispatch?: {
+    mode?: string;
+    title?: string;
+    body?: string;
+    extra?: Record<string, unknown>;
+    is_handoff?: boolean;
+  } | null;
   errors?: string[];
   attachments?: DispatchAttachment[];
 };
@@ -724,25 +730,37 @@ function renderDispatchHistory(
   if (dispatchNote) dispatchNote.textContent = `Latest #${entries[0]?.seq ?? "–"}`;
 
   entries.forEach((entry) => {
-    const container = document.createElement("div");
-    container.className = "dispatch-item clickable";
-    container.title = "Click to view in Inbox";
-
-    // Add click handler to navigate to inbox
-    container.addEventListener("click", () => {
-      if (runId) {
-        // Update URL with run_id so inbox tab loads the right thread
-        const url = new URL(window.location.href);
-        url.searchParams.set("run_id", runId);
-        window.history.replaceState({}, "", url.toString());
-        // Switch to inbox tab
-        activateTab("inbox");
-      }
-    });
-
     const dispatch = entry.dispatch;
+    const isTurnSummary = dispatch?.mode === "turn_summary" || dispatch?.extra?.is_turn_summary;
     const isHandoff = dispatch?.mode === "pause";
-    const modeLabel = isHandoff ? "HANDOFF" : ((dispatch?.mode as string) || "notify").toUpperCase();
+    
+    const container = document.createElement("div");
+    container.className = `dispatch-item${isTurnSummary ? " turn-summary" : ""} clickable`;
+    container.title = isTurnSummary ? "Agent turn output" : "Click to view in Inbox";
+
+    // Add click handler to navigate to inbox (skip for turn summaries)
+    if (!isTurnSummary) {
+      container.addEventListener("click", () => {
+        if (runId) {
+          // Update URL with run_id so inbox tab loads the right thread
+          const url = new URL(window.location.href);
+          url.searchParams.set("run_id", runId);
+          window.history.replaceState({}, "", url.toString());
+          // Switch to inbox tab
+          activateTab("inbox");
+        }
+      });
+    }
+
+    // Determine mode label
+    let modeLabel: string;
+    if (isTurnSummary) {
+      modeLabel = "TURN";
+    } else if (isHandoff) {
+      modeLabel = "HANDOFF";
+    } else {
+      modeLabel = ((dispatch?.mode as string) || "notify").toUpperCase();
+    }
 
     const head = document.createElement("div");
     head.className = "dispatch-item-head";
@@ -750,9 +768,24 @@ function renderDispatchHistory(
     seq.className = "ticket-name";
     seq.textContent = `#${entry.seq || "?"}`;
     const mode = document.createElement("span");
-    mode.className = "ticket-agent";
+    mode.className = `ticket-agent${isTurnSummary ? " turn-summary-badge" : ""}`;
     mode.textContent = modeLabel;
     head.append(seq, mode);
+    
+    // Add ticket reference if present
+    const ticketId = dispatch?.extra?.ticket_id as string | undefined;
+    if (ticketId) {
+      // Extract ticket number from path (e.g., "TICKET-009" from ".codex-autorunner/tickets/TICKET-009.md")
+      const ticketMatch = ticketId.match(/TICKET-\d+/);
+      if (ticketMatch) {
+        const ticketLabel = document.createElement("span");
+        ticketLabel.className = "dispatch-ticket-ref";
+        ticketLabel.textContent = ticketMatch[0];
+        ticketLabel.title = ticketId;
+        head.appendChild(ticketLabel);
+      }
+    }
+    
     container.appendChild(head);
 
     if (entry.errors && entry.errors.length) {
