@@ -974,6 +974,20 @@ def create_app(
     return asgi_app
 
 
+def create_repo_app(
+    repo_root: Path,
+    server_overrides: Optional[ServerOverrides] = None,
+    hub_config: Optional[HubConfig] = None,
+) -> ASGIApp:
+    """Hub-mounted repo app helper (base path handled by hub)."""
+    return create_app(
+        repo_root,
+        base_path="",
+        server_overrides=server_overrides,
+        hub_config=hub_config,
+    )
+
+
 def create_hub_app(
     hub_root: Optional[Path] = None, base_path: Optional[str] = None
 ) -> ASGIApp:
