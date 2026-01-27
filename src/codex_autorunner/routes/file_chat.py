@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import difflib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
@@ -23,11 +24,16 @@ from ..core import drafts as draft_utils
 from ..core.app_server_events import format_sse
 from ..core.state import now_iso
 from ..core.utils import atomic_write, find_repo_root
-from ..workspace.paths import WORKSPACE_DOC_KINDS, workspace_dir, workspace_doc_path
+from ..workspace.paths import (
+    WORKSPACE_DOC_KINDS,
+    normalize_workspace_rel_path,
+    workspace_doc_path,
+)
 from .shared import SSE_HEADERS
 
 FILE_CHAT_STATE_NAME = draft_utils.FILE_CHAT_STATE_NAME
 FILE_CHAT_TIMEOUT_SECONDS = 180
+logger = logging.getLogger(__name__)
 
 
 class FileChatError(Exception):
@@ -115,16 +121,10 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             path = workspace_doc_path(repo_root, suffix_raw)
             rel_suffix = f"{suffix_raw}.md"
         else:
-            # Treat suffix as a path relative to the workspace directory
-            base = workspace_dir(repo_root).resolve()
-            candidate = (base / suffix_raw).resolve()
-            if not candidate.is_relative_to(base):
-                raise HTTPException(status_code=400, detail="invalid workspace target")
-            path = candidate
             try:
-                rel_suffix = str(candidate.relative_to(base))
-            except Exception:
-                rel_suffix = candidate.name
+                path, rel_suffix = normalize_workspace_rel_path(repo_root, suffix_raw)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         rel = (
             str(path.relative_to(repo_root))
@@ -268,8 +268,9 @@ def build_file_chat_routes() -> APIRouter:
                 yield format_sse(
                     "error", {"detail": result.get("detail") or "File chat failed"}
                 )
-        except Exception as exc:
-            yield format_sse("error", {"detail": str(exc)})
+        except Exception:
+            logger.exception("file chat stream failed")
+            yield format_sse("error", {"detail": "File chat failed"})
         finally:
             await _clear_interrupt_event(target.state_key)
 
@@ -805,8 +806,8 @@ def build_file_chat_routes() -> APIRouter:
         }
 
     @router.post("/tickets/{index}/chat/discard")
-    async def discard_ticket_patch(index: int):
-        repo_root = _resolve_repo_root()
+    async def discard_ticket_patch(index: int, request: Request):
+        repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, f"ticket:{int(index)}")
         state = _load_state(repo_root)
         drafts = (
@@ -822,8 +823,8 @@ def build_file_chat_routes() -> APIRouter:
         }
 
     @router.post("/tickets/{index}/chat/interrupt")
-    async def interrupt_ticket_chat(index: int):
-        repo_root = _resolve_repo_root()
+    async def interrupt_ticket_chat(index: int, request: Request):
+        repo_root = _resolve_repo_root(request)
         target = _parse_target(repo_root, f"ticket:{int(index)}")
         async with _chat_lock:
             ev = _active_chats.get(target.state_key)

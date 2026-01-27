@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from ..core import drafts as draft_utils
@@ -34,13 +34,29 @@ def workspace_dir(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "workspace"
 
 
-def _normalize_rel_path(repo_root: Path, rel_path: str) -> Path:
+def normalize_workspace_rel_path(repo_root: Path, rel_path: str) -> tuple[Path, str]:
+    """Return a normalized workspace path and its workspace-relative string.
+
+    Rejects absolute paths and any path containing ".." to prevent traversal
+    outside the workspace directory.
+    """
+
     base = workspace_dir(repo_root).resolve()
-    cleaned = (rel_path or "").lstrip("/")
-    candidate = (base / cleaned).resolve()
-    if not candidate.is_relative_to(base):
+    cleaned = (rel_path or "").strip()
+    if not cleaned:
         raise ValueError("invalid workspace file path")
-    return candidate
+
+    relative = PurePosixPath(cleaned)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("invalid workspace file path")
+
+    candidate = (base / relative).resolve(strict=False)
+    try:
+        rel_posix = candidate.relative_to(base).as_posix()
+    except Exception as exc:
+        raise ValueError("invalid workspace file path") from exc
+
+    return candidate, rel_posix
 
 
 def workspace_doc_path(repo_root: Path, kind: str) -> Path:
@@ -49,7 +65,7 @@ def workspace_doc_path(repo_root: Path, kind: str) -> Path:
 
 
 def read_workspace_file(repo_root: Path, rel_path: str) -> str:
-    path = _normalize_rel_path(repo_root, rel_path)
+    path, _ = normalize_workspace_rel_path(repo_root, rel_path)
     if path.is_dir():
         raise ValueError("path points to a directory")
     if not path.exists():
@@ -58,7 +74,7 @@ def read_workspace_file(repo_root: Path, rel_path: str) -> str:
 
 
 def write_workspace_file(repo_root: Path, rel_path: str, content: str) -> str:
-    path = _normalize_rel_path(repo_root, rel_path)
+    path, rel_posix = normalize_workspace_rel_path(repo_root, rel_path)
     if path.exists() and path.is_dir():
         raise ValueError("path points to a directory")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,7 +82,7 @@ def write_workspace_file(repo_root: Path, rel_path: str, content: str) -> str:
     try:
         rel = path.relative_to(repo_root).as_posix()
         draft_utils.invalidate_drafts_for_path(repo_root, rel)
-        state_key = f"workspace_{rel.replace('/', '_')}"
+        state_key = f"workspace_{rel_posix.replace('/', '_')}"
         draft_utils.remove_draft(repo_root, state_key)
     except Exception:
         # best effort; do not block writes
