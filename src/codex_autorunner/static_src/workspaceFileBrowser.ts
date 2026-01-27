@@ -231,16 +231,19 @@ export class WorkspaceFileBrowser {
         const label = document.createElement("div");
         label.className = "workspace-tree-label";
 
+        const main = document.createElement("div");
+        main.className = "workspace-tree-main";
+
         if (node.type === "folder") {
           const caret = document.createElement("span");
           caret.className = "workspace-tree-caret";
           caret.textContent = this.expanded.has(node.path) ? "▾" : "▸";
-          label.appendChild(caret);
+          main.appendChild(caret);
         } else {
           const bullet = document.createElement("span");
           bullet.className = "workspace-tree-dot";
           bullet.textContent = "•";
-          label.appendChild(bullet);
+          main.appendChild(bullet);
         }
 
         const name = document.createElement("button");
@@ -262,7 +265,8 @@ export class WorkspaceFileBrowser {
         } else {
           name.addEventListener("click", () => this.select(node.path));
         }
-        label.appendChild(name);
+        main.appendChild(name);
+        label.appendChild(main);
 
         const meta = document.createElement("span");
         meta.className = "workspace-tree-meta";
@@ -272,7 +276,7 @@ export class WorkspaceFileBrowser {
           const count = node.children.filter((c) => c.type === "file").length;
           meta.textContent = count ? `${count} file${count === 1 ? "" : "s"}` : "";
         }
-        label.appendChild(meta);
+        if (meta.textContent) label.appendChild(meta);
 
         const actions = document.createElement("div");
         actions.className = "workspace-item-actions";
