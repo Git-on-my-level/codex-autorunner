@@ -43,7 +43,8 @@ def normalize_workspace_rel_path(repo_root: Path, rel_path: str) -> tuple[Path, 
     against ".." traversal and symlink escapes that CodeQL flagged.
     """
 
-    base = workspace_dir(repo_root).resolve()
+    base = workspace_dir(repo_root)
+    base_real = os.path.realpath(base)
     cleaned = (rel_path or "").strip()
     if not cleaned:
         raise ValueError("invalid workspace file path")
@@ -52,12 +53,28 @@ def normalize_workspace_rel_path(repo_root: Path, rel_path: str) -> tuple[Path, 
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("invalid workspace file path")
 
-    candidate = (base / relative).resolve()
-    # Ensure the resolved path stays under the workspace directory
-    if os.path.commonpath([base, candidate]) != str(base):
+    # Normalize the relative path to collapse any sneaky segments
+    norm_relative = os.path.normpath(relative.as_posix())
+    if norm_relative in {".", ""}:
+        normalized = ""
+    else:
+        normalized = norm_relative
+
+    # Reject traversal or absolute inputs after normalization
+    if (
+        normalized.startswith("..")
+        or normalized.startswith("/")
+        or normalized.startswith("\\")
+    ):
         raise ValueError("invalid workspace file path")
 
-    rel_posix = candidate.relative_to(base).as_posix()
+    candidate_str = os.path.realpath(os.path.join(base_real, normalized))
+    # Ensure the resolved path stays under the workspace directory
+    if not (candidate_str == base_real or candidate_str.startswith(base_real + os.sep)):
+        raise ValueError("invalid workspace file path")
+
+    candidate = Path(candidate_str)
+    rel_posix = candidate.relative_to(base_real).as_posix()
     return candidate, rel_posix
 
 
