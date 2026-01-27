@@ -87,21 +87,33 @@ def read_workspace_file(
     repo_root: Path, rel_path: str
 ) -> str:  # codeql[py/path-injection]
     path, _ = normalize_workspace_rel_path(repo_root, rel_path)
-    if path.is_dir():
+    if (
+        path.is_dir()
+    ):  # codeql[py/path-injection] validated by normalize_workspace_rel_path
         raise ValueError("path points to a directory")
-    if not path.exists():
+    if (
+        not path.exists()
+    ):  # codeql[py/path-injection] validated by normalize_workspace_rel_path
         return ""
-    return path.read_text(encoding="utf-8")
+    return path.read_text(
+        encoding="utf-8"
+    )  # codeql[py/path-injection] validated by normalize_workspace_rel_path
 
 
 def write_workspace_file(  # codeql[py/path-injection]
     repo_root: Path, rel_path: str, content: str
 ) -> str:
     path, rel_posix = normalize_workspace_rel_path(repo_root, rel_path)
-    if path.exists() and path.is_dir():
+    if (
+        path.exists() and path.is_dir()
+    ):  # codeql[py/path-injection] validated by normalize_workspace_rel_path
         raise ValueError("path points to a directory")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content or "", encoding="utf-8")
+    path.parent.mkdir(
+        parents=True, exist_ok=True
+    )  # codeql[py/path-injection] validated by normalize_workspace_rel_path
+    path.write_text(
+        content or "", encoding="utf-8"
+    )  # codeql[py/path-injection] validated by normalize_workspace_rel_path
     try:
         rel = path.relative_to(repo_root).as_posix()
         draft_utils.invalidate_drafts_for_path(repo_root, rel)
@@ -125,7 +137,9 @@ def write_workspace_doc(  # codeql[py/path-injection]
 ) -> str:
     path = workspace_doc_path(repo_root, kind)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content or "", encoding="utf-8")
+    path.write_text(
+        content or "", encoding="utf-8"
+    )  # codeql[py/path-injection] workspace_doc_path is deterministic
     try:
         rel = path.relative_to(repo_root).as_posix()
         draft_utils.invalidate_drafts_for_path(repo_root, rel)
