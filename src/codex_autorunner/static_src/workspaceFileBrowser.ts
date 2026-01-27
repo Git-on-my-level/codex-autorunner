@@ -267,10 +267,10 @@ export class WorkspaceFileBrowser {
         const meta = document.createElement("span");
         meta.className = "workspace-tree-meta";
         if (node.type === "file" && node.size != null) {
-          meta.textContent = `· ${this.prettySize(node.size)}`;
+          meta.textContent = this.prettySize(node.size);
         } else if (node.type === "folder" && node.children) {
           const count = node.children.filter((c) => c.type === "file").length;
-          meta.textContent = count ? `· ${count} file${count === 1 ? "" : "s"}` : "";
+          meta.textContent = count ? `${count} file${count === 1 ? "" : "s"}` : "";
         }
         label.appendChild(meta);
 

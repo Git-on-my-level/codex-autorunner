@@ -1,4 +1,4 @@
-import { api } from "./utils.js";
+import { api, resolvePath } from "./utils.js";
 
 export type WorkspaceKind = "active_context" | "decisions" | "spec";
 
@@ -78,14 +78,14 @@ export async function uploadWorkspaceFiles(
 }
 
 export function downloadWorkspaceFile(path: string): void {
-  const url = `/api/workspace/download?path=${encodeURIComponent(path)}`;
+  const url = resolvePath(`/api/workspace/download?path=${encodeURIComponent(path)}`);
   window.location.href = url;
 }
 
 export function downloadWorkspaceZip(path?: string): void {
   const url = path
-    ? `/api/workspace/download-zip?path=${encodeURIComponent(path)}`
-    : "/api/workspace/download-zip";
+    ? resolvePath(`/api/workspace/download-zip?path=${encodeURIComponent(path)}`)
+    : resolvePath("/api/workspace/download-zip");
   window.location.href = url;
 }
 

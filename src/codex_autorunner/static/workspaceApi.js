@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api } from "./utils.js";
+import { api, resolvePath } from "./utils.js";
 export async function fetchWorkspace() {
     return (await api("/api/workspace"));
 }
@@ -33,13 +33,13 @@ export async function uploadWorkspaceFiles(files, subdir) {
     return api("/api/workspace/upload", { method: "POST", body: fd });
 }
 export function downloadWorkspaceFile(path) {
-    const url = `/api/workspace/download?path=${encodeURIComponent(path)}`;
+    const url = resolvePath(`/api/workspace/download?path=${encodeURIComponent(path)}`);
     window.location.href = url;
 }
 export function downloadWorkspaceZip(path) {
     const url = path
-        ? `/api/workspace/download-zip?path=${encodeURIComponent(path)}`
-        : "/api/workspace/download-zip";
+        ? resolvePath(`/api/workspace/download-zip?path=${encodeURIComponent(path)}`)
+        : resolvePath("/api/workspace/download-zip");
     window.location.href = url;
 }
 export async function createWorkspaceFolder(path) {

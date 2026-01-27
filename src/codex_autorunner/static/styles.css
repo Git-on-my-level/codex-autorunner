@@ -3330,6 +3330,12 @@ button.icon-btn {
 .workspace-tree-meta {
   color: var(--muted);
   font-size: 11px;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .workspace-item-actions {
@@ -3346,6 +3352,17 @@ button.icon-btn {
 .workspace-item-actions .danger {
   color: var(--error);
   border-color: var(--error);
+}
+
+.workspace-create-dialog {
+  max-width: 420px;
+  width: 90vw;
+}
+
+.workspace-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 @media (max-width: 720px) {

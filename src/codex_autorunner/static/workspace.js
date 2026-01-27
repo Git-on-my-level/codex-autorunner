@@ -53,6 +53,7 @@ function els() {
         uploadBtn: document.getElementById("workspace-upload"),
         uploadInput: document.getElementById("workspace-upload-input"),
         newFolderBtn: document.getElementById("workspace-new-folder"),
+        newFileBtn: document.getElementById("workspace-new-file"),
         downloadAllBtn: document.getElementById("workspace-download-all"),
         generateBtn: document.getElementById("workspace-generate-tickets"),
         textarea: document.getElementById("workspace-content"),
@@ -80,6 +81,13 @@ function els() {
         agentSelect: document.getElementById("workspace-chat-agent-select"),
         modelSelect: document.getElementById("workspace-chat-model-select"),
         reasoningSelect: document.getElementById("workspace-chat-reasoning-select"),
+        createModal: document.getElementById("workspace-create-modal"),
+        createTitle: document.getElementById("workspace-create-title"),
+        createInput: document.getElementById("workspace-create-name"),
+        createHint: document.getElementById("workspace-create-hint"),
+        createClose: document.getElementById("workspace-create-close"),
+        createCancel: document.getElementById("workspace-create-cancel"),
+        createSubmit: document.getElementById("workspace-create-submit"),
     };
 }
 function workspaceKindFromPath(path) {
@@ -168,6 +176,59 @@ function renderPatch() {
 }
 function renderChat() {
     workspaceChat.render();
+}
+let createMode = null;
+function openCreateModal(mode) {
+    const { createModal, createTitle, createInput, createHint } = els();
+    if (!createModal || !createInput || !createTitle || !createHint)
+        return;
+    createMode = mode;
+    createTitle.textContent = mode === "folder" ? "New Folder" : "New Markdown File";
+    createInput.value = "";
+    createInput.placeholder = mode === "folder" ? "folder-name" : "note.md";
+    createHint.textContent =
+        mode === "folder"
+            ? "Folder will be created under the current path"
+            : "File will be created under the current path ('.md' appended if missing)";
+    createModal.hidden = false;
+    setTimeout(() => createInput.focus(), 10);
+}
+function closeCreateModal() {
+    const { createModal } = els();
+    createMode = null;
+    if (createModal)
+        createModal.hidden = true;
+}
+async function handleCreateSubmit() {
+    const { createInput } = els();
+    if (!createMode || !createInput)
+        return;
+    const rawName = (createInput.value || "").trim();
+    if (!rawName) {
+        flash("Name is required", "error");
+        return;
+    }
+    const base = state.browser?.getCurrentPath() || "";
+    const name = createMode === "file" && !rawName.toLowerCase().endsWith(".md") ? `${rawName}.md` : rawName;
+    const path = base ? `${base}/${name}` : name;
+    try {
+        if (createMode === "folder") {
+            await createWorkspaceFolder(path);
+            flash("Folder created", "success");
+        }
+        else {
+            await writeWorkspaceContent(path, "");
+            flash("File created", "success");
+        }
+        closeCreateModal();
+        await loadFiles(createMode === "file" ? path : state.target?.path || undefined);
+        if (createMode === "file") {
+            state.browser?.select(path);
+        }
+    }
+    catch (err) {
+        flash(err.message || "Failed to create item", "error");
+    }
 }
 async function loadWorkspaceFile(path) {
     state.loading = true;
@@ -490,21 +551,8 @@ export async function initWorkspace() {
             uploadInput.value = "";
         }
     });
-    newFolderBtn?.addEventListener("click", async () => {
-        const name = (prompt("Folder name:") || "").trim();
-        if (!name)
-            return;
-        const base = state.browser?.getCurrentPath() || "";
-        const path = base ? `${base}/${name}` : name;
-        try {
-            await createWorkspaceFolder(path);
-            flash("Folder created", "success");
-            await loadFiles(state.target?.path || path);
-        }
-        catch (err) {
-            flash(err.message || "Failed to create folder", "error");
-        }
-    });
+    newFolderBtn?.addEventListener("click", () => openCreateModal("folder"));
+    els().newFileBtn?.addEventListener("click", () => openCreateModal("file"));
     downloadAllBtn?.addEventListener("click", () => downloadWorkspaceZip());
     generateBtn?.addEventListener("click", () => void generateTickets());
     patchApply?.addEventListener("click", () => void applyWorkspaceDraft());
@@ -522,4 +570,23 @@ export async function initWorkspace() {
             }
         });
     }
+    const { createModal, createClose, createCancel, createSubmit } = els();
+    createClose?.addEventListener("click", () => closeCreateModal());
+    createCancel?.addEventListener("click", () => closeCreateModal());
+    createSubmit?.addEventListener("click", () => void handleCreateSubmit());
+    els().createInput?.addEventListener("keydown", (evt) => {
+        if (evt.key === "Enter") {
+            evt.preventDefault();
+            void handleCreateSubmit();
+        }
+    });
+    createModal?.addEventListener("click", (evt) => {
+        if (evt.target === createModal)
+            closeCreateModal();
+    });
+    document.addEventListener("keydown", (evt) => {
+        if (evt.key === "Escape" && createModal && !createModal.hidden) {
+            closeCreateModal();
+        }
+    });
 }
