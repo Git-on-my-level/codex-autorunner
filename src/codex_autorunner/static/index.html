@@ -467,11 +467,17 @@
               </div>
               <div class="ticket-list" id="ticket-flow-tickets">Loading tickets…</div>
             </div>
-            <div class="ticket-panel">
+            <div class="ticket-panel" id="dispatch-panel">
               <div class="ticket-panel-header">
                 <span class="muted">Dispatch history</span>
                 <span class="muted small" id="ticket-dispatch-note">–</span>
+                <button class="ticket-panel-toggle" id="dispatch-panel-toggle" aria-label="Toggle dispatch panel" title="Collapse/expand panel">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
               </div>
+              <div class="dispatch-mini-list" id="dispatch-mini-list"></div>
               <div class="ticket-list" id="ticket-dispatch-history">No dispatches yet. Agent messages will appear here.</div>
             </div>
           </div>

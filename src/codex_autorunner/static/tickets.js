@@ -608,8 +608,21 @@ function renderTickets(data) {
         const ticketTitle = fm?.title ? String(fm.title) : "";
         const name = document.createElement("span");
         name.className = "ticket-name";
-        // Combine ticket number and title on the same line
-        name.textContent = ticketTitle ? `${ticketNumber}: ${ticketTitle}` : ticketNumber;
+        // Split number and title into separate spans for responsive control
+        const numSpan = document.createElement("span");
+        numSpan.className = "ticket-num";
+        // Extract just the number (e.g., "001" from "TICKET-001")
+        const numMatch = ticketNumber.match(/\d+/);
+        numSpan.textContent = numMatch ? numMatch[0] : ticketNumber;
+        name.appendChild(numSpan);
+        if (ticketTitle) {
+            const titleSpan = document.createElement("span");
+            titleSpan.className = "ticket-title-text";
+            titleSpan.textContent = `: ${ticketTitle}`;
+            name.appendChild(titleSpan);
+        }
+        // Set full text as title attribute for tooltip on hover
+        item.title = ticketTitle ? `${ticketNumber}: ${ticketTitle}` : ticketNumber;
         head.appendChild(name);
         // Badge container for status + agent badges
         const badges = document.createElement("span");

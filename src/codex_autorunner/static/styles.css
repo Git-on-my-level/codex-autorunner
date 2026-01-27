@@ -2050,6 +2050,17 @@ button.icon-btn {
   white-space: nowrap;
 }
 
+/* Ticket number span - inline by default */
+.ticket-card .ticket-item .ticket-num {
+  font-weight: 600;
+  color: #c8d0e0;
+}
+
+/* Ticket title text span - follows number */
+.ticket-card .ticket-item .ticket-title-text {
+  color: #9098a8;
+}
+
 .ticket-card .ticket-item .ticket-badges {
   display: flex;
   align-items: center;
@@ -2125,6 +2136,211 @@ button.icon-btn {
 
   .ticket-item .ticket-title {
     font-size: 11px;
+  }
+}
+
+/* ===== Collapsible Dispatch Panel for Medium Screens ===== */
+
+/* Mini dispatch list - hidden by default, shown in collapsed mode */
+.dispatch-mini-list {
+  display: none;
+}
+
+/* Toggle button in panel header */
+.ticket-panel-toggle {
+  display: none;
+  /* Hidden by default, shown on medium screens */
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: rgba(111, 137, 255, 0.12);
+  border: 1px solid rgba(111, 137, 255, 0.25);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.ticket-panel-toggle:hover {
+  background: rgba(111, 137, 255, 0.2);
+  border-color: var(--accent);
+}
+
+.ticket-panel-toggle:active {
+  transform: scale(0.95);
+}
+
+.ticket-panel-toggle svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.2s ease;
+}
+
+/* Collapsed state arrow rotation */
+.ticket-panel.collapsed .ticket-panel-toggle svg {
+  transform: rotate(180deg);
+}
+
+/* Medium screen: tickets as slim sidebar tabs, dispatch gets ~80% */
+@media (min-width: 640px) and (max-width: 1100px) {
+  .ticket-card .ticket-flow-grid {
+    grid-template-columns: auto 1fr;
+    /* Tickets slim sidebar, dispatch fills rest */
+  }
+
+  /* Hide toggle button - not needed in this layout */
+  .ticket-panel-toggle {
+    display: none;
+  }
+
+  /* Tickets panel: slim tab sidebar */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child {
+    width: 120px;
+    min-width: 120px;
+    max-width: 120px;
+    padding: 8px 6px;
+  }
+
+  /* Compact ticket header */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-panel-header {
+    padding: 2px 4px 6px;
+    margin-bottom: 4px;
+  }
+
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-panel-header>span:first-child {
+    font-size: 11px;
+  }
+
+  /* Hide the directory path in compact mode */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child #ticket-flow-dir {
+    display: none;
+  }
+
+  /* Ticket items as elegant compact pills */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item {
+    padding: 8px 6px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid transparent;
+    transition: all 0.15s ease;
+  }
+
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+
+  /* Active ticket gets accent highlight */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item.active {
+    background: rgba(111, 137, 255, 0.15);
+    border-color: rgba(111, 137, 255, 0.4);
+  }
+
+  /* Done tickets get subtle green left border */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item.done {
+    border-left: 3px solid rgba(63, 185, 80, 0.6);
+    padding-left: 5px;
+  }
+
+  /* Stack number and badges vertically */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-item-head {
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+
+  /* Hide body and full title - show only number */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-body,
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-title,
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-title-text {
+    display: none;
+  }
+
+  /* Ticket name container */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-name {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Ticket number: clean monospace pill */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-num {
+    font-size: 13px;
+    font-weight: 600;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+    letter-spacing: 0.03em;
+    color: var(--text);
+  }
+
+  /* Done tickets: muted number */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item.done .ticket-num {
+    color: rgba(168, 230, 180, 0.9);
+  }
+
+  /* Active ticket: bright number */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item.active .ticket-num {
+    color: #fff;
+  }
+
+  /* Compact badges layout */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-badges {
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    margin-top: 4px;
+  }
+
+  /* Hide done badge and working badge - status shown via visual indicators */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-done-badge,
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-working-badge {
+    display: none;
+  }
+
+  /* Compact agent badge */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item .ticket-agent {
+    padding: 2px 6px;
+    font-size: 9px;
+    border-radius: 4px;
+  }
+
+  /* Active/working ticket: pulsing glow animation */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-item.active {
+    animation: ticket-pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes ticket-pulse {
+    0%, 100% {
+      border-color: rgba(111, 137, 255, 0.4);
+      box-shadow: 0 0 4px rgba(111, 137, 255, 0.2);
+    }
+    50% {
+      border-color: rgba(111, 137, 255, 0.7);
+      box-shadow: 0 0 12px rgba(111, 137, 255, 0.4);
+    }
+  }
+
+  /* Ticket list: tighter gap */
+  .ticket-card .ticket-flow-grid>.ticket-panel:first-child .ticket-list {
+    gap: 4px;
+  }
+
+  /* Dispatch panel: takes remaining space (~80%) */
+  .ticket-card .ticket-flow-grid>.ticket-panel:last-child {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Dispatch panel has full readable content */
+  .ticket-card .ticket-flow-grid>.ticket-panel:last-child .dispatch-item {
+    padding: 10px 12px;
+  }
+
+  .ticket-card .ticket-flow-grid>.ticket-panel:last-child .ticket-dispatch-body {
+    font-size: 12px;
+    line-height: 1.5;
   }
 }
 

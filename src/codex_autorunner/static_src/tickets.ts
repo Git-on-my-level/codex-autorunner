@@ -74,6 +74,10 @@ let liveOutputEvents: AgentEvent[] = [];
 let liveOutputEventIndex: Record<string, number> = {};
 let currentReasonFull: string | null = null; // Full reason text for modal display
 
+// Dispatch panel collapse state (persisted to localStorage)
+const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
+let dispatchPanelCollapsed = false;
+
 // Throttling state
 let liveOutputRenderPending = false;
 let liveOutputTextPending = false;
@@ -105,6 +109,80 @@ function scheduleLiveOutputTextUpdate(): void {
     }
     liveOutputTextPending = false;
   });
+}
+
+/**
+ * Initialize dispatch panel collapse state from localStorage
+ */
+function initDispatchPanelToggle(): void {
+  const { dispatchPanel, dispatchPanelToggle } = els();
+  if (!dispatchPanel || !dispatchPanelToggle) return;
+
+  // Restore collapsed state from localStorage
+  const stored = localStorage.getItem(DISPATCH_PANEL_COLLAPSED_KEY);
+  dispatchPanelCollapsed = stored === "true";
+  if (dispatchPanelCollapsed) {
+    dispatchPanel.classList.add("collapsed");
+  }
+
+  // Handle toggle click
+  dispatchPanelToggle.addEventListener("click", () => {
+    dispatchPanelCollapsed = !dispatchPanelCollapsed;
+    dispatchPanel.classList.toggle("collapsed", dispatchPanelCollapsed);
+    localStorage.setItem(DISPATCH_PANEL_COLLAPSED_KEY, String(dispatchPanelCollapsed));
+  });
+}
+
+/**
+ * Render mini dispatch items for collapsed panel view.
+ * Shows compact dispatch indicators that can be clicked to expand.
+ */
+function renderDispatchMiniList(entries: DispatchEntry[]): void {
+  const { dispatchMiniList, dispatchPanel } = els();
+  if (!dispatchMiniList) return;
+  dispatchMiniList.innerHTML = "";
+
+  // Only show first 8 items in mini view
+  const maxMiniItems = 8;
+  entries.slice(0, maxMiniItems).forEach((entry) => {
+    const dispatch = entry.dispatch;
+    const isTurnSummary = dispatch?.mode === "turn_summary" || dispatch?.extra?.is_turn_summary;
+    const isNotify = dispatch?.mode === "notify";
+
+    const mini = document.createElement("div");
+    mini.className = `dispatch-mini-item${isNotify ? " notify" : ""}`;
+    mini.textContent = `#${entry.seq || "?"}`;
+    mini.title = isTurnSummary
+      ? "Agent turn output"
+      : dispatch?.title || `Dispatch #${entry.seq}`;
+
+    // Click to expand panel and scroll to this item
+    mini.addEventListener("click", () => {
+      if (dispatchPanel && dispatchPanelCollapsed) {
+        dispatchPanelCollapsed = false;
+        dispatchPanel.classList.remove("collapsed");
+        localStorage.setItem(DISPATCH_PANEL_COLLAPSED_KEY, "false");
+      }
+    });
+
+    dispatchMiniList.appendChild(mini);
+  });
+
+  // Show overflow indicator if more items
+  if (entries.length > maxMiniItems) {
+    const more = document.createElement("div");
+    more.className = "dispatch-mini-item";
+    more.textContent = `+${entries.length - maxMiniItems}`;
+    more.title = `${entries.length - maxMiniItems} more dispatches`;
+    more.addEventListener("click", () => {
+      if (dispatchPanel && dispatchPanelCollapsed) {
+        dispatchPanelCollapsed = false;
+        dispatchPanel.classList.remove("collapsed");
+        localStorage.setItem(DISPATCH_PANEL_COLLAPSED_KEY, "false");
+      }
+    });
+    dispatchMiniList.appendChild(more);
+  }
 }
 
 function formatElapsed(startTime: Date): string {
@@ -566,6 +644,9 @@ function els(): {
   tickets: HTMLElement | null;
   history: HTMLElement | null;
   dispatchNote: HTMLElement | null;
+  dispatchPanel: HTMLElement | null;
+  dispatchPanelToggle: HTMLButtonElement | null;
+  dispatchMiniList: HTMLElement | null;
   bootstrapBtn: HTMLButtonElement | null;
   resumeBtn: HTMLButtonElement | null;
   refreshBtn: HTMLButtonElement | null;
@@ -587,6 +668,9 @@ function els(): {
     tickets: document.getElementById("ticket-flow-tickets"),
     history: document.getElementById("ticket-dispatch-history"),
     dispatchNote: document.getElementById("ticket-dispatch-note"),
+    dispatchPanel: document.getElementById("dispatch-panel"),
+    dispatchPanelToggle: document.getElementById("dispatch-panel-toggle") as HTMLButtonElement | null,
+    dispatchMiniList: document.getElementById("dispatch-mini-list"),
     bootstrapBtn: document.getElementById("ticket-flow-bootstrap") as HTMLButtonElement | null,
     resumeBtn: document.getElementById("ticket-flow-resume") as HTMLButtonElement | null,
     refreshBtn: document.getElementById("ticket-flow-refresh") as HTMLButtonElement | null,
@@ -657,8 +741,24 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
 
     const name = document.createElement("span");
     name.className = "ticket-name";
-    // Combine ticket number and title on the same line
-    name.textContent = ticketTitle ? `${ticketNumber}: ${ticketTitle}` : ticketNumber;
+    
+    // Split number and title into separate spans for responsive control
+    const numSpan = document.createElement("span");
+    numSpan.className = "ticket-num";
+    // Extract just the number (e.g., "001" from "TICKET-001")
+    const numMatch = ticketNumber.match(/\d+/);
+    numSpan.textContent = numMatch ? numMatch[0] : ticketNumber;
+    name.appendChild(numSpan);
+    
+    if (ticketTitle) {
+      const titleSpan = document.createElement("span");
+      titleSpan.className = "ticket-title-text";
+      titleSpan.textContent = `: ${ticketTitle}`;
+      name.appendChild(titleSpan);
+    }
+    
+    // Set full text as title attribute for tooltip on hover
+    item.title = ticketTitle ? `${ticketNumber}: ${ticketTitle}` : ticketNumber;
     head.appendChild(name);
 
     // Badge container for status + agent badges
@@ -714,9 +814,12 @@ function renderDispatchHistory(
   if (!history) return;
   history.innerHTML = "";
 
+  const { dispatchMiniList } = els();
+
   if (!runId) {
     history.textContent = "Start the ticket flow to see agent dispatches.";
     if (dispatchNote) dispatchNote.textContent = "–";
+    if (dispatchMiniList) dispatchMiniList.innerHTML = "";
     return;
   }
 
@@ -724,10 +827,14 @@ function renderDispatchHistory(
   if (!entries.length) {
     history.textContent = "No dispatches yet.";
     if (dispatchNote) dispatchNote.textContent = "–";
+    if (dispatchMiniList) dispatchMiniList.innerHTML = "";
     return;
   }
 
   if (dispatchNote) dispatchNote.textContent = `Latest #${entries[0]?.seq ?? "–"}`;
+
+  // Also render mini list for collapsed panel view
+  renderDispatchMiniList(entries);
 
   entries.forEach((entry) => {
     const dispatch = entry.dispatch;
@@ -1299,6 +1406,9 @@ export function initTicketFlow(): void {
 
   // Initialize live output panel
   initLiveOutputPanel();
+
+  // Initialize dispatch panel toggle for medium screens
+  initDispatchPanelToggle();
 
   const newThreadBtn = document.getElementById("ticket-chat-new-thread");
   if (newThreadBtn) {
