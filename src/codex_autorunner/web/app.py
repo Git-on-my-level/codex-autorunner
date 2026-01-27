@@ -261,6 +261,7 @@ def _build_app_server_supervisor(
         state_root=config.state_root,
         env_builder=_env_builder,
         logger=logger,
+        auto_restart=config.auto_restart,
         max_handles=config.max_handles,
         idle_ttl_seconds=config.idle_ttl_seconds,
         request_timeout=config.request_timeout,

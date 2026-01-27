@@ -303,7 +303,9 @@ class Engine:
         try:
             todo_before = self.docs.read_doc("todo")
         except (FileNotFoundError, OSError) as exc:
-            self._app_server_logger.debug("Failed to read TODO.md before run: %s", exc)
+            self._app_server_logger.debug(
+                "Failed to read TODO.md before run %s: %s", run_id, exc
+            )
             todo_before = ""
         state = load_state(self.state_path)
         selected_agent = (state.autorunner_agent_override or "codex").strip().lower()
@@ -354,7 +356,9 @@ class Engine:
         try:
             todo_after = self.docs.read_doc("todo")
         except (FileNotFoundError, OSError) as exc:
-            self._app_server_logger.debug("Failed to read TODO.md after run: %s", exc)
+            self._app_server_logger.debug(
+                "Failed to read TODO.md after run %s: %s", run_id, exc
+            )
             todo_after = ""
         todo_delta = self._compute_todo_attribution(todo_before, todo_after)
         todo_snapshot = self._build_todo_snapshot(todo_before, todo_after)
@@ -393,7 +397,7 @@ class Engine:
                 )
             except (TypeError, ValueError) as exc:
                 self._app_server_logger.debug(
-                    "Failed to serialize plan to JSON: %s", exc
+                    "Failed to serialize plan to JSON for run %s: %s", run_id, exc
                 )
                 plan_content = json.dumps(
                     {"plan": str(telemetry.plan)}, ensure_ascii=True, indent=2
@@ -473,7 +477,7 @@ class Engine:
                 text = run_log.read_text(encoding="utf-8")
             except (FileNotFoundError, OSError) as exc:
                 self._app_server_logger.debug(
-                    "Failed to read previous run log: %s", exc
+                    "Failed to read previous run log for run %s: %s", run_id, exc
                 )
                 text = ""
             if text:
@@ -524,10 +528,12 @@ class Engine:
             try:
                 return run_log.read_text(encoding="utf-8")
             except (FileNotFoundError, OSError) as exc:
-                self._app_server_logger.debug("Failed to read run log block: %s", exc)
+                self._app_server_logger.debug(
+                    "Failed to read run log block for run %s: %s", run_id, exc
+                )
                 return None
         if index_entry:
-            block = self._read_log_range(index_entry)
+            block = self._read_log_range(run_id, index_entry)
             if block is not None:
                 return block
         if not self.log_path.exists():
@@ -571,7 +577,7 @@ class Engine:
                 return "\n".join(buf) if buf else None
         except (FileNotFoundError, OSError, ValueError) as exc:
             self._app_server_logger.debug(
-                "Failed to read full log for run block: %s", exc
+                "Failed to read full log for run %s block: %s", run_id, exc
             )
             return None
         return None
@@ -598,7 +604,7 @@ class Engine:
                 self._active_run_log.flush()
             except (OSError, IOError) as exc:
                 self._app_server_logger.warning(
-                    "Failed to write to active run log: %s", exc
+                    "Failed to write to active run log for run %s: %s", run_id, exc
                 )
         else:
             run_log = self._run_log_path(run_id)
@@ -623,7 +629,7 @@ class Engine:
                 f.write(_json.dumps(event_data) + "\n")
         except (OSError, IOError) as exc:
             self._app_server_logger.warning(
-                "Failed to write event to events log: %s", exc
+                "Failed to write event to events log for run %s: %s", run_id, exc
             )
 
     def _ensure_log_path(self) -> None:
@@ -666,7 +672,9 @@ class Engine:
                 self._active_run_log.flush()
             except (OSError, IOError) as exc:
                 self._app_server_logger.warning(
-                    "Failed to write marker to active run log: %s", exc
+                    "Failed to write marker to active run log for run %s: %s",
+                    run_id,
+                    exc,
                 )
         else:
             self._ensure_run_log_dir()
@@ -744,7 +752,7 @@ class Engine:
                     handler.close()
                 except (OSError, IOError) as exc:
                     self._app_server_logger.debug(
-                        "Failed to close run log handler: %s", exc
+                        "Failed to close run log handler for run %s: %s", run_id, exc
                     )
 
     def _start_run_telemetry(self, run_id: int) -> None:
@@ -1086,7 +1094,10 @@ class Engine:
                 entry_id = int(key)
             except (TypeError, ValueError) as exc:
                 self._app_server_logger.debug(
-                    "Failed to parse run index key '%s': %s", key, exc
+                    "Failed to parse run index key '%s' while resolving run %s: %s",
+                    key,
+                    run_id,
+                    exc,
                 )
                 continue
             if entry_id >= run_id:
@@ -1171,7 +1182,7 @@ class Engine:
         atomic_write(path, content)
         return path
 
-    def _read_log_range(self, entry: dict) -> Optional[str]:
+    def _read_log_range(self, run_id: int, entry: dict) -> Optional[str]:
         start = entry.get("start_offset")
         end = entry.get("end_offset")
         if start is None or end is None:
@@ -1180,7 +1191,9 @@ class Engine:
             start_offset = int(start)
             end_offset = int(end)
         except (TypeError, ValueError) as exc:
-            self._app_server_logger.debug("Failed to parse log range offsets: %s", exc)
+            self._app_server_logger.debug(
+                "Failed to parse log range offsets for run %s: %s", run_id, exc
+            )
             return None
         if end_offset < start_offset:
             return None
@@ -1196,7 +1209,9 @@ class Engine:
                 data = f.read(end_offset - start_offset)
             return data.decode("utf-8", errors="replace")
         except (FileNotFoundError, OSError) as exc:
-            self._app_server_logger.debug("Failed to read log range: %s", exc)
+            self._app_server_logger.debug(
+                "Failed to read log range for run %s: %s", run_id, exc
+            )
             return None
 
     def _build_app_server_prompt(self, prev_output: Optional[str]) -> str:
@@ -1426,6 +1441,7 @@ class Engine:
             env_builder=env_builder,
             logger=self._app_server_logger,
             notification_handler=self._handle_app_server_notification,
+            auto_restart=config.auto_restart,
             max_handles=config.max_handles,
             idle_ttl_seconds=config.idle_ttl_seconds,
             request_timeout=config.request_timeout,
@@ -1618,8 +1634,9 @@ class Engine:
                     await client.get_session(thread_id)
                 except Exception as exc:
                     self._app_server_logger.debug(
-                        "Failed to get existing opencode session '%s': %s",
+                        "Failed to get existing opencode session '%s' for run %s: %s",
                         thread_id,
+                        run_id,
                         exc,
                     )
                     self._app_server_threads.reset_thread(key)
@@ -2023,12 +2040,16 @@ class Engine:
                 for line in tb.splitlines():
                     self.log_line(run_id, f"traceback: {line}")
             except (OSError, IOError) as exc:
-                self._app_server_logger.error("Failed to log run_loop crash: %s", exc)
+                self._app_server_logger.error(
+                    "Failed to log run_loop crash for run %s: %s", run_id, exc
+                )
             try:
                 self._update_state("error", run_id, 1, finished=True)
             except (OSError, IOError) as exc:
                 self._app_server_logger.error(
-                    "Failed to update state after run_loop crash: %s", exc
+                    "Failed to update state after run_loop crash for run %s: %s",
+                    run_id,
+                    exc,
                 )
         finally:
             try:
@@ -2037,7 +2058,9 @@ class Engine:
                     last_exit_code=last_exit_code,
                 )
             except Exception as exc:
-                self._app_server_logger.warning("End-of-run review failed: %s", exc)
+                self._app_server_logger.warning(
+                    "End-of-run review failed for run %s: %s", run_id, exc
+                )
             await self._close_app_server_supervisor()
             await self._close_opencode_supervisor()
         # IMPORTANT: lock ownership is managed by the caller (CLI/Hub/Server runner).
@@ -2201,8 +2224,12 @@ class Engine:
         started: bool = False,
         finished: bool = False,
     ) -> None:
+        prev_status: Optional[str] = None
+        last_run_started_at: Optional[str] = None
+        last_run_finished_at: Optional[str] = None
         with state_lock(self.state_path):
             current = load_state(self.state_path)
+            prev_status = current.status
             last_run_started_at = current.last_run_started_at
             last_run_finished_at = current.last_run_finished_at
             runner_pid = current.runner_pid
@@ -2230,6 +2257,18 @@ class Engine:
                 repo_to_session=current.repo_to_session,
             )
             save_state(self.state_path, new_state)
+        if run_id > 0 and prev_status != status:
+            payload: dict[str, Any] = {
+                "from_status": prev_status,
+                "to_status": status,
+            }
+            if exit_code is not None:
+                payload["exit_code"] = exit_code
+            if started and last_run_started_at:
+                payload["started_at"] = last_run_started_at
+            if finished and last_run_finished_at:
+                payload["finished_at"] = last_run_finished_at
+            self._emit_event(run_id, "run.state_changed", **payload)
 
 
 def clear_stale_lock(lock_path: Path) -> bool:

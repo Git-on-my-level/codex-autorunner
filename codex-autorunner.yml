@@ -196,6 +196,8 @@ telegram_bot:
         language_code: ""
       - type: all_group_chats
         language_code: ""
+  # Optional full OpenCode command (overrides agent binary for Telegram sessions).
+  opencode_command: null
   state_file: .codex-autorunner/telegram_state.sqlite3
   # Optional env var that contains the full app-server command.
   app_server_command_env: CAR_TELEGRAM_APP_SERVER_COMMAND
@@ -239,6 +241,10 @@ hub:
     max_bytes: 10000000
     backup_count: 3
 
+update:
+  # Skip running ./scripts/check.sh during system updates.
+  skip_checks: false
+
 app_server:
   # Command used to start the Codex app-server.
   command:
@@ -248,6 +254,8 @@ app_server:
   # Supports ~ expansion: ~/.codex-autorunner/workspaces → /home/user/.codex-autorunner/workspaces
   # Can also be relative to repo root: .codex-autorunner/workspaces
   state_root: ~/.codex-autorunner/workspaces
+  # Whether to auto-restart the app-server after unexpected exits.
+  auto_restart: true
   # Cap concurrent handles; null/<=0 disables the cap.
   max_handles: 20
   # Close idle app-server handles after this many seconds; null/<=0 disables pruning.

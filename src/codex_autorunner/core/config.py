@@ -144,9 +144,13 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         # Bounds the agentic sync step in GitHubService.sync_pr (seconds).
         "sync_agent_timeout_seconds": 1800,
     },
+    "update": {
+        "skip_checks": False,
+    },
     "app_server": {
         "command": ["codex", "app-server"],
         "state_root": "~/.codex-autorunner/workspaces",
+        "auto_restart": True,
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
         "turn_timeout_seconds": 28800,
@@ -250,6 +254,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 {"type": "all_group_chats", "language_code": ""},
             ],
         },
+        "opencode_command": None,
         "state_file": ".codex-autorunner/telegram_state.sqlite3",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
@@ -396,6 +401,7 @@ REPO_DEFAULT_KEYS = {
     "ticket_flow",
     "git",
     "github",
+    "update",
     "notifications",
     "voice",
     "log",
@@ -415,6 +421,7 @@ REPO_SHARED_KEYS = {
     "terminal",
     "static_assets",
     "housekeeping",
+    "update",
 }
 
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
@@ -484,6 +491,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
                 {"type": "all_group_chats", "language_code": ""},
             ],
         },
+        "opencode_command": None,
         "state_file": ".codex-autorunner/telegram_state.sqlite3",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
@@ -514,9 +522,13 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "backup_count": 3,
         },
     },
+    "update": {
+        "skip_checks": False,
+    },
     "app_server": {
         "command": ["codex", "app-server"],
         "state_root": "~/.codex-autorunner/workspaces",
+        "auto_restart": True,
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
         "turn_timeout_seconds": 28800,
@@ -708,6 +720,7 @@ class AppServerPromptsConfig:
 class AppServerConfig:
     command: List[str]
     state_root: Path
+    auto_restart: Optional[bool]
     max_handles: Optional[int]
     idle_ttl_seconds: Optional[int]
     turn_timeout_seconds: Optional[float]
@@ -754,6 +767,7 @@ class RepoConfig:
     ticket_flow: Dict[str, Any]
     git_auto_commit: bool
     git_commit_message_template: str
+    update_skip_checks: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
     server_host: str
@@ -803,6 +817,7 @@ class HubConfig:
     repo_server_inherit: bool
     update_repo_url: str
     update_repo_ref: str
+    update_skip_checks: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
     server_host: str
@@ -1043,6 +1058,11 @@ def _parse_app_server_config(
         allow_home=True,
         scope="app_server.state_root",
     )
+    auto_restart_raw = cfg.get("auto_restart", defaults.get("auto_restart"))
+    if auto_restart_raw is None:
+        auto_restart = None
+    else:
+        auto_restart = bool(auto_restart_raw)
     max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
     max_handles = int(max_handles_raw) if max_handles_raw is not None else None
     if max_handles is not None and max_handles <= 0:
@@ -1106,6 +1126,7 @@ def _parse_app_server_config(
     return AppServerConfig(
         command=command,
         state_root=state_root,
+        auto_restart=auto_restart,
         max_handles=max_handles,
         idle_ttl_seconds=idle_ttl_seconds,
         turn_timeout_seconds=turn_timeout_seconds,
@@ -1395,6 +1416,11 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     server_log_cfg = cast(
         Dict[str, Any], server_log_cfg if isinstance(server_log_cfg, dict) else {}
     )
+    update_cfg = cfg.get("update")
+    update_cfg = cast(
+        Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
+    )
+    update_skip_checks = bool(update_cfg.get("skip_checks", False))
     return RepoConfig(
         raw=cfg,
         root=root,
@@ -1415,6 +1441,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         runner_no_progress_threshold=int(cfg["runner"].get("no_progress_threshold", 3)),
         git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
         git_commit_message_template=str(cfg["git"].get("commit_message_template")),
+        update_skip_checks=update_skip_checks,
         ticket_flow=cast(Dict[str, Any], cfg.get("ticket_flow") or {}),
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
@@ -1495,6 +1522,12 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
     except ConfigPathError as exc:
         raise ConfigError(str(exc)) from exc
 
+    update_cfg = cfg.get("update")
+    update_cfg = cast(
+        Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
+    )
+    update_skip_checks = bool(update_cfg.get("skip_checks", False))
+
     return HubConfig(
         raw=cfg,
         root=root,
@@ -1510,6 +1543,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         repo_server_inherit=bool(hub_cfg.get("repo_server_inherit", True)),
         update_repo_url=str(hub_cfg.get("update_repo_url", "")),
         update_repo_ref=str(hub_cfg.get("update_repo_ref", "main")),
+        update_skip_checks=update_skip_checks,
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
             root,
@@ -1597,6 +1631,12 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
         app_server_cfg.get("state_root", ""), str
     ):
         raise ConfigError("app_server.state_root must be a string path")
+    if (
+        "auto_restart" in app_server_cfg
+        and app_server_cfg.get("auto_restart") is not None
+    ):
+        if not isinstance(app_server_cfg.get("auto_restart"), bool):
+            raise ConfigError("app_server.auto_restart must be boolean or null")
     for key in ("max_handles", "idle_ttl_seconds"):
         if key in app_server_cfg and app_server_cfg.get(key) is not None:
             if not isinstance(app_server_cfg.get(key), int):
@@ -1682,6 +1722,17 @@ def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
             raise ConfigError(
                 "opencode.session_stall_timeout_seconds must be a number or null"
             )
+
+
+def _validate_update_config(cfg: Dict[str, Any]) -> None:
+    update_cfg = cfg.get("update")
+    if update_cfg is None:
+        return
+    if not isinstance(update_cfg, dict):
+        raise ConfigError("update section must be a mapping if provided")
+    if "skip_checks" in update_cfg and update_cfg.get("skip_checks") is not None:
+        if not isinstance(update_cfg.get("skip_checks"), bool):
+            raise ConfigError("update.skip_checks must be boolean or null")
 
 
 def _validate_agents_config(cfg: Dict[str, Any]) -> None:
@@ -1827,6 +1878,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_server_security(server)
     _validate_app_server_config(cfg)
     _validate_opencode_config(cfg)
+    _validate_update_config(cfg)
     notifications_cfg = cfg.get("notifications")
     if notifications_cfg is not None:
         if not isinstance(notifications_cfg, dict):
@@ -1971,6 +2023,7 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("repo section is no longer supported; use repo_defaults")
     _validate_agents_config(cfg)
     _validate_opencode_config(cfg)
+    _validate_update_config(cfg)
     repo_defaults = cfg.get("repo_defaults")
     if repo_defaults is not None:
         if not isinstance(repo_defaults, dict):
@@ -2306,10 +2359,20 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                     raise ConfigError(
                         "telegram_bot.command_registration.scopes.language_code must be a string or null"
                     )
+    if "trigger_mode" in telegram_cfg and not isinstance(
+        telegram_cfg.get("trigger_mode"), str
+    ):
+        raise ConfigError("telegram_bot.trigger_mode must be a string")
     if "state_file" in telegram_cfg and not isinstance(
         telegram_cfg.get("state_file"), str
     ):
         raise ConfigError("telegram_bot.state_file must be a string path")
+    if (
+        "opencode_command" in telegram_cfg
+        and not isinstance(telegram_cfg.get("opencode_command"), (list, str))
+        and telegram_cfg.get("opencode_command") is not None
+    ):
+        raise ConfigError("telegram_bot.opencode_command must be a list or string")
     if "app_server_command" in telegram_cfg and not isinstance(
         telegram_cfg.get("app_server_command"), (list, str)
     ):

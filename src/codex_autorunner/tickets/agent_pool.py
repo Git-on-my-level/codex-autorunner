@@ -137,6 +137,7 @@ class AgentPool:
             env_builder=_env_builder,
             logger=logging.getLogger("codex_autorunner.app_server"),
             notification_handler=self._handle_app_server_notification,
+            auto_restart=app_server_cfg.auto_restart,
             max_handles=app_server_cfg.max_handles,
             idle_ttl_seconds=app_server_cfg.idle_ttl_seconds,
             request_timeout=app_server_cfg.request_timeout,

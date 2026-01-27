@@ -160,6 +160,7 @@ class TelegramBotConfig:
     shell: TelegramBotShellConfig
     progress_stream: TelegramBotProgressStreamConfig
     command_registration: TelegramBotCommandRegistration
+    opencode_command: list[str]
     state_file: Path
     app_server_command_env: str
     app_server_command: list[str]
@@ -400,6 +401,13 @@ class TelegramBotConfig:
             enabled=command_reg_enabled, scopes=scopes
         )
 
+        opencode_command = []
+        opencode_env_command = env.get("CAR_OPENCODE_COMMAND")
+        if opencode_env_command:
+            opencode_command = _parse_command(opencode_env_command)
+        if not opencode_command:
+            opencode_command = _parse_command(cfg.get("opencode_command"))
+
         state_file = Path(cfg.get("state_file", DEFAULT_STATE_FILE))
         if not state_file.is_absolute():
             state_file = (root / state_file).resolve()
@@ -523,6 +531,7 @@ class TelegramBotConfig:
             shell=shell,
             progress_stream=progress_stream,
             command_registration=command_registration,
+            opencode_command=opencode_command,
             state_file=state_file,
             app_server_command_env=app_server_command_env,
             app_server_command=app_server_command,

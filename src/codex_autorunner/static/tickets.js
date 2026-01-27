@@ -6,7 +6,7 @@ import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor } from "./ticketEditor.js";
 import { parseAppServerEvent } from "./agentEvents.js";
-import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
+import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
 let currentRunId = null;
 let ticketsExist = false;
@@ -24,6 +24,38 @@ const LIVE_EVENT_MAX = 50;
 let liveOutputEvents = [];
 let liveOutputEventIndex = {};
 let currentReasonFull = null; // Full reason text for modal display
+// Throttling state
+let liveOutputRenderPending = false;
+let liveOutputTextPending = false;
+function scheduleLiveOutputRender() {
+    if (liveOutputRenderPending)
+        return;
+    liveOutputRenderPending = true;
+    requestAnimationFrame(() => {
+        renderLiveOutputView();
+        liveOutputRenderPending = false;
+    });
+}
+function scheduleLiveOutputTextUpdate() {
+    if (liveOutputTextPending)
+        return;
+    liveOutputTextPending = true;
+    requestAnimationFrame(() => {
+        const outputEl = document.getElementById("ticket-live-output-text");
+        if (outputEl) {
+            const newText = liveOutputBuffer.join("\n");
+            if (outputEl.textContent !== newText) {
+                outputEl.textContent = newText;
+            }
+            // Auto-scroll to bottom when detail view is showing
+            const detailEl = document.getElementById("ticket-live-output-detail");
+            if (detailEl && liveOutputDetailExpanded) {
+                detailEl.scrollTop = detailEl.scrollHeight;
+            }
+        }
+        liveOutputTextPending = false;
+    });
+}
 function formatElapsed(startTime) {
     const now = new Date();
     const diffMs = now.getTime() - startTime.getTime();
@@ -94,9 +126,6 @@ function stopLastActivityTimer() {
 function appendToLiveOutput(text) {
     if (!text)
         return;
-    const outputEl = document.getElementById("ticket-live-output-text");
-    if (!outputEl)
-        return;
     const segments = text.split("\n");
     // Merge first segment into the last buffered line to avoid artificial newlines between deltas
     if (liveOutputBuffer.length === 0) {
@@ -113,13 +142,7 @@ function appendToLiveOutput(text) {
     while (liveOutputBuffer.length > MAX_OUTPUT_LINES) {
         liveOutputBuffer.shift();
     }
-    // Update display
-    outputEl.textContent = liveOutputBuffer.join("\n");
-    // Auto-scroll to bottom when detail view is showing
-    const detailEl = document.getElementById("ticket-live-output-detail");
-    if (detailEl && liveOutputDetailExpanded) {
-        detailEl.scrollTop = detailEl.scrollHeight;
-    }
+    scheduleLiveOutputTextUpdate();
 }
 function addLiveOutputEvent(parsed) {
     const { event, mergeStrategy } = parsed;
@@ -156,41 +179,88 @@ function renderLiveOutputEvents() {
     if (!container || !list || !count)
         return;
     const hasEvents = liveOutputEvents.length > 0;
-    count.textContent = String(liveOutputEvents.length);
-    container.classList.toggle("hidden", !hasEvents || !liveOutputDetailExpanded);
-    list.innerHTML = "";
-    if (!hasEvents || !liveOutputDetailExpanded)
+    if (count.textContent !== String(liveOutputEvents.length)) {
+        count.textContent = String(liveOutputEvents.length);
+    }
+    const shouldHide = !hasEvents || !liveOutputDetailExpanded;
+    if (container.classList.contains("hidden") !== shouldHide) {
+        container.classList.toggle("hidden", shouldHide);
+    }
+    if (shouldHide) {
+        if (list.innerHTML !== "")
+            list.innerHTML = "";
         return;
+    }
+    // Track which IDs are currently in the list to remove stale ones
+    const currentIds = new Set();
     liveOutputEvents.forEach((entry) => {
-        const wrapper = document.createElement("div");
-        wrapper.className = `ticket-chat-event ${entry.kind || ""}`.trim();
-        const title = document.createElement("div");
-        title.className = "ticket-chat-event-title";
-        title.textContent = entry.title || entry.method || "Update";
-        wrapper.appendChild(title);
-        if (entry.summary) {
+        const id = entry.id;
+        currentIds.add(id);
+        // Safer lookup than querySelector with arbitrary ID
+        let wrapper = null;
+        for (let i = 0; i < list.children.length; i++) {
+            const child = list.children[i];
+            if (child.dataset.eventId === id) {
+                wrapper = child;
+                break;
+            }
+        }
+        if (!wrapper) {
+            wrapper = document.createElement("div");
+            wrapper.className = `ticket-chat-event ${entry.kind || ""}`.trim();
+            wrapper.dataset.eventId = id;
+            const title = document.createElement("div");
+            title.className = "ticket-chat-event-title";
+            wrapper.appendChild(title);
             const summary = document.createElement("div");
             summary.className = "ticket-chat-event-summary";
-            summary.textContent = entry.summary;
             wrapper.appendChild(summary);
-        }
-        if (entry.detail) {
             const detail = document.createElement("div");
             detail.className = "ticket-chat-event-detail";
-            detail.textContent = entry.detail;
             wrapper.appendChild(detail);
+            const meta = document.createElement("div");
+            meta.className = "ticket-chat-event-meta";
+            wrapper.appendChild(meta);
+            list.appendChild(wrapper);
         }
-        const meta = document.createElement("div");
-        meta.className = "ticket-chat-event-meta";
-        meta.textContent = entry.time
-            ? new Date(entry.time).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-            })
-            : "";
-        wrapper.appendChild(meta);
-        list.appendChild(wrapper);
+        // Efficiently update content only if changed
+        const titleEl = wrapper.querySelector(".ticket-chat-event-title");
+        const newTitle = entry.title || entry.method || "Update";
+        if (titleEl && titleEl.textContent !== newTitle) {
+            titleEl.textContent = newTitle;
+        }
+        const summaryEl = wrapper.querySelector(".ticket-chat-event-summary");
+        const newSummary = entry.summary || "";
+        if (summaryEl && summaryEl.textContent !== newSummary) {
+            summaryEl.textContent = newSummary;
+        }
+        const detailEl = wrapper.querySelector(".ticket-chat-event-detail");
+        const newDetail = entry.detail || "";
+        if (detailEl && detailEl.textContent !== newDetail) {
+            detailEl.textContent = newDetail;
+        }
+        const metaEl = wrapper.querySelector(".ticket-chat-event-meta");
+        if (metaEl) {
+            const newMeta = entry.time
+                ? new Date(entry.time).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                })
+                : "";
+            if (metaEl.textContent !== newMeta) {
+                metaEl.textContent = newMeta;
+            }
+        }
     });
+    // Remove stale events
+    Array.from(list.children).forEach((child) => {
+        const el = child;
+        if (el.dataset.eventId && !currentIds.has(el.dataset.eventId)) {
+            el.remove();
+        }
+    });
+    // Only scroll if near bottom or if height changed significantly?
+    // For now, just scroll as it's the expected behavior for live logs
     list.scrollTop = list.scrollHeight;
 }
 function renderLiveOutputCompact() {
@@ -198,25 +268,34 @@ function renderLiveOutputCompact() {
     if (!compactEl)
         return;
     const summary = summarizeEvents(liveOutputEvents, {
-        maxActions: COMPACT_MAX_ACTIONS,
+        maxActions: 1, // Show only 1 action + thinking to fit in 3-line compact view
         maxTextLength: COMPACT_MAX_TEXT_LENGTH,
     });
     const text = liveOutputEvents.length ? renderCompactSummary(summary) : "";
-    compactEl.textContent = text || "Waiting for agent output...";
+    const newText = text || "Waiting for agent output...";
+    if (compactEl.textContent !== newText) {
+        compactEl.textContent = newText;
+    }
 }
 function updateLiveOutputViewToggle() {
     const viewToggle = document.getElementById("ticket-live-output-view-toggle");
     if (!viewToggle)
         return;
     if (liveOutputDetailExpanded) {
-        viewToggle.classList.add("active");
-        viewToggle.textContent = "≡";
-        viewToggle.title = "Show summary";
+        if (!viewToggle.classList.contains("active"))
+            viewToggle.classList.add("active");
+        if (viewToggle.textContent !== "≡")
+            viewToggle.textContent = "≡";
+        if (viewToggle.title !== "Show summary")
+            viewToggle.title = "Show summary";
     }
     else {
-        viewToggle.classList.remove("active");
-        viewToggle.textContent = "⋯";
-        viewToggle.title = "Show full output";
+        if (viewToggle.classList.contains("active"))
+            viewToggle.classList.remove("active");
+        if (viewToggle.textContent !== "⋯")
+            viewToggle.textContent = "⋯";
+        if (viewToggle.title !== "Show full output")
+            viewToggle.title = "Show full output";
     }
 }
 function renderLiveOutputView() {
@@ -243,7 +322,7 @@ function clearLiveOutput() {
         outputEl.textContent = "";
     liveOutputEvents = [];
     liveOutputEventIndex = {};
-    renderLiveOutputView();
+    scheduleLiveOutputRender();
 }
 function setLiveOutputStatus(status) {
     const statusEl = document.getElementById("ticket-live-output-status");
@@ -281,7 +360,7 @@ function handleFlowEvent(event) {
         const parsed = parseAppServerEvent(event.data);
         if (parsed) {
             addLiveOutputEvent(parsed);
-            renderLiveOutputView();
+            scheduleLiveOutputRender();
         }
     }
     // Handle flow lifecycle events

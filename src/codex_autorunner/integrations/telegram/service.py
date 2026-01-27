@@ -110,11 +110,11 @@ def _build_opencode_supervisor(
     *,
     logger: logging.Logger,
 ) -> Optional[OpenCodeSupervisor]:
-    raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
+    opencode_command = config.opencode_command or None
     opencode_binary = config.agent_binaries.get("opencode")
 
     supervisor = build_opencode_supervisor(
-        opencode_command=[raw_command] if raw_command else None,
+        opencode_command=opencode_command,
         opencode_binary=opencode_binary,
         workspace_root=config.root,
         logger=logger,
@@ -178,6 +178,8 @@ class TelegramBotService(
         housekeeping_config: Optional[HousekeepingConfig] = None,
         update_repo_url: Optional[str] = None,
         update_repo_ref: Optional[str] = None,
+        update_skip_checks: bool = False,
+        app_server_auto_restart: Optional[bool] = None,
     ) -> None:
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
@@ -185,6 +187,8 @@ class TelegramBotService(
         self._manifest_path = manifest_path
         self._update_repo_url = update_repo_url
         self._update_repo_ref = update_repo_ref
+        self._update_skip_checks = update_skip_checks
+        self._app_server_auto_restart = app_server_auto_restart
         self._allowlist = config.allowlist()
         self._store = TelegramStateStore(
             config.state_file, default_approval_mode=config.defaults.approval_mode
@@ -198,6 +202,7 @@ class TelegramBotService(
             approval_handler=self._handle_approval_request,
             notification_handler=self._handle_app_server_notification,
             logger=self._logger,
+            auto_restart=self._app_server_auto_restart,
             max_handles=config.app_server_max_handles,
             idle_ttl_seconds=config.app_server_idle_ttl_seconds,
         )

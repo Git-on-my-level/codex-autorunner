@@ -160,11 +160,13 @@ class CodexAppServerClient:
         self._env = env
         self._approval_handler = approval_handler
         self._default_approval_decision = default_approval_decision
-        if auto_restart is None:
-            disable_restart_env = os.environ.get(
-                "CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS"
-            )
-            self._auto_restart = False if disable_restart_env else True
+        disable_restart_env = os.environ.get(
+            "CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS"
+        )
+        if disable_restart_env:
+            self._auto_restart = False
+        elif auto_restart is None:
+            self._auto_restart = True
         else:
             self._auto_restart = auto_restart
         self._request_timeout = request_timeout

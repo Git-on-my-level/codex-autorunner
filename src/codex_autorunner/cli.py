@@ -975,6 +975,8 @@ def telegram_start(
             housekeeping_config=config.housekeeping,
             update_repo_url=update_repo_url,
             update_repo_ref=update_repo_ref,
+            update_skip_checks=config.update_skip_checks,
+            app_server_auto_restart=config.app_server.auto_restart,
         )
         await service.run_polling()
 

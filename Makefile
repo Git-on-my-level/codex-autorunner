@@ -21,7 +21,10 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check
+.PHONY: install dev hooks build test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check
+
+build: npm-install
+	pnpm build
 
 install:
 	$(PYTHON) -m pip install .
@@ -97,7 +100,7 @@ format:
 deadcode-baseline:
 	$(PYTHON) scripts/deadcode.py --update-baseline
 
-serve:
+serve: build
 	$(PYTHON) -m codex_autorunner.cli serve --host $(HOST) --port $(PORT)
 
 serve-dev: venv-dev

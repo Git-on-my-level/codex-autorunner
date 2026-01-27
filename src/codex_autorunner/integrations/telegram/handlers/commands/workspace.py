@@ -246,10 +246,8 @@ class WorkspaceCommands(SharedHelpers):
         return None
 
     def _opencode_available(self) -> bool:
-        from os import getenv
-
-        raw_command = getenv("CAR_OPENCODE_COMMAND")
-        if resolve_opencode_binary(raw_command):
+        opencode_command = self._config.opencode_command
+        if opencode_command and resolve_opencode_binary(opencode_command[0]):
             return True
         binary = self._config.agent_binaries.get("opencode")
         if not binary:
