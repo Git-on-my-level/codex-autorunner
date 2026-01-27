@@ -99,7 +99,7 @@ function eventToAction(event: AgentEvent, maxTextLength: number): CompactAction 
 
 export function summarizeEvents(
   events: AgentEvent[],
-  options: { maxActions?: number; maxTextLength?: number; now?: number; contextUsagePercent?: number } = {}
+  options: { maxActions?: number; maxTextLength?: number; now?: number; contextUsagePercent?: number; startTime?: number } = {}
 ): EventSummary {
   const maxActions = options.maxActions ?? COMPACT_MAX_ACTIONS;
   const maxTextLength = options.maxTextLength ?? COMPACT_MAX_TEXT_LENGTH;
@@ -149,7 +149,7 @@ export function summarizeEvents(
   const step = actions.length;
   const headerParts: string[] = [deriveHeaderLabel(events)];
   const now = options.now ?? Date.now();
-  const startTime = events.length ? Math.min(...events.map((evt) => evt.time || now)) : null;
+  const startTime = options.startTime ?? (events.length ? Math.min(...events.map((evt) => evt.time || now)) : null);
   if (startTime != null) {
     const elapsed = (now - startTime) / 1000;
     headerParts.push(formatElapsed(elapsed));

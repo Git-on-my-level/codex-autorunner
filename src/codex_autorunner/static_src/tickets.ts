@@ -343,6 +343,7 @@ function renderLiveOutputCompact(): void {
   const summary = summarizeEvents(liveOutputEvents, {
     maxActions: 1, // Show only 1 action + thinking to fit in 3-line compact view
     maxTextLength: COMPACT_MAX_TEXT_LENGTH,
+    startTime: flowStartedAt?.getTime(),
   });
   const text = liveOutputEvents.length ? renderCompactSummary(summary) : "";
   const newText = text || "Waiting for agent output...";

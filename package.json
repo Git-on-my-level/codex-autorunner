@@ -11,7 +11,7 @@
     "lint:ts": "eslint \"src/codex_autorunner/static_src/**/*.ts\"",
     "lint": "eslint \"src/codex_autorunner/static_src/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.json",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/add_static_banner.mjs",
     "lint:html": "html-validate \"src/codex_autorunner/static/index.html\"",
     "test:dom": "node scripts/check_dom_structure.mjs"
   },
