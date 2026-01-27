@@ -48,27 +48,6 @@ def build_workspace_routes() -> APIRouter:
             "spec": read_workspace_doc(repo_root, "spec"),
         }
 
-    @router.put("/workspace/{kind}", response_model=WorkspaceResponse)
-    def put_workspace(kind: str, payload: WorkspaceWriteRequest, request: Request):
-        key = (kind or "").strip().lower()
-        if key not in WORKSPACE_DOC_KINDS:
-            raise HTTPException(status_code=400, detail="invalid workspace doc kind")
-        repo_root = request.app.state.engine.repo_root
-        write_workspace_doc(repo_root, key, payload.content)
-        try:
-            rel_path = workspace_doc_path(repo_root, key).relative_to(repo_root)
-            draft_utils.invalidate_drafts_for_path(repo_root, rel_path.as_posix())
-            state_key = f"workspace_{rel_path.name}"
-            draft_utils.remove_draft(repo_root, state_key)
-        except Exception:
-            # best-effort invalidation; avoid blocking writes
-            pass
-        return {
-            "active_context": read_workspace_doc(repo_root, "active_context"),
-            "decisions": read_workspace_doc(repo_root, "decisions"),
-            "spec": read_workspace_doc(repo_root, "spec"),
-        }
-
     @router.get("/workspace/file", response_class=PlainTextResponse)
     def read_workspace(request: Request, path: str):
         repo_root = request.app.state.engine.repo_root
@@ -95,6 +74,27 @@ def build_workspace_routes() -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return PlainTextResponse(content)
+
+    @router.put("/workspace/{kind}", response_model=WorkspaceResponse)
+    def put_workspace(kind: str, payload: WorkspaceWriteRequest, request: Request):
+        key = (kind or "").strip().lower()
+        if key not in WORKSPACE_DOC_KINDS:
+            raise HTTPException(status_code=400, detail="invalid workspace doc kind")
+        repo_root = request.app.state.engine.repo_root
+        write_workspace_doc(repo_root, key, payload.content)
+        try:
+            rel_path = workspace_doc_path(repo_root, key).relative_to(repo_root)
+            draft_utils.invalidate_drafts_for_path(repo_root, rel_path.as_posix())
+            state_key = f"workspace_{rel_path.name}"
+            draft_utils.remove_draft(repo_root, state_key)
+        except Exception:
+            # best-effort invalidation; avoid blocking writes
+            pass
+        return {
+            "active_context": read_workspace_doc(repo_root, "active_context"),
+            "decisions": read_workspace_doc(repo_root, "decisions"),
+            "spec": read_workspace_doc(repo_root, "spec"),
+        }
 
     @router.get("/workspace/files", response_model=WorkspaceFileListResponse)
     def list_files(request: Request):
