@@ -22,7 +22,8 @@ from ..core.flows import (
     FlowRunStatus,
     FlowStore,
 )
-from ..core.flows.store import now_iso
+from ..core.flows.store import UNSET
+from ..core.flows.transition import resolve_flow_transition
 from ..core.flows.worker_process import (
     FlowWorkerHealth,
     check_worker_health,
@@ -220,13 +221,11 @@ def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
 def _maybe_recover_stuck_flow(
     repo_root: Path, record: FlowRunRecord, store: FlowStore
 ) -> FlowRunRecord:
-    """Recover flows stuck in active states when worker is dead or state is inconsistent.
+    """
+    Reconcile persisted flow state with worker health and inner ticket_engine status.
 
-    If a flow is in RUNNING or STOPPING state but the worker process is dead,
-    transition it to FAILED or STOPPED respectively so users can archive/restart.
-    Also reconcile cases where the inner ticket_engine has already paused or completed
-    but the outer flow status remains RUNNING. For PAUSED runs, only reconcile when
-    the worker is alive to avoid flipping legitimate pauses to failed.
+    Delegates decision logic to a pure transition resolver to keep recovery predictable
+    and exhaustively testable.
     """
     if record.status not in (
         FlowRunStatus.RUNNING,
@@ -237,79 +236,31 @@ def _maybe_recover_stuck_flow(
 
     health = check_worker_health(repo_root, record.id)
 
-    # Dead-worker recovery only applies to running/stopping; paused flows intentionally
-    # shut down their worker and should remain paused.
+    decision = resolve_flow_transition(record, health)
+
     if (
-        record.status in (FlowRunStatus.RUNNING, FlowRunStatus.STOPPING)
-        and not health.is_alive
+        decision.status == record.status
+        and decision.finished_at == record.finished_at
+        and decision.state == (record.state or {})
     ):
-        new_status = (
-            FlowRunStatus.STOPPED
-            if record.status == FlowRunStatus.STOPPING
-            else FlowRunStatus.FAILED
-        )
-        _logger.info(
-            "Recovering stuck flow %s: %s -> %s (worker dead)",
-            record.id,
-            record.status.value,
-            new_status.value,
-        )
-        updated = store.update_flow_run_status(run_id=record.id, status=new_status)
-        _ensure_worker_not_stale(health)
-        return updated or record
+        return record
 
-    # Worker appears alive; check for inner/outer status inconsistency.
-    if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
-        state = record.state or {}
-        ticket_engine = state.get("ticket_engine") if isinstance(state, dict) else {}
-        ticket_engine = ticket_engine if isinstance(ticket_engine, dict) else {}
-        inner_status = ticket_engine.get("status")
+    _logger.info(
+        "Recovering flow %s: %s -> %s (%s)",
+        record.id,
+        record.status.value,
+        decision.status.value,
+        decision.note or "reconcile",
+    )
 
-        if record.status == FlowRunStatus.RUNNING:
-            if inner_status == "paused":
-                _logger.warning(
-                    "Recovering inconsistent flow %s: flow=running but ticket_engine=paused",
-                    record.id,
-                )
-                updated = store.update_flow_run_status(
-                    run_id=record.id,
-                    status=FlowRunStatus.PAUSED,
-                    state=state,
-                )
-                return updated or record
-
-            if inner_status == "completed":
-                _logger.warning(
-                    "Recovering inconsistent flow %s: flow=running but ticket_engine=completed",
-                    record.id,
-                )
-                updated = store.update_flow_run_status(
-                    run_id=record.id,
-                    status=FlowRunStatus.COMPLETED,
-                    finished_at=now_iso(),
-                    state=state,
-                )
-                return updated or record
-
-        if record.status == FlowRunStatus.PAUSED and inner_status in (None, "running"):
-            # Flow was marked paused, but the inner engine is active again (or was never paused).
-            _logger.warning(
-                "Recovering inconsistent flow %s: flow=paused but ticket_engine=%s (worker alive)",
-                record.id,
-                inner_status or "unset",
-            )
-            ticket_engine.pop("reason", None)
-            ticket_engine.pop("reason_details", None)
-            ticket_engine["status"] = "running"
-            state["ticket_engine"] = ticket_engine
-            updated = store.update_flow_run_status(
-                run_id=record.id,
-                status=FlowRunStatus.RUNNING,
-                state=state,
-            )
-            return updated or record
-
-    return record
+    updated = store.update_flow_run_status(
+        run_id=record.id,
+        status=decision.status,
+        state=decision.state,
+        finished_at=decision.finished_at if decision.finished_at else UNSET,
+    )
+    _ensure_worker_not_stale(health)
+    return updated or record
 
 
 class FlowStartRequest(BaseModel):
