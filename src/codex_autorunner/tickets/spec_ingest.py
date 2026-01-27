@@ -57,8 +57,6 @@ agent: codex
 done: false
 title: Bootstrap tickets from workspace spec
 goal: Read workspace spec and create follow-up tickets
-requires:
-  - {rel_spec}
 ---
 
 You are the first ticket in a workspace-driven workflow.
