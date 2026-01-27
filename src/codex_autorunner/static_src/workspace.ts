@@ -9,7 +9,6 @@ import {
   fetchWorkspaceTree,
   uploadWorkspaceFiles,
   downloadWorkspaceZip,
-  downloadWorkspaceFile,
   createWorkspaceFolder,
   writeWorkspace,
 } from "./workspaceApi.js";
@@ -128,8 +127,6 @@ function els() {
     createClose: document.getElementById("workspace-create-close") as HTMLButtonElement | null,
     createCancel: document.getElementById("workspace-create-cancel") as HTMLButtonElement | null,
     createSubmit: document.getElementById("workspace-create-submit") as HTMLButtonElement | null,
-    downloadCurrent: document.getElementById("workspace-download-current") as HTMLButtonElement | null,
-    downloadMobile: document.getElementById("workspace-download-mobile") as HTMLButtonElement | null,
   };
 }
 
@@ -228,23 +225,6 @@ function renderChat(): void {
   workspaceChat.render();
 }
 
-function updateDownloadButtons(): void {
-  const { downloadCurrent, downloadMobile } = els();
-  const currentFolder = state.browser?.getCurrentPath() || "";
-  const currentFile = state.target?.path;
-  [downloadCurrent, downloadMobile].forEach((btn) => {
-    if (!btn) return;
-    const isFile = Boolean(currentFile);
-    btn.disabled = !isFile && !currentFolder;
-    btn.textContent = isFile ? "Download" : "Download Zip";
-    btn.title = isFile ? "Download file" : "Download folder as zip";
-    btn.onclick = () => {
-      if (currentFile) return downloadWorkspaceFile(currentFile);
-      if (currentFolder) return downloadWorkspaceZip(currentFolder);
-      return downloadWorkspaceZip();
-    };
-  });
-}
 
 type CreateMode = "folder" | "file";
 let createMode: CreateMode | null = null;
@@ -358,7 +338,6 @@ async function loadWorkspaceFile(path: string): Promise<void> {
     await loadPendingDraft();
     renderPatch();
     setStatus("Loaded");
-    updateDownloadButtons();
   } catch (err) {
     const message = (err as Error).message || "Failed to load workspace file";
     flash(message, "error");
@@ -607,7 +586,7 @@ async function loadFiles(defaultPath?: string): Promise<void> {
         workspaceChat.setTarget(target());
         void loadWorkspaceFile(file.path);
       },
-      onPathChange: () => updateDownloadButtons(),
+      onPathChange: () => {},
       onRefresh: () => loadFiles(state.target?.path),
       onConfirm: (message) =>
         (window as unknown as { workspaceConfirm?: (msg: string) => Promise<boolean> }).workspaceConfirm?.(message) ??
@@ -616,7 +595,6 @@ async function loadFiles(defaultPath?: string): Promise<void> {
   }
 
   state.browser.setTree(tree, defaultPath || state.target?.path || undefined);
-  updateDownloadButtons();
   if (state.target) {
     workspaceChat.setTarget(target());
   }

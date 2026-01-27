@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
-import { fetchWorkspace, ingestSpecToTickets, listTickets, fetchWorkspaceTree, uploadWorkspaceFiles, downloadWorkspaceZip, downloadWorkspaceFile, createWorkspaceFolder, writeWorkspace, } from "./workspaceApi.js";
+import { fetchWorkspace, ingestSpecToTickets, listTickets, fetchWorkspaceTree, uploadWorkspaceFiles, downloadWorkspaceZip, createWorkspaceFolder, writeWorkspace, } from "./workspaceApi.js";
 import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
 import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
@@ -89,8 +89,6 @@ function els() {
         createClose: document.getElementById("workspace-create-close"),
         createCancel: document.getElementById("workspace-create-cancel"),
         createSubmit: document.getElementById("workspace-create-submit"),
-        downloadCurrent: document.getElementById("workspace-download-current"),
-        downloadMobile: document.getElementById("workspace-download-mobile"),
     };
 }
 function workspaceKindFromPath(path) {
@@ -188,26 +186,6 @@ function renderPatch() {
 }
 function renderChat() {
     workspaceChat.render();
-}
-function updateDownloadButtons() {
-    const { downloadCurrent, downloadMobile } = els();
-    const currentFolder = state.browser?.getCurrentPath() || "";
-    const currentFile = state.target?.path;
-    [downloadCurrent, downloadMobile].forEach((btn) => {
-        if (!btn)
-            return;
-        const isFile = Boolean(currentFile);
-        btn.disabled = !isFile && !currentFolder;
-        btn.textContent = isFile ? "Download" : "Download Zip";
-        btn.title = isFile ? "Download file" : "Download folder as zip";
-        btn.onclick = () => {
-            if (currentFile)
-                return downloadWorkspaceFile(currentFile);
-            if (currentFolder)
-                return downloadWorkspaceZip(currentFolder);
-            return downloadWorkspaceZip();
-        };
-    });
 }
 let createMode = null;
 function listFolderPaths(nodes, base = "") {
@@ -322,7 +300,6 @@ async function loadWorkspaceFile(path) {
         await loadPendingDraft();
         renderPatch();
         setStatus("Loaded");
-        updateDownloadButtons();
     }
     catch (err) {
         const message = err.message || "Failed to load workspace file";
@@ -565,14 +542,13 @@ async function loadFiles(defaultPath) {
                 workspaceChat.setTarget(target());
                 void loadWorkspaceFile(file.path);
             },
-            onPathChange: () => updateDownloadButtons(),
+            onPathChange: () => { },
             onRefresh: () => loadFiles(state.target?.path),
             onConfirm: (message) => window.workspaceConfirm?.(message) ??
                 Promise.resolve(confirm(message)),
         });
     }
     state.browser.setTree(tree, defaultPath || state.target?.path || undefined);
-    updateDownloadButtons();
     if (state.target) {
         workspaceChat.setTarget(target());
     }

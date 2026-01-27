@@ -1,4 +1,4 @@
-import { WorkspaceNode, deleteWorkspaceFile, deleteWorkspaceFolder } from "./workspaceApi.js";
+import { WorkspaceNode, deleteWorkspaceFile, deleteWorkspaceFolder, downloadWorkspaceFile, downloadWorkspaceZip } from "./workspaceApi.js";
 import { flash } from "./utils.js";
 
 type ChangeHandler = (file: WorkspaceNode) => void;
@@ -258,6 +258,36 @@ export class WorkspaceFileBrowser {
 
         const actions = document.createElement("div");
         actions.className = "workspace-item-actions";
+
+        // Download button for files
+        if (node.type === "file") {
+          const dlBtn = document.createElement("button");
+          dlBtn.type = "button";
+          dlBtn.className = "ghost sm workspace-download-btn";
+          dlBtn.textContent = "⬇";
+          dlBtn.title = `Download ${node.name}`;
+          dlBtn.addEventListener("click", (evt) => {
+            evt.stopPropagation();
+            downloadWorkspaceFile(node.path);
+          });
+          actions.appendChild(dlBtn);
+        }
+
+        // Download as ZIP button for folders
+        if (node.type === "folder") {
+          const dlBtn = document.createElement("button");
+          dlBtn.type = "button";
+          dlBtn.className = "ghost sm workspace-download-btn";
+          dlBtn.textContent = "⬇";
+          dlBtn.title = `Download ${node.name} as ZIP`;
+          dlBtn.addEventListener("click", (evt) => {
+            evt.stopPropagation();
+            downloadWorkspaceZip(node.path);
+          });
+          actions.appendChild(dlBtn);
+        }
+
+        // Delete button for files (non-pinned)
         if (node.type === "file" && !node.is_pinned) {
           const delBtn = document.createElement("button");
           delBtn.type = "button";
@@ -279,7 +309,10 @@ export class WorkspaceFileBrowser {
             }
           });
           actions.appendChild(delBtn);
-        } else if (node.type === "folder") {
+        }
+
+        // Delete button for folders
+        if (node.type === "folder") {
           const delBtn = document.createElement("button");
           delBtn.type = "button";
           delBtn.className = "ghost sm danger";
@@ -367,6 +400,24 @@ export class WorkspaceFileBrowser {
 
       const actions = document.createElement("span");
       actions.className = "file-picker-actions";
+
+      // Download button
+      const dlBtn = document.createElement("button");
+      dlBtn.type = "button";
+      dlBtn.className = "ghost sm workspace-download-btn";
+      dlBtn.textContent = "⬇";
+      dlBtn.title = node.type === "folder" ? `Download ${node.name} as ZIP` : `Download ${node.name}`;
+      dlBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (node.type === "folder") {
+          downloadWorkspaceZip(node.path);
+        } else {
+          downloadWorkspaceFile(node.path);
+        }
+      });
+      actions.appendChild(dlBtn);
+
+      // Delete button (for non-pinned items)
       if (!(node.type === "file" && node.is_pinned)) {
         const delBtn = document.createElement("button");
         delBtn.type = "button";
