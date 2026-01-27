@@ -10,6 +10,7 @@ interface BrowserOptions {
   onSelect: ChangeHandler;
   onPathChange?: (path: string) => void;
   onRefresh?: () => Promise<void> | void;
+  onConfirm?: (message: string) => Promise<boolean>;
 }
 
 export class WorkspaceFileBrowser {
@@ -22,6 +23,7 @@ export class WorkspaceFileBrowser {
   private readonly onSelect: ChangeHandler;
   private readonly onPathChange?: (path: string) => void;
   private readonly onRefresh: () => Promise<void> | void;
+  private readonly onConfirm?: (message: string) => Promise<boolean>;
   private readonly fileBtnEl: HTMLElement | null;
   private readonly fileBtnNameEl: HTMLElement | null;
   private readonly modalEl: HTMLElement | null;
@@ -35,6 +37,7 @@ export class WorkspaceFileBrowser {
     this.onSelect = options.onSelect;
     this.onPathChange = options.onPathChange;
     this.onRefresh = options.onRefresh ?? (() => {});
+    this.onConfirm = options.onConfirm;
 
     this.fileBtnEl = document.getElementById("workspace-file-pill");
     this.fileBtnNameEl = document.getElementById("workspace-file-pill-name");
@@ -263,7 +266,8 @@ export class WorkspaceFileBrowser {
           delBtn.title = "Delete file";
           delBtn.addEventListener("click", async (evt) => {
             evt.stopPropagation();
-            if (!confirm(`Delete ${node.name}?`)) return;
+            const ok = this.onConfirm ? await this.onConfirm(`Delete ${node.name}?`) : confirm(`Delete ${node.name}?`);
+            if (!ok) return;
             try {
               await deleteWorkspaceFile(node.path);
               if (this.selectedPath === node.path) {
@@ -283,7 +287,10 @@ export class WorkspaceFileBrowser {
           delBtn.title = "Delete folder";
           delBtn.addEventListener("click", async (evt) => {
             evt.stopPropagation();
-            if (!confirm(`Delete folder ${node.name}? (must be empty)`)) return;
+            const ok = this.onConfirm
+              ? await this.onConfirm(`Delete folder ${node.name}? (must be empty)`)
+              : confirm(`Delete folder ${node.name}? (must be empty)`);
+            if (!ok) return;
             try {
               await deleteWorkspaceFolder(node.path);
               await this.onRefresh();

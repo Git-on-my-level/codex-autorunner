@@ -3370,6 +3370,16 @@ button.icon-btn {
   gap: 8px;
 }
 
+.workspace-confirm-dialog {
+  max-width: 360px;
+}
+
+.workspace-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .workspace-path-row {
   display: flex;
   align-items: center;

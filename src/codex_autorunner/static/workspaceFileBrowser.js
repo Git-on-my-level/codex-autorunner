@@ -12,6 +12,7 @@ export class WorkspaceFileBrowser {
         this.onSelect = options.onSelect;
         this.onPathChange = options.onPathChange;
         this.onRefresh = options.onRefresh ?? (() => { });
+        this.onConfirm = options.onConfirm;
         this.fileBtnEl = document.getElementById("workspace-file-pill");
         this.fileBtnNameEl = document.getElementById("workspace-file-pill-name");
         this.modalEl = document.getElementById("file-picker-modal");
@@ -232,7 +233,8 @@ export class WorkspaceFileBrowser {
                     delBtn.title = "Delete file";
                     delBtn.addEventListener("click", async (evt) => {
                         evt.stopPropagation();
-                        if (!confirm(`Delete ${node.name}?`))
+                        const ok = this.onConfirm ? await this.onConfirm(`Delete ${node.name}?`) : confirm(`Delete ${node.name}?`);
+                        if (!ok)
                             return;
                         try {
                             await deleteWorkspaceFile(node.path);
@@ -255,7 +257,10 @@ export class WorkspaceFileBrowser {
                     delBtn.title = "Delete folder";
                     delBtn.addEventListener("click", async (evt) => {
                         evt.stopPropagation();
-                        if (!confirm(`Delete folder ${node.name}? (must be empty)`))
+                        const ok = this.onConfirm
+                            ? await this.onConfirm(`Delete folder ${node.name}? (must be empty)`)
+                            : confirm(`Delete folder ${node.name}? (must be empty)`);
+                        if (!ok)
                             return;
                         try {
                             await deleteWorkspaceFolder(node.path);

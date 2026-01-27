@@ -609,6 +609,9 @@ async function loadFiles(defaultPath?: string): Promise<void> {
       },
       onPathChange: () => updateDownloadButtons(),
       onRefresh: () => loadFiles(state.target?.path),
+      onConfirm: (message) =>
+        (window as unknown as { workspaceConfirm?: (msg: string) => Promise<boolean> }).workspaceConfirm?.(message) ??
+        Promise.resolve(confirm(message)),
     });
   }
 
@@ -718,5 +721,29 @@ export async function initWorkspace(): Promise<void> {
     if (evt.key === "Escape" && createModal && !createModal.hidden) {
       closeCreateModal();
     }
+  });
+
+  // Confirm modal wiring
+  const confirmModal = document.getElementById("workspace-confirm-modal");
+  const confirmText = document.getElementById("workspace-confirm-text");
+  const confirmYes = document.getElementById("workspace-confirm-yes") as HTMLButtonElement | null;
+  const confirmCancel = document.getElementById("workspace-confirm-cancel") as HTMLButtonElement | null;
+  let confirmResolver: ((val: boolean) => void) | null = null;
+  const closeConfirm = (result: boolean) => {
+    if (confirmModal) confirmModal.hidden = true;
+    confirmResolver?.(result);
+    confirmResolver = null;
+  };
+  (window as unknown as { workspaceConfirm?: (message: string) => Promise<boolean> }).workspaceConfirm = (message) =>
+    new Promise<boolean>((resolve) => {
+      confirmResolver = resolve;
+      if (confirmText) confirmText.textContent = message;
+      if (confirmModal) confirmModal.hidden = false;
+      confirmYes?.focus();
+    });
+  confirmYes?.addEventListener("click", () => closeConfirm(true));
+  confirmCancel?.addEventListener("click", () => closeConfirm(false));
+  confirmModal?.addEventListener("click", (evt) => {
+    if (evt.target === confirmModal) closeConfirm(false);
   });
 }
