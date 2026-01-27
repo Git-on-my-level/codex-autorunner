@@ -10,6 +10,7 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 
 ## Layout and key files
 - Core package: `src/codex_autorunner/` (engine, CLI, server/API, UI assets).
+- Frontend JS is generated from TypeScript: edit `static_src/*.ts`, not `static/*.js` (run `pnpm run build` after).
 - Runtime/config/state live under `.codex-autorunner/` (not at repo root):
   - Primary work surface: `.codex-autorunner/tickets/TICKET-###.md` (required).
   - Optional workspace docs (auto-created on write; missing is OK):
