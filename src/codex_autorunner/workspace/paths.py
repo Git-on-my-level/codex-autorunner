@@ -35,10 +35,11 @@ def workspace_dir(repo_root: Path) -> Path:
 
 
 def normalize_workspace_rel_path(repo_root: Path, rel_path: str) -> tuple[Path, str]:
-    """Return a normalized workspace path and its workspace-relative string.
+    """Normalize a user-supplied workspace path and ensure it stays in-tree.
 
-    Rejects absolute paths and any path containing ".." to prevent traversal
-    outside the workspace directory.
+    We accept POSIX-style relative paths only, then resolve the full path and
+    verify the result is still under the workspace directory. This guards
+    against ".." traversal and symlink escapes that CodeQL flagged.
     """
 
     base = workspace_dir(repo_root).resolve()
@@ -51,11 +52,10 @@ def normalize_workspace_rel_path(repo_root: Path, rel_path: str) -> tuple[Path, 
         raise ValueError("invalid workspace file path")
 
     candidate = (base / relative).resolve(strict=False)
-    try:
-        rel_posix = candidate.relative_to(base).as_posix()
-    except Exception as exc:
-        raise ValueError("invalid workspace file path") from exc
+    if not candidate.is_relative_to(base):
+        raise ValueError("invalid workspace file path")
 
+    rel_posix = candidate.relative_to(base).as_posix()
     return candidate, rel_posix
 
 
