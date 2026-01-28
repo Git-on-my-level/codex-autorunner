@@ -8,7 +8,8 @@ from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_ticket_frontmatter
 from .models import TicketDoc, TicketFrontmatter
 
-_TICKET_NAME_RE = re.compile(r"^TICKET-(\d+)\.md$", re.IGNORECASE)
+# Accept TICKET-###.md or TICKET-###<suffix>.md (suffix optional), case-insensitive.
+_TICKET_NAME_RE = re.compile(r"^TICKET-(\d{3,})(?:[^/]*)\.md$", re.IGNORECASE)
 
 
 def parse_ticket_index(name: str) -> Optional[int]:
@@ -51,7 +52,9 @@ def read_ticket(path: Path) -> tuple[Optional[TicketDoc], list[str]]:
     data, body = parse_markdown_frontmatter(raw)
     idx = parse_ticket_index(path.name)
     if idx is None:
-        return None, ["Invalid ticket filename; expected TICKET-<number>.md"]
+        return None, [
+            "Invalid ticket filename; expected TICKET-<number>[suffix].md (e.g. TICKET-001-foo.md)"
+        ]
 
     frontmatter, errors = lint_ticket_frontmatter(data)
     if errors:
