@@ -743,6 +743,7 @@ class TicketRunner:
             "- decisions.md: can contain conditional decision context that many only be relevant to some tickets.\n"
             "- If you create new documents that future agents should reference, modify their tickets and leave a pointer to your new files.\n"
             "- All files and folders under `.codex-autorunner/workspace/` are viewable and editable by the user. If you need the user's input on something, make sure it's in the workspace including copies of any artifacts they should review.\n"
+            "- Do NOT add any files under `.codex-autorunner/` to git unless they are already tracked and not gitignored."
         )
 
         checkpoint_block = ""
