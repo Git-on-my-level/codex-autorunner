@@ -17,6 +17,7 @@ def test_about_car_is_seeded(repo: Path):
     assert ".codex-autorunner/workspace/active_context.md" in text
     assert ".codex-autorunner/workspace/decisions.md" in text
     assert ".codex-autorunner/workspace/spec.md" in text
+    assert "lint ticket frontmatter" in text.lower()
 
 
 def test_terminal_new_cmd_does_not_seed_about_prompt(repo: Path):

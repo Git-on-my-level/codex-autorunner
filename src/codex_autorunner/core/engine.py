@@ -77,6 +77,7 @@ from .review_context import build_spec_progress_review_context
 from .run_index import RunIndexStore
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .static_assets import missing_static_assets, resolve_static_dir
+from .ticket_linter_cli import ensure_ticket_linter
 from .utils import (
     RepoNotFoundError,
     atomic_write,
@@ -169,6 +170,12 @@ class Engine:
             # Never fail Engine creation due to a best-effort helper doc.
             self._app_server_logger.debug(
                 "Best-effort ABOUT_CAR.md creation failed: %s", exc
+            )
+        try:
+            ensure_ticket_linter(self.config.root)
+        except (OSError, IOError) as exc:
+            self._app_server_logger.debug(
+                "Best-effort lint_tickets.py creation failed: %s", exc
             )
 
     @staticmethod
