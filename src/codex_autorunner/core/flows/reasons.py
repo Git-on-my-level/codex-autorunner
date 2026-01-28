@@ -21,7 +21,7 @@ def ensure_reason_summary(
     default: Optional[str] = None,
 ) -> dict[str, Any]:
     """Ensure state includes a short reason_summary when stopping/pausing/failing."""
-    normalized: dict[str, Any] = state if isinstance(state, dict) else {}
+    normalized: dict[str, Any] = dict(state) if isinstance(state, dict) else {}
     existing = normalized.get("reason_summary")
     if isinstance(existing, str) and existing.strip():
         return normalized

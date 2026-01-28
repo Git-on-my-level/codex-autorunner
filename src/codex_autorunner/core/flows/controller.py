@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
 
 from .definition import FlowDefinition
-from .models import FlowEvent, FlowEventType, FlowRunRecord, FlowRunStatus
+from .models import FlowEvent, FlowRunRecord, FlowRunStatus
 from .runtime import FlowRuntime
 from .store import FlowStore
 
@@ -122,13 +122,6 @@ class FlowController:
                 state=state,
             )
             if updated:
-                event = self.store.create_event(
-                    event_id=str(uuid.uuid4()),
-                    run_id=run_id,
-                    event_type=FlowEventType.FLOW_RESUMED,
-                    data={},
-                )
-                self._emit_event(event)
                 return updated
 
             updated = self.store.get_flow_run(run_id)

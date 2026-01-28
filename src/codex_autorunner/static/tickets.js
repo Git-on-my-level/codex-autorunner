@@ -1096,6 +1096,9 @@ async function loadTicketFlow(ctx) {
             reason.classList.toggle("has-details", hasDetails);
         }
         lastKnownEventSeq = typeof latest?.last_event_seq === "number" ? latest.last_event_seq : null;
+        if (currentRunId && typeof lastKnownEventSeq === "number") {
+            setLastSeenSeq(currentRunId, lastKnownEventSeq);
+        }
         updateLastActivityFromTimestamp(latest?.last_event_at || null);
         const isActive = latest?.status === "running" || latest?.status === "pending";
         const isStale = Boolean(isActive &&
