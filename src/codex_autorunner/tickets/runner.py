@@ -136,6 +136,16 @@ class TicketRunner:
                 )
             current_path = next_path
             state["current_ticket"] = safe_relpath(current_path, self._workspace_root)
+            # Inform listeners immediately which ticket is about to run so the UI
+            # can show the active indicator before the first turn completes.
+            if emit_event is not None:
+                emit_event(
+                    FlowEventType.STEP_PROGRESS,
+                    {
+                        "message": "Selected ticket",
+                        "current_ticket": state["current_ticket"],
+                    },
+                )
             # New ticket resets per-ticket state.
             state["ticket_turns"] = 0
             state.pop("last_agent_output", None)

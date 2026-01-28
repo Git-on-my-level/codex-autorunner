@@ -35,6 +35,7 @@ let dispatchHistoryRunId = null;
 let eventSourceRetryAttempt = 0;
 let eventSourceRetryTimerId = null;
 const lastSeenSeqByRun = {};
+let ticketListCache = null;
 // Dispatch panel collapse state (persisted to localStorage)
 const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
 let dispatchPanelCollapsed = false;
@@ -520,6 +521,20 @@ function handleFlowEvent(event) {
             scheduleLiveOutputRender();
         }
     }
+    // Handle step progress events carrying ticket selection so UI can highlight immediately
+    if (event.event_type === "step_progress") {
+        const nextTicket = event.data?.current_ticket;
+        if (nextTicket) {
+            currentActiveTicket = nextTicket;
+            currentFlowStatus = "running";
+            const { current } = els();
+            if (current)
+                current.textContent = currentActiveTicket;
+            if (ticketListCache) {
+                renderTickets(ticketListCache);
+            }
+        }
+    }
     // Handle flow lifecycle events
     if (event.event_type === "flow_completed" ||
         event.event_type === "flow_failed" ||
@@ -679,6 +694,7 @@ function truncate(text, max = 100) {
     return `${text.slice(0, max).trim()}…`;
 }
 function renderTickets(data) {
+    ticketListCache = data;
     const { tickets, dir } = els();
     if (dir)
         dir.textContent = data?.ticket_dir || "–";
@@ -945,6 +961,7 @@ async function loadTicketFiles(ctx) {
         ticketsHydrated = true;
     }
     catch (err) {
+        ticketListCache = null;
         preserveScroll(tickets, () => {
             renderTickets(null);
         }, { restoreOnNextFrame: true });
