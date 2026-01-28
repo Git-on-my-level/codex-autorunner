@@ -298,12 +298,24 @@ class CodexAppServerBackend(AgentBackend):
 
     async def interrupt(self, session_id: str) -> None:
         target_thread = session_id or self._thread_id
-        if self._client and target_thread:
+        target_turn = self._turn_id
+        if self._client and target_turn:
             try:
-                await self._client.turn_interrupt(target_thread)
-                _logger.info("Interrupted turn on thread %s", target_thread)
+                await self._client.turn_interrupt(target_turn, thread_id=target_thread)
+                _logger.info(
+                    "Interrupted turn %s on thread %s",
+                    target_turn,
+                    target_thread or "unknown",
+                )
+                return
             except Exception as e:
                 _logger.warning("Failed to interrupt turn: %s", e)
+                return
+        if self._client and target_thread:
+            _logger.warning(
+                "Cannot interrupt turn for thread %s: missing turn id",
+                target_thread,
+            )
 
     async def final_messages(self, session_id: str) -> list[str]:
         return []
