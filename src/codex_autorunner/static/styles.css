@@ -1687,6 +1687,16 @@ button.icon-btn {
   opacity: 0.6;
 }
 
+.ticket-card .ticket-flow-meta .ticket-flow-action {
+  padding: 2px 6px;
+  font-size: 10px;
+  line-height: 1.1;
+}
+
+.ticket-card .ticket-flow-meta .ticket-flow-pill {
+  margin-left: 2px;
+}
+
 /* Ticket meta details container - desktop shows all */
 .ticket-card .ticket-meta-details {
   display: contents;
