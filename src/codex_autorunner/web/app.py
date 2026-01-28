@@ -55,6 +55,10 @@ from ..core.utils import (
     set_repo_root_context,
 )
 from ..housekeeping import run_housekeeping_once
+from ..integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
@@ -343,7 +347,12 @@ def _build_app_context(
         if base_path is not None
         else config.server_base_path
     )
-    engine = Engine(config.root, config=config)
+    engine = Engine(
+        config.root,
+        config=config,
+        backend_factory=build_agent_backend_factory(config.root, config),
+        app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+    )
     manager = RunnerManager(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=env)
     voice_missing_reason: Optional[str] = None

@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import dataclasses
+import inspect
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import IO, Any, Iterator, Optional
+from typing import IO, Any, Awaitable, Callable, Iterator, Optional
 
 import yaml
 
@@ -29,19 +30,16 @@ from ..agents.opencode.runtime import (
 )
 from ..agents.opencode.supervisor import OpenCodeSupervisor, OpenCodeSupervisorError
 from ..agents.registry import validate_agent_id
-from ..integrations.app_server.client import (
-    CodexAppServerError,
-    _extract_thread_id,
-    _extract_thread_id_for_turn,
-    _extract_turn_id,
-)
-from ..integrations.app_server.env import build_app_server_env
-from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
 from ..tickets.files import list_ticket_paths, ticket_is_done
 from .about_car import ensure_about_car_file
 from .adapter_utils import handle_agent_output
-from .app_server_events import AppServerEventBuffer
+from .app_server_events import (
+    AppServerEventBuffer,
+    extract_thread_id,
+    extract_thread_id_for_turn,
+    extract_turn_id,
+)
 from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
@@ -66,6 +64,8 @@ from .locks import (
 )
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
+from .ports.agent_backend import AgentBackend
+from .ports.run_event import Completed, Failed, OutputDelta, RunEvent, Started
 from .prompt import build_final_summary_prompt
 from .redaction import redact_text
 from .review_context import build_spec_progress_review_context
@@ -118,6 +118,13 @@ class ActiveOpencodeRun:
     interrupt_event: asyncio.Event
 
 
+NotificationHandler = Callable[[dict[str, Any]], Awaitable[None]]
+BackendFactory = Callable[
+    [str, RunnerState, Optional[NotificationHandler]], AgentBackend
+]
+AppServerSupervisorFactory = Callable[[str, Optional[NotificationHandler]], Any]
+
+
 class Engine:
     def __init__(
         self,
@@ -125,6 +132,8 @@ class Engine:
         *,
         config: Optional[RepoConfig] = None,
         hub_path: Optional[Path] = None,
+        backend_factory: Optional[BackendFactory] = None,
+        app_server_supervisor_factory: Optional[AppServerSupervisorFactory] = None,
     ):
         if config is None:
             config = load_repo_config(repo_root, hub_path=hub_path)
@@ -144,7 +153,9 @@ class Engine:
             default_app_server_threads_path(self.repo_root)
         )
         self._app_server_threads_lock = threading.Lock()
-        self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+        self._backend_factory = backend_factory
+        self._app_server_supervisor_factory = app_server_supervisor_factory
+        self._app_server_supervisor: Optional[Any] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         redact_enabled = self.config.security.get("redact_run_logs", True)
         self._app_server_event_formatter = AppServerEventFormatter(
@@ -856,11 +867,11 @@ class Engine:
         params_raw = message.get("params")
         params = params_raw if isinstance(params_raw, dict) else {}
         thread_id = (
-            _extract_thread_id_for_turn(params)
-            or _extract_thread_id(params)
-            or _extract_thread_id(message)
+            extract_thread_id_for_turn(params)
+            or extract_thread_id(params)
+            or extract_thread_id(message)
         )
-        turn_id = _extract_turn_id(params) or _extract_turn_id(message)
+        turn_id = extract_turn_id(params) or extract_turn_id(message)
         run_id: Optional[int] = None
         with self._run_telemetry_lock:
             telemetry = self._run_telemetry
@@ -1241,7 +1252,6 @@ class Engine:
                     prompt,
                     run_id,
                     external_stop_flag=external_stop_flag,
-                    reuse_supervisor=False,
                 )
             )
         except RuntimeError as exc:
@@ -1259,7 +1269,6 @@ class Engine:
         run_id: int,
         *,
         external_stop_flag: Optional[threading.Event] = None,
-        reuse_supervisor: bool = True,
     ) -> int:
         config = self.config
         if not config.app_server.command:
@@ -1268,127 +1277,180 @@ class Engine:
                 "error: app-server backend requires app_server.command to be configured",
             )
             return 1
-
-        def _env_builder(
-            workspace_root: Path, _workspace_id: str, state_dir: Path
-        ) -> dict[str, str]:
-            state_dir.mkdir(parents=True, exist_ok=True)
-            return build_app_server_env(
-                config.app_server.command,
-                workspace_root,
-                state_dir,
-                logger=self._app_server_logger,
-                event_prefix="autorunner",
+        if self._backend_factory is None:
+            self.log_line(
+                run_id,
+                "error: codex backend factory is not configured for this engine",
             )
+            return 1
 
-        supervisor = (
-            self._ensure_app_server_supervisor(_env_builder)
-            if reuse_supervisor
-            else self._build_app_server_supervisor(_env_builder)
-        )
         with state_lock(self.state_path):
             state = load_state(self.state_path)
         effective_model = state.autorunner_model_override or config.codex_model
         effective_effort = state.autorunner_effort_override or config.codex_reasoning
-        approval_policy = state.autorunner_approval_policy or "never"
-        sandbox_mode = state.autorunner_sandbox_mode or "dangerFullAccess"
-        if sandbox_mode == "workspaceWrite":
-            sandbox_policy: Any = {
-                "type": "workspaceWrite",
-                "writableRoots": [str(self.repo_root)],
-                "networkAccess": bool(state.autorunner_workspace_write_network),
-            }
-        else:
-            sandbox_policy = sandbox_mode
         try:
-            client = await supervisor.get_client(self.repo_root)
-            with self._app_server_threads_lock:
-                thread_id = self._app_server_threads.get_thread_id("autorunner")
-                thread_info: Optional[dict[str, Any]] = None
-                if thread_id:
-                    try:
-                        resume_result = await client.thread_resume(thread_id)
-                        resumed = resume_result.get("id")
-                        if isinstance(resumed, str) and resumed:
-                            thread_id = resumed
-                            self._app_server_threads.set_thread_id(
-                                "autorunner", thread_id
-                            )
-                        if isinstance(resume_result, dict):
-                            thread_info = resume_result
-                    except CodexAppServerError:
-                        self._app_server_threads.reset_thread("autorunner")
-                        thread_id = None
-                if not thread_id:
-                    thread = await client.thread_start(str(self.repo_root))
-                    thread_id = thread.get("id")
-                    if not isinstance(thread_id, str) or not thread_id:
-                        self.log_line(
-                            run_id, "error: app-server did not return a thread id"
-                        )
-                        return 1
-                    self._app_server_threads.set_thread_id("autorunner", thread_id)
-                    if isinstance(thread, dict):
-                        thread_info = thread
-            if thread_id:
-                self._update_run_telemetry(run_id, thread_id=thread_id)
-            turn_kwargs: dict[str, Any] = {}
-            if effective_model:
-                turn_kwargs["model"] = str(effective_model)
-            if effective_effort:
-                turn_kwargs["effort"] = str(effective_effort)
-            handle = await client.turn_start(
-                thread_id,
-                prompt,
-                approval_policy=approval_policy,
-                sandbox_policy=sandbox_policy,
-                **turn_kwargs,
+            backend = self._backend_factory(
+                "codex", state, self._handle_app_server_notification
             )
-            app_server_meta = self._build_app_server_meta(
-                thread_id=thread_id,
-                turn_id=handle.turn_id,
-                thread_info=thread_info,
-                model=turn_kwargs.get("model"),
-                reasoning_effort=turn_kwargs.get("effort"),
+        except Exception as exc:
+            self.log_line(run_id, f"error: failed to initialize codex backend: {exc}")
+            return 1
+
+        with self._app_server_threads_lock:
+            session_id = self._app_server_threads.get_thread_id("autorunner")
+
+        try:
+            session_id = await backend.start_session(
+                target={"workspace": str(self.repo_root)},
+                context={"workspace": str(self.repo_root), "session_id": session_id},
             )
-            self._merge_run_index_entry(run_id, {"app_server": app_server_meta})
-            self._update_run_telemetry(
-                run_id, thread_id=thread_id, turn_id=handle.turn_id
+        except Exception as exc:
+            self.log_line(
+                run_id, f"error: codex backend failed to start session: {exc}"
             )
-            turn_timeout = config.app_server.turn_timeout_seconds
-            turn_result, interrupted = await self._wait_for_turn_with_stop(
-                client,
-                handle,
-                run_id,
-                timeout=turn_timeout,
-                external_stop_flag=external_stop_flag,
-                supervisor=supervisor,
-            )
-            self._last_run_interrupted = interrupted
+            return 1
+
+        if not session_id:
+            self.log_line(run_id, "error: codex backend did not return a session id")
+            return 1
+
+        with self._app_server_threads_lock:
+            self._app_server_threads.set_thread_id("autorunner", session_id)
+
+        self._update_run_telemetry(run_id, thread_id=session_id)
+
+        events: asyncio.Queue[Optional[RunEvent]] = asyncio.Queue()
+
+        async def _produce_events() -> None:
+            try:
+                async for event in backend.run_turn_events(session_id, prompt):
+                    await events.put(event)
+            except Exception as exc:
+                await events.put(Failed(timestamp=now_iso(), error_message=str(exc)))
+            finally:
+                await events.put(None)
+
+        producer_task = asyncio.create_task(_produce_events())
+        stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
+        timeout_seconds = config.app_server.turn_timeout_seconds
+        timeout_task: Optional[asyncio.Task] = (
+            asyncio.create_task(asyncio.sleep(timeout_seconds))
+            if timeout_seconds
+            else None
+        )
+
+        assistant_messages: list[str] = []
+        final_message: Optional[str] = None
+        failed_error: Optional[str] = None
+
+        try:
+            while True:
+                get_task = asyncio.create_task(events.get())
+                tasks = {get_task, stop_task}
+                if timeout_task is not None:
+                    tasks.add(timeout_task)
+                done, pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if get_task in done:
+                    event = get_task.result()
+                    if event is None:
+                        break
+                    if isinstance(event, Started) and event.session_id:
+                        self._update_run_telemetry(run_id, thread_id=event.session_id)
+                    elif isinstance(event, OutputDelta):
+                        if event.delta_type in {
+                            "assistant_message",
+                            "assistant_stream",
+                        }:
+                            assistant_messages.append(event.content)
+                    elif isinstance(event, Completed):
+                        if event.final_message:
+                            final_message = event.final_message
+                    elif isinstance(event, Failed):
+                        failed_error = event.error_message
+                    continue
+
+                timed_out = timeout_task is not None and timeout_task in done
+                stopped = stop_task in done
+                if timed_out:
+                    self.log_line(
+                        run_id,
+                        "error: app-server turn timed out; interrupting app-server",
+                    )
+                if stopped:
+                    self._last_run_interrupted = True
+                    self.log_line(
+                        run_id, "info: stop requested; interrupting app-server"
+                    )
+                try:
+                    await backend.interrupt(session_id)
+                except Exception as exc:
+                    self.log_line(run_id, f"error: app-server interrupt failed: {exc}")
+
+                done_after_interrupt, _pending = await asyncio.wait(
+                    {producer_task}, timeout=AUTORUNNER_INTERRUPT_GRACE_SECONDS
+                )
+                if not done_after_interrupt:
+                    producer_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await producer_task
+                    if stopped:
+                        return 0
+                    return 1
+                if stopped:
+                    return 0
+                return 1
+
+            await producer_task
+        finally:
+            stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+            if timeout_task is not None:
+                timeout_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await timeout_task
+
+        if failed_error:
+            self.log_line(run_id, f"error: {failed_error}")
+            return 1
+
+        output_messages = []
+        if final_message:
+            output_messages = [final_message]
+        elif assistant_messages:
+            output_messages = assistant_messages
+
+        if output_messages:
             handle_agent_output(
                 self._log_app_server_output,
                 self._write_run_artifact,
                 self._merge_run_index_entry,
                 run_id,
-                turn_result.agent_messages,
+                output_messages,
             )
-            if turn_result.errors:
-                for error in turn_result.errors:
-                    self.log_line(run_id, f"error: {error}")
-                return 1
-            return 0
-        except asyncio.TimeoutError:
-            self.log_line(run_id, "error: app-server turn timed out")
-            return 1
-        except CodexAppServerError as exc:
-            self.log_line(run_id, f"error: {exc}")
-            return 1
-        except Exception as exc:  # pragma: no cover - defensive
-            self.log_line(run_id, f"error: app-server failed: {exc}")
-            return 1
-        finally:
-            if not reuse_supervisor:
-                await supervisor.close_all()
+
+        telemetry = self._snapshot_run_telemetry(run_id)
+        turn_id = None
+        if telemetry is not None:
+            turn_id = telemetry.turn_id
+        if not turn_id:
+            turn_id = getattr(backend, "last_turn_id", None)
+        thread_info = getattr(backend, "last_thread_info", None)
+
+        if session_id and turn_id:
+            app_server_meta = self._build_app_server_meta(
+                thread_id=session_id,
+                turn_id=turn_id,
+                thread_info=thread_info if isinstance(thread_info, dict) else None,
+                model=effective_model,
+                reasoning_effort=effective_effort,
+            )
+            self._merge_run_index_entry(run_id, {"app_server": app_server_meta})
+
+        return 0
 
     def _log_app_server_output(self, run_id: int, messages: list[str]) -> None:
         if not messages:
@@ -1438,36 +1500,13 @@ class Engine:
         except GitError as exc:
             self.log_line(run_id, f"git commit failed: {exc}")
 
-    def _build_app_server_supervisor(
-        self, env_builder: Any
-    ) -> WorkspaceAppServerSupervisor:
-        config = self.config.app_server
-        return WorkspaceAppServerSupervisor(
-            config.command,
-            state_root=config.state_root,
-            env_builder=env_builder,
-            logger=self._app_server_logger,
-            notification_handler=self._handle_app_server_notification,
-            auto_restart=config.auto_restart,
-            max_handles=config.max_handles,
-            idle_ttl_seconds=config.idle_ttl_seconds,
-            request_timeout=config.request_timeout,
-            turn_stall_timeout_seconds=config.turn_stall_timeout_seconds,
-            turn_stall_poll_interval_seconds=config.turn_stall_poll_interval_seconds,
-            turn_stall_recovery_min_interval_seconds=config.turn_stall_recovery_min_interval_seconds,
-            max_message_bytes=config.client.max_message_bytes,
-            oversize_preview_bytes=config.client.oversize_preview_bytes,
-            max_oversize_drain_bytes=config.client.max_oversize_drain_bytes,
-            restart_backoff_initial_seconds=config.client.restart_backoff_initial_seconds,
-            restart_backoff_max_seconds=config.client.restart_backoff_max_seconds,
-            restart_backoff_jitter_ratio=config.client.restart_backoff_jitter_ratio,
-        )
-
-    def _ensure_app_server_supervisor(
-        self, env_builder: Any
-    ) -> WorkspaceAppServerSupervisor:
+    def _ensure_app_server_supervisor(self, event_prefix: str) -> Optional[Any]:
         if self._app_server_supervisor is None:
-            self._app_server_supervisor = self._build_app_server_supervisor(env_builder)
+            if self._app_server_supervisor_factory is None:
+                return None
+            self._app_server_supervisor = self._app_server_supervisor_factory(
+                event_prefix, self._handle_app_server_notification
+            )
         return self._app_server_supervisor
 
     async def _close_app_server_supervisor(self) -> None:
@@ -1476,11 +1515,29 @@ class Engine:
         supervisor = self._app_server_supervisor
         self._app_server_supervisor = None
         try:
-            await supervisor.close_all()
+            close_all = getattr(supervisor, "close_all", None)
+            if close_all is None:
+                return
+            result = close_all()
+            if inspect.isawaitable(result):
+                await result
         except Exception as exc:
             self._app_server_logger.warning(
                 "app-server supervisor close failed: %s", exc
             )
+
+    async def _close_agent_backends(self) -> None:
+        if self._backend_factory is None:
+            return
+        close_all = getattr(self._backend_factory, "close_all", None)
+        if close_all is None:
+            return
+        try:
+            result = close_all()
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:
+            self._app_server_logger.warning("agent backend close failed: %s", exc)
 
     def _build_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
         config = self.config.app_server
@@ -1548,7 +1605,7 @@ class Engine:
         *,
         timeout: Optional[float],
         external_stop_flag: Optional[threading.Event],
-        supervisor: Optional[WorkspaceAppServerSupervisor] = None,
+        supervisor: Optional[Any] = None,
     ) -> tuple[Any, bool]:
         stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
         turn_task = asyncio.create_task(handle.wait(timeout=None))
@@ -1580,7 +1637,7 @@ class Engine:
                     await client.turn_interrupt(
                         handle.turn_id, thread_id=handle.thread_id
                     )
-                except CodexAppServerError as exc:
+                except Exception as exc:
                     self.log_line(run_id, f"error: app-server interrupt failed: {exc}")
                     if interrupted:
                         self.kill_running_process()
@@ -1595,7 +1652,7 @@ class Engine:
                     )
                     if interrupted:
                         self.kill_running_process()
-                        raise CodexAppServerError("App-server interrupt timed out")
+                        raise RuntimeError("App-server interrupt timed out")
                     if supervisor is not None:
                         await supervisor.close_all()
                     raise asyncio.TimeoutError()
@@ -2076,6 +2133,7 @@ class Engine:
                 )
             await self._close_app_server_supervisor()
             await self._close_opencode_supervisor()
+            await self._close_agent_backends()
         # IMPORTANT: lock ownership is managed by the caller (CLI/Hub/Server runner).
         # Engine.run_loop must never unconditionally mutate the lock file.
 
@@ -2146,7 +2204,7 @@ class Engine:
         payload = {k: v for k, v in payload.items() if v is not None}
 
         opencode_supervisor: Optional[OpenCodeSupervisor] = None
-        app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+        app_server_supervisor: Optional[Any] = None
 
         if agent == "codex":
             if not self.config.app_server.command:
@@ -2154,20 +2212,12 @@ class Engine:
                     "Skipping end-of-run review: codex backend not configured"
                 )
                 return
-
-            def _env_builder(
-                workspace_root: Path, _workspace_id: str, state_dir: Path
-            ) -> dict[str, str]:
-                state_dir.mkdir(parents=True, exist_ok=True)
-                return build_app_server_env(
-                    self.config.app_server.command,
-                    workspace_root,
-                    state_dir,
-                    logger=self._app_server_logger,
-                    event_prefix="review",
+            app_server_supervisor = self._ensure_app_server_supervisor("review")
+            if app_server_supervisor is None:
+                self._app_server_logger.info(
+                    "Skipping end-of-run review: codex supervisor factory unavailable"
                 )
-
-            app_server_supervisor = self._ensure_app_server_supervisor(_env_builder)
+                return
         else:
             opencode_supervisor = self._ensure_opencode_supervisor()
             if opencode_supervisor is None:

@@ -5,13 +5,65 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional
 
-from ..integrations.app_server.client import (
-    _extract_thread_id,
-    _extract_thread_id_for_turn,
-    _extract_turn_id,
-)
-
 TurnKey = tuple[str, str]
+
+
+def extract_turn_id(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("turnId", "turn_id", "id"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    turn = payload.get("turn")
+    if isinstance(turn, dict):
+        for key in ("id", "turnId", "turn_id"):
+            value = turn.get(key)
+            if isinstance(value, str):
+                return value
+    return None
+
+
+def _extract_thread_id_from_container(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("threadId", "thread_id"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    thread = payload.get("thread")
+    if isinstance(thread, dict):
+        for key in ("id", "threadId", "thread_id"):
+            value = thread.get(key)
+            if isinstance(value, str):
+                return value
+    return None
+
+
+def extract_thread_id_for_turn(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for candidate in (payload, payload.get("turn"), payload.get("item")):
+        thread_id = _extract_thread_id_from_container(candidate)
+        if thread_id:
+            return thread_id
+    return None
+
+
+def extract_thread_id(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("threadId", "thread_id", "id"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    thread = payload.get("thread")
+    if isinstance(thread, dict):
+        for key in ("id", "threadId", "thread_id"):
+            value = thread.get(key)
+            if isinstance(value, str):
+                return value
+    return None
 
 
 def format_sse(event: str, data: object) -> str:
@@ -143,11 +195,11 @@ class AppServerEventBuffer:
     ) -> tuple[Optional[str], Optional[str]]:
         params_raw = message.get("params")
         params: Dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
-        turn_id = _extract_turn_id(params) or _extract_turn_id(message)
+        turn_id = extract_turn_id(params) or extract_turn_id(message)
         thread_id = (
-            _extract_thread_id_for_turn(params)
-            or _extract_thread_id(params)
-            or _extract_thread_id(message)
+            extract_thread_id_for_turn(params)
+            or extract_thread_id(params)
+            or extract_thread_id(message)
         )
         if not thread_id and turn_id:
             thread_id = self._turn_index.get(turn_id)

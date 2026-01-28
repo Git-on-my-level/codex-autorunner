@@ -117,15 +117,15 @@ class AgentBackend:
     async def start_session(self, target: dict, context: dict) -> str:
         raise NotImplementedError
 
-    async def run_turn(
+    def run_turn(
         self, session_id: str, message: str
     ) -> AsyncGenerator[AgentEvent, None]:
         raise NotImplementedError
 
-    async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
+    def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
         raise NotImplementedError
 
-    async def run_turn_events(
+    def run_turn_events(
         self, session_id: str, message: str
     ) -> AsyncGenerator[Any, None]:
         raise NotImplementedError

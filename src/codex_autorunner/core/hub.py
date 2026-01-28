@@ -9,6 +9,10 @@ from typing import Dict, List, Optional, Tuple
 
 from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
+from ..integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from ..manifest import (
     Manifest,
     ensure_unique_repo_id,
@@ -197,7 +201,14 @@ class RepoRunner:
         spawn_fn: Optional[SpawnRunnerFn] = None,
     ):
         self.repo_id = repo_id
-        self._engine = Engine(repo_root, config=repo_config)
+        self._engine = Engine(
+            repo_root,
+            config=repo_config,
+            backend_factory=build_agent_backend_factory(repo_root, repo_config),
+            app_server_supervisor_factory=build_app_server_supervisor_factory(
+                repo_config
+            ),
+        )
         self._controller = ProcessRunnerController(self._engine, spawn_fn=spawn_fn)
 
     @property
@@ -269,7 +280,16 @@ class HubSupervisor:
                     self.hub_config, record.absolute_path, load_env=False
                 )
                 controller = ProcessRunnerController(
-                    Engine(record.absolute_path, config=repo_config)
+                    Engine(
+                        record.absolute_path,
+                        config=repo_config,
+                        backend_factory=build_agent_backend_factory(
+                            record.absolute_path, repo_config
+                        ),
+                        app_server_supervisor_factory=build_app_server_supervisor_factory(
+                            repo_config
+                        ),
+                    )
                 )
                 controller.reconcile()
             except Exception as exc:

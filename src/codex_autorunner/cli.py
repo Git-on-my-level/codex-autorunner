@@ -24,6 +24,7 @@ from .core.config import (
     derive_repo_config,
     find_nearest_hub_config_path,
     load_hub_config,
+    load_repo_config,
 )
 from .core.engine import DoctorReport, Engine, LockError, clear_stale_lock, doctor
 from .core.git_utils import GitError, run_git
@@ -39,6 +40,10 @@ from .core.usage import (
     summarize_repo_usage,
 )
 from .core.utils import RepoNotFoundError, default_editor, find_repo_root
+from .integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from .integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
 from .integrations.telegram.doctor import telegram_doctor_checks
 from .integrations.telegram.service import (
@@ -72,7 +77,14 @@ def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> Engine:
     except RepoNotFoundError as exc:
         _raise_exit("No .git directory found for repo commands.", cause=exc)
     try:
-        return Engine(repo_root, hub_path=hub)
+        config = load_repo_config(repo_root, hub_path=hub)
+        return Engine(
+            repo_root,
+            config=config,
+            hub_path=hub,
+            backend_factory=build_agent_backend_factory(repo_root, config),
+            app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+        )
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
 
