@@ -1589,7 +1589,10 @@ export function initHub(): void {
   checkUpdateStatus();
 
   registerAutoRefresh("hub-repos", {
-    callback: async () => { await dynamicRefreshHub(); },
+    callback: async (ctx) => {
+      void ctx;
+      await dynamicRefreshHub();
+    },
     tabId: null,
     interval: HUB_REFRESH_ACTIVE_MS,
     refreshOnActivation: true,

@@ -1423,7 +1423,10 @@ export function initTicketFlow(): void {
 
   loadTicketFlow();
   registerAutoRefresh("ticket-flow", {
-    callback: loadTicketFlow,
+    callback: async (ctx) => {
+      void ctx;
+      await loadTicketFlow();
+    },
     tabId: null,
     interval:
       (CONSTANTS.UI?.AUTO_REFRESH_INTERVAL as number | undefined) ||

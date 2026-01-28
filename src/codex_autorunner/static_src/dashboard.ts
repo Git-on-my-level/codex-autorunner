@@ -884,14 +884,18 @@ export function initDashboard(): void {
   checkUpdateStatus();
 
   registerAutoRefresh("dashboard-usage", {
-    callback: async () => { await loadUsage(); },
+    callback: async (ctx) => {
+      void ctx;
+      await loadUsage();
+    },
     tabId: "analytics",
     interval: CONSTANTS.UI.AUTO_REFRESH_USAGE_INTERVAL,
     refreshOnActivation: true,
     immediate: false,
   });
   registerAutoRefresh("dashboard-analytics", {
-    callback: async () => {
+    callback: async (ctx) => {
+      void ctx;
       await loadTicketAnalytics();
       await loadRunHistory();
     },

@@ -1278,7 +1278,10 @@ export function initTicketFlow() {
     initTicketEditor();
     loadTicketFlow();
     registerAutoRefresh("ticket-flow", {
-        callback: loadTicketFlow,
+        callback: async (ctx) => {
+            void ctx;
+            await loadTicketFlow();
+        },
         tabId: null,
         interval: CONSTANTS.UI?.AUTO_REFRESH_INTERVAL ||
             15000,

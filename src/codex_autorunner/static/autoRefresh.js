@@ -48,7 +48,7 @@ export function registerAutoRefresh(id, options) {
     maybeStartTimer(id, refresher);
     // Immediate refresh if requested
     if (immediate && globallyEnabled) {
-        doRefresh(id, refresher);
+        void doRefresh(id, refresher, { reason: "manual" });
     }
     return () => unregisterAutoRefresh(id);
 }
@@ -70,7 +70,7 @@ export function unregisterAutoRefresh(id) {
 export function triggerRefresh(id) {
     const refresher = refreshers.get(id);
     if (refresher) {
-        doRefresh(id, refresher);
+        void doRefresh(id, refresher, { reason: "manual" });
     }
 }
 /**
@@ -113,13 +113,13 @@ function canRefresh(refresher) {
 /**
  * Perform actual refresh.
  */
-async function doRefresh(id, refresher) {
+async function doRefresh(id, refresher, ctx) {
     if (!canRefresh(refresher))
         return;
     refresher.isRefreshing = true;
     refresher.lastRefresh = Date.now();
     try {
-        await refresher.callback();
+        await refresher.callback(ctx);
     }
     catch (err) {
         console.error(`Auto-refresh error for '${id}':`, err);
@@ -145,7 +145,7 @@ function maybeStartTimer(id, refresher) {
     if (refresher.tabId && refresher.tabId !== activeTab)
         return;
     refresher.timerId = setInterval(() => {
-        doRefresh(id, refresher);
+        void doRefresh(id, refresher, { reason: "timer" });
     }, refresher.interval);
 }
 /**
@@ -169,7 +169,7 @@ function handleTabChange(tabId) {
             const timeSinceLastRefresh = Date.now() - refresher.lastRefresh;
             // Only refresh if it's been at least 5 seconds since last refresh
             if (timeSinceLastRefresh > 5000) {
-                doRefresh(id, refresher);
+                void doRefresh(id, refresher, { reason: "activation" });
             }
         }
     });
@@ -186,7 +186,7 @@ function handleVisibilityChange() {
             // Refresh if it's been a while since last refresh
             const timeSinceLastRefresh = Date.now() - refresher.lastRefresh;
             if (timeSinceLastRefresh > refresher.interval) {
-                doRefresh(id, refresher);
+                void doRefresh(id, refresher, { reason: "visibility" });
             }
         });
     }
