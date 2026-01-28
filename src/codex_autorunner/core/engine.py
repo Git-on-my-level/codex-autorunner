@@ -73,7 +73,6 @@ from .review_context import build_spec_progress_review_context
 from .run_index import RunIndexStore
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .state_roots import resolve_global_state_root, resolve_repo_state_root
-from .static_assets import missing_static_assets, resolve_static_dir
 from .ticket_linter_cli import ensure_ticket_linter
 from .utils import (
     RepoNotFoundError,
@@ -2669,28 +2668,6 @@ def doctor(start_path: Path) -> DoctorReport:
                     "ok",
                     "Server auth token env var is set for non-loopback host.",
                 )
-
-    static_dir, static_context = resolve_static_dir()
-    try:
-        missing_assets = missing_static_assets(static_dir)
-        if missing_assets:
-            _append_check(
-                checks,
-                "static.assets",
-                "error",
-                f"Static UI assets missing in {static_dir}: {', '.join(missing_assets)}",
-                "Reinstall the package or rebuild the UI assets.",
-            )
-        else:
-            _append_check(
-                checks,
-                "static.assets",
-                "ok",
-                f"Static UI assets present in {static_dir}",
-            )
-    finally:
-        if static_context is not None:
-            static_context.close()
 
     if hub_config.manifest_path.exists():
         version = _parse_manifest_version(hub_config.manifest_path)
