@@ -387,6 +387,16 @@ class FlowStore:
         rows = conn.execute(query, params).fetchall()
         return [self._row_to_flow_event(row) for row in rows]
 
+    def get_last_event_meta(self, run_id: str) -> tuple[Optional[int], Optional[str]]:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT seq, timestamp FROM flow_events WHERE run_id = ? ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None, None
+        return row["seq"], row["timestamp"]
+
     def create_artifact(
         self,
         artifact_id: str,

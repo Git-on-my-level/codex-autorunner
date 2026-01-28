@@ -55,7 +55,8 @@ def test_recover_running_flow_when_ticket_engine_paused(tmp_path, monkeypatch):
     updated, _, _ = reconcile_flow_run(repo_root, record, store)
 
     assert updated.status == FlowRunStatus.PAUSED
-    assert updated.state == state
+    expected_state = {**state, "reason_summary": "Paused"}
+    assert updated.state == expected_state
     persisted = store.get_flow_run(record.id)
     assert persisted is not None
     assert persisted.status == FlowRunStatus.PAUSED

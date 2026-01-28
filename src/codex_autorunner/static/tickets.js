@@ -20,6 +20,8 @@ let eventSource = null;
 let eventSourceRunId = null;
 let lastActivityTime = null;
 let lastActivityTimerId = null;
+let lastKnownEventSeq = null;
+let lastKnownEventAt = null;
 let liveOutputDetailExpanded = false; // Start with summary view, one click for full
 let liveOutputBuffer = [];
 const MAX_OUTPUT_LINES = 200;
@@ -38,6 +40,7 @@ const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
 let dispatchPanelCollapsed = false;
 const LAST_SEEN_SEQ_KEY_PREFIX = "car-ticket-flow-last-seq:";
 const EVENT_STREAM_RETRY_DELAYS_MS = [500, 1000, 2000, 5000, 10000];
+const STALE_THRESHOLD_MS = 30000;
 // Throttling state
 let liveOutputRenderPending = false;
 let liveOutputTextPending = false;
@@ -203,6 +206,23 @@ function stopLastActivityTimer() {
         clearInterval(lastActivityTimerId);
         lastActivityTimerId = null;
     }
+}
+function updateLastActivityFromTimestamp(timestamp) {
+    if (timestamp) {
+        const parsed = new Date(timestamp);
+        if (!Number.isNaN(parsed.getTime())) {
+            lastActivityTime = parsed;
+            lastKnownEventAt = parsed;
+            startLastActivityTimer();
+            return;
+        }
+    }
+    lastActivityTime = null;
+    lastKnownEventAt = null;
+    stopLastActivityTimer();
+    const { lastActivity } = els();
+    if (lastActivity)
+        lastActivity.textContent = "–";
 }
 function getLastSeenSeq(runId) {
     if (lastSeenSeqByRun[runId] !== undefined) {
@@ -482,6 +502,7 @@ function setLiveOutputStatus(status) {
 function handleFlowEvent(event) {
     // Update last activity time
     lastActivityTime = new Date(event.timestamp);
+    lastKnownEventAt = lastActivityTime;
     updateLastActivityDisplay();
     // Handle agent stream delta events
     if (event.event_type === "agent_stream_delta") {
@@ -515,7 +536,7 @@ function handleFlowEvent(event) {
         }
     }
 }
-function connectEventStream(runId) {
+function connectEventStream(runId, afterSeq) {
     disconnectEventStream();
     clearEventStreamRetry();
     eventSourceRunId = runId;
@@ -524,9 +545,14 @@ function connectEventStream(runId) {
     if (token) {
         url.searchParams.set("token", token);
     }
-    const lastSeenSeq = getLastSeenSeq(runId);
-    if (typeof lastSeenSeq === "number") {
-        url.searchParams.set("after", String(lastSeenSeq));
+    if (typeof afterSeq === "number") {
+        url.searchParams.set("after", String(afterSeq));
+    }
+    else {
+        const lastSeenSeq = getLastSeenSeq(runId);
+        if (typeof lastSeenSeq === "number") {
+            url.searchParams.set("after", String(lastSeenSeq));
+        }
     }
     eventSource = new EventSource(url.toString());
     eventSource.onopen = () => {
@@ -540,6 +566,7 @@ function connectEventStream(runId) {
             const seq = parseEventSeq(data, event.lastEventId);
             if (currentRunId && typeof seq === "number") {
                 setLastSeenSeq(currentRunId, seq);
+                lastKnownEventSeq = seq;
             }
             handleFlowEvent(data);
         }
@@ -619,6 +646,11 @@ function els() {
         progress: document.getElementById("ticket-flow-progress"),
         reason: document.getElementById("ticket-flow-reason"),
         lastActivity: document.getElementById("ticket-flow-last-activity"),
+        stalePill: document.getElementById("ticket-flow-stale"),
+        reconnectBtn: document.getElementById("ticket-flow-reconnect"),
+        workerStatus: document.getElementById("ticket-flow-worker"),
+        workerPill: document.getElementById("ticket-flow-worker-pill"),
+        recoverBtn: document.getElementById("ticket-flow-recover"),
         dir: document.getElementById("ticket-flow-dir"),
         tickets: document.getElementById("ticket-flow-tickets"),
         history: document.getElementById("ticket-dispatch-history"),
@@ -635,8 +667,8 @@ function els() {
     };
 }
 function setButtonsDisabled(disabled) {
-    const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn } = els();
-    [bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn].forEach((btn) => {
+    const { bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn, reconnectBtn, recoverBtn } = els();
+    [bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn, reconnectBtn, recoverBtn].forEach((btn) => {
         if (btn)
             btn.disabled = disabled;
     });
@@ -896,7 +928,10 @@ function summarizeReason(run) {
     const engine = (state.ticket_engine || {});
     const fullReason = getFullReason(run);
     currentReasonFull = fullReason;
-    const shortReason = engine.reason ||
+    const reasonSummary = typeof run.reason_summary === "string" ? run.reason_summary : "";
+    const useSummary = run.status === "paused" || run.status === "failed" || run.status === "stopped";
+    const shortReason = (useSummary && reasonSummary ? reasonSummary : "") ||
+        engine.reason ||
         run.error_message ||
         (engine.current_ticket ? `Working on ${engine.current_ticket}` : "") ||
         run.status ||
@@ -976,7 +1011,7 @@ async function loadDispatchHistory(runId, ctx) {
     }
 }
 async function loadTicketFlow(ctx) {
-    const { status, run, current, turn, elapsed, progress, reason, lastActivity, resumeBtn, bootstrapBtn, stopBtn, archiveBtn } = els();
+    const { status, run, current, turn, elapsed, progress, reason, lastActivity, stalePill, reconnectBtn, workerStatus, workerPill, recoverBtn, resumeBtn, bootstrapBtn, stopBtn, archiveBtn } = els();
     if (!isRepoHealthy()) {
         if (status)
             statusPill(status, "error");
@@ -992,6 +1027,16 @@ async function loadTicketFlow(ctx) {
             progress.textContent = "–";
         if (lastActivity)
             lastActivity.textContent = "–";
+        if (stalePill)
+            stalePill.style.display = "none";
+        if (reconnectBtn)
+            reconnectBtn.style.display = "none";
+        if (workerStatus)
+            workerStatus.textContent = "–";
+        if (workerPill)
+            workerPill.style.display = "none";
+        if (recoverBtn)
+            recoverBtn.style.display = "none";
         if (reason)
             reason.textContent = "Repo offline or uninitialized.";
         setButtonsDisabled(true);
@@ -1050,6 +1095,34 @@ async function loadTicketFlow(ctx) {
                 (currentReasonFull && currentReasonFull.length > MAX_REASON_LENGTH));
             reason.classList.toggle("has-details", hasDetails);
         }
+        lastKnownEventSeq = typeof latest?.last_event_seq === "number" ? latest.last_event_seq : null;
+        updateLastActivityFromTimestamp(latest?.last_event_at || null);
+        const isActive = latest?.status === "running" || latest?.status === "pending";
+        const isStale = Boolean(isActive &&
+            lastKnownEventAt &&
+            Date.now() - lastKnownEventAt.getTime() > STALE_THRESHOLD_MS);
+        if (stalePill)
+            stalePill.style.display = isStale ? "" : "none";
+        if (reconnectBtn) {
+            reconnectBtn.style.display = isStale ? "" : "none";
+            reconnectBtn.disabled = !currentRunId;
+        }
+        const worker = latest?.worker_health;
+        const workerLabel = worker?.status
+            ? `${worker.status}${worker.pid ? ` (pid ${worker.pid})` : ""}`
+            : "–";
+        if (workerStatus)
+            workerStatus.textContent = workerLabel;
+        const workerDead = Boolean(isActive &&
+            worker &&
+            worker.is_alive === false &&
+            worker.status !== "absent");
+        if (workerPill)
+            workerPill.style.display = workerDead ? "" : "none";
+        if (recoverBtn) {
+            recoverBtn.style.display = workerDead ? "" : "none";
+            recoverBtn.disabled = !currentRunId;
+        }
         if (resumeBtn) {
             resumeBtn.disabled = !latest?.id || latest.status !== "paused";
         }
@@ -1082,10 +1155,12 @@ async function loadTicketFlow(ctx) {
         }
         else {
             disconnectEventStream();
-            stopLastActivityTimer();
-            if (lastActivity)
-                lastActivity.textContent = "–";
-            lastActivityTime = null;
+            if (!lastKnownEventAt) {
+                stopLastActivityTimer();
+                if (lastActivity)
+                    lastActivity.textContent = "–";
+                lastActivityTime = null;
+            }
         }
         if (bootstrapBtn) {
             const busy = latest?.status === "running" || latest?.status === "pending";
@@ -1107,7 +1182,9 @@ async function loadTicketFlow(ctx) {
             const isTerminal = latest?.status === "completed" ||
                 latest?.status === "stopped" ||
                 latest?.status === "failed";
-            const canRestart = (isPaused || isStopping || isTerminal) && ticketsExist && Boolean(currentRunId);
+            const canRestart = (isPaused || isStopping || isTerminal || workerDead) &&
+                ticketsExist &&
+                Boolean(currentRunId);
             restartBtn.style.display = canRestart ? "" : "none";
             restartBtn.disabled = !canRestart;
         }
@@ -1194,6 +1271,17 @@ async function resumeTicketFlow() {
         setButtonsDisabled(false);
     }
 }
+function reconnectTicketFlowStream() {
+    if (!currentRunId) {
+        flash("No ticket flow run to reconnect", "info");
+        return;
+    }
+    const afterSeq = typeof lastKnownEventSeq === "number"
+        ? lastKnownEventSeq
+        : getLastSeenSeq(currentRunId);
+    connectEventStream(currentRunId, afterSeq ?? undefined);
+    flash("Reconnecting event stream", "info");
+}
 async function stopTicketFlow() {
     const { stopBtn } = els();
     if (!stopBtn)
@@ -1218,6 +1306,33 @@ async function stopTicketFlow() {
     }
     finally {
         stopBtn.textContent = "Stop";
+        setButtonsDisabled(false);
+    }
+}
+async function recoverTicketFlow() {
+    const { recoverBtn } = els();
+    if (!recoverBtn)
+        return;
+    if (!isRepoHealthy()) {
+        flash("Repo offline; cannot recover ticket flow.", "error");
+        return;
+    }
+    if (!currentRunId) {
+        flash("No ticket flow run to recover", "info");
+        return;
+    }
+    setButtonsDisabled(true);
+    recoverBtn.textContent = "Recovering…";
+    try {
+        await api(`/api/flows/${currentRunId}/reconcile`, { method: "POST", body: {} });
+        flash("Flow reconciled");
+        await loadTicketFlow();
+    }
+    catch (err) {
+        flash(err.message || "Failed to recover ticket flow", "error");
+    }
+    finally {
+        recoverBtn.textContent = "Recover";
         setButtonsDisabled(false);
     }
 }
@@ -1294,7 +1409,7 @@ async function archiveTicketFlow() {
         currentActiveTicket = null;
         currentReasonFull = null;
         // Reset all UI elements to idle state directly (avoid re-fetching stale data)
-        const { status, run, current, turn, elapsed, progress, lastActivity, bootstrapBtn, resumeBtn, stopBtn, restartBtn } = els();
+        const { status, run, current, turn, elapsed, progress, lastActivity, stalePill, reconnectBtn, workerStatus, workerPill, recoverBtn, bootstrapBtn, resumeBtn, stopBtn, restartBtn, archiveBtn } = els();
         if (status)
             statusPill(status, "idle");
         if (run)
@@ -1309,6 +1424,16 @@ async function archiveTicketFlow() {
             progress.textContent = "–";
         if (lastActivity)
             lastActivity.textContent = "–";
+        if (stalePill)
+            stalePill.style.display = "none";
+        if (reconnectBtn)
+            reconnectBtn.style.display = "none";
+        if (workerStatus)
+            workerStatus.textContent = "–";
+        if (workerPill)
+            workerPill.style.display = "none";
+        if (recoverBtn)
+            recoverBtn.style.display = "none";
         if (reason) {
             reason.textContent = "No ticket flow run yet.";
             reason.classList.remove("has-details");
@@ -1348,7 +1473,7 @@ async function archiveTicketFlow() {
     }
 }
 export function initTicketFlow() {
-    const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn } = els();
+    const { card, bootstrapBtn, resumeBtn, refreshBtn, stopBtn, restartBtn, archiveBtn, reconnectBtn, recoverBtn } = els();
     if (!card || card.dataset.ticketInitialized === "1")
         return;
     card.dataset.ticketInitialized = "1";
@@ -1362,6 +1487,10 @@ export function initTicketFlow() {
         restartBtn.addEventListener("click", restartTicketFlow);
     if (archiveBtn)
         archiveBtn.addEventListener("click", archiveTicketFlow);
+    if (reconnectBtn)
+        reconnectBtn.addEventListener("click", reconnectTicketFlowStream);
+    if (recoverBtn)
+        recoverBtn.addEventListener("click", recoverTicketFlow);
     if (refreshBtn)
         refreshBtn.addEventListener("click", () => {
             void loadTicketFlow({ reason: "manual" });
