@@ -30,6 +30,27 @@ def test_bootstrap_check_ready(tmp_path, monkeypatch):
     assert resp.json()["status"] == "ready"
 
 
+def test_bootstrap_check_ready_when_tickets_exist(tmp_path, monkeypatch):
+    """Even without ISSUE.md, existing tickets should mark repo ready."""
+
+    _reset_state()
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        "--\nagent: codex\ndone: false\n--\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+    with TestClient(app) as client:
+        resp = client.get("/api/flows/ticket_flow/bootstrap-check")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ready"
+
+
 def test_bootstrap_check_needs_issue_with_github(tmp_path, monkeypatch):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))

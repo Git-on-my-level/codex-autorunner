@@ -71,6 +71,11 @@ def _issue_md_path(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "ISSUE.md"
 
 
+def _ticket_dir(repo_root: Path) -> Path:
+    repo_root = repo_root.resolve()
+    return repo_root / ".codex-autorunner" / "tickets"
+
+
 def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
     db_path, _ = _flow_paths(repo_root)
     store = FlowStore(db_path)
@@ -558,6 +563,11 @@ def build_flow_routes() -> APIRouter:
         for fetching an issue before bootstrapping the ticket flow.
         """
         repo_root = find_repo_root()
+
+        # If tickets already exist, consider the repo ready regardless of ISSUE.md.
+        if list_ticket_paths(_ticket_dir(repo_root)):
+            return BootstrapCheckResponse(status="ready")
+
         issue_path = _issue_md_path(repo_root)
         if issue_path.exists():
             try:
