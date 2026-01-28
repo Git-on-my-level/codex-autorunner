@@ -1,6 +1,6 @@
 import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal } from "./utils.js";
 import { activateTab } from "./tabs.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
+import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
@@ -8,6 +8,7 @@ import { closeTicketEditor, initTicketEditor, openTicketEditor, TicketData } fro
 import { parseAppServerEvent, type AgentEvent, type ParsedAgentEvent } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
+import { preserveScroll } from "./preserve.js";
 
 type FlowEvent = {
   event_type: string;
@@ -73,6 +74,9 @@ const LIVE_EVENT_MAX = 50;
 let liveOutputEvents: AgentEvent[] = [];
 let liveOutputEventIndex: Record<string, number> = {};
 let currentReasonFull: string | null = null; // Full reason text for modal display
+let ticketsHydrated = false;
+let dispatchHistoryHydrated = false;
+let dispatchHistoryRunId: string | null = null;
 
 // Dispatch panel collapse state (persisted to localStorage)
 const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
@@ -983,17 +987,24 @@ function summarizeReason(run: FlowRun | null): string {
   return shortReason;
 }
 
-async function loadTicketFiles(): Promise<void> {
+async function loadTicketFiles(ctx?: RefreshContext): Promise<void> {
   const { tickets } = els();
-  if (tickets) tickets.textContent = "Loading tickets…";
+  if (tickets && (!ticketsHydrated || ctx?.reason === "manual")) {
+    tickets.textContent = "Loading tickets…";
+  }
   try {
     const data = (await api("/api/flows/ticket_flow/tickets")) as {
       ticket_dir?: string;
       tickets?: TicketFile[];
     };
-    renderTickets(data);
+    preserveScroll(tickets, () => {
+      renderTickets(data);
+    }, { restoreOnNextFrame: true });
+    ticketsHydrated = true;
   } catch (err) {
-    renderTickets(null);
+    preserveScroll(tickets, () => {
+      renderTickets(null);
+    }, { restoreOnNextFrame: true });
     flash((err as Error).message || "Failed to load tickets", "error");
   }
 }
@@ -1017,26 +1028,42 @@ async function openTicketByIndex(index: number): Promise<void> {
   }
 }
 
-async function loadDispatchHistory(runId: string | null): Promise<void> {
+async function loadDispatchHistory(runId: string | null, ctx?: RefreshContext): Promise<void> {
   const { history } = els();
-  if (history) history.textContent = "Loading dispatch history…";
+  const runChanged = dispatchHistoryRunId !== runId;
+  if (history && (!dispatchHistoryHydrated || runChanged || ctx?.reason === "manual")) {
+    history.textContent = "Loading dispatch history…";
+  }
   if (!runId) {
     renderDispatchHistory(null, null);
+    dispatchHistoryHydrated = false;
+    dispatchHistoryRunId = null;
+    dispatchHistoryHydrated = false;
+    dispatchHistoryRunId = null;
     return;
+  }
+  if (runChanged) {
+    dispatchHistoryHydrated = false;
+    dispatchHistoryRunId = runId;
   }
   try {
     // Use dispatch_history endpoint
     const data = (await api(`/api/flows/${runId}/dispatch_history`)) as {
       history?: DispatchEntry[];
     };
-    renderDispatchHistory(runId, data);
+    preserveScroll(history, () => {
+      renderDispatchHistory(runId, data);
+    }, { restoreOnNextFrame: true });
+    dispatchHistoryHydrated = true;
   } catch (err) {
-    renderDispatchHistory(runId, null);
+    preserveScroll(history, () => {
+      renderDispatchHistory(runId, null);
+    }, { restoreOnNextFrame: true });
     flash((err as Error).message || "Failed to load dispatch history", "error");
   }
 }
 
-async function loadTicketFlow(): Promise<void> {
+async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
   const { status, run, current, turn, elapsed, progress, reason, lastActivity, resumeBtn, bootstrapBtn, stopBtn, archiveBtn } = els();
   if (!isRepoHealthy()) {
     if (status) statusPill(status, "error");
@@ -1116,7 +1143,7 @@ async function loadTicketFlow(): Promise<void> {
         latest?.status === "running" || latest?.status === "pending";
       stopBtn.disabled = !latest?.id || !stoppable;
     }
-    await loadTicketFiles();
+    await loadTicketFiles(ctx);
     
     // Calculate and display ticket progress (scoped to tickets container only)
     if (progress) {
@@ -1182,7 +1209,7 @@ async function loadTicketFlow(): Promise<void> {
       archiveBtn.style.display = canArchive ? "" : "none";
       archiveBtn.disabled = !canArchive;
     }
-    await loadDispatchHistory(currentRunId);
+    await loadDispatchHistory(currentRunId, ctx);
   } catch (err) {
     if (reason) reason.textContent = (err as Error).message || "Ticket flow unavailable";
     flash((err as Error).message || "Failed to load ticket flow state", "error");
@@ -1399,7 +1426,9 @@ export function initTicketFlow(): void {
   if (stopBtn) stopBtn.addEventListener("click", stopTicketFlow);
   if (restartBtn) restartBtn.addEventListener("click", restartTicketFlow);
   if (archiveBtn) archiveBtn.addEventListener("click", archiveTicketFlow);
-  if (refreshBtn) refreshBtn.addEventListener("click", loadTicketFlow);
+  if (refreshBtn) refreshBtn.addEventListener("click", () => {
+    void loadTicketFlow({ reason: "manual" });
+  });
 
   // Initialize reason click handler for modal
   initReasonModal();
@@ -1424,10 +1453,9 @@ export function initTicketFlow(): void {
   loadTicketFlow();
   registerAutoRefresh("ticket-flow", {
     callback: async (ctx) => {
-      void ctx;
-      await loadTicketFlow();
+      await loadTicketFlow(ctx);
     },
-    tabId: null,
+    tabId: "tickets",
     interval:
       (CONSTANTS.UI?.AUTO_REFRESH_INTERVAL as number | undefined) ||
       15000,

@@ -9,6 +9,7 @@ import { closeTicketEditor, initTicketEditor, openTicketEditor } from "./ticketE
 import { parseAppServerEvent } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
+import { preserveScroll } from "./preserve.js";
 let currentRunId = null;
 let ticketsExist = false;
 let currentActiveTicket = null;
@@ -25,6 +26,9 @@ const LIVE_EVENT_MAX = 50;
 let liveOutputEvents = [];
 let liveOutputEventIndex = {};
 let currentReasonFull = null; // Full reason text for modal display
+let ticketsHydrated = false;
+let dispatchHistoryHydrated = false;
+let dispatchHistoryRunId = null;
 // Dispatch panel collapse state (persisted to localStorage)
 const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
 let dispatchPanelCollapsed = false;
@@ -825,16 +829,22 @@ function summarizeReason(run) {
     }
     return shortReason;
 }
-async function loadTicketFiles() {
+async function loadTicketFiles(ctx) {
     const { tickets } = els();
-    if (tickets)
+    if (tickets && (!ticketsHydrated || ctx?.reason === "manual")) {
         tickets.textContent = "Loading tickets…";
+    }
     try {
         const data = (await api("/api/flows/ticket_flow/tickets"));
-        renderTickets(data);
+        preserveScroll(tickets, () => {
+            renderTickets(data);
+        }, { restoreOnNextFrame: true });
+        ticketsHydrated = true;
     }
     catch (err) {
-        renderTickets(null);
+        preserveScroll(tickets, () => {
+            renderTickets(null);
+        }, { restoreOnNextFrame: true });
         flash(err.message || "Failed to load tickets", "error");
     }
 }
@@ -856,25 +866,40 @@ async function openTicketByIndex(index) {
         flash(`Failed to open ticket: ${err.message}`, "error");
     }
 }
-async function loadDispatchHistory(runId) {
+async function loadDispatchHistory(runId, ctx) {
     const { history } = els();
-    if (history)
+    const runChanged = dispatchHistoryRunId !== runId;
+    if (history && (!dispatchHistoryHydrated || runChanged || ctx?.reason === "manual")) {
         history.textContent = "Loading dispatch history…";
+    }
     if (!runId) {
         renderDispatchHistory(null, null);
+        dispatchHistoryHydrated = false;
+        dispatchHistoryRunId = null;
+        dispatchHistoryHydrated = false;
+        dispatchHistoryRunId = null;
         return;
+    }
+    if (runChanged) {
+        dispatchHistoryHydrated = false;
+        dispatchHistoryRunId = runId;
     }
     try {
         // Use dispatch_history endpoint
         const data = (await api(`/api/flows/${runId}/dispatch_history`));
-        renderDispatchHistory(runId, data);
+        preserveScroll(history, () => {
+            renderDispatchHistory(runId, data);
+        }, { restoreOnNextFrame: true });
+        dispatchHistoryHydrated = true;
     }
     catch (err) {
-        renderDispatchHistory(runId, null);
+        preserveScroll(history, () => {
+            renderDispatchHistory(runId, null);
+        }, { restoreOnNextFrame: true });
         flash(err.message || "Failed to load dispatch history", "error");
     }
 }
-async function loadTicketFlow() {
+async function loadTicketFlow(ctx) {
     const { status, run, current, turn, elapsed, progress, reason, lastActivity, resumeBtn, bootstrapBtn, stopBtn, archiveBtn } = els();
     if (!isRepoHealthy()) {
         if (status)
@@ -956,7 +981,7 @@ async function loadTicketFlow() {
             const stoppable = latest?.status === "running" || latest?.status === "pending";
             stopBtn.disabled = !latest?.id || !stoppable;
         }
-        await loadTicketFiles();
+        await loadTicketFiles(ctx);
         // Calculate and display ticket progress (scoped to tickets container only)
         if (progress) {
             const ticketsContainer = document.getElementById("ticket-flow-tickets");
@@ -1019,7 +1044,7 @@ async function loadTicketFlow() {
             archiveBtn.style.display = canArchive ? "" : "none";
             archiveBtn.disabled = !canArchive;
         }
-        await loadDispatchHistory(currentRunId);
+        await loadDispatchHistory(currentRunId, ctx);
     }
     catch (err) {
         if (reason)
@@ -1260,7 +1285,9 @@ export function initTicketFlow() {
     if (archiveBtn)
         archiveBtn.addEventListener("click", archiveTicketFlow);
     if (refreshBtn)
-        refreshBtn.addEventListener("click", loadTicketFlow);
+        refreshBtn.addEventListener("click", () => {
+            void loadTicketFlow({ reason: "manual" });
+        });
     // Initialize reason click handler for modal
     initReasonModal();
     // Initialize live output panel
@@ -1279,10 +1306,9 @@ export function initTicketFlow() {
     loadTicketFlow();
     registerAutoRefresh("ticket-flow", {
         callback: async (ctx) => {
-            void ctx;
-            await loadTicketFlow();
+            await loadTicketFlow(ctx);
         },
-        tabId: null,
+        tabId: "tickets",
         interval: CONSTANTS.UI?.AUTO_REFRESH_INTERVAL ||
             15000,
         refreshOnActivation: true,
