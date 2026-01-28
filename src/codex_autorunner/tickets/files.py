@@ -56,6 +56,7 @@ def read_ticket(path: Path) -> tuple[Optional[TicketDoc], list[str]]:
     frontmatter, errors = lint_ticket_frontmatter(data)
     if errors:
         return None, errors
+    assert frontmatter is not None
     return TicketDoc(path=path, index=idx, frontmatter=frontmatter, body=body), []
 
 

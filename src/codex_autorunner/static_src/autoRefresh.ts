@@ -12,8 +12,16 @@
 import { subscribe } from "./bus.js";
 import { CONSTANTS } from "./constants.js";
 
+export type RefreshReason = "timer" | "activation" | "visibility" | "manual";
+
+export interface RefreshContext {
+  reason: RefreshReason;
+  // Optional future extension point:
+  // startedAt: number;
+}
+
 interface Refresher {
-  callback: () => Promise<void>;
+  callback: (ctx: RefreshContext) => Promise<void>;
   tabId: string | null;
   interval: number;
   refreshOnActivation: boolean;
@@ -50,7 +58,7 @@ let globalPauseReason: string | null = null;
 export function registerAutoRefresh(
   id: string,
   options: {
-    callback: () => Promise<void>;
+    callback: (ctx: RefreshContext) => Promise<void>;
     tabId?: string | null;
     interval?: number;
     refreshOnActivation?: boolean;
@@ -82,7 +90,7 @@ export function registerAutoRefresh(
 
   // Immediate refresh if requested
   if (immediate && globallyEnabled) {
-    doRefresh(id, refresher);
+    void doRefresh(id, refresher, { reason: "manual" });
   }
 
   return () => unregisterAutoRefresh(id);
@@ -107,7 +115,7 @@ export function unregisterAutoRefresh(id: string): void {
 export function triggerRefresh(id: string): void {
   const refresher = refreshers.get(id);
   if (refresher) {
-    doRefresh(id, refresher);
+    void doRefresh(id, refresher, { reason: "manual" });
   }
 }
 
@@ -153,14 +161,18 @@ function canRefresh(refresher: Refresher): boolean {
 /**
  * Perform actual refresh.
  */
-async function doRefresh(id: string, refresher: Refresher): Promise<void> {
+async function doRefresh(
+  id: string,
+  refresher: Refresher,
+  ctx: RefreshContext
+): Promise<void> {
   if (!canRefresh(refresher)) return;
 
   refresher.isRefreshing = true;
   refresher.lastRefresh = Date.now();
 
   try {
-    await refresher.callback();
+    await refresher.callback(ctx);
   } catch (err) {
     console.error(`Auto-refresh error for '${id}':`, err);
   } finally {
@@ -184,7 +196,7 @@ function maybeStartTimer(id: string, refresher: Refresher): void {
   if (refresher.tabId && refresher.tabId !== activeTab) return;
 
   refresher.timerId = setInterval(() => {
-    doRefresh(id, refresher);
+    void doRefresh(id, refresher, { reason: "timer" });
   }, refresher.interval);
 }
 
@@ -212,7 +224,7 @@ function handleTabChange(tabId: unknown): void {
       const timeSinceLastRefresh = Date.now() - refresher.lastRefresh;
       // Only refresh if it's been at least 5 seconds since last refresh
       if (timeSinceLastRefresh > 5000) {
-        doRefresh(id, refresher);
+        void doRefresh(id, refresher, { reason: "activation" });
       }
     }
   });
@@ -232,7 +244,7 @@ function handleVisibilityChange(): void {
       // Refresh if it's been a while since last refresh
       const timeSinceLastRefresh = Date.now() - refresher.lastRefresh;
       if (timeSinceLastRefresh > refresher.interval) {
-        doRefresh(id, refresher);
+        void doRefresh(id, refresher, { reason: "visibility" });
       }
     });
   } else {
