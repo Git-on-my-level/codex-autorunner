@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .utils import atomic_write
 
 FILE_CHAT_STATE_NAME = "file_chat_state.json"
+FILE_CHAT_STATE_CORRUPT_SUFFIX = ".corrupt"
+FILE_CHAT_STATE_NOTICE_SUFFIX = ".corrupt.json"
+
+logger = logging.getLogger(__name__)
 
 
 def state_path(repo_root: Path) -> Path:
@@ -23,12 +29,19 @@ def load_state(repo_root: Path) -> Dict[str, Any]:
     if not path.exists():
         return {"drafts": {}}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return data
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Failed to read file chat state at %s: %s", path, exc)
         return {"drafts": {}}
-    except Exception:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _handle_corrupt_state(path, str(exc))
         return {"drafts": {}}
+    if not isinstance(data, dict):
+        _handle_corrupt_state(path, f"Expected JSON object, got {type(data).__name__}")
+        return {"drafts": {}}
+    return data
 
 
 def save_state(repo_root: Path, state: Dict[str, Any]) -> None:
@@ -80,3 +93,44 @@ def invalidate_drafts_for_path(repo_root: Path, rel_path: str) -> list[str]:
     if removed_keys:
         save_drafts(repo_root, drafts)
     return removed_keys
+
+
+def _stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _notice_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}{FILE_CHAT_STATE_NOTICE_SUFFIX}")
+
+
+def _handle_corrupt_state(path: Path, detail: str) -> None:
+    stamp = _stamp()
+    backup_path = path.with_name(f"{path.name}{FILE_CHAT_STATE_CORRUPT_SUFFIX}.{stamp}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.replace(backup_path)
+        backup_value = str(backup_path)
+    except OSError:
+        backup_value = ""
+    notice = {
+        "status": "corrupt",
+        "message": "Draft state reset due to corrupted file_chat_state.json.",
+        "detail": detail,
+        "detected_at": stamp,
+        "backup_path": backup_value,
+    }
+    notice_path = _notice_path(path)
+    try:
+        atomic_write(notice_path, json.dumps(notice, indent=2) + "\n")
+    except Exception:
+        logger.warning("Failed to write draft corruption notice at %s", notice_path)
+    try:
+        atomic_write(path, json.dumps({"drafts": {}}, indent=2) + "\n")
+    except Exception:
+        logger.warning("Failed to reset draft state at %s", path)
+    logger.warning(
+        "Corrupted file chat state detected; backup=%s notice=%s detail=%s",
+        backup_value or "unavailable",
+        notice_path,
+        detail,
+    )
