@@ -876,8 +876,6 @@ async function loadDispatchHistory(runId, ctx) {
         renderDispatchHistory(null, null);
         dispatchHistoryHydrated = false;
         dispatchHistoryRunId = null;
-        dispatchHistoryHydrated = false;
-        dispatchHistoryRunId = null;
         return;
     }
     if (runChanged) {

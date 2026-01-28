@@ -1038,8 +1038,6 @@ async function loadDispatchHistory(runId: string | null, ctx?: RefreshContext): 
     renderDispatchHistory(null, null);
     dispatchHistoryHydrated = false;
     dispatchHistoryRunId = null;
-    dispatchHistoryHydrated = false;
-    dispatchHistoryRunId = null;
     return;
   }
   if (runChanged) {
