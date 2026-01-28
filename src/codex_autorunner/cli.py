@@ -21,6 +21,7 @@ from .core.config import (
     HubConfig,
     RepoConfig,
     _normalize_base_path,
+    collect_env_overrides,
     derive_repo_config,
     find_nearest_hub_config_path,
     load_hub_config,
@@ -779,7 +780,16 @@ def edit(
     if key not in ("active_context", "decisions", "spec"):
         _raise_exit("Invalid target; choose active_context, decisions, or spec")
     path = config.doc_path(key)
-    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or default_editor()
+    ui_cfg = config.raw.get("ui") if isinstance(config.raw, dict) else {}
+    ui_cfg = ui_cfg if isinstance(ui_cfg, dict) else {}
+    config_editor = ui_cfg.get("editor") if isinstance(ui_cfg, dict) else None
+    if not isinstance(config_editor, str) or not config_editor.strip():
+        config_editor = "vi"
+    editor = (
+        os.environ.get("VISUAL")
+        or os.environ.get("EDITOR")
+        or default_editor(fallback=config_editor)
+    )
     editor_parts = shlex.split(editor)
     if not editor_parts:
         editor_parts = [editor]
@@ -993,6 +1003,9 @@ def telegram_start(
     except TelegramBotConfigError as exc:
         _raise_exit(str(exc), cause=exc)
     logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
+    env_overrides = collect_env_overrides(env=os.environ, include_telegram=True)
+    if env_overrides:
+        logger.info("Environment overrides active: %s", ", ".join(env_overrides))
     log_event(
         logger,
         logging.INFO,

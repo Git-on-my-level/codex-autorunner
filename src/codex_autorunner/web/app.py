@@ -27,6 +27,7 @@ from ..core.config import (
     HubConfig,
     _is_loopback_host,
     _normalize_base_path,
+    collect_env_overrides,
     derive_repo_config,
     load_hub_config,
     load_repo_config,
@@ -386,6 +387,14 @@ def _build_app_context(
         f"repo[{engine.repo_root}]", engine.config.server_log
     )
     engine.notifier.set_logger(logger)
+    env_overrides = collect_env_overrides(env=env)
+    if env_overrides:
+        safe_log(
+            logger,
+            logging.INFO,
+            "Environment overrides active: %s",
+            ", ".join(env_overrides),
+        )
     safe_log(
         logger,
         logging.INFO,
@@ -644,6 +653,14 @@ def _build_hub_context(
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
     )
     logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
+    env_overrides = collect_env_overrides()
+    if env_overrides:
+        safe_log(
+            logger,
+            logging.INFO,
+            "Environment overrides active: %s",
+            ", ".join(env_overrides),
+        )
     safe_log(
         logger,
         logging.INFO,

@@ -95,6 +95,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "prev_run_max_chars": 6000,
         "template": ".codex-autorunner/prompt.txt",
     },
+    "ui": {
+        "editor": "vi",
+    },
     "security": {
         "redact_run_logs": True,
     },
@@ -213,6 +216,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "enabled": "auto",
         "events": ["run_finished", "run_error", "tui_idle"],
         "tui_idle_seconds": 60,
+        "timeout_seconds": 5.0,
         "discord": {
             "webhook_url_env": "CAR_DISCORD_WEBHOOK_URL",
         },
@@ -427,6 +431,7 @@ REPO_DEFAULT_KEYS = {
     "docs",
     "codex",
     "prompt",
+    "ui",
     "runner",
     "autorunner",
     "ticket_flow",
@@ -1438,6 +1443,54 @@ def resolve_env_for_root(
     return env
 
 
+VOICE_ENV_OVERRIDES = (
+    "CODEX_AUTORUNNER_VOICE_ENABLED",
+    "CODEX_AUTORUNNER_VOICE_PROVIDER",
+    "CODEX_AUTORUNNER_VOICE_LATENCY",
+    "CODEX_AUTORUNNER_VOICE_CHUNK_MS",
+    "CODEX_AUTORUNNER_VOICE_SAMPLE_RATE",
+    "CODEX_AUTORUNNER_VOICE_WARN_REMOTE",
+    "CODEX_AUTORUNNER_VOICE_MAX_MS",
+    "CODEX_AUTORUNNER_VOICE_SILENCE_MS",
+    "CODEX_AUTORUNNER_VOICE_MIN_HOLD_MS",
+)
+
+TELEGRAM_ENV_OVERRIDES = (
+    "CAR_OPENCODE_COMMAND",
+    "CAR_TELEGRAM_APP_SERVER_COMMAND",
+)
+
+
+def collect_env_overrides(
+    *,
+    env: Optional[Mapping[str, str]] = None,
+    include_telegram: bool = False,
+) -> list[str]:
+    source = env if env is not None else os.environ
+    overrides: list[str] = []
+
+    def _has_value(key: str) -> bool:
+        value = source.get(key)
+        if value is None:
+            return False
+        return str(value).strip() != ""
+
+    if source.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1":
+        overrides.append("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS")
+    if _has_value("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS"):
+        overrides.append("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS")
+    if _has_value("CAR_GLOBAL_STATE_ROOT"):
+        overrides.append("CAR_GLOBAL_STATE_ROOT")
+    for key in VOICE_ENV_OVERRIDES:
+        if _has_value(key):
+            overrides.append(key)
+    if include_telegram:
+        for key in TELEGRAM_ENV_OVERRIDES:
+            if _has_value(key):
+                overrides.append(key)
+    return overrides
+
+
 def load_hub_config_data(config_path: Path) -> Dict[str, Any]:
     """Load, merge, and return a raw hub config dict for the given config path."""
     load_dotenv_for_root(config_path.parent.parent.resolve())
@@ -2078,6 +2131,12 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             ticket_flow_cfg.get("default_approval_decision"), str
         ):
             raise ConfigError("ticket_flow.default_approval_decision must be a string")
+    ui_cfg = cfg.get("ui")
+    if ui_cfg is not None and not isinstance(ui_cfg, dict):
+        raise ConfigError("ui section must be a mapping if provided")
+    if isinstance(ui_cfg, dict):
+        if "editor" in ui_cfg and not isinstance(ui_cfg.get("editor"), str):
+            raise ConfigError("ui.editor must be a string if provided")
     git = cfg.get("git")
     if not isinstance(git, dict):
         raise ConfigError("git section must be a mapping")
@@ -2152,6 +2211,16 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             if tui_idle_seconds < 0:
                 raise ConfigError(
                     "notifications.tui_idle_seconds must be >= 0 if provided"
+                )
+        timeout_seconds = notifications_cfg.get("timeout_seconds")
+        if timeout_seconds is not None:
+            if not isinstance(timeout_seconds, (int, float)):
+                raise ConfigError(
+                    "notifications.timeout_seconds must be a number if provided"
+                )
+            if timeout_seconds <= 0:
+                raise ConfigError(
+                    "notifications.timeout_seconds must be > 0 if provided"
                 )
         discord_cfg = notifications_cfg.get("discord")
         if discord_cfg is not None and not isinstance(discord_cfg, dict):

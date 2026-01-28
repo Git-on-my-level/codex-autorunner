@@ -44,6 +44,10 @@ repo_defaults:
     # Example: .codex-autorunner/prompt.txt → /repo/root/.codex-autorunner/prompt.txt
     template: .codex-autorunner/prompt.txt
 
+  ui:
+    # Default editor used when VISUAL/EDITOR are unset.
+    editor: vi
+
   runner:
     # Sleep between loop iterations.
     sleep_seconds: 5
@@ -79,6 +83,8 @@ repo_defaults:
       - run_finished
       - run_error
       - tui_idle
+    # Request timeout for notification delivery (seconds).
+    timeout_seconds: 5.0
     # Idle time (seconds) after last TUI output before notifying.
     tui_idle_seconds: 60
     discord:
