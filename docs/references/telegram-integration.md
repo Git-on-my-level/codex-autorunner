@@ -130,6 +130,15 @@ A `DispatchContext` is built for each update:
 - `is_edited`: Whether the message was edited
 - `topic_key`: Computed routing key for this conversation
 
+### Pause Dispatch Notifications
+
+- Controlled by `telegram_bot.pause_dispatch_notifications`:
+  - `enabled` (default: true when Telegram bot enabled)
+  - `send_attachments` (default: true)
+  - `max_file_size_bytes` (default: 50MB; files larger are skipped with a warning message)
+  - `chunk_long_messages` (default: true; dispatch text is split into numbered chunks)
+- Unbound workspaces (no Telegram topics) can still receive pause notifications via `telegram_bot.default_notification_chat_id` (a Telegram chat ID, typically the operator's DM).
+
 ### Update Routing Flow
 
 1. **Build context**: Extract metadata from update and resolve `topic_key`

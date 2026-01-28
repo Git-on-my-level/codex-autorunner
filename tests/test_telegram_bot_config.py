@@ -183,6 +183,11 @@ def test_telegram_bot_config_media_file_defaults(tmp_path: Path) -> None:
     cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
     assert cfg.media.files is True
     assert cfg.media.max_file_bytes == DEFAULT_MEDIA_MAX_FILE_BYTES
+    assert cfg.pause_dispatch_notifications.enabled is True
+    assert cfg.pause_dispatch_notifications.send_attachments is True
+    assert cfg.pause_dispatch_notifications.max_file_size_bytes == 50 * 1024 * 1024
+    assert cfg.pause_dispatch_notifications.chunk_long_messages is True
+    assert cfg.default_notification_chat_id is None
 
 
 def test_telegram_bot_config_message_overflow_default(tmp_path: Path) -> None:
@@ -230,6 +235,20 @@ def test_telegram_bot_config_message_overflow_override(tmp_path: Path) -> None:
     }
     cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
     assert cfg.message_overflow == "split"
+
+
+def test_telegram_bot_config_default_notification_chat_id(tmp_path: Path) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "default_notification_chat_id": "42",
+        "pause_dispatch_notifications": {"enabled": True},
+    }
+    env = {"TEST_BOT_TOKEN": "token", "TEST_CHAT_ID": "123"}
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    assert cfg.default_notification_chat_id == 42
 
 
 def test_telegram_bot_config_metrics_mode_default(tmp_path: Path) -> None:

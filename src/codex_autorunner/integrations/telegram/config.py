@@ -62,6 +62,7 @@ DEFAULT_MESSAGE_OVERFLOW = "document"
 MESSAGE_OVERFLOW_OPTIONS = {"document", "split", "trim"}
 DEFAULT_METRICS_MODE = "separate"
 METRICS_MODE_OPTIONS = {"separate", "append_to_response", "append_to_progress"}
+DEFAULT_PAUSE_DISPATCH_MAX_FILE_BYTES = 50 * 1024 * 1024
 
 PARSE_MODE_ALIASES = {
     "html": "HTML",
@@ -161,6 +162,14 @@ class TelegramBotProgressStreamConfig:
 
 
 @dataclass(frozen=True)
+class PauseDispatchNotifications:
+    enabled: bool
+    send_attachments: bool
+    max_file_size_bytes: int
+    chunk_long_messages: bool
+
+
+@dataclass(frozen=True)
 class TelegramMediaCandidate:
     kind: str
     file_id: str
@@ -209,6 +218,8 @@ class TelegramBotConfig:
     coalesce_window_seconds: float
     agent_binaries: dict[str, str]
     ticket_flow_auto_resume: bool
+    pause_dispatch_notifications: PauseDispatchNotifications
+    default_notification_chat_id: Optional[int]
 
     @classmethod
     def from_raw(
@@ -506,6 +517,33 @@ class TelegramBotConfig:
         )
         ticket_flow_auto_resume = bool(ticket_flow_raw.get("auto_resume", False))
 
+        pause_raw_value = cfg.get("pause_dispatch_notifications")
+        pause_raw: dict[str, Any] = (
+            pause_raw_value if isinstance(pause_raw_value, dict) else {}
+        )
+        pause_enabled = bool(pause_raw.get("enabled", enabled))
+        pause_send_attachments = bool(pause_raw.get("send_attachments", True))
+        pause_max_file_size_bytes = int(
+            pause_raw.get("max_file_size_bytes", DEFAULT_PAUSE_DISPATCH_MAX_FILE_BYTES)
+        )
+        if pause_max_file_size_bytes <= 0:
+            pause_max_file_size_bytes = DEFAULT_PAUSE_DISPATCH_MAX_FILE_BYTES
+        pause_chunk_long_messages = bool(pause_raw.get("chunk_long_messages", True))
+        pause_dispatch_notifications = PauseDispatchNotifications(
+            enabled=pause_enabled,
+            send_attachments=pause_send_attachments,
+            max_file_size_bytes=pause_max_file_size_bytes,
+            chunk_long_messages=pause_chunk_long_messages,
+        )
+
+        default_notification_chat_raw = cfg.get("default_notification_chat_id")
+        default_notification_chat_id: Optional[int] = None
+        try:
+            if default_notification_chat_raw is not None:
+                default_notification_chat_id = int(default_notification_chat_raw)
+        except (TypeError, ValueError):
+            default_notification_chat_id = None
+
         agent_binaries = dict(agent_binaries or {})
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
@@ -666,6 +704,8 @@ class TelegramBotConfig:
             coalesce_window_seconds=coalesce_window_seconds,
             agent_binaries=agent_binaries,
             ticket_flow_auto_resume=ticket_flow_auto_resume,
+            pause_dispatch_notifications=pause_dispatch_notifications,
+            default_notification_chat_id=default_notification_chat_id,
         )
 
     def validate(self) -> None:

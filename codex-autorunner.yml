@@ -234,6 +234,14 @@ telegram_bot:
       - message
       - edited_message
       - callback_query
+  # Pause dispatch notifications
+  pause_dispatch_notifications:
+    enabled: true
+    send_attachments: true
+    max_file_size_bytes: 50000000
+    chunk_long_messages: true
+  # Default chat for workspaces without bound topics (Telegram chat id)
+  default_notification_chat_id: null
 
 hub:
   # Hub repo discovery root (relative to config file location).
