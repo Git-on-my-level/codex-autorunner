@@ -17,18 +17,6 @@ from typing import IO, Any, Awaitable, Callable, Iterator, Optional
 
 import yaml
 
-from ..agents.opencode.logging import OpenCodeEventFormatter
-from ..agents.opencode.runtime import (
-    OpenCodeTurnOutput,
-    build_turn_id,
-    collect_opencode_output,
-    extract_session_id,
-    map_approval_policy_to_permission,
-    opencode_missing_env,
-    parse_message_response,
-    split_model_id,
-)
-from ..agents.opencode.supervisor import OpenCodeSupervisor, OpenCodeSupervisorError
 from ..agents.registry import validate_agent_id
 from ..manifest import MANIFEST_VERSION
 from ..tickets.files import list_ticket_paths, ticket_is_done
@@ -109,15 +97,6 @@ class RunTelemetry:
     diff: Optional[Any] = None
 
 
-@dataclasses.dataclass
-class ActiveOpencodeRun:
-    session_id: str
-    turn_id: str
-    client: Any
-    interrupted: bool
-    interrupt_event: asyncio.Event
-
-
 NotificationHandler = Callable[[dict[str, Any]], Awaitable[None]]
 BackendFactory = Callable[
     [str, RunnerState, Optional[NotificationHandler]], AgentBackend
@@ -162,8 +141,7 @@ class Engine:
             redact_enabled=redact_enabled
         )
         self._app_server_events = AppServerEventBuffer()
-        self._opencode_event_formatter = OpenCodeEventFormatter()
-        self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
+        self._opencode_supervisor: Optional[Any] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
         self._last_telemetry_update_time: float = 0.0
@@ -777,7 +755,6 @@ class Engine:
         with self._run_telemetry_lock:
             self._run_telemetry = RunTelemetry(run_id=run_id)
         self._app_server_event_formatter.reset()
-        self._opencode_event_formatter.reset()
 
     def _update_run_telemetry(self, run_id: int, **updates: Any) -> None:
         with self._run_telemetry_lock:
@@ -1277,27 +1254,52 @@ class Engine:
                 "error: app-server backend requires app_server.command to be configured",
             )
             return 1
-        if self._backend_factory is None:
-            self.log_line(
-                run_id,
-                "error: codex backend factory is not configured for this engine",
-            )
-            return 1
-
         with state_lock(self.state_path):
             state = load_state(self.state_path)
         effective_model = state.autorunner_model_override or config.codex_model
         effective_effort = state.autorunner_effort_override or config.codex_reasoning
+        return await self._run_agent_backend_async(
+            agent_id="codex",
+            prompt=prompt,
+            run_id=run_id,
+            state=state,
+            session_key="autorunner",
+            model=effective_model,
+            reasoning=effective_effort,
+            external_stop_flag=external_stop_flag,
+        )
+
+    async def _run_agent_backend_async(
+        self,
+        *,
+        agent_id: str,
+        prompt: str,
+        run_id: int,
+        state: RunnerState,
+        session_key: str,
+        model: Optional[str],
+        reasoning: Optional[str],
+        external_stop_flag: Optional[threading.Event],
+    ) -> int:
+        if self._backend_factory is None:
+            self.log_line(
+                run_id,
+                f"error: {agent_id} backend factory is not configured for this engine",
+            )
+            return 1
+
         try:
             backend = self._backend_factory(
-                "codex", state, self._handle_app_server_notification
+                agent_id, state, self._handle_app_server_notification
             )
         except Exception as exc:
-            self.log_line(run_id, f"error: failed to initialize codex backend: {exc}")
+            self.log_line(
+                run_id, f"error: failed to initialize {agent_id} backend: {exc}"
+            )
             return 1
 
         with self._app_server_threads_lock:
-            session_id = self._app_server_threads.get_thread_id("autorunner")
+            session_id = self._app_server_threads.get_thread_id(session_key)
 
         try:
             session_id = await backend.start_session(
@@ -1306,16 +1308,18 @@ class Engine:
             )
         except Exception as exc:
             self.log_line(
-                run_id, f"error: codex backend failed to start session: {exc}"
+                run_id, f"error: {agent_id} backend failed to start session: {exc}"
             )
             return 1
 
         if not session_id:
-            self.log_line(run_id, "error: codex backend did not return a session id")
+            self.log_line(
+                run_id, f"error: {agent_id} backend did not return a session id"
+            )
             return 1
 
         with self._app_server_threads_lock:
-            self._app_server_threads.set_thread_id("autorunner", session_id)
+            self._app_server_threads.set_thread_id(session_key, session_id)
 
         self._update_run_telemetry(run_id, thread_id=session_id)
 
@@ -1332,7 +1336,7 @@ class Engine:
 
         producer_task = asyncio.create_task(_produce_events())
         stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
-        timeout_seconds = config.app_server.turn_timeout_seconds
+        timeout_seconds = self.config.app_server.turn_timeout_seconds
         timeout_task: Optional[asyncio.Task] = (
             asyncio.create_task(asyncio.sleep(timeout_seconds))
             if timeout_seconds
@@ -1365,6 +1369,15 @@ class Engine:
                             "assistant_stream",
                         }:
                             assistant_messages.append(event.content)
+                        elif event.delta_type == "log_line":
+                            self.log_line(
+                                run_id,
+                                (
+                                    f"stdout: {event.content}"
+                                    if event.content
+                                    else "stdout: "
+                                ),
+                            )
                     elif isinstance(event, Completed):
                         if event.final_message:
                             final_message = event.final_message
@@ -1432,6 +1445,10 @@ class Engine:
                 output_messages,
             )
 
+        token_total = getattr(backend, "last_token_total", None)
+        if isinstance(token_total, dict):
+            self._update_run_telemetry(run_id, token_total=token_total)
+
         telemetry = self._snapshot_run_telemetry(run_id)
         turn_id = None
         if telemetry is not None:
@@ -1445,9 +1462,11 @@ class Engine:
                 thread_id=session_id,
                 turn_id=turn_id,
                 thread_info=thread_info if isinstance(thread_info, dict) else None,
-                model=effective_model,
-                reasoning_effort=effective_effort,
+                model=model,
+                reasoning_effort=reasoning,
             )
+            if agent_id != "codex":
+                app_server_meta["agent"] = agent_id
             self._merge_run_index_entry(run_id, {"app_server": app_server_meta})
 
         return 0
@@ -1539,7 +1558,7 @@ class Engine:
         except Exception as exc:
             self._app_server_logger.warning("agent backend close failed: %s", exc)
 
-    def _build_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
+    def _build_opencode_supervisor(self) -> Optional[Any]:
         config = self.config.app_server
         opencode_command = self.config.agent_serve_command("opencode")
         opencode_binary = None
@@ -1572,7 +1591,7 @@ class Engine:
 
         return supervisor
 
-    def _ensure_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
+    def _ensure_opencode_supervisor(self) -> Optional[Any]:
         if self._opencode_supervisor is None:
             self._opencode_supervisor = self._build_opencode_supervisor()
         return self._opencode_supervisor
@@ -1669,12 +1688,6 @@ class Engine:
                 with contextlib.suppress(asyncio.CancelledError):
                     await timeout_task
 
-    async def _abort_opencode(self, client: Any, session_id: str, run_id: int) -> None:
-        try:
-            await client.abort(session_id)
-        except Exception as exc:
-            self.log_line(run_id, f"error: opencode abort failed: {exc}")
-
     async def _run_opencode_app_server_async(
         self,
         prompt: str,
@@ -1684,242 +1697,18 @@ class Engine:
         reasoning: Optional[str],
         external_stop_flag: Optional[threading.Event] = None,
     ) -> int:
-        supervisor = self._ensure_opencode_supervisor()
-        if supervisor is None:
-            self.log_line(
-                run_id, "error: opencode backend is not configured in this repo"
-            )
-            return 1
-        try:
-            client = await supervisor.get_client(self.repo_root)
-        except OpenCodeSupervisorError as exc:
-            self.log_line(run_id, f"error: opencode backend unavailable: {exc}")
-            return 1
-
-        with self._app_server_threads_lock:
-            key = "autorunner.opencode"
-            thread_id = self._app_server_threads.get_thread_id(key)
-            if thread_id:
-                try:
-                    await client.get_session(thread_id)
-                except Exception as exc:
-                    self._app_server_logger.debug(
-                        "Failed to get existing opencode session '%s' for run %s: %s",
-                        thread_id,
-                        run_id,
-                        exc,
-                    )
-                    self._app_server_threads.reset_thread(key)
-                    thread_id = None
-            if not thread_id:
-                session = await client.create_session(directory=str(self.repo_root))
-                thread_id = extract_session_id(session, allow_fallback_id=True)
-                if not isinstance(thread_id, str) or not thread_id:
-                    self.log_line(run_id, "error: opencode did not return a session id")
-                    return 1
-                self._app_server_threads.set_thread_id(key, thread_id)
-
-        model_payload = split_model_id(model)
-        missing_env = await opencode_missing_env(
-            client, str(self.repo_root), model_payload
-        )
-        if missing_env:
-            provider_id = model_payload.get("providerID") if model_payload else None
-            self.log_line(
-                run_id,
-                "error: opencode provider "
-                f"{provider_id or 'selected'} requires env vars: "
-                f"{', '.join(missing_env)}",
-            )
-            return 1
-        opencode_turn_started = False
-        await supervisor.mark_turn_started(self.repo_root)
-        opencode_turn_started = True
-        turn_id = build_turn_id(thread_id)
-        self._update_run_telemetry(run_id, thread_id=thread_id, turn_id=turn_id)
-        app_server_meta = self._build_app_server_meta(
-            thread_id=thread_id,
-            turn_id=turn_id,
-            thread_info=None,
-            model=model,
-            reasoning_effort=reasoning,
-        )
-        app_server_meta["agent"] = "opencode"
-        self._merge_run_index_entry(run_id, {"app_server": app_server_meta})
-
-        active = ActiveOpencodeRun(
-            session_id=thread_id,
-            turn_id=turn_id,
-            client=client,
-            interrupted=False,
-            interrupt_event=asyncio.Event(),
-        )
         with state_lock(self.state_path):
             state = load_state(self.state_path)
-        permission_policy = map_approval_policy_to_permission(
-            state.autorunner_approval_policy, default="allow"
+        return await self._run_agent_backend_async(
+            agent_id="opencode",
+            prompt=prompt,
+            run_id=run_id,
+            state=state,
+            session_key="autorunner.opencode",
+            model=model,
+            reasoning=reasoning,
+            external_stop_flag=external_stop_flag,
         )
-
-        async def _opencode_part_handler(
-            part_type: str, part: dict[str, Any], delta_text: Optional[str]
-        ) -> None:
-            if part_type == "usage" and isinstance(part, dict):
-                for line in self._opencode_event_formatter.format_usage(part):
-                    self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
-            else:
-                for line in self._opencode_event_formatter.format_part(
-                    part_type, part, delta_text
-                ):
-                    self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
-
-        ready_event = asyncio.Event()
-        output_task = asyncio.create_task(
-            collect_opencode_output(
-                client,
-                session_id=thread_id,
-                workspace_path=str(self.repo_root),
-                model_payload=model_payload,
-                permission_policy=permission_policy,
-                question_policy="auto_first_option",
-                should_stop=active.interrupt_event.is_set,
-                part_handler=_opencode_part_handler,
-                ready_event=ready_event,
-                stall_timeout_seconds=self.config.opencode.session_stall_timeout_seconds,
-            )
-        )
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(ready_event.wait(), timeout=2.0)
-        prompt_task = asyncio.create_task(
-            client.prompt_async(
-                thread_id,
-                message=prompt,
-                model=model_payload,
-                variant=reasoning,
-            )
-        )
-        stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
-        timeout_task = None
-        turn_timeout = self.config.app_server.turn_timeout_seconds
-        if turn_timeout:
-            timeout_task = asyncio.create_task(asyncio.sleep(turn_timeout))
-        timed_out = False
-        try:
-            try:
-                prompt_response = await prompt_task
-                prompt_info = (
-                    prompt_response.get("info")
-                    if isinstance(prompt_response, dict)
-                    else {}
-                )
-                tokens = (
-                    prompt_info.get("tokens") if isinstance(prompt_info, dict) else {}
-                )
-                if isinstance(tokens, dict):
-                    input_tokens = int(tokens.get("input", 0) or 0)
-                    cached_read = (
-                        int(tokens.get("cache", {}).get("read", 0) or 0)
-                        if isinstance(tokens.get("cache"), dict)
-                        else 0
-                    )
-                    output_tokens = int(tokens.get("output", 0) or 0)
-                    reasoning_tokens = int(tokens.get("reasoning", 0) or 0)
-                    total_tokens = (
-                        input_tokens + cached_read + output_tokens + reasoning_tokens
-                    )
-                    token_total = {
-                        "total": total_tokens,
-                        "input_tokens": input_tokens,
-                        "prompt_tokens": input_tokens,
-                        "cached_input_tokens": cached_read,
-                        "output_tokens": output_tokens,
-                        "completion_tokens": output_tokens,
-                        "reasoning_tokens": reasoning_tokens,
-                        "reasoning_output_tokens": reasoning_tokens,
-                    }
-                    self._update_run_telemetry(run_id, token_total=token_total)
-            except Exception as exc:
-                active.interrupt_event.set()
-                output_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await output_task
-                self.log_line(run_id, f"error: opencode prompt failed: {exc}")
-                return 1
-            tasks = {output_task, stop_task}
-            if timeout_task is not None:
-                tasks.add(timeout_task)
-            done, _pending = await asyncio.wait(
-                tasks, return_when=asyncio.FIRST_COMPLETED
-            )
-            timed_out = timeout_task is not None and timeout_task in done
-            stopped = stop_task in done
-            if timed_out:
-                self.log_line(
-                    run_id, "error: opencode turn timed out; aborting session"
-                )
-                active.interrupt_event.set()
-            if stopped:
-                active.interrupted = True
-                active.interrupt_event.set()
-                self.log_line(run_id, "info: stop requested; aborting opencode")
-            if timed_out or stopped:
-                await self._abort_opencode(client, thread_id, run_id)
-                done, _pending = await asyncio.wait(
-                    {output_task}, timeout=AUTORUNNER_INTERRUPT_GRACE_SECONDS
-                )
-                if not done:
-                    output_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await output_task
-                    if timed_out:
-                        return 1
-                    self._last_run_interrupted = active.interrupted
-                    return 0
-            output_result = await output_task
-            if not output_result.text and not output_result.error:
-                fallback = parse_message_response(prompt_response)
-                if fallback.text:
-                    output_result = OpenCodeTurnOutput(
-                        text=fallback.text, error=fallback.error
-                    )
-                    self.log_line(run_id, "info: opencode fallback message used")
-        finally:
-            # Flush buffered reasoning deltas before cleanup, so partial reasoning is still logged
-            # even when the turn is aborted, times out, or is interrupted.
-            for line in self._opencode_event_formatter.flush_all_reasoning():
-                self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
-            stop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stop_task
-            if timeout_task is not None:
-                timeout_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await timeout_task
-            if opencode_turn_started:
-                await supervisor.mark_turn_finished(self.repo_root)
-
-        if not output_result.text:
-            self.log_line(
-                run_id,
-                "info: opencode returned empty output (error=%s)"
-                % (output_result.error or "none"),
-            )
-        if output_result.text:
-            handle_agent_output(
-                self._log_app_server_output,
-                self._write_run_artifact,
-                self._merge_run_index_entry,
-                run_id,
-                output_result.text,
-            )
-        if output_result.error:
-            self.log_line(
-                run_id, f"error: opencode session error: {output_result.error}"
-            )
-            return 1
-        self._last_run_interrupted = active.interrupted
-        if timed_out:
-            return 1
-        return 0
 
     async def _run_loop_async(
         self,
@@ -2203,7 +1992,7 @@ class Engine:
         }
         payload = {k: v for k, v in payload.items() if v is not None}
 
-        opencode_supervisor: Optional[OpenCodeSupervisor] = None
+        opencode_supervisor: Optional[Any] = None
         app_server_supervisor: Optional[Any] = None
 
         if agent == "codex":
