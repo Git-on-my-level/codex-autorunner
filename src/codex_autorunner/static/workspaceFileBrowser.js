@@ -23,13 +23,10 @@ export class WorkspaceFileBrowser {
     setTree(tree, defaultPath) {
         this.tree = tree || [];
         const next = this.pickInitialSelection(defaultPath);
-        if (next) {
-            const shouldTrigger = next !== this.selectedPath;
-            this.select(next, shouldTrigger);
-        }
-        else {
+        const shouldTrigger = !!next && next !== this.selectedPath;
+        const didSelect = next ? this.select(next, shouldTrigger) : false;
+        if (!didSelect)
             this.render();
-        }
     }
     getCurrentPath() {
         return this.currentPath;
@@ -43,8 +40,10 @@ export class WorkspaceFileBrowser {
     }
     select(path, trigger = true) {
         const node = this.findNode(path);
-        if (!node || node.type !== "file")
-            return;
+        if (!node || node.type !== "file") {
+            this.render();
+            return false;
+        }
         this.selectedPath = path;
         this.currentPath = this.parentPath(path);
         if (this.onPathChange)
@@ -54,13 +53,14 @@ export class WorkspaceFileBrowser {
         this.render();
         if (trigger)
             this.onSelect(node);
+        return true;
     }
     refresh() {
         this.render();
         this.renderModal();
     }
     pickInitialSelection(defaultPath) {
-        if (defaultPath)
+        if (defaultPath && this.findNode(defaultPath))
             return defaultPath;
         if (this.selectedPath && this.findNode(this.selectedPath)) {
             return this.selectedPath;

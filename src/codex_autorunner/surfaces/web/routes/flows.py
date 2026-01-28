@@ -31,6 +31,7 @@ from ..core.flows.worker_process import (
 )
 from ..core.utils import atomic_write, find_repo_root
 from ..flows.ticket_flow import build_ticket_flow_definition
+from ..integrations.github.service import GitHubError, GitHubService
 from ..tickets import AgentPool
 from ..tickets.files import (
     list_ticket_paths,
@@ -63,6 +64,11 @@ def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     artifacts_root = repo_root / ".codex-autorunner" / "flows"
     return db_path, artifacts_root
+
+
+def _issue_md_path(repo_root: Path) -> Path:
+    repo_root = repo_root.resolve()
+    return repo_root / ".codex-autorunner" / "ISSUE.md"
 
 
 def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
@@ -223,6 +229,17 @@ class FlowStartRequest(BaseModel):
     metadata: Optional[Dict] = None
 
 
+class BootstrapCheckResponse(BaseModel):
+    status: str
+    github_available: Optional[bool] = None
+    repo: Optional[str] = None
+
+
+class SeedIssueRequest(BaseModel):
+    issue_ref: Optional[str] = None  # GitHub issue number, #num, or URL
+    plan_text: Optional[str] = None  # Freeform plan text when GitHub unavailable
+
+
 class FlowWorkerHealthResponse(BaseModel):
     status: str
     pid: Optional[int]
@@ -336,6 +353,50 @@ def _start_flow_worker(repo_root: Path, run_id: str) -> Optional[subprocess.Pope
     _active_workers[normalized_run_id] = (proc, stdout_handle, stderr_handle)
     _logger.info("Started flow worker for run %s (pid=%d)", normalized_run_id, proc.pid)
     return proc
+
+
+def _format_issue_as_markdown(issue: dict, repo_slug: Optional[str] = None) -> str:
+    """Render GitHub issue data as ISSUE.md content."""
+    number = issue.get("number")
+    title = issue.get("title") or ""
+    url = issue.get("url") or ""
+    state = issue.get("state") or ""
+    author = issue.get("author") or {}
+    author_name = (
+        author.get("login") if isinstance(author, dict) else str(author or "unknown")
+    )
+    labels = issue.get("labels")
+    label_names: list[str] = []
+    if isinstance(labels, list):
+        for lbl in labels:
+            if isinstance(lbl, dict):
+                name = lbl.get("name")
+            else:
+                name = lbl
+            if name:
+                label_names.append(str(name))
+    comments = issue.get("comments")
+    comment_count = None
+    if isinstance(comments, dict):
+        total = comments.get("totalCount")
+        if isinstance(total, int):
+            comment_count = total
+
+    body = issue.get("body") or "(no description)"
+    lines = [
+        f"# Issue #{number}: {title}".strip(),
+        "",
+        f"**Repo:** {repo_slug or 'unknown'}",
+        f"**URL:** {url}",
+        f"**State:** {state}",
+        f"**Author:** {author_name}",
+    ]
+    if label_names:
+        lines.append(f"**Labels:** {', '.join(label_names)}")
+    if comment_count is not None:
+        lines.append(f"**Comments:** {comment_count}")
+    lines.extend(["", "## Description", "", str(body).strip(), ""])
+    return "\n".join(lines)
 
 
 def _stop_worker(run_id: str, timeout: float = 10.0) -> None:
@@ -490,6 +551,86 @@ def build_flow_routes() -> APIRouter:
         force_new = bool(meta.get("force_new"))
         return await _start_flow(flow_type, request, force_new=force_new)
 
+    @router.get("/ticket_flow/bootstrap-check", response_model=BootstrapCheckResponse)
+    async def bootstrap_check():
+        """
+        Determine whether ISSUE.md already exists and whether GitHub is available
+        for fetching an issue before bootstrapping the ticket flow.
+        """
+        repo_root = find_repo_root()
+        issue_path = _issue_md_path(repo_root)
+        if issue_path.exists():
+            try:
+                content = issue_path.read_text(encoding="utf-8")
+                if content.strip():
+                    return BootstrapCheckResponse(status="ready")
+            except OSError:
+                # Fall through to needs_issue branch
+                pass
+
+        gh_available = False
+        repo_slug: Optional[str] = None
+        try:
+            gh = GitHubService(repo_root=repo_root)
+            gh_available = gh.gh_available() and gh.gh_authenticated()
+            if gh_available:
+                repo_info = gh.repo_info()
+                repo_slug = repo_info.name_with_owner
+        except Exception:
+            gh_available = False
+
+        return BootstrapCheckResponse(
+            status="needs_issue", github_available=gh_available, repo=repo_slug
+        )
+
+    @router.post("/ticket_flow/seed-issue")
+    async def seed_issue(request: SeedIssueRequest):
+        """Create .codex-autorunner/ISSUE.md from GitHub issue or user-provided text."""
+        repo_root = find_repo_root()
+        issue_path = _issue_md_path(repo_root)
+        issue_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # GitHub-backed path
+        if request.issue_ref:
+            gh = GitHubService(repo_root=repo_root)
+            if not (gh.gh_available() and gh.gh_authenticated()):
+                raise HTTPException(
+                    status_code=400,
+                    detail="GitHub CLI is not available or not authenticated.",
+                )
+            try:
+                number = gh.validate_issue_same_repo(request.issue_ref)
+                issue = gh.issue_view(number=number)
+                repo_info = gh.repo_info()
+                content = _format_issue_as_markdown(issue, repo_info.name_with_owner)
+                atomic_write(issue_path, content)
+                return {
+                    "status": "ok",
+                    "source": "github",
+                    "issue_number": number,
+                    "repo": repo_info.name_with_owner,
+                }
+            except GitHubError as exc:
+                raise HTTPException(
+                    status_code=exc.status_code, detail=str(exc)
+                ) from exc
+            except Exception as exc:  # pragma: no cover - defensive
+                _logger.exception("Failed to seed ISSUE.md from GitHub: %s", exc)
+                raise HTTPException(
+                    status_code=500, detail="Failed to fetch issue from GitHub"
+                ) from exc
+
+        # Manual text path
+        if request.plan_text:
+            content = f"# Issue\n\n{request.plan_text.strip()}\n"
+            atomic_write(issue_path, content)
+            return {"status": "ok", "source": "user_input"}
+
+        raise HTTPException(
+            status_code=400,
+            detail="issue_ref or plan_text is required to seed ISSUE.md",
+        )
+
     @router.post("/ticket_flow/bootstrap", response_model=FlowStatusResponse)
     async def bootstrap_ticket_flow(request: Optional[FlowStartRequest] = None):
         repo_root = find_repo_root()
@@ -529,7 +670,9 @@ goal: Capture scope and seed follow-up tickets
 
 You are the first ticket in a new ticket_flow run.
 
-- Read `.codex-autorunner/ISSUE.md` (or ask for the issue/PR URL if missing).
+- Read `.codex-autorunner/ISSUE.md`. If it is missing:
+  - If GitHub is available, ask the user for the issue/PR URL or number and create `.codex-autorunner/ISSUE.md` from it.
+  - If GitHub is not available, write `DISPATCH.md` with `mode: pause` asking the user to describe the work (or share a doc). After the reply, create `.codex-autorunner/ISSUE.md` with their input.
 - If helpful, create or update workspace docs under `.codex-autorunner/workspace/`:
   - `active_context.md` for current context and links
   - `decisions.md` for decisions/rationale

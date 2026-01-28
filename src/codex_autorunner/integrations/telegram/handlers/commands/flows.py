@@ -13,6 +13,7 @@ from .....core.flows.worker_process import (
 from .....core.utils import canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
 from .....tickets import AgentPool
+from ....github.service import GitHubService
 from ...adapter import TelegramMessage
 from ...helpers import _truncate_text
 from .shared import SharedHelpers
@@ -102,6 +103,12 @@ class FlowCommands(SharedHelpers):
             ticket_dir.mkdir(parents=True, exist_ok=True)
             first_ticket = ticket_dir / "TICKET-001.md"
             seeded = False
+            issue_path = repo_root / ".codex-autorunner" / "ISSUE.md"
+            issue_exists = (
+                issue_path.exists() and issue_path.read_text(encoding="utf-8").strip()
+                if issue_path.exists()
+                else False
+            )
             if not first_ticket.exists():
                 first_ticket.write_text(
                     """---
@@ -122,6 +129,32 @@ Create SPEC.md and additional tickets under .codex-autorunner/tickets/. Then wri
                 metadata={"seeded_ticket": seeded, "origin": "telegram"},
             )
             _spawn_flow_worker(repo_root, flow_record.id)
+
+            if not issue_exists:
+                gh_status = "GitHub not detected; please describe the work so I can write ISSUE.md."
+                try:
+                    gh = GitHubService(repo_root=repo_root)
+                    gh_available = gh.gh_available() and gh.gh_authenticated()
+                    if gh_available:
+                        repo_info = gh.repo_info()
+                        gh_status = (
+                            f"No ISSUE.md found. Reply with a GitHub issue URL or number for {repo_info.name_with_owner} "
+                            "and I'll fetch it into .codex-autorunner/ISSUE.md."
+                        )
+                    else:
+                        gh_status = (
+                            "No ISSUE.md found and GitHub CLI unavailable. "
+                            "Reply with a short plan/requirements so I can seed ISSUE.md."
+                        )
+                except Exception:
+                    pass
+                await self._send_message(
+                    message.chat_id,
+                    gh_status,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+
             await self._send_message(
                 message.chat_id,
                 f"Started ticket flow run {flow_record.id}.",

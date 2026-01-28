@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal } from "./utils.js";
+import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal, inputModal, } from "./utils.js";
 import { activateTab } from "./tabs.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
@@ -679,7 +679,7 @@ function truncate(text, max = 100) {
     return `${text.slice(0, max).trim()}…`;
 }
 function renderTickets(data) {
-    const { tickets, dir, bootstrapBtn } = els();
+    const { tickets, dir } = els();
     if (dir)
         dir.textContent = data?.ticket_dir || "–";
     if (!tickets)
@@ -687,18 +687,8 @@ function renderTickets(data) {
     tickets.innerHTML = "";
     const list = (data?.tickets || []);
     ticketsExist = list.length > 0;
-    // Disable start button if no tickets exist
-    if (bootstrapBtn && !bootstrapBtn.disabled) {
-        bootstrapBtn.disabled = !ticketsExist;
-        if (!ticketsExist) {
-            bootstrapBtn.title = "Create a ticket first";
-        }
-        else {
-            bootstrapBtn.title = "";
-        }
-    }
     if (!list.length) {
-        tickets.textContent = "No tickets found. Create TICKET-001.md to begin.";
+        tickets.textContent = "No tickets found. Start the ticket flow to create TICKET-001.md.";
         return;
     }
     list.forEach((ticket) => {
@@ -1167,15 +1157,10 @@ async function loadTicketFlow(ctx) {
         }
         if (bootstrapBtn) {
             const busy = latest?.status === "running" || latest?.status === "pending";
-            // Disable if busy OR if no tickets exist
-            bootstrapBtn.disabled = busy || !ticketsExist;
+            // Disable only if busy; bootstrap will create initial ticket when missing
+            bootstrapBtn.disabled = busy;
             bootstrapBtn.textContent = busy ? "Running…" : "Start Ticket Flow";
-            if (!ticketsExist && !busy) {
-                bootstrapBtn.title = "Create a ticket first";
-            }
-            else {
-                bootstrapBtn.title = "";
-            }
+            bootstrapBtn.title = busy ? "Ticket flow in progress" : "";
         }
         // Show restart button when flow is paused, stopping, or in terminal state (allows starting fresh)
         const { restartBtn } = els();
@@ -1218,13 +1203,9 @@ async function bootstrapTicketFlow() {
         flash("Repo offline; cannot start ticket flow.", "error");
         return;
     }
-    if (!ticketsExist) {
-        flash("Create a ticket first before starting the flow.", "error");
-        return;
-    }
     setButtonsDisabled(true);
-    bootstrapBtn.textContent = "Starting…";
-    try {
+    bootstrapBtn.textContent = "Checking…";
+    const startFlow = async () => {
         const res = (await api("/api/flows/ticket_flow/bootstrap", {
             method: "POST",
             body: {},
@@ -1238,6 +1219,113 @@ async function bootstrapTicketFlow() {
             clearLiveOutput(); // Clear output for new run
         }
         await loadTicketFlow();
+    };
+    const seedIssueFromGithub = async (issueRef) => {
+        await api("/api/flows/ticket_flow/seed-issue", {
+            method: "POST",
+            body: { issue_ref: issueRef },
+        });
+        flash("ISSUE.md created from GitHub", "success");
+    };
+    const seedIssueFromPlan = async (planText) => {
+        await api("/api/flows/ticket_flow/seed-issue", {
+            method: "POST",
+            body: { plan_text: planText },
+        });
+        flash("ISSUE.md created from your input", "success");
+    };
+    const promptIssueRef = async (repo) => {
+        const message = repo
+            ? `Enter GitHub issue number or URL for ${repo}`
+            : "Enter GitHub issue number or URL";
+        const input = await inputModal(message, {
+            placeholder: "#123 or https://github.com/org/repo/issues/123",
+            confirmText: "Fetch issue",
+        });
+        const value = (input || "").trim();
+        return value || null;
+    };
+    const promptPlanText = async () => {
+        // Build a simple textarea modal dynamically to avoid new HTML templates.
+        const overlay = document.createElement("div");
+        overlay.className = "modal-overlay";
+        overlay.hidden = true;
+        const dialog = document.createElement("div");
+        dialog.className = "modal-dialog";
+        dialog.setAttribute("role", "dialog");
+        dialog.setAttribute("aria-modal", "true");
+        dialog.tabIndex = -1;
+        const title = document.createElement("h3");
+        title.textContent = "Describe the work";
+        const textarea = document.createElement("textarea");
+        textarea.placeholder = "Describe the scope/requirements to seed ISSUE.md";
+        textarea.rows = 6;
+        textarea.style.width = "100%";
+        textarea.style.resize = "vertical";
+        const actions = document.createElement("div");
+        actions.className = "modal-actions";
+        const cancel = document.createElement("button");
+        cancel.className = "ghost";
+        cancel.textContent = "Cancel";
+        const submit = document.createElement("button");
+        submit.className = "primary";
+        submit.textContent = "Create ISSUE.md";
+        actions.append(cancel, submit);
+        dialog.append(title, textarea, actions);
+        overlay.append(dialog);
+        document.body.append(overlay);
+        return await new Promise((resolve) => {
+            let closeModal = null;
+            const cleanup = () => {
+                if (closeModal)
+                    closeModal();
+                overlay.remove();
+            };
+            const finalize = (value) => {
+                cleanup();
+                resolve(value);
+            };
+            closeModal = openModal(overlay, {
+                initialFocus: textarea,
+                returnFocusTo: bootstrapBtn,
+                onRequestClose: () => finalize(null),
+            });
+            submit.addEventListener("click", () => {
+                finalize(textarea.value.trim() || null);
+            });
+            cancel.addEventListener("click", () => finalize(null));
+        });
+    };
+    try {
+        const check = (await api("/api/flows/ticket_flow/bootstrap-check", {
+            method: "GET",
+        }));
+        if (check.status === "ready") {
+            await startFlow();
+            return;
+        }
+        if (check.status === "needs_issue") {
+            if (check.github_available) {
+                const issueRef = await promptIssueRef(check.repo);
+                if (!issueRef) {
+                    flash("Bootstrap cancelled (no issue provided)", "info");
+                    return;
+                }
+                await seedIssueFromGithub(issueRef);
+            }
+            else {
+                const planText = await promptPlanText();
+                if (!planText) {
+                    flash("Bootstrap cancelled (no description provided)", "info");
+                    return;
+                }
+                await seedIssueFromPlan(planText);
+            }
+            await startFlow();
+            return;
+        }
+        // Fallback: start normally
+        await startFlow();
     }
     catch (err) {
         flash(err.message || "Failed to start ticket flow", "error");
