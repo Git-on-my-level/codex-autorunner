@@ -4,8 +4,13 @@ from typing import Any, AsyncGenerator, Dict, Optional
 
 from ...agents.opencode.client import OpenCodeClient
 from ...agents.opencode.events import SSEEvent
-from .agent_backend import AgentBackend, AgentEvent, AgentEventType, now_iso
-from .run_event import (
+from ...core.ports.agent_backend import (
+    AgentBackend,
+    AgentEvent,
+    AgentEventType,
+    now_iso,
+)
+from ...core.ports.run_event import (
     Completed,
     Failed,
     OutputDelta,

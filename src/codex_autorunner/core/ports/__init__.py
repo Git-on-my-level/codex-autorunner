@@ -1,4 +1,5 @@
-from ...core.ports.run_event import (
+from .agent_backend import AgentBackend, AgentEvent, AgentEventType, now_iso
+from .run_event import (
     ApprovalRequested,
     Completed,
     Failed,
@@ -6,10 +7,13 @@ from ...core.ports.run_event import (
     RunEvent,
     Started,
     ToolCall,
-    now_iso,
 )
 
 __all__ = [
+    "AgentBackend",
+    "AgentEvent",
+    "AgentEventType",
+    "now_iso",
     "RunEvent",
     "Started",
     "OutputDelta",
@@ -17,5 +21,4 @@ __all__ = [
     "ApprovalRequested",
     "Completed",
     "Failed",
-    "now_iso",
 ]

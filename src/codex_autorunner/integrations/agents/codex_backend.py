@@ -4,9 +4,8 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional, Union
 
 from ...core.circuit_breaker import CircuitBreaker
-from ...integrations.app_server.client import CodexAppServerClient
-from .agent_backend import AgentBackend, AgentEvent, now_iso
-from .run_event import (
+from ...core.ports.agent_backend import AgentBackend, AgentEvent, now_iso
+from ...core.ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
@@ -15,6 +14,7 @@ from .run_event import (
     Started,
     ToolCall,
 )
+from ...integrations.app_server.client import CodexAppServerClient
 
 _logger = logging.getLogger(__name__)
 

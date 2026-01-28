@@ -95,6 +95,7 @@ filterwarnings = [
 [tool.ruff]
 line-length = 88
 target-version = "py39"
+src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B"]
