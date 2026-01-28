@@ -13,7 +13,6 @@ from typing import Any, Optional
 from ..agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
 from ..agents.opencode.supervisor import OpenCodeSupervisor
 from ..agents.registry import has_capability, validate_agent_id
-from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from .config import RepoConfig
 from .engine import Engine
 from .locks import FileLock, FileLockBusy, FileLockError, process_alive, read_lock_info
@@ -391,7 +390,7 @@ class ReviewService:
         engine: Engine,
         *,
         opencode_supervisor: Optional[OpenCodeSupervisor] = None,
-        app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None,
+        app_server_supervisor: Optional[Any] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.engine = engine

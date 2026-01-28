@@ -1,17 +1,19 @@
 import asyncio
 import json
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional
 
-from ..integrations.app_server.client import (
-    _extract_thread_id,
-    _extract_thread_id_for_turn,
-    _extract_turn_id,
+from ...core.app_server_ids import (
+    extract_thread_id,
+    extract_thread_id_for_turn,
+    extract_turn_id,
 )
 
 TurnKey = tuple[str, str]
+LOGGER = logging.getLogger("codex_autorunner.app_server")
 
 
 def format_sse(event: str, data: object) -> str:
@@ -143,11 +145,11 @@ class AppServerEventBuffer:
     ) -> tuple[Optional[str], Optional[str]]:
         params_raw = message.get("params")
         params: Dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
-        turn_id = _extract_turn_id(params) or _extract_turn_id(message)
+        turn_id = extract_turn_id(params) or extract_turn_id(message)
         thread_id = (
-            _extract_thread_id_for_turn(params)
-            or _extract_thread_id(params)
-            or _extract_thread_id(message)
+            extract_thread_id_for_turn(params)
+            or extract_thread_id(params)
+            or extract_thread_id(message)
         )
         if not thread_id and turn_id:
             thread_id = self._turn_index.get(turn_id)
@@ -184,9 +186,14 @@ class AppServerEventBuffer:
         try:
             lines = formatter.format_event(message)
         except Exception:
+            LOGGER.warning("Failed to format app server event log line.", exc_info=True)
             return
         for line in lines:
             try:
                 emit(line)
             except Exception:
+                LOGGER.warning(
+                    "Failed to emit app server event log line.",
+                    exc_info=True,
+                )
                 continue

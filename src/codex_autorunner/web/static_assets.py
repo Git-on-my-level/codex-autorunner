@@ -6,14 +6,60 @@ import os
 import shutil
 import time
 from contextlib import ExitStack
+from importlib import resources
 from pathlib import Path
 from typing import Iterable, Optional
 from uuid import uuid4
 
 from ..core.logging_utils import safe_log
-from ..core.static_assets import missing_static_assets, resolve_static_dir
 
 _ASSET_VERSION_TOKEN = "__CAR_ASSET_VERSION__"
+_REQUIRED_STATIC_ASSETS = (
+    "index.html",
+    "styles.css",
+    "bootstrap.js",
+    "loader.js",
+    "app.js",
+    "vendor/xterm.js",
+    "vendor/xterm-addon-fit.js",
+    "vendor/xterm.css",
+)
+
+
+def missing_static_assets(static_dir: Path) -> list[str]:
+    missing: list[str] = []
+    for rel_path in _REQUIRED_STATIC_ASSETS:
+        try:
+            if not (static_dir / rel_path).exists():
+                missing.append(rel_path)
+        except OSError:
+            missing.append(rel_path)
+    return missing
+
+
+def resolve_static_dir() -> tuple[Path, Optional[ExitStack]]:
+    """Locate packaged static assets."""
+
+    static_root = resources.files("codex_autorunner").joinpath("static")
+    if isinstance(static_root, Path):
+        if static_root.exists():
+            return static_root, None
+        fallback = Path(__file__).resolve().parent.parent / "static"
+        return fallback, None
+
+    stack = ExitStack()
+    try:
+        static_path = stack.enter_context(resources.as_file(static_root))
+    except Exception:
+        stack.close()
+        fallback = Path(__file__).resolve().parent.parent / "static"
+        return fallback, None
+    if static_path.exists():
+        return static_path, stack
+
+    stack.close()
+    fallback = Path(__file__).resolve().parent.parent / "static"
+    return fallback, None
 
 
 def _iter_static_source_files(source_dir: Path) -> Iterable[Path]:

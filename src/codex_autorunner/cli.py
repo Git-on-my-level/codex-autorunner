@@ -21,9 +21,11 @@ from .core.config import (
     HubConfig,
     RepoConfig,
     _normalize_base_path,
+    collect_env_overrides,
     derive_repo_config,
     find_nearest_hub_config_path,
     load_hub_config,
+    load_repo_config,
 )
 from .core.engine import DoctorReport, Engine, LockError, clear_stale_lock, doctor
 from .core.git_utils import GitError, run_git
@@ -39,6 +41,10 @@ from .core.usage import (
     summarize_repo_usage,
 )
 from .core.utils import RepoNotFoundError, default_editor, find_repo_root
+from .integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from .integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
 from .integrations.telegram.doctor import telegram_doctor_checks
 from .integrations.telegram.service import (
@@ -72,7 +78,14 @@ def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> Engine:
     except RepoNotFoundError as exc:
         _raise_exit("No .git directory found for repo commands.", cause=exc)
     try:
-        return Engine(repo_root, hub_path=hub)
+        config = load_repo_config(repo_root, hub_path=hub)
+        return Engine(
+            repo_root,
+            config=config,
+            hub_path=hub,
+            backend_factory=build_agent_backend_factory(repo_root, config),
+            app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+        )
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
 
@@ -767,7 +780,16 @@ def edit(
     if key not in ("active_context", "decisions", "spec"):
         _raise_exit("Invalid target; choose active_context, decisions, or spec")
     path = config.doc_path(key)
-    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or default_editor()
+    ui_cfg = config.raw.get("ui") if isinstance(config.raw, dict) else {}
+    ui_cfg = ui_cfg if isinstance(ui_cfg, dict) else {}
+    config_editor = ui_cfg.get("editor") if isinstance(ui_cfg, dict) else None
+    if not isinstance(config_editor, str) or not config_editor.strip():
+        config_editor = "vi"
+    editor = (
+        os.environ.get("VISUAL")
+        or os.environ.get("EDITOR")
+        or default_editor(fallback=config_editor)
+    )
     editor_parts = shlex.split(editor)
     if not editor_parts:
         editor_parts = [editor]
@@ -860,7 +882,11 @@ def hub_create(
 ):
     """Create a new git repo under the hub and initialize codex-autorunner files."""
     config = _require_hub_config(path)
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     try:
         snapshot = supervisor.create_repo(
             repo_id, repo_path, git_init=git_init, force=force
@@ -888,7 +914,11 @@ def hub_clone(
 ):
     """Clone a git repo under the hub and initialize codex-autorunner files."""
     config = _require_hub_config(path)
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     try:
         snapshot = supervisor.clone_repo(
             git_url=git_url, repo_id=repo_id, repo_path=repo_path, force=force
@@ -933,7 +963,11 @@ def hub_serve(
 def hub_scan(path: Optional[Path] = typer.Option(None, "--path", help="Hub root path")):
     """Trigger discovery/init and print repo statuses."""
     config = _require_hub_config(path)
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     snapshots = supervisor.scan()
     typer.echo(f"Scanned hub at {config.root} (repos_root={config.repos_root})")
     for snap in snapshots:
@@ -969,6 +1003,9 @@ def telegram_start(
     except TelegramBotConfigError as exc:
         _raise_exit(str(exc), cause=exc)
     logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
+    env_overrides = collect_env_overrides(env=os.environ, include_telegram=True)
+    if env_overrides:
+        logger.info("Environment overrides active: %s", ", ".join(env_overrides))
     log_event(
         logger,
         logging.INFO,

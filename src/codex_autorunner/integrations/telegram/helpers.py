@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
+from ...core.state_roots import resolve_global_state_root
 from ...core.utils import (
     RepoNotFoundError,
     canonicalize_path,
@@ -2103,7 +2104,7 @@ def _telegram_lock_path(token: str) -> Path:
     if not isinstance(token, str) or not token:
         raise ValueError("token is required")
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
-    return Path.home() / ".codex-autorunner" / "locks" / f"telegram_bot_{digest}.lock"
+    return resolve_global_state_root() / "locks" / f"telegram_bot_{digest}.lock"
 
 
 def _read_lock_payload(path: Path) -> Optional[dict[str, Any]]:

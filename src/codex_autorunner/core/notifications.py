@@ -23,6 +23,18 @@ class NotificationManager:
         self._warned_missing: set[str] = set()
         self._enabled_mode = self._parse_enabled(self._cfg.get("enabled"))
         self._events = self._normalize_events(self._cfg.get("events"))
+        timeout_raw = self._cfg.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
+        try:
+            timeout_seconds = (
+                float(timeout_raw)
+                if timeout_raw is not None
+                else DEFAULT_TIMEOUT_SECONDS
+            )
+        except (TypeError, ValueError):
+            timeout_seconds = DEFAULT_TIMEOUT_SECONDS
+        if timeout_seconds <= 0:
+            timeout_seconds = DEFAULT_TIMEOUT_SECONDS
+        self._timeout_seconds = timeout_seconds
         self._warn_unknown_events(self._events)
         discord_cfg = self._cfg.get("discord")
         self._discord: Dict[str, Any] = (
@@ -202,7 +214,7 @@ class NotificationManager:
         if not targets:
             return
         try:
-            with httpx.Client(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+            with httpx.Client(timeout=self._timeout_seconds) as client:
                 self._send_sync(client, targets, message)
         except Exception as exc:
             self._log_warning("Notification delivery failed", exc)
@@ -216,7 +228,7 @@ class NotificationManager:
         if not targets:
             return
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
                 await self._send_async(client, targets, message)
         except Exception as exc:
             self._log_warning("Notification delivery failed", exc)

@@ -20,6 +20,10 @@ from codex_autorunner.core.config import (
 from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from codex_autorunner.manifest import sanitize_repo_id
 from codex_autorunner.server import create_hub_app
 
@@ -73,7 +77,11 @@ def test_scan_writes_hub_state(tmp_path: Path):
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     snapshots = supervisor.scan()
 
     state_path = hub_root / ".codex-autorunner" / "hub_state.json"
@@ -97,7 +105,11 @@ def test_locked_status_reported(tmp_path: Path):
     lock_path = repo_dir / ".codex-autorunner" / "lock"
     lock_path.write_text("999999", encoding="utf-8")
 
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     supervisor.scan()
     snapshots = supervisor.list_repos()
     snap = next(r for r in snapshots if r.id == "demo")
@@ -285,7 +297,12 @@ def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         thread.start()
         return thread
 
-    supervisor = HubSupervisor(load_hub_config(hub_root), spawn_fn=spawn_fn)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        spawn_fn=spawn_fn,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     supervisor.scan()
     supervisor.run_repo("alpha", once=True)
     supervisor.run_repo("beta", once=True)
@@ -329,7 +346,11 @@ def test_hub_remove_repo_with_worktrees(tmp_path: Path):
     cfg_path = hub_root / CONFIG_FILENAME
     _write_config(cfg_path, cfg)
 
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     base = supervisor.create_repo("base")
     _init_git_repo(base.path)
     worktree = supervisor.create_worktree(base_repo_id="base", branch="feature/test")

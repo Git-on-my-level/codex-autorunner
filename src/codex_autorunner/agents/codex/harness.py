@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from ...core.app_server_events import AppServerEventBuffer
+from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..base import AgentHarness
 from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef

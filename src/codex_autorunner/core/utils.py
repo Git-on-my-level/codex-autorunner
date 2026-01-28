@@ -152,8 +152,8 @@ def ensure_executable(binary: str) -> bool:
     return resolve_executable(binary) is not None
 
 
-def default_editor() -> str:
-    return os.environ.get("EDITOR") or "vi"
+def default_editor(*, fallback: str = "vi") -> str:
+    return os.environ.get("EDITOR") or fallback
 
 
 def resolve_opencode_binary(raw_command: Optional[str] = None) -> Optional[str]:

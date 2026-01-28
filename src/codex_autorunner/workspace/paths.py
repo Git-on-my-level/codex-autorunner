@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 from ..core import drafts as draft_utils
+from ..core.logging_utils import log_event
 
 WorkspaceDocKind = Literal["active_context", "decisions", "spec"]
 WORKSPACE_DOC_KINDS: tuple[WorkspaceDocKind, ...] = (
@@ -13,6 +15,8 @@ WORKSPACE_DOC_KINDS: tuple[WorkspaceDocKind, ...] = (
     "decisions",
     "spec",
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -133,14 +137,27 @@ def write_workspace_file(  # codeql[py/path-injection]
     path.write_text(
         content or "", encoding="utf-8"
     )  # codeql[py/path-injection] validated by normalize_workspace_rel_path
+    rel = path.relative_to(repo_root).as_posix()
+    state_key = f"workspace_{rel_posix.replace('/', '_')}"
     try:
-        rel = path.relative_to(repo_root).as_posix()
         draft_utils.invalidate_drafts_for_path(repo_root, rel)
-        state_key = f"workspace_{rel_posix.replace('/', '_')}"
         draft_utils.remove_draft(repo_root, state_key)
-    except Exception:
-        # best effort; do not block writes
-        pass
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "workspace.draft_invalidation_failed",
+            repo_root=str(repo_root),
+            rel_path=rel_posix,
+            state_key=state_key,
+            exc=exc,
+        )
+        logger.debug(
+            "workspace draft invalidation failed for %s (repo_root=%s)",
+            rel_posix,
+            repo_root,
+            exc_info=True,
+        )
     return path.read_text(encoding="utf-8")
 
 
@@ -159,13 +176,29 @@ def write_workspace_doc(  # codeql[py/path-injection]
     path.write_text(
         content or "", encoding="utf-8"
     )  # codeql[py/path-injection] workspace_doc_path is deterministic
+    rel = path.relative_to(repo_root).as_posix()
+    state_key = f"workspace_{rel.replace('/', '_')}"
     try:
-        rel = path.relative_to(repo_root).as_posix()
         draft_utils.invalidate_drafts_for_path(repo_root, rel)
-        state_key = f"workspace_{rel.replace('/', '_')}"
         draft_utils.remove_draft(repo_root, state_key)
-    except Exception:
-        pass
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "workspace.draft_invalidation_failed",
+            repo_root=str(repo_root),
+            rel_path=rel,
+            state_key=state_key,
+            kind=kind,
+            exc=exc,
+        )
+        logger.debug(
+            "workspace draft invalidation failed for %s (repo_root=%s kind=%s)",
+            rel,
+            repo_root,
+            kind,
+            exc_info=True,
+        )
     return path.read_text(encoding="utf-8")
 
 

@@ -6,6 +6,10 @@ This document describes how codex-autorunner resolves paths in configuration fil
 
 All config paths follow consistent resolution rules to eliminate confusion about which paths are absolute vs relative, and when `~` expansion occurs.
 
+Codex Autorunner uses two state roots:
+- **Repo-local root**: `.codex-autorunner/` under the repo (runtime state, tickets, artifacts).
+- **Global root**: `~/.codex-autorunner/` by default (cross-repo caches/locks).
+
 ## Relative Paths
 
 All config paths without leading `/` or `~` are interpreted as **relative to the repo root**.
@@ -204,6 +208,25 @@ agents:
     serve_command:
       - /absolute/path/to/opencode
       - serve
+```
+
+### state_roots.global
+
+Controls the global state root used for cross-repo caches and locks (update cache,
+update status/lock, shared app-server workspaces).
+
+Defaults to `~/.codex-autorunner/` unless overridden via the environment variable
+`CAR_GLOBAL_STATE_ROOT` or this config key.
+
+**Examples:**
+
+```yaml
+state_roots:
+  global: ~/.codex-autorunner
+```
+
+```bash
+export CAR_GLOBAL_STATE_ROOT=/srv/codex-autorunner
 ```
 
 ## Error Messages

@@ -17,7 +17,6 @@ from starlette.routing import Mount
 from starlette.types import ASGIApp
 
 from ..agents.opencode.supervisor import OpenCodeSupervisor
-from ..core.app_server_events import AppServerEventBuffer
 from ..core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -28,6 +27,7 @@ from ..core.config import (
     HubConfig,
     _is_loopback_host,
     _normalize_base_path,
+    collect_env_overrides,
     derive_repo_config,
     load_hub_config,
     load_repo_config,
@@ -55,8 +55,13 @@ from ..core.utils import (
     set_repo_root_context,
 )
 from ..housekeeping import run_housekeeping_once
+from ..integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
+from ..integrations.app_server.event_buffer import AppServerEventBuffer
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import load_manifest
 from ..routes import build_repo_router
@@ -343,7 +348,12 @@ def _build_app_context(
         if base_path is not None
         else config.server_base_path
     )
-    engine = Engine(config.root, config=config)
+    engine = Engine(
+        config.root,
+        config=config,
+        backend_factory=build_agent_backend_factory(config.root, config),
+        app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+    )
     manager = RunnerManager(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=env)
     voice_missing_reason: Optional[str] = None
@@ -377,6 +387,14 @@ def _build_app_context(
         f"repo[{engine.repo_root}]", engine.config.server_log
     )
     engine.notifier.set_logger(logger)
+    env_overrides = collect_env_overrides(env=env)
+    if env_overrides:
+        safe_log(
+            logger,
+            logging.INFO,
+            "Environment overrides active: %s",
+            ", ".join(env_overrides),
+        )
     safe_log(
         logger,
         logging.INFO,
@@ -629,8 +647,20 @@ def _build_hub_context(
         if base_path is not None
         else config.server_base_path
     )
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
+    env_overrides = collect_env_overrides()
+    if env_overrides:
+        safe_log(
+            logger,
+            logging.INFO,
+            "Environment overrides active: %s",
+            ", ".join(env_overrides),
+        )
     safe_log(
         logger,
         logging.INFO,
@@ -1386,6 +1416,7 @@ def create_hub_app(
         per_repo, unmatched, status = get_hub_usage_summary_cached(
             repo_map,
             default_codex_home(),
+            config=context.config,
             since=since_dt,
             until=until_dt,
         )
@@ -1429,6 +1460,7 @@ def create_hub_app(
             series, status = get_hub_usage_series_cached(
                 repo_map,
                 default_codex_home(),
+                config=context.config,
                 since=since_dt,
                 until=until_dt,
                 bucket=bucket,

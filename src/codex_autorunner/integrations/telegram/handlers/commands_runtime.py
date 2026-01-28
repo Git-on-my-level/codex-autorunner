@@ -20,6 +20,7 @@ from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import _normalize_update_target, _spawn_update_process
+from ....core.update_paths import resolve_update_paths
 from ....core.utils import canonicalize_path
 from ...app_server.client import _normalize_sandbox_policy
 from ..adapter import (
@@ -2277,7 +2278,7 @@ Summary applied.""",
         repo_ref = (self._update_repo_ref or DEFAULT_UPDATE_REPO_REF).strip()
         if not repo_ref:
             repo_ref = DEFAULT_UPDATE_REPO_REF
-        update_dir = Path.home() / ".codex-autorunner" / "update_cache"
+        update_dir = resolve_update_paths().cache_dir
         notify_reply_to = reply_to
         if notify_reply_to is None and callback is not None:
             notify_reply_to = callback.message_id
@@ -2383,7 +2384,7 @@ Summary applied.""",
         )
 
     def _update_status_path(self) -> Path:
-        return Path.home() / ".codex-autorunner" / "update_status.json"
+        return resolve_update_paths().status_path
 
     def _read_update_status(self) -> Optional[dict[str, Any]]:
         path = self._update_status_path()
@@ -2467,7 +2468,7 @@ Summary applied.""",
             )
 
     def _compact_status_path(self) -> Path:
-        return Path.home() / ".codex-autorunner" / "compact_status.json"
+        return resolve_update_paths().compact_status_path
 
     def _read_compact_status(self) -> Optional[dict[str, Any]]:
         path = self._compact_status_path()

@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
 import dataclasses
+import hashlib
+import inspect
 import json
 import logging
 import os
@@ -8,40 +10,25 @@ import signal
 import threading
 import time
 import traceback
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import IO, Any, Iterator, Optional
+from typing import IO, Any, Awaitable, Callable, Iterator, Optional
 
 import yaml
 
-from ..agents.opencode.logging import OpenCodeEventFormatter
-from ..agents.opencode.runtime import (
-    OpenCodeTurnOutput,
-    build_turn_id,
-    collect_opencode_output,
-    extract_session_id,
-    map_approval_policy_to_permission,
-    opencode_missing_env,
-    parse_message_response,
-    split_model_id,
-)
-from ..agents.opencode.supervisor import OpenCodeSupervisor, OpenCodeSupervisorError
 from ..agents.registry import validate_agent_id
-from ..integrations.app_server.client import (
-    CodexAppServerError,
-    _extract_thread_id,
-    _extract_thread_id_for_turn,
-    _extract_turn_id,
-)
-from ..integrations.app_server.env import build_app_server_env
-from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import MANIFEST_VERSION
 from ..tickets.files import list_ticket_paths, ticket_is_done
 from .about_car import ensure_about_car_file
 from .adapter_utils import handle_agent_output
-from .app_server_events import AppServerEventBuffer
+from .app_server_ids import (
+    extract_thread_id,
+    extract_thread_id_for_turn,
+    extract_turn_id,
+)
 from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
@@ -54,6 +41,7 @@ from .config import (
     load_repo_config,
 )
 from .docs import DocsManager, parse_todos
+from .flows.models import FlowEventType
 from .git_utils import GitError, run_git
 from .locks import (
     DEFAULT_RUNNER_CMD_HINTS,
@@ -66,12 +54,24 @@ from .locks import (
 )
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
+from .ports.agent_backend import AgentBackend
+from .ports.run_event import (
+    ApprovalRequested,
+    Completed,
+    Failed,
+    OutputDelta,
+    RunEvent,
+    RunNotice,
+    Started,
+    TokenUsage,
+    ToolCall,
+)
 from .prompt import build_final_summary_prompt
 from .redaction import redact_text
 from .review_context import build_spec_progress_review_context
 from .run_index import RunIndexStore
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
-from .static_assets import missing_static_assets, resolve_static_dir
+from .state_roots import resolve_global_state_root, resolve_repo_state_root
 from .ticket_linter_cli import ensure_ticket_linter
 from .utils import (
     RepoNotFoundError,
@@ -109,13 +109,11 @@ class RunTelemetry:
     diff: Optional[Any] = None
 
 
-@dataclasses.dataclass
-class ActiveOpencodeRun:
-    session_id: str
-    turn_id: str
-    client: Any
-    interrupted: bool
-    interrupt_event: asyncio.Event
+NotificationHandler = Callable[[dict[str, Any]], Awaitable[None]]
+BackendFactory = Callable[
+    [str, RunnerState, Optional[NotificationHandler]], AgentBackend
+]
+AppServerSupervisorFactory = Callable[[str, Optional[NotificationHandler]], Any]
 
 
 class Engine:
@@ -125,6 +123,8 @@ class Engine:
         *,
         config: Optional[RepoConfig] = None,
         hub_path: Optional[Path] = None,
+        backend_factory: Optional[BackendFactory] = None,
+        app_server_supervisor_factory: Optional[AppServerSupervisorFactory] = None,
     ):
         if config is None:
             config = load_repo_config(repo_root, hub_path=hub_path)
@@ -144,18 +144,20 @@ class Engine:
             default_app_server_threads_path(self.repo_root)
         )
         self._app_server_threads_lock = threading.Lock()
-        self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+        self._backend_factory = backend_factory
+        self._app_server_supervisor_factory = app_server_supervisor_factory
+        self._app_server_supervisor: Optional[Any] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         redact_enabled = self.config.security.get("redact_run_logs", True)
         self._app_server_event_formatter = AppServerEventFormatter(
             redact_enabled=redact_enabled
         )
-        self._app_server_events = AppServerEventBuffer()
-        self._opencode_event_formatter = OpenCodeEventFormatter()
-        self._opencode_supervisor: Optional[OpenCodeSupervisor] = None
+        self._opencode_supervisor: Optional[Any] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
         self._last_telemetry_update_time: float = 0.0
+        self._canonical_event_lock = threading.Lock()
+        self._canonical_event_seq: dict[int, int] = {}
         self._last_run_interrupted = False
         self._lock_handle: Optional[FileLock] = None
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
@@ -374,6 +376,7 @@ class Engine:
             "todo_snapshot": todo_snapshot,
         }
         telemetry = self._snapshot_run_telemetry(run_id)
+        usage_payload: Optional[dict[str, Any]] = None
         if (
             telemetry
             and telemetry.thread_id
@@ -386,45 +389,38 @@ class Engine:
                     thread_id=telemetry.thread_id, run_id=run_id
                 )
             delta = self._compute_token_delta(baseline, telemetry.token_total)
-            run_updates["token_usage"] = {
+            token_usage_payload = {
                 "delta": delta,
                 "thread_total_before": baseline,
                 "thread_total_after": telemetry.token_total,
             }
+            run_updates["token_usage"] = token_usage_payload
+            usage_payload = {
+                "run_id": run_id,
+                "captured_at": timestamp(),
+                "agent": validated_agent,
+                "thread_id": telemetry.thread_id,
+                "turn_id": telemetry.turn_id,
+                "token_usage": token_usage_payload,
+                "cache_scope": getattr(self.config.usage, "cache_scope", "global"),
+            }
         artifacts: dict[str, str] = {}
+        if usage_payload is not None:
+            usage_path = self._write_run_usage_artifact(run_id, usage_payload)
+            if usage_path is not None:
+                artifacts["usage_path"] = str(usage_path)
         redact_enabled = self.config.security.get("redact_run_logs", True)
         if telemetry and telemetry.plan is not None:
-            try:
-                plan_content = (
-                    telemetry.plan
-                    if isinstance(telemetry.plan, str)
-                    else json.dumps(
-                        telemetry.plan, ensure_ascii=True, indent=2, default=str
-                    )
-                )
-            except (TypeError, ValueError) as exc:
-                self._app_server_logger.debug(
-                    "Failed to serialize plan to JSON for run %s: %s", run_id, exc
-                )
-                plan_content = json.dumps(
-                    {"plan": str(telemetry.plan)}, ensure_ascii=True, indent=2
-                )
-            if redact_enabled:
-                plan_content = redact_text(plan_content)
+            plan_content = self._serialize_plan_content(
+                telemetry.plan, redact_enabled=redact_enabled, run_id=run_id
+            )
             plan_path = self._write_run_artifact(run_id, "plan.json", plan_content)
             artifacts["plan_path"] = str(plan_path)
         if telemetry and telemetry.diff is not None:
-            normalized_diff = self._normalize_diff_payload(telemetry.diff)
-            if normalized_diff is not None:
-                diff_content = (
-                    normalized_diff
-                    if isinstance(normalized_diff, str)
-                    else json.dumps(
-                        normalized_diff, ensure_ascii=True, indent=2, default=str
-                    )
-                )
-                if redact_enabled:
-                    diff_content = redact_text(diff_content)
+            diff_content = self._serialize_diff_content(
+                telemetry.diff, redact_enabled=redact_enabled
+            )
+            if diff_content is not None:
                 diff_path = self._write_run_artifact(run_id, "diff.patch", diff_content)
                 artifacts["diff_path"] = str(diff_path)
         if artifacts:
@@ -638,6 +634,68 @@ class Engine:
             self._app_server_logger.warning(
                 "Failed to write event to events log for run %s: %s", run_id, exc
             )
+        event_type = {
+            "run.started": FlowEventType.RUN_STARTED,
+            "run.finished": FlowEventType.RUN_FINISHED,
+            "run.state_changed": FlowEventType.RUN_STATE_CHANGED,
+            "run.no_progress": FlowEventType.RUN_NO_PROGRESS,
+            "token.updated": FlowEventType.TOKEN_USAGE,
+            "plan.updated": FlowEventType.PLAN_UPDATED,
+            "diff.updated": FlowEventType.DIFF_UPDATED,
+        }.get(event)
+        if event_type is not None:
+            self._emit_canonical_event(run_id, event_type, payload)
+
+    def _emit_canonical_event(
+        self,
+        run_id: int,
+        event_type: FlowEventType,
+        data: Optional[dict[str, Any]] = None,
+        *,
+        step_id: Optional[str] = None,
+        timestamp_override: Optional[str] = None,
+    ) -> None:
+        event_payload: dict[str, Any] = {
+            "id": uuid.uuid4().hex,
+            "run_id": str(run_id),
+            "event_type": event_type.value,
+            "timestamp": timestamp_override or now_iso(),
+            "data": data or {},
+        }
+        if step_id is not None:
+            event_payload["step_id"] = step_id
+        self._ensure_run_log_dir()
+        with self._canonical_event_lock:
+            seq = self._canonical_event_seq.get(run_id, 0) + 1
+            self._canonical_event_seq[run_id] = seq
+            event_payload["seq"] = seq
+            events_path = self._canonical_events_log_path(run_id)
+            try:
+                with events_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(event_payload, ensure_ascii=True) + "\n")
+            except (OSError, IOError) as exc:
+                self._app_server_logger.warning(
+                    "Failed to write canonical event for run %s: %s", run_id, exc
+                )
+
+    async def _cancel_task_with_notice(
+        self,
+        run_id: int,
+        task: asyncio.Task[Any],
+        *,
+        name: str,
+    ) -> None:
+        if task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            self._emit_canonical_event(
+                run_id,
+                FlowEventType.RUN_CANCELLED,
+                {"task": name},
+            )
 
     def _ensure_log_path(self) -> None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -647,6 +705,9 @@ class Engine:
 
     def _events_log_path(self, run_id: int) -> Path:
         return self.log_path.parent / "runs" / f"run-{run_id}.events.jsonl"
+
+    def _canonical_events_log_path(self, run_id: int) -> Path:
+        return self.log_path.parent / "runs" / f"run-{run_id}.events.canonical.jsonl"
 
     def _ensure_run_log_dir(self) -> None:
         (self.log_path.parent / "runs").mkdir(parents=True, exist_ok=True)
@@ -766,7 +827,6 @@ class Engine:
         with self._run_telemetry_lock:
             self._run_telemetry = RunTelemetry(run_id=run_id)
         self._app_server_event_formatter.reset()
-        self._opencode_event_formatter.reset()
 
     def _update_run_telemetry(self, run_id: int, **updates: Any) -> None:
         with self._run_telemetry_lock:
@@ -814,6 +874,52 @@ class Engine:
             return None
         return diff
 
+    @staticmethod
+    def _hash_content(content: str) -> str:
+        return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
+
+    def _serialize_plan_content(
+        self,
+        plan: Any,
+        *,
+        redact_enabled: bool,
+        run_id: Optional[int] = None,
+    ) -> str:
+        try:
+            content = (
+                plan
+                if isinstance(plan, str)
+                else json.dumps(plan, ensure_ascii=True, indent=2, default=str)
+            )
+        except (TypeError, ValueError) as exc:
+            if run_id is not None:
+                self._app_server_logger.debug(
+                    "Failed to serialize plan to JSON for run %s: %s", run_id, exc
+                )
+            else:
+                self._app_server_logger.debug(
+                    "Failed to serialize plan to JSON: %s", exc
+                )
+            content = json.dumps({"plan": str(plan)}, ensure_ascii=True, indent=2)
+        if redact_enabled:
+            content = redact_text(content)
+        return content
+
+    def _serialize_diff_content(
+        self, diff: Any, *, redact_enabled: bool
+    ) -> Optional[str]:
+        normalized = self._normalize_diff_payload(diff)
+        if normalized is None:
+            return None
+        content = (
+            normalized
+            if isinstance(normalized, str)
+            else json.dumps(normalized, ensure_ascii=True, indent=2, default=str)
+        )
+        if redact_enabled:
+            content = redact_text(content)
+        return content
+
     def _maybe_update_run_index_telemetry(
         self, run_id: int, min_interval_seconds: float = 3.0
     ) -> None:
@@ -856,12 +962,14 @@ class Engine:
         params_raw = message.get("params")
         params = params_raw if isinstance(params_raw, dict) else {}
         thread_id = (
-            _extract_thread_id_for_turn(params)
-            or _extract_thread_id(params)
-            or _extract_thread_id(message)
+            extract_thread_id_for_turn(params)
+            or extract_thread_id(params)
+            or extract_thread_id(message)
         )
-        turn_id = _extract_turn_id(params) or _extract_turn_id(message)
+        turn_id = extract_turn_id(params) or extract_turn_id(message)
         run_id: Optional[int] = None
+        plan_update: Any = None
+        diff_update: Any = None
         with self._run_telemetry_lock:
             telemetry = self._run_telemetry
             if telemetry is None:
@@ -886,16 +994,60 @@ class Engine:
                         self._maybe_update_run_index_telemetry(run_id)
                         self._emit_event(run_id, "token.updated", token_total=total)
             if method == "turn/plan/updated":
-                telemetry.plan = params.get("plan") if "plan" in params else params
+                plan_update = params.get("plan") if "plan" in params else params
+                telemetry.plan = plan_update
             if method == "turn/diff/updated":
                 diff: Any = None
                 for key in ("diff", "patch", "content", "value"):
                     if key in params:
                         diff = params.get(key)
                         break
-                telemetry.diff = diff if diff is not None else params or None
+                diff_update = diff if diff is not None else params or None
+                telemetry.diff = diff_update
         if run_id is None:
             return
+        redact_enabled = self.config.security.get("redact_run_logs", True)
+        notification_path = self._append_run_notification(
+            run_id, message, redact_enabled
+        )
+        if notification_path is not None:
+            self._merge_run_index_entry(
+                run_id,
+                {
+                    "artifacts": {
+                        "app_server_notifications_path": str(notification_path)
+                    }
+                },
+            )
+        if plan_update is not None:
+            plan_content = self._serialize_plan_content(
+                plan_update, redact_enabled=redact_enabled, run_id=run_id
+            )
+            plan_path = self._write_run_artifact(run_id, "plan.json", plan_content)
+            self._merge_run_index_entry(
+                run_id, {"artifacts": {"plan_path": str(plan_path)}}
+            )
+            self._emit_event(
+                run_id,
+                "plan.updated",
+                plan_hash=self._hash_content(plan_content),
+                plan_path=str(plan_path),
+            )
+        if diff_update is not None:
+            diff_content = self._serialize_diff_content(
+                diff_update, redact_enabled=redact_enabled
+            )
+            if diff_content is not None:
+                diff_path = self._write_run_artifact(run_id, "diff.patch", diff_content)
+                self._merge_run_index_entry(
+                    run_id, {"artifacts": {"diff_path": str(diff_path)}}
+                )
+                self._emit_event(
+                    run_id,
+                    "diff.updated",
+                    diff_hash=self._hash_content(diff_content),
+                    diff_path=str(diff_path),
+                )
         for line in self._app_server_event_formatter.format_event(message):
             self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
 
@@ -1189,6 +1341,51 @@ class Engine:
         atomic_write(path, content)
         return path
 
+    def _write_run_usage_artifact(
+        self, run_id: int, payload: dict[str, Any]
+    ) -> Optional[Path]:
+        self._ensure_run_log_dir()
+        run_dir = self.log_path.parent / "runs" / str(run_id)
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            path = run_dir / "usage.json"
+            atomic_write(
+                path,
+                json.dumps(payload, ensure_ascii=True, indent=2, default=str),
+            )
+            return path
+        except OSError as exc:
+            self._app_server_logger.warning(
+                "Failed to write usage artifact for run %s: %s", run_id, exc
+            )
+            return None
+
+    def _app_server_notifications_path(self, run_id: int) -> Path:
+        return (
+            self.log_path.parent
+            / "runs"
+            / f"run-{run_id}.app_server.notifications.jsonl"
+        )
+
+    def _append_run_notification(
+        self, run_id: int, message: dict[str, Any], redact_enabled: bool
+    ) -> Optional[Path]:
+        self._ensure_run_log_dir()
+        path = self._app_server_notifications_path(run_id)
+        payload = {"ts": timestamp(), "message": message}
+        try:
+            line = json.dumps(payload, ensure_ascii=True, default=str)
+            if redact_enabled:
+                line = redact_text(line)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except (OSError, IOError, TypeError, ValueError) as exc:
+            self._app_server_logger.warning(
+                "Failed to write app-server notification for run %s: %s", run_id, exc
+            )
+            return None
+        return path
+
     def _read_log_range(self, run_id: int, entry: dict) -> Optional[str]:
         start = entry.get("start_offset")
         end = entry.get("end_offset")
@@ -1241,7 +1438,6 @@ class Engine:
                     prompt,
                     run_id,
                     external_stop_flag=external_stop_flag,
-                    reuse_supervisor=False,
                 )
             )
         except RuntimeError as exc:
@@ -1259,7 +1455,6 @@ class Engine:
         run_id: int,
         *,
         external_stop_flag: Optional[threading.Event] = None,
-        reuse_supervisor: bool = True,
     ) -> int:
         config = self.config
         if not config.app_server.command:
@@ -1268,127 +1463,300 @@ class Engine:
                 "error: app-server backend requires app_server.command to be configured",
             )
             return 1
-
-        def _env_builder(
-            workspace_root: Path, _workspace_id: str, state_dir: Path
-        ) -> dict[str, str]:
-            state_dir.mkdir(parents=True, exist_ok=True)
-            return build_app_server_env(
-                config.app_server.command,
-                workspace_root,
-                state_dir,
-                logger=self._app_server_logger,
-                event_prefix="autorunner",
-            )
-
-        supervisor = (
-            self._ensure_app_server_supervisor(_env_builder)
-            if reuse_supervisor
-            else self._build_app_server_supervisor(_env_builder)
-        )
         with state_lock(self.state_path):
             state = load_state(self.state_path)
         effective_model = state.autorunner_model_override or config.codex_model
         effective_effort = state.autorunner_effort_override or config.codex_reasoning
-        approval_policy = state.autorunner_approval_policy or "never"
-        sandbox_mode = state.autorunner_sandbox_mode or "dangerFullAccess"
-        if sandbox_mode == "workspaceWrite":
-            sandbox_policy: Any = {
-                "type": "workspaceWrite",
-                "writableRoots": [str(self.repo_root)],
-                "networkAccess": bool(state.autorunner_workspace_write_network),
-            }
-        else:
-            sandbox_policy = sandbox_mode
-        try:
-            client = await supervisor.get_client(self.repo_root)
-            with self._app_server_threads_lock:
-                thread_id = self._app_server_threads.get_thread_id("autorunner")
-                thread_info: Optional[dict[str, Any]] = None
-                if thread_id:
-                    try:
-                        resume_result = await client.thread_resume(thread_id)
-                        resumed = resume_result.get("id")
-                        if isinstance(resumed, str) and resumed:
-                            thread_id = resumed
-                            self._app_server_threads.set_thread_id(
-                                "autorunner", thread_id
-                            )
-                        if isinstance(resume_result, dict):
-                            thread_info = resume_result
-                    except CodexAppServerError:
-                        self._app_server_threads.reset_thread("autorunner")
-                        thread_id = None
-                if not thread_id:
-                    thread = await client.thread_start(str(self.repo_root))
-                    thread_id = thread.get("id")
-                    if not isinstance(thread_id, str) or not thread_id:
-                        self.log_line(
-                            run_id, "error: app-server did not return a thread id"
-                        )
-                        return 1
-                    self._app_server_threads.set_thread_id("autorunner", thread_id)
-                    if isinstance(thread, dict):
-                        thread_info = thread
-            if thread_id:
-                self._update_run_telemetry(run_id, thread_id=thread_id)
-            turn_kwargs: dict[str, Any] = {}
-            if effective_model:
-                turn_kwargs["model"] = str(effective_model)
-            if effective_effort:
-                turn_kwargs["effort"] = str(effective_effort)
-            handle = await client.turn_start(
-                thread_id,
-                prompt,
-                approval_policy=approval_policy,
-                sandbox_policy=sandbox_policy,
-                **turn_kwargs,
-            )
-            app_server_meta = self._build_app_server_meta(
-                thread_id=thread_id,
-                turn_id=handle.turn_id,
-                thread_info=thread_info,
-                model=turn_kwargs.get("model"),
-                reasoning_effort=turn_kwargs.get("effort"),
-            )
-            self._merge_run_index_entry(run_id, {"app_server": app_server_meta})
-            self._update_run_telemetry(
-                run_id, thread_id=thread_id, turn_id=handle.turn_id
-            )
-            turn_timeout = config.app_server.turn_timeout_seconds
-            turn_result, interrupted = await self._wait_for_turn_with_stop(
-                client,
-                handle,
+        return await self._run_agent_backend_async(
+            agent_id="codex",
+            prompt=prompt,
+            run_id=run_id,
+            state=state,
+            session_key="autorunner",
+            model=effective_model,
+            reasoning=effective_effort,
+            external_stop_flag=external_stop_flag,
+        )
+
+    async def _run_agent_backend_async(
+        self,
+        *,
+        agent_id: str,
+        prompt: str,
+        run_id: int,
+        state: RunnerState,
+        session_key: str,
+        model: Optional[str],
+        reasoning: Optional[str],
+        external_stop_flag: Optional[threading.Event],
+    ) -> int:
+        if self._backend_factory is None:
+            self.log_line(
                 run_id,
-                timeout=turn_timeout,
-                external_stop_flag=external_stop_flag,
-                supervisor=supervisor,
+                f"error: {agent_id} backend factory is not configured for this engine",
             )
-            self._last_run_interrupted = interrupted
+            return 1
+
+        try:
+            backend = self._backend_factory(
+                agent_id, state, self._handle_app_server_notification
+            )
+        except Exception as exc:
+            self.log_line(
+                run_id, f"error: failed to initialize {agent_id} backend: {exc}"
+            )
+            return 1
+
+        reuse_session = bool(getattr(self.config, "autorunner_reuse_session", False))
+        session_id: Optional[str] = None
+        if reuse_session:
+            with self._app_server_threads_lock:
+                session_id = self._app_server_threads.get_thread_id(session_key)
+
+        try:
+            session_id = await backend.start_session(
+                target={"workspace": str(self.repo_root)},
+                context={"workspace": str(self.repo_root), "session_id": session_id},
+            )
+        except Exception as exc:
+            self.log_line(
+                run_id, f"error: {agent_id} backend failed to start session: {exc}"
+            )
+            return 1
+
+        if not session_id:
+            self.log_line(
+                run_id, f"error: {agent_id} backend did not return a session id"
+            )
+            return 1
+
+        if reuse_session:
+            with self._app_server_threads_lock:
+                self._app_server_threads.set_thread_id(session_key, session_id)
+
+        self._update_run_telemetry(run_id, thread_id=session_id)
+
+        events: asyncio.Queue[Optional[RunEvent]] = asyncio.Queue()
+
+        async def _produce_events() -> None:
+            try:
+                async for event in backend.run_turn_events(session_id, prompt):
+                    await events.put(event)
+            except Exception as exc:
+                await events.put(Failed(timestamp=now_iso(), error_message=str(exc)))
+            finally:
+                await events.put(None)
+
+        producer_task = asyncio.create_task(_produce_events())
+        stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
+        timeout_seconds = self.config.app_server.turn_timeout_seconds
+        timeout_task: Optional[asyncio.Task] = (
+            asyncio.create_task(asyncio.sleep(timeout_seconds))
+            if timeout_seconds
+            else None
+        )
+
+        assistant_messages: list[str] = []
+        final_message: Optional[str] = None
+        failed_error: Optional[str] = None
+
+        try:
+            while True:
+                get_task = asyncio.create_task(events.get())
+                tasks = {get_task, stop_task}
+                if timeout_task is not None:
+                    tasks.add(timeout_task)
+                done, pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if get_task in done:
+                    event = get_task.result()
+                    if event is None:
+                        break
+                    if isinstance(event, Started) and event.session_id:
+                        self._update_run_telemetry(run_id, thread_id=event.session_id)
+                    elif isinstance(event, OutputDelta):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.AGENT_STREAM_DELTA,
+                            {
+                                "delta": event.content,
+                                "delta_type": event.delta_type,
+                            },
+                            timestamp_override=event.timestamp,
+                        )
+                        if event.delta_type in {
+                            "assistant_message",
+                            "assistant_stream",
+                        }:
+                            assistant_messages.append(event.content)
+                        elif event.delta_type == "log_line":
+                            self.log_line(
+                                run_id,
+                                (
+                                    f"stdout: {event.content}"
+                                    if event.content
+                                    else "stdout: "
+                                ),
+                            )
+                    elif isinstance(event, ToolCall):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.TOOL_CALL,
+                            {
+                                "tool_name": event.tool_name,
+                                "tool_input": event.tool_input,
+                            },
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, ApprovalRequested):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.APPROVAL_REQUESTED,
+                            {
+                                "request_id": event.request_id,
+                                "description": event.description,
+                                "context": event.context,
+                            },
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, TokenUsage):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.TOKEN_USAGE,
+                            {"usage": event.usage},
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, RunNotice):
+                        notice_type = FlowEventType.RUN_STATE_CHANGED
+                        if event.kind.endswith("timeout"):
+                            notice_type = FlowEventType.RUN_TIMEOUT
+                        elif "cancel" in event.kind:
+                            notice_type = FlowEventType.RUN_CANCELLED
+                        data: dict[str, Any] = {
+                            "kind": event.kind,
+                            "message": event.message,
+                        }
+                        if event.data:
+                            data["data"] = event.data
+                        self._emit_canonical_event(
+                            run_id,
+                            notice_type,
+                            data,
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, Completed):
+                        if event.final_message:
+                            self._emit_canonical_event(
+                                run_id,
+                                FlowEventType.AGENT_MESSAGE_COMPLETE,
+                                {"final_message": event.final_message},
+                                timestamp_override=event.timestamp,
+                            )
+                        if event.final_message:
+                            final_message = event.final_message
+                    elif isinstance(event, Failed):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.AGENT_FAILED,
+                            {"error_message": event.error_message},
+                            timestamp_override=event.timestamp,
+                        )
+                        failed_error = event.error_message
+                    continue
+
+                timed_out = timeout_task is not None and timeout_task in done
+                stopped = stop_task in done
+                if timed_out:
+                    self.log_line(
+                        run_id,
+                        "error: app-server turn timed out; interrupting app-server",
+                    )
+                    self._emit_canonical_event(
+                        run_id,
+                        FlowEventType.RUN_TIMEOUT,
+                        {
+                            "context": "app_server_turn",
+                            "timeout_seconds": timeout_seconds,
+                        },
+                    )
+                if stopped:
+                    self._last_run_interrupted = True
+                    self.log_line(
+                        run_id, "info: stop requested; interrupting app-server"
+                    )
+                try:
+                    await backend.interrupt(session_id)
+                except Exception as exc:
+                    self.log_line(run_id, f"error: app-server interrupt failed: {exc}")
+
+                done_after_interrupt, _pending = await asyncio.wait(
+                    {producer_task}, timeout=AUTORUNNER_INTERRUPT_GRACE_SECONDS
+                )
+                if not done_after_interrupt:
+                    await self._cancel_task_with_notice(
+                        run_id, producer_task, name="producer_task"
+                    )
+                    if stopped:
+                        return 0
+                    return 1
+                if stopped:
+                    return 0
+                return 1
+
+            await producer_task
+        finally:
+            await self._cancel_task_with_notice(run_id, stop_task, name="stop_task")
+            if timeout_task is not None:
+                await self._cancel_task_with_notice(
+                    run_id, timeout_task, name="timeout_task"
+                )
+
+        if failed_error:
+            self.log_line(run_id, f"error: {failed_error}")
+            return 1
+
+        output_messages = []
+        if final_message:
+            output_messages = [final_message]
+        elif assistant_messages:
+            output_messages = assistant_messages
+
+        if output_messages:
             handle_agent_output(
                 self._log_app_server_output,
                 self._write_run_artifact,
                 self._merge_run_index_entry,
                 run_id,
-                turn_result.agent_messages,
+                output_messages,
             )
-            if turn_result.errors:
-                for error in turn_result.errors:
-                    self.log_line(run_id, f"error: {error}")
-                return 1
-            return 0
-        except asyncio.TimeoutError:
-            self.log_line(run_id, "error: app-server turn timed out")
-            return 1
-        except CodexAppServerError as exc:
-            self.log_line(run_id, f"error: {exc}")
-            return 1
-        except Exception as exc:  # pragma: no cover - defensive
-            self.log_line(run_id, f"error: app-server failed: {exc}")
-            return 1
-        finally:
-            if not reuse_supervisor:
-                await supervisor.close_all()
+
+        token_total = getattr(backend, "last_token_total", None)
+        if isinstance(token_total, dict):
+            self._update_run_telemetry(run_id, token_total=token_total)
+
+        telemetry = self._snapshot_run_telemetry(run_id)
+        turn_id = None
+        if telemetry is not None:
+            turn_id = telemetry.turn_id
+        if not turn_id:
+            turn_id = getattr(backend, "last_turn_id", None)
+        thread_info = getattr(backend, "last_thread_info", None)
+
+        if session_id and turn_id:
+            app_server_meta = self._build_app_server_meta(
+                thread_id=session_id,
+                turn_id=turn_id,
+                thread_info=thread_info if isinstance(thread_info, dict) else None,
+                model=model,
+                reasoning_effort=reasoning,
+            )
+            if agent_id != "codex":
+                app_server_meta["agent"] = agent_id
+            self._merge_run_index_entry(run_id, {"app_server": app_server_meta})
+
+        return 0
 
     def _log_app_server_output(self, run_id: int, messages: list[str]) -> None:
         if not messages:
@@ -1438,36 +1806,13 @@ class Engine:
         except GitError as exc:
             self.log_line(run_id, f"git commit failed: {exc}")
 
-    def _build_app_server_supervisor(
-        self, env_builder: Any
-    ) -> WorkspaceAppServerSupervisor:
-        config = self.config.app_server
-        return WorkspaceAppServerSupervisor(
-            config.command,
-            state_root=config.state_root,
-            env_builder=env_builder,
-            logger=self._app_server_logger,
-            notification_handler=self._handle_app_server_notification,
-            auto_restart=config.auto_restart,
-            max_handles=config.max_handles,
-            idle_ttl_seconds=config.idle_ttl_seconds,
-            request_timeout=config.request_timeout,
-            turn_stall_timeout_seconds=config.turn_stall_timeout_seconds,
-            turn_stall_poll_interval_seconds=config.turn_stall_poll_interval_seconds,
-            turn_stall_recovery_min_interval_seconds=config.turn_stall_recovery_min_interval_seconds,
-            max_message_bytes=config.client.max_message_bytes,
-            oversize_preview_bytes=config.client.oversize_preview_bytes,
-            max_oversize_drain_bytes=config.client.max_oversize_drain_bytes,
-            restart_backoff_initial_seconds=config.client.restart_backoff_initial_seconds,
-            restart_backoff_max_seconds=config.client.restart_backoff_max_seconds,
-            restart_backoff_jitter_ratio=config.client.restart_backoff_jitter_ratio,
-        )
-
-    def _ensure_app_server_supervisor(
-        self, env_builder: Any
-    ) -> WorkspaceAppServerSupervisor:
+    def _ensure_app_server_supervisor(self, event_prefix: str) -> Optional[Any]:
         if self._app_server_supervisor is None:
-            self._app_server_supervisor = self._build_app_server_supervisor(env_builder)
+            if self._app_server_supervisor_factory is None:
+                return None
+            self._app_server_supervisor = self._app_server_supervisor_factory(
+                event_prefix, self._handle_app_server_notification
+            )
         return self._app_server_supervisor
 
     async def _close_app_server_supervisor(self) -> None:
@@ -1476,13 +1821,31 @@ class Engine:
         supervisor = self._app_server_supervisor
         self._app_server_supervisor = None
         try:
-            await supervisor.close_all()
+            close_all = getattr(supervisor, "close_all", None)
+            if close_all is None:
+                return
+            result = close_all()
+            if inspect.isawaitable(result):
+                await result
         except Exception as exc:
             self._app_server_logger.warning(
                 "app-server supervisor close failed: %s", exc
             )
 
-    def _build_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
+    async def _close_agent_backends(self) -> None:
+        if self._backend_factory is None:
+            return
+        close_all = getattr(self._backend_factory, "close_all", None)
+        if close_all is None:
+            return
+        try:
+            result = close_all()
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:
+            self._app_server_logger.warning("agent backend close failed: %s", exc)
+
+    def _build_opencode_supervisor(self) -> Optional[Any]:
         config = self.config.app_server
         opencode_command = self.config.agent_serve_command("opencode")
         opencode_binary = None
@@ -1515,7 +1878,7 @@ class Engine:
 
         return supervisor
 
-    def _ensure_opencode_supervisor(self) -> Optional[OpenCodeSupervisor]:
+    def _ensure_opencode_supervisor(self) -> Optional[Any]:
         if self._opencode_supervisor is None:
             self._opencode_supervisor = self._build_opencode_supervisor()
         return self._opencode_supervisor
@@ -1548,7 +1911,7 @@ class Engine:
         *,
         timeout: Optional[float],
         external_stop_flag: Optional[threading.Event],
-        supervisor: Optional[WorkspaceAppServerSupervisor] = None,
+        supervisor: Optional[Any] = None,
     ) -> tuple[Any, bool]:
         stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
         turn_task = asyncio.create_task(handle.wait(timeout=None))
@@ -1572,6 +1935,11 @@ class Engine:
                 self.log_line(
                     run_id, "error: app-server turn timed out; interrupting app-server"
                 )
+                self._emit_canonical_event(
+                    run_id,
+                    FlowEventType.RUN_TIMEOUT,
+                    {"context": "app_server_turn", "timeout_seconds": timeout},
+                )
             if stopped and not turn_task.done():
                 interrupted = True
                 self.log_line(run_id, "info: stop requested; interrupting app-server")
@@ -1580,7 +1948,7 @@ class Engine:
                     await client.turn_interrupt(
                         handle.turn_id, thread_id=handle.thread_id
                     )
-                except CodexAppServerError as exc:
+                except Exception as exc:
                     self.log_line(run_id, f"error: app-server interrupt failed: {exc}")
                     if interrupted:
                         self.kill_running_process()
@@ -1595,7 +1963,7 @@ class Engine:
                     )
                     if interrupted:
                         self.kill_running_process()
-                        raise CodexAppServerError("App-server interrupt timed out")
+                        raise RuntimeError("App-server interrupt timed out")
                     if supervisor is not None:
                         await supervisor.close_all()
                     raise asyncio.TimeoutError()
@@ -1604,19 +1972,11 @@ class Engine:
                 raise asyncio.TimeoutError()
             return result, interrupted
         finally:
-            stop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stop_task
+            await self._cancel_task_with_notice(run_id, stop_task, name="stop_task")
             if timeout_task is not None:
-                timeout_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await timeout_task
-
-    async def _abort_opencode(self, client: Any, session_id: str, run_id: int) -> None:
-        try:
-            await client.abort(session_id)
-        except Exception as exc:
-            self.log_line(run_id, f"error: opencode abort failed: {exc}")
+                await self._cancel_task_with_notice(
+                    run_id, timeout_task, name="timeout_task"
+                )
 
     async def _run_opencode_app_server_async(
         self,
@@ -1627,242 +1987,18 @@ class Engine:
         reasoning: Optional[str],
         external_stop_flag: Optional[threading.Event] = None,
     ) -> int:
-        supervisor = self._ensure_opencode_supervisor()
-        if supervisor is None:
-            self.log_line(
-                run_id, "error: opencode backend is not configured in this repo"
-            )
-            return 1
-        try:
-            client = await supervisor.get_client(self.repo_root)
-        except OpenCodeSupervisorError as exc:
-            self.log_line(run_id, f"error: opencode backend unavailable: {exc}")
-            return 1
-
-        with self._app_server_threads_lock:
-            key = "autorunner.opencode"
-            thread_id = self._app_server_threads.get_thread_id(key)
-            if thread_id:
-                try:
-                    await client.get_session(thread_id)
-                except Exception as exc:
-                    self._app_server_logger.debug(
-                        "Failed to get existing opencode session '%s' for run %s: %s",
-                        thread_id,
-                        run_id,
-                        exc,
-                    )
-                    self._app_server_threads.reset_thread(key)
-                    thread_id = None
-            if not thread_id:
-                session = await client.create_session(directory=str(self.repo_root))
-                thread_id = extract_session_id(session, allow_fallback_id=True)
-                if not isinstance(thread_id, str) or not thread_id:
-                    self.log_line(run_id, "error: opencode did not return a session id")
-                    return 1
-                self._app_server_threads.set_thread_id(key, thread_id)
-
-        model_payload = split_model_id(model)
-        missing_env = await opencode_missing_env(
-            client, str(self.repo_root), model_payload
-        )
-        if missing_env:
-            provider_id = model_payload.get("providerID") if model_payload else None
-            self.log_line(
-                run_id,
-                "error: opencode provider "
-                f"{provider_id or 'selected'} requires env vars: "
-                f"{', '.join(missing_env)}",
-            )
-            return 1
-        opencode_turn_started = False
-        await supervisor.mark_turn_started(self.repo_root)
-        opencode_turn_started = True
-        turn_id = build_turn_id(thread_id)
-        self._update_run_telemetry(run_id, thread_id=thread_id, turn_id=turn_id)
-        app_server_meta = self._build_app_server_meta(
-            thread_id=thread_id,
-            turn_id=turn_id,
-            thread_info=None,
-            model=model,
-            reasoning_effort=reasoning,
-        )
-        app_server_meta["agent"] = "opencode"
-        self._merge_run_index_entry(run_id, {"app_server": app_server_meta})
-
-        active = ActiveOpencodeRun(
-            session_id=thread_id,
-            turn_id=turn_id,
-            client=client,
-            interrupted=False,
-            interrupt_event=asyncio.Event(),
-        )
         with state_lock(self.state_path):
             state = load_state(self.state_path)
-        permission_policy = map_approval_policy_to_permission(
-            state.autorunner_approval_policy, default="allow"
+        return await self._run_agent_backend_async(
+            agent_id="opencode",
+            prompt=prompt,
+            run_id=run_id,
+            state=state,
+            session_key="autorunner.opencode",
+            model=model,
+            reasoning=reasoning,
+            external_stop_flag=external_stop_flag,
         )
-
-        async def _opencode_part_handler(
-            part_type: str, part: dict[str, Any], delta_text: Optional[str]
-        ) -> None:
-            if part_type == "usage" and isinstance(part, dict):
-                for line in self._opencode_event_formatter.format_usage(part):
-                    self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
-            else:
-                for line in self._opencode_event_formatter.format_part(
-                    part_type, part, delta_text
-                ):
-                    self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
-
-        ready_event = asyncio.Event()
-        output_task = asyncio.create_task(
-            collect_opencode_output(
-                client,
-                session_id=thread_id,
-                workspace_path=str(self.repo_root),
-                model_payload=model_payload,
-                permission_policy=permission_policy,
-                question_policy="auto_first_option",
-                should_stop=active.interrupt_event.is_set,
-                part_handler=_opencode_part_handler,
-                ready_event=ready_event,
-                stall_timeout_seconds=self.config.opencode.session_stall_timeout_seconds,
-            )
-        )
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(ready_event.wait(), timeout=2.0)
-        prompt_task = asyncio.create_task(
-            client.prompt_async(
-                thread_id,
-                message=prompt,
-                model=model_payload,
-                variant=reasoning,
-            )
-        )
-        stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
-        timeout_task = None
-        turn_timeout = self.config.app_server.turn_timeout_seconds
-        if turn_timeout:
-            timeout_task = asyncio.create_task(asyncio.sleep(turn_timeout))
-        timed_out = False
-        try:
-            try:
-                prompt_response = await prompt_task
-                prompt_info = (
-                    prompt_response.get("info")
-                    if isinstance(prompt_response, dict)
-                    else {}
-                )
-                tokens = (
-                    prompt_info.get("tokens") if isinstance(prompt_info, dict) else {}
-                )
-                if isinstance(tokens, dict):
-                    input_tokens = int(tokens.get("input", 0) or 0)
-                    cached_read = (
-                        int(tokens.get("cache", {}).get("read", 0) or 0)
-                        if isinstance(tokens.get("cache"), dict)
-                        else 0
-                    )
-                    output_tokens = int(tokens.get("output", 0) or 0)
-                    reasoning_tokens = int(tokens.get("reasoning", 0) or 0)
-                    total_tokens = (
-                        input_tokens + cached_read + output_tokens + reasoning_tokens
-                    )
-                    token_total = {
-                        "total": total_tokens,
-                        "input_tokens": input_tokens,
-                        "prompt_tokens": input_tokens,
-                        "cached_input_tokens": cached_read,
-                        "output_tokens": output_tokens,
-                        "completion_tokens": output_tokens,
-                        "reasoning_tokens": reasoning_tokens,
-                        "reasoning_output_tokens": reasoning_tokens,
-                    }
-                    self._update_run_telemetry(run_id, token_total=token_total)
-            except Exception as exc:
-                active.interrupt_event.set()
-                output_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await output_task
-                self.log_line(run_id, f"error: opencode prompt failed: {exc}")
-                return 1
-            tasks = {output_task, stop_task}
-            if timeout_task is not None:
-                tasks.add(timeout_task)
-            done, _pending = await asyncio.wait(
-                tasks, return_when=asyncio.FIRST_COMPLETED
-            )
-            timed_out = timeout_task is not None and timeout_task in done
-            stopped = stop_task in done
-            if timed_out:
-                self.log_line(
-                    run_id, "error: opencode turn timed out; aborting session"
-                )
-                active.interrupt_event.set()
-            if stopped:
-                active.interrupted = True
-                active.interrupt_event.set()
-                self.log_line(run_id, "info: stop requested; aborting opencode")
-            if timed_out or stopped:
-                await self._abort_opencode(client, thread_id, run_id)
-                done, _pending = await asyncio.wait(
-                    {output_task}, timeout=AUTORUNNER_INTERRUPT_GRACE_SECONDS
-                )
-                if not done:
-                    output_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await output_task
-                    if timed_out:
-                        return 1
-                    self._last_run_interrupted = active.interrupted
-                    return 0
-            output_result = await output_task
-            if not output_result.text and not output_result.error:
-                fallback = parse_message_response(prompt_response)
-                if fallback.text:
-                    output_result = OpenCodeTurnOutput(
-                        text=fallback.text, error=fallback.error
-                    )
-                    self.log_line(run_id, "info: opencode fallback message used")
-        finally:
-            # Flush buffered reasoning deltas before cleanup, so partial reasoning is still logged
-            # even when the turn is aborted, times out, or is interrupted.
-            for line in self._opencode_event_formatter.flush_all_reasoning():
-                self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
-            stop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stop_task
-            if timeout_task is not None:
-                timeout_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await timeout_task
-            if opencode_turn_started:
-                await supervisor.mark_turn_finished(self.repo_root)
-
-        if not output_result.text:
-            self.log_line(
-                run_id,
-                "info: opencode returned empty output (error=%s)"
-                % (output_result.error or "none"),
-            )
-        if output_result.text:
-            handle_agent_output(
-                self._log_app_server_output,
-                self._write_run_artifact,
-                self._merge_run_index_entry,
-                run_id,
-                output_result.text,
-            )
-        if output_result.error:
-            self.log_line(
-                run_id, f"error: opencode session error: {output_result.error}"
-            )
-            return 1
-        self._last_run_interrupted = active.interrupted
-        if timed_out:
-            return 1
-        return 0
 
     async def _run_loop_async(
         self,
@@ -2076,6 +2212,7 @@ class Engine:
                 )
             await self._close_app_server_supervisor()
             await self._close_opencode_supervisor()
+            await self._close_agent_backends()
         # IMPORTANT: lock ownership is managed by the caller (CLI/Hub/Server runner).
         # Engine.run_loop must never unconditionally mutate the lock file.
 
@@ -2145,8 +2282,8 @@ class Engine:
         }
         payload = {k: v for k, v in payload.items() if v is not None}
 
-        opencode_supervisor: Optional[OpenCodeSupervisor] = None
-        app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+        opencode_supervisor: Optional[Any] = None
+        app_server_supervisor: Optional[Any] = None
 
         if agent == "codex":
             if not self.config.app_server.command:
@@ -2154,20 +2291,12 @@ class Engine:
                     "Skipping end-of-run review: codex backend not configured"
                 )
                 return
-
-            def _env_builder(
-                workspace_root: Path, _workspace_id: str, state_dir: Path
-            ) -> dict[str, str]:
-                state_dir.mkdir(parents=True, exist_ok=True)
-                return build_app_server_env(
-                    self.config.app_server.command,
-                    workspace_root,
-                    state_dir,
-                    logger=self._app_server_logger,
-                    event_prefix="review",
+            app_server_supervisor = self._ensure_app_server_supervisor("review")
+            if app_server_supervisor is None:
+                self._app_server_logger.info(
+                    "Skipping end-of-run review: codex supervisor factory unavailable"
                 )
-
-            app_server_supervisor = self._ensure_app_server_supervisor(_env_builder)
+                return
         else:
             opencode_supervisor = self._ensure_opencode_supervisor()
             if opencode_supervisor is None:
@@ -2441,6 +2570,23 @@ def doctor(start_path: Path) -> DoctorReport:
     checks: list[DoctorCheck] = []
     config = repo_config or hub_config
     root = config.root
+    global_state_root = resolve_global_state_root(config=config)
+    if repo_config is not None:
+        repo_state_root = resolve_repo_state_root(repo_config.root)
+        _append_check(
+            checks,
+            "state.roots",
+            "ok",
+            f"Repo state root: {repo_state_root}; Global state root: {global_state_root}",
+        )
+    else:
+        _append_check(
+            checks,
+            "state.roots",
+            "warning",
+            f"Global state root: {global_state_root}",
+            "Run doctor from a repo to report repo-local state root.",
+        )
 
     if repo_config is not None:
         missing = []
@@ -2554,28 +2700,6 @@ def doctor(start_path: Path) -> DoctorReport:
                     "ok",
                     "Server auth token env var is set for non-loopback host.",
                 )
-
-    static_dir, static_context = resolve_static_dir()
-    try:
-        missing_assets = missing_static_assets(static_dir)
-        if missing_assets:
-            _append_check(
-                checks,
-                "static.assets",
-                "error",
-                f"Static UI assets missing in {static_dir}: {', '.join(missing_assets)}",
-                "Reinstall the package or rebuild the UI assets.",
-            )
-        else:
-            _append_check(
-                checks,
-                "static.assets",
-                "ok",
-                f"Static UI assets present in {static_dir}",
-            )
-    finally:
-        if static_context is not None:
-            static_context.close()
 
     if hub_config.manifest_path.exists():
         version = _parse_manifest_version(hub_config.manifest_path)

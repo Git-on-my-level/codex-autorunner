@@ -1,8 +1,13 @@
+import logging
 from pathlib import Path
 
 import pytest
 
-from codex_autorunner.workspace.paths import normalize_workspace_rel_path
+from codex_autorunner.workspace.paths import (
+    normalize_workspace_rel_path,
+    write_workspace_doc,
+    write_workspace_file,
+)
 
 
 def test_rejects_absolute_and_parent_refs(tmp_path: Path) -> None:
@@ -40,3 +45,45 @@ def test_blocks_symlink_escape(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         normalize_workspace_rel_path(repo_root, "link/secret.txt")
+
+
+def test_write_workspace_file_logs_draft_invalidation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    def _raise(*args, **kwargs) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "codex_autorunner.workspace.paths.draft_utils.invalidate_drafts_for_path",
+        _raise,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="codex_autorunner.workspace.paths"):
+        content = write_workspace_file(repo_root, "notes/todo.md", "hello")
+
+    assert content == "hello"
+    assert "workspace.draft_invalidation_failed" in caplog.text
+
+
+def test_write_workspace_doc_logs_draft_invalidation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    def _raise(*args, **kwargs) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "codex_autorunner.workspace.paths.draft_utils.invalidate_drafts_for_path",
+        _raise,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="codex_autorunner.workspace.paths"):
+        content = write_workspace_doc(repo_root, "spec", "spec data")
+
+    assert content == "spec data"
+    assert "workspace.draft_invalidation_failed" in caplog.text

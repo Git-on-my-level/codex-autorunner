@@ -21,6 +21,7 @@ from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
+from ...core.state_roots import resolve_global_state_root
 from ...core.text_delta_coalescer import TextDeltaCoalescer
 from ...core.utils import build_opencode_supervisor
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
@@ -47,7 +48,6 @@ from .config import (
 )
 from .constants import (
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
-    DEFAULT_WORKSPACE_STATE_ROOT,
     QUEUED_PLACEHOLDER_TEXT,
     TurnKey,
 )
@@ -182,7 +182,7 @@ class TelegramBotService(
             config.state_file, default_approval_mode=config.defaults.approval_mode
         )
         self._router = TopicRouter(self._store)
-        self._app_server_state_root = Path(DEFAULT_WORKSPACE_STATE_ROOT).expanduser()
+        self._app_server_state_root = resolve_global_state_root() / "workspaces"
         self._app_server_supervisor = WorkspaceAppServerSupervisor(
             config.app_server_command,
             state_root=self._app_server_state_root,

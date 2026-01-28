@@ -5,7 +5,7 @@ import re
 import shutil
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
@@ -17,7 +17,7 @@ from ..manifest import (
     save_manifest,
 )
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
-from .engine import Engine
+from .engine import AppServerSupervisorFactory, BackendFactory, Engine
 from .git_utils import (
     GitError,
     git_available,
@@ -32,6 +32,9 @@ from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub")
+
+BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
+AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFactory]
 
 
 def _git_failure_detail(proc) -> str:
@@ -195,9 +198,28 @@ class RepoRunner:
         *,
         repo_config: RepoConfig,
         spawn_fn: Optional[SpawnRunnerFn] = None,
+        backend_factory_builder: Optional[BackendFactoryBuilder] = None,
+        app_server_supervisor_factory_builder: Optional[
+            AppServerSupervisorFactoryBuilder
+        ] = None,
     ):
         self.repo_id = repo_id
-        self._engine = Engine(repo_root, config=repo_config)
+        backend_factory = (
+            backend_factory_builder(repo_root, repo_config)
+            if backend_factory_builder is not None
+            else None
+        )
+        app_server_supervisor_factory = (
+            app_server_supervisor_factory_builder(repo_config)
+            if app_server_supervisor_factory_builder is not None
+            else None
+        )
+        self._engine = Engine(
+            repo_root,
+            config=repo_config,
+            backend_factory=backend_factory,
+            app_server_supervisor_factory=app_server_supervisor_factory,
+        )
         self._controller = ProcessRunnerController(self._engine, spawn_fn=spawn_fn)
 
     @property
@@ -219,21 +241,44 @@ class RepoRunner:
 
 class HubSupervisor:
     def __init__(
-        self, hub_config: HubConfig, *, spawn_fn: Optional[SpawnRunnerFn] = None
+        self,
+        hub_config: HubConfig,
+        *,
+        spawn_fn: Optional[SpawnRunnerFn] = None,
+        backend_factory_builder: Optional[BackendFactoryBuilder] = None,
+        app_server_supervisor_factory_builder: Optional[
+            AppServerSupervisorFactoryBuilder
+        ] = None,
     ):
         self.hub_config = hub_config
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
         self._runners: Dict[str, RepoRunner] = {}
         self._spawn_fn = spawn_fn
+        self._backend_factory_builder = backend_factory_builder
+        self._app_server_supervisor_factory_builder = (
+            app_server_supervisor_factory_builder
+        )
         self.state = load_hub_state(self.state_path, self.hub_config.root)
         self._list_cache_at: Optional[float] = None
         self._list_cache: Optional[List[RepoSnapshot]] = None
         self._reconcile_startup()
 
     @classmethod
-    def from_path(cls, path: Path) -> "HubSupervisor":
+    def from_path(
+        cls,
+        path: Path,
+        *,
+        backend_factory_builder: Optional[BackendFactoryBuilder] = None,
+        app_server_supervisor_factory_builder: Optional[
+            AppServerSupervisorFactoryBuilder
+        ] = None,
+    ) -> "HubSupervisor":
         config = load_hub_config(path)
-        return cls(config)
+        return cls(
+            config,
+            backend_factory_builder=backend_factory_builder,
+            app_server_supervisor_factory_builder=app_server_supervisor_factory_builder,
+        )
 
     def scan(self) -> List[RepoSnapshot]:
         self._invalidate_list_cache()
@@ -268,8 +313,23 @@ class HubSupervisor:
                 repo_config = derive_repo_config(
                     self.hub_config, record.absolute_path, load_env=False
                 )
+                backend_factory = (
+                    self._backend_factory_builder(record.absolute_path, repo_config)
+                    if self._backend_factory_builder is not None
+                    else None
+                )
+                app_server_supervisor_factory = (
+                    self._app_server_supervisor_factory_builder(repo_config)
+                    if self._app_server_supervisor_factory_builder is not None
+                    else None
+                )
                 controller = ProcessRunnerController(
-                    Engine(record.absolute_path, config=repo_config)
+                    Engine(
+                        record.absolute_path,
+                        config=repo_config,
+                        backend_factory=backend_factory,
+                        app_server_supervisor_factory=app_server_supervisor_factory,
+                    )
                 )
                 controller.reconcile()
             except Exception as exc:
@@ -777,6 +837,10 @@ class HubSupervisor:
             repo_root,
             repo_config=repo_config,
             spawn_fn=self._spawn_fn,
+            backend_factory_builder=self._backend_factory_builder,
+            app_server_supervisor_factory_builder=(
+                self._app_server_supervisor_factory_builder
+            ),
         )
         self._runners[repo_id] = runner
         return runner

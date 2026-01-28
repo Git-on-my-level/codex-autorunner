@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from ..core.config import load_repo_config
 from ..core.engine import Engine
 from ..core.flows import (
     FlowController,
@@ -31,6 +32,10 @@ from ..core.flows.worker_process import (
 )
 from ..core.utils import atomic_write, find_repo_root
 from ..flows.ticket_flow import build_ticket_flow_definition
+from ..integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from ..integrations.github.service import GitHubError, GitHubService
 from ..tickets import AgentPool
 from ..tickets.files import (
@@ -119,7 +124,13 @@ def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
         return _definition_cache[key]
 
     if flow_type == "ticket_flow":
-        engine = Engine(repo_root)
+        config = load_repo_config(repo_root)
+        engine = Engine(
+            repo_root,
+            config=config,
+            backend_factory=build_agent_backend_factory(repo_root, config),
+            app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+        )
         agent_pool = AgentPool(engine.config)
         definition = build_ticket_flow_definition(agent_pool=agent_pool)
     else:
