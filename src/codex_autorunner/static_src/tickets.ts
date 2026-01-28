@@ -110,6 +110,7 @@ let dispatchHistoryRunId: string | null = null;
 let eventSourceRetryAttempt = 0;
 let eventSourceRetryTimerId: ReturnType<typeof setTimeout> | null = null;
 const lastSeenSeqByRun: Record<string, number> = {};
+let ticketListCache: { ticket_dir?: string; tickets?: TicketFile[] } | null = null;
 
 // Dispatch panel collapse state (persisted to localStorage)
 const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
@@ -632,6 +633,20 @@ function handleFlowEvent(event: FlowEvent): void {
       scheduleLiveOutputRender();
     }
   }
+
+  // Handle step progress events carrying ticket selection so UI can highlight immediately
+  if (event.event_type === "step_progress") {
+    const nextTicket = event.data?.current_ticket as string | undefined;
+    if (nextTicket) {
+      currentActiveTicket = nextTicket;
+      currentFlowStatus = "running";
+      const { current } = els();
+      if (current) current.textContent = currentActiveTicket;
+      if (ticketListCache) {
+        renderTickets(ticketListCache);
+      }
+    }
+  }
   
   // Handle flow lifecycle events
   if (event.event_type === "flow_completed" || 
@@ -835,6 +850,7 @@ function truncate(text: string, max = 100): string {
 }
 
 function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | null): void {
+  ticketListCache = data;
   const { tickets, dir } = els();
   if (dir) dir.textContent = data?.ticket_dir || "–";
   if (!tickets) return;
@@ -1135,6 +1151,7 @@ async function loadTicketFiles(ctx?: RefreshContext): Promise<void> {
     }, { restoreOnNextFrame: true });
     ticketsHydrated = true;
   } catch (err) {
+    ticketListCache = null;
     preserveScroll(tickets, () => {
       renderTickets(null);
     }, { restoreOnNextFrame: true });
