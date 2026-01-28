@@ -52,6 +52,10 @@ repo_defaults:
     # Stop after wallclock seconds (null = no limit).
     max_wallclock_seconds: null
 
+  autorunner:
+    # Reuse app-server sessions across autorunner runs. Default is stateless.
+    reuse_session: false
+
   git:
     # Auto-commit after a run.
     auto_commit: false

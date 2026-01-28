@@ -1298,8 +1298,11 @@ class Engine:
             )
             return 1
 
-        with self._app_server_threads_lock:
-            session_id = self._app_server_threads.get_thread_id(session_key)
+        reuse_session = bool(getattr(self.config, "autorunner_reuse_session", False))
+        session_id: Optional[str] = None
+        if reuse_session:
+            with self._app_server_threads_lock:
+                session_id = self._app_server_threads.get_thread_id(session_key)
 
         try:
             session_id = await backend.start_session(
@@ -1318,8 +1321,9 @@ class Engine:
             )
             return 1
 
-        with self._app_server_threads_lock:
-            self._app_server_threads.set_thread_id(session_key, session_id)
+        if reuse_session:
+            with self._app_server_threads_lock:
+                self._app_server_threads.set_thread_id(session_key, session_id)
 
         self._update_run_telemetry(run_id, thread_id=session_id)
 

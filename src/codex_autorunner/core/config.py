@@ -128,6 +128,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             },
         },
     },
+    "autorunner": {
+        "reuse_session": False,
+    },
     "ticket_flow": {
         "approval_mode": "yolo",
         # Keep ticket_flow deterministic by default; surfaces can tighten this.
@@ -420,6 +423,7 @@ REPO_DEFAULT_KEYS = {
     "codex",
     "prompt",
     "runner",
+    "autorunner",
     "ticket_flow",
     "git",
     "github",
@@ -819,6 +823,7 @@ class RepoConfig:
     runner_stop_after_runs: Optional[int]
     runner_max_wallclock_seconds: Optional[int]
     runner_no_progress_threshold: int
+    autorunner_reuse_session: bool
     ticket_flow: Dict[str, Any]
     git_auto_commit: bool
     git_commit_message_template: str
@@ -1507,6 +1512,14 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
     )
     update_skip_checks = bool(update_cfg.get("skip_checks", False))
+    autorunner_cfg = cfg.get("autorunner")
+    autorunner_cfg = cast(
+        Dict[str, Any], autorunner_cfg if isinstance(autorunner_cfg, dict) else {}
+    )
+    reuse_session_value = autorunner_cfg.get("reuse_session")
+    autorunner_reuse_session = (
+        bool(reuse_session_value) if reuse_session_value is not None else False
+    )
     return RepoConfig(
         raw=cfg,
         root=root,
@@ -1525,6 +1538,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         runner_stop_after_runs=cfg["runner"].get("stop_after_runs"),
         runner_max_wallclock_seconds=cfg["runner"].get("max_wallclock_seconds"),
         runner_no_progress_threshold=int(cfg["runner"].get("no_progress_threshold", 3)),
+        autorunner_reuse_session=autorunner_reuse_session,
         git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
         git_commit_message_template=str(cfg["git"].get("commit_message_template")),
         update_skip_checks=update_skip_checks,
@@ -1943,6 +1957,13 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
         val = runner.get(k)
         if val is not None and not isinstance(val, int):
             raise ConfigError(f"runner.{k} must be an integer or null")
+    autorunner_cfg = cfg.get("autorunner")
+    if autorunner_cfg is not None and not isinstance(autorunner_cfg, dict):
+        raise ConfigError("autorunner section must be a mapping if provided")
+    if isinstance(autorunner_cfg, dict):
+        reuse_session = autorunner_cfg.get("reuse_session")
+        if reuse_session is not None and not isinstance(reuse_session, bool):
+            raise ConfigError("autorunner.reuse_session must be boolean or null")
     ticket_flow_cfg = cfg.get("ticket_flow")
     if ticket_flow_cfg is not None and not isinstance(ticket_flow_cfg, dict):
         raise ConfigError("ticket_flow section must be a mapping if provided")
