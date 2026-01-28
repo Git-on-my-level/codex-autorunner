@@ -1,11 +1,13 @@
 import asyncio
 import json
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional
 
 TurnKey = tuple[str, str]
+LOGGER = logging.getLogger("codex_autorunner.app_server")
 
 
 def extract_turn_id(payload: Any) -> Optional[str]:
@@ -236,9 +238,14 @@ class AppServerEventBuffer:
         try:
             lines = formatter.format_event(message)
         except Exception:
+            LOGGER.warning("Failed to format app server event log line.", exc_info=True)
             return
         for line in lines:
             try:
                 emit(line)
             except Exception:
+                LOGGER.warning(
+                    "Failed to emit app server event log line.",
+                    exc_info=True,
+                )
                 continue

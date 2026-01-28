@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -16,6 +17,8 @@ FILE_CHAT_KEY = "file_chat"
 FILE_CHAT_OPENCODE_KEY = "file_chat.opencode"
 FILE_CHAT_PREFIX = "file_chat."
 FILE_CHAT_OPENCODE_PREFIX = "file_chat.opencode."
+
+LOGGER = logging.getLogger("codex_autorunner.app_server")
 
 # Static keys that can be reset/managed via the UI.
 FEATURE_KEYS = {
@@ -177,8 +180,14 @@ class AppServerThreadRegistry:
         try:
             atomic_write(self._notice_path(), json.dumps(notice, indent=2) + "\n")
         except Exception:
-            pass
+            LOGGER.warning(
+                "Failed to write app server thread corruption notice.",
+                exc_info=True,
+            )
         try:
             self._save_unlocked({})
         except Exception:
-            pass
+            LOGGER.warning(
+                "Failed to reset app server thread registry after corruption.",
+                exc_info=True,
+            )
