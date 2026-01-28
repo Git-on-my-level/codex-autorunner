@@ -1395,6 +1395,7 @@ def create_hub_app(
         per_repo, unmatched, status = get_hub_usage_summary_cached(
             repo_map,
             default_codex_home(),
+            config=context.config,
             since=since_dt,
             until=until_dt,
         )
@@ -1438,6 +1439,7 @@ def create_hub_app(
             series, status = get_hub_usage_series_cached(
                 repo_map,
                 default_codex_home(),
+                config=context.config,
                 since=since_dt,
                 until=until_dt,
                 bucket=bucket,

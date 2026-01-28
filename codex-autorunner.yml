@@ -139,6 +139,14 @@ repo_defaults:
     reasoning: null
     max_wallclock_seconds: null
 
+  usage:
+    # Cache scope for aggregated usage series: global|repo
+    cache_scope: global
+    # Override global CODEX_HOME for usage cache (null = CODEX_HOME env or ~/.codex)
+    global_cache_root: null
+    # Repo-local cache path (relative to repo root).
+    repo_cache_path: .codex-autorunner/usage/usage_series_cache.json
+
 agents:
   # Agent binaries/commands (add new agents here; do not hardcode).
   codex:
@@ -263,6 +271,14 @@ hub:
 update:
   # Skip running ./scripts/check.sh during system updates.
   skip_checks: false
+
+usage:
+  # Cache scope for aggregated usage series: global|repo
+  cache_scope: global
+  # Override global CODEX_HOME for usage cache (null = CODEX_HOME env or ~/.codex)
+  global_cache_root: null
+  # Hub-level cache path (relative to repo root).
+  repo_cache_path: .codex-autorunner/usage/usage_series_cache.json
 
 app_server:
   # Command used to start the Codex app-server.

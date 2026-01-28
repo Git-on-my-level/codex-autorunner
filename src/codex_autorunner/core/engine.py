@@ -378,6 +378,7 @@ class Engine:
             "todo_snapshot": todo_snapshot,
         }
         telemetry = self._snapshot_run_telemetry(run_id)
+        usage_payload: Optional[dict[str, Any]] = None
         if (
             telemetry
             and telemetry.thread_id
@@ -390,12 +391,26 @@ class Engine:
                     thread_id=telemetry.thread_id, run_id=run_id
                 )
             delta = self._compute_token_delta(baseline, telemetry.token_total)
-            run_updates["token_usage"] = {
+            token_usage_payload = {
                 "delta": delta,
                 "thread_total_before": baseline,
                 "thread_total_after": telemetry.token_total,
             }
+            run_updates["token_usage"] = token_usage_payload
+            usage_payload = {
+                "run_id": run_id,
+                "captured_at": timestamp(),
+                "agent": validated_agent,
+                "thread_id": telemetry.thread_id,
+                "turn_id": telemetry.turn_id,
+                "token_usage": token_usage_payload,
+                "cache_scope": getattr(self.config.usage, "cache_scope", "global"),
+            }
         artifacts: dict[str, str] = {}
+        if usage_payload is not None:
+            usage_path = self._write_run_usage_artifact(run_id, usage_payload)
+            if usage_path is not None:
+                artifacts["usage_path"] = str(usage_path)
         redact_enabled = self.config.security.get("redact_run_logs", True)
         if telemetry and telemetry.plan is not None:
             plan_content = self._serialize_plan_content(
@@ -1327,6 +1342,25 @@ class Engine:
         path = self.log_path.parent / "runs" / f"run-{run_id}.{name}"
         atomic_write(path, content)
         return path
+
+    def _write_run_usage_artifact(
+        self, run_id: int, payload: dict[str, Any]
+    ) -> Optional[Path]:
+        self._ensure_run_log_dir()
+        run_dir = self.log_path.parent / "runs" / str(run_id)
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            path = run_dir / "usage.json"
+            atomic_write(
+                path,
+                json.dumps(payload, ensure_ascii=True, indent=2, default=str),
+            )
+            return path
+        except OSError as exc:
+            self._app_server_logger.warning(
+                "Failed to write usage artifact for run %s: %s", run_id, exc
+            )
+            return None
 
     def _app_server_notifications_path(self, run_id: int) -> Path:
         return (

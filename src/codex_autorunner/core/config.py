@@ -195,6 +195,11 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "opencode": {
         "session_stall_timeout_seconds": 60,
     },
+    "usage": {
+        "cache_scope": "global",
+        "global_cache_root": None,
+        "repo_cache_path": ".codex-autorunner/usage/usage_series_cache.json",
+    },
     "server": {
         "host": "127.0.0.1",
         "port": 4173,
@@ -434,6 +439,7 @@ REPO_DEFAULT_KEYS = {
     "server_log",
     "review",
     "opencode",
+    "usage",
 }
 DEFAULT_REPO_DEFAULTS = {
     key: json.loads(json.dumps(DEFAULT_REPO_CONFIG[key])) for key in REPO_DEFAULT_KEYS
@@ -448,6 +454,7 @@ REPO_SHARED_KEYS = {
     "static_assets",
     "housekeeping",
     "update",
+    "usage",
 }
 
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
@@ -606,6 +613,11 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     },
     "opencode": {
         "session_stall_timeout_seconds": 60,
+    },
+    "usage": {
+        "cache_scope": "global",
+        "global_cache_root": None,
+        "repo_cache_path": ".codex-autorunner/usage/usage_series_cache.json",
     },
     "server": {
         "host": "127.0.0.1",
@@ -795,6 +807,13 @@ class OpenCodeConfig:
     session_stall_timeout_seconds: Optional[float]
 
 
+@dataclasses.dataclass
+class UsageConfig:
+    cache_scope: str
+    global_cache_root: Path
+    repo_cache_path: Path
+
+
 @dataclasses.dataclass(frozen=True)
 class AgentConfig:
     binary: str
@@ -830,6 +849,7 @@ class RepoConfig:
     update_skip_checks: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
+    usage: UsageConfig
     server_host: str
     server_port: int
     server_base_path: str
@@ -880,6 +900,7 @@ class HubConfig:
     update_skip_checks: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
+    usage: UsageConfig
     server_host: str
     server_port: int
     server_base_path: str
@@ -1248,6 +1269,40 @@ def _parse_opencode_config(
     return OpenCodeConfig(session_stall_timeout_seconds=stall_timeout_seconds)
 
 
+def _parse_usage_config(
+    cfg: Optional[Dict[str, Any]],
+    root: Path,
+    defaults: Optional[Dict[str, Any]],
+) -> UsageConfig:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+    cache_scope = str(cfg.get("cache_scope", defaults.get("cache_scope", "global")))
+    cache_scope = cache_scope.lower().strip() or "global"
+    global_cache_raw = cfg.get("global_cache_root", defaults.get("global_cache_root"))
+    if global_cache_raw is None:
+        global_cache_raw = os.environ.get("CODEX_HOME", "~/.codex")
+    global_cache_root = resolve_config_path(
+        global_cache_raw,
+        root,
+        allow_absolute=True,
+        allow_home=True,
+        scope="usage.global_cache_root",
+    )
+    repo_cache_raw = cfg.get("repo_cache_path", defaults.get("repo_cache_path"))
+    if repo_cache_raw is None:
+        repo_cache_raw = ".codex-autorunner/usage/usage_series_cache.json"
+    repo_cache_path = resolve_config_path(
+        repo_cache_raw,
+        root,
+        scope="usage.repo_cache_path",
+    )
+    return UsageConfig(
+        cache_scope=cache_scope,
+        global_cache_root=global_cache_root,
+        repo_cache_path=repo_cache_path,
+    )
+
+
 def _parse_agents_config(
     cfg: Optional[Dict[str, Any]], defaults: Dict[str, Any]
 ) -> Dict[str, AgentConfig]:
@@ -1422,7 +1477,7 @@ def load_hub_config(start: Path) -> HubConfig:
     """Load the nearest hub config walking upward from the provided path."""
     config_path = _resolve_hub_config_path(start)
     merged = load_hub_config_data(config_path)
-    _validate_hub_config(merged)
+    _validate_hub_config(merged, root=config_path.parent.parent.resolve())
     return _build_hub_config(config_path, merged)
 
 
@@ -1468,7 +1523,7 @@ def load_repo_config(start: Path, hub_path: Optional[Path] = None) -> RepoConfig
     repo_root = _resolve_repo_root(start)
     hub_config_path = _resolve_hub_path_for_repo(repo_root, hub_path)
     hub_config = load_hub_config_data(hub_config_path)
-    _validate_hub_config(hub_config)
+    _validate_hub_config(hub_config, root=hub_config_path.parent.parent.resolve())
     hub = _build_hub_config(hub_config_path, hub_config)
     return derive_repo_config(hub, repo_root)
 
@@ -1550,6 +1605,9 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         ),
         opencode=_parse_opencode_config(
             cfg.get("opencode"), root, DEFAULT_REPO_CONFIG.get("opencode")
+        ),
+        usage=_parse_usage_config(
+            cfg.get("usage"), root, DEFAULT_REPO_CONFIG.get("usage")
         ),
         security=security_cfg,
         server_host=str(cfg["server"].get("host")),
@@ -1651,6 +1709,9 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         ),
         opencode=_parse_opencode_config(
             cfg.get("opencode"), root, DEFAULT_HUB_CONFIG.get("opencode")
+        ),
+        usage=_parse_usage_config(
+            cfg.get("usage"), root, DEFAULT_HUB_CONFIG.get("usage")
         ),
         server_host=str(cfg["server"]["host"]),
         server_port=int(cfg["server"]["port"]),
@@ -1868,6 +1929,47 @@ def _validate_update_config(cfg: Dict[str, Any]) -> None:
             raise ConfigError("update.skip_checks must be boolean or null")
 
 
+def _validate_usage_config(cfg: Dict[str, Any], *, root: Path) -> None:
+    usage_cfg = cfg.get("usage")
+    if usage_cfg is None:
+        return
+    if not isinstance(usage_cfg, dict):
+        raise ConfigError("usage section must be a mapping if provided")
+    cache_scope = usage_cfg.get("cache_scope")
+    if cache_scope is not None and not isinstance(cache_scope, str):
+        raise ConfigError("usage.cache_scope must be a string if provided")
+    if isinstance(cache_scope, str):
+        scope_val = cache_scope.strip().lower()
+        if scope_val and scope_val not in {"global", "repo"}:
+            raise ConfigError("usage.cache_scope must be 'global' or 'repo'")
+    global_cache_root = usage_cfg.get("global_cache_root")
+    if global_cache_root is not None:
+        if not isinstance(global_cache_root, str):
+            raise ConfigError("usage.global_cache_root must be a string or null")
+        try:
+            resolve_config_path(
+                global_cache_root,
+                root,
+                allow_absolute=True,
+                allow_home=True,
+                scope="usage.global_cache_root",
+            )
+        except ConfigPathError as exc:
+            raise ConfigError(str(exc)) from exc
+    repo_cache_path = usage_cfg.get("repo_cache_path")
+    if repo_cache_path is not None:
+        if not isinstance(repo_cache_path, str):
+            raise ConfigError("usage.repo_cache_path must be a string or null")
+        try:
+            resolve_config_path(
+                repo_cache_path,
+                root,
+                scope="usage.repo_cache_path",
+            )
+        except ConfigPathError as exc:
+            raise ConfigError(str(exc)) from exc
+
+
 def _validate_agents_config(cfg: Dict[str, Any]) -> None:
     agents_cfg = cfg.get("agents")
     if agents_cfg is None:
@@ -2019,6 +2121,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_app_server_config(cfg)
     _validate_opencode_config(cfg)
     _validate_update_config(cfg)
+    _validate_usage_config(cfg, root=root)
     notifications_cfg = cfg.get("notifications")
     if notifications_cfg is not None:
         if not isinstance(notifications_cfg, dict):
@@ -2155,7 +2258,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_telegram_bot_config(cfg)
 
 
-def _validate_hub_config(cfg: Dict[str, Any]) -> None:
+def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_version(cfg)
     if cfg.get("mode") != "hub":
         raise ConfigError("Hub config must set mode: hub")
@@ -2164,6 +2267,7 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
     _validate_agents_config(cfg)
     _validate_opencode_config(cfg)
     _validate_update_config(cfg)
+    _validate_usage_config(cfg, root=root)
     repo_defaults = cfg.get("repo_defaults")
     if repo_defaults is not None:
         if not isinstance(repo_defaults, dict):

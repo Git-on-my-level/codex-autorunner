@@ -1513,7 +1513,8 @@ class UsageSeriesCache:
         }
 
 
-_USAGE_SERIES_CACHES: Dict[str, UsageSeriesCache] = {}
+_USAGE_SERIES_CACHES: Dict[Tuple[str, str], UsageSeriesCache] = {}
+_REPO_USAGE_CACHE_MIGRATED: set[str] = set()
 
 
 def _build_series_entries(
@@ -1781,9 +1782,80 @@ def _build_hub_opencode_series(
     }
 
 
-def get_usage_series_cache(codex_home: Path) -> UsageSeriesCache:
-    cache_path = _default_usage_series_cache_path(codex_home)
-    key = str(cache_path)
+def _resolve_usage_cache_paths(
+    *,
+    config: Optional[Any] = None,
+    repo_root: Optional[Path] = None,
+    codex_home: Optional[Path] = None,
+) -> Tuple[Path, Path, str, Path]:
+    codex_root = (codex_home or default_codex_home()).expanduser()
+    cache_scope = "global"
+    cache_path = _default_usage_series_cache_path(codex_root)
+    global_cache_root = codex_root
+    usage_cfg: Optional[Any] = None
+    if config is not None:
+        usage_cfg = getattr(config, "usage", None)
+        if usage_cfg is None:
+            raw = getattr(config, "raw", None)
+            if isinstance(raw, dict):
+                usage_cfg = raw.get("usage")
+    if usage_cfg:
+        cache_scope = str(getattr(usage_cfg, "cache_scope", "global") or "global")
+        cache_scope = cache_scope.lower().strip() or "global"
+        global_root = getattr(usage_cfg, "global_cache_root", None)
+        repo_cache_path = getattr(usage_cfg, "repo_cache_path", None)
+        if global_root:
+            global_cache_root = Path(global_root)
+        if cache_scope == "repo":
+            if repo_cache_path:
+                cache_path = Path(repo_cache_path)
+            elif repo_root:
+                cache_path = (
+                    repo_root
+                    / ".codex-autorunner"
+                    / "usage"
+                    / "usage_series_cache.json"
+                )
+        else:
+            if global_root:
+                cache_path = _default_usage_series_cache_path(global_cache_root)
+            else:
+                cache_path = _default_usage_series_cache_path(codex_root)
+    return codex_root, cache_path, cache_scope, Path(global_cache_root)
+
+
+def _maybe_migrate_usage_cache(cache_path: Path, global_cache_path: Path) -> None:
+    cache_key = str(cache_path)
+    if cache_key in _REPO_USAGE_CACHE_MIGRATED:
+        return
+    _REPO_USAGE_CACHE_MIGRATED.add(cache_key)
+    if cache_path.exists() or not global_cache_path.exists():
+        return
+    try:
+        payload = global_cache_path.read_text(encoding="utf-8")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = cache_path.with_suffix(".tmp")
+        tmp_path.write_text(payload, encoding="utf-8")
+        tmp_path.replace(cache_path)
+        logger.warning(
+            "Imported global usage cache into repo cache at %s from %s",
+            cache_path,
+            global_cache_path,
+        )
+    except OSError as exc:
+        logger.warning(
+            "Failed to import global usage cache from %s to %s: %s",
+            global_cache_path,
+            cache_path,
+            exc,
+        )
+
+
+def get_usage_series_cache(
+    codex_home: Path, *, cache_path: Optional[Path] = None
+) -> UsageSeriesCache:
+    cache_path = cache_path or _default_usage_series_cache_path(codex_home)
+    key = (str(cache_path), str(codex_home))
     cache = _USAGE_SERIES_CACHES.get(key)
     if cache is None:
         cache = UsageSeriesCache(codex_home, cache_path)
@@ -1795,13 +1867,19 @@ def get_repo_usage_series_cached(
     repo_root: Path,
     codex_home: Optional[Path] = None,
     *,
+    config: Optional[Any] = None,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
     bucket: str = "day",
     segment: str = "none",
 ) -> Tuple[Dict[str, object], str]:
-    codex_root = (codex_home or default_codex_home()).expanduser()
-    cache = get_usage_series_cache(codex_root)
+    codex_root, cache_path, cache_scope, global_cache_root = _resolve_usage_cache_paths(
+        config=config, repo_root=repo_root, codex_home=codex_home
+    )
+    if cache_scope == "repo":
+        global_cache_path = _default_usage_series_cache_path(global_cache_root)
+        _maybe_migrate_usage_cache(cache_path, global_cache_path)
+    cache = get_usage_series_cache(codex_root, cache_path=cache_path)
     if segment == "agent":
         codex_series, status = cache.get_repo_series(
             repo_root, since=since, until=until, bucket=bucket, segment="none"
@@ -1829,11 +1907,17 @@ def get_repo_usage_summary_cached(
     repo_root: Path,
     codex_home: Optional[Path] = None,
     *,
+    config: Optional[Any] = None,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
 ) -> Tuple[UsageSummary, str]:
-    codex_root = (codex_home or default_codex_home()).expanduser()
-    cache = get_usage_series_cache(codex_root)
+    codex_root, cache_path, cache_scope, global_cache_root = _resolve_usage_cache_paths(
+        config=config, repo_root=repo_root, codex_home=codex_home
+    )
+    if cache_scope == "repo":
+        global_cache_path = _default_usage_series_cache_path(global_cache_root)
+        _maybe_migrate_usage_cache(cache_path, global_cache_path)
+    cache = get_usage_series_cache(codex_root, cache_path=cache_path)
     summary, status = cache.get_repo_summary(repo_root, since=since, until=until)
     opencode_summary = summarize_opencode_repo_usage(
         repo_root, since=since, until=until
@@ -1852,13 +1936,19 @@ def get_hub_usage_series_cached(
     repo_map: List[Tuple[str, Path]],
     codex_home: Optional[Path] = None,
     *,
+    config: Optional[Any] = None,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
     bucket: str = "day",
     segment: str = "none",
 ) -> Tuple[Dict[str, object], str]:
-    codex_root = (codex_home or default_codex_home()).expanduser()
-    cache = get_usage_series_cache(codex_root)
+    codex_root, cache_path, cache_scope, global_cache_root = _resolve_usage_cache_paths(
+        config=config, repo_root=None, codex_home=codex_home
+    )
+    if cache_scope == "repo":
+        global_cache_path = _default_usage_series_cache_path(global_cache_root)
+        _maybe_migrate_usage_cache(cache_path, global_cache_path)
+    cache = get_usage_series_cache(codex_root, cache_path=cache_path)
     if segment == "agent":
         codex_series, status = cache.get_hub_series(
             repo_map, since=since, until=until, bucket=bucket, segment="none"
@@ -1886,11 +1976,17 @@ def get_hub_usage_summary_cached(
     repo_map: List[Tuple[str, Path]],
     codex_home: Optional[Path] = None,
     *,
+    config: Optional[Any] = None,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
 ) -> Tuple[Dict[str, UsageSummary], UsageSummary, str]:
-    codex_root = (codex_home or default_codex_home()).expanduser()
-    cache = get_usage_series_cache(codex_root)
+    codex_root, cache_path, cache_scope, global_cache_root = _resolve_usage_cache_paths(
+        config=config, repo_root=None, codex_home=codex_home
+    )
+    if cache_scope == "repo":
+        global_cache_path = _default_usage_series_cache_path(global_cache_root)
+        _maybe_migrate_usage_cache(cache_path, global_cache_path)
+    cache = get_usage_series_cache(codex_root, cache_path=cache_path)
     per_repo, unmatched, status = cache.get_hub_summary(
         repo_map, since=since, until=until
     )
