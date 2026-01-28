@@ -247,6 +247,12 @@ class TelegramBotService(
             store=self._store,
             pause_targets=self._ticket_flow_pause_targets,
             send_message_with_outbox=self._send_message_with_outbox,
+            send_document=self._send_document,
+            pause_config=self._config.pause_dispatch_notifications,
+            default_notification_chat_id=self._config.default_notification_chat_id,
+            hub_root=hub_root,
+            manifest_path=manifest_path,
+            config_root=self._config.root,
         )
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
@@ -1027,7 +1033,7 @@ class TelegramBotService(
 
     def _load_ticket_flow_pause(
         self, workspace_root: Path
-    ) -> Optional[tuple[str, str, str]]:
+    ) -> Optional[tuple[str, str, str, Optional[Path]]]:
         return self._ticket_flow_bridge._load_ticket_flow_pause(workspace_root)
 
     def _latest_dispatch_seq(self, history_dir: Path) -> Optional[str]:
@@ -1035,13 +1041,6 @@ class TelegramBotService(
 
     def _format_ticket_flow_pause_reason(self, record: "FlowRunRecord") -> str:
         return self._ticket_flow_bridge._format_ticket_flow_pause_reason(record)
-
-    def _format_ticket_flow_pause_message(
-        self, run_id: str, seq: str, content: str
-    ) -> str:
-        return self._ticket_flow_bridge._format_ticket_flow_pause_message(
-            run_id, seq, content
-        )
 
     def _get_paused_ticket_flow(
         self, workspace_root: Path, preferred_run_id: Optional[str] = None
