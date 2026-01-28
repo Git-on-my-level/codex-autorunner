@@ -147,15 +147,17 @@ _SCRIPT = dedent(
             return 2
 
         errors: List[str] = []
-        checked = 0
         ticket_paths, name_errors = _ticket_paths(tickets_dir)
         errors.extend(name_errors)
 
         for path in ticket_paths:
-            checked += 1
             errors.extend(lint_ticket(path))
 
-        if not checked:
+        if not ticket_paths:
+            if errors:
+                for msg in errors:
+                    sys.stderr.write(msg + "\\n")
+                return 1
             sys.stderr.write(f"No tickets found in {tickets_dir}\\n")
             return 1
 
@@ -164,7 +166,7 @@ _SCRIPT = dedent(
                 sys.stderr.write(msg + "\\n")
             return 1
 
-        sys.stdout.write(f\"OK: {checked} ticket(s) linted.\\n\")
+        sys.stdout.write(f\"OK: {len(ticket_paths)} ticket(s) linted.\\n\")
         return 0
 
 

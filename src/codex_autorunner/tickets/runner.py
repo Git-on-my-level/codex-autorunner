@@ -715,6 +715,7 @@ class TicketRunner:
             f"  - Dispatch directory: {rel_dispatch_dir}\n"
             f"  - DISPATCH.md path: {rel_dispatch_path}\n"
             "  DISPATCH.md frontmatter supports: mode: notify|pause (pause will wait for a user response; notify will continue without waiting for user input).\n"
+            "- No need to dispatch a final notification to the user; your final turn summary is dispatched automatically. Only dispatch if it is time sensitive, extremely important for the user to know, or if you need their input (pause).\n"
             "- Keep tickets minimal and avoid scope creep. You may create new tickets only if blocking the current SPEC.\n"
         )
 

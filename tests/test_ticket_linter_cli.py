@@ -29,6 +29,16 @@ def test_linter_rejects_invalid_filename_and_extension(repo: Path) -> None:
     tickets_dir = repo / ".codex-autorunner" / "tickets"
     tickets_dir.mkdir(parents=True, exist_ok=True)
 
+    invalid_only = tickets_dir / "NOTE-001.md"
+    invalid_only.write_text(
+        "---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8"
+    )
+    result_only_invalid = _run_linter(repo)
+    assert result_only_invalid.returncode == 1
+    assert "Invalid ticket filename" in result_only_invalid.stderr
+
+    invalid_only.unlink()
+
     good = tickets_dir / "TICKET-001.md"
     good.write_text("---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8")
 
