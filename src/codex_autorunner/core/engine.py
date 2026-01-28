@@ -24,8 +24,7 @@ from ..manifest import MANIFEST_VERSION
 from ..tickets.files import list_ticket_paths, ticket_is_done
 from .about_car import ensure_about_car_file
 from .adapter_utils import handle_agent_output
-from .app_server_events import (
-    AppServerEventBuffer,
+from .app_server_ids import (
     extract_thread_id,
     extract_thread_id_for_turn,
     extract_turn_id,
@@ -153,7 +152,6 @@ class Engine:
         self._app_server_event_formatter = AppServerEventFormatter(
             redact_enabled=redact_enabled
         )
-        self._app_server_events = AppServerEventBuffer()
         self._opencode_supervisor: Optional[Any] = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from ...core.app_server_events import format_sse
+from ...integrations.app_server.event_buffer import format_sse
 from ..base import AgentHarness
 from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef
 from .runtime import (

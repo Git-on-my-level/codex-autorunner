@@ -17,7 +17,6 @@ from starlette.routing import Mount
 from starlette.types import ASGIApp
 
 from ..agents.opencode.supervisor import OpenCodeSupervisor
-from ..core.app_server_events import AppServerEventBuffer
 from ..core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -61,6 +60,7 @@ from ..integrations.agents.wiring import (
 )
 from ..integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ..integrations.app_server.env import build_app_server_env
+from ..integrations.app_server.event_buffer import AppServerEventBuffer
 from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ..manifest import load_manifest
 from ..routes import build_repo_router
@@ -638,7 +638,11 @@ def _build_hub_context(
         if base_path is not None
         else config.server_base_path
     )
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
     safe_log(
         logger,

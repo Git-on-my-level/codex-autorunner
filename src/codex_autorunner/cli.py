@@ -872,7 +872,11 @@ def hub_create(
 ):
     """Create a new git repo under the hub and initialize codex-autorunner files."""
     config = _require_hub_config(path)
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     try:
         snapshot = supervisor.create_repo(
             repo_id, repo_path, git_init=git_init, force=force
@@ -900,7 +904,11 @@ def hub_clone(
 ):
     """Clone a git repo under the hub and initialize codex-autorunner files."""
     config = _require_hub_config(path)
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     try:
         snapshot = supervisor.clone_repo(
             git_url=git_url, repo_id=repo_id, repo_path=repo_path, force=force
@@ -945,7 +953,11 @@ def hub_serve(
 def hub_scan(path: Optional[Path] = typer.Option(None, "--path", help="Hub root path")):
     """Trigger discovery/init and print repo statuses."""
     config = _require_hub_config(path)
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     snapshots = supervisor.scan()
     typer.echo(f"Scanned hub at {config.root} (repos_root={config.repos_root})")
     for snap in snapshots:
