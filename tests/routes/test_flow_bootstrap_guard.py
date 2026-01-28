@@ -158,6 +158,55 @@ def test_bootstrap_honors_force_new(tmp_path, monkeypatch):
     assert payload.get("state", {}).get("hint") is None
 
 
+def test_bootstrap_skips_seeding_when_tickets_exist(tmp_path, monkeypatch):
+    """Bootstrap should not create a new ticket when any ticket already exists."""
+
+    _reset_state()
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    # Simulate an existing ticket with a non-001 index
+    (ticket_dir / "TICKET-010.md").write_text(
+        "--\nagent: codex\ndone: false\n--\n", encoding="utf-8"
+    )
+
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db_path)
+    store.initialize()
+
+    class StubController:
+        def __init__(self, backing_store: FlowStore):
+            self.store = backing_store
+
+        async def start_flow(self, input_data, run_id, metadata=None):
+            return self.store.create_flow_run(
+                run_id=run_id,
+                flow_type="ticket_flow",
+                input_data=input_data or {},
+                metadata=metadata or {},
+                state={},
+                current_step="bootstrap",
+            )
+
+    monkeypatch.setattr(
+        flow_routes,
+        "_get_flow_controller",
+        lambda _repo_root, _flow_type: StubController(store),
+    )
+    monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post("/api/flows/ticket_flow/bootstrap", json={})
+
+    assert resp.status_code == 200
+    # Should not seed TICKET-001 because tickets already exist
+    assert not (ticket_dir / "TICKET-001.md").exists()
+
+
 def test_start_flow_worker_skips_when_process_alive(tmp_path, monkeypatch):
     _reset_state()
 

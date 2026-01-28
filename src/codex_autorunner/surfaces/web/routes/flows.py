@@ -647,6 +647,8 @@ def build_flow_routes() -> APIRouter:
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
         ticket_dir.mkdir(parents=True, exist_ok=True)
         ticket_path = ticket_dir / "TICKET-001.md"
+        existing_tickets = list_ticket_paths(ticket_dir)
+        tickets_exist = bool(existing_tickets)
         flow_request = request or FlowStartRequest()
         meta = flow_request.metadata if isinstance(flow_request.metadata, dict) else {}
         force_new = bool(meta.get("force_new"))
@@ -670,7 +672,7 @@ def build_flow_routes() -> APIRouter:
                 return resp
 
         seeded = False
-        if not ticket_path.exists():
+        if not tickets_exist and not ticket_path.exists():
             template = """---
 agent: codex
 done: false
