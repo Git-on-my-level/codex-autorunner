@@ -60,6 +60,7 @@ from .redaction import redact_text
 from .review_context import build_spec_progress_review_context
 from .run_index import RunIndexStore
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
+from .state_roots import resolve_global_state_root, resolve_repo_state_root
 from .static_assets import missing_static_assets, resolve_static_dir
 from .ticket_linter_cli import ensure_ticket_linter
 from .utils import (
@@ -2382,6 +2383,23 @@ def doctor(start_path: Path) -> DoctorReport:
     checks: list[DoctorCheck] = []
     config = repo_config or hub_config
     root = config.root
+    global_state_root = resolve_global_state_root(config=config)
+    if repo_config is not None:
+        repo_state_root = resolve_repo_state_root(repo_config.root)
+        _append_check(
+            checks,
+            "state.roots",
+            "ok",
+            f"Repo state root: {repo_state_root}; Global state root: {global_state_root}",
+        )
+    else:
+        _append_check(
+            checks,
+            "state.roots",
+            "warning",
+            f"Global state root: {global_state_root}",
+            "Run doctor from a repo to report repo-local state root.",
+        )
 
     if repo_config is not None:
         missing = []

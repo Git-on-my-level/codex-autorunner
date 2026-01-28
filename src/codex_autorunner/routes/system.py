@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from ..core import update as update_core
 from ..core.config import HubConfig
+from ..core.state_roots import resolve_global_state_root
 from ..core.static_assets import missing_static_assets
 from ..core.update import (
     UpdateInProgressError,
@@ -151,8 +152,7 @@ def build_system_routes() -> APIRouter:
         elif config is not None:
             skip_checks = bool(getattr(config, "update_skip_checks", False))
 
-        home_dot_car = Path.home() / ".codex-autorunner"
-        update_dir = home_dot_car / "update_cache"
+        update_dir = resolve_global_state_root(config=config) / "update_cache"
 
         try:
             target_raw = payload.target if payload else None

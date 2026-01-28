@@ -11,6 +11,7 @@ from typing import Optional
 from urllib.parse import unquote, urlparse
 
 from .git_utils import GitError, run_git
+from .state_roots import resolve_global_state_root
 
 
 class UpdateInProgressError(RuntimeError):
@@ -55,7 +56,7 @@ def _normalize_update_ref(raw: Optional[str]) -> str:
 
 
 def _update_status_path() -> Path:
-    return Path.home() / ".codex-autorunner" / "update_status.json"
+    return resolve_global_state_root() / "update_status.json"
 
 
 def _write_update_status(status: str, message: str, **extra) -> None:
@@ -134,7 +135,7 @@ def _read_update_status() -> Optional[dict[str, object]]:
 
 
 def _update_lock_path() -> Path:
-    return Path.home() / ".codex-autorunner" / "update.lock"
+    return resolve_global_state_root() / "update.lock"
 
 
 def _read_update_lock() -> Optional[dict[str, object]]:
@@ -282,7 +283,7 @@ def _system_update_check(
 ) -> dict:
     module_dir = module_dir or Path(__file__).resolve().parent
     update_cache_dir = update_cache_dir or (
-        Path.home() / ".codex-autorunner" / "update_cache"
+        resolve_global_state_root() / "update_cache"
     )
     repo_ref = _normalize_update_ref(repo_ref)
 

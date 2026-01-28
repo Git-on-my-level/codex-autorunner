@@ -12,7 +12,9 @@ CAR is a local-first, filesystem-backed agent orchestration system with multiple
 - If something matters (state, decisions, outputs), it must be representable on disk.
 
 ### 2) Canonical runtime state lives under a single root
-- `.codex-autorunner/` is the canonical location for runtime + agent state.
+- `.codex-autorunner/` under the repo root is the canonical location for per-repo runtime + agent state.
+- A separate global root (default `~/.codex-autorunner/`) is allowed only for cross-repo caches/locks
+  (e.g., update cache, app-server workspace pool) and must be explicitly configured.
 - Avoid “shadow state” in env-only values, tmp dirs, implicit globals, or UI-only state.
 
 ### 3) Layering and replaceability
