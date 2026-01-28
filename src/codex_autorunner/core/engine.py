@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import dataclasses
+import hashlib
 import inspect
 import json
 import logging
@@ -383,37 +384,16 @@ class Engine:
         artifacts: dict[str, str] = {}
         redact_enabled = self.config.security.get("redact_run_logs", True)
         if telemetry and telemetry.plan is not None:
-            try:
-                plan_content = (
-                    telemetry.plan
-                    if isinstance(telemetry.plan, str)
-                    else json.dumps(
-                        telemetry.plan, ensure_ascii=True, indent=2, default=str
-                    )
-                )
-            except (TypeError, ValueError) as exc:
-                self._app_server_logger.debug(
-                    "Failed to serialize plan to JSON for run %s: %s", run_id, exc
-                )
-                plan_content = json.dumps(
-                    {"plan": str(telemetry.plan)}, ensure_ascii=True, indent=2
-                )
-            if redact_enabled:
-                plan_content = redact_text(plan_content)
+            plan_content = self._serialize_plan_content(
+                telemetry.plan, redact_enabled=redact_enabled, run_id=run_id
+            )
             plan_path = self._write_run_artifact(run_id, "plan.json", plan_content)
             artifacts["plan_path"] = str(plan_path)
         if telemetry and telemetry.diff is not None:
-            normalized_diff = self._normalize_diff_payload(telemetry.diff)
-            if normalized_diff is not None:
-                diff_content = (
-                    normalized_diff
-                    if isinstance(normalized_diff, str)
-                    else json.dumps(
-                        normalized_diff, ensure_ascii=True, indent=2, default=str
-                    )
-                )
-                if redact_enabled:
-                    diff_content = redact_text(diff_content)
+            diff_content = self._serialize_diff_content(
+                telemetry.diff, redact_enabled=redact_enabled
+            )
+            if diff_content is not None:
                 diff_path = self._write_run_artifact(run_id, "diff.patch", diff_content)
                 artifacts["diff_path"] = str(diff_path)
         if artifacts:
@@ -802,6 +782,52 @@ class Engine:
             return None
         return diff
 
+    @staticmethod
+    def _hash_content(content: str) -> str:
+        return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
+
+    def _serialize_plan_content(
+        self,
+        plan: Any,
+        *,
+        redact_enabled: bool,
+        run_id: Optional[int] = None,
+    ) -> str:
+        try:
+            content = (
+                plan
+                if isinstance(plan, str)
+                else json.dumps(plan, ensure_ascii=True, indent=2, default=str)
+            )
+        except (TypeError, ValueError) as exc:
+            if run_id is not None:
+                self._app_server_logger.debug(
+                    "Failed to serialize plan to JSON for run %s: %s", run_id, exc
+                )
+            else:
+                self._app_server_logger.debug(
+                    "Failed to serialize plan to JSON: %s", exc
+                )
+            content = json.dumps({"plan": str(plan)}, ensure_ascii=True, indent=2)
+        if redact_enabled:
+            content = redact_text(content)
+        return content
+
+    def _serialize_diff_content(
+        self, diff: Any, *, redact_enabled: bool
+    ) -> Optional[str]:
+        normalized = self._normalize_diff_payload(diff)
+        if normalized is None:
+            return None
+        content = (
+            normalized
+            if isinstance(normalized, str)
+            else json.dumps(normalized, ensure_ascii=True, indent=2, default=str)
+        )
+        if redact_enabled:
+            content = redact_text(content)
+        return content
+
     def _maybe_update_run_index_telemetry(
         self, run_id: int, min_interval_seconds: float = 3.0
     ) -> None:
@@ -850,6 +876,8 @@ class Engine:
         )
         turn_id = extract_turn_id(params) or extract_turn_id(message)
         run_id: Optional[int] = None
+        plan_update: Any = None
+        diff_update: Any = None
         with self._run_telemetry_lock:
             telemetry = self._run_telemetry
             if telemetry is None:
@@ -874,16 +902,60 @@ class Engine:
                         self._maybe_update_run_index_telemetry(run_id)
                         self._emit_event(run_id, "token.updated", token_total=total)
             if method == "turn/plan/updated":
-                telemetry.plan = params.get("plan") if "plan" in params else params
+                plan_update = params.get("plan") if "plan" in params else params
+                telemetry.plan = plan_update
             if method == "turn/diff/updated":
                 diff: Any = None
                 for key in ("diff", "patch", "content", "value"):
                     if key in params:
                         diff = params.get(key)
                         break
-                telemetry.diff = diff if diff is not None else params or None
+                diff_update = diff if diff is not None else params or None
+                telemetry.diff = diff_update
         if run_id is None:
             return
+        redact_enabled = self.config.security.get("redact_run_logs", True)
+        notification_path = self._append_run_notification(
+            run_id, message, redact_enabled
+        )
+        if notification_path is not None:
+            self._merge_run_index_entry(
+                run_id,
+                {
+                    "artifacts": {
+                        "app_server_notifications_path": str(notification_path)
+                    }
+                },
+            )
+        if plan_update is not None:
+            plan_content = self._serialize_plan_content(
+                plan_update, redact_enabled=redact_enabled, run_id=run_id
+            )
+            plan_path = self._write_run_artifact(run_id, "plan.json", plan_content)
+            self._merge_run_index_entry(
+                run_id, {"artifacts": {"plan_path": str(plan_path)}}
+            )
+            self._emit_event(
+                run_id,
+                "plan.updated",
+                plan_hash=self._hash_content(plan_content),
+                plan_path=str(plan_path),
+            )
+        if diff_update is not None:
+            diff_content = self._serialize_diff_content(
+                diff_update, redact_enabled=redact_enabled
+            )
+            if diff_content is not None:
+                diff_path = self._write_run_artifact(run_id, "diff.patch", diff_content)
+                self._merge_run_index_entry(
+                    run_id, {"artifacts": {"diff_path": str(diff_path)}}
+                )
+                self._emit_event(
+                    run_id,
+                    "diff.updated",
+                    diff_hash=self._hash_content(diff_content),
+                    diff_path=str(diff_path),
+                )
         for line in self._app_server_event_formatter.format_event(message):
             self.log_line(run_id, f"stdout: {line}" if line else "stdout: ")
 
@@ -1175,6 +1247,32 @@ class Engine:
         self._ensure_run_log_dir()
         path = self.log_path.parent / "runs" / f"run-{run_id}.{name}"
         atomic_write(path, content)
+        return path
+
+    def _app_server_notifications_path(self, run_id: int) -> Path:
+        return (
+            self.log_path.parent
+            / "runs"
+            / f"run-{run_id}.app_server.notifications.jsonl"
+        )
+
+    def _append_run_notification(
+        self, run_id: int, message: dict[str, Any], redact_enabled: bool
+    ) -> Optional[Path]:
+        self._ensure_run_log_dir()
+        path = self._app_server_notifications_path(run_id)
+        payload = {"ts": timestamp(), "message": message}
+        try:
+            line = json.dumps(payload, ensure_ascii=True, default=str)
+            if redact_enabled:
+                line = redact_text(line)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except (OSError, IOError, TypeError, ValueError) as exc:
+            self._app_server_logger.warning(
+                "Failed to write app-server notification for run %s: %s", run_id, exc
+            )
+            return None
         return path
 
     def _read_log_range(self, run_id: int, entry: dict) -> Optional[str]:
