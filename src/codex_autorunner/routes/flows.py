@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import IO, Dict, Optional, Tuple, Union
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -741,7 +741,9 @@ You are the first ticket in a new ticket_flow run.
         return FlowStatusResponse.from_record(record)
 
     @router.get("/{run_id}/events")
-    async def stream_flow_events(run_id: uuid.UUID, after: Optional[int] = None):
+    async def stream_flow_events(
+        run_id: uuid.UUID, request: Request, after: Optional[int] = None
+    ):
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
@@ -749,9 +751,23 @@ You are the first ticket in a new ticket_flow run.
 
         async def event_stream():
             try:
-                async for event in controller.stream_events(run_id, after_seq=after):
+                resume_after = after
+                if resume_after is None:
+                    last_event_id = request.headers.get("Last-Event-ID")
+                    if last_event_id:
+                        try:
+                            resume_after = int(last_event_id)
+                        except ValueError:
+                            _logger.debug(
+                                "Invalid Last-Event-ID %s for run %s",
+                                last_event_id,
+                                run_id,
+                            )
+                async for event in controller.stream_events(
+                    run_id, after_seq=resume_after
+                ):
                     data = event.model_dump(mode="json")
-                    yield f"data: {json.dumps(data)}\n\n"
+                    yield f"id: {event.seq}\n" f"data: {json.dumps(data)}\n\n"
             except Exception as e:
                 _logger.exception("Error streaming events for run %s: %s", run_id, e)
                 raise

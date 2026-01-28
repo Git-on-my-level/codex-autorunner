@@ -17,6 +17,7 @@ let currentFlowStatus = null;
 let elapsedTimerId = null;
 let flowStartedAt = null;
 let eventSource = null;
+let eventSourceRunId = null;
 let lastActivityTime = null;
 let lastActivityTimerId = null;
 let liveOutputDetailExpanded = false; // Start with summary view, one click for full
@@ -29,9 +30,14 @@ let currentReasonFull = null; // Full reason text for modal display
 let ticketsHydrated = false;
 let dispatchHistoryHydrated = false;
 let dispatchHistoryRunId = null;
+let eventSourceRetryAttempt = 0;
+let eventSourceRetryTimerId = null;
+const lastSeenSeqByRun = {};
 // Dispatch panel collapse state (persisted to localStorage)
 const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
 let dispatchPanelCollapsed = false;
+const LAST_SEEN_SEQ_KEY_PREFIX = "car-ticket-flow-last-seq:";
+const EVENT_STREAM_RETRY_DELAYS_MS = [500, 1000, 2000, 5000, 10000];
 // Throttling state
 let liveOutputRenderPending = false;
 let liveOutputTextPending = false;
@@ -197,6 +203,60 @@ function stopLastActivityTimer() {
         clearInterval(lastActivityTimerId);
         lastActivityTimerId = null;
     }
+}
+function getLastSeenSeq(runId) {
+    if (lastSeenSeqByRun[runId] !== undefined) {
+        return lastSeenSeqByRun[runId];
+    }
+    const stored = localStorage.getItem(`${LAST_SEEN_SEQ_KEY_PREFIX}${runId}`);
+    if (!stored)
+        return null;
+    const parsed = Number.parseInt(stored, 10);
+    if (Number.isNaN(parsed))
+        return null;
+    lastSeenSeqByRun[runId] = parsed;
+    return parsed;
+}
+function setLastSeenSeq(runId, seq) {
+    if (!Number.isFinite(seq))
+        return;
+    const current = lastSeenSeqByRun[runId];
+    if (current !== undefined && seq <= current)
+        return;
+    lastSeenSeqByRun[runId] = seq;
+    localStorage.setItem(`${LAST_SEEN_SEQ_KEY_PREFIX}${runId}`, String(seq));
+}
+function parseEventSeq(event, lastEventId) {
+    if (typeof event.seq === "number" && Number.isFinite(event.seq)) {
+        return event.seq;
+    }
+    if (lastEventId) {
+        const parsed = Number.parseInt(lastEventId, 10);
+        if (!Number.isNaN(parsed))
+            return parsed;
+    }
+    return null;
+}
+function clearEventStreamRetry() {
+    if (eventSourceRetryTimerId) {
+        clearTimeout(eventSourceRetryTimerId);
+        eventSourceRetryTimerId = null;
+    }
+}
+function scheduleEventStreamReconnect(runId) {
+    if (eventSourceRetryTimerId)
+        return;
+    const index = Math.min(eventSourceRetryAttempt, EVENT_STREAM_RETRY_DELAYS_MS.length - 1);
+    const delay = EVENT_STREAM_RETRY_DELAYS_MS[index];
+    eventSourceRetryAttempt += 1;
+    eventSourceRetryTimerId = setTimeout(() => {
+        eventSourceRetryTimerId = null;
+        if (currentRunId !== runId)
+            return;
+        if (currentFlowStatus !== "running" && currentFlowStatus !== "pending")
+            return;
+        connectEventStream(runId);
+    }, delay);
 }
 function appendToLiveOutput(text) {
     if (!text)
@@ -457,18 +517,30 @@ function handleFlowEvent(event) {
 }
 function connectEventStream(runId) {
     disconnectEventStream();
+    clearEventStreamRetry();
+    eventSourceRunId = runId;
     const token = getAuthToken();
-    let url = resolvePath(`/api/flows/${runId}/events`);
+    const url = new URL(resolvePath(`/api/flows/${runId}/events`), window.location.origin);
     if (token) {
-        url += `?token=${encodeURIComponent(token)}`;
+        url.searchParams.set("token", token);
     }
-    eventSource = new EventSource(url);
+    const lastSeenSeq = getLastSeenSeq(runId);
+    if (typeof lastSeenSeq === "number") {
+        url.searchParams.set("after", String(lastSeenSeq));
+    }
+    eventSource = new EventSource(url.toString());
     eventSource.onopen = () => {
         setLiveOutputStatus("connected");
+        eventSourceRetryAttempt = 0;
+        clearEventStreamRetry();
     };
     eventSource.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data);
+            const seq = parseEventSeq(data, event.lastEventId);
+            if (currentRunId && typeof seq === "number") {
+                setLastSeenSeq(currentRunId, seq);
+            }
             handleFlowEvent(data);
         }
         catch (err) {
@@ -477,7 +549,11 @@ function connectEventStream(runId) {
     };
     eventSource.onerror = () => {
         setLiveOutputStatus("disconnected");
-        // Don't auto-reconnect here - loadTicketFlow will handle it
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+        scheduleEventStreamReconnect(runId);
     };
 }
 function disconnectEventStream() {
@@ -485,6 +561,8 @@ function disconnectEventStream() {
         eventSource.close();
         eventSource = null;
     }
+    clearEventStreamRetry();
+    eventSourceRunId = null;
     setLiveOutputStatus("disconnected");
 }
 function initLiveOutputPanel() {
@@ -995,7 +1073,9 @@ async function loadTicketFlow(ctx) {
         // Connect/disconnect event stream based on flow status
         if (currentRunId && (latest?.status === "running" || latest?.status === "pending")) {
             // Only connect if not already connected to this run
-            if (!eventSource || eventSource.url?.indexOf(currentRunId) === -1) {
+            const isSameRun = eventSourceRunId === currentRunId;
+            const isClosed = eventSource?.readyState === EventSource.CLOSED;
+            if (!eventSource || !isSameRun || isClosed) {
                 connectEventStream(currentRunId);
                 startLastActivityTimer();
             }
