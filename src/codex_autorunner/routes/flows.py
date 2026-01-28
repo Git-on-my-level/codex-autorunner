@@ -22,8 +22,7 @@ from ..core.flows import (
     FlowRunStatus,
     FlowStore,
 )
-from ..core.flows.store import UNSET
-from ..core.flows.transition import resolve_flow_transition
+from ..core.flows.reconciler import reconcile_flow_run
 from ..core.flows.worker_process import (
     FlowWorkerHealth,
     check_worker_health,
@@ -88,7 +87,8 @@ def _safe_list_flow_runs(
         if recover_stuck:
             # Recover any flows stuck in active states with dead workers
             records = [
-                _maybe_recover_stuck_flow(repo_root, rec, store) for rec in records
+                reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
+                for rec in records
             ]
         return records
     except Exception as exc:
@@ -218,51 +218,6 @@ def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
             _logger.debug("Failed to clear worker metadata: %s", health.artifact_path)
 
 
-def _maybe_recover_stuck_flow(
-    repo_root: Path, record: FlowRunRecord, store: FlowStore
-) -> FlowRunRecord:
-    """
-    Reconcile persisted flow state with worker health and inner ticket_engine status.
-
-    Delegates decision logic to a pure transition resolver to keep recovery predictable
-    and exhaustively testable.
-    """
-    if record.status not in (
-        FlowRunStatus.RUNNING,
-        FlowRunStatus.STOPPING,
-        FlowRunStatus.PAUSED,
-    ):
-        return record
-
-    health = check_worker_health(repo_root, record.id)
-
-    decision = resolve_flow_transition(record, health)
-
-    if (
-        decision.status == record.status
-        and decision.finished_at == record.finished_at
-        and decision.state == (record.state or {})
-    ):
-        return record
-
-    _logger.info(
-        "Recovering flow %s: %s -> %s (%s)",
-        record.id,
-        record.status.value,
-        decision.status.value,
-        decision.note or "reconcile",
-    )
-
-    updated = store.update_flow_run_status(
-        run_id=record.id,
-        status=decision.status,
-        state=decision.state,
-        finished_at=decision.finished_at if decision.finished_at else UNSET,
-    )
-    _ensure_worker_not_stale(health)
-    return updated or record
-
-
 class FlowStartRequest(BaseModel):
     input_data: Dict = Field(default_factory=dict)
     metadata: Optional[Dict] = None
@@ -386,10 +341,10 @@ def build_flow_routes() -> APIRouter:
         return {"definitions": definitions}
 
     @router.get("/runs", response_model=list[FlowStatusResponse])
-    async def list_runs(flow_type: Optional[str] = None):
+    async def list_runs(flow_type: Optional[str] = None, reconcile: bool = False):
         repo_root = find_repo_root()
         records = _safe_list_flow_runs(
-            repo_root, flow_type=flow_type, recover_stuck=True
+            repo_root, flow_type=flow_type, recover_stuck=reconcile
         )
         return [FlowStatusResponse.from_record(rec) for rec in records]
 
@@ -722,21 +677,22 @@ You are the first ticket in a new ticket_flow run.
         }
 
     @router.get("/{run_id}/status", response_model=FlowStatusResponse)
-    async def get_flow_status(run_id: uuid.UUID):
+    async def get_flow_status(run_id: uuid.UUID, reconcile: bool = False):
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
 
         _reap_dead_worker(run_id)
 
         record = _get_flow_record(repo_root, run_id)
-
-        # If the worker died but status claims it's still active, recover the flow
-        store = _require_flow_store(repo_root)
-        if store:
-            try:
-                record = _maybe_recover_stuck_flow(repo_root, record, store)
-            finally:
-                store.close()
+        if reconcile:
+            store = _require_flow_store(repo_root)
+            if store:
+                try:
+                    record = reconcile_flow_run(
+                        repo_root, record, store, logger=_logger
+                    )[0]
+                finally:
+                    store.close()
 
         return FlowStatusResponse.from_record(record)
 

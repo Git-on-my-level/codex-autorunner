@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, cast
 
+from ..sqlite_utils import SQLITE_PRAGMAS
 from .models import (
     FlowArtifact,
     FlowEvent,
@@ -42,6 +43,8 @@ class FlowStore:
                 self.db_path, check_same_thread=False, isolation_level=None
             )
             self._local.conn.row_factory = sqlite3.Row
+            for pragma in SQLITE_PRAGMAS:
+                self._local.conn.execute(pragma)
         return cast(sqlite3.Connection, self._local.conn)
 
     @contextmanager
