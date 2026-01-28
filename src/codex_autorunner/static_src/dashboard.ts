@@ -2,6 +2,7 @@ import { api, flash, confirmModal, openModal, statusPill } from "./utils.js";
 import { saveToCache, loadFromCache } from "./cache.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
+import { preserveScroll } from "./preserve.js";
 
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 const ANALYTICS_SUMMARY_CACHE_KEY = "analytics-summary";
@@ -286,32 +287,34 @@ function calcDurationFromRun(run: FlowRun): string {
 function renderRunHistory(runs: FlowRun[]): void {
   const container = document.getElementById("run-history-list");
   if (!container) return;
-  if (!runs || !runs.length) {
-    container.innerHTML = '<div class="muted">No runs yet.</div>';
-    return;
-  }
-  const items = runs.map((run) => {
-    const shortId = run.id ? run.id.split("-")[0] : "–";
-    const status = run.status || "unknown";
-    const duration = calcDurationFromRun(run);
-    const started = formatIso(run.started_at);
-    const current = run.current_step || "–";
-    return `
-      <div class="run-history-row">
-        <div class="run-history-id">${shortId}</div>
-        <div class="run-history-status">${status}</div>
-        <div class="run-history-duration">${duration}</div>
-        <div class="run-history-start">${started}</div>
-        <div class="run-history-step">${current}</div>
+  preserveScroll(container, () => {
+    if (!runs || !runs.length) {
+      container.innerHTML = '<div class="muted">No runs yet.</div>';
+      return;
+    }
+    const items = runs.map((run) => {
+      const shortId = run.id ? run.id.split("-")[0] : "–";
+      const status = run.status || "unknown";
+      const duration = calcDurationFromRun(run);
+      const started = formatIso(run.started_at);
+      const current = run.current_step || "–";
+      return `
+        <div class="run-history-row">
+          <div class="run-history-id">${shortId}</div>
+          <div class="run-history-status">${status}</div>
+          <div class="run-history-duration">${duration}</div>
+          <div class="run-history-start">${started}</div>
+          <div class="run-history-step">${current}</div>
+        </div>
+      `;
+    });
+    container.innerHTML = `
+      <div class="run-history-head">
+        <div>ID</div><div>Status</div><div>Duration</div><div>Started</div><div>Step</div>
       </div>
+      ${items.join("")}
     `;
-  });
-  container.innerHTML = `
-    <div class="run-history-head">
-      <div>ID</div><div>Status</div><div>Duration</div><div>Started</div><div>Step</div>
-    </div>
-    ${items.join("")}
-  `;
+  }, { restoreOnNextFrame: true });
 }
 
 function buildUsageSeriesQuery(): string {
