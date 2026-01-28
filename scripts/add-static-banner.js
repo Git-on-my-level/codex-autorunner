@@ -7,9 +7,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import glob from 'glob';
+import { glob } from 'glob';
 import { fileURLToPath } from 'url';
-import { promisify } from 'util';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,8 +19,7 @@ async function main() {
   const staticDir = path.join(__dirname, '..', 'src', 'codex_autorunner', 'static');
   const pattern = path.join(staticDir, '**', '*.js').replace(/\\/g, '/');
 
-  const globAsync = promisify(glob);
-  const files = await globAsync(pattern, {
+  const files = await glob(pattern, {
     ignore: ['**/vendor/**', '**/node_modules/**']
   });
   

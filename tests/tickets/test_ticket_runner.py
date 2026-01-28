@@ -6,7 +6,10 @@ from typing import Callable
 import pytest
 
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest, AgentTurnResult
-from codex_autorunner.tickets.models import TicketRunConfig
+from codex_autorunner.tickets.models import (
+    DEFAULT_MAX_TOTAL_TURNS,
+    TicketRunConfig,
+)
 from codex_autorunner.tickets.runner import TicketRunner
 
 
@@ -40,6 +43,15 @@ def _corrupt_ticket_frontmatter(path: Path) -> None:
     # Make 'done' invalid.
     raw = raw.replace("done: false", "done: notabool")
     path.write_text(raw, encoding="utf-8")
+
+
+def test_ticket_run_config_default_max_turns() -> None:
+    cfg = TicketRunConfig(
+        ticket_dir=Path(".codex-autorunner/tickets"),
+        runs_dir=Path(".codex-autorunner/runs"),
+        auto_commit=False,
+    )
+    assert cfg.max_total_turns == DEFAULT_MAX_TOTAL_TURNS
 
 
 class FakeAgentPool:
