@@ -57,7 +57,10 @@ def test_bootstrap_reuses_active_run_with_hint(tmp_path, monkeypatch):
         artifact_path=artifacts_dir / "worker.json",
         message=None,
     )
-    monkeypatch.setattr(flow_routes, "check_worker_health", lambda *a, **k: health)
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        lambda *a, **k: health,
+    )
 
     spawned = {"count": 0}
 

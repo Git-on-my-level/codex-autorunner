@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from typing import IO, Dict, Optional, Tuple, Union
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -22,8 +22,7 @@ from ..core.flows import (
     FlowRunStatus,
     FlowStore,
 )
-from ..core.flows.store import UNSET
-from ..core.flows.transition import resolve_flow_transition
+from ..core.flows.reconciler import reconcile_flow_run
 from ..core.flows.worker_process import (
     FlowWorkerHealth,
     check_worker_health,
@@ -94,7 +93,8 @@ def _safe_list_flow_runs(
         if recover_stuck:
             # Recover any flows stuck in active states with dead workers
             records = [
-                _maybe_recover_stuck_flow(repo_root, rec, store) for rec in records
+                reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
+                for rec in records
             ]
         return records
     except Exception as exc:
@@ -224,51 +224,6 @@ def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
             _logger.debug("Failed to clear worker metadata: %s", health.artifact_path)
 
 
-def _maybe_recover_stuck_flow(
-    repo_root: Path, record: FlowRunRecord, store: FlowStore
-) -> FlowRunRecord:
-    """
-    Reconcile persisted flow state with worker health and inner ticket_engine status.
-
-    Delegates decision logic to a pure transition resolver to keep recovery predictable
-    and exhaustively testable.
-    """
-    if record.status not in (
-        FlowRunStatus.RUNNING,
-        FlowRunStatus.STOPPING,
-        FlowRunStatus.PAUSED,
-    ):
-        return record
-
-    health = check_worker_health(repo_root, record.id)
-
-    decision = resolve_flow_transition(record, health)
-
-    if (
-        decision.status == record.status
-        and decision.finished_at == record.finished_at
-        and decision.state == (record.state or {})
-    ):
-        return record
-
-    _logger.info(
-        "Recovering flow %s: %s -> %s (%s)",
-        record.id,
-        record.status.value,
-        decision.status.value,
-        decision.note or "reconcile",
-    )
-
-    updated = store.update_flow_run_status(
-        run_id=record.id,
-        status=decision.status,
-        state=decision.state,
-        finished_at=decision.finished_at if decision.finished_at else UNSET,
-    )
-    _ensure_worker_not_stale(health)
-    return updated or record
-
-
 class FlowStartRequest(BaseModel):
     input_data: Dict = Field(default_factory=dict)
     metadata: Optional[Dict] = None
@@ -285,6 +240,22 @@ class SeedIssueRequest(BaseModel):
     plan_text: Optional[str] = None  # Freeform plan text when GitHub unavailable
 
 
+class FlowWorkerHealthResponse(BaseModel):
+    status: str
+    pid: Optional[int]
+    is_alive: bool
+    message: Optional[str] = None
+
+    @classmethod
+    def from_health(cls, health: FlowWorkerHealth) -> "FlowWorkerHealthResponse":
+        return cls(
+            status=health.status,
+            pid=health.pid,
+            is_alive=health.is_alive,
+            message=health.message,
+        )
+
+
 class FlowStatusResponse(BaseModel):
     id: str
     flow_type: str
@@ -295,9 +266,26 @@ class FlowStatusResponse(BaseModel):
     finished_at: Optional[str]
     error_message: Optional[str]
     state: Dict = Field(default_factory=dict)
+    reason_summary: Optional[str] = None
+    last_event_seq: Optional[int] = None
+    last_event_at: Optional[str] = None
+    worker_health: Optional[FlowWorkerHealthResponse] = None
 
     @classmethod
-    def from_record(cls, record: FlowRunRecord) -> "FlowStatusResponse":
+    def from_record(
+        cls,
+        record: FlowRunRecord,
+        *,
+        last_event_seq: Optional[int] = None,
+        last_event_at: Optional[str] = None,
+        worker_health: Optional[FlowWorkerHealth] = None,
+    ) -> "FlowStatusResponse":
+        state = record.state or {}
+        reason_summary = None
+        if isinstance(state, dict):
+            value = state.get("reason_summary")
+            if isinstance(value, str):
+                reason_summary = value
         return cls(
             id=record.id,
             flow_type=record.flow_type,
@@ -307,7 +295,15 @@ class FlowStatusResponse(BaseModel):
             started_at=record.started_at,
             finished_at=record.finished_at,
             error_message=record.error_message,
-            state=record.state,
+            state=state,
+            reason_summary=reason_summary,
+            last_event_seq=last_event_seq,
+            last_event_at=last_event_at,
+            worker_health=(
+                FlowWorkerHealthResponse.from_health(worker_health)
+                if worker_health
+                else None
+            ),
         )
 
 
@@ -317,6 +313,25 @@ class FlowArtifactInfo(BaseModel):
     path: str
     created_at: str
     metadata: Dict = Field(default_factory=dict)
+
+
+def _build_flow_status_response(
+    record: FlowRunRecord,
+    repo_root: Path,
+    *,
+    store: Optional[FlowStore] = None,
+) -> FlowStatusResponse:
+    last_event_seq = None
+    last_event_at = None
+    if store:
+        last_event_seq, last_event_at = store.get_last_event_meta(record.id)
+    health = check_worker_health(repo_root, record.id)
+    return FlowStatusResponse.from_record(
+        record,
+        last_event_seq=last_event_seq,
+        last_event_at=last_event_at,
+        worker_health=health,
+    )
 
 
 def _start_flow_worker(repo_root: Path, run_id: str) -> Optional[subprocess.Popen]:
@@ -447,12 +462,29 @@ def build_flow_routes() -> APIRouter:
         return {"definitions": definitions}
 
     @router.get("/runs", response_model=list[FlowStatusResponse])
-    async def list_runs(flow_type: Optional[str] = None):
+    async def list_runs(flow_type: Optional[str] = None, reconcile: bool = False):
         repo_root = find_repo_root()
-        records = _safe_list_flow_runs(
-            repo_root, flow_type=flow_type, recover_stuck=True
-        )
-        return [FlowStatusResponse.from_record(rec) for rec in records]
+        store = _require_flow_store(repo_root)
+        records: list[FlowRunRecord] = []
+        try:
+            if store:
+                records = store.list_flow_runs(flow_type=flow_type)
+                if reconcile:
+                    records = [
+                        reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
+                        for rec in records
+                    ]
+            else:
+                records = _safe_list_flow_runs(
+                    repo_root, flow_type=flow_type, recover_stuck=reconcile
+                )
+            return [
+                _build_flow_status_response(rec, repo_root, store=store)
+                for rec in records
+            ]
+        finally:
+            if store:
+                store.close()
 
     @router.get("/{flow_type}")
     async def get_flow_definition(flow_type: str):
@@ -484,7 +516,14 @@ def build_flow_routes() -> APIRouter:
             if active:
                 _reap_dead_worker(active.id)
                 _start_flow_worker(repo_root, active.id)
-                response = FlowStatusResponse.from_record(active)
+                store = _require_flow_store(repo_root)
+                try:
+                    response = _build_flow_status_response(
+                        active, repo_root, store=store
+                    )
+                finally:
+                    if store:
+                        store.close()
                 response.state = response.state or {}
                 response.state["hint"] = "active_run_reused"
                 return response
@@ -499,7 +538,12 @@ def build_flow_routes() -> APIRouter:
 
         _start_flow_worker(repo_root, run_id)
 
-        return FlowStatusResponse.from_record(record)
+        store = _require_flow_store(repo_root)
+        try:
+            return _build_flow_status_response(record, repo_root, store=store)
+        finally:
+            if store:
+                store.close()
 
     @router.post("/{flow_type}/start", response_model=FlowStatusResponse)
     async def start_flow(flow_type: str, request: FlowStartRequest):
@@ -605,7 +649,12 @@ def build_flow_routes() -> APIRouter:
             if active:
                 _reap_dead_worker(active.id)
                 _start_flow_worker(repo_root, active.id)
-                resp = FlowStatusResponse.from_record(active)
+                store = _require_flow_store(repo_root)
+                try:
+                    resp = _build_flow_status_response(active, repo_root, store=store)
+                finally:
+                    if store:
+                        store.close()
                 resp.state = resp.state or {}
                 resp.state["hint"] = "active_run_reused"
                 return resp
@@ -784,7 +833,12 @@ You are the first ticket in a new ticket_flow run.
         _stop_worker(run_id)
 
         updated = await controller.stop_flow(run_id)
-        return FlowStatusResponse.from_record(updated)
+        store = _require_flow_store(repo_root)
+        try:
+            return _build_flow_status_response(updated, repo_root, store=store)
+        finally:
+            if store:
+                store.close()
 
     @router.post("/{run_id}/resume", response_model=FlowStatusResponse)
     async def resume_flow(run_id: uuid.UUID):
@@ -797,7 +851,26 @@ You are the first ticket in a new ticket_flow run.
         _reap_dead_worker(run_id)
         _start_flow_worker(repo_root, run_id)
 
-        return FlowStatusResponse.from_record(updated)
+        store = _require_flow_store(repo_root)
+        try:
+            return _build_flow_status_response(updated, repo_root, store=store)
+        finally:
+            if store:
+                store.close()
+
+    @router.post("/{run_id}/reconcile", response_model=FlowStatusResponse)
+    async def reconcile_flow(run_id: uuid.UUID):
+        run_id = _normalize_run_id(run_id)
+        repo_root = find_repo_root()
+        record = _get_flow_record(repo_root, run_id)
+        store = _require_flow_store(repo_root)
+        if not store:
+            raise HTTPException(status_code=503, detail="Flow store unavailable")
+        try:
+            record = reconcile_flow_run(repo_root, record, store, logger=_logger)[0]
+            return _build_flow_status_response(record, repo_root, store=store)
+        finally:
+            store.close()
 
     @router.post("/{run_id}/archive")
     async def archive_flow(
@@ -865,26 +938,26 @@ You are the first ticket in a new ticket_flow run.
         }
 
     @router.get("/{run_id}/status", response_model=FlowStatusResponse)
-    async def get_flow_status(run_id: uuid.UUID):
+    async def get_flow_status(run_id: uuid.UUID, reconcile: bool = False):
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
 
         _reap_dead_worker(run_id)
 
         record = _get_flow_record(repo_root, run_id)
-
-        # If the worker died but status claims it's still active, recover the flow
         store = _require_flow_store(repo_root)
-        if store:
-            try:
-                record = _maybe_recover_stuck_flow(repo_root, record, store)
-            finally:
+        try:
+            if reconcile and store:
+                record = reconcile_flow_run(repo_root, record, store, logger=_logger)[0]
+            return _build_flow_status_response(record, repo_root, store=store)
+        finally:
+            if store:
                 store.close()
 
-        return FlowStatusResponse.from_record(record)
-
     @router.get("/{run_id}/events")
-    async def stream_flow_events(run_id: uuid.UUID, after: Optional[int] = None):
+    async def stream_flow_events(
+        run_id: uuid.UUID, request: Request, after: Optional[int] = None
+    ):
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
@@ -892,9 +965,23 @@ You are the first ticket in a new ticket_flow run.
 
         async def event_stream():
             try:
-                async for event in controller.stream_events(run_id, after_seq=after):
+                resume_after = after
+                if resume_after is None:
+                    last_event_id = request.headers.get("Last-Event-ID")
+                    if last_event_id:
+                        try:
+                            resume_after = int(last_event_id)
+                        except ValueError:
+                            _logger.debug(
+                                "Invalid Last-Event-ID %s for run %s",
+                                last_event_id,
+                                run_id,
+                            )
+                async for event in controller.stream_events(
+                    run_id, after_seq=resume_after
+                ):
                     data = event.model_dump(mode="json")
-                    yield f"data: {json.dumps(data)}\n\n"
+                    yield f"id: {event.seq}\n" f"data: {json.dumps(data)}\n\n"
             except Exception as e:
                 _logger.exception("Error streaming events for run %s: %s", run_id, e)
                 raise

@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.flows.reconciler import reconcile_flow_run
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
 from codex_autorunner.routes import flows as flow_routes
@@ -29,8 +30,7 @@ def test_recover_running_flow_when_ticket_engine_paused(tmp_path, monkeypatch):
     _reset_state()
     repo_root = Path(tmp_path)
     monkeypatch.setattr(
-        flow_routes,
-        "check_worker_health",
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
         lambda *_args, **_kwargs: _make_alive_health(repo_root),
     )
 
@@ -52,10 +52,11 @@ def test_recover_running_flow_when_ticket_engine_paused(tmp_path, monkeypatch):
     record = store.get_flow_run(record.id)
     assert record is not None
 
-    updated = flow_routes._maybe_recover_stuck_flow(repo_root, record, store)
+    updated, _, _ = reconcile_flow_run(repo_root, record, store)
 
     assert updated.status == FlowRunStatus.PAUSED
-    assert updated.state == state
+    expected_state = {**state, "reason_summary": "Paused"}
+    assert updated.state == expected_state
     persisted = store.get_flow_run(record.id)
     assert persisted is not None
     assert persisted.status == FlowRunStatus.PAUSED
@@ -66,8 +67,7 @@ def test_recover_running_flow_when_ticket_engine_completed(tmp_path, monkeypatch
     _reset_state()
     repo_root = Path(tmp_path)
     monkeypatch.setattr(
-        flow_routes,
-        "check_worker_health",
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
         lambda *_args, **_kwargs: _make_alive_health(repo_root),
     )
 
@@ -89,7 +89,7 @@ def test_recover_running_flow_when_ticket_engine_completed(tmp_path, monkeypatch
     record = store.get_flow_run(record.id)
     assert record is not None
 
-    updated = flow_routes._maybe_recover_stuck_flow(repo_root, record, store)
+    updated, _, _ = reconcile_flow_run(repo_root, record, store)
 
     assert updated.status == FlowRunStatus.COMPLETED
     assert updated.state == state
@@ -105,8 +105,7 @@ def test_running_flow_with_consistent_state_is_unchanged(tmp_path, monkeypatch):
     _reset_state()
     repo_root = Path(tmp_path)
     monkeypatch.setattr(
-        flow_routes,
-        "check_worker_health",
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
         lambda *_args, **_kwargs: _make_alive_health(repo_root),
     )
 
@@ -128,7 +127,7 @@ def test_running_flow_with_consistent_state_is_unchanged(tmp_path, monkeypatch):
     record = store.get_flow_run(record.id)
     assert record is not None
 
-    updated = flow_routes._maybe_recover_stuck_flow(repo_root, record, store)
+    updated, _, _ = reconcile_flow_run(repo_root, record, store)
 
     assert updated.status == FlowRunStatus.RUNNING
     assert updated.state == state

@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, Optional, Set, cast
 
 from .definition import FlowDefinition, StepFn, StepFn2, StepFn3
 from .models import FlowEvent, FlowEventType, FlowRunRecord, FlowRunStatus
+from .reasons import ensure_reason_summary
 from .store import FlowStore, now_iso
 
 _logger = logging.getLogger(__name__)
@@ -97,10 +98,16 @@ class FlowRuntime:
                 if record.stop_requested:
                     self._emit(FlowEventType.FLOW_STOPPED, run_id)
                     now = now_iso()
+                    state = ensure_reason_summary(
+                        dict(record.state or {}),
+                        status=FlowRunStatus.STOPPED,
+                        default="Stopped by user",
+                    )
                     updated = self.store.update_flow_run_status(
                         run_id=run_id,
                         status=FlowRunStatus.STOPPED,
                         finished_at=now,
+                        state=state,
                     )
                     if not updated:
                         raise RuntimeError(f"Failed to stop flow run {run_id}")
@@ -128,11 +135,17 @@ class FlowRuntime:
                 data={"error": str(e)},
             )
             now = now_iso()
+            state = ensure_reason_summary(
+                dict(record.state or {}),
+                status=FlowRunStatus.FAILED,
+                error_message=str(e),
+            )
             updated = self.store.update_flow_run_status(
                 run_id=run_id,
                 status=FlowRunStatus.FAILED,
                 finished_at=now,
                 error_message=str(e),
+                state=state,
             )
             if not updated:
                 raise RuntimeError(
@@ -267,12 +280,17 @@ class FlowRuntime:
                 )
 
                 now = now_iso()
+                state = ensure_reason_summary(
+                    dict(record.state or {}),
+                    status=FlowRunStatus.FAILED,
+                    error_message=outcome.error,
+                )
                 updated = self.store.update_flow_run_status(
                     run_id=record.id,
                     status=FlowRunStatus.FAILED,
                     finished_at=now,
                     error_message=outcome.error,
-                    state=record.state,
+                    state=state,
                     current_step=None,
                 )
                 if not updated:
@@ -290,11 +308,15 @@ class FlowRuntime:
                 )
 
                 now = now_iso()
+                state = ensure_reason_summary(
+                    dict(record.state or {}),
+                    status=FlowRunStatus.STOPPED,
+                )
                 updated = self.store.update_flow_run_status(
                     run_id=record.id,
                     status=FlowRunStatus.STOPPED,
                     finished_at=now,
-                    state=record.state,
+                    state=state,
                     current_step=None,
                 )
                 if not updated:
@@ -311,10 +333,14 @@ class FlowRuntime:
                     step_id=step_id,
                 )
 
+                state = ensure_reason_summary(
+                    dict(record.state or {}),
+                    status=FlowRunStatus.PAUSED,
+                )
                 updated = self.store.update_flow_run_status(
                     run_id=record.id,
                     status=FlowRunStatus.PAUSED,
-                    state=record.state,
+                    state=state,
                     current_step=step_id,
                 )
                 if not updated:
@@ -335,12 +361,17 @@ class FlowRuntime:
             )
 
             now = now_iso()
+            state = ensure_reason_summary(
+                dict(record.state or {}),
+                status=FlowRunStatus.FAILED,
+                error_message=str(e),
+            )
             updated = self.store.update_flow_run_status(
                 run_id=record.id,
                 status=FlowRunStatus.FAILED,
                 finished_at=now,
                 error_message=str(e),
-                state=record.state,
+                state=state,
                 current_step=None,
             )
             if not updated:
