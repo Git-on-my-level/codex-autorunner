@@ -4,7 +4,9 @@ from ...core.ports.run_event import (
     Failed,
     OutputDelta,
     RunEvent,
+    RunNotice,
     Started,
+    TokenUsage,
     ToolCall,
     now_iso,
 )
@@ -15,6 +17,8 @@ __all__ = [
     "OutputDelta",
     "ToolCall",
     "ApprovalRequested",
+    "TokenUsage",
+    "RunNotice",
     "Completed",
     "Failed",
     "now_iso",

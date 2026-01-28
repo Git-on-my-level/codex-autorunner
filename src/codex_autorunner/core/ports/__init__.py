@@ -5,7 +5,9 @@ from .run_event import (
     Failed,
     OutputDelta,
     RunEvent,
+    RunNotice,
     Started,
+    TokenUsage,
     ToolCall,
 )
 
@@ -19,6 +21,8 @@ __all__ = [
     "OutputDelta",
     "ToolCall",
     "ApprovalRequested",
+    "TokenUsage",
+    "RunNotice",
     "Completed",
     "Failed",
 ]

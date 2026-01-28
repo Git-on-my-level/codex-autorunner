@@ -30,7 +30,9 @@ from ...core.ports.run_event import (
     Failed,
     OutputDelta,
     RunEvent,
+    RunNotice,
     Started,
+    TokenUsage,
     ToolCall,
 )
 
@@ -199,6 +201,7 @@ class OpenCodeBackend(AgentBackend):
         ) -> None:
             if part_type == "usage" and isinstance(part, dict):
                 self._last_token_total = _usage_to_token_total(part)
+                await event_queue.put(TokenUsage(timestamp=now_iso(), usage=dict(part)))
                 await _enqueue_lines(self._event_formatter.format_usage(part))
             else:
                 await _enqueue_lines(
@@ -226,8 +229,17 @@ class OpenCodeBackend(AgentBackend):
                 stall_timeout_seconds=self._session_stall_timeout_seconds,
             )
         )
-        with contextlib.suppress(asyncio.TimeoutError):
+        try:
             await asyncio.wait_for(ready_event.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            await event_queue.put(
+                RunNotice(
+                    timestamp=now_iso(),
+                    kind="ready_timeout",
+                    message="OpenCode stream readiness wait timed out",
+                    data={"timeout_seconds": 2.0},
+                )
+            )
 
         prompt_response: Any = None
         prompt_task: Optional[asyncio.Task[Any]] = asyncio.create_task(

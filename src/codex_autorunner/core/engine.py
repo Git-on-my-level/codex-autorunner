@@ -10,6 +10,7 @@ import signal
 import threading
 import time
 import traceback
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -41,6 +42,7 @@ from .config import (
     load_repo_config,
 )
 from .docs import DocsManager, parse_todos
+from .flows.models import FlowEventType
 from .git_utils import GitError, run_git
 from .locks import (
     DEFAULT_RUNNER_CMD_HINTS,
@@ -54,7 +56,17 @@ from .locks import (
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
 from .ports.agent_backend import AgentBackend
-from .ports.run_event import Completed, Failed, OutputDelta, RunEvent, Started
+from .ports.run_event import (
+    ApprovalRequested,
+    Completed,
+    Failed,
+    OutputDelta,
+    RunEvent,
+    RunNotice,
+    Started,
+    TokenUsage,
+    ToolCall,
+)
 from .prompt import build_final_summary_prompt
 from .redaction import redact_text
 from .review_context import build_spec_progress_review_context
@@ -147,6 +159,8 @@ class Engine:
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
         self._last_telemetry_update_time: float = 0.0
+        self._canonical_event_lock = threading.Lock()
+        self._canonical_event_seq: dict[int, int] = {}
         self._last_run_interrupted = False
         self._lock_handle: Optional[FileLock] = None
         # Ensure the interactive TUI briefing doc exists (for web Terminal "New").
@@ -608,6 +622,68 @@ class Engine:
             self._app_server_logger.warning(
                 "Failed to write event to events log for run %s: %s", run_id, exc
             )
+        event_type = {
+            "run.started": FlowEventType.RUN_STARTED,
+            "run.finished": FlowEventType.RUN_FINISHED,
+            "run.state_changed": FlowEventType.RUN_STATE_CHANGED,
+            "run.no_progress": FlowEventType.RUN_NO_PROGRESS,
+            "token.updated": FlowEventType.TOKEN_USAGE,
+            "plan.updated": FlowEventType.PLAN_UPDATED,
+            "diff.updated": FlowEventType.DIFF_UPDATED,
+        }.get(event)
+        if event_type is not None:
+            self._emit_canonical_event(run_id, event_type, payload)
+
+    def _emit_canonical_event(
+        self,
+        run_id: int,
+        event_type: FlowEventType,
+        data: Optional[dict[str, Any]] = None,
+        *,
+        step_id: Optional[str] = None,
+        timestamp_override: Optional[str] = None,
+    ) -> None:
+        event_payload: dict[str, Any] = {
+            "id": uuid.uuid4().hex,
+            "run_id": str(run_id),
+            "event_type": event_type.value,
+            "timestamp": timestamp_override or now_iso(),
+            "data": data or {},
+        }
+        if step_id is not None:
+            event_payload["step_id"] = step_id
+        self._ensure_run_log_dir()
+        with self._canonical_event_lock:
+            seq = self._canonical_event_seq.get(run_id, 0) + 1
+            self._canonical_event_seq[run_id] = seq
+            event_payload["seq"] = seq
+            events_path = self._canonical_events_log_path(run_id)
+            try:
+                with events_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(event_payload, ensure_ascii=True) + "\n")
+            except (OSError, IOError) as exc:
+                self._app_server_logger.warning(
+                    "Failed to write canonical event for run %s: %s", run_id, exc
+                )
+
+    async def _cancel_task_with_notice(
+        self,
+        run_id: int,
+        task: asyncio.Task[Any],
+        *,
+        name: str,
+    ) -> None:
+        if task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            self._emit_canonical_event(
+                run_id,
+                FlowEventType.RUN_CANCELLED,
+                {"task": name},
+            )
 
     def _ensure_log_path(self) -> None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -617,6 +693,9 @@ class Engine:
 
     def _events_log_path(self, run_id: int) -> Path:
         return self.log_path.parent / "runs" / f"run-{run_id}.events.jsonl"
+
+    def _canonical_events_log_path(self, run_id: int) -> Path:
+        return self.log_path.parent / "runs" / f"run-{run_id}.events.canonical.jsonl"
 
     def _ensure_run_log_dir(self) -> None:
         (self.log_path.parent / "runs").mkdir(parents=True, exist_ok=True)
@@ -1467,6 +1546,15 @@ class Engine:
                     if isinstance(event, Started) and event.session_id:
                         self._update_run_telemetry(run_id, thread_id=event.session_id)
                     elif isinstance(event, OutputDelta):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.AGENT_STREAM_DELTA,
+                            {
+                                "delta": event.content,
+                                "delta_type": event.delta_type,
+                            },
+                            timestamp_override=event.timestamp,
+                        )
                         if event.delta_type in {
                             "assistant_message",
                             "assistant_stream",
@@ -1481,10 +1569,69 @@ class Engine:
                                     else "stdout: "
                                 ),
                             )
+                    elif isinstance(event, ToolCall):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.TOOL_CALL,
+                            {
+                                "tool_name": event.tool_name,
+                                "tool_input": event.tool_input,
+                            },
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, ApprovalRequested):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.APPROVAL_REQUESTED,
+                            {
+                                "request_id": event.request_id,
+                                "description": event.description,
+                                "context": event.context,
+                            },
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, TokenUsage):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.TOKEN_USAGE,
+                            {"usage": event.usage},
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, RunNotice):
+                        notice_type = FlowEventType.RUN_STATE_CHANGED
+                        if event.kind.endswith("timeout"):
+                            notice_type = FlowEventType.RUN_TIMEOUT
+                        elif "cancel" in event.kind:
+                            notice_type = FlowEventType.RUN_CANCELLED
+                        data: dict[str, Any] = {
+                            "kind": event.kind,
+                            "message": event.message,
+                        }
+                        if event.data:
+                            data["data"] = event.data
+                        self._emit_canonical_event(
+                            run_id,
+                            notice_type,
+                            data,
+                            timestamp_override=event.timestamp,
+                        )
                     elif isinstance(event, Completed):
+                        if event.final_message:
+                            self._emit_canonical_event(
+                                run_id,
+                                FlowEventType.AGENT_MESSAGE_COMPLETE,
+                                {"final_message": event.final_message},
+                                timestamp_override=event.timestamp,
+                            )
                         if event.final_message:
                             final_message = event.final_message
                     elif isinstance(event, Failed):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.AGENT_FAILED,
+                            {"error_message": event.error_message},
+                            timestamp_override=event.timestamp,
+                        )
                         failed_error = event.error_message
                     continue
 
@@ -1494,6 +1641,14 @@ class Engine:
                     self.log_line(
                         run_id,
                         "error: app-server turn timed out; interrupting app-server",
+                    )
+                    self._emit_canonical_event(
+                        run_id,
+                        FlowEventType.RUN_TIMEOUT,
+                        {
+                            "context": "app_server_turn",
+                            "timeout_seconds": timeout_seconds,
+                        },
                     )
                 if stopped:
                     self._last_run_interrupted = True
@@ -1509,9 +1664,9 @@ class Engine:
                     {producer_task}, timeout=AUTORUNNER_INTERRUPT_GRACE_SECONDS
                 )
                 if not done_after_interrupt:
-                    producer_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await producer_task
+                    await self._cancel_task_with_notice(
+                        run_id, producer_task, name="producer_task"
+                    )
                     if stopped:
                         return 0
                     return 1
@@ -1521,13 +1676,11 @@ class Engine:
 
             await producer_task
         finally:
-            stop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stop_task
+            await self._cancel_task_with_notice(run_id, stop_task, name="stop_task")
             if timeout_task is not None:
-                timeout_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await timeout_task
+                await self._cancel_task_with_notice(
+                    run_id, timeout_task, name="timeout_task"
+                )
 
         if failed_error:
             self.log_line(run_id, f"error: {failed_error}")
@@ -1751,6 +1904,11 @@ class Engine:
                 self.log_line(
                     run_id, "error: app-server turn timed out; interrupting app-server"
                 )
+                self._emit_canonical_event(
+                    run_id,
+                    FlowEventType.RUN_TIMEOUT,
+                    {"context": "app_server_turn", "timeout_seconds": timeout},
+                )
             if stopped and not turn_task.done():
                 interrupted = True
                 self.log_line(run_id, "info: stop requested; interrupting app-server")
@@ -1783,13 +1941,11 @@ class Engine:
                 raise asyncio.TimeoutError()
             return result, interrupted
         finally:
-            stop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stop_task
+            await self._cancel_task_with_notice(run_id, stop_task, name="stop_task")
             if timeout_task is not None:
-                timeout_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await timeout_task
+                await self._cancel_task_with_notice(
+                    run_id, timeout_task, name="timeout_task"
+                )
 
     async def _run_opencode_app_server_async(
         self,

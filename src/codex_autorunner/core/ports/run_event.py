@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Union
 
@@ -38,6 +38,20 @@ class ApprovalRequested:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    timestamp: str
+    usage: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RunNotice:
+    timestamp: str
+    kind: str
+    message: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Completed:
     timestamp: str
     final_message: str = ""
@@ -54,6 +68,8 @@ RunEvent = Union[
     OutputDelta,
     ToolCall,
     ApprovalRequested,
+    TokenUsage,
+    RunNotice,
     Completed,
     Failed,
 ]
@@ -65,6 +81,8 @@ __all__ = [
     "OutputDelta",
     "ToolCall",
     "ApprovalRequested",
+    "TokenUsage",
+    "RunNotice",
     "Completed",
     "Failed",
     "now_iso",
