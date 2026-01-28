@@ -12,6 +12,7 @@ _SCRIPT = dedent(
     #!/usr/bin/env python3
     \"\"\"Portable ticket frontmatter linter (no project venv required).
 
+    - Validates ticket filenames (TICKET-<number>[suffix].md, e.g. TICKET-001-foo.md)
     - Parses YAML frontmatter for each .codex-autorunner/tickets/TICKET-*.md
     - Validates required keys: agent (string) and done (bool)
     - Exits non-zero on any error
@@ -19,9 +20,10 @@ _SCRIPT = dedent(
 
     from __future__ import annotations
 
+    import re
     import sys
     from pathlib import Path
-    from typing import Any, Iterable, List, Optional, Tuple
+    from typing import Any, List, Optional, Tuple
 
     try:
         import yaml  # type: ignore
@@ -33,8 +35,33 @@ _SCRIPT = dedent(
         sys.exit(2)
 
 
-    def _ticket_paths(tickets_dir: Path) -> Iterable[Path]:
-        return sorted(tickets_dir.glob("TICKET-*.md"))
+    _TICKET_NAME_RE = re.compile(r"^TICKET-(\\d{3,})(?:[^/]*)\\.md$", re.IGNORECASE)
+
+
+    def _ticket_paths(tickets_dir: Path) -> Tuple[List[Path], List[str]]:
+        \"\"\"Return sorted ticket paths along with filename lint errors.\"\"\"
+
+        tickets: List[tuple[int, Path]] = []
+        errors: List[str] = []
+        for path in sorted(tickets_dir.iterdir()):
+            if not path.is_file():
+                continue
+            match = _TICKET_NAME_RE.match(path.name)
+            if not match:
+                errors.append(
+                    f\"{path}: Invalid ticket filename; expected TICKET-<number>[suffix].md (e.g. TICKET-001-foo.md)\"
+                )
+                continue
+            try:
+                idx = int(match.group(1))
+            except ValueError:
+                errors.append(
+                    f\"{path}: Invalid ticket filename; ticket number must be digits (e.g. 001)\"
+                )
+                continue
+            tickets.append((idx, path))
+        tickets.sort(key=lambda pair: pair[0])
+        return [p for _, p in tickets], errors
 
 
     def _split_frontmatter(text: str) -> Tuple[Optional[str], List[str]]:
@@ -120,12 +147,17 @@ _SCRIPT = dedent(
             return 2
 
         errors: List[str] = []
-        checked = 0
-        for path in _ticket_paths(tickets_dir):
-            checked += 1
+        ticket_paths, name_errors = _ticket_paths(tickets_dir)
+        errors.extend(name_errors)
+
+        for path in ticket_paths:
             errors.extend(lint_ticket(path))
 
-        if not checked:
+        if not ticket_paths:
+            if errors:
+                for msg in errors:
+                    sys.stderr.write(msg + "\\n")
+                return 1
             sys.stderr.write(f"No tickets found in {tickets_dir}\\n")
             return 1
 
@@ -134,7 +166,7 @@ _SCRIPT = dedent(
                 sys.stderr.write(msg + "\\n")
             return 1
 
-        sys.stdout.write(f\"OK: {checked} ticket(s) linted.\\n\")
+        sys.stdout.write(f\"OK: {len(ticket_paths)} ticket(s) linted.\\n\")
         return 0
 
 

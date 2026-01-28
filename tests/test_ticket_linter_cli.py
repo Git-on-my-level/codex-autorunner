@@ -25,11 +25,53 @@ def test_linter_is_seeded_with_repo(repo: Path) -> None:
     assert mode & stat.S_IXUSR, "linter should be executable"
 
 
-def test_linter_flags_invalid_yaml_and_passes_valid(repo: Path, tmp_path: Path) -> None:
+def test_linter_rejects_invalid_filename_and_extension(repo: Path) -> None:
     tickets_dir = repo / ".codex-autorunner" / "tickets"
     tickets_dir.mkdir(parents=True, exist_ok=True)
 
-    bad = tickets_dir / "TICKET-999.md"
+    invalid_only = tickets_dir / "NOTE-001.md"
+    invalid_only.write_text(
+        "---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8"
+    )
+    result_only_invalid = _run_linter(repo)
+    assert result_only_invalid.returncode == 1
+    assert "Invalid ticket filename" in result_only_invalid.stderr
+
+    invalid_only.unlink()
+
+    good = tickets_dir / "TICKET-001.md"
+    good.write_text("---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8")
+
+    invalid_prefix = tickets_dir / "NOTE-001.md"
+    invalid_prefix.write_text(
+        "---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8"
+    )
+    result_prefix = _run_linter(repo)
+    assert result_prefix.returncode == 1
+    assert "Invalid ticket filename" in result_prefix.stderr
+
+    invalid_prefix.unlink()
+
+    invalid_ext = tickets_dir / "TICKET-002-bad.txt"
+    invalid_ext.write_text(
+        "---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8"
+    )
+    result_ext = _run_linter(repo)
+    assert result_ext.returncode == 1
+    assert "Invalid ticket filename" in result_ext.stderr
+
+    invalid_ext.unlink()
+
+    result_good = _run_linter(repo)
+    assert result_good.returncode == 0
+    assert "OK" in result_good.stdout
+
+
+def test_linter_flags_invalid_yaml_with_suffix(repo: Path) -> None:
+    tickets_dir = repo / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+
+    bad = tickets_dir / "TICKET-999-sse-resume.md"
     bad.write_text(
         "---\nagent: codex\ntitle: Foo: Bar\ndone: false\n---\nBody\n",
         encoding="utf-8",
