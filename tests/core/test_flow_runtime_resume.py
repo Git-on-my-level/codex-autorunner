@@ -41,8 +41,8 @@ async def test_resume_clears_stop_requested(tmp_path: Path) -> None:
 
     cleared = await controller.resume_flow(record.id)
     assert cleared.stop_requested is False
-    # Status stays pending; run_flow can proceed afterwards.
-    assert cleared.status == FlowRunStatus.PENDING
+    # Resume updates status immediately; run_flow can proceed afterwards.
+    assert cleared.status == FlowRunStatus.RUNNING
 
 
 @pytest.mark.asyncio

@@ -77,6 +77,7 @@ class TicketRunner:
             return self._pause(
                 state,
                 reason=f"Max turns reached ({self._config.max_total_turns}). Review tickets and resume.",
+                reason_code="needs_user_fix",
             )
 
         ticket_dir = self._workspace_root / self._config.ticket_dir
@@ -106,6 +107,7 @@ class TicketRunner:
                     "No tickets found. Create tickets under "
                     f"{safe_relpath(ticket_dir, self._workspace_root)} and resume."
                 ),
+                reason_code="no_tickets",
             )
 
         current_ticket = state.get("current_ticket")
@@ -148,6 +150,7 @@ class TicketRunner:
             state["status"] = "running"
             state.pop("reason", None)
             state.pop("reason_details", None)
+            state.pop("reason_code", None)
 
         _lint_raw = state.get("lint")
         lint_state: dict[str, Any] = _lint_raw if isinstance(_lint_raw, dict) else {}
@@ -176,6 +179,7 @@ class TicketRunner:
                         f"{safe_relpath(current_path, self._workspace_root)}: {exc}"
                     ),
                     current_ticket=safe_relpath(current_path, self._workspace_root),
+                    reason_code="infra_error",
                 )
 
             data, _ = parse_markdown_frontmatter(raw)
@@ -189,6 +193,7 @@ class TicketRunner:
                         "Fix the ticket frontmatter manually and resume."
                     ),
                     current_ticket=safe_relpath(current_path, self._workspace_root),
+                    reason_code="needs_user_fix",
                 )
 
             # Validate agent id unless it is the special user sentinel.
@@ -205,6 +210,7 @@ class TicketRunner:
                             f"{safe_relpath(current_path, self._workspace_root)}: {exc}"
                         ),
                         current_ticket=safe_relpath(current_path, self._workspace_root),
+                        reason_code="needs_user_fix",
                     )
 
             ticket_doc = type(
@@ -225,6 +231,7 @@ class TicketRunner:
                     reason=f"Ticket frontmatter invalid: {safe_relpath(current_path, self._workspace_root)}",
                     reason_details="Errors:\n- " + "\n- ".join(ticket_errors),
                     current_ticket=safe_relpath(current_path, self._workspace_root),
+                    reason_code="needs_user_fix",
                 )
 
         # Built-in manual user ticket.
@@ -239,6 +246,7 @@ class TicketRunner:
                     f"{safe_relpath(current_path, self._workspace_root)}"
                 ),
                 current_ticket=safe_relpath(current_path, self._workspace_root),
+                reason_code="user_pause",
             )
 
         ticket_turns = int(state.get("ticket_turns") or 0)
@@ -320,6 +328,7 @@ class TicketRunner:
                 reason="Agent turn failed. Fix the issue and resume.",
                 reason_details=f"Error: {result.error}",
                 current_ticket=safe_relpath(current_path, self._workspace_root),
+                reason_code="infra_error",
             )
 
         # Mark replies as consumed only after a successful agent turn.
@@ -369,6 +378,7 @@ class TicketRunner:
                 reason="Invalid DISPATCH.md frontmatter.",
                 reason_details="Errors:\n- " + "\n- ".join(dispatch_errors),
                 current_ticket=safe_relpath(current_path, self._workspace_root),
+                reason_code="needs_user_fix",
             )
 
         if dispatch is not None:
@@ -402,6 +412,7 @@ class TicketRunner:
                         "Errors:\n- " + "\n- ".join(fm_errors)
                     ),
                     current_ticket=safe_relpath(current_path, self._workspace_root),
+                    reason_code="needs_user_fix",
                 )
 
             state["lint"] = {
@@ -439,7 +450,9 @@ class TicketRunner:
             reason = dispatch.dispatch.title or "Paused for user input."
             if checkpoint_error:
                 reason += f"\n\nNote: checkpoint commit failed: {checkpoint_error}"
+            state["status"] = "paused"
             state["reason"] = reason
+            state["reason_code"] = "user_pause"
             return TicketResult(
                 status="paused",
                 state=state,
@@ -495,6 +508,7 @@ class TicketRunner:
                         ),
                         reason_details="".join(details_parts),
                         current_ticket=safe_relpath(current_path, self._workspace_root),
+                        reason_code="needs_user_fix",
                     )
 
                 return TicketResult(
@@ -583,12 +597,14 @@ class TicketRunner:
         state: dict[str, Any],
         *,
         reason: str,
+        reason_code: str = "needs_user_fix",
         reason_details: Optional[str] = None,
         current_ticket: Optional[str] = None,
     ) -> TicketResult:
         state = dict(state)
         state["status"] = "paused"
         state["reason"] = reason
+        state["reason_code"] = reason_code
         if reason_details:
             state["reason_details"] = reason_details
         else:

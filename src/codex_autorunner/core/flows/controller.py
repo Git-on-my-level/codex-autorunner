@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
 
 from .definition import FlowDefinition
-from .models import FlowEvent, FlowRunRecord, FlowRunStatus
+from .models import FlowEvent, FlowEventType, FlowRunRecord, FlowRunStatus
 from .runtime import FlowRuntime
 from .store import FlowStore
 
@@ -103,7 +103,37 @@ class FlowController:
             cleared = self.store.set_stop_requested(run_id, False)
             if not cleared:
                 raise RuntimeError(f"Failed to clear stop flag for run {run_id}")
-            return cleared
+            if record.status == FlowRunStatus.COMPLETED:
+                return cleared
+            state = dict(record.state or {})
+            engine = state.get("ticket_engine")
+            if isinstance(engine, dict):
+                engine = dict(engine)
+                engine["status"] = "running"
+                engine.pop("reason", None)
+                engine.pop("reason_details", None)
+                engine.pop("reason_code", None)
+                state["ticket_engine"] = engine
+
+            updated = self.store.update_flow_run_status(
+                run_id=run_id,
+                status=FlowRunStatus.RUNNING,
+                state=state,
+            )
+            if updated:
+                event = self.store.create_event(
+                    event_id=str(uuid.uuid4()),
+                    run_id=run_id,
+                    event_type=FlowEventType.FLOW_RESUMED,
+                    data={},
+                )
+                self._emit_event(event)
+                return updated
+
+            updated = self.store.get_flow_run(run_id)
+            if not updated:
+                raise RuntimeError(f"Failed to get record for run {run_id}")
+            return updated
 
     def get_status(self, run_id: str) -> Optional[FlowRunRecord]:
         return self.store.get_flow_run(run_id)
