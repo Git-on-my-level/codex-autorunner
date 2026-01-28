@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+DEFAULT_MAX_TOTAL_TURNS = 50
+
 
 @dataclass(frozen=True)
 class TicketFrontmatter:
@@ -70,7 +72,7 @@ class DispatchRecord:
 class TicketRunConfig:
     ticket_dir: Path
     runs_dir: Path
-    max_total_turns: int = 25
+    max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS
     max_lint_retries: int = 3
     max_commit_retries: int = 2
     auto_commit: bool = True

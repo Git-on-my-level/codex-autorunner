@@ -6,7 +6,12 @@ from typing import Any, Dict, Optional
 from ...core.flows.definition import EmitEventFn, FlowDefinition, StepOutcome
 from ...core.flows.models import FlowEventType, FlowRunRecord
 from ...core.utils import find_repo_root
-from ...tickets import AgentPool, TicketRunConfig, TicketRunner
+from ...tickets import (
+    DEFAULT_MAX_TOTAL_TURNS,
+    AgentPool,
+    TicketRunConfig,
+    TicketRunner,
+)
 
 
 def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
@@ -33,7 +38,9 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         workspace_root = Path(input_data.get("workspace_root") or repo_root)
         ticket_dir = Path(input_data.get("ticket_dir") or ".codex-autorunner/tickets")
         runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
-        max_total_turns = int(input_data.get("max_total_turns") or 25)
+        max_total_turns = int(
+            input_data.get("max_total_turns") or DEFAULT_MAX_TOTAL_TURNS
+        )
         max_lint_retries = int(input_data.get("max_lint_retries") or 3)
         max_commit_retries = int(input_data.get("max_commit_retries") or 2)
         auto_commit = bool(
