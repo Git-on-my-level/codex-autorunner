@@ -18,7 +18,7 @@ const BANNER = '// GENERATED FILE - do not edit directly. Source: static_src/\n'
 async function main() {
   const staticDir = path.join(__dirname, '..', 'src', 'codex_autorunner', 'static');
   const pattern = path.join(staticDir, '**', '*.js').replace(/\\/g, '/');
-  
+
   const files = await glob(pattern, {
     ignore: ['**/vendor/**', '**/node_modules/**']
   });

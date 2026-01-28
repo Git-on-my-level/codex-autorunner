@@ -1,6 +1,6 @@
 [project]
 name = "codex-autorunner"
-version = "0.1.2"
+version = "1.0.0"
 description = "Codex autorunner CLI per DESIGN-V1"
 readme = "README.md"
 license = {file = "LICENSE"}

@@ -116,8 +116,6 @@ agent: codex
 done: false
 title: Bootstrap ticket flow
 goal: Create SPEC.md and additional tickets, then pause for review
-requires:
-  - .codex-autorunner/ISSUE.md
 ---
 
 Create SPEC.md and additional tickets under .codex-autorunner/tickets/. Then write a pause DISPATCH.md for review.

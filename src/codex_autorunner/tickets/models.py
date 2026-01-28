@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
+
+DEFAULT_MAX_TOTAL_TURNS = 50
 
 
 @dataclass(frozen=True)
@@ -17,7 +19,6 @@ class TicketFrontmatter:
     done: bool
     title: Optional[str] = None
     goal: Optional[str] = None
-    requires: tuple[str, ...] = ()
     # Optional model/reasoning overrides for this ticket.
     model: Optional[str] = None
     reasoning: Optional[str] = None
@@ -71,7 +72,7 @@ class DispatchRecord:
 class TicketRunConfig:
     ticket_dir: Path
     runs_dir: Path
-    max_total_turns: int = 25
+    max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS
     max_lint_retries: int = 3
     max_commit_retries: int = 2
     auto_commit: bool = True
@@ -94,23 +95,3 @@ class TicketResult:
     agent_id: Optional[str] = None
     agent_conversation_id: Optional[str] = None
     agent_turn_id: Optional[str] = None
-
-
-def normalize_requires(requires: Optional[Sequence[Any]]) -> tuple[str, ...]:
-    if not requires:
-        return ()
-    items: list[str] = []
-    for item in requires:
-        if isinstance(item, str):
-            cleaned = item.strip()
-            if cleaned:
-                items.append(cleaned)
-    # Preserve order but drop duplicates.
-    seen: set[str] = set()
-    unique: list[str] = []
-    for item in items:
-        if item in seen:
-            continue
-        seen.add(item)
-        unique.append(item)
-    return tuple(unique)

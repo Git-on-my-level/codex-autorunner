@@ -22,7 +22,8 @@ from ..core.flows import (
     FlowRunStatus,
     FlowStore,
 )
-from ..core.flows.store import now_iso
+from ..core.flows.store import UNSET
+from ..core.flows.transition import resolve_flow_transition
 from ..core.flows.worker_process import (
     FlowWorkerHealth,
     check_worker_health,
@@ -226,67 +227,46 @@ def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
 def _maybe_recover_stuck_flow(
     repo_root: Path, record: FlowRunRecord, store: FlowStore
 ) -> FlowRunRecord:
-    """Recover flows stuck in active states when worker is dead or state is inconsistent.
-
-    If a flow is in RUNNING or STOPPING state but the worker process is dead,
-    transition it to FAILED or STOPPED respectively so users can archive/restart.
-    Also reconcile cases where the inner ticket_engine has already paused or completed
-    but the outer flow status remains RUNNING.
     """
-    if record.status not in (FlowRunStatus.RUNNING, FlowRunStatus.STOPPING):
+    Reconcile persisted flow state with worker health and inner ticket_engine status.
+
+    Delegates decision logic to a pure transition resolver to keep recovery predictable
+    and exhaustively testable.
+    """
+    if record.status not in (
+        FlowRunStatus.RUNNING,
+        FlowRunStatus.STOPPING,
+        FlowRunStatus.PAUSED,
+    ):
         return record
 
     health = check_worker_health(repo_root, record.id)
-    if not health.is_alive:
-        # Worker is dead but status claims it's still active -> recover
-        new_status = (
-            FlowRunStatus.STOPPED
-            if record.status == FlowRunStatus.STOPPING
-            else FlowRunStatus.FAILED
-        )
-        _logger.info(
-            "Recovering stuck flow %s: %s -> %s (worker dead)",
-            record.id,
-            record.status.value,
-            new_status.value,
-        )
-        updated = store.update_flow_run_status(run_id=record.id, status=new_status)
-        _ensure_worker_not_stale(health)
-        return updated or record
 
-    # Worker appears alive; check for inner/outer status inconsistency.
-    if record.status == FlowRunStatus.RUNNING:
-        state = record.state or {}
-        ticket_engine = state.get("ticket_engine") if isinstance(state, dict) else {}
-        ticket_engine = ticket_engine if isinstance(ticket_engine, dict) else {}
-        inner_status = ticket_engine.get("status")
+    decision = resolve_flow_transition(record, health)
 
-        if inner_status == "paused":
-            _logger.warning(
-                "Recovering inconsistent flow %s: flow=running but ticket_engine=paused",
-                record.id,
-            )
-            updated = store.update_flow_run_status(
-                run_id=record.id,
-                status=FlowRunStatus.PAUSED,
-                state=state,
-            )
-            return updated or record
+    if (
+        decision.status == record.status
+        and decision.finished_at == record.finished_at
+        and decision.state == (record.state or {})
+    ):
+        return record
 
-        if inner_status == "completed":
-            _logger.warning(
-                "Recovering inconsistent flow %s: flow=running but ticket_engine=completed",
-                record.id,
-            )
-            updated = store.update_flow_run_status(
-                run_id=record.id,
-                status=FlowRunStatus.COMPLETED,
-                finished_at=now_iso(),
-                state=state,
-            )
-            return updated or record
+    _logger.info(
+        "Recovering flow %s: %s -> %s (%s)",
+        record.id,
+        record.status.value,
+        decision.status.value,
+        decision.note or "reconcile",
+    )
 
-    return record
+    updated = store.update_flow_run_status(
+        run_id=record.id,
+        status=decision.status,
+        state=decision.state,
+        finished_at=decision.finished_at if decision.finished_at else UNSET,
+    )
+    _ensure_worker_not_stale(health)
+    return updated or record
 
 
 class FlowStartRequest(BaseModel):
@@ -637,8 +617,6 @@ agent: codex
 done: false
 title: Bootstrap ticket plan
 goal: Capture scope and seed follow-up tickets
-requires:
-  - .codex-autorunner/ISSUE.md
 ---
 
 You are the first ticket in a new ticket_flow run.
@@ -708,11 +686,6 @@ You are the first ticket in a new ticket_flow run.
             next_index += 1
 
         # Build frontmatter
-        requires_block = ""
-        if request.requires:
-            req_lines = "\n".join(f"  - {r}" for r in request.requires)
-            requires_block = f"requires:\n{req_lines}\n"
-
         title_line = f"title: {request.title}\n" if request.title else ""
         goal_line = f"goal: {request.goal}\n" if request.goal else ""
 
@@ -722,7 +695,6 @@ You are the first ticket in a new ticket_flow run.
             "done: false\n"
             f"{title_line}"
             f"{goal_line}"
-            f"{requires_block}"
             "---\n\n"
             f"{request.body}\n"
         )

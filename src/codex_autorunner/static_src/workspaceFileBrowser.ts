@@ -95,7 +95,6 @@ export class WorkspaceFileBrowser {
     const firstFile = this.flattenFiles(this.tree).find((n) => n.type === "file");
     return firstFile ? firstFile.path : null;
   }
-
   private parentPath(path: string): string {
     const parts = path.split("/").filter(Boolean);
     if (parts.length <= 1) return "";

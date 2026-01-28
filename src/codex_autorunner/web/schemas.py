@@ -357,7 +357,6 @@ class TicketCreateRequest(Payload):
     agent: str = "codex"
     title: Optional[str] = None
     goal: Optional[str] = None
-    requires: Optional[List[str]] = None
     body: str = ""
 
 
