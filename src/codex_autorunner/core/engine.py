@@ -34,7 +34,6 @@ from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
 from .config import (
-    ConfigError,
     RepoConfig,
     _is_loopback_host,
     derive_repo_config,
@@ -77,7 +76,6 @@ from .ticket_linter_cli import ensure_ticket_linter
 from .utils import (
     RepoNotFoundError,
     atomic_write,
-    build_opencode_supervisor,
     ensure_executable,
     find_repo_root,
 )
@@ -158,18 +156,30 @@ class Engine:
 
         # Backend orchestrator for protocol-agnostic backend management
         # Use provided orchestrator if available (for testing), otherwise create it
+        self._backend_orchestrator: Optional[BackendOrchestrator] = None
         if backend_orchestrator is not None:
-            self._backend_orchestrator: Optional[BackendOrchestrator] = (
-                backend_orchestrator
-            )
-        elif backend_factory is None:
-            self._backend_orchestrator = BackendOrchestrator(
-                repo_root=self.repo_root,
-                config=self.config,
-                notification_handler=self._handle_app_server_notification,
-                logger=self._app_server_logger,
-            )
+            self._backend_orchestrator = backend_orchestrator
+        elif backend_factory is None and app_server_supervisor_factory is None:
+            try:
+                self._backend_orchestrator = BackendOrchestrator(
+                    repo_root=self.repo_root,
+                    config=self.config,
+                    notification_handler=None,
+                    logger=self._app_server_logger,
+                )
+            except Exception as exc:
+                import traceback
+
+                self._app_server_logger.warning(
+                    "Failed to create BackendOrchestrator: %s\n%s",
+                    exc,
+                    traceback.format_exc(),
+                )
+                self._backend_orchestrator = None
         else:
+            self._app_server_logger.debug(
+                "Skipping BackendOrchestrator creation because backend_factory or app_server_supervisor_factory is set",
+            )
             self._backend_orchestrator = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
@@ -2100,12 +2110,35 @@ class Engine:
             self.log_line(run_id, f"git commit failed: {exc}")
 
     def _ensure_app_server_supervisor(self, event_prefix: str) -> Optional[Any]:
+        """
+        Ensure app server supervisor exists by delegating to BackendOrchestrator.
+
+        This method is kept for backward compatibility but now delegates to
+        BackendOrchestrator to keep Engine protocol-agnostic.
+        """
         if self._app_server_supervisor is None:
-            if self._app_server_supervisor_factory is None:
-                return None
-            self._app_server_supervisor = self._app_server_supervisor_factory(
-                event_prefix, self._handle_app_server_notification
-            )
+            if (
+                self._backend_orchestrator is None
+                and self._app_server_supervisor_factory is not None
+            ):
+                self._app_server_supervisor = self._app_server_supervisor_factory(
+                    event_prefix, self._handle_app_server_notification
+                )
+            elif self._backend_orchestrator is not None:
+                try:
+                    self._app_server_supervisor = (
+                        self._backend_orchestrator.build_app_server_supervisor(
+                            event_prefix=event_prefix,
+                            notification_handler=self._handle_app_server_notification,
+                        )
+                    )
+                except Exception:
+                    if self._app_server_supervisor_factory is not None:
+                        self._app_server_supervisor = (
+                            self._app_server_supervisor_factory(
+                                event_prefix, self._handle_app_server_notification
+                            )
+                        )
         return self._app_server_supervisor
 
     async def _close_app_server_supervisor(self) -> None:
@@ -2139,39 +2172,24 @@ class Engine:
             self._app_server_logger.warning("agent backend close failed: %s", exc)
 
     def _build_opencode_supervisor(self) -> Optional[Any]:
-        config = self.config.app_server
-        opencode_command = self.config.agent_serve_command("opencode")
-        opencode_binary = None
-        try:
-            opencode_binary = self.config.agent_binary("opencode")
-        except ConfigError:
-            opencode_binary = None
+        """
+        Build OpenCode supervisor by delegating to BackendOrchestrator.
 
-        agent_config = self.config.agents.get("opencode")
-        subagent_models = agent_config.subagent_models if agent_config else None
-
-        supervisor = build_opencode_supervisor(
-            opencode_command=opencode_command,
-            opencode_binary=opencode_binary,
-            workspace_root=self.repo_root,
-            logger=self._app_server_logger,
-            request_timeout=config.request_timeout,
-            max_handles=config.max_handles,
-            idle_ttl_seconds=config.idle_ttl_seconds,
-            session_stall_timeout_seconds=self.config.opencode.session_stall_timeout_seconds,
-            base_env=None,
-            subagent_models=subagent_models,
-        )
-
-        if supervisor is None:
-            self._app_server_logger.info(
-                "OpenCode command unavailable; skipping opencode supervisor."
-            )
+        This method is kept for backward compatibility but now delegates to
+        BackendOrchestrator to keep Engine protocol-agnostic.
+        """
+        if self._backend_orchestrator is None:
             return None
 
-        return supervisor
+        return self._backend_orchestrator.ensure_opencode_supervisor()
 
     def _ensure_opencode_supervisor(self) -> Optional[Any]:
+        """
+        Ensure OpenCode supervisor exists by delegating to BackendOrchestrator.
+
+        This method is kept for backward compatibility but now delegates to
+        BackendOrchestrator to keep Engine protocol-agnostic.
+        """
         if self._opencode_supervisor is None:
             self._opencode_supervisor = self._build_opencode_supervisor()
         return self._opencode_supervisor
