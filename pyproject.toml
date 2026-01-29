@@ -111,11 +111,6 @@ ignore = ["E501"]
 "src/codex_autorunner/routes/terminal_images.py" = ["B008"]
 "src/codex_autorunner/surfaces/web/routes/terminal_images.py" = ["B008"]
 "src/codex_autorunner/routes/voice.py" = ["B008"]
-<<<<<<< HEAD
-"src/codex_autorunner/surfaces/cli/cli.py" = ["B008"]
-"src/codex_autorunner/surfaces/web/routes/terminal_images.py" = ["B008"]
-=======
->>>>>>> origin/main
 "src/codex_autorunner/surfaces/web/routes/voice.py" = ["B008"]
 
 [tool.mypy]
