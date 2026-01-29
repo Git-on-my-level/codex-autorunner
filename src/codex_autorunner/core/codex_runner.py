@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
-from ..codex_cli import apply_codex_options, supports_reasoning
+from ..surfaces.cli.codex_cli import apply_codex_options, supports_reasoning
 from .config import Config, ConfigError
 from .utils import resolve_executable, subprocess_env
 

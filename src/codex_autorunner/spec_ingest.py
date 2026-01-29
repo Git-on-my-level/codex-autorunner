@@ -22,7 +22,7 @@ from .agents.opencode.runtime import (
     split_model_id,
 )
 from .agents.opencode.supervisor import OpenCodeSupervisor
-from .core.app_server_events import AppServerEventBuffer
+from .integrations.app_server.app_server_events import AppServerEventBuffer
 from .core.app_server_prompts import (
     build_spec_ingest_prompt as build_app_server_spec_ingest_prompt,
 )
