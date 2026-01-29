@@ -20,6 +20,7 @@ from typing import IO, Any, Awaitable, Callable, Iterator, Optional
 import yaml
 
 from ..agents.registry import validate_agent_id
+from ..integrations.agents.backend_orchestrator import BackendOrchestrator
 from ..manifest import MANIFEST_VERSION
 from ..tickets.files import list_ticket_paths, ticket_is_done
 from .about_car import ensure_about_car_file
@@ -33,7 +34,6 @@ from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
 from .config import (
-    ConfigError,
     RepoConfig,
     _is_loopback_host,
     derive_repo_config,
@@ -76,7 +76,6 @@ from .ticket_linter_cli import ensure_ticket_linter
 from .utils import (
     RepoNotFoundError,
     atomic_write,
-    build_opencode_supervisor,
     ensure_executable,
     find_repo_root,
 )
@@ -125,6 +124,7 @@ class Engine:
         hub_path: Optional[Path] = None,
         backend_factory: Optional[BackendFactory] = None,
         app_server_supervisor_factory: Optional[AppServerSupervisorFactory] = None,
+        backend_orchestrator: Optional[BackendOrchestrator] = None,
     ):
         if config is None:
             config = load_repo_config(repo_root, hub_path=hub_path)
@@ -154,6 +154,34 @@ class Engine:
             redact_enabled=redact_enabled
         )
         self._opencode_supervisor: Optional[Any] = None
+
+        # Backend orchestrator for protocol-agnostic backend management
+        # Use provided orchestrator if available (for testing), otherwise create it
+        self._backend_orchestrator = None
+        if backend_orchestrator is not None:
+            self._backend_orchestrator = backend_orchestrator
+        elif backend_factory is None and app_server_supervisor_factory is None:
+            try:
+                self._backend_orchestrator = BackendOrchestrator(
+                    repo_root=self.repo_root,
+                    config=self.config,
+                    notification_handler=self._handle_app_server_notification,
+                    logger=self._app_server_logger,
+                )
+            except Exception as exc:
+                import traceback
+
+                self._app_server_logger.warning(
+                    "Failed to create BackendOrchestrator: %s\n%s",
+                    exc,
+                    traceback.format_exc(),
+                )
+                self._backend_orchestrator = None
+        else:
+            self._app_server_logger.debug(
+                "Skipping BackendOrchestrator creation because backend_factory or app_server_supervisor_factory is set",
+            )
+            self._backend_orchestrator = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
         self._last_telemetry_update_time: float = 0.0
@@ -347,20 +375,13 @@ class Engine:
 
         with self._run_log_context(run_id):
             self._write_run_marker(run_id, "start", actor=actor, mode=mode)
-            if validated_agent == "opencode":
-                exit_code = await self._run_opencode_app_server_async(
-                    prompt,
-                    run_id,
-                    model=state.autorunner_model_override,
-                    reasoning=state.autorunner_effort_override,
-                    external_stop_flag=external_stop_flag,
-                )
-            else:
-                exit_code = await self._run_codex_app_server_async(
-                    prompt,
-                    run_id,
-                    external_stop_flag=external_stop_flag,
-                )
+            exit_code = await self._run_agent_async(
+                agent_id=validated_agent,
+                prompt=prompt,
+                run_id=run_id,
+                state=state,
+                external_stop_flag=external_stop_flag,
+            )
             self._write_run_marker(run_id, "end", exit_code=exit_code)
 
         try:
@@ -403,6 +424,7 @@ class Engine:
                 "thread_id": telemetry.thread_id,
                 "turn_id": telemetry.turn_id,
                 "token_usage": token_usage_payload,
+                # Use getattr() for optional config attributes that may not exist in all config versions
                 "cache_scope": getattr(self.config.usage, "cache_scope", "global"),
             }
         artifacts: dict[str, str] = {}
@@ -799,6 +821,7 @@ class Engine:
     def _run_log_context(self, run_id: int) -> Iterator[None]:
         self._ensure_log_path()
         self._ensure_run_log_dir()
+        # Use getattr() for optional config attributes that may not exist in all config versions
         max_bytes = getattr(self.config.log, "max_bytes", None) or 0
         backup_count = getattr(self.config.log, "backup_count", 0) or 0
         handler = RotatingFileHandler(
@@ -1719,8 +1742,21 @@ class Engine:
         if failed_error:
             return 1
 
+        output_messages: list[str] = []
         if final_message:
             self.log_line(run_id, final_message)
+            output_messages = [final_message]
+        elif assistant_messages:
+            output_messages = assistant_messages
+
+        if output_messages:
+            handle_agent_output(
+                self._log_app_server_output,
+                self._write_run_artifact,
+                self._merge_run_index_entry,
+                run_id,
+                output_messages,
+            )
 
         context = orchestrator.get_context()
         if context:
@@ -1797,7 +1833,9 @@ class Engine:
 
         reuse_session = bool(getattr(self.config, "autorunner_reuse_session", False))
         session_id: Optional[str] = None
-        if reuse_session:
+        if reuse_session and self._backend_orchestrator is not None:
+            session_id = self._backend_orchestrator.get_thread_id(session_key)
+        elif reuse_session:
             with self._app_server_threads_lock:
                 session_id = self._app_server_threads.get_thread_id(session_key)
 
@@ -1818,7 +1856,9 @@ class Engine:
             )
             return 1
 
-        if reuse_session:
+        if reuse_session and self._backend_orchestrator is not None:
+            self._backend_orchestrator.set_thread_id(session_key, session_id)
+        elif reuse_session:
             with self._app_server_threads_lock:
                 self._app_server_threads.set_thread_id(session_key, session_id)
 
@@ -1863,7 +1903,9 @@ class Engine:
                     if event is None:
                         break
                     if isinstance(event, Started) and event.session_id:
-                        self._update_run_telemetry(run_id, thread_id=event.session_id)
+                        self._update_run_telemetry(
+                            run_id, thread_id=event.session_id, turn_id=event.turn_id
+                        )
                     elif isinstance(event, OutputDelta):
                         self._emit_canonical_event(
                             run_id,
@@ -2095,12 +2137,35 @@ class Engine:
             self.log_line(run_id, f"git commit failed: {exc}")
 
     def _ensure_app_server_supervisor(self, event_prefix: str) -> Optional[Any]:
+        """
+        Ensure app server supervisor exists by delegating to BackendOrchestrator.
+
+        This method is kept for backward compatibility but now delegates to
+        BackendOrchestrator to keep Engine protocol-agnostic.
+        """
         if self._app_server_supervisor is None:
-            if self._app_server_supervisor_factory is None:
-                return None
-            self._app_server_supervisor = self._app_server_supervisor_factory(
-                event_prefix, self._handle_app_server_notification
-            )
+            if (
+                self._backend_orchestrator is None
+                and self._app_server_supervisor_factory is not None
+            ):
+                self._app_server_supervisor = self._app_server_supervisor_factory(
+                    event_prefix, self._handle_app_server_notification
+                )
+            elif self._backend_orchestrator is not None:
+                try:
+                    self._app_server_supervisor = (
+                        self._backend_orchestrator.build_app_server_supervisor(
+                            event_prefix=event_prefix,
+                            notification_handler=self._handle_app_server_notification,
+                        )
+                    )
+                except Exception:
+                    if self._app_server_supervisor_factory is not None:
+                        self._app_server_supervisor = (
+                            self._app_server_supervisor_factory(
+                                event_prefix, self._handle_app_server_notification
+                            )
+                        )
         return self._app_server_supervisor
 
     async def _close_app_server_supervisor(self) -> None:
@@ -2134,39 +2199,24 @@ class Engine:
             self._app_server_logger.warning("agent backend close failed: %s", exc)
 
     def _build_opencode_supervisor(self) -> Optional[Any]:
-        config = self.config.app_server
-        opencode_command = self.config.agent_serve_command("opencode")
-        opencode_binary = None
-        try:
-            opencode_binary = self.config.agent_binary("opencode")
-        except ConfigError:
-            opencode_binary = None
+        """
+        Build OpenCode supervisor by delegating to BackendOrchestrator.
 
-        agent_config = self.config.agents.get("opencode")
-        subagent_models = agent_config.subagent_models if agent_config else None
-
-        supervisor = build_opencode_supervisor(
-            opencode_command=opencode_command,
-            opencode_binary=opencode_binary,
-            workspace_root=self.repo_root,
-            logger=self._app_server_logger,
-            request_timeout=config.request_timeout,
-            max_handles=config.max_handles,
-            idle_ttl_seconds=config.idle_ttl_seconds,
-            session_stall_timeout_seconds=self.config.opencode.session_stall_timeout_seconds,
-            base_env=None,
-            subagent_models=subagent_models,
-        )
-
-        if supervisor is None:
-            self._app_server_logger.info(
-                "OpenCode command unavailable; skipping opencode supervisor."
-            )
+        This method is kept for backward compatibility but now delegates to
+        BackendOrchestrator to keep Engine protocol-agnostic.
+        """
+        if self._backend_orchestrator is None:
             return None
 
-        return supervisor
+        return self._backend_orchestrator.ensure_opencode_supervisor()
 
     def _ensure_opencode_supervisor(self) -> Optional[Any]:
+        """
+        Ensure OpenCode supervisor exists by delegating to BackendOrchestrator.
+
+        This method is kept for backward compatibility but now delegates to
+        BackendOrchestrator to keep Engine protocol-agnostic.
+        """
         if self._opencode_supervisor is None:
             self._opencode_supervisor = self._build_opencode_supervisor()
         return self._opencode_supervisor
@@ -2265,28 +2315,6 @@ class Engine:
                 await self._cancel_task_with_notice(
                     run_id, timeout_task, name="timeout_task"
                 )
-
-    async def _run_opencode_app_server_async(
-        self,
-        prompt: str,
-        run_id: int,
-        *,
-        model: Optional[str],
-        reasoning: Optional[str],
-        external_stop_flag: Optional[threading.Event] = None,
-    ) -> int:
-        with state_lock(self.state_path):
-            state = load_state(self.state_path)
-        return await self._run_agent_backend_async(
-            agent_id="opencode",
-            prompt=prompt,
-            run_id=run_id,
-            state=state,
-            session_key="autorunner.opencode",
-            model=model,
-            reasoning=reasoning,
-            external_stop_flag=external_stop_flag,
-        )
 
     async def _run_loop_async(
         self,
