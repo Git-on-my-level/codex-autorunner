@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from codex_autorunner.core.app_server_events import AppServerEventBuffer
+from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 
 
 async def _next_event(stream):

@@ -44,6 +44,10 @@ repo_defaults:
     # Example: .codex-autorunner/prompt.txt → /repo/root/.codex-autorunner/prompt.txt
     template: .codex-autorunner/prompt.txt
 
+  ui:
+    # Default editor used when VISUAL/EDITOR are unset.
+    editor: vi
+
   runner:
     # Sleep between loop iterations.
     sleep_seconds: 5
@@ -51,6 +55,10 @@ repo_defaults:
     stop_after_runs: null
     # Stop after wallclock seconds (null = no limit).
     max_wallclock_seconds: null
+
+  autorunner:
+    # Reuse app-server sessions across autorunner runs. Default is stateless.
+    reuse_session: false
 
   git:
     # Auto-commit after a run.
@@ -75,6 +83,8 @@ repo_defaults:
       - run_finished
       - run_error
       - tui_idle
+    # Request timeout for notification delivery (seconds).
+    timeout_seconds: 5.0
     # Idle time (seconds) after last TUI output before notifying.
     tui_idle_seconds: 60
     discord:
@@ -134,6 +144,14 @@ repo_defaults:
     subagent_model: zai-coding-plan/glm-4.7-flashx
     reasoning: null
     max_wallclock_seconds: null
+
+  usage:
+    # Cache scope for aggregated usage series: global|repo
+    cache_scope: global
+    # Override global CODEX_HOME for usage cache (null = CODEX_HOME env or ~/.codex)
+    global_cache_root: null
+    # Repo-local cache path (relative to repo root).
+    repo_cache_path: .codex-autorunner/usage/usage_series_cache.json
 
 agents:
   # Agent binaries/commands (add new agents here; do not hardcode).
@@ -267,6 +285,14 @@ hub:
 update:
   # Skip running ./scripts/check.sh during system updates.
   skip_checks: false
+
+usage:
+  # Cache scope for aggregated usage series: global|repo
+  cache_scope: global
+  # Override global CODEX_HOME for usage cache (null = CODEX_HOME env or ~/.codex)
+  global_cache_root: null
+  # Hub-level cache path (relative to repo root).
+  repo_cache_path: .codex-autorunner/usage/usage_series_cache.json
 
 app_server:
   # Command used to start the Codex app-server.

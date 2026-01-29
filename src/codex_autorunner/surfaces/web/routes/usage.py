@@ -36,6 +36,7 @@ def build_usage_routes() -> APIRouter:
         summary, status = get_repo_usage_summary_cached(
             engine.repo_root,
             default_codex_home(),
+            config=engine.config,
             since=since_dt,
             until=until_dt,
         )
@@ -67,6 +68,7 @@ def build_usage_routes() -> APIRouter:
             series, status = get_repo_usage_series_cached(
                 engine.repo_root,
                 default_codex_home(),
+                config=engine.config,
                 since=since_dt,
                 until=until_dt,
                 bucket=bucket,

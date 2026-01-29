@@ -67,6 +67,8 @@ Mapping the conceptual layers to the codebase:
     - `workspace/`: Optional context (`active_context.md`, `decisions.md`, `spec.md`).
     - `config.yml`: Generated config.
     - `state.sqlite3`, logs, lock.
+- **Global Root** (cross-repo only):
+  - `~/.codex-autorunner/`: update cache, update status/lock, shared app-server workspaces.
 - **Config Precedence**: Built-ins < `codex-autorunner.yml` < override < `.codex-autorunner/config.yml` < env.
 
 ## Execution Loop

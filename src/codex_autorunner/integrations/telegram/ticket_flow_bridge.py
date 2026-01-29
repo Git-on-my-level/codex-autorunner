@@ -571,9 +571,20 @@ def _ticket_controller_for(repo_root: Path) -> FlowController:
     repo_root = repo_root.resolve()
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     artifacts_root = repo_root / ".codex-autorunner" / "flows"
+    from ...core.config import load_repo_config
     from ...core.engine import Engine
+    from ...integrations.agents.wiring import (
+        build_agent_backend_factory,
+        build_app_server_supervisor_factory,
+    )
 
-    engine = Engine(repo_root)
+    config = load_repo_config(repo_root)
+    engine = Engine(
+        repo_root,
+        config=config,
+        backend_factory=build_agent_backend_factory(repo_root, config),
+        app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+    )
     agent_pool = AgentPool(engine.config)
     definition = build_ticket_flow_definition(agent_pool=agent_pool)
     definition.validate()

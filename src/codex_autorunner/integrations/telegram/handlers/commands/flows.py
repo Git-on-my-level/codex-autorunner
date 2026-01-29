@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from .....core.config import load_repo_config
 from .....core.engine import Engine
 from .....core.flows import FlowController, FlowStore
 from .....core.flows.models import FlowRunStatus
@@ -12,6 +13,10 @@ from .....core.flows.worker_process import (
 )
 from .....core.utils import canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
+from .....integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from .....tickets import AgentPool
 from ....github.service import GitHubService
 from ...adapter import TelegramMessage
@@ -30,7 +35,13 @@ def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
 
 def _get_ticket_controller(repo_root: Path) -> FlowController:
     db_path, artifacts_root = _flow_paths(repo_root)
-    engine = Engine(repo_root)
+    config = load_repo_config(repo_root)
+    engine = Engine(
+        repo_root,
+        config=config,
+        backend_factory=build_agent_backend_factory(repo_root, config),
+        app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+    )
     agent_pool = AgentPool(engine.config)
     definition = build_ticket_flow_definition(agent_pool=agent_pool)
     definition.validate()

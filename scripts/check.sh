@@ -60,6 +60,9 @@ echo "Checking import boundaries..."
 echo "Checking work docs..."
 "$PYTHON_BIN" scripts/check_docs.py
 
+echo "Checking import boundaries..."
+"$PYTHON_BIN" scripts/check_import_boundaries.py
+
 echo "Validating hub interface contracts..."
 "$PYTHON_BIN" scripts/validate_interfaces.py
 

@@ -13,6 +13,10 @@ from codex_autorunner.core.config import (
 )
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 
 
 def _write_config(path: Path, data: dict) -> None:
@@ -65,7 +69,11 @@ def test_hub_create_repo_rejects_outside_repos_root(tmp_path: Path):
     cfg["hub"]["repos_root"] = "workspace"
     _write_config(hub_root / CONFIG_FILENAME, cfg)
 
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     with pytest.raises(ValueError):
         supervisor.create_repo("bad", repo_path=Path(".."))
 
@@ -76,7 +84,11 @@ def test_hub_create_repo_rejects_duplicate_id(tmp_path: Path):
     cfg["hub"]["repos_root"] = "workspace"
     _write_config(hub_root / CONFIG_FILENAME, cfg)
 
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     supervisor.create_repo("demo")
     with pytest.raises(ValueError, match="Repo id demo already exists"):
         supervisor.create_repo("demo", repo_path=Path("other"))
@@ -122,7 +134,11 @@ def test_hub_clone_repo_rejects_duplicate_id(tmp_path: Path):
     source_repo = tmp_path / "source"
     _init_git_repo(source_repo)
 
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     supervisor.create_repo("demo")
     with pytest.raises(ValueError, match="Repo id demo already exists"):
         supervisor.clone_repo(
