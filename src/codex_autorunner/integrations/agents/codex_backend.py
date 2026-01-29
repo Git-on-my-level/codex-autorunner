@@ -127,6 +127,8 @@ class CodexAppServerBackend(AgentBackend):
 
         repo_root = Path(context.get("workspace") or self._cwd or Path.cwd())
         resume_session = context.get("session_id") or context.get("thread_id")
+        # Ensure we don't reuse a stale turn id when a new session begins.
+        self._turn_id = None
         if isinstance(resume_session, str) and resume_session:
             try:
                 resume_result = await client.thread_resume(resume_session)
@@ -164,6 +166,8 @@ class CodexAppServerBackend(AgentBackend):
 
         if session_id:
             self._thread_id = session_id
+            # Reset last turn to avoid interrupting the wrong turn when reusing backends.
+            self._turn_id = None
 
         if not self._thread_id:
             await self.start_session(target={}, context={})
@@ -209,6 +213,7 @@ class CodexAppServerBackend(AgentBackend):
 
         if session_id:
             self._thread_id = session_id
+            self._turn_id = None
 
         if not self._thread_id:
             actual_session_id = await self.start_session(target={}, context={})

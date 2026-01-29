@@ -570,6 +570,30 @@
             },
             "method": {
               "enum": [
+                "thread/unarchive"
+              ],
+              "title": "Thread/unarchiveRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadUnarchiveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/unarchiveRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -2220,6 +2244,50 @@
       ],
       "type": "object"
     },
+    "DynamicToolCallParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "arguments": true,
+        "callId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "arguments",
+        "callId",
+        "threadId",
+        "tool",
+        "turnId"
+      ],
+      "title": "DynamicToolCallParams",
+      "type": "object"
+    },
+    "DynamicToolCallResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "output": {
+          "type": "string"
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "output",
+        "success"
+      ],
+      "title": "DynamicToolCallResponse",
+      "type": "object"
+    },
     "EmbeddedResource": {
       "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
       "properties": {
@@ -2901,6 +2969,9 @@
         },
         {
           "properties": {
+            "action": {
+              "$ref": "#/definitions/v2/WebSearchAction"
+            },
             "call_id": {
               "type": "string"
             },
@@ -2916,6 +2987,7 @@
             }
           },
           "required": [
+            "action",
             "call_id",
             "query",
             "type"
@@ -3286,6 +3358,36 @@
             "type"
           ],
           "title": "RequestUserInputEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": true,
+            "callId": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "dynamic_tool_call_request"
+              ],
+              "title": "DynamicToolCallRequestEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "callId",
+            "tool",
+            "turnId",
+            "type"
+          ],
+          "title": "DynamicToolCallRequestEventMsg",
           "type": "object"
         },
         {
@@ -6249,6 +6351,10 @@
         "id": {
           "type": "string"
         },
+        "isOther": {
+          "default": false,
+          "type": "boolean"
+        },
         "options": {
           "items": {
             "$ref": "#/definitions/RequestUserInputQuestionOption"
@@ -6686,7 +6792,14 @@
         {
           "properties": {
             "action": {
-              "$ref": "#/definitions/WebSearchAction"
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WebSearchAction"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "id": {
               "type": [
@@ -6710,7 +6823,6 @@
             }
           },
           "required": [
-            "action",
             "type"
           ],
           "title": "WebSearchCallResponseItem",
@@ -8022,6 +8134,31 @@
           "type": "object"
         },
         {
+          "description": "Execute a dynamic tool call on the client.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "item/tool/call"
+              ],
+              "title": "Item/tool/callRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/DynamicToolCallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Item/tool/callRequest",
+          "type": "object"
+        },
+        {
           "description": "DEPRECATED APIs below Request to approve a patch. This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).",
           "properties": {
             "id": {
@@ -8693,6 +8830,10 @@
         "id": {
           "type": "string"
         },
+        "isOther": {
+          "default": false,
+          "type": "boolean"
+        },
         "options": {
           "items": {
             "$ref": "#/definitions/ToolRequestUserInputOption"
@@ -8847,6 +8988,9 @@
         },
         {
           "properties": {
+            "action": {
+              "$ref": "#/definitions/WebSearchAction"
+            },
             "id": {
               "type": "string"
             },
@@ -8862,6 +9006,7 @@
             }
           },
           "required": [
+            "action",
             "id",
             "query",
             "type"
@@ -10817,6 +10962,23 @@
         "title": "DeprecationNoticeNotification",
         "type": "object"
       },
+      "DynamicToolSpec": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "inputSchema": true,
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "inputSchema",
+          "name"
+        ],
+        "type": "object"
+      },
       "EmbeddedResource": {
         "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
         "properties": {
@@ -11638,6 +11800,10 @@
               "$ref": "#/definitions/v2/ReasoningEffortOption"
             },
             "type": "array"
+          },
+          "supportsPersonality": {
+            "default": false,
+            "type": "boolean"
           }
         },
         "required": [
@@ -12577,7 +12743,14 @@
           {
             "properties": {
               "action": {
-                "$ref": "#/definitions/v2/WebSearchAction"
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/WebSearchAction"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "id": {
                 "type": [
@@ -12601,7 +12774,6 @@
               }
             },
             "required": [
-              "action",
               "type"
             ],
             "title": "WebSearchCallResponseItem",
@@ -14067,6 +14239,16 @@
               }
             ],
             "description": "Optional sort key; defaults to created_at."
+          },
+          "sourceKinds": {
+            "description": "Optional source filter; when set, only sessions from these source kinds are returned. When omitted or empty, defaults to interactive sources.",
+            "items": {
+              "$ref": "#/definitions/v2/ThreadSourceKind"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "title": "ThreadListParams",
@@ -14360,6 +14542,21 @@
         ],
         "type": "string"
       },
+      "ThreadSourceKind": {
+        "enum": [
+          "cli",
+          "vscode",
+          "exec",
+          "appServer",
+          "subAgent",
+          "subAgentReview",
+          "subAgentCompact",
+          "subAgentThreadSpawn",
+          "subAgentOther",
+          "unknown"
+        ],
+        "type": "string"
+      },
       "ThreadStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -14395,6 +14592,15 @@
           "developerInstructions": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "dynamicTools": {
+            "items": {
+              "$ref": "#/definitions/v2/DynamicToolSpec"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -14542,6 +14748,32 @@
           "turnId"
         ],
         "title": "ThreadTokenUsageUpdatedNotification",
+        "type": "object"
+      },
+      "ThreadUnarchiveParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadUnarchiveParams",
+        "type": "object"
+      },
+      "ThreadUnarchiveResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "thread": {
+            "$ref": "#/definitions/v2/Thread"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "title": "ThreadUnarchiveResponse",
         "type": "object"
       },
       "TokenUsageBreakdown": {
