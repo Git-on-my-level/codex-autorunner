@@ -2628,26 +2628,4 @@ def doctor(start_path: Path) -> DoctorReport:
                 "Install git or disable worktrees.",
             )
 
-    telegram_cfg = None
-    if isinstance(config.raw, dict):
-        telegram_cfg = config.raw.get("telegram_bot")
-    if isinstance(telegram_cfg, dict) and telegram_cfg.get("enabled") is True:
-        missing_telegram = missing_optional_dependencies((("httpx", "httpx"),))
-        if missing_telegram:
-            deps_list = ", ".join(missing_telegram)
-            _append_check(
-                checks,
-                "telegram.dependencies",
-                "error",
-                f"Telegram is enabled but missing optional deps: {deps_list}",
-                "Install with `pip install codex-autorunner[telegram]`.",
-            )
-        else:
-            _append_check(
-                checks,
-                "telegram.dependencies",
-                "ok",
-                "Telegram dependencies are installed.",
-            )
-
     return DoctorReport(checks=checks)
