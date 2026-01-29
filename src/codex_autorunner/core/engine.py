@@ -1812,7 +1812,9 @@ class Engine:
 
         reuse_session = bool(getattr(self.config, "autorunner_reuse_session", False))
         session_id: Optional[str] = None
-        if reuse_session:
+        if reuse_session and self._backend_orchestrator is not None:
+            session_id = self._backend_orchestrator.get_thread_id(session_key)
+        elif reuse_session:
             with self._app_server_threads_lock:
                 session_id = self._app_server_threads.get_thread_id(session_key)
 
@@ -1833,7 +1835,9 @@ class Engine:
             )
             return 1
 
-        if reuse_session:
+        if reuse_session and self._backend_orchestrator is not None:
+            self._backend_orchestrator.set_thread_id(session_key, session_id)
+        elif reuse_session:
             with self._app_server_threads_lock:
                 self._app_server_threads.set_thread_id(session_key, session_id)
 
