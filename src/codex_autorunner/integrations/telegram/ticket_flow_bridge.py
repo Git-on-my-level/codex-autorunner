@@ -10,6 +10,7 @@ from ...core.flows import FlowStore
 from ...core.flows.controller import FlowController
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.flows.worker_process import spawn_flow_worker
+from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...manifest import load_manifest
@@ -29,7 +30,7 @@ class TelegramTicketFlowBridge:
         store,
         pause_targets: dict[str, str],
         send_message_with_outbox,
-        send_document: Callable[..., Awaitable[None]],
+        send_document: Callable[..., Awaitable[bool]],
         pause_config,
         default_notification_chat_id: Optional[int],
         hub_root: Optional[Path] = None,
@@ -91,7 +92,12 @@ class TelegramTicketFlowBridge:
             try:
                 await self._scan_and_notify_pauses()
             except Exception as exc:
-                self._logger.warning("telegram.ticket_flow.watch_failed", exc_info=exc)
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.ticket_flow.watch_failed",
+                    exc=exc,
+                )
             await asyncio.sleep(interval)
 
     async def _scan_and_notify_pauses(self) -> None:
@@ -125,9 +131,11 @@ class TelegramTicketFlowBridge:
                 self._load_ticket_flow_pause, workspace_root
             )
         except Exception as exc:
-            self._logger.warning(
+            log_event(
+                self._logger,
+                logging.WARNING,
                 "telegram.ticket_flow.scan_failed",
-                exc_info=exc,
+                exc=exc,
                 workspace_root=str(workspace_root),
             )
             return
@@ -176,9 +184,11 @@ class TelegramTicketFlowBridge:
             )
             self._pause_targets[str(workspace_root)] = run_id
         except Exception as exc:
-            self._logger.warning(
+            log_event(
+                self._logger,
+                logging.WARNING,
                 "telegram.ticket_flow.notify_failed",
-                exc_info=exc,
+                exc=exc,
                 topic_key=primary_key,
                 run_id=run_id,
                 seq=seq,
@@ -320,7 +330,9 @@ class TelegramTicketFlowBridge:
             if updated:
                 _spawn_ticket_worker(workspace_root, updated.id, self._logger)
         except Exception as exc:
-            self._logger.warning(
+            log_event(
+                self._logger,
+                logging.WARNING,
                 "telegram.ticket_flow.auto_resume_failed",
                 exc=exc,
                 run_id=run_id,
@@ -335,9 +347,11 @@ class TelegramTicketFlowBridge:
                 self._load_ticket_flow_pause, workspace_root
             )
         except Exception as exc:
-            self._logger.warning(
+            log_event(
+                self._logger,
+                logging.WARNING,
                 "telegram.ticket_flow.scan_failed",
-                exc_info=exc,
+                exc=exc,
                 workspace_root=str(workspace_root),
             )
             return
@@ -360,9 +374,11 @@ class TelegramTicketFlowBridge:
             self._last_default_notification[workspace_root] = marker
             self._pause_targets[str(workspace_root)] = run_id
         except Exception as exc:
-            self._logger.warning(
+            log_event(
+                self._logger,
+                logging.WARNING,
                 "telegram.ticket_flow.notify_default_failed",
-                exc_info=exc,
+                exc=exc,
                 chat_id=self._default_notification_chat_id,
                 run_id=run_id,
                 seq=seq,
@@ -448,9 +464,11 @@ class TelegramTicketFlowBridge:
                 key=lambda p: p.name,
             )
         except OSError as exc:
-            self._logger.warning(
+            log_event(
+                self._logger,
+                logging.WARNING,
                 "telegram.ticket_flow.attachments_list_failed",
-                exc_info=exc,
+                exc=exc,
                 run_id=run_id,
                 seq=seq,
                 dir=str(archived_dir),
@@ -494,9 +512,11 @@ class TelegramTicketFlowBridge:
         try:
             data = path.read_bytes()
         except OSError as exc:
-            self._logger.warning(
+            log_event(
+                self._logger,
+                logging.WARNING,
                 "telegram.ticket_flow.attachment_read_failed",
-                exc_info=exc,
+                exc=exc,
                 file=str(path),
                 run_id=run_id,
                 seq=seq,
@@ -509,8 +529,9 @@ class TelegramTicketFlowBridge:
             )
             return
         caption = f"[run {run_id} dispatch #{seq}] {path.name}"
+        send_ok = False
         try:
-            await self._send_document(
+            send_ok = await self._send_document(
                 chat_id,
                 data,
                 filename=path.name,
@@ -518,14 +539,26 @@ class TelegramTicketFlowBridge:
                 reply_to=None,
                 caption=caption[:1024],
             )
+            if not send_ok:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.ticket_flow.attachment_send_failed",
+                    file=str(path),
+                    run_id=run_id,
+                    seq=seq,
+                )
         except Exception as exc:
-            self._logger.warning(
+            log_event(
+                self._logger,
+                logging.WARNING,
                 "telegram.ticket_flow.attachment_send_failed",
-                exc_info=exc,
+                exc=exc,
                 file=str(path),
                 run_id=run_id,
                 seq=seq,
             )
+        if not send_ok:
             await self._send_message_with_outbox(
                 chat_id,
                 f"Failed to send attachment {path.name}.",

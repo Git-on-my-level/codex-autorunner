@@ -56,6 +56,7 @@ async def test_pause_dispatch_sends_text_and_attachments(tmp_path: Path) -> None
         caption=None,
     ):
         docs.append(filename)
+        return True
 
     pause_config = PauseDispatchNotifications(
         enabled=True,
@@ -89,6 +90,62 @@ async def test_pause_dispatch_sends_text_and_attachments(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_pause_dispatch_reports_attachment_send_failure(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws_fail"
+    workspace.mkdir()
+    history = workspace / "dispatch_history" / "0001"
+    history.mkdir(parents=True)
+    (history / "DISPATCH.md").write_text("body", encoding="utf-8")
+    (history / "note.txt").write_text("attachment", encoding="utf-8")
+
+    calls: list[str] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append(text)
+        return True
+
+    async def send_document(
+        chat_id: int,
+        data: bytes,
+        *,
+        filename: str,
+        thread_id=None,
+        reply_to=None,
+        caption=None,
+    ):
+        return False
+
+    pause_config = PauseDispatchNotifications(
+        enabled=True,
+        send_attachments=True,
+        max_file_size_bytes=50 * 1024 * 1024,
+        chunk_long_messages=False,
+    )
+    record = _DummyRecord(workspace)
+    store = _DummyStore({"123:root": record})
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=store,
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=pause_config,
+        default_notification_chat_id=None,
+        hub_root=None,
+        manifest_path=None,
+        config_root=workspace,
+    )
+
+    bridge._load_ticket_flow_pause = lambda path: ("run1", "0001", "body", history)  # type: ignore
+
+    await bridge._notify_ticket_flow_pause(workspace, [("123:root", record)])
+
+    assert any("Failed to send attachment note.txt." in call for call in calls)
+
+
+@pytest.mark.asyncio
 async def test_default_chat_dedupes(tmp_path: Path) -> None:
     workspace = tmp_path / "ws2"
     workspace.mkdir()
@@ -104,7 +161,7 @@ async def test_default_chat_dedupes(tmp_path: Path) -> None:
         return True
 
     async def send_document(**kwargs):
-        pass
+        return True
 
     pause_config = PauseDispatchNotifications(
         enabled=True,

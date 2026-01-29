@@ -384,7 +384,7 @@ class TelegramMessageTransport:
         thread_id: Optional[int] = None,
         reply_to: Optional[int] = None,
         caption: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
         try:
             await self._bot.send_document(
                 chat_id,
@@ -394,6 +394,7 @@ class TelegramMessageTransport:
                 reply_to_message_id=reply_to,
                 caption=caption,
             )
+            return True
         except Exception as exc:
             log_event(
                 self._logger,
@@ -404,6 +405,7 @@ class TelegramMessageTransport:
                 reply_to_message_id=reply_to,
                 exc=exc,
             )
+            return False
 
     async def _answer_callback(
         self, callback: Optional[TelegramCallbackQuery], text: str
