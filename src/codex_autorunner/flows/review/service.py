@@ -15,7 +15,13 @@ from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import has_capability, validate_agent_id
 from ...core.config import RepoConfig
 from ...core.engine import Engine
-from ...core.locks import FileLock, FileLockBusy, FileLockError, process_alive, read_lock_info
+from ...core.locks import (
+    FileLock,
+    FileLockBusy,
+    FileLockError,
+    process_alive,
+    read_lock_info,
+)
 from ...core.state import now_iso
 from ...core.utils import atomic_write, read_json
 
