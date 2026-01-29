@@ -1,19 +1,9 @@
 import logging
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, MutableMapping, Optional
+from typing import MutableMapping, Optional
 
 from ...agents.opencode.client import OpenCodeClient
 from ...agents.opencode.supervisor import OpenCodeSupervisor
-from .agent_backend import AgentBackend, AgentEvent, AgentEventType, now_iso
-from .run_event import (
-    ApprovalRequested,
-    Completed,
-    Failed,
-    OutputDelta,
-    RunEvent,
-    Started,
-    ToolCall,
-)
 
 _logger = logging.getLogger(__name__)
 
@@ -55,7 +45,7 @@ class OpenCodeAdapterOrchestrator:
         self._client: Optional[OpenCodeClient] = None
         self._session_id: Optional[str] = None
 
-    async def ensure_supervisor(self) -> OpenCodeSupervisor:
+    async def ensure_supervisor(self) -> Optional[OpenCodeSupervisor]:
         """Ensure the OpenCode supervisor is initialized."""
         if self._supervisor is None:
             self._supervisor = self._build_supervisor()
@@ -64,6 +54,10 @@ class OpenCodeAdapterOrchestrator:
     async def get_client(self, workspace_root: Path) -> OpenCodeClient:
         """Get or create an OpenCode client for the given workspace."""
         supervisor = await self.ensure_supervisor()
+        if supervisor is None:
+            raise RuntimeError(
+                "OpenCode is not configured: neither opencode_command nor opencode_binary is set"
+            )
         if self._client is None:
             self._client = await supervisor.get_client(workspace_root)
         return self._client

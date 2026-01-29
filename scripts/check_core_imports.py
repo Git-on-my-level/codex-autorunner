@@ -13,22 +13,15 @@ from pathlib import Path
 from typing import Set, Tuple
 
 
-def is_inside_type_checking(node: ast.AST, tree: ast.AST) -> bool:
+def is_inside_type_checking(
+    node: ast.AST, parent_map: dict[ast.AST, ast.AST | None]
+) -> bool:
     """
     Check if a node is inside a TYPE_CHECKING block.
 
     This allows imports inside `if TYPE_CHECKING:` blocks which are only used for
     type annotations and don't create runtime dependencies.
     """
-    parent_map = {}
-
-    def build_parent_map(n: ast.AST, parent: ast.AST | None = None):
-        parent_map[n] = parent
-        for child in ast.iter_child_nodes(n):
-            build_parent_map(child, n)
-
-    build_parent_map(tree)
-
     current = node
     while current is not None:
         parent = parent_map.get(current)
@@ -40,10 +33,28 @@ def is_inside_type_checking(node: ast.AST, tree: ast.AST) -> bool:
     return False
 
 
-def get_imports(filepath: Path, package_root: Path) -> Set[Tuple[str, int]]:
+def build_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST | None]:
+    """Build a map from each AST node to its parent node."""
+    parent_map: dict[ast.AST, ast.AST | None] = {}
+
+    def build(n: ast.AST, parent: ast.AST | None = None):
+        parent_map[n] = parent
+        for child in ast.iter_child_nodes(n):
+            build(child, n)
+
+    build(tree)
+    return parent_map
+
+
+def get_imports(
+    filepath: Path, package_root: Path
+) -> Set[Tuple[str, int, tuple[str, ...]]]:
     """
     Extract all import statements from a Python file and convert relative imports to absolute.
     Imports inside TYPE_CHECKING blocks are excluded.
+
+    Returns a set of (module, lineno, imported_names) tuples.
+    imported_names is a tuple of the names being imported from the module.
     """
     imports = set()
 
@@ -67,14 +78,17 @@ def get_imports(filepath: Path, package_root: Path) -> Set[Tuple[str, int]]:
     except Exception:
         return imports
 
+    # Build parent map once for efficiency
+    parent_map = build_parent_map(tree)
+
     for node in ast.walk(tree):
         # Skip imports inside TYPE_CHECKING blocks
-        if is_inside_type_checking(node, tree):
+        if is_inside_type_checking(node, parent_map):
             continue
 
         if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.add((alias.name, node.lineno))
+                imports.add((alias.name, node.lineno, ()))
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 # Convert relative import to absolute
@@ -104,25 +118,38 @@ def get_imports(filepath: Path, package_root: Path) -> Set[Tuple[str, int]]:
                         continue
 
                 for alias in node.names:
-                    imports.add((module, node.lineno))
+                    imports.add((module, node.lineno, (alias.name,)))
 
     return imports
 
 
-def is_forbidden_import(module: str, core_package: Path) -> Tuple[bool, str]:
+def is_forbidden_import(
+    module: str, imported_names: tuple[str, ...]
+) -> Tuple[bool, str]:
     """
     Check if an import is forbidden (core importing from adapter implementations).
 
     Returns (is_forbidden, reason).
     """
-    module_path = module.replace(".", "/")
-
     # Core can import from integrations/agents interfaces
     if module.startswith("codex_autorunner.integrations.agents"):
         # Check if it's importing from interface files only
         allowed_interfaces = {
             "agent_backend",
             "run_event",
+        }
+        # Allowed interface symbols that core can import from integrations/agents package
+        allowed_interface_symbols = {
+            "AgentBackend",
+            "AgentEvent",
+            "AgentEventType",
+            "RunEvent",
+            "Started",
+            "OutputDelta",
+            "ToolCall",
+            "ApprovalRequested",
+            "Completed",
+            "Failed",
         }
         parts = module.split(".")
         if len(parts) >= 4:
@@ -134,15 +161,25 @@ def is_forbidden_import(module: str, core_package: Path) -> Tuple[bool, str]:
                 True,
                 f"forbidden import from integrations/agents/{impl_module} (implementation)",
             )
+        elif module == "codex_autorunner.integrations.agents" and imported_names:
+            # Package-level import: check if all imported names are interface symbols
+            forbidden_names = [
+                name for name in imported_names if name not in allowed_interface_symbols
+            ]
+            if forbidden_names:
+                return (
+                    True,
+                    f"forbidden import from integrations/agents (implementation symbols: {', '.join(forbidden_names)})",
+                )
         return False, ""
 
     # Core cannot import from integrations/app_server implementations
     if module.startswith("codex_autorunner.integrations.app_server"):
-        return True, f"forbidden import from integrations/app_server (implementation)"
+        return True, "forbidden import from integrations/app_server (implementation)"
 
     # Core cannot import from agents implementations
     if module.startswith("codex_autorunner.agents"):
-        return True, f"forbidden import from agents (implementation)"
+        return True, "forbidden import from agents (implementation)"
 
     return False, ""
 
@@ -153,8 +190,8 @@ def check_core_file(filepath: Path, core_dir: Path, package_root: Path) -> list[
 
     try:
         imports = get_imports(filepath, package_root)
-        for module, lineno in imports:
-            is_forbidden, reason = is_forbidden_import(module, core_dir)
+        for module, lineno, imported_names in imports:
+            is_forbidden, reason = is_forbidden_import(module, imported_names)
             if is_forbidden:
                 rel_path = filepath.relative_to(core_dir.parent)
                 errors.append(f"{rel_path}:{lineno}: {reason} (from '{module}')")
