@@ -2,16 +2,16 @@ from typing import Any, Union
 
 import pytest
 
-from codex_autorunner.integrations.agents import (
-    AgentBackend,
+from codex_autorunner.core.ports import AgentBackend
+from codex_autorunner.core.ports.run_event import (
     ApprovalRequested,
     Completed,
     Failed,
     OutputDelta,
     Started,
     ToolCall,
+    now_iso,
 )
-from codex_autorunner.integrations.agents.run_event import now_iso
 
 
 class MockAgentBackend(AgentBackend):
