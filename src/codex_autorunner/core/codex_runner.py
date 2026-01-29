@@ -3,9 +3,13 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
-from ..surfaces.cli.codex_cli import apply_codex_options, supports_reasoning
 from .config import Config, ConfigError
-from .utils import resolve_executable, subprocess_env
+from .utils import (
+    apply_codex_options,
+    resolve_executable,
+    subprocess_env,
+    supports_reasoning,
+)
 
 
 class CodexRunnerError(Exception):

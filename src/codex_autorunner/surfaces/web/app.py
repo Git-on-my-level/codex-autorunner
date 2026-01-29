@@ -16,7 +16,6 @@ from starlette.routing import Mount
 from starlette.types import ASGIApp
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
-from ...integrations.app_server.app_server_events import AppServerEventBuffer
 from ...core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -53,12 +52,11 @@ from ...core.utils import (
     build_opencode_supervisor,
 )
 from ...housekeeping import run_housekeeping_once
+from ...integrations.app_server.app_server_events import AppServerEventBuffer
 from ...integrations.app_server.client import ApprovalHandler, NotificationHandler
 from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...manifest import load_manifest
-from .routes import build_repo_router
-from .routes.system import build_system_routes
 from ...spec_ingest import SpecIngestService
 from ...tickets.files import safe_relpath
 from ...tickets.outbox import parse_user_message, resolve_outbox_paths
@@ -71,6 +69,8 @@ from .middleware import (
     RequestIdMiddleware,
     SecurityHeadersMiddleware,
 )
+from .routes import build_repo_router
+from .routes.system import build_system_routes
 from .runner_manager import RunnerManager
 from .schemas import (
     HubCleanupWorktreeRequest,

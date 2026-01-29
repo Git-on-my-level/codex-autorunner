@@ -58,3 +58,7 @@ class CircuitOpenError(CriticalError):
             msg,
             user_message=f"{service_name} is temporarily unavailable. Please try again later.",
         )
+
+
+class AppServerError(CodexError):
+    pass

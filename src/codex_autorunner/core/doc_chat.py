@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Awaitable,
@@ -33,8 +34,13 @@ from ..agents.opencode.runtime import (
 )
 from ..agents.opencode.supervisor import OpenCodeSupervisor
 from ..agents.registry import validate_agent_id
-from ..integrations.app_server.client import CodexAppServerError
-from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+from .exceptions import AppServerError
+
+if TYPE_CHECKING:
+    from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+else:
+    WorkspaceAppServerSupervisor = object
+
 from .app_server_events import AppServerEventBuffer, format_sse
 from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_doc_chat_prompt
@@ -242,7 +248,7 @@ class DocChatService:
                 chat_id,
                 'result=error detail="interrupt_timeout" backend=app_server',
             )
-        except CodexAppServerError as exc:
+        except AppServerError as exc:
             self._log(
                 chat_id,
                 "result=error "
@@ -874,7 +880,7 @@ class DocChatService:
                     if isinstance(resumed, str) and resumed:
                         thread_id = resumed
                         self._app_server_threads.set_thread_id(key, thread_id)
-                except CodexAppServerError:
+                except AppServerError:
                     self._app_server_threads.reset_thread(key)
                     thread_id = None
             if not thread_id:

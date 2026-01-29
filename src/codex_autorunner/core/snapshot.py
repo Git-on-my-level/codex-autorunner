@@ -6,10 +6,15 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
 
-from ..integrations.app_server.client import CodexAppServerError
-from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+from .exceptions import AppServerError
+
+if TYPE_CHECKING:
+    from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+else:
+    WorkspaceAppServerSupervisor = object
+
 from .app_server_prompts import build_app_server_snapshot_prompt
 from .app_server_threads import (
     AppServerThreadRegistry,
@@ -515,7 +520,7 @@ class SnapshotService:
                     if isinstance(resumed, str) and resumed:
                         thread_id = resumed
                         self._app_server_threads.set_thread_id(key, thread_id)
-                except CodexAppServerError:
+                except AppServerError:
                     self._app_server_threads.reset_thread(key)
                     thread_id = None
             if not thread_id:

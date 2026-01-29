@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional
 
-from ..integrations.app_server.client import (
+from ...core.app_server_utils import (
     _extract_thread_id,
     _extract_thread_id_for_turn,
     _extract_turn_id,

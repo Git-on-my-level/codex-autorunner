@@ -7,6 +7,8 @@ __all__ = [
     "routes",
     "server",
     "surfaces",
+    "surfaces.web.routes",
+    "surfaces.web",
     "voice",
     "web",
 ]

@@ -13,9 +13,20 @@ def find_imports(file_path: Path) -> Set[str]:
 
     try:
         with open(file_path, "r") as f:
-            tree = ast.parse(f.read(), filename=str(file_path))
+            content = f.read()
+            tree = ast.parse(content, filename=str(file_path))
+
+        type_checking_blocks = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If):
+                if isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
+                    for sub_node in ast.walk(node):
+                        if isinstance(sub_node, (ast.ImportFrom, ast.Import)):
+                            type_checking_blocks.add(sub_node)
 
         for node in ast.walk(tree):
+            if node in type_checking_blocks:
+                continue
             if isinstance(node, ast.ImportFrom):
                 module = node.module or ""
                 imports.add(module)

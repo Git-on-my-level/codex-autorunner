@@ -12,7 +12,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import IO, Any, Iterator, Optional
+from typing import IO, TYPE_CHECKING, Any, Iterator, Optional
 
 import yaml
 
@@ -29,15 +29,20 @@ from ..agents.opencode.runtime import (
 )
 from ..agents.opencode.supervisor import OpenCodeSupervisor, OpenCodeSupervisorError
 from ..agents.registry import validate_agent_id
-from ..integrations.app_server.client import (
-    CodexAppServerError,
+from ..manifest import MANIFEST_VERSION
+from .app_server_utils import (
     _extract_thread_id,
     _extract_thread_id_for_turn,
     _extract_turn_id,
+    build_app_server_env,
 )
-from ..integrations.app_server.env import build_app_server_env
-from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
-from ..manifest import MANIFEST_VERSION
+from .exceptions import AppServerError
+
+if TYPE_CHECKING:
+    from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+else:
+    WorkspaceAppServerSupervisor = object
+
 from .about_car import ensure_about_car_file
 from .adapter_utils import handle_agent_output
 from .app_server_events import AppServerEventBuffer
@@ -140,7 +145,7 @@ class Engine:
             default_app_server_threads_path(self.repo_root)
         )
         self._app_server_threads_lock = threading.Lock()
-        self._app_server_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+        self._app_server_supervisor: Optional["WorkspaceAppServerSupervisor"] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         self._app_server_event_formatter = AppServerEventFormatter()
         self._app_server_events = AppServerEventBuffer()
@@ -1229,7 +1234,7 @@ class Engine:
                             )
                         if isinstance(resume_result, dict):
                             thread_info = resume_result
-                    except CodexAppServerError:
+                    except AppServerError:
                         self._app_server_threads.reset_thread("autorunner")
                         thread_id = None
                 if not thread_id:
@@ -1293,7 +1298,7 @@ class Engine:
         except asyncio.TimeoutError:
             self.log_line(run_id, "error: app-server turn timed out")
             return 1
-        except CodexAppServerError as exc:
+        except AppServerError as exc:
             self.log_line(run_id, f"error: {exc}")
             return 1
         except Exception as exc:  # pragma: no cover - defensive
@@ -1487,7 +1492,7 @@ class Engine:
                     await client.turn_interrupt(
                         handle.turn_id, thread_id=handle.thread_id
                     )
-                except CodexAppServerError as exc:
+                except AppServerError as exc:
                     self.log_line(run_id, f"error: app-server interrupt failed: {exc}")
                     if interrupted:
                         self.kill_running_process()
@@ -1502,7 +1507,7 @@ class Engine:
                     )
                     if interrupted:
                         self.kill_running_process()
-                        raise CodexAppServerError("App-server interrupt timed out")
+                        raise AppServerError("App-server interrupt timed out")
                     if supervisor is not None:
                         await supervisor.close_all()
                     raise asyncio.TimeoutError()
