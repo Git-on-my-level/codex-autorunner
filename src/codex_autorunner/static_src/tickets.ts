@@ -917,7 +917,11 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
     if (isActive) {
       const workingBadge = document.createElement("span");
       workingBadge.className = "ticket-working-badge";
-      workingBadge.textContent = "Working";
+      // Text content used on middle responsive view; CSS hides text on desktop/mobile
+      const workingText = document.createElement("span");
+      workingText.className = "badge-text";
+      workingText.textContent = "Working";
+      workingBadge.appendChild(workingText);
       badges.appendChild(workingBadge);
     }
 
@@ -925,7 +929,11 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
     if (done && !isActive) {
       const doneBadge = document.createElement("span");
       doneBadge.className = "ticket-done-badge";
-      doneBadge.textContent = "Done";
+      // Text content used on middle responsive view; CSS hides text on desktop/mobile
+      const doneText = document.createElement("span");
+      doneText.className = "badge-text";
+      doneText.textContent = "Done";
+      doneBadge.appendChild(doneText);
       badges.appendChild(doneBadge);
     }
 

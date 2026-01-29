@@ -80,6 +80,8 @@ completions = true
 
 [tool.pytest.ini_options]
 cache_dir = ".codex-autorunner/pytest-cache"
+testpaths = ["tests"]
+norecursedirs = ["worktrees", ".codex-autorunner", ".git", "node_modules"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [

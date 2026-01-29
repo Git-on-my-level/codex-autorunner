@@ -2149,6 +2149,37 @@ button.icon-btn {
   }
 }
 
+/* ===== Desktop (>=1024px): Compact emoji-only badges ===== */
+@media (min-width: 1024px) {
+  /* Hide badge text on desktop, show emoji only */
+  .ticket-card .ticket-item .ticket-done-badge .badge-text,
+  .ticket-card .ticket-item .ticket-working-badge .badge-text {
+    display: none;
+  }
+
+  /* Compact done badge - just checkmark */
+  .ticket-card .ticket-item.done .ticket-done-badge {
+    padding: 2px 6px;
+    gap: 0;
+  }
+
+  /* Compact working badge - hammer emoji instead of animated dot */
+  .ticket-card .ticket-item.active .ticket-working-badge {
+    padding: 2px 6px;
+    gap: 0;
+  }
+
+  .ticket-card .ticket-item.active .ticket-working-badge::before {
+    content: "🔨";
+    width: auto;
+    height: auto;
+    border-radius: 0;
+    background: none;
+    animation: none;
+    font-size: 11px;
+  }
+}
+
 /* ===== Collapsible Dispatch Panel for Medium Screens ===== */
 
 /* Mini dispatch list - hidden by default, shown in collapsed mode */
@@ -2255,6 +2286,24 @@ button.icon-btn {
     white-space: nowrap;
     line-height: 1;
     margin: 0 !important;
+    gap: 0 !important;
+  }
+
+  /* Hide badge text on mobile, show emoji only */
+  .ticket-card .ticket-item .ticket-done-badge .badge-text,
+  .ticket-card .ticket-item .ticket-working-badge .badge-text {
+    display: none;
+  }
+
+  /* Working badge - hammer emoji instead of animated dot on mobile */
+  .ticket-card .ticket-item.active .ticket-working-badge::before {
+    content: "🔨" !important;
+    width: auto !important;
+    height: auto !important;
+    border-radius: 0 !important;
+    background: none !important;
+    animation: none !important;
+    font-size: 10px;
   }
 
   .ticket-card .ticket-item .ticket-agent {
