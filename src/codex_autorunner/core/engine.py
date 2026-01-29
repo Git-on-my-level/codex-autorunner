@@ -2305,7 +2305,7 @@ class Engine:
                 )
                 return
 
-        from .review import ReviewService
+        from ..flows.review import ReviewService
 
         review_service = ReviewService(
             self,

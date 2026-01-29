@@ -1,7 +1,7 @@
 import pytest
 
 import codex_autorunner.core.engine as engine_module
-import codex_autorunner.core.review as review_module
+import codex_autorunner.flows.review as review_module
 from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.state import RunnerState, save_state
 
