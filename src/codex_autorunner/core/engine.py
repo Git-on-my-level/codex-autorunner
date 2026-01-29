@@ -156,7 +156,7 @@ class Engine:
 
         # Backend orchestrator for protocol-agnostic backend management
         # Use provided orchestrator if available (for testing), otherwise create it
-        self._backend_orchestrator: Optional[BackendOrchestrator] = None
+        self._backend_orchestrator = None
         if backend_orchestrator is not None:
             self._backend_orchestrator = backend_orchestrator
         elif backend_factory is None and app_server_supervisor_factory is None:
@@ -164,7 +164,7 @@ class Engine:
                 self._backend_orchestrator = BackendOrchestrator(
                     repo_root=self.repo_root,
                     config=self.config,
-                    notification_handler=None,
+                    notification_handler=self._handle_app_server_notification,
                     logger=self._app_server_logger,
                 )
             except Exception as exc:
@@ -1741,8 +1741,21 @@ class Engine:
         if failed_error:
             return 1
 
+        output_messages: list[str] = []
         if final_message:
             self.log_line(run_id, final_message)
+            output_messages = [final_message]
+        elif assistant_messages:
+            output_messages = assistant_messages
+
+        if output_messages:
+            handle_agent_output(
+                self._log_app_server_output,
+                self._write_run_artifact,
+                self._merge_run_index_entry,
+                run_id,
+                output_messages,
+            )
 
         context = orchestrator.get_context()
         if context:
