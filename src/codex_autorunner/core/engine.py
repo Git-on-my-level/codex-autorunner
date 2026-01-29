@@ -1454,6 +1454,7 @@ class Engine:
                     "error: app-server backend cannot run inside an active event loop",
                 )
                 return 1
+            raise
 
     async def _run_agent_async(
         self,
@@ -2025,28 +2026,6 @@ class Engine:
                 await self._cancel_task_with_notice(
                     run_id, timeout_task, name="timeout_task"
                 )
-
-    async def _run_opencode_app_server_async(
-        self,
-        prompt: str,
-        run_id: int,
-        *,
-        model: Optional[str],
-        reasoning: Optional[str],
-        external_stop_flag: Optional[threading.Event] = None,
-    ) -> int:
-        with state_lock(self.state_path):
-            state = load_state(self.state_path)
-        return await self._run_agent_backend_async(
-            agent_id="opencode",
-            prompt=prompt,
-            run_id=run_id,
-            state=state,
-            session_key="autorunner.opencode",
-            model=model,
-            reasoning=reasoning,
-            external_stop_flag=external_stop_flag,
-        )
 
     async def _run_loop_async(
         self,
