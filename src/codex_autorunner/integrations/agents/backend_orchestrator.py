@@ -19,7 +19,7 @@ from ...core.ports.run_event import RunEvent
 from ...core.state import RunnerState
 from .codex_backend import CodexAppServerBackend
 from .opencode_backend import OpenCodeBackend
-
+from .wiring import BackendFactory
 
 NotificationHandler = Callable[[dict[str, Any]], Awaitable[None]]
 SessionIdGetter = Callable[[str], Optional[str]]
@@ -55,7 +55,7 @@ class BackendOrchestrator:
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
     ):
-        from .wiring import AgentBackendFactory, build_agent_backend_factory
+        from .wiring import build_agent_backend_factory
 
         self._repo_root = repo_root
         self._config = config
@@ -63,7 +63,7 @@ class BackendOrchestrator:
         self._notification_handler = notification_handler
 
         # Backend factory manages creation and caching of backends
-        self._backend_factory: AgentBackendFactory = build_agent_backend_factory(
+        self._backend_factory: BackendFactory = build_agent_backend_factory(
             repo_root, config
         )
 
@@ -172,24 +172,24 @@ class BackendOrchestrator:
 
     def get_last_turn_id(self) -> Optional[str]:
         """Get the last turn ID from the active backend."""
-        if self._active_backend and hasattr(self._active_backend, "last_turn_id"):
-            return self._active_backend.last_turn_id
+        if self._active_backend:
+            return getattr(self._active_backend, "last_turn_id", None)
         if self._context:
             return self._context.turn_id
         return None
 
     def get_last_thread_info(self) -> Optional[dict[str, Any]]:
         """Get the last thread info from the active backend."""
-        if self._active_backend and hasattr(self._active_backend, "last_thread_info"):
-            return self._active_backend.last_thread_info
+        if self._active_backend:
+            return getattr(self._active_backend, "last_thread_info", None)
         if self._context:
             return self._context.thread_info
         return None
 
     def get_last_token_total(self) -> Optional[dict[str, Any]]:
         """Get the last token total from the active backend."""
-        if self._active_backend and hasattr(self._active_backend, "last_token_total"):
-            return self._active_backend.last_token_total
+        if self._active_backend:
+            return getattr(self._active_backend, "last_token_total", None)
         return None
 
     async def close_all(self) -> None:
