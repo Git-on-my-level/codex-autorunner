@@ -236,6 +236,11 @@ class BackendOrchestrator:
         with self._app_server_threads_lock:
             self._app_server_threads.set_thread_id(session_key, thread_id)
 
+    def _agent_backend_factory(self) -> Optional[AgentBackendFactory]:
+        if isinstance(self._backend_factory, AgentBackendFactory):
+            return self._backend_factory
+        return None
+
     def ensure_opencode_supervisor(self) -> Optional[Any]:
         """
         Ensure OpenCode supervisor exists.
@@ -243,9 +248,8 @@ class BackendOrchestrator:
         This method delegates to the backend factory for supervisor management,
         keeping Engine protocol-agnostic.
         """
-        if isinstance(self._backend_factory, AgentBackendFactory):
-            factory = self._backend_factory
-            assert isinstance(factory, AgentBackendFactory)
+        factory = self._agent_backend_factory()
+        if factory is not None:
             return factory._ensure_opencode_supervisor()
         return None
 

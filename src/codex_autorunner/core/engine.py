@@ -423,6 +423,7 @@ class Engine:
                 "thread_id": telemetry.thread_id,
                 "turn_id": telemetry.turn_id,
                 "token_usage": token_usage_payload,
+                # Use getattr() for optional config attributes that may not exist in all config versions
                 "cache_scope": getattr(self.config.usage, "cache_scope", "global"),
             }
         artifacts: dict[str, str] = {}
@@ -819,6 +820,7 @@ class Engine:
     def _run_log_context(self, run_id: int) -> Iterator[None]:
         self._ensure_log_path()
         self._ensure_run_log_dir()
+        # Use getattr() for optional config attributes that may not exist in all config versions
         max_bytes = getattr(self.config.log, "max_bytes", None) or 0
         backup_count = getattr(self.config.log, "backup_count", 0) or 0
         handler = RotatingFileHandler(
