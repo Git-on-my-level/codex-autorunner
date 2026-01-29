@@ -360,20 +360,13 @@ class Engine:
 
         with self._run_log_context(run_id):
             self._write_run_marker(run_id, "start", actor=actor, mode=mode)
-            if validated_agent == "opencode":
-                exit_code = await self._run_opencode_app_server_async(
-                    prompt,
-                    run_id,
-                    model=state.autorunner_model_override,
-                    reasoning=state.autorunner_effort_override,
-                    external_stop_flag=external_stop_flag,
-                )
-            else:
-                exit_code = await self._run_codex_app_server_async(
-                    prompt,
-                    run_id,
-                    external_stop_flag=external_stop_flag,
-                )
+            exit_code = await self._run_agent_async(
+                agent_id=validated_agent,
+                prompt=prompt,
+                run_id=run_id,
+                state=state,
+                external_stop_flag=external_stop_flag,
+            )
             self._write_run_marker(run_id, "end", exit_code=exit_code)
 
         try:
@@ -1461,7 +1454,48 @@ class Engine:
                     "error: app-server backend cannot run inside an active event loop",
                 )
                 return 1
-            raise
+
+    async def _run_agent_async(
+        self,
+        *,
+        agent_id: str,
+        prompt: str,
+        run_id: int,
+        state: RunnerState,
+        external_stop_flag: Optional[threading.Event],
+    ) -> int:
+        """
+        Run an agent turn using the specified backend.
+
+        This method is protocol-agnostic - it determines the appropriate
+        model/reasoning parameters and session key based on the agent_id,
+        then delegates to _run_agent_backend_async().
+        """
+        # Determine model and reasoning parameters based on agent
+        if agent_id == "codex":
+            model = state.autorunner_model_override or self.config.codex_model
+            reasoning = state.autorunner_effort_override or self.config.codex_reasoning
+            session_key = "autorunner"
+        elif agent_id == "opencode":
+            model = state.autorunner_model_override
+            reasoning = state.autorunner_effort_override
+            session_key = "autorunner.opencode"
+        else:
+            # Fallback to codex defaults for unknown agents
+            model = state.autorunner_model_override or self.config.codex_model
+            reasoning = state.autorunner_effort_override or self.config.codex_reasoning
+            session_key = "autorunner"
+
+        return await self._run_agent_backend_async(
+            agent_id=agent_id,
+            prompt=prompt,
+            run_id=run_id,
+            state=state,
+            session_key=session_key,
+            model=model,
+            reasoning=reasoning,
+            external_stop_flag=external_stop_flag,
+        )
 
     async def _run_codex_app_server_async(
         self,
