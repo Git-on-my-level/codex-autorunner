@@ -1882,7 +1882,9 @@ class Engine:
                     if event is None:
                         break
                     if isinstance(event, Started) and event.session_id:
-                        self._update_run_telemetry(run_id, thread_id=event.session_id)
+                        self._update_run_telemetry(
+                            run_id, thread_id=event.session_id, turn_id=event.turn_id
+                        )
                     elif isinstance(event, OutputDelta):
                         self._emit_canonical_event(
                             run_id,

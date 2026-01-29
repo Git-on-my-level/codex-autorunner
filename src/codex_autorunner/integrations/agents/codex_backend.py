@@ -226,7 +226,12 @@ class CodexAppServerBackend(AgentBackend):
             message[:100],
         )
 
-        yield Started(timestamp=now_iso(), session_id=actual_session_id)
+        yield Started(
+            timestamp=now_iso(),
+            session_id=actual_session_id,
+            thread_id=self._thread_id,
+            turn_id=self._turn_id,
+        )
 
         yield OutputDelta(
             timestamp=now_iso(), content=message, delta_type="user_message"

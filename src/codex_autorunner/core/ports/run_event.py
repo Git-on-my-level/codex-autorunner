@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 
 def now_iso() -> str:
@@ -13,6 +13,8 @@ def now_iso() -> str:
 class Started:
     timestamp: str
     session_id: str
+    thread_id: Optional[str] = None
+    turn_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
