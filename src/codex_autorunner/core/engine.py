@@ -20,6 +20,7 @@ from typing import IO, Any, Awaitable, Callable, Iterator, Optional
 import yaml
 
 from ..agents.registry import validate_agent_id
+from ..integrations.agents.backend_orchestrator import BackendOrchestrator
 from ..manifest import MANIFEST_VERSION
 from ..tickets.files import list_ticket_paths, ticket_is_done
 from .about_car import ensure_about_car_file
@@ -153,6 +154,19 @@ class Engine:
             redact_enabled=redact_enabled
         )
         self._opencode_supervisor: Optional[Any] = None
+
+        # Backend orchestrator for protocol-agnostic backend management
+        # TODO: Gradually migrate to use this instead of direct backend access
+        if backend_factory is not None:
+            # Use provided orchestrator (for testing)
+            self._backend_orchestrator: Optional[BackendOrchestrator] = None
+        else:
+            self._backend_orchestrator = BackendOrchestrator(
+                repo_root=self.repo_root,
+                config=self.config,
+                notification_handler=self._handle_app_server_notification,
+                logger=self._app_server_logger,
+            )
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
         self._last_telemetry_update_time: float = 0.0
