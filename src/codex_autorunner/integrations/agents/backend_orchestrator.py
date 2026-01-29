@@ -9,10 +9,15 @@ interface to the Engine.
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, Optional
 
+from ...core.app_server_threads import (
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
 from ...core.config import RepoConfig
 from ...core.ports.agent_backend import AgentBackend
 from ...core.ports.run_event import RunEvent
@@ -72,6 +77,12 @@ class BackendOrchestrator:
 
         # Context tracking
         self._context: Optional[BackendContext] = None
+
+        # Session registry for backend-specific session tracking
+        self._app_server_threads = AppServerThreadRegistry(
+            default_app_server_threads_path(repo_root)
+        )
+        self._app_server_threads_lock = threading.Lock()
 
     async def get_backend(
         self,
@@ -214,6 +225,16 @@ class BackendOrchestrator:
                 self._context.turn_id = turn_id
             if thread_info:
                 self._context.thread_info = thread_info
+
+    def get_thread_id(self, session_key: str) -> Optional[str]:
+        """Get the thread ID for a given session key."""
+        with self._app_server_threads_lock:
+            return self._app_server_threads.get_thread_id(session_key)
+
+    def set_thread_id(self, session_key: str, thread_id: str) -> None:
+        """Set the thread ID for a given session key."""
+        with self._app_server_threads_lock:
+            self._app_server_threads.set_thread_id(session_key, thread_id)
 
     def ensure_opencode_supervisor(self) -> Optional[Any]:
         """
