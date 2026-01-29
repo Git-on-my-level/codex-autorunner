@@ -10,14 +10,14 @@ import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
-from ..agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
-from ..agents.opencode.supervisor import OpenCodeSupervisor
-from ..agents.registry import has_capability, validate_agent_id
-from .config import RepoConfig
-from .engine import Engine
-from .locks import FileLock, FileLockBusy, FileLockError, process_alive, read_lock_info
-from .state import now_iso
-from .utils import atomic_write, read_json
+from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
+from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...agents.registry import has_capability, validate_agent_id
+from ...core.config import RepoConfig
+from ...core.engine import Engine
+from ...core.locks import FileLock, FileLockBusy, FileLockError, process_alive, read_lock_info
+from ...core.state import now_iso
+from ...core.utils import atomic_write, read_json
 
 REVIEW_STATE_VERSION = 1
 REVIEW_TIMEOUT_SECONDS = 3600
