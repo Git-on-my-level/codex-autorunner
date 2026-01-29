@@ -100,11 +100,19 @@ class DocsManager:
         self.config = config
 
     def read_doc(self, key: str) -> str:
-        path = self.config.doc_path(key)
+        try:
+            path = self.config.doc_path(key)
+        except KeyError:
+            return ""
         return path.read_text(encoding="utf-8") if path.exists() else ""
 
     def todos(self) -> Tuple[List[str], List[str]]:
-        todo_path: Path = self.config.doc_path("todo")
+        # Legacy helper retained for backward compatibility; newer configs may not
+        # have a TODO doc at all.
+        try:
+            todo_path: Path = self.config.doc_path("todo")
+        except KeyError:
+            return [], []
         if not todo_path.exists():
             return [], []
         return parse_todos(todo_path.read_text(encoding="utf-8"))

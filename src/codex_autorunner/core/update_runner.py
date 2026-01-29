@@ -23,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--update-dir", required=True)
     parser.add_argument("--log-path", required=True)
     parser.add_argument("--target", default="both")
+    parser.add_argument("--skip-checks", action="store_true")
     args = parser.parse_args(argv)
 
     update_dir = Path(args.update_dir).expanduser()
@@ -36,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         update_dir=update_dir,
         logger=logger,
         update_target=args.target,
+        skip_checks=bool(args.skip_checks),
     )
     return 0
 

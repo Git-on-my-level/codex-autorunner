@@ -25,6 +25,7 @@ Config lives under `telegram_bot` in `codex-autorunner.yml` and the generated
 - `telegram_bot.app_server`: app-server tuning (`max_handles`, `idle_ttl_seconds`, `turn_timeout_seconds`).
 - `telegram_bot.media`: image/voice handling limits and prompts.
 - `telegram_bot.shell`: `!<cmd>` settings (enable flag, timeouts, output limits).
+- `telegram_bot.cache`: in-memory TTLs for pending approvals, selections, and progress state.
 - `telegram_bot.defaults`: approval/sandbox defaults for the app-server client.
 
 Required env vars are typically:

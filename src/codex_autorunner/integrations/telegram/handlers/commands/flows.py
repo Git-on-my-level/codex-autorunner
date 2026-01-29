@@ -3,13 +3,22 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from .....core.config import load_repo_config
 from .....core.engine import Engine
 from .....core.flows import FlowController, FlowStore
 from .....core.flows.models import FlowRunStatus
-from .....core.flows.worker_process import spawn_flow_worker
+from .....core.flows.worker_process import (
+    check_worker_health,
+    spawn_flow_worker,
+)
 from .....core.utils import canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
+from .....integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from .....tickets import AgentPool
+from ....github.service import GitHubService
 from ...adapter import TelegramMessage
 from ...helpers import _truncate_text
 from .shared import SharedHelpers
@@ -26,7 +35,13 @@ def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
 
 def _get_ticket_controller(repo_root: Path) -> FlowController:
     db_path, artifacts_root = _flow_paths(repo_root)
-    engine = Engine(repo_root)
+    config = load_repo_config(repo_root)
+    engine = Engine(
+        repo_root,
+        config=config,
+        backend_factory=build_agent_backend_factory(repo_root, config),
+        app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+    )
     agent_pool = AgentPool(engine.config)
     definition = build_ticket_flow_definition(agent_pool=agent_pool)
     definition.validate()
@@ -38,6 +53,11 @@ def _get_ticket_controller(repo_root: Path) -> FlowController:
 
 
 def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
+    health = check_worker_health(repo_root, run_id)
+    if health.is_alive:
+        _logger.info("Worker already active for run %s (pid=%s)", run_id, health.pid)
+        return
+
     proc, out, err = spawn_flow_worker(repo_root, run_id)
     try:
         # We don't track handles in Telegram commands, close in parent after spawn.
@@ -94,6 +114,12 @@ class FlowCommands(SharedHelpers):
             ticket_dir.mkdir(parents=True, exist_ok=True)
             first_ticket = ticket_dir / "TICKET-001.md"
             seeded = False
+            issue_path = repo_root / ".codex-autorunner" / "ISSUE.md"
+            issue_exists = (
+                issue_path.exists() and issue_path.read_text(encoding="utf-8").strip()
+                if issue_path.exists()
+                else False
+            )
             if not first_ticket.exists():
                 first_ticket.write_text(
                     """---
@@ -101,11 +127,9 @@ agent: codex
 done: false
 title: Bootstrap ticket flow
 goal: Create SPEC.md and additional tickets, then pause for review
-requires:
-  - .codex-autorunner/ISSUE.md
 ---
 
-Create SPEC.md and additional tickets under .codex-autorunner/tickets/. Then write a pause USER_MESSAGE for review.
+Create SPEC.md and additional tickets under .codex-autorunner/tickets/. Then write a pause DISPATCH.md for review.
 """,
                     encoding="utf-8",
                 )
@@ -116,6 +140,32 @@ Create SPEC.md and additional tickets under .codex-autorunner/tickets/. Then wri
                 metadata={"seeded_ticket": seeded, "origin": "telegram"},
             )
             _spawn_flow_worker(repo_root, flow_record.id)
+
+            if not issue_exists:
+                gh_status = "GitHub not detected; please describe the work so I can write ISSUE.md."
+                try:
+                    gh = GitHubService(repo_root=repo_root)
+                    gh_available = gh.gh_available() and gh.gh_authenticated()
+                    if gh_available:
+                        repo_info = gh.repo_info()
+                        gh_status = (
+                            f"No ISSUE.md found. Reply with a GitHub issue URL or number for {repo_info.name_with_owner} "
+                            "and I'll fetch it into .codex-autorunner/ISSUE.md."
+                        )
+                    else:
+                        gh_status = (
+                            "No ISSUE.md found and GitHub CLI unavailable. "
+                            "Reply with a short plan/requirements so I can seed ISSUE.md."
+                        )
+                except Exception:
+                    pass
+                await self._send_message(
+                    message.chat_id,
+                    gh_status,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+
             await self._send_message(
                 message.chat_id,
                 f"Started ticket flow run {flow_record.id}.",

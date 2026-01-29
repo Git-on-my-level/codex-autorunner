@@ -148,6 +148,7 @@ async def test_outbox_coalescing_collapses_edits(
         await store.close()
 
 
+@pytest.mark.integration
 @pytest.mark.anyio
 async def test_outbox_retry_after_honored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -217,6 +218,7 @@ async def test_outbox_retry_after_honored(
         await store.close()
 
 
+@pytest.mark.integration
 @pytest.mark.anyio
 async def test_outbox_per_chat_scheduling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

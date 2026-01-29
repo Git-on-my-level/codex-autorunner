@@ -2,15 +2,15 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from codex_autorunner.server import create_app
+from codex_autorunner.server import create_hub_app
 
 
-def _client(repo_root: Path) -> TestClient:
-    app = create_app(repo_root)
+def _client(hub_env) -> TestClient:
+    app = create_hub_app(hub_env.hub_root)
     return TestClient(app)
 
 
-def test_voice_transcribe_reads_uploaded_file_bytes(repo: Path) -> None:
+def test_voice_transcribe_reads_uploaded_file_bytes(hub_env, repo: Path) -> None:
     """
     The web UI uploads audio as multipart/form-data (FormData).
     The server must read the uploaded file bytes, not the raw multipart body.
@@ -19,9 +19,9 @@ def test_voice_transcribe_reads_uploaded_file_bytes(repo: Path) -> None:
     (multipart boundaries) and we'd get a provider error instead of empty_audio.
     """
 
-    client = _client(repo)
+    client = _client(hub_env)
     res = client.post(
-        "/api/voice/transcribe",
+        f"/repos/{hub_env.repo_id}/api/voice/transcribe",
         files={"file": ("voice.webm", b"", "audio/webm")},
     )
     assert res.status_code == 400, res.text

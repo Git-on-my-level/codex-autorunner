@@ -1,6 +1,7 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 export const CONSTANTS = {
     UI: {
-        TOAST_DURATION: 2200,
+        TOAST_DURATION: 5000,
         POLLING_INTERVAL: 15000,
         LOG_SCROLL_THRESHOLD: 50,
         MAX_LOG_LINES_IN_DOM: 2000,
@@ -36,9 +37,26 @@ export const CONSTANTS = {
     },
     PROMPTS: {
         VOICE_TRANSCRIPT_DISCLAIMER: "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.",
+        CAR_CONTEXT_HINT: "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.",
+    },
+    KEYWORDS: {
+        CAR_CONTEXT: [
+            "car",
+            "codex",
+            "spec",
+            "autorunner",
+            "workspace",
+            "ticket",
+            "tickets",
+            "context",
+            "decision",
+            "decisions",
+            "handoff",
+            "dispatch",
+            "inbox",
+        ],
     },
     API: {
-        DOCS_ENDPOINT: "/api/docs",
         TERMINAL_ENDPOINT: "/api/terminal",
         TERMINAL_IMAGE_ENDPOINT: "/api/terminal/image",
     }

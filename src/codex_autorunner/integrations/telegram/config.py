@@ -8,7 +8,21 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .adapter import TelegramAllowlist
-from .constants import DEFAULT_AGENT_TURN_TIMEOUT_SECONDS
+from .constants import (
+    CACHE_CLEANUP_INTERVAL_SECONDS,
+    COALESCE_BUFFER_TTL_SECONDS,
+    DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+    MEDIA_BATCH_BUFFER_TTL_SECONDS,
+    MODEL_PENDING_TTL_SECONDS,
+    OVERSIZE_WARNING_TTL_SECONDS,
+    PENDING_APPROVAL_TTL_SECONDS,
+    PENDING_QUESTION_TTL_SECONDS,
+    PROGRESS_STREAM_TTL_SECONDS,
+    REASONING_BUFFER_TTL_SECONDS,
+    SELECTION_STATE_TTL_SECONDS,
+    TURN_PREVIEW_TTL_SECONDS,
+    UPDATE_ID_PERSIST_INTERVAL_SECONDS,
+)
 from .state import APPROVAL_MODE_YOLO, normalize_approval_mode
 
 DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
@@ -48,6 +62,7 @@ DEFAULT_MESSAGE_OVERFLOW = "document"
 MESSAGE_OVERFLOW_OPTIONS = {"document", "split", "trim"}
 DEFAULT_METRICS_MODE = "separate"
 METRICS_MODE_OPTIONS = {"separate", "append_to_response", "append_to_progress"}
+DEFAULT_PAUSE_DISPATCH_MAX_FILE_BYTES = 50 * 1024 * 1024
 
 PARSE_MODE_ALIASES = {
     "html": "HTML",
@@ -111,6 +126,22 @@ class TelegramBotShellConfig:
 
 
 @dataclass(frozen=True)
+class TelegramBotCacheConfig:
+    cleanup_interval_seconds: float
+    coalesce_buffer_ttl_seconds: float
+    media_batch_buffer_ttl_seconds: float
+    model_pending_ttl_seconds: float
+    pending_approval_ttl_seconds: float
+    pending_question_ttl_seconds: float
+    reasoning_buffer_ttl_seconds: float
+    selection_state_ttl_seconds: float
+    turn_preview_ttl_seconds: float
+    progress_stream_ttl_seconds: float
+    oversize_warning_ttl_seconds: float
+    update_id_persist_interval_seconds: float
+
+
+@dataclass(frozen=True)
 class TelegramBotCommandScope:
     scope: dict[str, Any]
     language_code: str
@@ -128,6 +159,14 @@ class TelegramBotProgressStreamConfig:
     max_actions: int
     max_output_chars: int
     min_edit_interval_seconds: float
+
+
+@dataclass(frozen=True)
+class PauseDispatchNotifications:
+    enabled: bool
+    send_attachments: bool
+    max_file_size_bytes: int
+    chunk_long_messages: bool
 
 
 @dataclass(frozen=True)
@@ -158,8 +197,10 @@ class TelegramBotConfig:
     concurrency: TelegramBotConcurrency
     media: TelegramBotMediaConfig
     shell: TelegramBotShellConfig
+    cache: TelegramBotCacheConfig
     progress_stream: TelegramBotProgressStreamConfig
     command_registration: TelegramBotCommandRegistration
+    opencode_command: list[str]
     state_file: Path
     app_server_command_env: str
     app_server_command: list[str]
@@ -176,6 +217,9 @@ class TelegramBotConfig:
     metrics_mode: str
     coalesce_window_seconds: float
     agent_binaries: dict[str, str]
+    ticket_flow_auto_resume: bool
+    pause_dispatch_notifications: PauseDispatchNotifications
+    default_notification_chat_id: Optional[int]
 
     @classmethod
     def from_raw(
@@ -188,6 +232,16 @@ class TelegramBotConfig:
     ) -> "TelegramBotConfig":
         env = env or dict(os.environ)
         cfg: dict[str, Any] = raw if isinstance(raw, dict) else {}
+
+        def _positive_float(value: Any, default: float) -> float:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return default
+            if parsed <= 0:
+                return default
+            return parsed
+
         enabled = bool(cfg.get("enabled", False))
         mode = str(cfg.get("mode", "polling"))
         bot_token_env = str(cfg.get("bot_token_env", "CAR_TELEGRAM_BOT_TOKEN"))
@@ -322,6 +376,81 @@ class TelegramBotConfig:
             timeout_ms=shell_timeout_ms,
             max_output_chars=shell_max_output_chars,
         )
+        cache_raw_value = cfg.get("cache")
+        cache_raw: dict[str, Any] = (
+            cache_raw_value if isinstance(cache_raw_value, dict) else {}
+        )
+        cache = TelegramBotCacheConfig(
+            cleanup_interval_seconds=_positive_float(
+                cache_raw.get(
+                    "cleanup_interval_seconds", CACHE_CLEANUP_INTERVAL_SECONDS
+                ),
+                CACHE_CLEANUP_INTERVAL_SECONDS,
+            ),
+            coalesce_buffer_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "coalesce_buffer_ttl_seconds", COALESCE_BUFFER_TTL_SECONDS
+                ),
+                COALESCE_BUFFER_TTL_SECONDS,
+            ),
+            media_batch_buffer_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "media_batch_buffer_ttl_seconds", MEDIA_BATCH_BUFFER_TTL_SECONDS
+                ),
+                MEDIA_BATCH_BUFFER_TTL_SECONDS,
+            ),
+            model_pending_ttl_seconds=_positive_float(
+                cache_raw.get("model_pending_ttl_seconds", MODEL_PENDING_TTL_SECONDS),
+                MODEL_PENDING_TTL_SECONDS,
+            ),
+            pending_approval_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "pending_approval_ttl_seconds", PENDING_APPROVAL_TTL_SECONDS
+                ),
+                PENDING_APPROVAL_TTL_SECONDS,
+            ),
+            pending_question_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "pending_question_ttl_seconds", PENDING_QUESTION_TTL_SECONDS
+                ),
+                PENDING_QUESTION_TTL_SECONDS,
+            ),
+            reasoning_buffer_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "reasoning_buffer_ttl_seconds", REASONING_BUFFER_TTL_SECONDS
+                ),
+                REASONING_BUFFER_TTL_SECONDS,
+            ),
+            selection_state_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "selection_state_ttl_seconds", SELECTION_STATE_TTL_SECONDS
+                ),
+                SELECTION_STATE_TTL_SECONDS,
+            ),
+            turn_preview_ttl_seconds=_positive_float(
+                cache_raw.get("turn_preview_ttl_seconds", TURN_PREVIEW_TTL_SECONDS),
+                TURN_PREVIEW_TTL_SECONDS,
+            ),
+            progress_stream_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "progress_stream_ttl_seconds", PROGRESS_STREAM_TTL_SECONDS
+                ),
+                PROGRESS_STREAM_TTL_SECONDS,
+            ),
+            oversize_warning_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "oversize_warning_ttl_seconds", OVERSIZE_WARNING_TTL_SECONDS
+                ),
+                OVERSIZE_WARNING_TTL_SECONDS,
+            ),
+            update_id_persist_interval_seconds=_positive_float(
+                cache_raw.get(
+                    "update_id_persist_interval_seconds",
+                    UPDATE_ID_PERSIST_INTERVAL_SECONDS,
+                ),
+                UPDATE_ID_PERSIST_INTERVAL_SECONDS,
+            ),
+        )
 
         progress_raw_value = cfg.get("progress_stream")
         progress_raw: dict[str, Any] = (
@@ -383,6 +512,38 @@ class TelegramBotConfig:
         if coalesce_window_seconds <= 0:
             coalesce_window_seconds = DEFAULT_COALESCE_WINDOW_SECONDS
 
+        ticket_flow_raw = (
+            cfg.get("ticket_flow") if isinstance(cfg.get("ticket_flow"), dict) else {}
+        )
+        ticket_flow_auto_resume = bool(ticket_flow_raw.get("auto_resume", False))
+
+        pause_raw_value = cfg.get("pause_dispatch_notifications")
+        pause_raw: dict[str, Any] = (
+            pause_raw_value if isinstance(pause_raw_value, dict) else {}
+        )
+        pause_enabled = bool(pause_raw.get("enabled", enabled))
+        pause_send_attachments = bool(pause_raw.get("send_attachments", True))
+        pause_max_file_size_bytes = int(
+            pause_raw.get("max_file_size_bytes", DEFAULT_PAUSE_DISPATCH_MAX_FILE_BYTES)
+        )
+        if pause_max_file_size_bytes <= 0:
+            pause_max_file_size_bytes = DEFAULT_PAUSE_DISPATCH_MAX_FILE_BYTES
+        pause_chunk_long_messages = bool(pause_raw.get("chunk_long_messages", True))
+        pause_dispatch_notifications = PauseDispatchNotifications(
+            enabled=pause_enabled,
+            send_attachments=pause_send_attachments,
+            max_file_size_bytes=pause_max_file_size_bytes,
+            chunk_long_messages=pause_chunk_long_messages,
+        )
+
+        default_notification_chat_raw = cfg.get("default_notification_chat_id")
+        default_notification_chat_id: Optional[int] = None
+        try:
+            if default_notification_chat_raw is not None:
+                default_notification_chat_id = int(default_notification_chat_raw)
+        except (TypeError, ValueError):
+            default_notification_chat_id = None
+
         agent_binaries = dict(agent_binaries or {})
         command_reg_raw_value = cfg.get("command_registration")
         command_reg_raw: dict[str, Any] = (
@@ -393,6 +554,13 @@ class TelegramBotConfig:
         command_registration = TelegramBotCommandRegistration(
             enabled=command_reg_enabled, scopes=scopes
         )
+
+        opencode_command = []
+        opencode_env_command = env.get("CAR_OPENCODE_COMMAND")
+        if opencode_env_command:
+            opencode_command = _parse_command(opencode_env_command)
+        if not opencode_command:
+            opencode_command = _parse_command(cfg.get("opencode_command"))
 
         state_file = Path(cfg.get("state_file", DEFAULT_STATE_FILE))
         if not state_file.is_absolute():
@@ -515,8 +683,10 @@ class TelegramBotConfig:
             concurrency=concurrency,
             media=media,
             shell=shell,
+            cache=cache,
             progress_stream=progress_stream,
             command_registration=command_registration,
+            opencode_command=opencode_command,
             state_file=state_file,
             app_server_command_env=app_server_command_env,
             app_server_command=app_server_command,
@@ -533,6 +703,9 @@ class TelegramBotConfig:
             metrics_mode=metrics_mode,
             coalesce_window_seconds=coalesce_window_seconds,
             agent_binaries=agent_binaries,
+            ticket_flow_auto_resume=ticket_flow_auto_resume,
+            pause_dispatch_notifications=pause_dispatch_notifications,
+            default_notification_chat_id=default_notification_chat_id,
         )
 
     def validate(self) -> None:

@@ -1,6 +1,6 @@
 [project]
 name = "codex-autorunner"
-version = "0.1.2"
+version = "1.0.0"
 description = "Codex autorunner CLI per DESIGN-V1"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -86,10 +86,16 @@ markers = [
     "integration: marks tests as integration tests that require external dependencies (deselect with '-m \"not integration\"')",
     "timeout(seconds): per-test timeout (provided by pytest-timeout)",
 ]
+filterwarnings = [
+    # Cancelled auto-restart tasks can emit noisy unraisable warnings when the event
+    # loop shuts down; we explicitly clean these up, so silence the residual notice.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.ruff]
 line-length = 88
 target-version = "py39"
+src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B"]
@@ -102,6 +108,9 @@ ignore = ["E501"]
 "src/codex_autorunner/cli.py" = ["B008"]
 "src/codex_autorunner/routes/terminal_images.py" = ["B008"]
 "src/codex_autorunner/routes/voice.py" = ["B008"]
+"src/codex_autorunner/surfaces/cli/cli.py" = ["B008"]
+"src/codex_autorunner/surfaces/web/routes/terminal_images.py" = ["B008"]
+"src/codex_autorunner/surfaces/web/routes/voice.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.9"

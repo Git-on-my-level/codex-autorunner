@@ -12,15 +12,10 @@ mode: hub
 repo_defaults:
   docs:
     # Paths are relative to the repo root.
-    # Example: .codex-autorunner/TODO.md → /repo/root/.codex-autorunner/TODO.md
     # Note: Absolute paths and ~ expansion are NOT allowed for docs.*
-    todo: .codex-autorunner/TODO.md
-    progress: .codex-autorunner/PROGRESS.md
-    opinions: .codex-autorunner/OPINIONS.md
-    spec: .codex-autorunner/SPEC.md
-    summary: .codex-autorunner/SUMMARY.md
-    snapshot: .codex-autorunner/SNAPSHOT.md
-    snapshot_state: .codex-autorunner/snapshot_state.json
+    active_context: .codex-autorunner/workspace/active_context.md
+    decisions: .codex-autorunner/workspace/decisions.md
+    spec: .codex-autorunner/workspace/spec.md
 
   codex:
     # Codex CLI binary to invoke.
@@ -49,6 +44,10 @@ repo_defaults:
     # Example: .codex-autorunner/prompt.txt → /repo/root/.codex-autorunner/prompt.txt
     template: .codex-autorunner/prompt.txt
 
+  ui:
+    # Default editor used when VISUAL/EDITOR are unset.
+    editor: vi
+
   runner:
     # Sleep between loop iterations.
     sleep_seconds: 5
@@ -56,6 +55,10 @@ repo_defaults:
     stop_after_runs: null
     # Stop after wallclock seconds (null = no limit).
     max_wallclock_seconds: null
+
+  autorunner:
+    # Reuse app-server sessions across autorunner runs. Default is stateless.
+    reuse_session: false
 
   git:
     # Auto-commit after a run.
@@ -80,6 +83,8 @@ repo_defaults:
       - run_finished
       - run_error
       - tui_idle
+    # Request timeout for notification delivery (seconds).
+    timeout_seconds: 5.0
     # Idle time (seconds) after last TUI output before notifying.
     tui_idle_seconds: 60
     discord:
@@ -140,6 +145,14 @@ repo_defaults:
     reasoning: null
     max_wallclock_seconds: null
 
+  usage:
+    # Cache scope for aggregated usage series: global|repo
+    cache_scope: global
+    # Override global CODEX_HOME for usage cache (null = CODEX_HOME env or ~/.codex)
+    global_cache_root: null
+    # Repo-local cache path (relative to repo root).
+    repo_cache_path: .codex-autorunner/usage/usage_series_cache.json
+
 agents:
   # Agent binaries/commands (add new agents here; do not hardcode).
   codex:
@@ -193,6 +206,21 @@ telegram_bot:
     timeout_ms: 120000
     # Max output characters to show inline before attaching full output.
     max_output_chars: 3800
+  cache:
+    # Cache cleanup cadence (seconds).
+    cleanup_interval_seconds: 300
+    # TTLs for in-memory Telegram state (seconds).
+    coalesce_buffer_ttl_seconds: 60
+    media_batch_buffer_ttl_seconds: 60
+    model_pending_ttl_seconds: 1800
+    pending_approval_ttl_seconds: 600
+    pending_question_ttl_seconds: 600
+    reasoning_buffer_ttl_seconds: 900
+    selection_state_ttl_seconds: 1800
+    turn_preview_ttl_seconds: 900
+    progress_stream_ttl_seconds: 900
+    oversize_warning_ttl_seconds: 3600
+    update_id_persist_interval_seconds: 60
   command_registration:
     # Auto-register bot commands so Telegram shows the slash command menu.
     enabled: true
@@ -201,6 +229,8 @@ telegram_bot:
         language_code: ""
       - type: all_group_chats
         language_code: ""
+  # Optional full OpenCode command (overrides agent binary for Telegram sessions).
+  opencode_command: null
   state_file: .codex-autorunner/telegram_state.sqlite3
   # Optional env var that contains the full app-server command.
   app_server_command_env: CAR_TELEGRAM_APP_SERVER_COMMAND
@@ -222,6 +252,14 @@ telegram_bot:
       - message
       - edited_message
       - callback_query
+  # Pause dispatch notifications
+  pause_dispatch_notifications:
+    enabled: true
+    send_attachments: true
+    max_file_size_bytes: 50000000
+    chunk_long_messages: true
+  # Default chat for workspaces without bound topics (Telegram chat id)
+  default_notification_chat_id: null
 
 hub:
   # Hub repo discovery root (relative to config file location).
@@ -244,6 +282,18 @@ hub:
     max_bytes: 10000000
     backup_count: 3
 
+update:
+  # Skip running ./scripts/check.sh during system updates.
+  skip_checks: false
+
+usage:
+  # Cache scope for aggregated usage series: global|repo
+  cache_scope: global
+  # Override global CODEX_HOME for usage cache (null = CODEX_HOME env or ~/.codex)
+  global_cache_root: null
+  # Hub-level cache path (relative to repo root).
+  repo_cache_path: .codex-autorunner/usage/usage_series_cache.json
+
 app_server:
   # Command used to start the Codex app-server.
   command:
@@ -253,6 +303,8 @@ app_server:
   # Supports ~ expansion: ~/.codex-autorunner/workspaces → /home/user/.codex-autorunner/workspaces
   # Can also be relative to repo root: .codex-autorunner/workspaces
   state_root: ~/.codex-autorunner/workspaces
+  # Whether to auto-restart the app-server after unexpected exits.
+  auto_restart: true
   # Cap concurrent handles; null/<=0 disables the cap.
   max_handles: 20
   # Close idle app-server handles after this many seconds; null/<=0 disables pruning.
@@ -261,6 +313,18 @@ app_server:
   turn_timeout_seconds: 28800
   # Per-request timeout (seconds); null/<=0 uses the client default.
   request_timeout: null
+  client:
+    # Max bytes for a single JSON-RPC message from the app-server.
+    max_message_bytes: 52428800
+    # Max bytes kept for oversize message previews.
+    oversize_preview_bytes: 4096
+    # Cap bytes drained when discarding oversized messages.
+    max_oversize_drain_bytes: 104857600
+    # Restart backoff tuning (seconds).
+    restart_backoff_initial_seconds: 0.5
+    restart_backoff_max_seconds: 30.0
+    # Jitter ratio applied to restart delays (0 disables jitter).
+    restart_backoff_jitter_ratio: 0.1
   # Prompt limits for app-server flows (doc chat, spec ingest, autorunner).
   prompts:
     doc_chat:

@@ -20,6 +20,7 @@ from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import _normalize_update_target, _spawn_update_process
+from ....core.update_paths import resolve_update_paths
 from ....core.utils import canonicalize_path
 from ...app_server.client import _normalize_sandbox_policy
 from ..adapter import (
@@ -54,6 +55,7 @@ from ..constants import (
     TurnKey,
 )
 from ..helpers import (
+    CodexFeatureRow,
     _coerce_model_options,
     _compact_preview,
     _extract_command_result,
@@ -77,6 +79,9 @@ from ..helpers import (
     _set_rollout_path,
     _thread_summary_preview,
     _with_conversation_id,
+    derive_codex_features_command,
+    format_codex_features,
+    parse_codex_features_list,
 )
 from ..state import (
     parse_topic_key,
@@ -112,20 +117,7 @@ OUTBOX_CONTEXT_RE = re.compile(
     "(?:\\b(?:pdf|png|jpg|jpeg|gif|webp|svg|csv|tsv|json|yaml|yml|zip|tar|gz|tgz|xlsx|xls|docx|pptx|md|txt|log|html|xml)\\b|\\.(?:pdf|png|jpg|jpeg|gif|webp|svg|csv|tsv|json|yaml|yml|zip|tar|gz|tgz|xlsx|xls|docx|pptx|md|txt|log|html|xml)\\b|\\b(?:outbox)\\b)",
     re.IGNORECASE,
 )
-CAR_CONTEXT_KEYWORDS = (
-    "car",
-    "codex",
-    "todo",
-    "progress",
-    "opinions",
-    "spec",
-    "summary",
-    "autorunner",
-    "work docs",
-)
-CAR_CONTEXT_HINT = (
-    "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules."
-)
+
 FILES_HINT_TEMPLATE = """Inbox: {inbox}
 Outbox (pending): {outbox}
 Topic key: {topic_key}
@@ -1622,36 +1614,84 @@ class TelegramCommandHandlers(
             )
             return
         argv = self._parse_command_args(args)
-        if not argv:
+
+        async def _read_explicit_config_features() -> Optional[str]:
             try:
                 result = await client.request("config/read", {"includeLayers": False})
+            except Exception:
+                return None
+            return _format_feature_flags(result)
+
+        async def _fetch_codex_features() -> (
+            tuple[list[CodexFeatureRow], Optional[str]]
+        ):
+            features_command = derive_codex_features_command(
+                self._config.app_server_command
+            )
+            try:
+                result = await client.request(
+                    "command/exec",
+                    {
+                        "cwd": record.workspace_path,
+                        "command": features_command,
+                        "timeoutMs": 10000,
+                    },
+                )
             except Exception as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "telegram.experimental.read_failed",
+                    "telegram.experimental.exec_failed",
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                     exc=exc,
                 )
+                return (
+                    [],
+                    "Failed to run `codex features list`; check Codex install/PATH.",
+                )
+            stdout, stderr, exit_code = _extract_command_result(result)
+            if exit_code not in (None, 0):
+                detail = stderr.strip() if isinstance(stderr, str) else ""
+                msg = f"`{' '.join(features_command)}` failed (exit {exit_code})."
+                if detail:
+                    msg = f"{msg} stderr: {detail}"
+                return [], msg
+            rows = parse_codex_features_list(stdout)
+            if not rows:
+                return (
+                    [],
+                    f"No feature rows returned by `{' '.join(features_command)}`.",
+                )
+            return rows, None
+
+        list_all = bool(argv and argv[0].lower() == "all")
+        is_list_request = not argv or list_all or argv[0].lower() in ("list", "ls")
+        if is_list_request:
+            stage_filter = None if list_all else "beta"
+            rows, error = await _fetch_codex_features()
+            if error:
+                fallback = await _read_explicit_config_features()
+                message_lines = [error]
+                if fallback and fallback.strip() != "No feature flags found.":
+                    message_lines.append("")
+                    message_lines.append("Explicit config entries (may be incomplete):")
+                    message_lines.append(fallback)
                 await self._send_message(
                     message.chat_id,
-                    _with_conversation_id(
-                        "Failed to read config; check logs for details.",
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                    ),
+                    "\n".join(message_lines),
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
                 return
             await self._send_message(
                 message.chat_id,
-                _format_feature_flags(result),
+                format_codex_features(rows, stage_filter=stage_filter),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
+
         if len(argv) < 2:
             await self._send_message(
                 message.chat_id,
@@ -1682,9 +1722,35 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
             )
             return
+
+        rows, error = await _fetch_codex_features()
+        if error:
+            await self._send_message(
+                message.chat_id,
+                error,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        normalized_feature = feature
+        if feature.startswith("features."):
+            normalized_feature = feature[len("features.") :]
+        target_row = next((row for row in rows if row.key == normalized_feature), None)
+        if target_row is None:
+            available = ", ".join(sorted(row.key for row in rows))
+            await self._send_message(
+                message.chat_id,
+                f"Unknown feature '{feature}'. Known features: {available}\n"
+                "Use /experimental all to list all stages.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
         key_path = feature if feature.startswith("features.") else f"features.{feature}"
         try:
-            await client.request(
+            write_result = await client.request(
                 "config/value/write",
                 {"keyPath": key_path, "value": value, "mergeStrategy": "replace"},
             )
@@ -1708,9 +1774,49 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
             )
             return
+
+        post_rows, post_error = await _fetch_codex_features()
+        effective_row = None
+        if not post_error:
+            effective_row = next(
+                (row for row in post_rows if row.key == normalized_feature), None
+            )
+
+        lines = [f"Feature {key_path} set to {value}."]
+        if effective_row:
+            lines.append(
+                f"Stage: {effective_row.stage}; effective state: {effective_row.enabled}."
+            )
+        elif post_error:
+            lines.append(f"(Could not verify effective state: {post_error})")
+
+        if isinstance(write_result, dict):
+            status = write_result.get("status")
+            overridden = write_result.get("overriddenMetadata")
+            if status == "okOverridden" and isinstance(overridden, dict):
+                message_txt = overridden.get("message")
+                effective_value = overridden.get("effectiveValue")
+                layer = overridden.get("overridingLayer") or {}
+                layer_name = layer.get("name") if isinstance(layer, dict) else None
+                layer_version = (
+                    layer.get("version") if isinstance(layer, dict) else None
+                )
+                lines.append("Write was overridden by another config layer.")
+                if layer_name:
+                    layer_desc = (
+                        f"{layer_name} (version {layer_version})"
+                        if layer_version
+                        else layer_name
+                    )
+                    lines.append(f"- Overriding layer: {layer_desc}")
+                if effective_value is not None:
+                    lines.append(f"- Effective value: {effective_value}")
+                if isinstance(message_txt, str) and message_txt:
+                    lines.append(f"- Note: {message_txt}")
+
         await self._send_message(
             message.chat_id,
-            f"Feature {key_path} set to {value}.",
+            "\n".join(lines),
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -2172,7 +2278,7 @@ Summary applied.""",
         repo_ref = (self._update_repo_ref or DEFAULT_UPDATE_REPO_REF).strip()
         if not repo_ref:
             repo_ref = DEFAULT_UPDATE_REPO_REF
-        update_dir = Path.home() / ".codex-autorunner" / "update_cache"
+        update_dir = resolve_update_paths().cache_dir
         notify_reply_to = reply_to
         if notify_reply_to is None and callback is not None:
             notify_reply_to = callback.message_id
@@ -2183,6 +2289,7 @@ Summary applied.""",
                 update_dir=update_dir,
                 logger=self._logger,
                 update_target=update_target,
+                skip_checks=bool(getattr(self, "_update_skip_checks", False)),
                 notify_chat_id=chat_id,
                 notify_thread_id=thread_id,
                 notify_reply_to=notify_reply_to,
@@ -2277,7 +2384,7 @@ Summary applied.""",
         )
 
     def _update_status_path(self) -> Path:
-        return Path.home() / ".codex-autorunner" / "update_status.json"
+        return resolve_update_paths().status_path
 
     def _read_update_status(self) -> Optional[dict[str, Any]]:
         path = self._update_status_path()
@@ -2361,7 +2468,7 @@ Summary applied.""",
             )
 
     def _compact_status_path(self) -> Path:
-        return Path.home() / ".codex-autorunner" / "compact_status.json"
+        return resolve_update_paths().compact_status_path
 
     def _read_compact_status(self) -> Optional[dict[str, Any]]:
         path = self._compact_status_path()

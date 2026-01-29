@@ -287,6 +287,7 @@ async def test_ensure_thread_id_creates_opencode_session(tmp_path: Path) -> None
     assert client.create_session_calls == [str(tmp_path.resolve())]
 
 
+@pytest.mark.integration
 @pytest.mark.anyio
 async def test_telegram_review_opencode_sends_command(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

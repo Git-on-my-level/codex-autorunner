@@ -52,13 +52,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
     "mode": "repo",
     "docs": {
-        "todo": ".codex-autorunner/TODO.md",
-        "progress": ".codex-autorunner/PROGRESS.md",
-        "opinions": ".codex-autorunner/OPINIONS.md",
-        "spec": ".codex-autorunner/SPEC.md",
-        "summary": ".codex-autorunner/SUMMARY.md",
-        "snapshot": ".codex-autorunner/SNAPSHOT.md",
-        "snapshot_state": ".codex-autorunner/snapshot_state.json",
+        "active_context": ".codex-autorunner/workspace/active_context.md",
+        "decisions": ".codex-autorunner/workspace/decisions.md",
+        "spec": ".codex-autorunner/workspace/spec.md",
     },
     "review": {
         "enabled": True,
@@ -99,6 +95,12 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "prev_run_max_chars": 6000,
         "template": ".codex-autorunner/prompt.txt",
     },
+    "ui": {
+        "editor": "vi",
+    },
+    "security": {
+        "redact_run_logs": True,
+    },
     "runner": {
         "sleep_seconds": 5,
         "stop_after_runs": None,
@@ -118,8 +120,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "reasoning": None,
             "max_wallclock_seconds": None,
             "context": {
-                "primary_docs": ["spec", "progress"],
-                "include_docs": ["todo", "summary"],
+                "primary_docs": ["spec", "decisions"],
+                "include_docs": ["active_context"],
                 "include_last_run_artifacts": True,
                 "max_doc_chars": 20000,
             },
@@ -128,6 +130,14 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 "write_to_review_runs_dir": True,
             },
         },
+    },
+    "autorunner": {
+        "reuse_session": False,
+    },
+    "ticket_flow": {
+        "approval_mode": "yolo",
+        # Keep ticket_flow deterministic by default; surfaces can tighten this.
+        "default_approval_decision": "accept",
     },
     "git": {
         "auto_commit": False,
@@ -140,9 +150,13 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         # Bounds the agentic sync step in GitHubService.sync_pr (seconds).
         "sync_agent_timeout_seconds": 1800,
     },
+    "update": {
+        "skip_checks": False,
+    },
     "app_server": {
         "command": ["codex", "app-server"],
         "state_root": "~/.codex-autorunner/workspaces",
+        "auto_restart": True,
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
         "turn_timeout_seconds": 28800,
@@ -150,7 +164,18 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "turn_stall_poll_interval_seconds": 2,
         "turn_stall_recovery_min_interval_seconds": 10,
         "request_timeout": None,
+        "client": {
+            "max_message_bytes": 50 * 1024 * 1024,
+            "oversize_preview_bytes": 4096,
+            "max_oversize_drain_bytes": 100 * 1024 * 1024,
+            "restart_backoff_initial_seconds": 0.5,
+            "restart_backoff_max_seconds": 30.0,
+            "restart_backoff_jitter_ratio": 0.1,
+        },
         "prompts": {
+            # NOTE: These keys are legacy names kept for config compatibility.
+            # The workspace cutover uses tickets + workspace docs + unified file chat; only
+            # the "autorunner" prompt is currently used by the app-server prompt builder.
             "doc_chat": {
                 "max_chars": 12000,
                 "message_max_chars": 2000,
@@ -173,6 +198,11 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "opencode": {
         "session_stall_timeout_seconds": 60,
     },
+    "usage": {
+        "cache_scope": "global",
+        "global_cache_root": None,
+        "repo_cache_path": ".codex-autorunner/usage/usage_series_cache.json",
+    },
     "server": {
         "host": "127.0.0.1",
         "port": 4173,
@@ -186,6 +216,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "enabled": "auto",
         "events": ["run_finished", "run_error", "tui_idle"],
         "tui_idle_seconds": 60,
+        "timeout_seconds": 5.0,
         "discord": {
             "webhook_url_env": "CAR_DISCORD_WEBHOOK_URL",
         },
@@ -236,6 +267,20 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             "timeout_ms": 120000,
             "max_output_chars": 3800,
         },
+        "cache": {
+            "cleanup_interval_seconds": 300,
+            "coalesce_buffer_ttl_seconds": 60,
+            "media_batch_buffer_ttl_seconds": 60,
+            "model_pending_ttl_seconds": 1800,
+            "pending_approval_ttl_seconds": 600,
+            "pending_question_ttl_seconds": 600,
+            "reasoning_buffer_ttl_seconds": 900,
+            "selection_state_ttl_seconds": 1800,
+            "turn_preview_ttl_seconds": 900,
+            "progress_stream_ttl_seconds": 900,
+            "oversize_warning_ttl_seconds": 3600,
+            "update_id_persist_interval_seconds": 60,
+        },
         "command_registration": {
             "enabled": True,
             "scopes": [
@@ -243,6 +288,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
                 {"type": "all_group_chats", "language_code": ""},
             ],
         },
+        "opencode_command": None,
         "state_file": ".codex-autorunner/telegram_state.sqlite3",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
@@ -385,15 +431,20 @@ REPO_DEFAULT_KEYS = {
     "docs",
     "codex",
     "prompt",
+    "ui",
     "runner",
+    "autorunner",
+    "ticket_flow",
     "git",
     "github",
+    "update",
     "notifications",
     "voice",
     "log",
     "server_log",
     "review",
     "opencode",
+    "usage",
 }
 DEFAULT_REPO_DEFAULTS = {
     key: json.loads(json.dumps(DEFAULT_REPO_CONFIG[key])) for key in REPO_DEFAULT_KEYS
@@ -407,6 +458,8 @@ REPO_SHARED_KEYS = {
     "terminal",
     "static_assets",
     "housekeeping",
+    "update",
+    "usage",
 }
 
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
@@ -469,6 +522,20 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "timeout_ms": 120000,
             "max_output_chars": 3800,
         },
+        "cache": {
+            "cleanup_interval_seconds": 300,
+            "coalesce_buffer_ttl_seconds": 60,
+            "media_batch_buffer_ttl_seconds": 60,
+            "model_pending_ttl_seconds": 1800,
+            "pending_approval_ttl_seconds": 600,
+            "pending_question_ttl_seconds": 600,
+            "reasoning_buffer_ttl_seconds": 900,
+            "selection_state_ttl_seconds": 1800,
+            "turn_preview_ttl_seconds": 900,
+            "progress_stream_ttl_seconds": 900,
+            "oversize_warning_ttl_seconds": 3600,
+            "update_id_persist_interval_seconds": 60,
+        },
         "command_registration": {
             "enabled": True,
             "scopes": [
@@ -476,6 +543,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
                 {"type": "all_group_chats", "language_code": ""},
             ],
         },
+        "opencode_command": None,
         "state_file": ".codex-autorunner/telegram_state.sqlite3",
         "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
         "app_server_command": ["codex", "app-server"],
@@ -506,9 +574,13 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             "backup_count": 3,
         },
     },
+    "update": {
+        "skip_checks": False,
+    },
     "app_server": {
         "command": ["codex", "app-server"],
         "state_root": "~/.codex-autorunner/workspaces",
+        "auto_restart": True,
         "max_handles": 20,
         "idle_ttl_seconds": 3600,
         "turn_timeout_seconds": 28800,
@@ -516,6 +588,14 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "turn_stall_poll_interval_seconds": 2,
         "turn_stall_recovery_min_interval_seconds": 10,
         "request_timeout": None,
+        "client": {
+            "max_message_bytes": 50 * 1024 * 1024,
+            "oversize_preview_bytes": 4096,
+            "max_oversize_drain_bytes": 100 * 1024 * 1024,
+            "restart_backoff_initial_seconds": 0.5,
+            "restart_backoff_max_seconds": 30.0,
+            "restart_backoff_jitter_ratio": 0.1,
+        },
         "prompts": {
             "doc_chat": {
                 "max_chars": 12000,
@@ -538,6 +618,11 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     },
     "opencode": {
         "session_stall_timeout_seconds": 60,
+    },
+    "usage": {
+        "cache_scope": "global",
+        "global_cache_root": None,
+        "repo_cache_path": ".codex-autorunner/usage/usage_series_cache.json",
     },
     "server": {
         "host": "127.0.0.1",
@@ -697,9 +782,20 @@ class AppServerPromptsConfig:
 
 
 @dataclasses.dataclass
+class AppServerClientConfig:
+    max_message_bytes: int
+    oversize_preview_bytes: int
+    max_oversize_drain_bytes: int
+    restart_backoff_initial_seconds: float
+    restart_backoff_max_seconds: float
+    restart_backoff_jitter_ratio: float
+
+
+@dataclasses.dataclass
 class AppServerConfig:
     command: List[str]
     state_root: Path
+    auto_restart: Optional[bool]
     max_handles: Optional[int]
     idle_ttl_seconds: Optional[int]
     turn_timeout_seconds: Optional[float]
@@ -707,12 +803,20 @@ class AppServerConfig:
     turn_stall_poll_interval_seconds: Optional[float]
     turn_stall_recovery_min_interval_seconds: Optional[float]
     request_timeout: Optional[float]
+    client: AppServerClientConfig
     prompts: AppServerPromptsConfig
 
 
 @dataclasses.dataclass
 class OpenCodeConfig:
     session_stall_timeout_seconds: Optional[float]
+
+
+@dataclasses.dataclass
+class UsageConfig:
+    cache_scope: str
+    global_cache_root: Path
+    repo_cache_path: Path
 
 
 @dataclasses.dataclass(frozen=True)
@@ -729,6 +833,7 @@ class RepoConfig:
     root: Path
     version: int
     mode: str
+    security: Dict[str, Any]
     docs: Dict[str, Path]
     codex_binary: str
     codex_args: List[str]
@@ -742,10 +847,14 @@ class RepoConfig:
     runner_stop_after_runs: Optional[int]
     runner_max_wallclock_seconds: Optional[int]
     runner_no_progress_threshold: int
+    autorunner_reuse_session: bool
+    ticket_flow: Dict[str, Any]
     git_auto_commit: bool
     git_commit_message_template: str
+    update_skip_checks: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
+    usage: UsageConfig
     server_host: str
     server_port: int
     server_base_path: str
@@ -793,8 +902,10 @@ class HubConfig:
     repo_server_inherit: bool
     update_repo_url: str
     update_repo_ref: str
+    update_skip_checks: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
+    usage: UsageConfig
     server_host: str
     server_port: int
     server_base_path: str
@@ -1033,6 +1144,11 @@ def _parse_app_server_config(
         allow_home=True,
         scope="app_server.state_root",
     )
+    auto_restart_raw = cfg.get("auto_restart", defaults.get("auto_restart"))
+    if auto_restart_raw is None:
+        auto_restart = None
+    else:
+        auto_restart = bool(auto_restart_raw)
     max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
     max_handles = int(max_handles_raw) if max_handles_raw is not None else None
     if max_handles is not None and max_handles <= 0:
@@ -1091,11 +1207,31 @@ def _parse_app_server_config(
     )
     if request_timeout is not None and request_timeout <= 0:
         request_timeout = None
+    client_defaults = defaults.get("client")
+    client_defaults = client_defaults if isinstance(client_defaults, dict) else {}
+    client_cfg_raw = cfg.get("client")
+    client_cfg = client_cfg_raw if isinstance(client_cfg_raw, dict) else {}
+
+    def _client_int(key: str) -> int:
+        value = client_cfg.get(key, client_defaults.get(key))
+        value = int(value) if value is not None else 0
+        if value <= 0:
+            value = int(client_defaults.get(key) or 0)
+        return value
+
+    def _client_float(key: str, *, allow_zero: bool = False) -> float:
+        value = client_cfg.get(key, client_defaults.get(key))
+        value = float(value) if value is not None else 0.0
+        if value < 0 or (not allow_zero and value <= 0):
+            value = float(client_defaults.get(key) or 0.0)
+        return value
+
     prompt_defaults = defaults.get("prompts")
     prompts = _parse_app_server_prompts_config(cfg.get("prompts"), prompt_defaults)
     return AppServerConfig(
         command=command,
         state_root=state_root,
+        auto_restart=auto_restart,
         max_handles=max_handles,
         idle_ttl_seconds=idle_ttl_seconds,
         turn_timeout_seconds=turn_timeout_seconds,
@@ -1103,6 +1239,18 @@ def _parse_app_server_config(
         turn_stall_poll_interval_seconds=turn_stall_poll_interval_seconds,
         turn_stall_recovery_min_interval_seconds=turn_stall_recovery_min_interval_seconds,
         request_timeout=request_timeout,
+        client=AppServerClientConfig(
+            max_message_bytes=_client_int("max_message_bytes"),
+            oversize_preview_bytes=_client_int("oversize_preview_bytes"),
+            max_oversize_drain_bytes=_client_int("max_oversize_drain_bytes"),
+            restart_backoff_initial_seconds=_client_float(
+                "restart_backoff_initial_seconds"
+            ),
+            restart_backoff_max_seconds=_client_float("restart_backoff_max_seconds"),
+            restart_backoff_jitter_ratio=_client_float(
+                "restart_backoff_jitter_ratio", allow_zero=True
+            ),
+        ),
         prompts=prompts,
     )
 
@@ -1124,6 +1272,40 @@ def _parse_opencode_config(
     if stall_timeout_seconds is not None and stall_timeout_seconds <= 0:
         stall_timeout_seconds = None
     return OpenCodeConfig(session_stall_timeout_seconds=stall_timeout_seconds)
+
+
+def _parse_usage_config(
+    cfg: Optional[Dict[str, Any]],
+    root: Path,
+    defaults: Optional[Dict[str, Any]],
+) -> UsageConfig:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+    cache_scope = str(cfg.get("cache_scope", defaults.get("cache_scope", "global")))
+    cache_scope = cache_scope.lower().strip() or "global"
+    global_cache_raw = cfg.get("global_cache_root", defaults.get("global_cache_root"))
+    if global_cache_raw is None:
+        global_cache_raw = os.environ.get("CODEX_HOME", "~/.codex")
+    global_cache_root = resolve_config_path(
+        global_cache_raw,
+        root,
+        allow_absolute=True,
+        allow_home=True,
+        scope="usage.global_cache_root",
+    )
+    repo_cache_raw = cfg.get("repo_cache_path", defaults.get("repo_cache_path"))
+    if repo_cache_raw is None:
+        repo_cache_raw = ".codex-autorunner/usage/usage_series_cache.json"
+    repo_cache_path = resolve_config_path(
+        repo_cache_raw,
+        root,
+        scope="usage.repo_cache_path",
+    )
+    return UsageConfig(
+        cache_scope=cache_scope,
+        global_cache_root=global_cache_root,
+        repo_cache_path=repo_cache_path,
+    )
 
 
 def _parse_agents_config(
@@ -1261,6 +1443,54 @@ def resolve_env_for_root(
     return env
 
 
+VOICE_ENV_OVERRIDES = (
+    "CODEX_AUTORUNNER_VOICE_ENABLED",
+    "CODEX_AUTORUNNER_VOICE_PROVIDER",
+    "CODEX_AUTORUNNER_VOICE_LATENCY",
+    "CODEX_AUTORUNNER_VOICE_CHUNK_MS",
+    "CODEX_AUTORUNNER_VOICE_SAMPLE_RATE",
+    "CODEX_AUTORUNNER_VOICE_WARN_REMOTE",
+    "CODEX_AUTORUNNER_VOICE_MAX_MS",
+    "CODEX_AUTORUNNER_VOICE_SILENCE_MS",
+    "CODEX_AUTORUNNER_VOICE_MIN_HOLD_MS",
+)
+
+TELEGRAM_ENV_OVERRIDES = (
+    "CAR_OPENCODE_COMMAND",
+    "CAR_TELEGRAM_APP_SERVER_COMMAND",
+)
+
+
+def collect_env_overrides(
+    *,
+    env: Optional[Mapping[str, str]] = None,
+    include_telegram: bool = False,
+) -> list[str]:
+    source = env if env is not None else os.environ
+    overrides: list[str] = []
+
+    def _has_value(key: str) -> bool:
+        value = source.get(key)
+        if value is None:
+            return False
+        return str(value).strip() != ""
+
+    if source.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1":
+        overrides.append("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS")
+    if _has_value("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS"):
+        overrides.append("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS")
+    if _has_value("CAR_GLOBAL_STATE_ROOT"):
+        overrides.append("CAR_GLOBAL_STATE_ROOT")
+    for key in VOICE_ENV_OVERRIDES:
+        if _has_value(key):
+            overrides.append(key)
+    if include_telegram:
+        for key in TELEGRAM_ENV_OVERRIDES:
+            if _has_value(key):
+                overrides.append(key)
+    return overrides
+
+
 def load_hub_config_data(config_path: Path) -> Dict[str, Any]:
     """Load, merge, and return a raw hub config dict for the given config path."""
     load_dotenv_for_root(config_path.parent.parent.resolve())
@@ -1275,6 +1505,21 @@ def load_hub_config_data(config_path: Path) -> Dict[str, Any]:
 def _resolve_hub_config_path(start: Path) -> Path:
     config_path = find_nearest_hub_config_path(start)
     if not config_path:
+        # Auto-initialize hub config if missing in the current directory or parents.
+        # If we are in a git repo, we'll initialize a hub there.
+        try:
+            from .utils import find_repo_root
+
+            target_root = find_repo_root(start)
+        except Exception:
+            target_root = start
+
+        from ..bootstrap import seed_hub_files
+
+        seed_hub_files(target_root)
+        config_path = find_nearest_hub_config_path(target_root)
+
+    if not config_path:
         raise ConfigError(
             f"Missing hub config file; expected to find {CONFIG_FILENAME} in {start} or parents (use --hub to specify)"
         )
@@ -1285,7 +1530,7 @@ def load_hub_config(start: Path) -> HubConfig:
     """Load the nearest hub config walking upward from the provided path."""
     config_path = _resolve_hub_config_path(start)
     merged = load_hub_config_data(config_path)
-    _validate_hub_config(merged)
+    _validate_hub_config(merged, root=config_path.parent.parent.resolve())
     return _build_hub_config(config_path, merged)
 
 
@@ -1331,7 +1576,7 @@ def load_repo_config(start: Path, hub_path: Optional[Path] = None) -> RepoConfig
     repo_root = _resolve_repo_root(start)
     hub_config_path = _resolve_hub_path_for_repo(repo_root, hub_path)
     hub_config = load_hub_config_data(hub_config_path)
-    _validate_hub_config(hub_config)
+    _validate_hub_config(hub_config, root=hub_config_path.parent.parent.resolve())
     hub = _build_hub_config(hub_config_path, hub_config)
     return derive_repo_config(hub, repo_root)
 
@@ -1339,15 +1584,9 @@ def load_repo_config(start: Path, hub_path: Optional[Path] = None) -> RepoConfig
 def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     root = config_path.parent.parent.resolve()
     docs = {
-        "todo": Path(cfg["docs"]["todo"]),
-        "progress": Path(cfg["docs"]["progress"]),
-        "opinions": Path(cfg["docs"]["opinions"]),
+        "active_context": Path(cfg["docs"]["active_context"]),
+        "decisions": Path(cfg["docs"]["decisions"]),
         "spec": Path(cfg["docs"]["spec"]),
-        "summary": Path(cfg["docs"]["summary"]),
-        "snapshot": Path(cfg["docs"].get("snapshot", ".codex-autorunner/SNAPSHOT.md")),
-        "snapshot_state": Path(
-            cfg["docs"].get("snapshot_state", ".codex-autorunner/snapshot_state.json")
-        ),
     }
     voice_cfg = cfg.get("voice") if isinstance(cfg.get("voice"), dict) else {}
     voice_cfg = cast(Dict[str, Any], voice_cfg)
@@ -1368,11 +1607,26 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         cfg.get("notifications") if isinstance(cfg.get("notifications"), dict) else {}
     )
     notifications_cfg = cast(Dict[str, Any], notifications_cfg)
+    security_cfg = cfg.get("security") if isinstance(cfg.get("security"), dict) else {}
+    security_cfg = cast(Dict[str, Any], security_cfg)
     log_cfg = cfg.get("log", {})
     log_cfg = cast(Dict[str, Any], log_cfg if isinstance(log_cfg, dict) else {})
     server_log_cfg = cfg.get("server_log", {}) or {}
     server_log_cfg = cast(
         Dict[str, Any], server_log_cfg if isinstance(server_log_cfg, dict) else {}
+    )
+    update_cfg = cfg.get("update")
+    update_cfg = cast(
+        Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
+    )
+    update_skip_checks = bool(update_cfg.get("skip_checks", False))
+    autorunner_cfg = cfg.get("autorunner")
+    autorunner_cfg = cast(
+        Dict[str, Any], autorunner_cfg if isinstance(autorunner_cfg, dict) else {}
+    )
+    reuse_session_value = autorunner_cfg.get("reuse_session")
+    autorunner_reuse_session = (
+        bool(reuse_session_value) if reuse_session_value is not None else False
     )
     return RepoConfig(
         raw=cfg,
@@ -1392,8 +1646,11 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         runner_stop_after_runs=cfg["runner"].get("stop_after_runs"),
         runner_max_wallclock_seconds=cfg["runner"].get("max_wallclock_seconds"),
         runner_no_progress_threshold=int(cfg["runner"].get("no_progress_threshold", 3)),
+        autorunner_reuse_session=autorunner_reuse_session,
         git_auto_commit=bool(cfg["git"].get("auto_commit", False)),
         git_commit_message_template=str(cfg["git"].get("commit_message_template")),
+        update_skip_checks=update_skip_checks,
+        ticket_flow=cast(Dict[str, Any], cfg.get("ticket_flow") or {}),
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
             root,
@@ -1402,6 +1659,10 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         opencode=_parse_opencode_config(
             cfg.get("opencode"), root, DEFAULT_REPO_CONFIG.get("opencode")
         ),
+        usage=_parse_usage_config(
+            cfg.get("usage"), root, DEFAULT_REPO_CONFIG.get("usage")
+        ),
+        security=security_cfg,
         server_host=str(cfg["server"].get("host")),
         server_port=int(cfg["server"].get("port")),
         server_base_path=_normalize_base_path(cfg["server"].get("base_path", "")),
@@ -1472,6 +1733,12 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
     except ConfigPathError as exc:
         raise ConfigError(str(exc)) from exc
 
+    update_cfg = cfg.get("update")
+    update_cfg = cast(
+        Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
+    )
+    update_skip_checks = bool(update_cfg.get("skip_checks", False))
+
     return HubConfig(
         raw=cfg,
         root=root,
@@ -1487,6 +1754,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         repo_server_inherit=bool(hub_cfg.get("repo_server_inherit", True)),
         update_repo_url=str(hub_cfg.get("update_repo_url", "")),
         update_repo_ref=str(hub_cfg.get("update_repo_ref", "main")),
+        update_skip_checks=update_skip_checks,
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
             root,
@@ -1494,6 +1762,9 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         ),
         opencode=_parse_opencode_config(
             cfg.get("opencode"), root, DEFAULT_HUB_CONFIG.get("opencode")
+        ),
+        usage=_parse_usage_config(
+            cfg.get("usage"), root, DEFAULT_HUB_CONFIG.get("usage")
         ),
         server_host=str(cfg["server"]["host"]),
         server_port=int(cfg["server"]["port"]),
@@ -1574,6 +1845,12 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
         app_server_cfg.get("state_root", ""), str
     ):
         raise ConfigError("app_server.state_root must be a string path")
+    if (
+        "auto_restart" in app_server_cfg
+        and app_server_cfg.get("auto_restart") is not None
+    ):
+        if not isinstance(app_server_cfg.get("auto_restart"), bool):
+            raise ConfigError("app_server.auto_restart must be boolean or null")
     for key in ("max_handles", "idle_ttl_seconds"):
         if key in app_server_cfg and app_server_cfg.get(key) is not None:
             if not isinstance(app_server_cfg.get(key), int):
@@ -1600,6 +1877,39 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
         if key in app_server_cfg and app_server_cfg.get(key) is not None:
             if not isinstance(app_server_cfg.get(key), (int, float)):
                 raise ConfigError(f"app_server.{key} must be a number or null")
+    client_cfg = app_server_cfg.get("client")
+    if client_cfg is not None:
+        if not isinstance(client_cfg, dict):
+            raise ConfigError("app_server.client must be a mapping if provided")
+        for key in (
+            "max_message_bytes",
+            "oversize_preview_bytes",
+            "max_oversize_drain_bytes",
+        ):
+            if key in client_cfg:
+                value = client_cfg.get(key)
+                if not isinstance(value, int):
+                    raise ConfigError(f"app_server.client.{key} must be an integer")
+                if value <= 0:
+                    raise ConfigError(f"app_server.client.{key} must be > 0")
+        for key in (
+            "restart_backoff_initial_seconds",
+            "restart_backoff_max_seconds",
+            "restart_backoff_jitter_ratio",
+        ):
+            if key in client_cfg:
+                value = client_cfg.get(key)
+                if not isinstance(value, (int, float)):
+                    raise ConfigError(
+                        f"app_server.client.{key} must be a number if provided"
+                    )
+                if key == "restart_backoff_jitter_ratio":
+                    if value < 0:
+                        raise ConfigError(
+                            "app_server.client.restart_backoff_jitter_ratio must be >= 0"
+                        )
+                elif value <= 0:
+                    raise ConfigError(f"app_server.client.{key} must be > 0")
     prompts = app_server_cfg.get("prompts")
     if prompts is not None:
         if not isinstance(prompts, dict):
@@ -1661,6 +1971,58 @@ def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
             )
 
 
+def _validate_update_config(cfg: Dict[str, Any]) -> None:
+    update_cfg = cfg.get("update")
+    if update_cfg is None:
+        return
+    if not isinstance(update_cfg, dict):
+        raise ConfigError("update section must be a mapping if provided")
+    if "skip_checks" in update_cfg and update_cfg.get("skip_checks") is not None:
+        if not isinstance(update_cfg.get("skip_checks"), bool):
+            raise ConfigError("update.skip_checks must be boolean or null")
+
+
+def _validate_usage_config(cfg: Dict[str, Any], *, root: Path) -> None:
+    usage_cfg = cfg.get("usage")
+    if usage_cfg is None:
+        return
+    if not isinstance(usage_cfg, dict):
+        raise ConfigError("usage section must be a mapping if provided")
+    cache_scope = usage_cfg.get("cache_scope")
+    if cache_scope is not None and not isinstance(cache_scope, str):
+        raise ConfigError("usage.cache_scope must be a string if provided")
+    if isinstance(cache_scope, str):
+        scope_val = cache_scope.strip().lower()
+        if scope_val and scope_val not in {"global", "repo"}:
+            raise ConfigError("usage.cache_scope must be 'global' or 'repo'")
+    global_cache_root = usage_cfg.get("global_cache_root")
+    if global_cache_root is not None:
+        if not isinstance(global_cache_root, str):
+            raise ConfigError("usage.global_cache_root must be a string or null")
+        try:
+            resolve_config_path(
+                global_cache_root,
+                root,
+                allow_absolute=True,
+                allow_home=True,
+                scope="usage.global_cache_root",
+            )
+        except ConfigPathError as exc:
+            raise ConfigError(str(exc)) from exc
+    repo_cache_path = usage_cfg.get("repo_cache_path")
+    if repo_cache_path is not None:
+        if not isinstance(repo_cache_path, str):
+            raise ConfigError("usage.repo_cache_path must be a string or null")
+        try:
+            resolve_config_path(
+                repo_cache_path,
+                root,
+                scope="usage.repo_cache_path",
+            )
+        except ConfigPathError as exc:
+            raise ConfigError(str(exc)) from exc
+
+
 def _validate_agents_config(cfg: Dict[str, Any]) -> None:
     agents_cfg = cfg.get("agents")
     if agents_cfg is None:
@@ -1697,7 +2059,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             )
         except ConfigPathError as exc:
             raise ConfigError(str(exc)) from exc
-    for key in ("todo", "progress", "opinions", "spec", "summary"):
+    for key in ("active_context", "decisions", "spec"):
         if not isinstance(docs.get(key), str) or not docs[key]:
             raise ConfigError(f"docs.{key} must be a non-empty string path")
     _validate_agents_config(cfg)
@@ -1750,6 +2112,31 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
         val = runner.get(k)
         if val is not None and not isinstance(val, int):
             raise ConfigError(f"runner.{k} must be an integer or null")
+    autorunner_cfg = cfg.get("autorunner")
+    if autorunner_cfg is not None and not isinstance(autorunner_cfg, dict):
+        raise ConfigError("autorunner section must be a mapping if provided")
+    if isinstance(autorunner_cfg, dict):
+        reuse_session = autorunner_cfg.get("reuse_session")
+        if reuse_session is not None and not isinstance(reuse_session, bool):
+            raise ConfigError("autorunner.reuse_session must be boolean or null")
+    ticket_flow_cfg = cfg.get("ticket_flow")
+    if ticket_flow_cfg is not None and not isinstance(ticket_flow_cfg, dict):
+        raise ConfigError("ticket_flow section must be a mapping if provided")
+    if isinstance(ticket_flow_cfg, dict):
+        if "approval_mode" in ticket_flow_cfg and not isinstance(
+            ticket_flow_cfg.get("approval_mode"), str
+        ):
+            raise ConfigError("ticket_flow.approval_mode must be a string")
+        if "default_approval_decision" in ticket_flow_cfg and not isinstance(
+            ticket_flow_cfg.get("default_approval_decision"), str
+        ):
+            raise ConfigError("ticket_flow.default_approval_decision must be a string")
+    ui_cfg = cfg.get("ui")
+    if ui_cfg is not None and not isinstance(ui_cfg, dict):
+        raise ConfigError("ui section must be a mapping if provided")
+    if isinstance(ui_cfg, dict):
+        if "editor" in ui_cfg and not isinstance(ui_cfg.get("editor"), str):
+            raise ConfigError("ui.editor must be a string if provided")
     git = cfg.get("git")
     if not isinstance(git, dict):
         raise ConfigError("git section must be a mapping")
@@ -1792,6 +2179,8 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_server_security(server)
     _validate_app_server_config(cfg)
     _validate_opencode_config(cfg)
+    _validate_update_config(cfg)
+    _validate_usage_config(cfg, root=root)
     notifications_cfg = cfg.get("notifications")
     if notifications_cfg is not None:
         if not isinstance(notifications_cfg, dict):
@@ -1822,6 +2211,16 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             if tui_idle_seconds < 0:
                 raise ConfigError(
                     "notifications.tui_idle_seconds must be >= 0 if provided"
+                )
+        timeout_seconds = notifications_cfg.get("timeout_seconds")
+        if timeout_seconds is not None:
+            if not isinstance(timeout_seconds, (int, float)):
+                raise ConfigError(
+                    "notifications.timeout_seconds must be a number if provided"
+                )
+            if timeout_seconds <= 0:
+                raise ConfigError(
+                    "notifications.timeout_seconds must be > 0 if provided"
                 )
         discord_cfg = notifications_cfg.get("discord")
         if discord_cfg is not None and not isinstance(discord_cfg, dict):
@@ -1928,7 +2327,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_telegram_bot_config(cfg)
 
 
-def _validate_hub_config(cfg: Dict[str, Any]) -> None:
+def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_version(cfg)
     if cfg.get("mode") != "hub":
         raise ConfigError("Hub config must set mode: hub")
@@ -1936,6 +2335,8 @@ def _validate_hub_config(cfg: Dict[str, Any]) -> None:
         raise ConfigError("repo section is no longer supported; use repo_defaults")
     _validate_agents_config(cfg)
     _validate_opencode_config(cfg)
+    _validate_update_config(cfg)
+    _validate_usage_config(cfg, root=root)
     repo_defaults = cfg.get("repo_defaults")
     if repo_defaults is not None:
         if not isinstance(repo_defaults, dict):
@@ -2234,6 +2635,29 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(f"telegram_bot.shell.{key} must be an integer")
             if isinstance(value, int) and value <= 0:
                 raise ConfigError(f"telegram_bot.shell.{key} must be greater than 0")
+    cache_cfg = telegram_cfg.get("cache")
+    if cache_cfg is not None and not isinstance(cache_cfg, dict):
+        raise ConfigError("telegram_bot.cache must be a mapping if provided")
+    if isinstance(cache_cfg, dict):
+        for key in (
+            "cleanup_interval_seconds",
+            "coalesce_buffer_ttl_seconds",
+            "media_batch_buffer_ttl_seconds",
+            "model_pending_ttl_seconds",
+            "pending_approval_ttl_seconds",
+            "pending_question_ttl_seconds",
+            "reasoning_buffer_ttl_seconds",
+            "selection_state_ttl_seconds",
+            "turn_preview_ttl_seconds",
+            "progress_stream_ttl_seconds",
+            "oversize_warning_ttl_seconds",
+            "update_id_persist_interval_seconds",
+        ):
+            value = cache_cfg.get(key)
+            if value is not None and not isinstance(value, (int, float)):
+                raise ConfigError(f"telegram_bot.cache.{key} must be a number")
+            if isinstance(value, (int, float)) and value <= 0:
+                raise ConfigError(f"telegram_bot.cache.{key} must be > 0")
     command_reg_cfg = telegram_cfg.get("command_registration")
     if command_reg_cfg is not None and not isinstance(command_reg_cfg, dict):
         raise ConfigError("telegram_bot.command_registration must be a mapping")
@@ -2271,10 +2695,20 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                     raise ConfigError(
                         "telegram_bot.command_registration.scopes.language_code must be a string or null"
                     )
+    if "trigger_mode" in telegram_cfg and not isinstance(
+        telegram_cfg.get("trigger_mode"), str
+    ):
+        raise ConfigError("telegram_bot.trigger_mode must be a string")
     if "state_file" in telegram_cfg and not isinstance(
         telegram_cfg.get("state_file"), str
     ):
         raise ConfigError("telegram_bot.state_file must be a string path")
+    if (
+        "opencode_command" in telegram_cfg
+        and not isinstance(telegram_cfg.get("opencode_command"), (list, str))
+        and telegram_cfg.get("opencode_command") is not None
+    ):
+        raise ConfigError("telegram_bot.opencode_command must be a list or string")
     if "app_server_command" in telegram_cfg and not isinstance(
         telegram_cfg.get("app_server_command"), (list, str)
     ):

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
+from ...core.state_roots import resolve_global_state_root
 from ...core.utils import (
     RepoNotFoundError,
     canonicalize_path,
@@ -40,6 +41,85 @@ class ModelOption:
     label: str
     efforts: tuple[str, ...]
     default_effort: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class CodexFeatureRow:
+    key: str
+    stage: str
+    enabled: bool
+
+
+def derive_codex_features_command(app_server_command: Sequence[str]) -> list[str]:
+    """
+    Build a Codex CLI invocation for `features list` that mirrors the configured app-server command.
+
+    We strip a trailing \"app-server\" subcommand (plus keep any preceding flags/binary),
+    so custom binaries or wrapper scripts stay aligned with the running app server.
+    """
+    base = list(app_server_command or [])
+    if base and base[-1] == "app-server":
+        base = base[:-1]
+    if not base:
+        base = ["codex"]
+    return [*base, "features", "list"]
+
+
+def parse_codex_features_list(stdout: str) -> list[CodexFeatureRow]:
+    rows: list[CodexFeatureRow] = []
+    if not isinstance(stdout, str):
+        return rows
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        key, stage, enabled_raw = parts
+        key = key.strip()
+        stage = stage.strip()
+        enabled_raw = enabled_raw.strip().lower()
+        if not key or not stage:
+            continue
+        if enabled_raw in ("true", "1", "yes", "y", "on"):
+            enabled = True
+        elif enabled_raw in ("false", "0", "no", "n", "off"):
+            enabled = False
+        else:
+            continue
+        rows.append(CodexFeatureRow(key=key, stage=stage, enabled=enabled))
+    return rows
+
+
+def format_codex_features(
+    rows: Sequence[CodexFeatureRow], *, stage_filter: Optional[str]
+) -> str:
+    filtered = [
+        row
+        for row in rows
+        if stage_filter is None or row.stage.lower() == stage_filter.lower()
+    ]
+    if not filtered:
+        label = (
+            "feature flags" if stage_filter is None else f"{stage_filter} feature flags"
+        )
+        return f"No {label} found."
+    header = (
+        "Codex feature flags (all):"
+        if stage_filter is None
+        else f"Codex feature flags ({stage_filter}):"
+    )
+    lines = [header]
+    for row in sorted(filtered, key=lambda r: r.key):
+        lines.append(f"- {row.key}: {row.enabled}")
+    lines.append("")
+    lines.append("Usage:")
+    lines.append("/experimental enable <flag>")
+    lines.append("/experimental disable <flag>")
+    if stage_filter is not None:
+        lines.append("/experimental all")
+    return "\n".join(lines)
 
 
 def _extract_thread_id(payload: Any) -> Optional[str]:
@@ -1237,7 +1317,7 @@ FIRST_USER_PREVIEW_IGNORE_PATTERNS = (
     ),
 )
 
-USER_MESSAGE_BEGIN_STRIP_RE = re.compile(
+DISPATCH_BEGIN_STRIP_RE = re.compile(
     r"(?s)^\s*(?:<prior context>\s*)?##\s*My request for Codex:\s*",
     re.IGNORECASE,
 )
@@ -1254,17 +1334,17 @@ def _is_ignored_first_user_preview(text: Optional[str]) -> bool:
     )
 
 
-def _strip_user_message_begin(text: Optional[str]) -> Optional[str]:
+def _strip_dispatch_begin(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str):
         return text
-    stripped = USER_MESSAGE_BEGIN_STRIP_RE.sub("", text)
+    stripped = DISPATCH_BEGIN_STRIP_RE.sub("", text)
     return stripped if stripped != text else text
 
 
 def _sanitize_user_preview(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str):
         return text
-    stripped = _strip_user_message_begin(text)
+    stripped = _strip_dispatch_begin(text)
     if _is_ignored_first_user_preview(stripped):
         return None
     return stripped
@@ -1286,7 +1366,7 @@ def _github_preview_matcher(text: Optional[str]) -> Optional[str]:
     return None
 
 
-COMPACT_SEED_PREFIX = "Context handoff from previous thread:"
+COMPACT_SEED_PREFIX = "Context from previous thread:"
 COMPACT_SEED_SUFFIX = "Continue from this context. Ask for missing info if needed."
 
 
@@ -1565,7 +1645,7 @@ def _extract_rollout_first_user_preview(path: Path) -> Optional[str]:
             continue
         for role, text in _iter_role_texts(payload):
             if role == "user" and text:
-                stripped = _strip_user_message_begin(text)
+                stripped = _strip_dispatch_begin(text)
                 if stripped and not _is_ignored_first_user_preview(stripped):
                     return stripped
     return None
@@ -1625,7 +1705,7 @@ def _extract_turns_first_user_preview(turns: Any) -> Optional[str]:
             for item in iterable:
                 for role, text in _iter_role_texts(item):
                     if role == "user" and text:
-                        stripped = _strip_user_message_begin(text)
+                        stripped = _strip_dispatch_begin(text)
                         if stripped and not _is_ignored_first_user_preview(stripped):
                             return stripped
     return None
@@ -1763,7 +1843,7 @@ def _extract_first_user_preview(entry: Any) -> Optional[str]:
         "initialMessage",
     )
     user_preview = _coerce_preview_field(entry, user_preview_keys)
-    user_preview = _strip_user_message_begin(user_preview)
+    user_preview = _strip_dispatch_begin(user_preview)
     if _is_ignored_first_user_preview(user_preview):
         user_preview = None
     turns = entry.get("turns")
@@ -2024,7 +2104,7 @@ def _telegram_lock_path(token: str) -> Path:
     if not isinstance(token, str) or not token:
         raise ValueError("token is required")
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
-    return Path.home() / ".codex-autorunner" / "locks" / f"telegram_bot_{digest}.lock"
+    return resolve_global_state_root() / "locks" / f"telegram_bot_{digest}.lock"
 
 
 def _read_lock_payload(path: Path) -> Optional[dict[str, Any]]:

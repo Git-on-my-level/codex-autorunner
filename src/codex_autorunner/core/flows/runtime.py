@@ -1,9 +1,11 @@
+import inspect
 import logging
 import uuid
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set, cast
 
-from .definition import FlowDefinition, StepFn, StepOutcome
+from .definition import FlowDefinition, StepFn, StepFn2, StepFn3
 from .models import FlowEvent, FlowEventType, FlowRunRecord, FlowRunStatus
+from .reasons import ensure_reason_summary
 from .store import FlowStore, now_iso
 
 _logger = logging.getLogger(__name__)
@@ -96,10 +98,16 @@ class FlowRuntime:
                 if record.stop_requested:
                     self._emit(FlowEventType.FLOW_STOPPED, run_id)
                     now = now_iso()
+                    state = ensure_reason_summary(
+                        dict(record.state or {}),
+                        status=FlowRunStatus.STOPPED,
+                        default="Stopped by user",
+                    )
                     updated = self.store.update_flow_run_status(
                         run_id=run_id,
                         status=FlowRunStatus.STOPPED,
                         finished_at=now,
+                        state=state,
                     )
                     if not updated:
                         raise RuntimeError(f"Failed to stop flow run {run_id}")
@@ -127,11 +135,17 @@ class FlowRuntime:
                 data={"error": str(e)},
             )
             now = now_iso()
+            state = ensure_reason_summary(
+                dict(record.state or {}),
+                status=FlowRunStatus.FAILED,
+                error_message=str(e),
+            )
             updated = self.store.update_flow_run_status(
                 run_id=run_id,
                 status=FlowRunStatus.FAILED,
                 finished_at=now,
                 error_message=str(e),
+                state=state,
             )
             if not updated:
                 raise RuntimeError(
@@ -153,7 +167,7 @@ class FlowRuntime:
         self._emit(
             FlowEventType.STEP_STARTED,
             record.id,
-            data={"step_id": step_id},
+            data={"step_id": step_id, "step_name": step_id},
             step_id=step_id,
         )
 
@@ -166,7 +180,45 @@ class FlowRuntime:
         record = updated
 
         try:
-            outcome: StepOutcome = await step_fn(record, record.input_data)
+
+            def _bound_emit(event_type: FlowEventType, data: Dict[str, Any]) -> None:
+                self._emit(
+                    event_type,
+                    record.id,
+                    data=data,
+                    step_id=step_id,
+                )
+
+            def _step_accepts_emit() -> bool:
+                try:
+                    sig = inspect.signature(step_fn)
+                except Exception:
+                    return False
+                params = list(sig.parameters.values())
+                if any(
+                    p.kind
+                    in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+                    for p in params
+                ):
+                    return True
+                positional = [
+                    p
+                    for p in params
+                    if p.kind
+                    in (
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    )
+                ]
+                return len(positional) >= 3
+
+            if _step_accepts_emit():
+                outcome = await cast(StepFn3, step_fn)(
+                    record, record.input_data, _bound_emit
+                )
+            else:
+                # Backwards-compatible call for older StepFn implementations.
+                outcome = await cast(StepFn2, step_fn)(record, record.input_data)
 
             if outcome.output:
                 record.state.update(outcome.output)
@@ -228,12 +280,17 @@ class FlowRuntime:
                 )
 
                 now = now_iso()
+                state = ensure_reason_summary(
+                    dict(record.state or {}),
+                    status=FlowRunStatus.FAILED,
+                    error_message=outcome.error,
+                )
                 updated = self.store.update_flow_run_status(
                     run_id=record.id,
                     status=FlowRunStatus.FAILED,
                     finished_at=now,
                     error_message=outcome.error,
-                    state=record.state,
+                    state=state,
                     current_step=None,
                 )
                 if not updated:
@@ -251,11 +308,15 @@ class FlowRuntime:
                 )
 
                 now = now_iso()
+                state = ensure_reason_summary(
+                    dict(record.state or {}),
+                    status=FlowRunStatus.STOPPED,
+                )
                 updated = self.store.update_flow_run_status(
                     run_id=record.id,
                     status=FlowRunStatus.STOPPED,
                     finished_at=now,
-                    state=record.state,
+                    state=state,
                     current_step=None,
                 )
                 if not updated:
@@ -272,10 +333,14 @@ class FlowRuntime:
                     step_id=step_id,
                 )
 
+                state = ensure_reason_summary(
+                    dict(record.state or {}),
+                    status=FlowRunStatus.PAUSED,
+                )
                 updated = self.store.update_flow_run_status(
                     run_id=record.id,
                     status=FlowRunStatus.PAUSED,
-                    state=record.state,
+                    state=state,
                     current_step=step_id,
                 )
                 if not updated:
@@ -296,12 +361,17 @@ class FlowRuntime:
             )
 
             now = now_iso()
+            state = ensure_reason_summary(
+                dict(record.state or {}),
+                status=FlowRunStatus.FAILED,
+                error_message=str(e),
+            )
             updated = self.store.update_flow_run_status(
                 run_id=record.id,
                 status=FlowRunStatus.FAILED,
                 finished_at=now,
                 error_message=str(e),
-                state=record.state,
+                state=state,
                 current_step=None,
             )
             if not updated:

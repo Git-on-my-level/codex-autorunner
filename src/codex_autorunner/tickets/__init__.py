@@ -5,10 +5,17 @@ markdown tickets with YAML frontmatter.
 """
 
 from .agent_pool import AgentPool, AgentTurnRequest, AgentTurnResult
-from .models import TicketDoc, TicketFrontmatter, TicketResult, TicketRunConfig
+from .models import (
+    DEFAULT_MAX_TOTAL_TURNS,
+    TicketDoc,
+    TicketFrontmatter,
+    TicketResult,
+    TicketRunConfig,
+)
 from .runner import TicketRunner
 
 __all__ = [
+    "DEFAULT_MAX_TOTAL_TURNS",
     "AgentPool",
     "AgentTurnRequest",
     "AgentTurnResult",

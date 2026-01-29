@@ -14,9 +14,10 @@ def test_about_car_is_seeded(repo: Path):
     text = about_path.read_text(encoding="utf-8")
     assert ABOUT_CAR_GENERATED_MARKER in text
     assert "ABOUT_CAR" in text
-    assert ".codex-autorunner/TODO.md" in text
-    assert ".codex-autorunner/SUMMARY.md" in text
-    assert "add this to the TODOs" in text
+    assert ".codex-autorunner/workspace/active_context.md" in text
+    assert ".codex-autorunner/workspace/decisions.md" in text
+    assert ".codex-autorunner/workspace/spec.md" in text
+    assert "lint ticket frontmatter" in text.lower()
 
 
 def test_terminal_new_cmd_does_not_seed_about_prompt(repo: Path):

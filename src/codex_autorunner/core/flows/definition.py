@@ -1,8 +1,8 @@
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, Optional, Set, Union
 
-from .models import FlowRunRecord, FlowRunStatus
+from .models import FlowEventType, FlowRunRecord, FlowRunStatus
 
 _logger = logging.getLogger(__name__)
 
@@ -43,7 +43,12 @@ class StepOutcome:
         return cls(status=FlowRunStatus.PAUSED, output=output)
 
 
-StepFn = Callable[[FlowRunRecord, Dict[str, Any]], Awaitable[StepOutcome]]
+EmitEventFn = Callable[[FlowEventType, Dict[str, Any]], None]
+StepFn2 = Callable[[FlowRunRecord, Dict[str, Any]], Awaitable[StepOutcome]]
+StepFn3 = Callable[
+    [FlowRunRecord, Dict[str, Any], Optional[EmitEventFn]], Awaitable[StepOutcome]
+]
+StepFn = Union[StepFn2, StepFn3]
 
 
 class FlowDefinition:

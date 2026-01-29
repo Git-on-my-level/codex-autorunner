@@ -309,6 +309,8 @@ HEALTH_CHECK_STATIC="$(normalize_bool "${HEALTH_CHECK_STATIC}")"
 HEALTH_CHECK_TELEGRAM="$(normalize_bool "${HEALTH_CHECK_TELEGRAM}")"
 should_reload_hub=false
 should_reload_telegram=false
+telegram_health_reason=""
+telegram_health_checked=false
 case "${UPDATE_TARGET}" in
   both)
     should_reload_hub=true
@@ -925,16 +927,20 @@ _check_hub_health() {
 
 _check_telegram_health() {
   if [[ "${should_reload_telegram}" != "true" ]]; then
+    telegram_health_reason="Telegram update skipped (target: ${UPDATE_TARGET})."
     return 0
   fi
   if ! _should_check_telegram; then
-    echo "Skipping telegram health check."
+    telegram_health_reason="Telegram health check skipped (disabled or not configured)."
     return 0
   fi
   if _wait_telegram_healthy; then
+    telegram_health_checked=true
+    telegram_health_reason="Telegram restarted and healthy."
     echo "Telegram health check OK."
     return 0
   fi
+    telegram_health_reason="Telegram health check failed."
   echo "Telegram health check failed." >&2
   return 1
 }
@@ -997,7 +1003,14 @@ fi
 
 if [[ "${health_ok}" == "true" ]]; then
   echo "Health check OK; update successful."
-  write_status "ok" "Update completed successfully."
+  status_msg="Update completed successfully."
+  if [[ "${should_reload_hub}" != "true" ]]; then
+    status_msg+=" Hub update skipped (target: ${UPDATE_TARGET})."
+  fi
+  if [[ -n "${telegram_health_reason}" ]]; then
+    status_msg+=" ${telegram_health_reason}"
+  fi
+  write_status "ok" "${status_msg}"
 else
   _rollback "Health check failed; rolling back to ${current_target}..."
   rollback_hub_ok=true

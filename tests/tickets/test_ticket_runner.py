@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 import pytest
 
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest, AgentTurnResult
-from codex_autorunner.tickets.models import TicketRunConfig
+from codex_autorunner.tickets.models import (
+    DEFAULT_MAX_TOTAL_TURNS,
+    TicketRunConfig,
+)
 from codex_autorunner.tickets.runner import TicketRunner
 
 
@@ -15,21 +18,14 @@ def _write_ticket(
     *,
     agent: str = "codex",
     done: bool = False,
-    requires: Optional[list[str]] = None,
     body: str = "Do the thing",
 ) -> None:
-    req_block = ""
-    if requires:
-        req_lines = "\n".join(f"  - {r}" for r in requires)
-        req_block = f"requires:\n{req_lines}\n"
-
     text = (
         "---\n"
         f"agent: {agent}\n"
         f"done: {str(done).lower()}\n"
         "title: Test\n"
         "goal: Finish the test\n"
-        f"{req_block}"
         "---\n\n"
         f"{body}\n"
     )
@@ -47,6 +43,15 @@ def _corrupt_ticket_frontmatter(path: Path) -> None:
     # Make 'done' invalid.
     raw = raw.replace("done: false", "done: notabool")
     path.write_text(raw, encoding="utf-8")
+
+
+def test_ticket_run_config_default_max_turns() -> None:
+    cfg = TicketRunConfig(
+        ticket_dir=Path(".codex-autorunner/tickets"),
+        runs_dir=Path(".codex-autorunner/runs"),
+        auto_commit=False,
+    )
+    assert cfg.max_total_turns == DEFAULT_MAX_TOTAL_TURNS
 
 
 class FakeAgentPool:
@@ -86,37 +91,6 @@ async def test_ticket_runner_pauses_when_no_tickets(tmp_path: Path) -> None:
     result = await runner.step({})
     assert result.status == "paused"
     assert "No tickets found" in (result.reason or "")
-
-
-@pytest.mark.asyncio
-async def test_ticket_runner_pauses_when_requires_missing(tmp_path: Path) -> None:
-    workspace_root = tmp_path
-    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True, exist_ok=True)
-    ticket_path = ticket_dir / "TICKET-001.md"
-    _write_ticket(ticket_path, requires=["SPEC.md"])
-
-    runner = TicketRunner(
-        workspace_root=workspace_root,
-        run_id="run-1",
-        config=TicketRunConfig(
-            ticket_dir=Path(".codex-autorunner/tickets"),
-            runs_dir=Path(".codex-autorunner/runs"),
-            auto_commit=False,
-        ),
-        agent_pool=FakeAgentPool(
-            lambda req: AgentTurnResult(
-                agent_id=req.agent_id,
-                conversation_id=req.conversation_id or "conv",
-                turn_id="t1",
-                text="noop",
-            )
-        ),
-    )
-
-    result = await runner.step({})
-    assert result.status == "paused"
-    assert "Missing required input files" in (result.reason or "")
 
 
 @pytest.mark.asyncio
@@ -169,13 +143,13 @@ async def test_ticket_runner_dispatch_pause_message(tmp_path: Path) -> None:
     runs_dir = Path(".codex-autorunner/runs")
     run_id = "run-1"
     run_dir = workspace_root / runs_dir / run_id
-    handoff_dir = run_dir / "handoff"
-    user_msg = run_dir / "USER_MESSAGE.md"
+    dispatch_dir = run_dir / "dispatch"
+    dispatch_path = run_dir / "DISPATCH.md"
 
     def handler(req: AgentTurnRequest) -> AgentTurnResult:
-        handoff_dir.mkdir(parents=True, exist_ok=True)
-        (handoff_dir / "review.md").write_text("Please review", encoding="utf-8")
-        user_msg.write_text(
+        dispatch_dir.mkdir(parents=True, exist_ok=True)
+        (dispatch_dir / "review.md").write_text("Please review", encoding="utf-8")
+        dispatch_path.write_text(
             "---\nmode: pause\n---\n\nReview attached.\n", encoding="utf-8"
         )
         return AgentTurnResult(
@@ -199,10 +173,13 @@ async def test_ticket_runner_dispatch_pause_message(tmp_path: Path) -> None:
     r1 = await runner.step({})
     assert r1.status == "paused"
     assert r1.dispatch is not None
-    assert r1.dispatch.message.mode == "pause"
-    assert r1.state.get("outbox_seq") == 1
-    assert (run_dir / "handoff_history" / "0001" / "USER_MESSAGE.md").exists()
-    assert (run_dir / "handoff_history" / "0001" / "review.md").exists()
+    assert r1.dispatch.dispatch.mode == "pause"
+    # dispatch_seq is 2: dispatch at seq=1, turn_summary at seq=2
+    assert r1.state.get("dispatch_seq") == 2
+    assert (run_dir / "dispatch_history" / "0001" / "DISPATCH.md").exists()
+    assert (run_dir / "dispatch_history" / "0001" / "review.md").exists()
+    # Turn summary should also be created
+    assert (run_dir / "dispatch_history" / "0002" / "DISPATCH.md").exists()
 
 
 @pytest.mark.asyncio
@@ -385,14 +362,14 @@ async def test_ticket_runner_notify_does_not_pause_and_pause_does(
     runs_dir = Path(".codex-autorunner/runs")
     run_id = "run-1"
     run_dir = workspace_root / runs_dir / run_id
-    handoff_dir = run_dir / "handoff"
-    user_msg = run_dir / "USER_MESSAGE.md"
+    dispatch_dir = run_dir / "dispatch"
+    dispatch_path = run_dir / "DISPATCH.md"
 
     def handler(req: AgentTurnRequest) -> AgentTurnResult:
         turn = len(pool.requests)
-        handoff_dir.mkdir(parents=True, exist_ok=True)
+        dispatch_dir.mkdir(parents=True, exist_ok=True)
         mode = "notify" if turn == 1 else "pause"
-        user_msg.write_text(
+        dispatch_path.write_text(
             f"---\nmode: {mode}\n---\n\nTurn {turn}\n", encoding="utf-8"
         )
         return AgentTurnResult(
@@ -417,18 +394,24 @@ async def test_ticket_runner_notify_does_not_pause_and_pause_does(
     r1 = await runner.step({})
     r2 = await runner.step(r1.state)
 
-    handoff_history = run_dir / "handoff_history"
+    dispatch_history = run_dir / "dispatch_history"
     assert r1.status == "continue"
     assert r1.dispatch is not None
-    assert r1.dispatch.message.mode == "notify"
-    assert (handoff_history / "0001" / "USER_MESSAGE.md").exists()
-    assert r1.state.get("outbox_seq") == 1
+    assert r1.dispatch.dispatch.mode == "notify"
+    assert (dispatch_history / "0001" / "DISPATCH.md").exists()
+    # dispatch_seq is 2: dispatch at seq=1, turn_summary at seq=2
+    assert r1.state.get("dispatch_seq") == 2
+    # Turn summary should also be created
+    assert (dispatch_history / "0002" / "DISPATCH.md").exists()
 
     assert r2.status == "paused"
     assert r2.dispatch is not None
-    assert r2.dispatch.message.mode == "pause"
-    assert (handoff_history / "0002" / "USER_MESSAGE.md").exists()
-    assert r2.state.get("outbox_seq") == 2
+    assert r2.dispatch.dispatch.mode == "pause"
+    # dispatch_seq is 4: previous was 2, dispatch at seq=3, turn_summary at seq=4
+    assert (dispatch_history / "0003" / "DISPATCH.md").exists()
+    assert r2.state.get("dispatch_seq") == 4
+    # Turn summary should also be created
+    assert (dispatch_history / "0004" / "DISPATCH.md").exists()
 
 
 @pytest.mark.asyncio
@@ -485,48 +468,3 @@ async def test_ticket_runner_consumes_reply_history(tmp_path: Path) -> None:
     assert r1.state.get("reply_seq") == 1
     assert r2.state.get("reply_seq") == 2
     assert len(pool.requests) == 2
-
-
-@pytest.mark.asyncio
-async def test_ticket_runner_resumes_after_requires_created(tmp_path: Path) -> None:
-    workspace_root = tmp_path
-    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
-    ticket_dir.mkdir(parents=True, exist_ok=True)
-    ticket_path = ticket_dir / "TICKET-001.md"
-    _write_ticket(ticket_path, requires=["SPEC.md"], done=False)
-
-    spec_path = workspace_root / "SPEC.md"
-
-    def handler(req: AgentTurnRequest) -> AgentTurnResult:
-        _set_ticket_done(ticket_path, done=True)
-        return AgentTurnResult(
-            agent_id=req.agent_id,
-            conversation_id="conv-1",
-            turn_id="t1",
-            text="processed after spec",
-        )
-
-    pool = FakeAgentPool(handler)
-    runner = TicketRunner(
-        workspace_root=workspace_root,
-        run_id="run-1",
-        config=TicketRunConfig(
-            ticket_dir=Path(".codex-autorunner/tickets"),
-            runs_dir=Path(".codex-autorunner/runs"),
-            auto_commit=False,
-        ),
-        agent_pool=pool,
-    )
-
-    paused = await runner.step({})
-    assert paused.status == "paused"
-    assert not pool.requests
-    assert "Missing required input files" in (paused.reason or "")
-
-    spec_path.write_text("# Spec\n", encoding="utf-8")
-    resumed = await runner.step(paused.state)
-    completed = await runner.step(resumed.state)
-
-    assert len(pool.requests) == 1
-    assert resumed.status == "continue"
-    assert completed.status == "completed"

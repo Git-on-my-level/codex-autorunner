@@ -145,7 +145,7 @@ class FixtureServer:
                 entry = {
                     "id": "thread-compact",
                     "first_user_message": (
-                        "Context handoff from previous thread:\n\n"
+                        "Context from previous thread:\n\n"
                         "Goals: Fix resume labels\n\n"
                         "Continue from this context. Ask for missing info if needed."
                     ),

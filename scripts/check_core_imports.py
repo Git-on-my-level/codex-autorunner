@@ -161,15 +161,21 @@ def is_forbidden_import(
                 True,
                 f"forbidden import from integrations/agents/{impl_module} (implementation)",
             )
-        elif module == "codex_autorunner.integrations.agents" and imported_names:
-            # Package-level import: check if all imported names are interface symbols
+        elif module == "codex_autorunner.integrations.agents":
+            # Package-level import: only allow interface symbols explicitly.
+            if not imported_names:
+                return (
+                    True,
+                    "forbidden import from integrations/agents package (imported module)",
+                )
             forbidden_names = [
                 name for name in imported_names if name not in allowed_interface_symbols
             ]
             if forbidden_names:
                 return (
                     True,
-                    f"forbidden import from integrations/agents (implementation symbols: {', '.join(forbidden_names)})",
+                    "forbidden import from integrations/agents "
+                    f"(implementation symbols: {', '.join(forbidden_names)})",
                 )
         return False, ""
 

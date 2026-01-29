@@ -155,7 +155,7 @@ def test_repo_docs_reject_absolute_path(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
     cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
-    cfg["docs"]["todo"] = "/tmp/TODO.md"
+    cfg["docs"]["active_context"] = "/tmp/active_context.md"
     _write_yaml(
         hub_root / CONFIG_FILENAME,
         {"mode": "hub", "repo_defaults": {"docs": cfg["docs"]}},
@@ -172,7 +172,7 @@ def test_repo_docs_reject_parent_segments(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
     cfg = json.loads(json.dumps(DEFAULT_REPO_CONFIG))
-    cfg["docs"]["summary"] = "../SUMMARY.md"
+    cfg["docs"]["spec"] = "../spec.md"
     _write_yaml(
         hub_root / CONFIG_FILENAME,
         {"mode": "hub", "repo_defaults": {"docs": cfg["docs"]}},

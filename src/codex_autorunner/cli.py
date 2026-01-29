@@ -19,16 +19,19 @@ from .core.config import (
     CONFIG_FILENAME,
     ConfigError,
     HubConfig,
+    RepoConfig,
     _normalize_base_path,
+    collect_env_overrides,
+    derive_repo_config,
     find_nearest_hub_config_path,
     load_hub_config,
+    load_repo_config,
 )
-from .core.engine import Engine, LockError, clear_stale_lock, doctor
+from .core.engine import DoctorReport, Engine, LockError, clear_stale_lock, doctor
 from .core.git_utils import GitError, run_git
 from .core.hub import HubSupervisor
 from .core.logging_utils import log_event, setup_rotating_logger
 from .core.optional_dependencies import require_optional_dependencies
-from .core.snapshot import SnapshotError
 from .core.state import RunnerState, load_state, now_iso, save_state, state_lock
 from .core.usage import (
     UsageError,
@@ -38,9 +41,12 @@ from .core.usage import (
     summarize_repo_usage,
 )
 from .core.utils import RepoNotFoundError, default_editor, find_repo_root
-from .integrations.app_server.env import build_app_server_env
-from .integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+from .integrations.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from .integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
+from .integrations.telegram.doctor import telegram_doctor_checks
 from .integrations.telegram.service import (
     TelegramBotConfig,
     TelegramBotConfigError,
@@ -50,7 +56,6 @@ from .integrations.telegram.service import (
 from .integrations.telegram.state import TelegramStateStore
 from .manifest import load_manifest
 from .server import create_hub_app
-from .spec_ingest import SpecIngestError, SpecIngestService, clear_work_docs
 from .voice import VoiceConfig
 
 logger = logging.getLogger("codex_autorunner.cli")
@@ -73,7 +78,14 @@ def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> Engine:
     except RepoNotFoundError as exc:
         _raise_exit("No .git directory found for repo commands.", cause=exc)
     try:
-        return Engine(repo_root, hub_path=hub)
+        config = load_repo_config(repo_root, hub_path=hub)
+        return Engine(
+            repo_root,
+            config=config,
+            hub_path=hub,
+            backend_factory=build_agent_backend_factory(repo_root, config),
+            app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+        )
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
 
@@ -757,7 +769,7 @@ def log(
 
 @app.command()
 def edit(
-    target: str = typer.Argument(..., help="todo|progress|opinions|spec"),
+    target: str = typer.Argument(..., help="active_context|decisions|spec"),
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
 ):
@@ -765,96 +777,24 @@ def edit(
     engine = _require_repo_config(repo, hub)
     config = engine.config
     key = target.lower()
-    if key not in ("todo", "progress", "opinions", "spec"):
-        _raise_exit("Invalid target; choose todo, progress, opinions, or spec")
+    if key not in ("active_context", "decisions", "spec"):
+        _raise_exit("Invalid target; choose active_context, decisions, or spec")
     path = config.doc_path(key)
-    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or default_editor()
+    ui_cfg = config.raw.get("ui") if isinstance(config.raw, dict) else {}
+    ui_cfg = ui_cfg if isinstance(ui_cfg, dict) else {}
+    config_editor = ui_cfg.get("editor") if isinstance(ui_cfg, dict) else None
+    if not isinstance(config_editor, str) or not config_editor.strip():
+        config_editor = "vi"
+    editor = (
+        os.environ.get("VISUAL")
+        or os.environ.get("EDITOR")
+        or default_editor(fallback=config_editor)
+    )
     editor_parts = shlex.split(editor)
     if not editor_parts:
         editor_parts = [editor]
     typer.echo(f"Opening {path} with {' '.join(editor_parts)}")
     subprocess.run([*editor_parts, str(path)])
-
-
-@app.command("ingest-spec")
-def ingest_spec_cmd(
-    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    spec: Optional[Path] = typer.Option(
-        None, "--spec", help="Path to SPEC (defaults to configured docs.spec)"
-    ),
-    force: bool = typer.Option(
-        False, "--force", help="Overwrite TODO/PROGRESS/OPINIONS"
-    ),
-):
-    """Generate TODO/PROGRESS/OPINIONS from SPEC using Codex."""
-    try:
-        engine = _require_repo_config(repo, hub)
-        config = engine.config
-        if not config.app_server.command:
-            raise SpecIngestError("app_server.command must be configured")
-
-        async def _run_ingest() -> dict:
-            logger = logging.getLogger("codex_autorunner.cli.app_server")
-
-            def _env_builder(
-                workspace_root: Path, _workspace_id: str, state_dir: Path
-            ) -> dict[str, str]:
-                state_dir.mkdir(parents=True, exist_ok=True)
-                return build_app_server_env(
-                    config.app_server.command,
-                    workspace_root,
-                    state_dir,
-                    logger=logger,
-                    event_prefix="cli",
-                )
-
-            supervisor = WorkspaceAppServerSupervisor(
-                config.app_server.command,
-                state_root=config.app_server.state_root,
-                env_builder=_env_builder,
-                logger=logger,
-                max_handles=config.app_server.max_handles,
-                idle_ttl_seconds=config.app_server.idle_ttl_seconds,
-                request_timeout=config.app_server.request_timeout,
-                turn_stall_timeout_seconds=config.app_server.turn_stall_timeout_seconds,
-                turn_stall_poll_interval_seconds=config.app_server.turn_stall_poll_interval_seconds,
-                turn_stall_recovery_min_interval_seconds=config.app_server.turn_stall_recovery_min_interval_seconds,
-            )
-            service = SpecIngestService(engine, app_server_supervisor=supervisor)
-            try:
-                await service.execute(force=force, spec_path=spec, message=None)
-                return service.apply_patch()
-            finally:
-                await supervisor.close_all()
-
-        docs = asyncio.run(_run_ingest())
-    except (ConfigError, SpecIngestError) as exc:
-        _raise_exit(str(exc), cause=exc)
-
-    typer.echo("Ingested SPEC into TODO/PROGRESS/OPINIONS.")
-    for key, content in docs.items():
-        lines = len(content.splitlines())
-        typer.echo(f"- {key.upper()}: {lines} lines")
-
-
-@app.command("clear-docs")
-def clear_docs_cmd(
-    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
-):
-    """Clear TODO/PROGRESS/OPINIONS to empty templates."""
-    if not yes:
-        confirm = input("Clear TODO/PROGRESS/OPINIONS? Type CLEAR to confirm: ").strip()
-        if confirm.upper() != "CLEAR":
-            _raise_exit("Aborted.")
-    engine = _require_repo_config(repo, hub)
-    try:
-        clear_work_docs(engine)
-    except ConfigError as exc:
-        _raise_exit(str(exc), cause=exc)
-    typer.echo("Cleared TODO/PROGRESS/OPINIONS.")
 
 
 @app.command("doctor")
@@ -864,7 +804,19 @@ def doctor_cmd(
 ):
     """Validate repo or hub setup."""
     try:
-        report = doctor(repo or Path.cwd())
+        start_path = repo or Path.cwd()
+        report = doctor(start_path)
+
+        hub_config = load_hub_config(start_path)
+        repo_config: Optional[RepoConfig] = None
+        try:
+            repo_root = find_repo_root(start_path)
+            repo_config = derive_repo_config(hub_config, repo_root)
+        except RepoNotFoundError:
+            repo_config = None
+
+        telegram_checks = telegram_doctor_checks(repo_config or hub_config)
+        report = DoctorReport(checks=report.checks + telegram_checks)
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
     if json_output:
@@ -880,59 +832,6 @@ def doctor_cmd(
     if report.has_errors():
         _raise_exit("Doctor check failed")
     typer.echo("Doctor check passed")
-
-
-@app.command()
-def snapshot(
-    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
-    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-):
-    """Generate or update `.codex-autorunner/SNAPSHOT.md`."""
-    try:
-        engine = _require_repo_config(repo, hub)
-        config = engine.config
-        if not config.app_server.command:
-            raise SnapshotError("app_server.command must be configured")
-
-        async def _run_snapshot() -> None:
-            logger = logging.getLogger("codex_autorunner.cli.app_server")
-
-            def _env_builder(
-                workspace_root: Path, _workspace_id: str, state_dir: Path
-            ) -> dict[str, str]:
-                state_dir.mkdir(parents=True, exist_ok=True)
-                return build_app_server_env(
-                    config.app_server.command,
-                    workspace_root,
-                    state_dir,
-                    logger=logger,
-                    event_prefix="cli",
-                )
-
-            supervisor = WorkspaceAppServerSupervisor(
-                config.app_server.command,
-                state_root=config.app_server.state_root,
-                env_builder=_env_builder,
-                logger=logger,
-                max_handles=config.app_server.max_handles,
-                idle_ttl_seconds=config.app_server.idle_ttl_seconds,
-                request_timeout=config.app_server.request_timeout,
-                turn_stall_timeout_seconds=config.app_server.turn_stall_timeout_seconds,
-                turn_stall_poll_interval_seconds=config.app_server.turn_stall_poll_interval_seconds,
-                turn_stall_recovery_min_interval_seconds=config.app_server.turn_stall_recovery_min_interval_seconds,
-            )
-            from .core.snapshot import SnapshotService
-
-            service = SnapshotService(engine, app_server_supervisor=supervisor)
-            try:
-                await service.generate_snapshot()
-            finally:
-                await supervisor.close_all()
-
-        asyncio.run(_run_snapshot())
-    except (ConfigError, SnapshotError) as exc:
-        _raise_exit(str(exc), cause=exc)
-    typer.echo("Snapshot written to .codex-autorunner/SNAPSHOT.md")
 
 
 @app.command()
@@ -983,7 +882,11 @@ def hub_create(
 ):
     """Create a new git repo under the hub and initialize codex-autorunner files."""
     config = _require_hub_config(path)
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     try:
         snapshot = supervisor.create_repo(
             repo_id, repo_path, git_init=git_init, force=force
@@ -1011,7 +914,11 @@ def hub_clone(
 ):
     """Clone a git repo under the hub and initialize codex-autorunner files."""
     config = _require_hub_config(path)
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     try:
         snapshot = supervisor.clone_repo(
             git_url=git_url, repo_id=repo_id, repo_path=repo_path, force=force
@@ -1056,7 +963,11 @@ def hub_serve(
 def hub_scan(path: Optional[Path] = typer.Option(None, "--path", help="Hub root path")):
     """Trigger discovery/init and print repo statuses."""
     config = _require_hub_config(path)
-    supervisor = HubSupervisor(config)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
     snapshots = supervisor.scan()
     typer.echo(f"Scanned hub at {config.root} (repos_root={config.repos_root})")
     for snap in snapshots:
@@ -1092,6 +1003,9 @@ def telegram_start(
     except TelegramBotConfigError as exc:
         _raise_exit(str(exc), cause=exc)
     logger = setup_rotating_logger("codex-autorunner-telegram", config.log)
+    env_overrides = collect_env_overrides(env=os.environ, include_telegram=True)
+    if env_overrides:
+        logger.info("Environment overrides active: %s", ", ".join(env_overrides))
     log_event(
         logger,
         logging.INFO,
@@ -1114,6 +1028,8 @@ def telegram_start(
             housekeeping_config=config.housekeeping,
             update_repo_url=update_repo_url,
             update_repo_ref=update_repo_ref,
+            update_skip_checks=config.update_skip_checks,
+            app_server_auto_restart=config.app_server.auto_restart,
         )
         await service.run_polling()
 
@@ -1170,11 +1086,19 @@ def telegram_state_check(
         config = load_hub_config(path or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
+    telegram_cfg = TelegramBotConfig.from_raw(
+        config.raw.get("telegram_bot") if isinstance(config.raw, dict) else None,
+        root=config.root,
+        agent_binaries=getattr(config, "agents", None)
+        and {name: agent.binary for name, agent in config.agents.items()},
+    )
+    if not telegram_cfg.enabled:
+        _raise_exit("telegram_bot is disabled; set telegram_bot.enabled: true")
 
     try:
         store = TelegramStateStore(
-            config.telegram_bot.state_file,
-            default_approval_mode=config.telegram_bot.defaults.approval_mode,
+            telegram_cfg.state_file,
+            default_approval_mode=telegram_cfg.defaults.approval_mode,
         )
         # This will open the DB and apply schema/migrations.
         store._connection_sync()  # type: ignore[attr-defined]

@@ -23,6 +23,8 @@ from codex_autorunner.integrations.app_server.supervisor import (
     WorkspaceAppServerSupervisor,
 )
 
+pytest.skip("codex app-server removed in workspace cutover", allow_module_level=True)
+
 
 def get_codex_bin() -> Optional[str]:
     """Get Codex binary path from environment or PATH."""
@@ -65,7 +67,7 @@ async def supervisor(
     def env_builder(
         _workspace_root: Path, _workspace_id: str, _state_dir: Path
     ) -> dict:
-        return build_app_server_env(_workspace_root, _workspace_id, _state_dir)
+        return build_app_server_env(command, _workspace_root, _state_dir)
 
     codex_bin = get_codex_bin()
     assert codex_bin is not None

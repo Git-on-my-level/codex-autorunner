@@ -8,7 +8,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
@@ -16,12 +16,9 @@ from .....core.state import now_iso
 from ...adapter import TelegramMessage
 from ...config import TelegramMediaCandidate
 from ...helpers import _path_within
+from ...state import PendingVoiceRecord, TelegramTopicRecord
 from .. import messages as message_handlers
 from .shared import SharedHelpers
-
-if TYPE_CHECKING:
-    from ...state import PendingVoiceRecord, TelegramTopicRecord
-
 
 FILES_HINT_TEMPLATE = (
     "Inbox: {inbox}\n"

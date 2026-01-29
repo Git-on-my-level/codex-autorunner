@@ -6,6 +6,10 @@ This document describes how codex-autorunner resolves paths in configuration fil
 
 All config paths follow consistent resolution rules to eliminate confusion about which paths are absolute vs relative, and when `~` expansion occurs.
 
+Codex Autorunner uses two state roots:
+- **Repo-local root**: `.codex-autorunner/` under the repo (runtime state, tickets, artifacts).
+- **Global root**: `~/.codex-autorunner/` by default (cross-repo caches/locks).
+
 ## Relative Paths
 
 All config paths without leading `/` or `~` are interpreted as **relative to the repo root**.
@@ -94,7 +98,7 @@ docs:
 
 ```yaml
 docs:
-  todo: .codex-autorunner/TODO.md  # Relative to repo root
+  active_context: .codex-autorunner/workspace/active_context.md  # Relative to repo root
 ```
 
 ### Empty Paths
@@ -105,8 +109,8 @@ Empty or whitespace-only paths are rejected.
 
 ```yaml
 docs:
-  todo: ""  # Rejected
-  progress: "   "  # Rejected (whitespace only)
+  active_context: ""  # Rejected
+  decisions: "   "  # Rejected (whitespace only)
 ```
 
 ## Configuration Sections
@@ -119,13 +123,9 @@ All `docs.*` paths must be **relative to repo root** (no `~` or absolute paths a
 
 ```yaml
 docs:
-  todo: .codex-autorunner/TODO.md
-  progress: .codex-autorunner/PROGRESS.md
-  opinions: .codex-autorunner/OPINIONS.md
-  spec: .codex-autorunner/SPEC.md
-  summary: .codex-autorunner/SUMMARY.md
-  snapshot: .codex-autorunner/SNAPSHOT.md
-  snapshot_state: .codex-autorunner/snapshot_state.json
+  active_context: .codex-autorunner/workspace/active_context.md
+  decisions: .codex-autorunner/workspace/decisions.md
+  spec: .codex-autorunner/workspace/spec.md
 ```
 
 ### log and server_log
@@ -208,6 +208,25 @@ agents:
     serve_command:
       - /absolute/path/to/opencode
       - serve
+```
+
+### state_roots.global
+
+Controls the global state root used for cross-repo caches and locks (update cache,
+update status/lock, shared app-server workspaces).
+
+Defaults to `~/.codex-autorunner/` unless overridden via the environment variable
+`CAR_GLOBAL_STATE_ROOT` or this config key.
+
+**Examples:**
+
+```yaml
+state_roots:
+  global: ~/.codex-autorunner
+```
+
+```bash
+export CAR_GLOBAL_STATE_ROOT=/srv/codex-autorunner
 ```
 
 ## Error Messages

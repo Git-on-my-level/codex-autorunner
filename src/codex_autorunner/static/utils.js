@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { CONSTANTS } from "./constants.js";
 import { BASE_PATH } from "./env.js";
 const toast = document.getElementById("toast");
@@ -630,4 +631,29 @@ export function ingestModal(message, options = {}) {
             inputEl.focus();
         }
     });
+}
+/**
+ * Split YAML frontmatter from a markdown document.
+ * Returns [frontmatter_yaml, body]. If no frontmatter is present, frontmatter_yaml is null.
+ */
+export function splitMarkdownFrontmatter(text) {
+    if (!text)
+        return [null, ""];
+    const lines = text.split(/\r?\n/);
+    if (lines.length === 0)
+        return [null, ""];
+    if (!/^---\s*$/.test(lines[0]))
+        return [null, text];
+    let endIdx = null;
+    for (let i = 1; i < lines.length; i++) {
+        if (/^---\s*$/.test(lines[i])) {
+            endIdx = i;
+            break;
+        }
+    }
+    if (endIdx === null)
+        return [null, text];
+    const fmYaml = lines.slice(1, endIdx).join("\n");
+    const body = lines.slice(endIdx + 1).join("\n");
+    return [fmYaml, body];
 }

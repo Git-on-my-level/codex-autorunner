@@ -6,6 +6,67 @@ import {
   initAgentControls,
 } from "./agentControls.js";
 
+interface XtermTerminal {
+  open(parent: HTMLElement): void;
+  dispose(): void;
+  onData(cb: (data: string) => void): { dispose(): void };
+  onBinary(cb: (data: string) => void): { dispose(): void };
+  onResize(cb: (size: { cols: number; rows: number }) => void): { dispose(): void };
+  onScroll(cb: (newPos: number) => void): { dispose(): void };
+  onRender(cb: (event: { start: number; end: number }) => void): { dispose(): void };
+  write(data: string | Uint8Array, callback?: () => void): void;
+  resize(cols: number, rows: number): void;
+  focus(): void;
+  scrollToBottom(): void;
+  scrollLines(amount: number): void;
+  reset(): void;
+  clear(): void;
+  buffer: {
+    active: {
+      type: string;
+      baseY: number;
+      viewportY: number;
+      length: number;
+      cursorY: number;
+      lines: {
+        get(index: number): { translateToString(trimRight?: boolean): string } | undefined;
+        length: number;
+      };
+      getLine(y: number): { translateToString(trimRight?: boolean): string } | undefined;
+      cols: number;
+    };
+    alternate: {
+      type: string;
+      baseY: number;
+      viewportY: number;
+    };
+  };
+  element: HTMLElement | null;
+  textarea: HTMLTextAreaElement | null;
+  cols: number;
+  rows: number;
+  options: XtermTerminalOptions;
+  modes: {
+    mouseTrackingMode: string;
+  };
+  _core: unknown;
+  loadAddon(addon: { dispose(): void }): void;
+}
+
+interface XtermTerminalOptions {
+  scrollback?: number;
+  fontSize?: number;
+  scrollSensitivity?: number;
+  fastScrollSensitivity?: number;
+  fastScrollModifier?: string;
+  [key: string]: unknown;
+}
+
+interface XtermFitAddon {
+  fit(): void;
+  dispose(): void;
+}
+
 function base64UrlEncode(value: string): string | null {
   if (!value) return null;
   try {
@@ -57,20 +118,7 @@ const XTERM_COLOR_MODE_PALETTE_256 = 0x02000000;
 const XTERM_COLOR_MODE_RGB = 0x03000000;
 
 const CAR_CONTEXT_HOOK_ID = "car_context";
-const CAR_CONTEXT_KEYWORDS = [
-  "car",
-  "codex",
-  "todo",
-  "progress",
-  "opinions",
-  "spec",
-  "summary",
-  "autorunner",
-  "work docs",
-];
-const CAR_CONTEXT_HINT_TEXT =
-  "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.";
-const CAR_CONTEXT_HINT = wrapInjectedContext(CAR_CONTEXT_HINT_TEXT);
+const CAR_CONTEXT_HINT = wrapInjectedContext(CONSTANTS.PROMPTS.CAR_CONTEXT_HINT);
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT =
   CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
   "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.";
@@ -154,7 +202,7 @@ const TERMINAL_DEBUG = (() => {
 
 interface TextHook {
   id: string;
-  apply: (context: { text: string; manager: any }) => { text?: string; stop?: boolean } | string | null | Promise<{ text?: string; stop?: boolean } | string | null>;
+  apply: (context: { text: string; manager: TerminalManager }) => { text?: string; stop?: boolean } | string | null | Promise<{ text?: string; stop?: boolean } | string | null>;
 }
 
 interface PendingTextInput {
@@ -198,10 +246,10 @@ interface VoiceController {
 
 export class TerminalManager {
   // Core terminal state
-  term: any = null;
-  fitAddon: any = null;
+  term: XtermTerminal | null = null;
+  fitAddon: XtermFitAddon | null = null;
   socket: WebSocket | null = null;
-  inputDisposable: any = null;
+  inputDisposable: { dispose(): void } | null = null;
   wheelScrollInstalled: boolean = false;
   wheelScrollRemainder: number = 0;
   touchScrollInstalled: boolean = false;
@@ -523,7 +571,7 @@ export class TerminalManager {
         state &&
         typeof state === "object" && state !== null && "terminal_idle_timeout_seconds" in state
       ) {
-        this.terminalIdleTimeoutSeconds = (state as any).terminal_idle_timeout_seconds;
+        this.terminalIdleTimeoutSeconds = (state as Record<string, unknown>).terminal_idle_timeout_seconds as number | null;
       }
     });
     if (this.terminalIdleTimeoutSeconds === null) {
@@ -533,6 +581,20 @@ export class TerminalManager {
     // Auto-connect if session ID exists
     if (this._getSavedSessionId()) {
       this.connect({ mode: "attach" });
+    }
+  }
+
+  /**
+   * Force resize terminal to fit container
+   */
+  fit() {
+    if (this.fitAddon && this.term) {
+      try {
+        this.fitAddon.fit();
+        this._handleResize(); // Send resize to server
+      } catch (e) {
+        // ignore
+      }
     }
   }
 
@@ -680,7 +742,7 @@ export class TerminalManager {
     for (const hook of this.textInputHooks) {
       try {
         let result = hook.apply({ text: next, manager: this });
-        if (result && typeof (result as any).then === "function") {
+        if (result && typeof (result as Promise<unknown>).then === "function") {
           result = await result;
         }
         if (!result) continue;
@@ -710,11 +772,11 @@ export class TerminalManager {
         if (manager._hasTextInputHookFired(CAR_CONTEXT_HOOK_ID)) return null;
 
         const lowered = text.toLowerCase();
-        const hit = CAR_CONTEXT_KEYWORDS.some((kw) => lowered.includes(kw));
+        const hit = CONSTANTS.KEYWORDS.CAR_CONTEXT.some((kw) => lowered.includes(kw));
         if (!hit) return null;
         if (lowered.includes("about_car.md")) return null;
         if (
-          text.includes(CAR_CONTEXT_HINT_TEXT) ||
+          text.includes(CONSTANTS.PROMPTS.CAR_CONTEXT_HINT) ||
           text.includes(CAR_CONTEXT_HINT)
         ) {
           return null;
@@ -1924,7 +1986,11 @@ export class TerminalManager {
    * Ensure xterm terminal is initialized
    */
   _ensureTerminal() {
-    if (!(window as any).Terminal || !(window as any).FitAddon) {
+    const win = window as unknown as {
+      Terminal: new (options: unknown) => XtermTerminal;
+      FitAddon: { FitAddon: new () => XtermFitAddon };
+    };
+    if (!win.Terminal || !win.FitAddon) {
       this._setStatus("xterm assets missing; reload or check /static/vendor");
       flash("xterm assets missing; reload the page", "error");
       return false;
@@ -1942,7 +2008,7 @@ export class TerminalManager {
     const container = document.getElementById("terminal-container") as HTMLElement | null;
     if (!container) return false;
 
-    this.term = new (window as any).Terminal({
+    this.term = new win.Terminal({
       convertEol: true,
       fontFamily:
         '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
@@ -1956,7 +2022,7 @@ export class TerminalManager {
       theme: CONSTANTS.THEME.XTERM,
     });
 
-    this.fitAddon = new (window as any).FitAddon.FitAddon();
+    this.fitAddon = new win.FitAddon.FitAddon();
     this.term.loadAddon(this.fitAddon);
     this.term.open(container);
     this.term.write('Press "New" or "Resume" to launch Codex TUI...\r\n');
@@ -1965,6 +2031,13 @@ export class TerminalManager {
     this.term.onScroll(() => this._updateJumpBottomVisibility());
     this.term.onRender(() => this._scheduleMobileViewRender());
     this._updateJumpBottomVisibility();
+
+    // Initial fit
+    try {
+      this.fitAddon.fit();
+    } catch (e) {
+      // ignore fit errors when not visible
+    }
 
     if (!this.inputDisposable) {
       this.inputDisposable = this.term.onData((data) => {
@@ -2052,7 +2125,8 @@ export class TerminalManager {
     if (!viewport) return;
 
     const getLineHeight = () => {
-      const dims = this.term?._core?._renderService?.dimensions;
+      const core = this.term?._core as { _renderService?: { dimensions?: { actualCellHeight?: number } } } | undefined;
+      const dims = core?._renderService?.dimensions;
       if (dims && Number.isFinite(dims.actualCellHeight) && dims.actualCellHeight > 0) {
         return dims.actualCellHeight;
       }
@@ -2275,7 +2349,7 @@ export class TerminalManager {
    * Connect to the terminal WebSocket
    */
   connect(options: { mode?: string; quiet?: boolean } = {}) {
-    const mode = ((options as any).mode || ((options as any).resume ? "resume" : "new")).toLowerCase();
+    const mode = (((options as Record<string, unknown>).mode as string | undefined) || ((options as Record<string, unknown>).resume ? "resume" : "new")).toLowerCase();
     const isAttach = mode === "attach";
     const isResume = mode === "resume";
     const shouldAwaitReplay = isAttach || isResume;
@@ -2803,7 +2877,7 @@ export class TerminalManager {
   }
 
   _queuePendingTextInput(payload, originalText, options = {}) {
-    const sendEnter = Boolean((options as any).sendEnter);
+    const sendEnter = Boolean((options as Record<string, unknown>).sendEnter);
     const { chunks, totalBytes } = this._splitTextByBytes(
       payload,
       TEXT_INPUT_SIZE_LIMITS.chunkBytes
@@ -2966,7 +3040,7 @@ export class TerminalManager {
   }
 
   _sendText(text, options = {}) {
-    const appendNewline = Boolean((options as any).appendNewline);
+    const appendNewline = Boolean((options as Record<string, unknown>).appendNewline);
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       flash("Connect the terminal first", "error");
       return false;
@@ -3006,15 +3080,15 @@ export class TerminalManager {
   }
 
   _sendTextWithAck(text: string, options: { appendNewline?: boolean; sendEnter?: boolean; originalText?: string } = {}) {
-    const appendNewline = Boolean((options as any).appendNewline);
-    const sendEnter = Boolean((options as any).sendEnter);
+    const appendNewline = Boolean((options as Record<string, unknown>).appendNewline);
+    const sendEnter = Boolean((options as Record<string, unknown>).sendEnter);
 
     let payload = this._normalizeNewlines(text);
     if (!payload) return false;
 
     const originalText =
-      typeof (options as any).originalText === "string"
-        ? this._normalizeNewlines((options as any).originalText)
+      typeof (options as Record<string, unknown>).originalText === "string"
+        ? this._normalizeNewlines((options as Record<string, unknown>).originalText as string)
         : payload;
     if (appendNewline && !payload.endsWith("\n")) {
       payload = `${payload}\n`;
@@ -3086,8 +3160,8 @@ export class TerminalManager {
     this._writeBoolToStorage(TEXT_INPUT_STORAGE_KEYS.enabled, this.textInputEnabled);
     publish("terminal:compose", { open: this.textInputEnabled });
 
-    const focus = (options as any).focus !== false;
-    const shouldFocusTextarea = focus && (this.isTouchDevice() || (options as any).focusTextarea);
+    const focus = (options as Record<string, unknown>).focus !== false;
+    const shouldFocusTextarea = focus && (this.isTouchDevice() || (options as Record<string, unknown>).focusTextarea);
 
     this.textInputToggleBtn?.setAttribute(
       "aria-expanded",
@@ -3172,7 +3246,7 @@ export class TerminalManager {
 
     const textarea = this.textInputTextareaEl;
     const value = textarea.value || "";
-    const replaceSelection = (options as any).replaceSelection !== false;
+    const replaceSelection = (options as Record<string, unknown>).replaceSelection !== false;
     const selection = this._getTextInputSelection();
     const insertAt = replaceSelection ? selection.start : selection.end;
     const prefix = value.slice(0, insertAt);
@@ -3218,7 +3292,8 @@ export class TerminalManager {
         method: "POST",
         body: formData,
       });
-      const imagePath = (response as any)?.path || (response as any)?.abs_path;
+      const p = response as Record<string, unknown>;
+      const imagePath = (p.path as string | undefined) || (p.abs_path as string | undefined);
       if (!imagePath) {
         throw new Error("Upload returned no path");
       }

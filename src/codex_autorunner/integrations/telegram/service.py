@@ -16,20 +16,16 @@ if TYPE_CHECKING:
     from .state import TelegramTopicRecord
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
-from ...core.flows import FlowStore
-from ...core.flows.models import FlowRunRecord, FlowRunStatus
+from ...core.flows.models import FlowRunRecord
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
+from ...core.state_roots import resolve_global_state_root
 from ...core.text_delta_coalescer import TextDeltaCoalescer
-from ...core.utils import (
-    build_opencode_supervisor,
-    canonicalize_path,
-)
+from ...core.utils import build_opencode_supervisor
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
 from ...manifest import load_manifest
-from ...tickets.outbox import resolve_outbox_paths
 from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_paths
 from ...voice import VoiceConfig, VoiceService
 from ..app_server.supervisor import WorkspaceAppServerSupervisor
@@ -51,21 +47,8 @@ from .config import (
     TelegramMediaCandidate,
 )
 from .constants import (
-    CACHE_CLEANUP_INTERVAL_SECONDS,
-    COALESCE_BUFFER_TTL_SECONDS,
     DEFAULT_INTERRUPT_TIMEOUT_SECONDS,
-    DEFAULT_WORKSPACE_STATE_ROOT,
-    MEDIA_BATCH_BUFFER_TTL_SECONDS,
-    MODEL_PENDING_TTL_SECONDS,
-    OVERSIZE_WARNING_TTL_SECONDS,
-    PENDING_APPROVAL_TTL_SECONDS,
-    PENDING_QUESTION_TTL_SECONDS,
-    PROGRESS_STREAM_TTL_SECONDS,
     QUEUED_PLACEHOLDER_TEXT,
-    REASONING_BUFFER_TTL_SECONDS,
-    SELECTION_STATE_TTL_SECONDS,
-    TURN_PREVIEW_TTL_SECONDS,
-    UPDATE_ID_PERSIST_INTERVAL_SECONDS,
     TurnKey,
 )
 from .dispatch import dispatch_update
@@ -83,7 +66,6 @@ from .helpers import (
     _read_lock_payload,
     _split_topic_key,
     _telegram_lock_path,
-    _truncate_text,
     _with_conversation_id,
 )
 from .notifications import TelegramNotificationHandlers
@@ -95,6 +77,7 @@ from .state import (
     parse_topic_key,
     topic_key,
 )
+from .ticket_flow_bridge import TelegramTicketFlowBridge
 from .transport import TelegramMessageTransport
 from .types import (
     CompactState,
@@ -115,11 +98,11 @@ def _build_opencode_supervisor(
     *,
     logger: logging.Logger,
 ) -> Optional[OpenCodeSupervisor]:
-    raw_command = os.environ.get("CAR_OPENCODE_COMMAND")
+    opencode_command = config.opencode_command or None
     opencode_binary = config.agent_binaries.get("opencode")
 
     supervisor = build_opencode_supervisor(
-        opencode_command=[raw_command] if raw_command else None,
+        opencode_command=opencode_command,
         opencode_binary=opencode_binary,
         workspace_root=config.root,
         logger=logger,
@@ -183,6 +166,8 @@ class TelegramBotService(
         housekeeping_config: Optional[HousekeepingConfig] = None,
         update_repo_url: Optional[str] = None,
         update_repo_ref: Optional[str] = None,
+        update_skip_checks: bool = False,
+        app_server_auto_restart: Optional[bool] = None,
     ) -> None:
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
@@ -190,12 +175,14 @@ class TelegramBotService(
         self._manifest_path = manifest_path
         self._update_repo_url = update_repo_url
         self._update_repo_ref = update_repo_ref
+        self._update_skip_checks = update_skip_checks
+        self._app_server_auto_restart = app_server_auto_restart
         self._allowlist = config.allowlist()
         self._store = TelegramStateStore(
             config.state_file, default_approval_mode=config.defaults.approval_mode
         )
         self._router = TopicRouter(self._store)
-        self._app_server_state_root = Path(DEFAULT_WORKSPACE_STATE_ROOT).expanduser()
+        self._app_server_state_root = resolve_global_state_root() / "workspaces"
         self._app_server_supervisor = WorkspaceAppServerSupervisor(
             config.app_server_command,
             state_root=self._app_server_state_root,
@@ -203,6 +190,7 @@ class TelegramBotService(
             approval_handler=self._handle_approval_request,
             notification_handler=self._handle_app_server_notification,
             logger=self._logger,
+            auto_restart=self._app_server_auto_restart,
             max_handles=config.app_server_max_handles,
             idle_ttl_seconds=config.app_server_idle_ttl_seconds,
         )
@@ -254,6 +242,18 @@ class TelegramBotService(
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._pending_questions: dict[str, PendingQuestion] = {}
         self._ticket_flow_pause_targets: dict[str, str] = {}
+        self._ticket_flow_bridge = TelegramTicketFlowBridge(
+            logger=self._logger,
+            store=self._store,
+            pause_targets=self._ticket_flow_pause_targets,
+            send_message_with_outbox=self._send_message_with_outbox,
+            send_document=self._send_document,
+            pause_config=self._config.pause_dispatch_notifications,
+            default_notification_chat_id=self._config.default_notification_chat_id,
+            hub_root=hub_root,
+            manifest_path=manifest_path,
+            config_root=self._config.root,
+        )
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
         self._update_options: dict[str, SelectionState] = {}
@@ -572,7 +572,9 @@ class TelegramBotService(
             self._housekeeping_task = asyncio.create_task(self._housekeeping_loop())
             self._cache_cleanup_task = asyncio.create_task(self._cache_cleanup_loop())
             self._ticket_flow_watch_task = asyncio.create_task(
-                self._ticket_flow_watch_loop()
+                self._ticket_flow_bridge.watch_ticket_flow_pauses(
+                    TICKET_FLOW_WATCH_INTERVAL_SECONDS
+                )
             )
             self._spawn_task(self._prewarm_workspace_clients())
             log_event(
@@ -914,68 +916,75 @@ class TelegramBotService(
                 self._pending_questions.pop(key, None)
 
     async def _cache_cleanup_loop(self) -> None:
-        interval = max(CACHE_CLEANUP_INTERVAL_SECONDS, 1.0)
+        interval = max(self._config.cache.cleanup_interval_seconds, 1.0)
         while True:
             await asyncio.sleep(interval)
             self._evict_expired_cache_entries(
-                "reasoning_buffers", REASONING_BUFFER_TTL_SECONDS
-            )
-            self._evict_expired_cache_entries("turn_preview", TURN_PREVIEW_TTL_SECONDS)
-            self._evict_expired_cache_entries(
-                "progress_trackers", PROGRESS_STREAM_TTL_SECONDS
+                "reasoning_buffers", self._config.cache.reasoning_buffer_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "oversize_warnings", OVERSIZE_WARNING_TTL_SECONDS
+                "turn_preview", self._config.cache.turn_preview_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "coalesced_buffers", COALESCE_BUFFER_TTL_SECONDS
+                "progress_trackers", self._config.cache.progress_stream_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "media_batch_buffers", MEDIA_BATCH_BUFFER_TTL_SECONDS
+                "oversize_warnings", self._config.cache.oversize_warning_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "resume_options", SELECTION_STATE_TTL_SECONDS
+                "coalesced_buffers", self._config.cache.coalesce_buffer_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "bind_options", SELECTION_STATE_TTL_SECONDS
+                "media_batch_buffers",
+                self._config.cache.media_batch_buffer_ttl_seconds,
             )
             self._evict_expired_cache_entries(
-                "agent_options", SELECTION_STATE_TTL_SECONDS
+                "resume_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "update_options", SELECTION_STATE_TTL_SECONDS
+                "bind_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "update_confirm_options", SELECTION_STATE_TTL_SECONDS
+                "agent_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "review_commit_options", SELECTION_STATE_TTL_SECONDS
+                "update_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "review_commit_subjects", SELECTION_STATE_TTL_SECONDS
+                "update_confirm_options",
+                self._config.cache.selection_state_ttl_seconds,
             )
             self._evict_expired_cache_entries(
-                "pending_review_custom", SELECTION_STATE_TTL_SECONDS
+                "review_commit_options",
+                self._config.cache.selection_state_ttl_seconds,
             )
             self._evict_expired_cache_entries(
-                "compact_pending", SELECTION_STATE_TTL_SECONDS
+                "review_commit_subjects",
+                self._config.cache.selection_state_ttl_seconds,
             )
             self._evict_expired_cache_entries(
-                "model_options", SELECTION_STATE_TTL_SECONDS
+                "pending_review_custom",
+                self._config.cache.selection_state_ttl_seconds,
             )
             self._evict_expired_cache_entries(
-                "model_pending", MODEL_PENDING_TTL_SECONDS
+                "compact_pending", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "pending_approvals", PENDING_APPROVAL_TTL_SECONDS
+                "model_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
-                "pending_questions", PENDING_QUESTION_TTL_SECONDS
+                "model_pending", self._config.cache.model_pending_ttl_seconds
+            )
+            self._evict_expired_cache_entries(
+                "pending_approvals", self._config.cache.pending_approval_ttl_seconds
+            )
+            self._evict_expired_cache_entries(
+                "pending_questions", self._config.cache.pending_question_ttl_seconds
             )
             now = time.monotonic()
             expired_placeholders = []
             for key, timestamp in self._queued_placeholder_timestamps.items():
-                if (now - timestamp) > PENDING_APPROVAL_TTL_SECONDS:
+                if (now - timestamp) > self._config.cache.pending_approval_ttl_seconds:
                     expired_placeholders.append(key)
             for key in expired_placeholders:
                 self._queued_placeholder_map.pop(key, None)
@@ -994,232 +1003,51 @@ class TelegramBotService(
     def _select_ticket_flow_topic(
         self, entries: list[tuple[str, "TelegramTopicRecord"]]
     ) -> Optional[tuple[str, "TelegramTopicRecord"]]:
-        if not entries:
-            return None
-
-        def score(entry: tuple[str, "TelegramTopicRecord"]) -> tuple[int, float, str]:
-            key, record = entry
-            thread_id = None
-            try:
-                _chat_id, thread_id, _scope = parse_topic_key(key)
-            except Exception:
-                thread_id = None
-            active_raw = getattr(record, "active_thread_id", None)
-            try:
-                active_thread = int(active_raw) if active_raw is not None else None
-            except (TypeError, ValueError):
-                active_thread = None
-            active_match = (
-                int(thread_id) == active_thread if thread_id is not None else False
-            )
-            return (1 if active_match else 0, self._parse_last_active(record), key)
-
-        return max(entries, key=score)
+        return self._ticket_flow_bridge._select_ticket_flow_topic(entries)
 
     @staticmethod
-    def _set_ticket_handoff_marker(
+    def _set_ticket_dispatch_marker(
         value: Optional[str],
     ) -> "Callable[[TelegramTopicRecord], None]":
         def apply(topic: "TelegramTopicRecord") -> None:
-            topic.last_ticket_handoff_seq = value
+            topic.last_ticket_dispatch_seq = value
 
         return apply
 
     async def _ticket_flow_watch_loop(self) -> None:
-        interval = max(TICKET_FLOW_WATCH_INTERVAL_SECONDS, 1)
-        while True:
-            try:
-                await self._watch_ticket_flow_pauses()
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.ticket_flow.watch_failed",
-                    exc=exc,
-                )
-            await asyncio.sleep(interval)
+        await self._ticket_flow_bridge.watch_ticket_flow_pauses(
+            TICKET_FLOW_WATCH_INTERVAL_SECONDS
+        )
 
     async def _watch_ticket_flow_pauses(self) -> None:
-        topics = await self._store.list_topics()
-        if not topics:
-            return
-        workspace_topics: dict[Path, list[tuple[str, "TelegramTopicRecord"]]] = {}
-        for key, record in topics.items():
-            if not isinstance(record.workspace_path, str) or not record.workspace_path:
-                continue
-            workspace_root = canonicalize_path(Path(record.workspace_path))
-            workspace_topics.setdefault(workspace_root, []).append((key, record))
-
-        tasks = [
-            asyncio.create_task(self._notify_ticket_flow_pause(workspace_root, entries))
-            for workspace_root, entries in workspace_topics.items()
-        ]
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        await self._ticket_flow_bridge._scan_and_notify_pauses()
 
     async def _notify_ticket_flow_pause(
         self,
         workspace_root: Path,
         entries: list[tuple[str, "TelegramTopicRecord"]],
     ) -> None:
-        try:
-            pause = await asyncio.to_thread(
-                self._load_ticket_flow_pause, workspace_root
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.ticket_flow.scan_failed",
-                exc=exc,
-                workspace_root=str(workspace_root),
-            )
-            return
-        if pause is None:
-            return
-        run_id, seq, content = pause
-        marker = f"{run_id}:{seq}"
-        pending = [
-            (key, record)
-            for key, record in entries
-            if record.last_ticket_handoff_seq != marker
-        ]
-        if not pending:
-            return
-        primary = self._select_ticket_flow_topic(pending)
-        if not primary:
-            return
-        message_text = self._format_ticket_flow_pause_message(run_id, seq, content)
-        updates: list[tuple[str, Optional[str]]] = [
-            (key, record.last_ticket_handoff_seq) for key, record in pending
-        ]
-        for key, _previous in updates:
-            await self._store.update_topic(key, self._set_ticket_handoff_marker(marker))
-
-        primary_key, _primary_record = primary
-        try:
-            chat_id, thread_id, _scope = parse_topic_key(primary_key)
-        except Exception:
-            for key, previous in updates:
-                await self._store.update_topic(
-                    key, self._set_ticket_handoff_marker(previous)
-                )
-            return
-
-        try:
-            await self._send_message_with_outbox(
-                chat_id,
-                message_text,
-                thread_id=thread_id,
-                reply_to=None,
-            )
-            self._ticket_flow_pause_targets[str(workspace_root)] = run_id
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.ticket_flow.notify_failed",
-                exc=exc,
-                topic_key=primary_key,
-                run_id=run_id,
-                seq=seq,
-            )
-            for key, previous in updates:
-                await self._store.update_topic(
-                    key, self._set_ticket_handoff_marker(previous)
-                )
+        await self._ticket_flow_bridge._notify_ticket_flow_pause(
+            workspace_root, entries
+        )
 
     def _load_ticket_flow_pause(
         self, workspace_root: Path
-    ) -> Optional[tuple[str, str, str]]:
-        db_path = workspace_root / ".codex-autorunner" / "flows.db"
-        if not db_path.exists():
-            return None
-        store = FlowStore(db_path)
-        try:
-            store.initialize()
-            runs = store.list_flow_runs(
-                flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-            )
-            if not runs:
-                return None
-            latest = runs[0]
-            runs_dir_raw = latest.input_data.get("runs_dir")
-            runs_dir = (
-                Path(runs_dir_raw)
-                if isinstance(runs_dir_raw, str) and runs_dir_raw
-                else Path(".codex-autorunner/runs")
-            )
-            paths = resolve_outbox_paths(
-                workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
-            )
-            history_dir = paths.handoff_history_dir
-            seq = self._latest_handoff_seq(history_dir)
-            if not seq:
-                reason = self._format_ticket_flow_pause_reason(latest)
-                return latest.id, "paused", reason
-            message_path = history_dir / seq / "USER_MESSAGE.md"
-            try:
-                content = message_path.read_text(encoding="utf-8")
-            except OSError:
-                return None
-            return latest.id, seq, content
-        finally:
-            store.close()
+    ) -> Optional[tuple[str, str, str, Optional[Path]]]:
+        return self._ticket_flow_bridge._load_ticket_flow_pause(workspace_root)
 
-    def _latest_handoff_seq(self, history_dir: Path) -> Optional[str]:
-        if not history_dir.exists() or not history_dir.is_dir():
-            return None
-        seqs = [
-            child.name
-            for child in history_dir.iterdir()
-            if child.is_dir()
-            and not child.name.startswith(".")
-            and child.name.isdigit()
-        ]
-        if not seqs:
-            return None
-        return max(seqs)
+    def _latest_dispatch_seq(self, history_dir: Path) -> Optional[str]:
+        return self._ticket_flow_bridge._latest_dispatch_seq(history_dir)
 
     def _format_ticket_flow_pause_reason(self, record: "FlowRunRecord") -> str:
-        state = record.state or {}
-        engine = state.get("ticket_engine") or {}
-        reason = (
-            engine.get("reason") or record.error_message or "Paused without details."
-        )
-        return f"Reason: {reason}"
-
-    def _format_ticket_flow_pause_message(
-        self, run_id: str, seq: str, content: str
-    ) -> str:
-        trimmed = _truncate_text(content.strip() or "(no handoff message)", 3000)
-        return (
-            f"Ticket flow paused (run {run_id}). Latest handoff #{seq}:\n\n"
-            f"{trimmed}\n\nUse /flow resume to continue."
-        )
+        return self._ticket_flow_bridge._format_ticket_flow_pause_reason(record)
 
     def _get_paused_ticket_flow(
         self, workspace_root: Path, preferred_run_id: Optional[str] = None
     ) -> Optional[tuple[str, FlowRunRecord]]:
-        db_path = workspace_root / ".codex-autorunner" / "flows.db"
-        if not db_path.exists():
-            return None
-        store = FlowStore(db_path)
-        try:
-            store.initialize()
-            if preferred_run_id:
-                preferred = store.get_flow_run(preferred_run_id)
-                if preferred and preferred.status == FlowRunStatus.PAUSED:
-                    return preferred.id, preferred
-            runs = store.list_flow_runs(
-                flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-            )
-            if not runs:
-                return None
-            latest = runs[0]
-            return latest.id, latest
-        finally:
-            store.close()
+        return self._ticket_flow_bridge.get_paused_ticket_flow(
+            workspace_root, preferred_run_id=preferred_run_id
+        )
 
     async def _write_user_reply_from_telegram(
         self,
@@ -1548,7 +1376,9 @@ class TelegramBotService(
     async def _maybe_persist_update_id(self, key: str, update_id: int) -> None:
         now = time.monotonic()
         last_persisted = self._last_update_persisted_at.get(key, 0.0)
-        if (now - last_persisted) < UPDATE_ID_PERSIST_INTERVAL_SECONDS:
+        if (
+            now - last_persisted
+        ) < self._config.cache.update_id_persist_interval_seconds:
             return
 
         def apply(record: "TelegramTopicRecord") -> None:

@@ -10,10 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.agents import (
-    AgentBackend,
-    AgentEvent,
-)
+from codex_autorunner.core.ports import AgentBackend, AgentEvent, AgentEventType
 
 pytestmark = pytest.mark.integration
 
@@ -46,7 +43,8 @@ class DummyBackend(AgentBackend):
         )
 
     async def stream_events(self, session_id: str):
-        pass
+        if False:
+            yield None
 
     async def interrupt(self, session_id: str):
         pass
@@ -88,7 +86,6 @@ async def test_backend_interface_compliance():
 @pytest.mark.asyncio
 async def test_backend_event_types():
     """Test that AgentEvent types are available."""
-    from codex_autorunner.integrations.agents import AgentEventType
 
     # Verify core event types exist
     assert hasattr(AgentEventType, "STREAM_DELTA")
@@ -112,8 +109,12 @@ async def test_backend_async_interface_methods():
     import inspect
 
     assert inspect.iscoroutinefunction(backend.start_session)
-    assert inspect.iscoroutinefunction(backend.run_turn)
-    assert inspect.iscoroutinefunction(backend.stream_events)
+    assert inspect.iscoroutinefunction(backend.run_turn) or inspect.isasyncgenfunction(
+        backend.run_turn
+    )
+    assert inspect.iscoroutinefunction(
+        backend.stream_events
+    ) or inspect.isasyncgenfunction(backend.stream_events)
     assert inspect.iscoroutinefunction(backend.interrupt)
     assert inspect.iscoroutinefunction(backend.final_messages)
 

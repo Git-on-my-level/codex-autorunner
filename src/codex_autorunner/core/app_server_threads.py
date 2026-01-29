@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -12,19 +13,17 @@ APP_SERVER_THREADS_FILENAME = ".codex-autorunner/app_server_threads.json"
 APP_SERVER_THREADS_VERSION = 1
 APP_SERVER_THREADS_CORRUPT_SUFFIX = ".corrupt"
 APP_SERVER_THREADS_NOTICE_SUFFIX = ".corrupt.json"
-DOC_CHAT_KINDS = ("todo", "progress", "opinions", "spec", "summary")
-DOC_CHAT_PREFIX = "doc_chat."
-DOC_CHAT_KEY = "doc_chat"
-DOC_CHAT_OPENCODE_KEY = "doc_chat.opencode"
-DOC_CHAT_OPENCODE_PREFIX = "doc_chat.opencode."
-DOC_CHAT_KEYS = {DOC_CHAT_KEY} | {f"{DOC_CHAT_PREFIX}{kind}" for kind in DOC_CHAT_KINDS}
-DOC_CHAT_KEYS = DOC_CHAT_KEYS | {
-    DOC_CHAT_OPENCODE_KEY,
-    *(f"{DOC_CHAT_OPENCODE_PREFIX}{kind}" for kind in DOC_CHAT_KINDS),
-}
-FEATURE_KEYS = DOC_CHAT_KEYS | {
-    "spec_ingest",
-    "spec_ingest.opencode",
+FILE_CHAT_KEY = "file_chat"
+FILE_CHAT_OPENCODE_KEY = "file_chat.opencode"
+FILE_CHAT_PREFIX = "file_chat."
+FILE_CHAT_OPENCODE_PREFIX = "file_chat.opencode."
+
+LOGGER = logging.getLogger("codex_autorunner.app_server")
+
+# Static keys that can be reset/managed via the UI.
+FEATURE_KEYS = {
+    FILE_CHAT_KEY,
+    FILE_CHAT_OPENCODE_KEY,
     "autorunner",
     "autorunner.opencode",
 }
@@ -43,6 +42,10 @@ def normalize_feature_key(raw: str) -> str:
     key = key.replace("/", ".").replace(":", ".")
     if key in FEATURE_KEYS:
         return key
+    # Allow per-target file chat threads (e.g. file_chat.ticket.1, file_chat.workspace.spec).
+    for prefix in (FILE_CHAT_PREFIX, FILE_CHAT_OPENCODE_PREFIX):
+        if key.startswith(prefix) and len(key) > len(prefix):
+            return key
     raise ValueError(f"invalid feature key: {raw}")
 
 
@@ -84,20 +87,9 @@ class AppServerThreadRegistry:
 
     def feature_map(self) -> dict[str, object]:
         threads = self.load()
-        doc_chat_thread = threads.get(DOC_CHAT_KEY)
-        doc_chat_opencode_thread = threads.get(DOC_CHAT_OPENCODE_KEY)
         payload: dict[str, object] = {
-            "doc_chat": {
-                kind: doc_chat_thread or threads.get(f"{DOC_CHAT_PREFIX}{kind}")
-                for kind in DOC_CHAT_KINDS
-            },
-            "doc_chat_opencode": {
-                kind: doc_chat_opencode_thread
-                or threads.get(f"{DOC_CHAT_OPENCODE_PREFIX}{kind}")
-                for kind in DOC_CHAT_KINDS
-            },
-            "spec_ingest": threads.get("spec_ingest"),
-            "spec_ingest_opencode": threads.get("spec_ingest.opencode"),
+            "file_chat": threads.get(FILE_CHAT_KEY),
+            "file_chat_opencode": threads.get(FILE_CHAT_OPENCODE_KEY),
             "autorunner": threads.get("autorunner"),
             "autorunner_opencode": threads.get("autorunner.opencode"),
         }
@@ -188,8 +180,14 @@ class AppServerThreadRegistry:
         try:
             atomic_write(self._notice_path(), json.dumps(notice, indent=2) + "\n")
         except Exception:
-            pass
+            LOGGER.warning(
+                "Failed to write app server thread corruption notice.",
+                exc_info=True,
+            )
         try:
             self._save_unlocked({})
         except Exception:
-            pass
+            LOGGER.warning(
+                "Failed to reset app server thread registry after corruption.",
+                exc_info=True,
+            )

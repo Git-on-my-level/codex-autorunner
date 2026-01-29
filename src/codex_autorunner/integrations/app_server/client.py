@@ -1,15 +1,27 @@
 import asyncio
 import json
 import logging
+import os
 import random
 import re
 import time
 import uuid
+import weakref
 from collections import deque
 from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Union, cast
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+    no_type_check,
+)
 
 from ...core.circuit_breaker import CircuitBreaker
 from ...core.exceptions import (
@@ -45,6 +57,9 @@ _TURN_STALL_POLL_INTERVAL_SECONDS = 2.0
 _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS = 10.0
 _MAX_TURN_RAW_EVENTS = 200
 _INVALID_JSON_PREVIEW_BYTES = 200
+
+# Track live clients so tests/cleanup can cancel any background restart tasks.
+_CLIENT_INSTANCES: weakref.WeakSet = weakref.WeakSet()
 
 
 class CodexAppServerError(CodexError):
@@ -132,11 +147,17 @@ class CodexAppServerClient:
         env: Optional[Dict[str, str]] = None,
         approval_handler: Optional[ApprovalHandler] = None,
         default_approval_decision: str = "cancel",
-        auto_restart: bool = True,
+        auto_restart: Optional[bool] = None,
         request_timeout: Optional[float] = None,
         turn_stall_timeout_seconds: Optional[float] = _TURN_STALL_TIMEOUT_SECONDS,
         turn_stall_poll_interval_seconds: Optional[float] = None,
         turn_stall_recovery_min_interval_seconds: Optional[float] = None,
+        max_message_bytes: Optional[int] = None,
+        oversize_preview_bytes: Optional[int] = None,
+        max_oversize_drain_bytes: Optional[int] = None,
+        restart_backoff_initial_seconds: Optional[float] = None,
+        restart_backoff_max_seconds: Optional[float] = None,
+        restart_backoff_jitter_ratio: Optional[float] = None,
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
@@ -145,11 +166,52 @@ class CodexAppServerClient:
         self._env = env
         self._approval_handler = approval_handler
         self._default_approval_decision = default_approval_decision
-        self._auto_restart = auto_restart
+        disable_restart_env = os.environ.get(
+            "CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS"
+        )
+        if disable_restart_env:
+            self._auto_restart = False
+        elif auto_restart is None:
+            self._auto_restart = True
+        else:
+            self._auto_restart = auto_restart
         self._request_timeout = request_timeout
         self._notification_handler = notification_handler
         self._logger = logger or logging.getLogger(__name__)
         self._circuit_breaker = CircuitBreaker("App-Server", logger=self._logger)
+        self._max_message_bytes = (
+            max_message_bytes
+            if max_message_bytes is not None and max_message_bytes > 0
+            else _MAX_MESSAGE_BYTES
+        )
+        self._oversize_preview_bytes = (
+            oversize_preview_bytes
+            if oversize_preview_bytes is not None and oversize_preview_bytes > 0
+            else _OVERSIZE_PREVIEW_BYTES
+        )
+        self._max_oversize_drain_bytes = (
+            max_oversize_drain_bytes
+            if max_oversize_drain_bytes is not None and max_oversize_drain_bytes > 0
+            else _MAX_OVERSIZE_DRAIN_BYTES
+        )
+        self._restart_backoff_initial_seconds = (
+            restart_backoff_initial_seconds
+            if restart_backoff_initial_seconds is not None
+            and restart_backoff_initial_seconds > 0
+            else _RESTART_BACKOFF_INITIAL_SECONDS
+        )
+        self._restart_backoff_max_seconds = (
+            restart_backoff_max_seconds
+            if restart_backoff_max_seconds is not None
+            and restart_backoff_max_seconds > 0
+            else _RESTART_BACKOFF_MAX_SECONDS
+        )
+        self._restart_backoff_jitter_ratio = (
+            restart_backoff_jitter_ratio
+            if restart_backoff_jitter_ratio is not None
+            and restart_backoff_jitter_ratio >= 0
+            else _RESTART_BACKOFF_JITTER_RATIO
+        )
 
         self._process: Optional[asyncio.subprocess.Process] = None
         self._reader_task: Optional[asyncio.Task] = None
@@ -170,7 +232,7 @@ class CodexAppServerClient:
         self._client_version = _client_version()
         self._include_client_version = True
         self._restart_task: Optional[asyncio.Task] = None
-        self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
+        self._restart_backoff_seconds = self._restart_backoff_initial_seconds
         self._stderr_tail: deque[str] = deque(maxlen=5)
         self._turn_stall_timeout_seconds: Optional[float] = turn_stall_timeout_seconds
         if (
@@ -200,6 +262,7 @@ class CodexAppServerClient:
             self._turn_stall_recovery_min_interval_seconds = (
                 _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS
             )
+        _CLIENT_INSTANCES.add(self)
 
     async def start(self) -> None:
         await self._ensure_process()
@@ -215,6 +278,7 @@ class CodexAppServerClient:
             self._restart_task = None
         await self._terminate_process()
         self._fail_pending(CodexAppServerDisconnected("Client closed"))
+        _CLIENT_INSTANCES.discard(self)
 
     async def wait_for_disconnect(self, *, timeout: Optional[float] = None) -> None:
         disconnected = self._ensure_disconnect_event()
@@ -574,7 +638,7 @@ class CodexAppServerClient:
             self._initializing = False
         await self._send_message(self._build_message("initialized", params=None))
         self._initialized = True
-        self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
+        self._restart_backoff_seconds = self._restart_backoff_initial_seconds
         log_event(self._logger, logging.INFO, "app_server.initialized")
 
     async def _request_raw(
@@ -689,26 +753,28 @@ class CodexAppServerClient:
                     newline_index = chunk.find(b"\n")
                     if newline_index == -1:
                         if not drain_limit_reached:
-                            if len(oversize_preview) < _OVERSIZE_PREVIEW_BYTES:
-                                remaining = _OVERSIZE_PREVIEW_BYTES - len(
+                            if len(oversize_preview) < self._oversize_preview_bytes:
+                                remaining = self._oversize_preview_bytes - len(
                                     oversize_preview
                                 )
                                 oversize_preview.extend(chunk[:remaining])
                             oversize_bytes_dropped += len(chunk)
-                            if oversize_bytes_dropped >= _MAX_OVERSIZE_DRAIN_BYTES:
+                            if oversize_bytes_dropped >= self._max_oversize_drain_bytes:
                                 await self._emit_oversize_warning(
                                     bytes_dropped=oversize_bytes_dropped,
                                     preview=oversize_preview,
                                     aborted=True,
-                                    drain_limit=_MAX_OVERSIZE_DRAIN_BYTES,
+                                    drain_limit=self._max_oversize_drain_bytes,
                                 )
                                 drain_limit_reached = True
                         continue
                     before = chunk[: newline_index + 1]
                     after = chunk[newline_index + 1 :]
                     if not drain_limit_reached:
-                        if len(oversize_preview) < _OVERSIZE_PREVIEW_BYTES:
-                            remaining = _OVERSIZE_PREVIEW_BYTES - len(oversize_preview)
+                        if len(oversize_preview) < self._oversize_preview_bytes:
+                            remaining = self._oversize_preview_bytes - len(
+                                oversize_preview
+                            )
                             oversize_preview.extend(before[:remaining])
                         oversize_bytes_dropped += len(before)
                         await self._emit_oversize_warning(
@@ -731,8 +797,8 @@ class CodexAppServerClient:
                     line = buffer[:newline_index]
                     del buffer[: newline_index + 1]
                     await self._handle_payload_line(line)
-                if not dropping_oversize and len(buffer) > _MAX_MESSAGE_BYTES:
-                    oversize_preview = bytearray(buffer[:_OVERSIZE_PREVIEW_BYTES])
+                if not dropping_oversize and len(buffer) > self._max_message_bytes:
+                    oversize_preview = bytearray(buffer[: self._oversize_preview_bytes])
                     oversize_bytes_dropped = len(buffer)
                     buffer.clear()
                     dropping_oversize = True
@@ -744,10 +810,10 @@ class CodexAppServerClient:
                         truncated=True,
                     )
             elif buffer:
-                if len(buffer) > _MAX_MESSAGE_BYTES:
+                if len(buffer) > self._max_message_bytes:
                     await self._emit_oversize_warning(
                         bytes_dropped=len(buffer),
-                        preview=buffer[:_OVERSIZE_PREVIEW_BYTES],
+                        preview=buffer[: self._oversize_preview_bytes],
                         truncated=True,
                     )
                 else:
@@ -806,7 +872,7 @@ class CodexAppServerClient:
         if self._notification_handler is None:
             return
         params: Dict[str, Any] = {
-            "byteLimit": _MAX_MESSAGE_BYTES,
+            "byteLimit": self._max_message_bytes,
             "bytesDropped": bytes_dropped,
         }
         inferred_method = metadata.get("method")
@@ -842,6 +908,7 @@ class CodexAppServerClient:
                 handled=False,
                 exc=exc,
             )
+            self._logger.debug("Notification handler failed: %s", exc)
 
     async def _drain_stderr(self) -> None:
         if not self._process or not self._process.stderr:
@@ -865,7 +932,8 @@ class CodexAppServerClient:
                         line_len=len(text),
                         tail_size=len(self._stderr_tail),
                     )
-        except Exception:
+        except Exception as exc:
+            self._logger.debug("Failed to read stderr: %s", exc)
             return
 
     async def _handle_message(self, message: Dict[str, Any]) -> None:
@@ -1349,44 +1417,55 @@ class CodexAppServerClient:
 
     @retry_transient(max_attempts=10, base_wait=0.5, max_wait=30.0)
     async def _restart_after_disconnect(self) -> None:
-        delay = max(self._restart_backoff_seconds, _RESTART_BACKOFF_INITIAL_SECONDS)
-        jitter = delay * _RESTART_BACKOFF_JITTER_RATIO
-        if jitter:
-            delay += random.uniform(0, jitter)
-        await asyncio.sleep(delay)
-        if self._closed:
-            raise CodexAppServerDisconnected("Client closed")
         try:
-            await self._ensure_process()
-            self._restart_backoff_seconds = _RESTART_BACKOFF_INITIAL_SECONDS
-            log_event(
-                self._logger,
-                logging.INFO,
-                "app_server.restarted",
-                delay_seconds=round(delay, 2),
+            delay = max(
+                self._restart_backoff_seconds, self._restart_backoff_initial_seconds
             )
-        except CodexAppServerDisconnected:
+            jitter = delay * self._restart_backoff_jitter_ratio
+            if jitter:
+                delay += random.uniform(0, jitter)
+            await asyncio.sleep(delay)
+            if self._closed:
+                raise CodexAppServerDisconnected("Client closed")
+            try:
+                await self._ensure_process()
+                self._restart_backoff_seconds = self._restart_backoff_initial_seconds
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "app_server.restarted",
+                    delay_seconds=round(delay, 2),
+                )
+            except CodexAppServerDisconnected:
+                raise
+            except CircuitOpenError:
+                await asyncio.sleep(60.0)
+                raise
+            except Exception as exc:
+                next_delay = min(
+                    max(
+                        self._restart_backoff_seconds * 2,
+                        self._restart_backoff_initial_seconds,
+                    ),
+                    self._restart_backoff_max_seconds,
+                )
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.restart.failed",
+                    delay_seconds=round(delay, 2),
+                    next_delay_seconds=round(next_delay, 2),
+                    exc=exc,
+                )
+                self._restart_backoff_seconds = next_delay
+                raise CodexAppServerDisconnected(f"Restart failed: {exc}") from exc
+        except asyncio.CancelledError:
+            # Ensure any partially-started process is cleaned up to avoid
+            # \"Task was destroyed\" noise when event loops shut down.
+            await self._terminate_process()
             raise
-        except CircuitOpenError:
-            await asyncio.sleep(60.0)
-            raise
-        except Exception as exc:
-            next_delay = min(
-                max(
-                    self._restart_backoff_seconds * 2, _RESTART_BACKOFF_INITIAL_SECONDS
-                ),
-                _RESTART_BACKOFF_MAX_SECONDS,
-            )
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "app_server.restart.failed",
-                delay_seconds=round(delay, 2),
-                next_delay_seconds=round(next_delay, 2),
-                exc=exc,
-            )
-            self._restart_backoff_seconds = next_delay
-            raise CodexAppServerDisconnected(f"Restart failed: {exc}") from exc
+        finally:
+            self._restart_task = None
 
     async def _terminate_process(self) -> None:
         if self._reader_task is not None:
@@ -1845,6 +1924,23 @@ def _extract_turn_snapshot_from_resume(
     return status, agent_messages, errors
 
 
+@no_type_check
+async def _close_all_clients() -> None:
+    """
+    Close any CodexAppServerClient instances that may still be alive.
+
+    This is primarily used in tests to avoid pending restart tasks keeping
+    subprocess transports alive when the event loop shuts down.
+    """
+    logger = logging.getLogger(__name__)
+    for client in list(_CLIENT_INSTANCES):
+        try:
+            await client.close()
+        except Exception as exc:
+            logger.debug("Failed to close client: %s", exc)
+            continue
+
+
 __all__ = [
     "APPROVAL_METHODS",
     "ApprovalDecision",
@@ -1858,4 +1954,5 @@ __all__ = [
     "TurnHandle",
     "TurnResult",
     "_normalize_sandbox_policy",
+    "_close_all_clients",
 ]

@@ -1,3 +1,4 @@
+// GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, buildWsUrl, getAuthToken, isMobileViewport } from "./utils.js";
 import { getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, } from "./agentControls.js";
 function base64UrlEncode(value) {
@@ -44,19 +45,7 @@ const XTERM_COLOR_MODE_PALETTE_16 = 0x01000000;
 const XTERM_COLOR_MODE_PALETTE_256 = 0x02000000;
 const XTERM_COLOR_MODE_RGB = 0x03000000;
 const CAR_CONTEXT_HOOK_ID = "car_context";
-const CAR_CONTEXT_KEYWORDS = [
-    "car",
-    "codex",
-    "todo",
-    "progress",
-    "opinions",
-    "spec",
-    "summary",
-    "autorunner",
-    "work docs",
-];
-const CAR_CONTEXT_HINT_TEXT = "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.";
-const CAR_CONTEXT_HINT = wrapInjectedContext(CAR_CONTEXT_HINT_TEXT);
+const CAR_CONTEXT_HINT = wrapInjectedContext(CONSTANTS.PROMPTS.CAR_CONTEXT_HINT);
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT = CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.";
 const INJECTED_CONTEXT_TAG_RE = /<injected context>/i;
@@ -442,6 +431,20 @@ export class TerminalManager {
         }
     }
     /**
+     * Force resize terminal to fit container
+     */
+    fit() {
+        if (this.fitAddon && this.term) {
+            try {
+                this.fitAddon.fit();
+                this._handleResize(); // Send resize to server
+            }
+            catch (e) {
+                // ignore
+            }
+        }
+    }
+    /**
      * Set terminal status message
      */
     _setStatus(message) {
@@ -618,12 +621,12 @@ export class TerminalManager {
                 if (manager._hasTextInputHookFired(CAR_CONTEXT_HOOK_ID))
                     return null;
                 const lowered = text.toLowerCase();
-                const hit = CAR_CONTEXT_KEYWORDS.some((kw) => lowered.includes(kw));
+                const hit = CONSTANTS.KEYWORDS.CAR_CONTEXT.some((kw) => lowered.includes(kw));
                 if (!hit)
                     return null;
                 if (lowered.includes("about_car.md"))
                     return null;
-                if (text.includes(CAR_CONTEXT_HINT_TEXT) ||
+                if (text.includes(CONSTANTS.PROMPTS.CAR_CONTEXT_HINT) ||
                     text.includes(CAR_CONTEXT_HINT)) {
                     return null;
                 }
@@ -1842,7 +1845,8 @@ export class TerminalManager {
      * Ensure xterm terminal is initialized
      */
     _ensureTerminal() {
-        if (!window.Terminal || !window.FitAddon) {
+        const win = window;
+        if (!win.Terminal || !win.FitAddon) {
             this._setStatus("xterm assets missing; reload or check /static/vendor");
             flash("xterm assets missing; reload the page", "error");
             return false;
@@ -1861,7 +1865,7 @@ export class TerminalManager {
         const container = document.getElementById("terminal-container");
         if (!container)
             return false;
-        this.term = new window.Terminal({
+        this.term = new win.Terminal({
             convertEol: true,
             fontFamily: '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
             fontSize: this._getFontSize(),
@@ -1873,7 +1877,7 @@ export class TerminalManager {
             scrollback: this.transcriptMaxLines,
             theme: CONSTANTS.THEME.XTERM,
         });
-        this.fitAddon = new window.FitAddon.FitAddon();
+        this.fitAddon = new win.FitAddon.FitAddon();
         this.term.loadAddon(this.fitAddon);
         this.term.open(container);
         this.term.write('Press "New" or "Resume" to launch Codex TUI...\r\n');
@@ -1882,6 +1886,13 @@ export class TerminalManager {
         this.term.onScroll(() => this._updateJumpBottomVisibility());
         this.term.onRender(() => this._scheduleMobileViewRender());
         this._updateJumpBottomVisibility();
+        // Initial fit
+        try {
+            this.fitAddon.fit();
+        }
+        catch (e) {
+            // ignore fit errors when not visible
+        }
         if (!this.inputDisposable) {
             this.inputDisposable = this.term.onData((data) => {
                 if (!this.socket || this.socket.readyState !== WebSocket.OPEN)
@@ -1966,7 +1977,8 @@ export class TerminalManager {
         if (!viewport)
             return;
         const getLineHeight = () => {
-            const dims = this.term?._core?._renderService?.dimensions;
+            const core = this.term?._core;
+            const dims = core?._renderService?.dimensions;
             if (dims && Number.isFinite(dims.actualCellHeight) && dims.actualCellHeight > 0) {
                 return dims.actualCellHeight;
             }
@@ -3062,7 +3074,8 @@ export class TerminalManager {
                 method: "POST",
                 body: formData,
             });
-            const imagePath = response?.path || response?.abs_path;
+            const p = response;
+            const imagePath = p.path || p.abs_path;
             if (!imagePath) {
                 throw new Error("Upload returned no path");
             }
