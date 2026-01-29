@@ -147,6 +147,7 @@ class Engine:
         self._backend_factory = backend_factory
         self._app_server_supervisor_factory = app_server_supervisor_factory
         self._app_server_supervisor: Optional[Any] = None
+        self._backend_orchestrator: Optional[Any] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         redact_enabled = self.config.security.get("redact_run_logs", True)
         self._app_server_event_formatter = AppServerEventFormatter(

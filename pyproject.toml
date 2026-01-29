@@ -82,6 +82,7 @@ completions = true
 cache_dir = ".codex-autorunner/pytest-cache"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+norecursedirs = ["worktrees", ".git", ".venv", ".codex-autorunner"]
 markers = [
     "integration: marks tests as integration tests that require external dependencies (deselect with '-m \"not integration\"')",
     "timeout(seconds): per-test timeout (provided by pytest-timeout)",
