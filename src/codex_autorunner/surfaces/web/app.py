@@ -21,7 +21,6 @@ from ...core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
-from ...core.app_server_utils import build_app_server_env
 from ...core.config import (
     AppServerConfig,
     ConfigError,
@@ -61,6 +60,7 @@ from ...integrations.agents.wiring import (
     build_app_server_supervisor_factory,
 )
 from ...integrations.app_server.client import ApprovalHandler, NotificationHandler
+from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...manifest import load_manifest

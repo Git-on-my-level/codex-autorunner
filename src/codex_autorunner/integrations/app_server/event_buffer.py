@@ -6,17 +6,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Optional
 
-<<<<<<<< HEAD:src/codex_autorunner/integrations/app_server/app_server_events.py
 from ...core.app_server_utils import (
     _extract_thread_id,
     _extract_thread_id_for_turn,
     _extract_turn_id,
-========
-from ...core.app_server_ids import (
-    extract_thread_id,
-    extract_thread_id_for_turn,
-    extract_turn_id,
->>>>>>>> e4a41b7 (Codebase alignments w/ constitution docs (#441)):src/codex_autorunner/integrations/app_server/event_buffer.py
 )
 
 TurnKey = tuple[str, str]
@@ -152,11 +145,11 @@ class AppServerEventBuffer:
     ) -> tuple[Optional[str], Optional[str]]:
         params_raw = message.get("params")
         params: Dict[str, Any] = params_raw if isinstance(params_raw, dict) else {}
-        turn_id = extract_turn_id(params) or extract_turn_id(message)
+        turn_id = _extract_turn_id(params) or _extract_turn_id(message)
         thread_id = (
-            extract_thread_id_for_turn(params)
-            or extract_thread_id(params)
-            or extract_thread_id(message)
+            _extract_thread_id_for_turn(params)
+            or _extract_thread_id(params)
+            or _extract_thread_id(message)
         )
         if not thread_id and turn_id:
             thread_id = self._turn_index.get(turn_id)

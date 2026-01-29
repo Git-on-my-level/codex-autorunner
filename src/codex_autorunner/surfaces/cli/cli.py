@@ -15,7 +15,6 @@ import uvicorn
 import yaml
 
 from ...bootstrap import seed_hub_files, seed_repo_files
-from ...core.app_server_utils import build_app_server_env
 from ...core.config import (
     CONFIG_FILENAME,
     ConfigError,
