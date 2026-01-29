@@ -42,6 +42,33 @@ This refactoring addresses the constitutional violation where `core/engine.py` i
    - Fixed type annotations in BackendOrchestrator to use BackendFactory type
    - Fixed mypy errors by using getattr() for optional backend attributes
 
+### Phase 6: Delegate Backend Supervisor Creation to BackendOrchestrator
+- **Commit 6380cde**: Moved supervisor creation logic to BackendOrchestrator
+   - Added build_app_server_supervisor() method to BackendOrchestrator
+   - Added ensure_opencode_supervisor() method to BackendOrchestrator
+   - Updated Engine._ensure_app_server_supervisor() to delegate to BackendOrchestrator
+   - Updated Engine._build_opencode_supervisor() to delegate to BackendOrchestrator
+   - Fixed BackendOrchestrator initialization to not call notification_handler during init
+   - Updated Engine.__init__ to skip BackendOrchestrator creation when app_server_supervisor_factory is provided
+   - Removed unused imports (ConfigError, build_opencode_supervisor)
+   - Maintained backward compatibility by falling back to legacy paths when BackendOrchestrator is unavailable
+
+### Phase 7: Move Session Management to BackendOrchestrator
+- **Commit 2412e0c**: Moved session tracking to BackendOrchestrator
+   - Added AppServerThreadRegistry to BackendOrchestrator
+   - Added get_thread_id() method to BackendOrchestrator
+   - Added set_thread_id() method to BackendOrchestrator
+   - Updated Engine._run_agent_backend_async() to delegate session management to BackendOrchestrator
+   - Maintained backward compatibility by falling back to legacy session management when BackendOrchestrator is unavailable
+
+### Phase 8: Enhance RunEvent Types to Include Backend Context
+- **Commit e74d8c5**: Added backend context to RunEvent protocol
+   - Added thread_id and turn_id fields to Started event
+   - Updated CodexAppServerBackend to emit thread_id and turn_id in Started event
+   - Updated Engine to use thread_id and turn_id from Started event instead of parsing notifications
+   - This reduces dependency on backend-specific notification parsing in Engine
+   - All 608 tests pass
+
 ## What's Been Achieved
 
 ✅ Engine run path is now protocol-agnostic
@@ -58,6 +85,13 @@ This refactoring addresses the constitutional violation where `core/engine.py` i
    - _run_agent_async() uses BackendOrchestrator when available (normal case)
    - Falls back to direct backend access for backward compatibility (testing)
    - BackendOrchestrator handles session lifecycle and backend context tracking
+   - BackendOrchestrator manages supervisor creation and lifecycle
+   - BackendOrchestrator provides methods for retrieving backend context (thread_id, turn_id, etc.)
+
+✅ Backend context is now passed via RunEvent protocol
+   - Started event includes thread_id and turn_id fields
+   - Engine uses this information instead of parsing backend-specific notifications
+   - Reduces dependency on backend-specific notification parsing
 
 ✅ Tests continue to pass
    - All 9 engine tests pass
@@ -66,51 +100,50 @@ This refactoring addresses the constitutional violation where `core/engine.py` i
 
 ## Remaining Work (Future Phases)
 
-### Phase 5: Remove Backend-Specific Imports
-The Engine still imports backend-specific modules:
-- `app_server_ids` (thread/turn ID extraction)
-- `app_server_threads` (session/thread registry)
-- `app_server_logging` (event formatting)
-- `app_server_prompts` (prompt building)
+### Phase 9: Further Reduce Backend-Specific Imports
+The Engine still imports some backend-specific modules:
+- `app_server_ids` (thread/turn ID extraction - still used in `_handle_app_server_notification`)
+- `app_server_logging` (event formatting - still used in `_handle_app_server_notification`)
+- `app_server_prompts` (prompt building - used in `_build_app_server_prompt`)
 
-**Action**: Move these concerns to:
-- Backend adapters (for protocol-specific logic)
-- BackendOrchestrator (for shared concerns)
-- New protocol-neutral utilities (for generic concerns)
+**Action**:
+- Consider moving notification handling to backend adapters
+- Move event formatting logic to backend adapters or protocol-neutral utilities
+- Evaluate if `build_autorunner_prompt` is generic or backend-specific
 
-### Phase 6: Move Session Management to Backends
-The Engine still manages app server sessions directly:
-- `AppServerThreadRegistry` for session tracking
-- `_app_server_threads_lock` for thread safety
-- Session key logic (`"autorunner"` vs `"autorunner.opencode"`)
+### Phase 10: Move Notification Handling
+The Engine still parses backend-specific notification formats:
+- `_handle_app_server_notification()` method parses raw app server notifications
+- Extracts token usage, plan, and diff updates from backend-specific messages
 
-**Action**: Move session lifecycle management to BackendOrchestrator and individual backends
+**Note**: This method is used for:
+- Saving notification artifacts
+- Updating run telemetry with token usage, plan, and diff
+- These features are valuable and may be backend-specific
 
-### Phase 7: Move Notification Handling
-The Engine parses backend-specific notification formats:
-- `_handle_app_server_notification()` method
-- Extracts thread_id, turn_id, token usage from backend-specific messages
+**Action**: Consider:
+- Moving notification handling to backend adapters
+- Creating a protocol-neutral event interface for these features
+- Keeping notification handling in Engine if it's protocol-neutral enough
 
-**Action**: 
-- Backend adapters should emit standardized events via `RunEvent` protocol
-- Engine should only handle standardized events, not raw backend notifications
+### Phase 11: Remove Backend Supervisor Methods
+The Engine still has methods for managing backend-specific supervisors:
+- `_build_opencode_supervisor()` - delegates to BackendOrchestrator
+- `_ensure_opencode_supervisor()` - delegates to BackendOrchestrator
+- `_close_opencode_supervisor()` - closes opencode supervisor
+- `_ensure_app_server_supervisor()` - delegates to BackendOrchestrator
+- `_close_app_server_supervisor()` - closes app server supervisor
 
-### Phase 8: Remove Backend Supervisor Methods
-The Engine has methods for managing backend-specific supervisors:
-- `_build_opencode_supervisor()`
-- `_ensure_opencode_supervisor()`
-- `_close_opencode_supervisor()`
-- `_ensure_app_server_supervisor()`
-- `_close_app_server_supervisor()`
+**Status**: These methods now delegate to BackendOrchestrator, making Engine protocol-agnostic
 
-**Action**: Move supervisor management to BackendOrchestrator
+**Action**: Consider if these methods can be removed entirely or kept for backward compatibility
 
-### Phase 9: Simplify `_run_codex_app_server_async`
-This method still exists for backward compatibility but is redundant:
-- It's a thin wrapper around `_run_agent_backend_async()`
-- Can be removed or converted to use `_run_agent_async()`
+### Phase 12: Simplify `_run_codex_app_server_async`
+This method still exists for backward compatibility:
+- It calls `_run_agent_backend_async()` with hardcoded parameters
+- Could be removed if all callers are updated
 
-**Action**: Remove or refactor this method after Phase 5-8
+**Action**: Evaluate if this method can be removed or kept for backward compatibility
 
 ## Architecture After Refactoring
 
@@ -118,12 +151,18 @@ This method still exists for backward compatibility but is redundant:
 Engine (Protocol-Agnostic)
   ├── BackendOrchestrator (Manages backend lifecycle)
   │   ├── AgentBackendFactory (Creates backend instances)
-  │   ├── CodexAppServerBackend
-  │   └── OpenCodeBackend
+  │   ├── CodexAppServerBackend (Emits RunEvent with thread_id, turn_id)
+  │   └── OpenCodeBackend (Emits RunEvent)
   ├── Run Lifecycle (scheduling, locks, artifact persistence)
   ├── State Management (RunnerState, locks)
-  └── Event Emission (canonical events, run index)
+  └── Event Emission (canonical events from RunEvent stream)
 ```
+
+Key improvements:
+- Backend adapters emit RunEvent objects with backend context (thread_id, turn_id)
+- Engine consumes RunEvent stream only, no direct backend-specific notification parsing
+- BackendOrchestrator manages all backend lifecycle (creation, sessions, supervisors)
+- Session management delegated to BackendOrchestrator
 
 ## Testing
 
@@ -177,3 +216,6 @@ await engine._run_agent_async(
 - 5859964: Consolidate backend-specific run methods into single _run_agent_async
 - 27f6b13: Remove unused _run_opencode_app_server_async method
 - 8934830: Fix import logic bug and integrate BackendOrchestrator
+- 6380cde: Phase 6/9: Delegate backend supervisor creation to BackendOrchestrator
+- 2412e0c: Phase 7: Move session management to BackendOrchestrator
+- e74d8c5: Phase 8: Enhance RunEvent types to include backend context
