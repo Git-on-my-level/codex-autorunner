@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
+from codex_autorunner.core.flows.reasons import ensure_reason_summary
 from codex_autorunner.core.flows.store import now_iso
 
 
@@ -54,6 +55,7 @@ def resolve_flow_transition(
             if record.status == FlowRunStatus.STOPPING
             else FlowRunStatus.FAILED
         )
+        state = ensure_reason_summary(state, status=new_status, default="Worker died")
         return TransitionDecision(
             status=new_status, finished_at=now, state=state, note="worker-dead"
         )
@@ -61,6 +63,7 @@ def resolve_flow_transition(
     # 2) Inner engine reconciliation (worker is alive or not required).
     if record.status == FlowRunStatus.RUNNING:
         if inner_status == "paused":
+            state = ensure_reason_summary(state, status=FlowRunStatus.PAUSED)
             return TransitionDecision(
                 status=FlowRunStatus.PAUSED,
                 finished_at=None,
@@ -98,6 +101,7 @@ def resolve_flow_transition(
             engine.pop("reason", None)
             engine.pop("reason_details", None)
             engine.pop("reason_code", None)
+            state.pop("reason_summary", None)
             engine["status"] = "running"
             state["ticket_engine"] = engine
             return TransitionDecision(
@@ -115,6 +119,7 @@ def resolve_flow_transition(
                 note="paused-worker-dead",
             )
 
+        state = ensure_reason_summary(state, status=FlowRunStatus.PAUSED)
         return TransitionDecision(
             status=FlowRunStatus.PAUSED, finished_at=None, state=state, note="paused"
         )

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, cast
 
+from ..sqlite_utils import SQLITE_PRAGMAS
 from .models import (
     FlowArtifact,
     FlowEvent,
@@ -42,6 +43,8 @@ class FlowStore:
                 self.db_path, check_same_thread=False, isolation_level=None
             )
             self._local.conn.row_factory = sqlite3.Row
+            for pragma in SQLITE_PRAGMAS:
+                self._local.conn.execute(pragma)
         return cast(sqlite3.Connection, self._local.conn)
 
     @contextmanager
@@ -383,6 +386,16 @@ class FlowStore:
 
         rows = conn.execute(query, params).fetchall()
         return [self._row_to_flow_event(row) for row in rows]
+
+    def get_last_event_meta(self, run_id: str) -> tuple[Optional[int], Optional[str]]:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT seq, timestamp FROM flow_events WHERE run_id = ? ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None, None
+        return row["seq"], row["timestamp"]
 
     def create_artifact(
         self,

@@ -35,6 +35,7 @@ from ...core.config import (
 )
 from ...core.engine import Engine, LockError
 from ...core.flows.models import FlowRunStatus
+from ...core.flows.reconciler import reconcile_flow_runs
 from ...core.flows.store import FlowStore
 from ...core.hub import HubSupervisor
 from ...core.logging_utils import safe_log, setup_rotating_logger
@@ -735,9 +736,27 @@ def _app_lifespan(context: AppContext):
             except asyncio.CancelledError:
                 return
 
+        async def _flow_reconcile_loop():
+            active_interval = 2.0
+            idle_interval = 5.0
+            try:
+                while True:
+                    result = await asyncio.to_thread(
+                        reconcile_flow_runs,
+                        app.state.engine.repo_root,
+                        logger=app.state.logger,
+                    )
+                    interval = (
+                        active_interval if result.summary.active > 0 else idle_interval
+                    )
+                    await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                return
+
         tasks.append(asyncio.create_task(_cleanup_loop()))
         if app.state.config.housekeeping.enabled:
             tasks.append(asyncio.create_task(_housekeeping_loop()))
+        tasks.append(asyncio.create_task(_flow_reconcile_loop()))
         app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
         app_server_prune_interval = getattr(
             app.state, "app_server_prune_interval", None

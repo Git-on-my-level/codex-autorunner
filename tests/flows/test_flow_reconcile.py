@@ -4,8 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.flows.reconciler import reconcile_flow_run
 from codex_autorunner.core.flows.store import FlowStore
-from codex_autorunner.routes.flows import _maybe_recover_stuck_flow
 
 
 def test_recover_paused_run_when_inner_running(monkeypatch, tmp_path: Path) -> None:
@@ -29,14 +29,16 @@ def test_recover_paused_run_when_inner_running(monkeypatch, tmp_path: Path) -> N
         return SimpleNamespace(is_alive=True, status="alive", artifact_path=tmp_path)
 
     monkeypatch.setattr(
-        "codex_autorunner.routes.flows.check_worker_health", fake_health
+        "codex_autorunner.core.flows.reconciler.check_worker_health", fake_health
     )
 
-    recovered = _maybe_recover_stuck_flow(
+    recovered, updated, locked = reconcile_flow_run(
         tmp_path, store.get_flow_run(record.id), store
     )
 
     assert recovered.status == FlowRunStatus.RUNNING
+    assert updated is True
+    assert locked is False
     engine = recovered.state.get("ticket_engine", {})
     assert engine.get("status") == "running"
     assert "reason" not in engine

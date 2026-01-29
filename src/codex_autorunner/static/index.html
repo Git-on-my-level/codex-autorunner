@@ -442,6 +442,14 @@
               <div>
                 <span class="muted">Last activity</span>
                 <span class="ticket-mono" id="ticket-flow-last-activity">–</span>
+                <span class="pill pill-warn pill-small ticket-flow-pill" id="ticket-flow-stale" style="display:none;">stale</span>
+                <button class="ghost sm ticket-flow-action" id="ticket-flow-reconnect" style="display:none;">Reconnect</button>
+              </div>
+              <div>
+                <span class="muted">Worker</span>
+                <span class="ticket-mono" id="ticket-flow-worker">–</span>
+                <span class="pill pill-error pill-small ticket-flow-pill" id="ticket-flow-worker-pill" style="display:none;">dead</span>
+                <button class="ghost sm ticket-flow-action" id="ticket-flow-recover" style="display:none;">Recover</button>
               </div>
             </div>
           </div>
