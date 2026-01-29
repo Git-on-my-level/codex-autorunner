@@ -367,7 +367,7 @@ async def handle_message_inner(
     ):
         await handlers._send_message(
             message.chat_id,
-            "Ticket flow is paused. Reply to the latest handoff message (tap Reply) or use /flow resume.",
+            "Ticket flow is paused. Reply to the latest dispatch message (tap Reply) or use /flow resume.",
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -836,7 +836,8 @@ async def handle_media_message(
                     data = await handlers._bot.download_file(file_info.file_path)
                     filename = f"photo_{best.file_id}.jpg"
                     files.append((filename, data))
-                except Exception:
+                except Exception as exc:
+                    handlers._logger.debug("Failed to download photo: %s", exc)
                     pass
         elif message.document:
             try:
@@ -846,7 +847,8 @@ async def handle_media_message(
                     message.document.file_name or f"document_{message.document.file_id}"
                 )
                 files.append((filename, data))
-            except Exception:
+            except Exception as exc:
+                handlers._logger.debug("Failed to download document: %s", exc)
                 pass
         success, result = await handlers._write_user_reply_from_telegram(
             workspace_root, run_id, run_record, message, caption_text, files

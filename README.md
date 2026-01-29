@@ -2,10 +2,16 @@
 [![PyPI](https://img.shields.io/pypi/v/codex-autorunner.svg)](https://pypi.org/project/codex-autorunner/)
 
 An opinionated autorunner that uses the Codex app-server as the primary execution backend with OpenCode support to work on large tasks via a simple loop. On each loop we feed the Codex instance the last one's final output along with core documents.
-1. TODO - Tracks long-horizon tasks
-2. PROGRESS - High level overview of what's been done already that may be relevant for future agents
-3. OPINIONS - Guidelines for how we should approach implementation
-4. SPEC - Source-of-truth requirements and scope for large features/projects
+
+In the current model, the primary work surface is **tickets**:
+
+- `.codex-autorunner/tickets/TICKET-###.md`
+
+Optionally, you can maintain lightweight **workspace docs** (auto-created on write; missing is OK):
+
+- `.codex-autorunner/workspace/active_context.md`
+- `.codex-autorunner/workspace/decisions.md`
+- `.codex-autorunner/workspace/spec.md`
 
 ## Sneak Peak
 Run multiple agents on many repositories, with git worktree support
@@ -17,8 +23,7 @@ See the progress of your long running tasks with a high level overview
 Dive deep into specific agent execution with a rich but readable log
 ![Desktop logs](docs/screenshots/car-desktop-logs.png)
 
-All memory and opinions are markdown files! Edit them directly or chat with the document!
-![Desktop TODO](docs/screenshots/car-desktop-todo.png)
+Tickets and workspace docs are markdown files. Edit them directly or use the web UI’s file chat to iterate with the agent.
 
 Use codex CLI directly for multi-shot problem solving or `/review`
 ![Desktop terminal](docs/screenshots/car-desktop-terminal.png)
@@ -30,9 +35,8 @@ Mobile-first experience, code on the go with Whisper support (BYOK)
 - Initializes a repo with Codex-friendly docs and config.
 - Runs Codex app-server in a loop against the repo, streaming logs via OpenCode runtime.
 - Tracks state, logs, and config under `.codex-autorunner/`.
-- Exposes a power-user HTTP API and web UI for docs, logs, runner control, and a Codex TUI terminal.
+- Exposes a power-user HTTP API and web UI for tickets, workspace docs, file chat, logs, runner control, and a Codex TUI terminal.
 - Optionally runs a Telegram bot for interactive, user-in-the-loop Codex sessions.
-- Generates a pasteable repo snapshot (`.codex-autorunner/SNAPSHOT.md`) for sharing with other LLM chats.
 
 CLI commands are available as `codex-autorunner` or the shorter `car`.
 
@@ -102,7 +106,7 @@ If you set a base path, prefix all checks with it.
 
 ## Quick start
 1) Install (editable): `pip install -e .`
-2) Initialize (hub + repo): `codex-autorunner init --git-init` (or `car init --git-init` if you prefer short). This creates the hub config at `.codex-autorunner/config.yml`, plus state/log files and the docs under `.codex-autorunner/`.
+2) Initialize (hub + repo): `codex-autorunner init --git-init` (or `car init --git-init` if you prefer short). This creates the hub config at `.codex-autorunner/config.yml`, plus state/log files and starter content under `.codex-autorunner/` (tickets and optional workspace docs).
 3) Run once: `codex-autorunner once` / `car once`
 4) Continuous loop: `codex-autorunner run` / `car run`
 5) If stuck: `codex-autorunner kill` then `codex-autorunner resume` (or the `car` equivalents)
@@ -167,19 +171,12 @@ If you set `server.auth_token_env`, the API requires `Authorization: Bearer <tok
 - `run` / `once` — run the loop (continuous or single iteration).
 - `resume` — clear stale lock/state and restart; `--once` for a single run.
 - `kill` — SIGTERM the running loop and mark state error.
-- `status` — show current state and outstanding TODO count.
+- `status` — show current state.
 - `sessions` — list terminal sessions (server-backed when available).
 - `stop-session` — stop a terminal session by repo (`--repo`) or id (`--session`).
 - `log` — view logs (tail or specific run).
-- `edit` — open TODO/PROGRESS/OPINIONS/SPEC in `$EDITOR`.
-- `ingest-spec` — generate TODO/PROGRESS/OPINIONS from SPEC using Codex (use `--force` to overwrite).
-- `clear-docs` — reset TODO/PROGRESS/OPINIONS to empty templates (type CLEAR to confirm).
-- `snapshot` — generate/update `.codex-autorunner/SNAPSHOT.md` (incremental by default when one exists; use `--from-scratch` to regenerate).
+- `edit` — open `active_context|decisions|spec` in `$EDITOR`.
 - `serve` — start the HTTP API (FastAPI) on host/port from config (defaults 127.0.0.1:4173).
-
-## Snapshot (repo briefing)
-- Web UI: open the Snapshot tab. If no snapshot exists, you’ll see “Generate snapshot”; otherwise you’ll see “Update snapshot (incremental)” and “Regenerate snapshot (from scratch)”, plus “Copy to clipboard”.
-- CLI: `codex-autorunner snapshot` (or `car snapshot`) writes `.codex-autorunner/SNAPSHOT.md` and `.codex-autorunner/snapshot_state.json`.
 
 ## Star history
 [![Star History Chart](https://api.star-history.com/svg?repos=Git-on-my-level/codex-autorunner&type=Date)](https://star-history.com/#Git-on-my-level/codex-autorunner&Date)

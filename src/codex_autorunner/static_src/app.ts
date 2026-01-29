@@ -1,7 +1,6 @@
 import { REPO_ID, HUB_BASE } from "./env.js";
 import { initHub } from "./hub.js";
 import { initTabs, registerTab } from "./tabs.js";
-import { initDocs } from "./docs.js";
 import { initTerminal } from "./terminal.js";
 import { initTicketFlow } from "./tickets.js";
 import { initMessages, initMessageBell } from "./messages.js";
@@ -11,38 +10,11 @@ import { initRepoSettingsPanel } from "./settings.js";
 import { flash } from "./utils.js";
 import { initLiveUpdates } from "./liveUpdates.js";
 import { initHealthGate } from "./health.js";
-
-function disableLegacyAnalyticsUI(): void {
-  // Ticket-first: these panels and their API calls are deprecated.
-  const legacyIds = [
-    "runner-controls",
-    "analytics-runs",
-    "analytics-logs",
-  ];
-  for (const id of legacyIds) {
-    const el = document.getElementById(id);
-    if (el) el.classList.add("hidden");
-  }
-
-  const panel = document.getElementById("analytics");
-  if (!panel) return;
-  if (document.getElementById("ticket-first-analytics-note")) return;
-
-  const note = document.createElement("div");
-  note.id = "ticket-first-analytics-note";
-  note.className = "status-card";
-  const title = document.createElement("h3");
-  title.textContent = "Ticket-first mode";
-  const body = document.createElement("p");
-  body.textContent =
-    "Legacy autorunner / GitHub / PR flow panels have been disabled. Analytics will be rebuilt around ticket_flow.";
-  note.append(title, body);
-  panel.insertBefore(note, panel.firstChild);
-}
+import { initWorkspace } from "./workspace.js";
+import { initDashboard } from "./dashboard.js";
 
 async function initRepoShell(): Promise<void> {
   await initHealthGate();
-  disableLegacyAnalyticsUI();
 
   if (REPO_ID) {
     const navBar = document.querySelector(".nav-bar");
@@ -66,22 +38,20 @@ async function initRepoShell(): Promise<void> {
   const defaultTab = REPO_ID ? "tickets" : "analytics";
 
   registerTab("tickets", "Tickets");
-  registerTab("messages", "Inbox");
+  registerTab("inbox", "Inbox");
   registerTab("analytics", "Analytics");
-  registerTab("docs", "Docs");
+  registerTab("workspace", "Workspace");
   registerTab("terminal", "Terminal");
 
   const initializedTabs = new Set<string>();
   const lazyInit = (tabId: string): void => {
     if (initializedTabs.has(tabId)) return;
-    if (tabId === "docs") {
-      initDocs();
-    } else if (tabId === "messages") {
+    if (tabId === "workspace") {
+      initWorkspace();
+    } else if (tabId === "inbox" || tabId === "messages") {
       initMessages();
     } else if (tabId === "analytics") {
-      // Ticket-first: keep Analytics as a stub panel for now and avoid all legacy
-      // dashboard / GitHub / PR flow boot paths.
-      disableLegacyAnalyticsUI();
+      initDashboard();
     } else if (tabId === "tickets") {
       initTicketFlow();
     }

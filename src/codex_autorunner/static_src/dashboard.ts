@@ -1,12 +1,10 @@
-import { api, flash, confirmModal, openModal } from "./utils.js";
-import { subscribe } from "./bus.js";
+import { api, flash, confirmModal, openModal, statusPill } from "./utils.js";
 import { saveToCache, loadFromCache } from "./cache.js";
-import { renderTodoPreview } from "./todoPreview.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
-let pendingSummaryOpen = false;
+const ANALYTICS_SUMMARY_CACHE_KEY = "analytics-summary";
 
 interface UsageChartState {
   segment: string;
@@ -22,48 +20,6 @@ const usageChartState: UsageChartState = {
 
 let usageSeriesRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let usageSummaryRetryTimer: ReturnType<typeof setTimeout> | null = null;
-let latestMessageStats: {
-  handoffs: number;
-  replies: number;
-  currentTicket: string | null;
-  totalTurns: number | null;
-} | null = null;
-
-function updateTodoPreview(content: string): void {
-  renderTodoPreview(content || "");
-  if (content !== undefined) {
-    saveToCache("todo-doc", content || "");
-  }
-}
-
-interface DocsEventPayload {
-  kind?: string;
-  content?: string;
-  todo?: string;
-}
-
-function handleDocsEvent(payload: DocsEventPayload | null): void {
-  if (!payload) return;
-  if (payload.kind === "todo") {
-    updateTodoPreview(payload.content || "");
-    return;
-  }
-  if (typeof payload.todo === "string") {
-    updateTodoPreview(payload.todo);
-  }
-}
-
-async function loadTodoPreview(options: { silent?: boolean } = {}): Promise<void> {
-  const { silent = false } = options;
-  try {
-    const data = await api("/api/docs");
-    updateTodoPreview((data as { todo?: string })?.todo || "");
-  } catch (err) {
-    if (!silent) {
-      flash((err as Error).message || "Failed to load TODO preview", "error");
-    }
-  }
-}
 
 function setUsageLoading(loading: boolean): void {
   const btn = document.getElementById("usage-refresh");
@@ -187,61 +143,175 @@ function renderUsage(data: UsageData | null): void {
   if (metaEl) metaEl.textContent = codexHome;
 }
 
-interface MessageThread {
-  run_id: string;
-  handoff_count?: number;
-  reply_count?: number;
-  ticket_state?: {
-    current_ticket?: string | null;
-    total_turns?: number | null;
-  } | null;
-  status?: string;
-  created_at?: string;
+interface AnalyticsRunSummary {
+  id: string | null;
+  short_id?: string | null;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+  current_step: string | null;
+  created_at?: string | null;
 }
 
-async function loadMessageStats(): Promise<void> {
+interface AnalyticsSummary {
+  run: AnalyticsRunSummary;
+  tickets: {
+    todo_count: number;
+    done_count: number;
+    total_count: number;
+    current_ticket: string | null;
+  };
+  turns: {
+    total: number | null;
+    current_ticket: number | null;
+    dispatches: number;
+    replies: number;
+  };
+  agent: {
+    id: string | null;
+    model: string | null;
+  };
+}
+
+interface FlowRun {
+  id: string;
+  flow_type: string;
+  status: string;
+  current_step: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  state?: Record<string, unknown>;
+}
+
+async function loadTicketAnalytics(): Promise<void> {
   try {
-    const data = (await api("/api/messages/threads")) as { threads?: MessageThread[] };
-    const threads = Array.isArray(data?.threads) ? data.threads : [];
-    if (!threads.length) {
-      latestMessageStats = {
-        handoffs: 0,
-        replies: 0,
-        currentTicket: null,
-        totalTurns: null,
-      };
-    } else {
-      const primary =
-        threads.find((t) => t.status === "paused") ||
-        threads[0];
-      latestMessageStats = {
-        handoffs: primary.handoff_count ?? 0,
-        replies: primary.reply_count ?? 0,
-        currentTicket: primary.ticket_state?.current_ticket || null,
-        totalTurns: primary.ticket_state?.total_turns ?? null,
-      };
-    }
-  } catch (_err) {
-    // best effort
-    latestMessageStats = latestMessageStats || null;
+    const data = (await api("/api/analytics/summary")) as AnalyticsSummary;
+    saveToCache(ANALYTICS_SUMMARY_CACHE_KEY, data);
+    renderTicketAnalytics(data);
+  } catch (err) {
+    const cached = loadFromCache(ANALYTICS_SUMMARY_CACHE_KEY) as AnalyticsSummary | null;
+    if (cached) renderTicketAnalytics(cached);
+    flash((err as Error).message || "Failed to load analytics", "error");
   }
-  renderMessageStats();
 }
 
-function renderMessageStats(): void {
-  const stats = latestMessageStats;
-  const handoffsEl = document.getElementById("message-handoffs");
+function formatDuration(seconds: number | null): string {
+  if (seconds === null || Number.isNaN(seconds)) return "–";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const mins = seconds / 60;
+  if (mins < 60) return `${Math.round(mins)}m`;
+  const hours = mins / 60;
+  return `${hours.toFixed(1)}h`;
+}
+
+function renderTicketAnalytics(data: AnalyticsSummary | null): void {
+  const run = data?.run;
+  const tickets = data?.tickets;
+  const turns = data?.turns;
+  const agent = data?.agent;
+
+  const statusEl = document.getElementById("runner-status");
+  if (statusEl && run) {
+    statusPill(statusEl, run.status || "idle");
+    statusEl.textContent = run.status || "idle";
+  }
+
+  const lastStart = document.getElementById("last-start");
+  const lastFinish = document.getElementById("last-finish");
+  const lastDuration = document.getElementById("last-duration");
+  const todoCount = document.getElementById("todo-count");
+  const doneCount = document.getElementById("done-count");
+  const ticketActive = document.getElementById("ticket-active");
+  const ticketTurns = document.getElementById("ticket-turns");
+  const totalTurns = document.getElementById("total-turns");
+  const dispatchesEl = document.getElementById("message-dispatches");
   const repliesEl = document.getElementById("message-replies");
-  const ticketEl = document.getElementById("ticket-active");
-  const turnsEl = document.getElementById("ticket-turns");
-  const handoffs = stats?.handoffs ?? 0;
-  const replies = stats?.replies ?? 0;
-  const ticket = stats?.currentTicket || "–";
-  const turns = stats?.totalTurns;
-  if (handoffsEl) handoffsEl.textContent = String(handoffs);
-  if (repliesEl) repliesEl.textContent = String(replies);
-  if (ticketEl) ticketEl.textContent = ticket;
-  if (turnsEl) turnsEl.textContent = turns != null ? String(turns) : "–";
+  const runIdEl = document.getElementById("last-run-id");
+
+  if (lastStart) lastStart.textContent = formatIso(run?.started_at || null);
+  if (lastFinish) lastFinish.textContent = formatIso(run?.finished_at || null);
+  if (lastDuration) lastDuration.textContent = formatDuration(run?.duration_seconds ?? null);
+  if (todoCount) todoCount.textContent = tickets ? String(tickets.todo_count) : "–";
+  if (doneCount) doneCount.textContent = tickets ? String(tickets.done_count) : "–";
+  if (ticketActive) {
+    const ticket = tickets?.current_ticket || null;
+    ticketActive.textContent = ticket ? ticket.split("/").pop() || ticket : "–";
+  }
+  if (ticketTurns) ticketTurns.textContent = turns?.current_ticket != null ? String(turns.current_ticket) : "–";
+  if (totalTurns) totalTurns.textContent = turns?.total != null ? String(turns.total) : "–";
+  const dispatchCount = turns?.dispatches ?? 0;
+  if (dispatchesEl) dispatchesEl.textContent = String(dispatchCount);
+  if (repliesEl) repliesEl.textContent = turns?.replies != null ? String(turns.replies) : "0";
+  if (runIdEl) runIdEl.textContent = run?.short_id || run?.id || "–";
+
+  // Agent chip (optional future use)
+  const agentEl = document.getElementById("ticket-agent");
+  if (agentEl) {
+    agentEl.textContent = agent?.id || "–";
+  }
+}
+
+async function loadRunHistory(): Promise<void> {
+  try {
+    const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
+    const runHistory = Array.isArray(runs) ? runs.slice(0, 10) : [];
+    renderRunHistory(runHistory);
+  } catch (err) {
+    flash((err as Error).message || "Failed to load run history", "error");
+  }
+}
+
+function formatIso(iso: string | null): string {
+  if (!iso) return "–";
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return iso;
+  return dt.toLocaleString();
+}
+
+function calcDurationFromRun(run: FlowRun): string {
+  const started = run.started_at;
+  const finished = run.finished_at;
+  if (!started) return "–";
+  const start = new Date(started).getTime();
+  const end =
+    finished && !Number.isNaN(new Date(finished).getTime())
+      ? new Date(finished).getTime()
+      : Date.now();
+  if (Number.isNaN(start) || Number.isNaN(end)) return "–";
+  return formatDuration((end - start) / 1000);
+}
+
+function renderRunHistory(runs: FlowRun[]): void {
+  const container = document.getElementById("run-history-list");
+  if (!container) return;
+  if (!runs || !runs.length) {
+    container.innerHTML = '<div class="muted">No runs yet.</div>';
+    return;
+  }
+  const items = runs.map((run) => {
+    const shortId = run.id ? run.id.split("-")[0] : "–";
+    const status = run.status || "unknown";
+    const duration = calcDurationFromRun(run);
+    const started = formatIso(run.started_at);
+    const current = run.current_step || "–";
+    return `
+      <div class="run-history-row">
+        <div class="run-history-id">${shortId}</div>
+        <div class="run-history-status">${status}</div>
+        <div class="run-history-duration">${duration}</div>
+        <div class="run-history-start">${started}</div>
+        <div class="run-history-step">${current}</div>
+      </div>
+    `;
+  });
+  container.innerHTML = `
+    <div class="run-history-head">
+      <div>ID</div><div>Status</div><div>Duration</div><div>Started</div><div>Step</div>
+    </div>
+    ${items.join("")}
+  `;
 }
 
 function buildUsageSeriesQuery(): string {
@@ -792,64 +862,26 @@ function bindAction(buttonId: string, action: () => Promise<void>): void {
   });
 }
 
-function isDocsReady(): boolean {
-  return document.body?.dataset?.docsReady === "true";
-}
-
-function openSummaryDoc(): void {
-  const summaryChip = document.querySelector('.chip[data-doc="summary"]') as HTMLElement | null;
-  if (summaryChip) summaryChip.click();
-}
-
 export function initDashboard(): void {
   initSettings();
   initUsageChartControls();
   // initReview(); // Removed - review.ts was deleted
-  subscribe("todo:invalidate", () => {
-    void loadTodoPreview({ silent: true });
-  });
-  subscribe("docs:updated", handleDocsEvent);
-  subscribe("docs:loaded", handleDocsEvent);
-  subscribe("docs:ready", () => {
-    if (!isDocsReady()) {
-      if (document.body) {
-        document.body.dataset.docsReady = "true";
-      }
-    }
-    if (pendingSummaryOpen) {
-      pendingSummaryOpen = false;
-      openSummaryDoc();
-    }
-  });
   bindAction("usage-refresh", loadUsage);
-  bindAction("refresh-preview", loadTodoPreview);
+  bindAction("analytics-refresh", async () => {
+    await loadTicketAnalytics();
+    await loadRunHistory();
+  });
 
   const cachedUsage = loadFromCache("usage");
   if (cachedUsage) renderUsage(cachedUsage as UsageData);
-
-  const cachedTodo = loadFromCache("todo-doc");
-  if (typeof cachedTodo === "string") {
-    updateTodoPreview(cachedTodo);
-  }
-
-  const summaryBtn = document.getElementById("open-summary") as HTMLButtonElement | null;
-  if (summaryBtn) {
-    summaryBtn.addEventListener("click", () => {
-      const docsTab = document.querySelector('.tab[data-target="docs"]') as HTMLElement | null;
-      if (docsTab) docsTab.click();
-      if (isDocsReady()) {
-        requestAnimationFrame(openSummaryDoc);
-      } else {
-        pendingSummaryOpen = true;
-      }
-    });
-  }
+  const cachedAnalytics = loadFromCache(ANALYTICS_SUMMARY_CACHE_KEY);
+  if (cachedAnalytics) renderTicketAnalytics(cachedAnalytics as AnalyticsSummary);
 
   loadUsage();
-  loadTodoPreview();
+  loadTicketAnalytics();
+  loadRunHistory();
   loadVersion();
   checkUpdateStatus();
-  loadMessageStats();
 
   registerAutoRefresh("dashboard-usage", {
     callback: async () => { await loadUsage(); },
@@ -858,8 +890,11 @@ export function initDashboard(): void {
     refreshOnActivation: true,
     immediate: false,
   });
-  registerAutoRefresh("message-stats", {
-    callback: loadMessageStats,
+  registerAutoRefresh("dashboard-analytics", {
+    callback: async () => {
+      await loadTicketAnalytics();
+      await loadRunHistory();
+    },
     tabId: "analytics",
     interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
     refreshOnActivation: true,

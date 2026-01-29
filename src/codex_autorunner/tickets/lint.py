@@ -19,7 +19,7 @@ def lint_ticket_frontmatter(
     """Validate and normalize ticket frontmatter.
 
     Required keys:
-    - agent: string (or the special value "pause")
+    - agent: string (or the special value "user")
     - done: bool
     """
 
@@ -35,7 +35,7 @@ def lint_ticket_frontmatter(
         errors.append("frontmatter.agent is required (e.g. 'codex' or 'opencode').")
     else:
         # Special built-in ticket handler.
-        if agent != "pause":
+        if agent != "user":
             try:
                 validate_agent_id(agent)
             except ValueError as exc:
@@ -56,8 +56,12 @@ def lint_ticket_frontmatter(
         data.get("requires") if isinstance(data, dict) else None
     )
 
+    # Optional model/reasoning overrides.
+    model = _as_optional_str(data.get("model"))
+    reasoning = _as_optional_str(data.get("reasoning"))
+
     # Remove normalized keys from extra.
-    for key in ("agent", "done", "title", "goal", "requires"):
+    for key in ("agent", "done", "title", "goal", "requires", "model", "reasoning"):
         extra.pop(key, None)
 
     if errors:
@@ -72,19 +76,21 @@ def lint_ticket_frontmatter(
             title=title,
             goal=goal,
             requires=requires,
+            model=model,
+            reasoning=reasoning,
             extra=extra,
         ),
         [],
     )
 
 
-def lint_user_message_frontmatter(
+def lint_dispatch_frontmatter(
     data: dict[str, Any],
 ) -> Tuple[dict[str, Any], list[str]]:
-    """Validate USER_MESSAGE.md frontmatter.
+    """Validate DISPATCH.md frontmatter.
 
     Keys:
-    - mode: "notify" | "pause" (defaults to notify)
+    - mode: "notify" | "pause" | "turn_summary" (defaults to notify)
     """
 
     errors: list[str] = []
@@ -93,8 +99,8 @@ def lint_user_message_frontmatter(
 
     mode_raw = data.get("mode")
     mode = mode_raw.strip().lower() if isinstance(mode_raw, str) else "notify"
-    if mode not in ("notify", "pause"):
-        errors.append("frontmatter.mode must be 'notify' or 'pause'.")
+    if mode not in ("notify", "pause", "turn_summary"):
+        errors.append("frontmatter.mode must be 'notify', 'pause', or 'turn_summary'.")
 
     normalized = dict(data)
     normalized["mode"] = mode

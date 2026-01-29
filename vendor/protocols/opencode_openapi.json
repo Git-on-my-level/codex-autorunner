@@ -4658,7 +4658,6 @@
           },
           "header": {
             "description": "Very short label (max 30 chars)",
-            "maxLength": 30,
             "type": "string"
           },
           "multiple": {
@@ -4692,7 +4691,6 @@
           },
           "label": {
             "description": "Display text (1-5 words, concise)",
-            "maxLength": 30,
             "type": "string"
           }
         },

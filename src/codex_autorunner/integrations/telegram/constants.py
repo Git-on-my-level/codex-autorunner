@@ -105,6 +105,16 @@ TURN_PROGRESS_MAX_LEN = 160
 TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 TURN_PROGRESS_TTL_SECONDS = 900.0
 PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 5.0
+COMPACT_MAX_ACTIONS = 10
+COMPACT_MAX_TEXT_LENGTH = 80
+STATUS_ICONS = {
+    "done": "✓",
+    "fail": "✗",
+    "warn": "⚠",
+    "running": "▸",
+    "update": "↻",
+    "thinking": "🧠",
+}
 COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
 MAX_MENTION_BYTES = 200_000
 VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}

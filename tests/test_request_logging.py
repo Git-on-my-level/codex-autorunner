@@ -89,7 +89,7 @@ def test_heavy_endpoint_logs_response_size() -> None:
     async def _run():
         scope = {
             "type": "http",
-            "path": "/api/docs",
+            "path": "/api/workspace",
             "query_string": b"",
             "headers": [],
             "method": "GET",
@@ -123,7 +123,7 @@ def test_heavy_endpoint_logs_response_size() -> None:
     assert response_log is not None
     assert "response_size" in response_log
     assert response_log["response_size"] == len(b"test response content")
-    assert response_log["path"] == "/api/docs"
+    assert response_log["path"] == "/api/workspace"
     assert "duration_ms" in response_log
 
 

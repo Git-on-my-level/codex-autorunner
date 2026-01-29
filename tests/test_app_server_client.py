@@ -213,7 +213,9 @@ async def test_turn_completed_via_resume_when_completion_missing(
 
 @pytest.mark.anyio
 async def test_restart_after_crash(tmp_path: Path) -> None:
-    client = CodexAppServerClient(fixture_command("crash"), cwd=tmp_path)
+    client = CodexAppServerClient(
+        fixture_command("crash"), cwd=tmp_path, auto_restart=True
+    )
     try:
         await client.request("fixture/crash")
         await client.wait_for_disconnect(timeout=1)

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from ...core.flows.definition import FlowDefinition, StepOutcome
-from ...core.flows.models import FlowRunRecord
+from ...core.flows.definition import EmitEventFn, FlowDefinition, StepOutcome
+from ...core.flows.models import FlowEventType, FlowRunRecord
 from ...core.utils import find_repo_root
 from ...tickets import AgentPool, TicketRunConfig, TicketRunner
 
@@ -17,7 +17,9 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
     """
 
     async def _ticket_turn_step(
-        record: FlowRunRecord, input_data: Dict[str, Any]
+        record: FlowRunRecord,
+        input_data: Dict[str, Any],
+        emit_event: Optional[EmitEventFn],
     ) -> StepOutcome:
         # Namespace all state under `ticket_engine` to avoid collisions with other flows.
         engine_state = (
@@ -33,6 +35,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
         max_total_turns = int(input_data.get("max_total_turns") or 25)
         max_lint_retries = int(input_data.get("max_lint_retries") or 3)
+        max_commit_retries = int(input_data.get("max_commit_retries") or 2)
         auto_commit = bool(
             input_data.get("auto_commit") if "auto_commit" in input_data else True
         )
@@ -45,12 +48,15 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 runs_dir=runs_dir,
                 max_total_turns=max_total_turns,
                 max_lint_retries=max_lint_retries,
+                max_commit_retries=max_commit_retries,
                 auto_commit=auto_commit,
             ),
             agent_pool=agent_pool,
         )
 
-        result = await runner.step(engine_state)
+        if emit_event is not None:
+            emit_event(FlowEventType.STEP_PROGRESS, {"message": "Running ticket turn"})
+        result = await runner.step(engine_state, emit_event=emit_event)
         out_state = dict(record.state or {})
         out_state["ticket_engine"] = result.state
 
@@ -77,6 +83,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 "runs_dir": {"type": "string"},
                 "max_total_turns": {"type": "integer"},
                 "max_lint_retries": {"type": "integer"},
+                "max_commit_retries": {"type": "integer"},
                 "auto_commit": {"type": "boolean"},
             },
         },

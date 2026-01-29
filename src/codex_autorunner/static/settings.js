@@ -20,17 +20,25 @@ function renderThreadTools(data) {
     if (data.autorunner !== undefined) {
         entries.push({ label: "Autorunner", value: data.autorunner || "—" });
     }
-    if (data.spec_ingest !== undefined) {
-        entries.push({ label: "Spec ingest", value: data.spec_ingest || "—" });
+    if (data.file_chat !== undefined) {
+        entries.push({ label: "File chat", value: data.file_chat || "—" });
     }
-    if (data.doc_chat && typeof data.doc_chat === "object") {
-        Object.keys(data.doc_chat).forEach((key) => {
-            entries.push({
-                label: `Doc chat (${key})`,
-                value: data.doc_chat[key] || "—",
-            });
+    if (data.file_chat_opencode !== undefined) {
+        entries.push({
+            label: "File chat (opencode)",
+            value: data.file_chat_opencode || "—",
         });
     }
+    // Render any additional string/number keys to avoid hiding future entries.
+    Object.keys(data).forEach((key) => {
+        if (["autorunner", "file_chat", "file_chat_opencode", "corruption"].includes(key)) {
+            return;
+        }
+        const value = data[key];
+        if (typeof value === "string" || typeof value === "number") {
+            entries.push({ label: key, value: value || "—" });
+        }
+    });
     if (!entries.length) {
         ui.threadList.textContent = "No threads recorded.";
         return;

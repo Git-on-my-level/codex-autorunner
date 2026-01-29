@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from codex_autorunner.tickets.lint import (
+    lint_dispatch_frontmatter,
     lint_ticket_frontmatter,
-    lint_user_message_frontmatter,
 )
 
 
@@ -20,7 +20,7 @@ def test_lint_ticket_frontmatter_requires_agent_and_done() -> None:
     assert any("agent" in e for e in errors)
 
 
-def test_lint_ticket_frontmatter_accepts_known_agents_and_pause() -> None:
+def test_lint_ticket_frontmatter_accepts_known_agents_and_user() -> None:
     fm, errors = lint_ticket_frontmatter({"agent": "codex", "done": False})
     assert errors == []
     assert fm is not None
@@ -31,10 +31,10 @@ def test_lint_ticket_frontmatter_accepts_known_agents_and_pause() -> None:
     assert fm is not None
     assert fm.agent == "opencode"
 
-    fm, errors = lint_ticket_frontmatter({"agent": "pause", "done": False})
+    fm, errors = lint_ticket_frontmatter({"agent": "user", "done": False})
     assert errors == []
     assert fm is not None
-    assert fm.agent == "pause"
+    assert fm.agent == "user"
 
     fm, errors = lint_ticket_frontmatter({"agent": "unknown", "done": False})
     assert fm is None
@@ -56,14 +56,19 @@ def test_lint_ticket_frontmatter_normalizes_requires_and_preserves_extra() -> No
     assert fm.extra.get("custom") == {"a": 1}
 
 
-def test_lint_user_message_frontmatter_defaults_notify_and_validates_mode() -> None:
-    normalized, errors = lint_user_message_frontmatter({})
+def test_lint_dispatch_frontmatter_defaults_notify_and_validates_mode() -> None:
+    normalized, errors = lint_dispatch_frontmatter({})
     assert errors == []
     assert normalized["mode"] == "notify"
 
-    normalized, errors = lint_user_message_frontmatter({"mode": "PAUSE"})
+    normalized, errors = lint_dispatch_frontmatter({"mode": "PAUSE"})
     assert errors == []
     assert normalized["mode"] == "pause"
 
-    normalized, errors = lint_user_message_frontmatter({"mode": "bad"})
+    # turn_summary is valid (used for agent turn output)
+    normalized, errors = lint_dispatch_frontmatter({"mode": "turn_summary"})
+    assert errors == []
+    assert normalized["mode"] == "turn_summary"
+
+    normalized, errors = lint_dispatch_frontmatter({"mode": "bad"})
     assert errors

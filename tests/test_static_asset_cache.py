@@ -5,9 +5,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.config import load_hub_config
-from codex_autorunner.server import create_app
+from codex_autorunner.server import create_hub_app
 from codex_autorunner.web import static_assets
 
 
@@ -116,51 +115,51 @@ def test_materialize_static_assets_prunes_old_entries(
     assert len(entries) <= 1
 
 
-def test_create_app_serves_cached_static_assets(tmp_path: Path, monkeypatch) -> None:
-    seed_hub_files(tmp_path, force=True)
-    seed_repo_files(tmp_path, force=True, git_required=False)
+def test_repo_app_serves_cached_static_assets(
+    hub_env, tmp_path: Path, monkeypatch
+) -> None:
     source_dir = tmp_path / "source_static"
     _write_required_assets(source_dir)
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
-    app = create_app(tmp_path)
+    app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
     shutil.rmtree(source_dir)
-    res = client.get("/")
+    res = client.get(f"/repos/{hub_env.repo_id}/")
     assert res.status_code == 200
-    static_res = client.get("/static/app.js")
+    static_res = client.get(f"/repos/{hub_env.repo_id}/static/app.js")
     assert static_res.status_code == 200
 
 
-def test_static_assets_cached_and_compressed(tmp_path: Path, monkeypatch) -> None:
-    seed_hub_files(tmp_path, force=True)
-    seed_repo_files(tmp_path, force=True, git_required=False)
+def test_static_assets_cached_and_compressed(
+    hub_env, tmp_path: Path, monkeypatch
+) -> None:
     source_dir = tmp_path / "source_static"
     _write_required_assets(source_dir)
     (source_dir / "big.js").write_text("a" * 2048, encoding="utf-8")
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
-    app = create_app(tmp_path)
+    app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
-    cache_res = client.get("/static/app.js")
+    cache_res = client.get(f"/repos/{hub_env.repo_id}/static/app.js")
     assert cache_res.status_code == 200
     cache_control = cache_res.headers.get("Cache-Control", "")
     assert "max-age=31536000" in cache_control
-    gzip_res = client.get("/static/big.js", headers={"Accept-Encoding": "gzip"})
+    gzip_res = client.get(
+        f"/repos/{hub_env.repo_id}/static/big.js", headers={"Accept-Encoding": "gzip"}
+    )
     assert gzip_res.status_code == 200
     assert gzip_res.headers.get("Content-Encoding") == "gzip"
 
 
-def test_repo_app_falls_back_to_hub_static_cache(tmp_path: Path, monkeypatch) -> None:
-    hub_root = tmp_path / "hub"
-    seed_hub_files(hub_root, force=True)
-    repo_root = hub_root / "worktrees" / "repo"
-    seed_repo_files(repo_root, force=True, git_required=False)
-    hub_config = load_hub_config(hub_root)
+def test_repo_app_falls_back_to_hub_static_cache(
+    hub_env, tmp_path: Path, monkeypatch
+) -> None:
+    hub_config = load_hub_config(hub_env.hub_root)
     hub_cache_root = hub_config.static_assets.cache_root
     existing_cache = hub_cache_root / "existing"
     _write_required_assets(existing_cache)
     source_dir = tmp_path / "missing_source"
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
-    app = create_app(repo_root, hub_config=hub_config)
+    app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
-    res = client.get("/static/app.js")
+    res = client.get(f"/repos/{hub_env.repo_id}/static/app.js")
     assert res.status_code == 200

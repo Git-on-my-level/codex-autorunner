@@ -1,0 +1,8 @@
+{
+  "extends": ["html-validate:standard"],
+  "elements": ["html5"],
+  "rules": {
+    "void-style": "off",
+    "element-permitted-content": "off"
+  }
+}

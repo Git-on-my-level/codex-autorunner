@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,11 +36,17 @@ class WorkspaceAppServerSupervisor:
         approval_handler: Optional[ApprovalHandler] = None,
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
-        auto_restart: bool = True,
+        auto_restart: Optional[bool] = None,
         request_timeout: Optional[float] = None,
         turn_stall_timeout_seconds: Optional[float] = None,
         turn_stall_poll_interval_seconds: Optional[float] = None,
         turn_stall_recovery_min_interval_seconds: Optional[float] = None,
+        max_message_bytes: Optional[int] = None,
+        oversize_preview_bytes: Optional[int] = None,
+        max_oversize_drain_bytes: Optional[int] = None,
+        restart_backoff_initial_seconds: Optional[float] = None,
+        restart_backoff_max_seconds: Optional[float] = None,
+        restart_backoff_jitter_ratio: Optional[float] = None,
         default_approval_decision: str = "cancel",
         max_handles: Optional[int] = None,
         idle_ttl_seconds: Optional[float] = None,
@@ -50,13 +57,27 @@ class WorkspaceAppServerSupervisor:
         self._approval_handler = approval_handler
         self._notification_handler = notification_handler
         self._logger = logger or logging.getLogger(__name__)
-        self._auto_restart = auto_restart
+        disable_restart_env = os.environ.get(
+            "CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS"
+        )
+        if disable_restart_env:
+            self._auto_restart = False
+        elif auto_restart is None:
+            self._auto_restart = True
+        else:
+            self._auto_restart = auto_restart
         self._request_timeout = request_timeout
         self._turn_stall_timeout_seconds = turn_stall_timeout_seconds
         self._turn_stall_poll_interval_seconds = turn_stall_poll_interval_seconds
         self._turn_stall_recovery_min_interval_seconds = (
             turn_stall_recovery_min_interval_seconds
         )
+        self._max_message_bytes = max_message_bytes
+        self._oversize_preview_bytes = oversize_preview_bytes
+        self._max_oversize_drain_bytes = max_oversize_drain_bytes
+        self._restart_backoff_initial_seconds = restart_backoff_initial_seconds
+        self._restart_backoff_max_seconds = restart_backoff_max_seconds
+        self._restart_backoff_jitter_ratio = restart_backoff_jitter_ratio
         self._default_approval_decision = default_approval_decision
         self._max_handles = max_handles
         self._idle_ttl_seconds = idle_ttl_seconds
@@ -87,7 +108,8 @@ class WorkspaceAppServerSupervisor:
                     last_used_at=handle.last_used_at,
                 )
                 await handle.client.close()
-            except Exception:
+            except Exception as exc:
+                self._logger.debug("Failed to close handle: %s", exc)
                 continue
 
     async def prune_idle(self) -> int:
@@ -109,7 +131,8 @@ class WorkspaceAppServerSupervisor:
                 )
                 await handle.client.close()
                 closed += 1
-            except Exception:
+            except Exception as exc:
+                self._logger.debug("Failed to prune handle: %s", exc)
                 continue
         return closed
 
@@ -141,6 +164,12 @@ class WorkspaceAppServerSupervisor:
                 turn_stall_timeout_seconds=self._turn_stall_timeout_seconds,
                 turn_stall_poll_interval_seconds=self._turn_stall_poll_interval_seconds,
                 turn_stall_recovery_min_interval_seconds=self._turn_stall_recovery_min_interval_seconds,
+                max_message_bytes=self._max_message_bytes,
+                oversize_preview_bytes=self._oversize_preview_bytes,
+                max_oversize_drain_bytes=self._max_oversize_drain_bytes,
+                restart_backoff_initial_seconds=self._restart_backoff_initial_seconds,
+                restart_backoff_max_seconds=self._restart_backoff_max_seconds,
+                restart_backoff_jitter_ratio=self._restart_backoff_jitter_ratio,
                 notification_handler=self._notification_handler,
                 logger=self._logger,
             )
@@ -169,7 +198,8 @@ class WorkspaceAppServerSupervisor:
                     last_used_at=handle.last_used_at,
                 )
                 await handle.client.close()
-            except Exception:
+            except Exception as exc:
+                self._logger.debug("Failed to close handle: %s", exc)
                 continue
         return handle
 

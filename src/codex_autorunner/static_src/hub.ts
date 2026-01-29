@@ -431,7 +431,7 @@ function renderHubUsageChart(data: HubChartData | null): void {
   const series = data?.series || [];
   const isLoading = data?.status === "loading";
   if (!buckets.length || !series.length) {
-    (hubUsageChartCanvas as any).__usageChartBound = false;
+    (hubUsageChartCanvas as unknown as { __usageChartBound: boolean }).__usageChartBound = false;
     hubUsageChartCanvas.innerHTML = isLoading
       ? '<div class="usage-chart-empty">Loading…</div>'
       : '<div class="usage-chart-empty">No data</div>';
@@ -520,7 +520,7 @@ function renderHubUsageChart(data: HubChartData | null): void {
   }
 
   svg += "</svg>";
-  (hubUsageChartCanvas as any).__usageChartBound = false;
+  (hubUsageChartCanvas as unknown as { __usageChartBound: boolean }).__usageChartBound = false;
   hubUsageChartCanvas.innerHTML = svg;
   attachHubUsageChartInteraction(hubUsageChartCanvas, {
     buckets,
@@ -583,9 +583,9 @@ interface ChartInteractionState {
 }
 
 function attachHubUsageChartInteraction(container: HTMLElement, state: ChartInteractionState): void {
-  (container as any).__usageChartState = state;
-  if ((container as any).__usageChartBound) return;
-  (container as any).__usageChartBound = true;
+  (container as unknown as { __usageChartState: ChartInteractionState }).__usageChartState = state;
+  if ((container as unknown as { __usageChartBound: boolean }).__usageChartBound) return;
+  (container as unknown as { __usageChartBound: boolean }).__usageChartBound = true;
 
   const focus = document.createElement("div");
   focus.className = "usage-chart-focus";
@@ -598,7 +598,7 @@ function attachHubUsageChartInteraction(container: HTMLElement, state: ChartInte
   container.appendChild(tooltip);
 
   const updateTooltip = (event: PointerEvent) => {
-    const chartState = (container as any).__usageChartState as ChartInteractionState;
+    const chartState = (container as unknown as { __usageChartState: ChartInteractionState }).__usageChartState;
     if (!chartState) return;
     const rect = container.getBoundingClientRect();
     const x = event.clientX - rect.left;

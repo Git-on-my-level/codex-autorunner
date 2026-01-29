@@ -1,5 +1,6 @@
 import errno
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -27,6 +28,7 @@ class LockAssessment:
 
 
 DEFAULT_RUNNER_CMD_HINTS = ("codex_autorunner.cli", "codex-autorunner", "car ")
+logger = logging.getLogger(__name__)
 
 
 def process_alive(pid: int) -> bool:
@@ -48,6 +50,7 @@ def process_is_zombie(pid: int) -> bool:
             check=False,
         )
     except Exception:
+        logger.debug("Failed to check process status for pid %s", pid, exc_info=True)
         return False
     if result.returncode != 0:
         return False
@@ -65,6 +68,7 @@ def process_command(pid: int) -> Optional[str]:
             check=False,
         )
     except Exception:
+        logger.debug("Failed to inspect process command for pid %s", pid, exc_info=True)
         return None
     if result.returncode != 0:
         return None

@@ -159,7 +159,7 @@
           "type": "string"
         },
         "conversationId": {
-          "$ref": "#/definitions/ThreadId"
+          "$ref": "#/definitions/v2/ThreadId"
         },
         "fileChanges": {
           "additionalProperties": {
@@ -681,6 +681,30 @@
             "params"
           ],
           "title": "Skills/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "app/list"
+              ],
+              "title": "App/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/AppsListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "App/listRequest",
           "type": "object"
         },
         {
@@ -2631,7 +2655,7 @@
             "forked_from_id": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 },
                 {
                   "type": "null"
@@ -2679,7 +2703,11 @@
               "description": "The effort the model is putting into reasoning about the user's request."
             },
             "rollout_path": {
-              "type": "string"
+              "description": "Path in which the rollout is stored. Can be `None` for ephemeral threads",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "sandbox_policy": {
               "allOf": [
@@ -2692,7 +2720,7 @@
             "session_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Name left as session_id instead of thread_id for backwards compatibility."
@@ -2712,7 +2740,6 @@
             "history_log_id",
             "model",
             "model_provider_id",
-            "rollout_path",
             "sandbox_policy",
             "session_id",
             "type"
@@ -3890,7 +3917,7 @@
               "$ref": "#/definitions/TurnItem"
             },
             "thread_id": {
-              "$ref": "#/definitions/ThreadId"
+              "$ref": "#/definitions/v2/ThreadId"
             },
             "turn_id": {
               "type": "string"
@@ -3918,7 +3945,7 @@
               "$ref": "#/definitions/TurnItem"
             },
             "thread_id": {
-              "$ref": "#/definitions/ThreadId"
+              "$ref": "#/definitions/v2/ThreadId"
             },
             "turn_id": {
               "type": "string"
@@ -4060,7 +4087,7 @@
             "sender_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the sender."
@@ -4092,7 +4119,7 @@
             "new_thread_id": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 },
                 {
                   "type": "null"
@@ -4107,7 +4134,7 @@
             "sender_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the sender."
@@ -4152,7 +4179,7 @@
             "receiver_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the receiver."
@@ -4160,7 +4187,7 @@
             "sender_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the sender."
@@ -4197,7 +4224,7 @@
             "receiver_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the receiver."
@@ -4205,7 +4232,7 @@
             "sender_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the sender."
@@ -4247,14 +4274,14 @@
             "receiver_thread_ids": {
               "description": "Thread ID of the receivers.",
               "items": {
-                "$ref": "#/definitions/ThreadId"
+                "$ref": "#/definitions/v2/ThreadId"
               },
               "type": "array"
             },
             "sender_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the sender."
@@ -4286,7 +4313,7 @@
             "sender_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the sender."
@@ -4325,7 +4352,7 @@
             "receiver_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the receiver."
@@ -4333,7 +4360,7 @@
             "sender_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the sender."
@@ -4365,7 +4392,7 @@
             "receiver_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the receiver."
@@ -4373,7 +4400,7 @@
             "sender_thread_id": {
               "allOf": [
                 {
-                  "$ref": "#/definitions/ThreadId"
+                  "$ref": "#/definitions/v2/ThreadId"
                 }
               ],
               "description": "Thread ID of the sender."
@@ -4421,7 +4448,7 @@
           "type": "array"
         },
         "conversationId": {
-          "$ref": "#/definitions/ThreadId"
+          "$ref": "#/definitions/v2/ThreadId"
         },
         "cwd": {
           "type": "string"
@@ -8308,6 +8335,32 @@
         {
           "additionalProperties": false,
           "properties": {
+            "thread_spawn": {
+              "properties": {
+                "depth": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "parent_thread_id": {
+                  "$ref": "#/definitions/ThreadId"
+                }
+              },
+              "required": [
+                "depth",
+                "parent_thread_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "thread_spawn"
+          ],
+          "title": "ThreadSpawnSubAgentSource",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "other": {
               "type": "string"
             }
@@ -9357,6 +9410,89 @@
         },
         "type": "object"
       },
+      "AppInfo": {
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "installUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isAccessible": {
+            "default": false,
+            "type": "boolean"
+          },
+          "logoUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "AppsListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "cursor": {
+            "description": "Opaque pagination cursor returned by a previous call.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Optional page size; defaults to a reasonable server-side value.",
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "AppsListParams",
+        "type": "object"
+      },
+      "AppsListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/AppInfo"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "AppsListResponse",
+        "type": "object"
+      },
       "AskForApproval": {
         "enum": [
           "untrusted",
@@ -9636,148 +9772,19 @@
       },
       "CollaborationMode": {
         "description": "Collaboration mode for a Codex session.",
-        "oneOf": [
-          {
-            "description": "Settings for a collaboration mode.",
-            "properties": {
-              "developer_instructions": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "mode": {
-                "enum": [
-                  "plan"
-                ],
-                "type": "string"
-              },
-              "model": {
-                "type": "string"
-              },
-              "reasoning_effort": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ReasoningEffort"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "mode",
-              "model"
-            ],
-            "type": "object"
+        "properties": {
+          "mode": {
+            "$ref": "#/definitions/v2/ModeKind"
           },
-          {
-            "description": "Settings for a collaboration mode.",
-            "properties": {
-              "developer_instructions": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "mode": {
-                "enum": [
-                  "pairprogramming"
-                ],
-                "type": "string"
-              },
-              "model": {
-                "type": "string"
-              },
-              "reasoning_effort": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ReasoningEffort"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "mode",
-              "model"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "Settings for a collaboration mode.",
-            "properties": {
-              "developer_instructions": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "mode": {
-                "enum": [
-                  "execute"
-                ],
-                "type": "string"
-              },
-              "model": {
-                "type": "string"
-              },
-              "reasoning_effort": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ReasoningEffort"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "mode",
-              "model"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "Settings for a collaboration mode.",
-            "properties": {
-              "developer_instructions": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "mode": {
-                "enum": [
-                  "custom"
-                ],
-                "type": "string"
-              },
-              "model": {
-                "type": "string"
-              },
-              "reasoning_effort": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ReasoningEffort"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "mode",
-              "model"
-            ],
-            "type": "object"
+          "settings": {
+            "$ref": "#/definitions/v2/Settings"
           }
-        ]
+        },
+        "required": [
+          "mode",
+          "settings"
+        ],
+        "type": "object"
       },
       "CollaborationModeListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -9791,7 +9798,7 @@
         "properties": {
           "data": {
             "items": {
-              "$ref": "#/definitions/v2/CollaborationMode"
+              "$ref": "#/definitions/v2/CollaborationModeMask"
             },
             "type": "array"
           }
@@ -9800,6 +9807,57 @@
           "data"
         ],
         "title": "CollaborationModeListResponse",
+        "type": "object"
+      },
+      "CollaborationModeMask": {
+        "description": "A mask for collaboration mode settings, allowing partial updates. All fields except `name` are optional, enabling selective updates.",
+        "properties": {
+          "developer_instructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ModeKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReasoningEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
         "type": "object"
       },
       "CommandAction": {
@@ -10231,6 +10289,12 @@
       "ConfigLayer": {
         "properties": {
           "config": true,
+          "disabledReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "$ref": "#/definitions/v2/ConfigLayerSource"
           },
@@ -10545,6 +10609,24 @@
               "string",
               "null"
             ]
+          },
+          "path": {
+            "description": "Optional path to the config file that triggered the warning.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "range": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/TextRange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional range for the error location inside the config file."
           },
           "summary": {
             "description": "Concise summary of the warning.",
@@ -11520,6 +11602,17 @@
         ],
         "type": "string"
       },
+      "ModeKind": {
+        "description": "Initial collaboration mode to use when the TUI starts.",
+        "enum": [
+          "plan",
+          "code",
+          "pair_programming",
+          "execute",
+          "custom"
+        ],
+        "type": "string"
+      },
       "Model": {
         "properties": {
           "defaultReasoningEffort": {
@@ -11694,6 +11787,13 @@
             "type": "object"
           }
         ]
+      },
+      "Personality": {
+        "enum": [
+          "friendly",
+          "pragmatic"
+        ],
+        "type": "string"
       },
       "PlanType": {
         "enum": [
@@ -12846,14 +12946,59 @@
         "type": "object"
       },
       "SessionSource": {
-        "enum": [
-          "cli",
-          "vscode",
-          "exec",
-          "appServer",
-          "unknown"
+        "oneOf": [
+          {
+            "enum": [
+              "cli",
+              "vscode",
+              "exec",
+              "appServer",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "subAgent": {
+                "$ref": "#/definitions/v2/SubAgentSource"
+              }
+            },
+            "required": [
+              "subAgent"
+            ],
+            "title": "SubAgentSessionSource",
+            "type": "object"
+          }
+        ]
+      },
+      "Settings": {
+        "description": "Settings for a collaboration mode.",
+        "properties": {
+          "developer_instructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningEffort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "model"
         ],
-        "type": "string"
+        "type": "object"
       },
       "SkillErrorInfo": {
         "properties": {
@@ -13053,6 +13198,56 @@
         "title": "SkillsListResponse",
         "type": "object"
       },
+      "SubAgentSource": {
+        "oneOf": [
+          {
+            "enum": [
+              "review",
+              "compact"
+            ],
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "thread_spawn": {
+                "properties": {
+                  "depth": {
+                    "format": "int32",
+                    "type": "integer"
+                  },
+                  "parent_thread_id": {
+                    "$ref": "#/definitions/v2/ThreadId"
+                  }
+                },
+                "required": [
+                  "depth",
+                  "parent_thread_id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "thread_spawn"
+            ],
+            "title": "ThreadSpawnSubAgentSource",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "other": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "other"
+            ],
+            "title": "OtherSubAgentSource",
+            "type": "object"
+          }
+        ]
+      },
       "TerminalInteractionNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -13131,6 +13326,42 @@
         ],
         "type": "object"
       },
+      "TextPosition": {
+        "properties": {
+          "column": {
+            "description": "1-based column number (in Unicode scalar values).",
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "line": {
+            "description": "1-based line number.",
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "column",
+          "line"
+        ],
+        "type": "object"
+      },
+      "TextRange": {
+        "properties": {
+          "end": {
+            "$ref": "#/definitions/v2/TextPosition"
+          },
+          "start": {
+            "$ref": "#/definitions/v2/TextPosition"
+          }
+        },
+        "required": [
+          "end",
+          "start"
+        ],
+        "type": "object"
+      },
       "TextResourceContents": {
         "properties": {
           "mimeType": {
@@ -13187,7 +13418,10 @@
           },
           "path": {
             "description": "[UNSTABLE] Path to the thread on disk.",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "preview": {
             "description": "Usually the first user message in the thread, if available.",
@@ -13220,7 +13454,6 @@
           "cwd",
           "id",
           "modelProvider",
-          "path",
           "preview",
           "source",
           "turns",
@@ -13367,6 +13600,9 @@
         ],
         "title": "ThreadForkResponse",
         "type": "object"
+      },
+      "ThreadId": {
+        "type": "string"
       },
       "ThreadItem": {
         "oneOf": [
@@ -14006,6 +14242,16 @@
               "null"
             ]
           },
+          "personality": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Personality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sandbox": {
             "anyOf": [
               {
@@ -14152,6 +14398,12 @@
               "null"
             ]
           },
+          "ephemeral": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "experimentalRawEvents": {
             "default": false,
             "description": "If true, opt into emitting raw response items on the event stream.\n\nThis is for internal use only (e.g. Codex Cloud). (TODO): Figure out a better way to categorize internal / experimental events & protocols.",
@@ -14167,6 +14419,16 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "personality": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Personality"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "sandbox": {
@@ -14689,6 +14951,17 @@
           },
           "outputSchema": {
             "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+          },
+          "personality": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Personality"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the personality for this turn and subsequent turns."
           },
           "sandboxPolicy": {
             "anyOf": [

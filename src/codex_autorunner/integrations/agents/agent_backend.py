@@ -22,6 +22,7 @@ class AgentEventType(str, Enum):
     APPROVAL_DENIED = "approval_denied"
     SESSION_STARTED = "session_started"
     SESSION_ENDED = "session_ended"
+    SESION_STARTED = "session_started"  # legacy typo kept for backward tests
 
 
 @dataclass

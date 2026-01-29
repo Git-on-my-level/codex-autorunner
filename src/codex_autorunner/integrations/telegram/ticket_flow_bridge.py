@@ -119,7 +119,7 @@ class TelegramTicketFlowBridge:
         pending = [
             (key, record)
             for key, record in entries
-            if getattr(record, "last_ticket_handoff_seq", None) != marker
+            if getattr(record, "last_ticket_dispatch_seq", None) != marker
         ]
         if not pending:
             return
@@ -128,19 +128,22 @@ class TelegramTicketFlowBridge:
             return
         message_text = self._format_ticket_flow_pause_message(run_id, seq, content)
         updates: list[tuple[str, Optional[str]]] = [
-            (key, getattr(record, "last_ticket_handoff_seq", None))
+            (key, getattr(record, "last_ticket_dispatch_seq", None))
             for key, record in pending
         ]
         for key, _previous in updates:
-            await self._store.update_topic(key, self._set_ticket_handoff_marker(marker))
+            await self._store.update_topic(
+                key, self._set_ticket_dispatch_marker(marker)
+            )
 
         primary_key, _primary_record = primary
         try:
             chat_id, thread_id, _scope = parse_topic_key(primary_key)
-        except Exception:
+        except Exception as exc:
+            self._logger.debug("Failed to parse topic key: %s", exc)
             for key, previous in updates:
                 await self._store.update_topic(
-                    key, self._set_ticket_handoff_marker(previous)
+                    key, self._set_ticket_dispatch_marker(previous)
                 )
             return
 
@@ -162,15 +165,15 @@ class TelegramTicketFlowBridge:
             )
             for key, previous in updates:
                 await self._store.update_topic(
-                    key, self._set_ticket_handoff_marker(previous)
+                    key, self._set_ticket_dispatch_marker(previous)
                 )
 
     @staticmethod
-    def _set_ticket_handoff_marker(
+    def _set_ticket_dispatch_marker(
         value: Optional[str],
     ):
         def apply(topic) -> None:
-            topic.last_ticket_handoff_seq = value
+            topic.last_ticket_dispatch_seq = value
 
         return apply
 
@@ -200,12 +203,12 @@ class TelegramTicketFlowBridge:
             paths = resolve_outbox_paths(
                 workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
             )
-            history_dir = paths.handoff_history_dir
-            seq = self._latest_handoff_seq(history_dir)
+            history_dir = paths.dispatch_history_dir
+            seq = self._latest_dispatch_seq(history_dir)
             if not seq:
                 reason = self._format_ticket_flow_pause_reason(latest)
                 return latest.id, "paused", reason
-            message_path = history_dir / seq / "USER_MESSAGE.md"
+            message_path = history_dir / seq / "DISPATCH.md"
             try:
                 content = message_path.read_text(encoding="utf-8")
             except OSError:
@@ -215,7 +218,7 @@ class TelegramTicketFlowBridge:
             store.close()
 
     @staticmethod
-    def _latest_handoff_seq(history_dir: Path) -> Optional[str]:
+    def _latest_dispatch_seq(history_dir: Path) -> Optional[str]:
         if not history_dir.exists() or not history_dir.is_dir():
             return None
         seqs = [
@@ -243,9 +246,9 @@ class TelegramTicketFlowBridge:
     ) -> str:
         from .helpers import _truncate_text
 
-        trimmed = _truncate_text(content.strip() or "(no handoff message)", 3000)
+        trimmed = _truncate_text(content.strip() or "(no dispatch message)", 3000)
         return (
-            f"Ticket flow paused (run {run_id}). Latest handoff #{seq}:\n\n"
+            f"Ticket flow paused (run {run_id}). Latest dispatch #{seq}:\n\n"
             f"{trimmed}\n\nUse /flow resume to continue."
         )
 

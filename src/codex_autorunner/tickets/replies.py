@@ -71,7 +71,7 @@ def parse_user_reply(path: Path) -> tuple[Optional[UserReply], list[str]]:
     extra = dict(data)
     extra.pop("title", None)
 
-    # Keep the body as-is, but normalize leading whitespace so it mirrors USER_MESSAGE.
+    # Keep the body as-is, but normalize leading whitespace so it mirrors DISPATCH.md.
     return UserReply(body=body.lstrip("\n"), title=title_str, extra=extra), []
 
 

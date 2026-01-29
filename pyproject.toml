@@ -86,6 +86,11 @@ markers = [
     "integration: marks tests as integration tests that require external dependencies (deselect with '-m \"not integration\"')",
     "timeout(seconds): per-test timeout (provided by pytest-timeout)",
 ]
+filterwarnings = [
+    # Cancelled auto-restart tasks can emit noisy unraisable warnings when the event
+    # loop shuts down; we explicitly clean these up, so silence the residual notice.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.ruff]
 line-length = 88

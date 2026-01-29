@@ -17,11 +17,9 @@ def test_prompt_calls_out_work_doc_paths(tmp_path: Path) -> None:
         engine.config, engine.docs, prev_run_output=None
     )
 
-    assert ".codex-autorunner/TODO.md" in prompt
-    assert ".codex-autorunner/PROGRESS.md" in prompt
-    assert ".codex-autorunner/OPINIONS.md" in prompt
-    assert ".codex-autorunner/SPEC.md" in prompt
-    assert ".codex-autorunner/SUMMARY.md" in prompt
+    assert ".codex-autorunner/workspace/active_context.md" in prompt
+    assert ".codex-autorunner/workspace/decisions.md" in prompt
+    assert ".codex-autorunner/workspace/spec.md" in prompt
     assert "FINAL user-facing report" in prompt
 
 
