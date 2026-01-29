@@ -348,16 +348,18 @@ class Engine:
                 "Failed to read TODO.md before run %s: %s", run_id, exc
             )
             todo_before = ""
+        from ..agents.registry import validate_agent_id
+
         state = load_state(self.state_path)
-        selected_agent = (state.autorunner_agent_override or "codex").strip().lower()
-        valid_agents = set(self.config.agents.keys()) | {"codex", "opencode"}
-        if selected_agent in valid_agents:
-            validated_agent = selected_agent
-        else:
+        try:
+            validated_agent = validate_agent_id(
+                state.autorunner_agent_override or "codex"
+            )
+        except ValueError:
             validated_agent = "codex"
             self.log_line(
                 run_id,
-                f"info: unknown agent '{selected_agent}', defaulting to codex",
+                f"info: unknown agent '{state.autorunner_agent_override}', defaulting to codex",
             )
         self._update_state("running", run_id, None, started=True)
         self._last_run_interrupted = False
