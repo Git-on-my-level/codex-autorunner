@@ -3782,58 +3782,7 @@
             "$ref": "#/components/schemas/TextPart"
           },
           {
-            "properties": {
-              "agent": {
-                "type": "string"
-              },
-              "command": {
-                "type": "string"
-              },
-              "description": {
-                "type": "string"
-              },
-              "id": {
-                "type": "string"
-              },
-              "messageID": {
-                "type": "string"
-              },
-              "model": {
-                "properties": {
-                  "modelID": {
-                    "type": "string"
-                  },
-                  "providerID": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "providerID",
-                  "modelID"
-                ],
-                "type": "object"
-              },
-              "prompt": {
-                "type": "string"
-              },
-              "sessionID": {
-                "type": "string"
-              },
-              "type": {
-                "const": "subtask",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "sessionID",
-              "messageID",
-              "type",
-              "prompt",
-              "description",
-              "agent"
-            ],
-            "type": "object"
+            "$ref": "#/components/schemas/SubtaskPart"
           },
           {
             "$ref": "#/components/schemas/ReasoningPart"
@@ -5220,6 +5169,60 @@
         ],
         "type": "object"
       },
+      "SubtaskPart": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "messageID": {
+            "type": "string"
+          },
+          "model": {
+            "properties": {
+              "modelID": {
+                "type": "string"
+              },
+              "providerID": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "providerID",
+              "modelID"
+            ],
+            "type": "object"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "type": {
+            "const": "subtask",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sessionID",
+          "messageID",
+          "type",
+          "prompt",
+          "description",
+          "agent"
+        ],
+        "type": "object"
+      },
       "SubtaskPartInput": {
         "properties": {
           "agent": {
@@ -5956,17 +5959,47 @@
       }
     },
     "/auth/{providerID}": {
+      "delete": {
+        "description": "Remove authentication credentials",
+        "operationId": "auth.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "providerID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "description": "Successfully removed authentication credentials"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Remove auth credentials"
+      },
       "put": {
         "description": "Set authentication credentials",
         "operationId": "auth.set",
         "parameters": [
-          {
-            "in": "query",
-            "name": "directory",
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "in": "path",
             "name": "providerID",
@@ -6835,6 +6868,61 @@
           }
         },
         "summary": "Get formatter status"
+      }
+    },
+    "/global/config": {
+      "get": {
+        "description": "Retrieve the current global OpenCode configuration settings and preferences.",
+        "operationId": "global.config.get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config"
+                }
+              }
+            },
+            "description": "Get global config info"
+          }
+        },
+        "summary": "Get global configuration"
+      },
+      "patch": {
+        "description": "Update global OpenCode configuration settings and preferences.",
+        "operationId": "global.config.update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Config"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config"
+                }
+              }
+            },
+            "description": "Successfully updated global config"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            },
+            "description": "Bad request"
+          }
+        },
+        "summary": "Update global configuration"
       }
     },
     "/global/dispose": {
