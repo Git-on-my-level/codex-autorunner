@@ -1501,6 +1501,13 @@ class Engine:
             reasoning = state.autorunner_effort_override or self.config.codex_reasoning
 
         # Use BackendOrchestrator if available, otherwise fall back to old method
+        if agent_id == "codex":
+            session_key = "autorunner"
+        elif agent_id == "opencode":
+            session_key = "autorunner.opencode"
+        else:
+            session_key = "autorunner"
+
         if self._backend_orchestrator is not None:
             return await self._run_agent_via_orchestrator(
                 agent_id=agent_id,
@@ -1509,17 +1516,11 @@ class Engine:
                 state=state,
                 model=model,
                 reasoning=reasoning,
+                session_key=session_key,
                 external_stop_flag=external_stop_flag,
             )
 
         # Fallback to old method for backward compatibility (testing)
-        if agent_id == "codex":
-            session_key = "autorunner"
-        elif agent_id == "opencode":
-            session_key = "autorunner.opencode"
-        else:
-            session_key = "autorunner"
-
         return await self._run_agent_backend_async(
             agent_id=agent_id,
             prompt=prompt,
@@ -1540,6 +1541,7 @@ class Engine:
         state: RunnerState,
         model: Optional[str],
         reasoning: Optional[str],
+        session_key: str,
         external_stop_flag: Optional[threading.Event],
     ) -> int:
         """
@@ -1563,6 +1565,7 @@ class Engine:
                     prompt=prompt,
                     model=model,
                     reasoning=reasoning,
+                    session_key=session_key,
                 ):
                     await events.put(event)
             except Exception as exc:
@@ -1687,6 +1690,8 @@ class Engine:
                         failed_error = event.error_message
 
                 if stop_task in done:
+                    self._last_run_interrupted = True
+                    self.log_line(run_id, "info: stop requested; interrupting backend")
                     if not producer_task.done():
                         producer_task.cancel()
                         try:
@@ -1703,7 +1708,7 @@ class Engine:
                         get_task.cancel()
                     for task in pending:
                         task.cancel()
-                    return 1
+                    return 0
 
                 if timeout_task and timeout_task in done:
                     if not producer_task.done():

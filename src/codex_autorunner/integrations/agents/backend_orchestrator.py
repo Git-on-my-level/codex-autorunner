@@ -133,18 +133,26 @@ class BackendOrchestrator:
         *,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
+        session_key: Optional[str] = None,
     ) -> AsyncGenerator[RunEvent, None]:
         """
         Run a turn on the backend.
 
         Yields RunEvent objects.
         """
-        backend = await self.get_backend(agent_id, state)
-
-        if self._context is None or self._context.session_id is None:
-            session_id = await self.start_session(agent_id, state)
-        else:
+        reuse_session = bool(getattr(self._config, "autorunner_reuse_session", False))
+        session_id: Optional[str] = None
+        if reuse_session and session_key:
+            session_id = self.get_thread_id(session_key)
+        if reuse_session and session_id is None and self._context is not None:
             session_id = self._context.session_id
+
+        session_id = await self.start_session(agent_id, state, session_id=session_id)
+        if reuse_session and session_key and session_id:
+            self.set_thread_id(session_key, session_id)
+
+        backend = self._active_backend
+        assert backend is not None, "backend should be initialized before run_turn"
 
         # Configure backend if supported
         if isinstance(backend, CodexAppServerBackend):
