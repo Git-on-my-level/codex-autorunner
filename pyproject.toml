@@ -82,6 +82,7 @@ completions = true
 cache_dir = ".codex-autorunner/pytest-cache"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+norecursedirs = ["worktrees", ".git", ".venv", ".codex-autorunner"]
 markers = [
     "integration: marks tests as integration tests that require external dependencies (deselect with '-m \"not integration\"')",
     "timeout(seconds): per-test timeout (provided by pytest-timeout)",
@@ -106,10 +107,10 @@ ignore = ["E501"]
 "src/codex_autorunner/pty_session.py" = ["F403"]
 "src/codex_autorunner/static_assets.py" = ["F403"]
 "src/codex_autorunner/cli.py" = ["B008"]
-"src/codex_autorunner/routes/terminal_images.py" = ["B008"]
-"src/codex_autorunner/routes/voice.py" = ["B008"]
 "src/codex_autorunner/surfaces/cli/cli.py" = ["B008"]
+"src/codex_autorunner/routes/terminal_images.py" = ["B008"]
 "src/codex_autorunner/surfaces/web/routes/terminal_images.py" = ["B008"]
+"src/codex_autorunner/routes/voice.py" = ["B008"]
 "src/codex_autorunner/surfaces/web/routes/voice.py" = ["B008"]
 
 [tool.mypy]

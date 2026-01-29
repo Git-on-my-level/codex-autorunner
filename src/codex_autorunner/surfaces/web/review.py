@@ -10,9 +10,9 @@ import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
-from ..agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
-from ..agents.opencode.supervisor import OpenCodeSupervisor
-from ..agents.registry import has_capability, validate_agent_id
+from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
+from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...agents.registry import has_capability, validate_agent_id
 from .config import RepoConfig
 from .engine import Engine
 from .locks import FileLock, FileLockBusy, FileLockError, process_alive, read_lock_info

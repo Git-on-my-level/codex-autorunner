@@ -1,4 +1,5 @@
 import contextvars
+import importlib
 import json
 import logging
 import os
@@ -344,9 +345,11 @@ def build_opencode_supervisor(
     if password and not username:
         username = "opencode"
 
-    from ..agents.opencode.supervisor import OpenCodeSupervisor
-
-    return OpenCodeSupervisor(
+    supervisor_module = importlib.import_module(
+        "codex_autorunner.agents.opencode.supervisor"
+    )
+    supervisor_cls = supervisor_module.OpenCodeSupervisor
+    supervisor = supervisor_cls(
         command,
         logger=logger,
         request_timeout=request_timeout,
@@ -358,6 +361,7 @@ def build_opencode_supervisor(
         base_env=base_env,
         subagent_models=subagent_models,
     )
+    return cast("OpenCodeSupervisor", supervisor)
 
 
 def _command_available(

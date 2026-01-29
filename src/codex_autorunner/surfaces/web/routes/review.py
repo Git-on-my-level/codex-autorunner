@@ -7,13 +7,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
-<<<<<<<< HEAD:src/codex_autorunner/surfaces/web/routes/review.py
-from ...review import ReviewBusyError, ReviewError, ReviewService
-from ..schemas import (
-========
-from ..flows.review import ReviewBusyError, ReviewError, ReviewService
-from ..web.schemas import (
->>>>>>>> 797dfb1 (Fix #407 (partial): Move review service from core/ to flows/ (#446)):src/codex_autorunner/routes/review.py
+from ..review import ReviewBusyError, ReviewError, ReviewService
+from .schemas import (
     ReviewControlResponse,
     ReviewStartRequest,
     ReviewStatusResponse,
