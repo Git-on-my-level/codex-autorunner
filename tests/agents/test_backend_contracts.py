@@ -10,10 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.agents import (
-    AgentBackend,
-    AgentEvent,
-)
+from codex_autorunner.core.ports import AgentBackend, AgentEvent, AgentEventType
 
 pytestmark = pytest.mark.integration
 
@@ -89,7 +86,6 @@ async def test_backend_interface_compliance():
 @pytest.mark.asyncio
 async def test_backend_event_types():
     """Test that AgentEvent types are available."""
-    from codex_autorunner.integrations.agents import AgentEventType
 
     # Verify core event types exist
     assert hasattr(AgentEventType, "STREAM_DELTA")
