@@ -11,6 +11,7 @@ from typing import Mapping, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.routing import Mount
 from starlette.types import ASGIApp
@@ -49,6 +50,8 @@ from ...core.usage import (
 )
 from ...core.utils import (
     build_opencode_supervisor,
+    reset_repo_root_context,
+    set_repo_root_context,
 )
 from ...housekeeping import run_housekeeping_once
 from ...integrations.app_server.app_server_events import AppServerEventBuffer
@@ -902,6 +905,22 @@ def create_repo_app(
     # apply their own base-path rewriting (the hub handles that globally).
     context = _build_app_context(repo_root, base_path="", hub_config=hub_config)
     app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
+
+    class _RepoRootContextMiddleware(BaseHTTPMiddleware):
+        """Ensure find_repo_root() resolves to the mounted repo even when cwd differs."""
+
+        def __init__(self, app, repo_root: Path):
+            super().__init__(app)
+            self.repo_root = repo_root
+
+        async def dispatch(self, request, call_next):
+            token = set_repo_root_context(self.repo_root)
+            try:
+                return await call_next(request)
+            finally:
+                reset_repo_root_context(token)
+
+    app.add_middleware(_RepoRootContextMiddleware, repo_root=context.engine.repo_root)
     _apply_app_context(app, context)
     app.add_middleware(GZipMiddleware, minimum_size=500)
     static_files = CacheStaticFiles(directory=context.static_dir)
@@ -928,14 +947,90 @@ def create_repo_app(
             auth_token_env = server_overrides.auth_token_env
     auth_token = _resolve_auth_token(auth_token_env, env=context.env)
     app.state.auth_token = auth_token
-    asgi_app: ASGIApp = app
     if auth_token:
-        asgi_app = AuthTokenMiddleware(asgi_app, auth_token, context.base_path)
-    asgi_app = HostOriginMiddleware(asgi_app, allowed_hosts, allowed_origins)
-    asgi_app = RequestIdMiddleware(asgi_app)
-    asgi_app = SecurityHeadersMiddleware(asgi_app)
+        app.add_middleware(
+            AuthTokenMiddleware, auth_token=auth_token, base_path=context.base_path
+        )
+    app.add_middleware(
+        HostOriginMiddleware,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
 
-    return asgi_app
+    return app
+
+
+def create_app(
+    repo_root: Optional[Path] = None,
+    base_path: Optional[str] = None,
+    server_overrides: Optional[ServerOverrides] = None,
+    hub_config: Optional[HubConfig] = None,
+) -> ASGIApp:
+    """
+    Public-facing factory for standalone repo apps (non-hub) retained for backward compatibility.
+    """
+    # Respect provided base_path when running directly; hub passes base_path="".
+    context = _build_app_context(repo_root, base_path, hub_config=hub_config)
+    app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
+
+    class _RepoRootContextMiddleware(BaseHTTPMiddleware):
+        """Ensure find_repo_root() resolves to the mounted repo even when cwd differs."""
+
+        def __init__(self, app, repo_root: Path):
+            super().__init__(app)
+            self.repo_root = repo_root
+
+        async def dispatch(self, request, call_next):
+            token = set_repo_root_context(self.repo_root)
+            try:
+                return await call_next(request)
+            finally:
+                reset_repo_root_context(token)
+
+    app.add_middleware(_RepoRootContextMiddleware, repo_root=context.engine.repo_root)
+    _apply_app_context(app, context)
+    app.add_middleware(GZipMiddleware, minimum_size=500)
+    static_files = CacheStaticFiles(directory=context.static_dir)
+    app.state.static_files = static_files
+    app.state.static_assets_lock = threading.Lock()
+    app.state.hub_static_assets = (
+        hub_config.static_assets if hub_config is not None else None
+    )
+    app.mount("/static", static_files, name="static")
+    # Route handlers
+    app.include_router(build_repo_router(context.static_dir))
+
+    allowed_hosts = _resolve_allowed_hosts(
+        context.engine.config.server_host, context.engine.config.server_allowed_hosts
+    )
+    allowed_origins = context.engine.config.server_allowed_origins
+    auth_token_env = context.engine.config.server_auth_token_env
+    if server_overrides is not None:
+        if server_overrides.allowed_hosts is not None:
+            allowed_hosts = list(server_overrides.allowed_hosts)
+        if server_overrides.allowed_origins is not None:
+            allowed_origins = list(server_overrides.allowed_origins)
+        if server_overrides.auth_token_env is not None:
+            auth_token_env = server_overrides.auth_token_env
+    auth_token = _resolve_auth_token(auth_token_env, env=context.env)
+    app.state.auth_token = auth_token
+    if auth_token:
+        app.add_middleware(
+            AuthTokenMiddleware, auth_token=auth_token, base_path=context.base_path
+        )
+    if context.base_path:
+        app.add_middleware(BasePathRouterMiddleware, base_path=context.base_path)
+    app.add_middleware(
+        HostOriginMiddleware,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    return app
 
 
 def create_hub_app(
