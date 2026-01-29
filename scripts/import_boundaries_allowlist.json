@@ -2,6 +2,11 @@
   "rules_version": 1,
   "violations": [
     {
+      "importer": "src/codex_autorunner/core/engine.py",
+      "imported": "codex_autorunner.integrations.agents.backend_orchestrator",
+      "reason": "Engine uses BackendOrchestrator for protocol-agnostic backend management."
+    },
+    {
       "importer": "src/codex_autorunner/core/hub.py",
       "imported": "codex_autorunner.integrations.agents.wiring",
       "reason": "Hub assembles agent backend wiring during repo discovery; still coupled to adapter wiring."

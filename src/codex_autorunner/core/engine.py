@@ -126,6 +126,7 @@ class Engine:
         hub_path: Optional[Path] = None,
         backend_factory: Optional[BackendFactory] = None,
         app_server_supervisor_factory: Optional[AppServerSupervisorFactory] = None,
+        backend_orchestrator: Optional[BackendOrchestrator] = None,
     ):
         if config is None:
             config = load_repo_config(repo_root, hub_path=hub_path)
@@ -156,17 +157,20 @@ class Engine:
         self._opencode_supervisor: Optional[Any] = None
 
         # Backend orchestrator for protocol-agnostic backend management
-        # TODO: Gradually migrate to use this instead of direct backend access
-        if backend_factory is not None:
-            # Use provided orchestrator (for testing)
-            self._backend_orchestrator: Optional[BackendOrchestrator] = None
-        else:
+        # Use provided orchestrator if available (for testing), otherwise create it
+        if backend_orchestrator is not None:
+            self._backend_orchestrator: Optional[BackendOrchestrator] = (
+                backend_orchestrator
+            )
+        elif backend_factory is None:
             self._backend_orchestrator = BackendOrchestrator(
                 repo_root=self.repo_root,
                 config=self.config,
                 notification_handler=self._handle_app_server_notification,
                 logger=self._app_server_logger,
             )
+        else:
+            self._backend_orchestrator = None
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
         self._last_telemetry_update_time: float = 0.0
@@ -1469,22 +1473,39 @@ class Engine:
         Run an agent turn using the specified backend.
 
         This method is protocol-agnostic - it determines the appropriate
-        model/reasoning parameters and session key based on the agent_id,
-        then delegates to _run_agent_backend_async().
+        model/reasoning parameters based on the agent_id and delegates to
+        either the BackendOrchestrator or _run_agent_backend_async().
         """
         # Determine model and reasoning parameters based on agent
         if agent_id == "codex":
             model = state.autorunner_model_override or self.config.codex_model
             reasoning = state.autorunner_effort_override or self.config.codex_reasoning
-            session_key = "autorunner"
         elif agent_id == "opencode":
             model = state.autorunner_model_override
             reasoning = state.autorunner_effort_override
-            session_key = "autorunner.opencode"
         else:
             # Fallback to codex defaults for unknown agents
             model = state.autorunner_model_override or self.config.codex_model
             reasoning = state.autorunner_effort_override or self.config.codex_reasoning
+
+        # Use BackendOrchestrator if available, otherwise fall back to old method
+        if self._backend_orchestrator is not None:
+            return await self._run_agent_via_orchestrator(
+                agent_id=agent_id,
+                prompt=prompt,
+                run_id=run_id,
+                state=state,
+                model=model,
+                reasoning=reasoning,
+                external_stop_flag=external_stop_flag,
+            )
+
+        # Fallback to old method for backward compatibility (testing)
+        if agent_id == "codex":
+            session_key = "autorunner"
+        elif agent_id == "opencode":
+            session_key = "autorunner.opencode"
+        else:
             session_key = "autorunner"
 
         return await self._run_agent_backend_async(
@@ -1497,6 +1518,229 @@ class Engine:
             reasoning=reasoning,
             external_stop_flag=external_stop_flag,
         )
+
+    async def _run_agent_via_orchestrator(
+        self,
+        *,
+        agent_id: str,
+        prompt: str,
+        run_id: int,
+        state: RunnerState,
+        model: Optional[str],
+        reasoning: Optional[str],
+        external_stop_flag: Optional[threading.Event],
+    ) -> int:
+        """
+        Run an agent turn using the BackendOrchestrator.
+
+        This method uses the orchestrator's protocol-agnostic interface to run
+        a turn on the backend, handling all events and emitting canonical events.
+        """
+        orchestrator = self._backend_orchestrator
+        assert (
+            orchestrator is not None
+        ), "orchestrator should be set when calling this method"
+
+        events: asyncio.Queue[Optional[RunEvent]] = asyncio.Queue()
+
+        async def _produce_events() -> None:
+            try:
+                async for event in orchestrator.run_turn(
+                    agent_id=agent_id,
+                    state=state,
+                    prompt=prompt,
+                    model=model,
+                    reasoning=reasoning,
+                ):
+                    await events.put(event)
+            except Exception as exc:
+                await events.put(Failed(timestamp=now_iso(), error_message=str(exc)))
+            finally:
+                await events.put(None)
+
+        producer_task = asyncio.create_task(_produce_events())
+        stop_task = asyncio.create_task(self._wait_for_stop(external_stop_flag))
+        timeout_seconds = self.config.app_server.turn_timeout_seconds
+        timeout_task: Optional[asyncio.Task] = (
+            asyncio.create_task(asyncio.sleep(timeout_seconds))
+            if timeout_seconds
+            else None
+        )
+
+        assistant_messages: list[str] = []
+        final_message: Optional[str] = None
+        failed_error: Optional[str] = None
+
+        try:
+            while True:
+                get_task = asyncio.create_task(events.get())
+                tasks = {get_task, stop_task}
+                if timeout_task is not None:
+                    tasks.add(timeout_task)
+                done, pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if get_task in done:
+                    event = get_task.result()
+                    if event is None:
+                        break
+                    if isinstance(event, Started) and event.session_id:
+                        self._update_run_telemetry(run_id, thread_id=event.session_id)
+                    elif isinstance(event, OutputDelta):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.AGENT_STREAM_DELTA,
+                            {
+                                "delta": event.content,
+                                "delta_type": event.delta_type,
+                            },
+                            timestamp_override=event.timestamp,
+                        )
+                        if event.delta_type in {
+                            "assistant_message",
+                            "assistant_stream",
+                        }:
+                            assistant_messages.append(event.content)
+                        elif event.delta_type == "log_line":
+                            self.log_line(
+                                run_id,
+                                (
+                                    f"stdout: {event.content}"
+                                    if event.content
+                                    else "stdout: "
+                                ),
+                            )
+                    elif isinstance(event, ToolCall):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.TOOL_CALL,
+                            {
+                                "tool_name": event.tool_name,
+                                "tool_input": event.tool_input,
+                            },
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, ApprovalRequested):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.APPROVAL_REQUESTED,
+                            {
+                                "request_id": event.request_id,
+                                "description": event.description,
+                                "context": event.context,
+                            },
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, TokenUsage):
+                        self._emit_canonical_event(
+                            run_id,
+                            FlowEventType.TOKEN_USAGE,
+                            {"usage": event.usage},
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, RunNotice):
+                        notice_type = FlowEventType.RUN_STATE_CHANGED
+                        if event.kind.endswith("timeout"):
+                            notice_type = FlowEventType.RUN_TIMEOUT
+                        elif "cancel" in event.kind:
+                            notice_type = FlowEventType.RUN_CANCELLED
+                        data: dict[str, Any] = {
+                            "kind": event.kind,
+                            "message": event.message,
+                        }
+                        if event.data:
+                            data["data"] = event.data
+                        self._emit_canonical_event(
+                            run_id,
+                            notice_type,
+                            data,
+                            timestamp_override=event.timestamp,
+                        )
+                    elif isinstance(event, Completed):
+                        if event.final_message:
+                            self._emit_canonical_event(
+                                run_id,
+                                FlowEventType.AGENT_MESSAGE_COMPLETE,
+                                {"final_message": event.final_message},
+                                timestamp_override=event.timestamp,
+                            )
+                        if event.final_message:
+                            final_message = event.final_message
+                    elif isinstance(event, Failed):
+                        self.log_line(
+                            run_id,
+                            f"error: backend run failed: {event.error_message}",
+                        )
+                        failed_error = event.error_message
+
+                if stop_task in done:
+                    if not producer_task.done():
+                        producer_task.cancel()
+                        try:
+                            await producer_task
+                        except asyncio.CancelledError:
+                            pass
+                    if timeout_task and not timeout_task.done():
+                        timeout_task.cancel()
+                    try:
+                        await orchestrator.interrupt(agent_id, state)
+                    except Exception as exc:
+                        self.log_line(run_id, f"interrupt failed: {exc}")
+                    if not get_task.done():
+                        get_task.cancel()
+                    for task in pending:
+                        task.cancel()
+                    return 1
+
+                if timeout_task and timeout_task in done:
+                    if not producer_task.done():
+                        producer_task.cancel()
+                        try:
+                            await producer_task
+                        except asyncio.CancelledError:
+                            pass
+                    try:
+                        await orchestrator.interrupt(agent_id, state)
+                    except Exception as exc:
+                        self.log_line(run_id, f"interrupt failed: {exc}")
+                    if not get_task.done():
+                        get_task.cancel()
+                    for task in pending:
+                        task.cancel()
+                    return 1
+        finally:
+            if not producer_task.done():
+                producer_task.cancel()
+                try:
+                    await producer_task
+                except asyncio.CancelledError:
+                    pass
+            if timeout_task and not timeout_task.done():
+                timeout_task.cancel()
+            if stop_task and not stop_task.done():
+                stop_task.cancel()
+
+        if failed_error:
+            return 1
+
+        if final_message:
+            self.log_line(run_id, final_message)
+
+        context = orchestrator.get_context()
+        if context:
+            turn_id = context.turn_id or orchestrator.get_last_turn_id()
+            thread_info = context.thread_info or orchestrator.get_last_thread_info()
+            token_total = orchestrator.get_last_token_total()
+            self._update_run_telemetry(
+                run_id,
+                turn_id=turn_id,
+                token_total=token_total,
+            )
+            if thread_info:
+                self._update_run_telemetry(run_id, thread_info=thread_info)
+
+        return 0
 
     async def _run_codex_app_server_async(
         self,
