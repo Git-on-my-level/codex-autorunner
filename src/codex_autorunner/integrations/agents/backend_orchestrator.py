@@ -19,7 +19,7 @@ from ...core.ports.run_event import RunEvent
 from ...core.state import RunnerState
 from .codex_backend import CodexAppServerBackend
 from .opencode_backend import OpenCodeBackend
-from .wiring import BackendFactory
+from .wiring import AgentBackendFactory, BackendFactory
 
 NotificationHandler = Callable[[dict[str, Any]], Awaitable[None]]
 SessionIdGetter = Callable[[str], Optional[str]]
@@ -214,6 +214,35 @@ class BackendOrchestrator:
                 self._context.turn_id = turn_id
             if thread_info:
                 self._context.thread_info = thread_info
+
+    def ensure_opencode_supervisor(self) -> Optional[Any]:
+        """
+        Ensure OpenCode supervisor exists.
+
+        This method delegates to the backend factory for supervisor management,
+        keeping Engine protocol-agnostic.
+        """
+        if isinstance(self._backend_factory, AgentBackendFactory):
+            factory = self._backend_factory
+            assert isinstance(factory, AgentBackendFactory)
+            return factory._ensure_opencode_supervisor()
+        return None
+
+    def build_app_server_supervisor(
+        self, *, event_prefix: str, notification_handler: Optional[NotificationHandler]
+    ) -> Optional[Any]:
+        """
+        Build a Codex app server supervisor factory.
+
+        This method centralizes backend-specific supervisor creation, keeping
+        Engine protocol-agnostic.
+        """
+        from .wiring import build_app_server_supervisor_factory
+
+        factory_fn = build_app_server_supervisor_factory(
+            self._config, logger=self._logger
+        )
+        return factory_fn(event_prefix, notification_handler)
 
 
 __all__ = [
