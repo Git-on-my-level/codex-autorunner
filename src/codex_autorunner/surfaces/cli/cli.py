@@ -14,8 +14,9 @@ import typer
 import uvicorn
 import yaml
 
-from .bootstrap import seed_hub_files, seed_repo_files
-from .core.config import (
+from ...bootstrap import seed_hub_files, seed_repo_files
+from ...core.app_server_utils import build_app_server_env
+from ...core.config import (
     CONFIG_FILENAME,
     ConfigError,
     HubConfig,
@@ -23,35 +24,34 @@ from .core.config import (
     find_nearest_hub_config_path,
     load_hub_config,
 )
-from .core.engine import Engine, LockError, clear_stale_lock, doctor
-from .core.git_utils import GitError, run_git
-from .core.hub import HubSupervisor
-from .core.logging_utils import log_event, setup_rotating_logger
-from .core.optional_dependencies import require_optional_dependencies
-from .core.snapshot import SnapshotError
-from .core.state import RunnerState, load_state, now_iso, save_state, state_lock
-from .core.usage import (
+from ...core.engine import Engine, LockError, clear_stale_lock, doctor
+from ...core.git_utils import GitError, run_git
+from ...core.hub import HubSupervisor
+from ...core.logging_utils import log_event, setup_rotating_logger
+from ...core.optional_dependencies import require_optional_dependencies
+from ...core.snapshot import SnapshotError
+from ...core.state import RunnerState, load_state, now_iso, save_state, state_lock
+from ...core.usage import (
     UsageError,
     default_codex_home,
     parse_iso_datetime,
     summarize_hub_usage,
     summarize_repo_usage,
 )
-from .core.utils import RepoNotFoundError, default_editor, find_repo_root
-from .integrations.app_server.env import build_app_server_env
-from .integrations.app_server.supervisor import WorkspaceAppServerSupervisor
-from .integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
-from .integrations.telegram.service import (
+from ...core.utils import RepoNotFoundError, default_editor, find_repo_root
+from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+from ...integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
+from ...integrations.telegram.service import (
     TelegramBotConfig,
     TelegramBotConfigError,
     TelegramBotLockError,
     TelegramBotService,
 )
-from .integrations.telegram.state import TelegramStateStore
-from .manifest import load_manifest
-from .server import create_hub_app
-from .spec_ingest import SpecIngestError, SpecIngestService, clear_work_docs
-from .voice import VoiceConfig
+from ...integrations.telegram.state import TelegramStateStore
+from ...manifest import load_manifest
+from ...server import create_hub_app
+from ...spec_ingest import SpecIngestError, SpecIngestService, clear_work_docs
+from ...voice import VoiceConfig
 
 logger = logging.getLogger("codex_autorunner.cli")
 
@@ -921,7 +921,7 @@ def snapshot(
                 turn_stall_poll_interval_seconds=config.app_server.turn_stall_poll_interval_seconds,
                 turn_stall_recovery_min_interval_seconds=config.app_server.turn_stall_recovery_min_interval_seconds,
             )
-            from .core.snapshot import SnapshotService
+            from ...core.snapshot import SnapshotService
 
             service = SnapshotService(engine, app_server_supervisor=supervisor)
             try:
@@ -1202,10 +1202,10 @@ def flow(
         except ValueError:
             _raise_exit("Invalid run_id format; must be a UUID")
 
-        from .core.flows import FlowController, FlowStore
-        from .core.flows.models import FlowRunStatus
-        from .flows.ticket_flow import build_ticket_flow_definition
-        from .tickets import AgentPool
+        from ...core.flows import FlowController, FlowStore
+        from ...core.flows.models import FlowRunStatus
+        from ...integrations.agents import AgentPool
+        from ...integrations.agents.ticket_flow import build_ticket_flow_definition
 
         db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
         artifacts_root = engine.repo_root / ".codex-autorunner" / "flows"

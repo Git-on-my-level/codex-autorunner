@@ -20,6 +20,7 @@ from ...core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
+from ...core.app_server_utils import build_app_server_env
 from ...core.config import (
     AppServerConfig,
     ConfigError,
@@ -54,7 +55,6 @@ from ...core.utils import (
 from ...housekeeping import run_housekeeping_once
 from ...integrations.app_server.app_server_events import AppServerEventBuffer
 from ...integrations.app_server.client import ApprovalHandler, NotificationHandler
-from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...manifest import load_manifest
 from ...spec_ingest import SpecIngestService

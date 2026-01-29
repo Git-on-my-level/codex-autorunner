@@ -1360,6 +1360,8 @@ class Engine:
     def _build_app_server_supervisor(
         self, env_builder: Any
     ) -> WorkspaceAppServerSupervisor:
+        from ..integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+
         config = self.config.app_server
         return WorkspaceAppServerSupervisor(
             config.command,
