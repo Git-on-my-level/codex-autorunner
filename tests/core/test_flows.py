@@ -168,6 +168,11 @@ def test_flow_store_persistence(flow_controller):
 
 
 def test_flow_events(flow_controller):
+    flow_controller.store.create_flow_run(
+        run_id="test-run-1",
+        flow_type="test_flow",
+        input_data={},
+    )
     event = flow_controller.store.create_event(
         event_id="test-event-1",
         run_id="test-run-1",
@@ -184,6 +189,11 @@ def test_flow_events(flow_controller):
 
 
 def test_flow_artifacts(flow_controller):
+    flow_controller.store.create_flow_run(
+        run_id="test-run-1",
+        flow_type="test_flow",
+        input_data={},
+    )
     artifact = flow_controller.store.create_artifact(
         artifact_id="test-artifact-1",
         run_id="test-run-1",

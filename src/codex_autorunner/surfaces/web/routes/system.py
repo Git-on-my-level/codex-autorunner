@@ -6,9 +6,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from ..core import update as update_core
-from ..core.config import HubConfig
-from ..core.update import (
+from ...core import update as update_core
+from ...core.config import HubConfig
+from ...core.update import (
     UpdateInProgressError,
     _normalize_update_ref,
     _normalize_update_target,
@@ -16,7 +16,7 @@ from ..core.update import (
     _spawn_update_process,
     _system_update_check,
 )
-from ..core.update_paths import resolve_update_paths
+from ...core.update_paths import resolve_update_paths
 from .schemas import (
     SystemHealthResponse,
     SystemUpdateCheckResponse,

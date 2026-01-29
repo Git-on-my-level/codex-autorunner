@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..core.state import persist_session_registry
+from ...core.state import persist_session_registry
 from .schemas import (
     SessionsResponse,
     SessionStopRequest,

@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
-from ..voice import VoiceService, VoiceServiceError
+from ...voice import VoiceService, VoiceServiceError
 
 logger = logging.getLogger("codex_autorunner.routes.voice")
 

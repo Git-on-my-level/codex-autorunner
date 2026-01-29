@@ -10,7 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..core.usage import (
+from ...core.usage import (
     UsageError,
     default_codex_home,
     get_repo_usage_series_cached,

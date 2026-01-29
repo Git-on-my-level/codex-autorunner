@@ -8,15 +8,15 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from ..codex_cli import apply_codex_options, extract_flag_value, supports_reasoning
-from ..core.locks import (
+from ...codex_cli import apply_codex_options, extract_flag_value, supports_reasoning
+from ...core.locks import (
     DEFAULT_RUNNER_CMD_HINTS,
     assess_lock,
     process_is_active,
     read_lock_info,
 )
-from ..core.state import load_state
-from ..core.utils import resolve_opencode_binary
+from ...core.state import load_state
+from ...core.utils import resolve_opencode_binary
 
 BYPASS_FLAGS = {
     "--yolo",

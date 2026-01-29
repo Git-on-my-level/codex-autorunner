@@ -14,8 +14,8 @@ import typer
 import uvicorn
 import yaml
 
-from ..bootstrap import seed_hub_files, seed_repo_files
-from ..core.config import (
+from ...bootstrap import seed_hub_files, seed_repo_files
+from ...core.config import (
     CONFIG_FILENAME,
     ConfigError,
     HubConfig,
@@ -27,36 +27,36 @@ from ..core.config import (
     load_hub_config,
     load_repo_config,
 )
-from ..core.engine import DoctorReport, Engine, LockError, clear_stale_lock, doctor
-from ..core.git_utils import GitError, run_git
-from ..core.hub import HubSupervisor
-from ..core.logging_utils import log_event, setup_rotating_logger
-from ..core.optional_dependencies import require_optional_dependencies
-from ..core.state import RunnerState, load_state, now_iso, save_state, state_lock
-from ..core.usage import (
+from ...core.engine import DoctorReport, Engine, LockError, clear_stale_lock, doctor
+from ...core.git_utils import GitError, run_git
+from ...core.hub import HubSupervisor
+from ...core.logging_utils import log_event, setup_rotating_logger
+from ...core.optional_dependencies import require_optional_dependencies
+from ...core.state import RunnerState, load_state, now_iso, save_state, state_lock
+from ...core.usage import (
     UsageError,
     default_codex_home,
     parse_iso_datetime,
     summarize_hub_usage,
     summarize_repo_usage,
 )
-from ..core.utils import RepoNotFoundError, default_editor, find_repo_root
-from ..integrations.agents.wiring import (
+from ...core.utils import RepoNotFoundError, default_editor, find_repo_root
+from ...integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
 )
-from ..integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
-from ..integrations.telegram.doctor import telegram_doctor_checks
-from ..integrations.telegram.service import (
+from ...integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
+from ...integrations.telegram.doctor import telegram_doctor_checks
+from ...integrations.telegram.service import (
     TelegramBotConfig,
     TelegramBotConfigError,
     TelegramBotLockError,
     TelegramBotService,
 )
-from ..integrations.telegram.state import TelegramStateStore
-from ..manifest import load_manifest
-from ..server import create_hub_app
-from ..voice import VoiceConfig
+from ...integrations.telegram.state import TelegramStateStore
+from ...manifest import load_manifest
+from ...server import create_hub_app
+from ...voice import VoiceConfig
 
 logger = logging.getLogger("codex_autorunner.surfaces.cli")
 

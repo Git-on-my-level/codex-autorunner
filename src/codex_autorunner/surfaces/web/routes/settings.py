@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..core.state import RunnerState, load_state, save_state, state_lock
+from ...core.state import RunnerState, load_state, save_state, state_lock
 from .schemas import SessionSettingsRequest, SessionSettingsResponse
 
 ALLOWED_APPROVAL_POLICIES = {"never", "unlessTrusted"}
