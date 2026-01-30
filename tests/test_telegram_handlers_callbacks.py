@@ -4,6 +4,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramCallbackQuery,
     encode_bind_callback,
     encode_compact_callback,
+    encode_flow_callback,
     encode_question_custom_callback,
     encode_question_done_callback,
     encode_question_option_callback,
@@ -51,6 +52,11 @@ class _HandlerStub:
         self, _callback: TelegramCallbackQuery, parsed: object
     ) -> None:
         self.calls.append(("question", parsed))
+
+    async def _handle_flow_callback(
+        self, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("flow", parsed))
 
 
 @pytest.mark.anyio
@@ -196,3 +202,20 @@ async def test_handle_callback_question_done() -> None:
     await handle_callback(handlers, callback)
     assert handlers.calls
     assert handlers.calls[0][0] == "question"
+
+
+@pytest.mark.anyio
+async def test_handle_callback_flow_action() -> None:
+    handlers = _HandlerStub()
+    callback = TelegramCallbackQuery(
+        update_id=8,
+        callback_id="cb8",
+        from_user_id=9,
+        data=encode_flow_callback("resume", "run-123"),
+        message_id=12,
+        chat_id=40,
+        thread_id=41,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls
+    assert handlers.calls[0][0] == "flow"

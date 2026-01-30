@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .....agents.registry import validate_agent_id
 from .....core.config import load_repo_config
@@ -184,6 +184,7 @@ def _get_ticket_controller(repo_root: Path) -> FlowController:
 
 def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
     health = check_worker_health(repo_root, run_id)
+    _ensure_worker_not_stale(health)
     if health.is_alive:
         _logger.info("Worker already active for run %s (pid=%s)", run_id, health.pid)
         return
@@ -196,6 +197,23 @@ def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
     finally:
         if proc.poll() is not None:
             _logger.warning("Flow worker for %s exited immediately", run_id)
+
+
+def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
+    if health.status in {"dead", "mismatch", "invalid"}:
+        try:
+            clear_worker_metadata(health.artifact_path.parent)
+        except Exception:
+            _logger.debug("Failed to clear worker metadata: %s", health.artifact_path)
+
+
+def _select_latest_run(
+    store: FlowStore, predicate: Callable[[object], bool]
+) -> Optional[object]:
+    for record in store.list_flow_runs(flow_type="ticket_flow"):
+        if predicate(record):
+            return record
+    return None
 
 
 class FlowCommands(SharedHelpers):
@@ -423,10 +441,9 @@ class FlowCommands(SharedHelpers):
                 if run_id_raw and error:
                     record = None
                 if error is None and record is None:
-                    paused_runs = store.list_flow_runs(
-                        flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+                    record = _select_latest_run(
+                        store, lambda run: run.status == FlowRunStatus.PAUSED
                     )
-                    record = paused_runs[0] if paused_runs else None
                 if error is None and record is None:
                     error = "No paused ticket flow run found."
                 if error is None and record.status != FlowRunStatus.PAUSED:
@@ -447,10 +464,11 @@ class FlowCommands(SharedHelpers):
                 if run_id_raw and error:
                     record = None
                 if error is None and record is None:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
-                    record = runs[0] if runs else None
+                    record = _select_latest_run(
+                        store, lambda run: run.status.is_active()
+                    )
                 if error is None and record is None:
-                    error = "No ticket flow run found."
+                    error = "No active ticket flow run found."
                 if error is None and record.status.is_terminal():
                     error = f"Run {record.id} is already {record.status.value}."
             finally:
@@ -469,10 +487,11 @@ class FlowCommands(SharedHelpers):
                 if run_id_raw and error:
                     record = None
                 if error is None and record is None:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
-                    record = runs[0] if runs else None
+                    record = _select_latest_run(
+                        store, lambda run: run.status.is_active()
+                    )
                 if error is None and record is None:
-                    error = "No ticket flow run found."
+                    error = "No active ticket flow run found."
                 if error is None:
                     record, updated, locked = reconcile_flow_run(
                         repo_root, record, store
@@ -493,12 +512,18 @@ class FlowCommands(SharedHelpers):
                 if run_id_raw and error:
                     record = None
                 if error is None and record is None:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
-                    record = runs[0] if runs else None
+                    record = _select_latest_run(
+                        store,
+                        lambda run: run.status.is_terminal()
+                        or run.status == FlowRunStatus.PAUSED,
+                    )
                 if error is None and record is None:
-                    error = "No ticket flow run found."
+                    error = "No paused or terminal ticket flow run found."
                 if error is None and not record.status.is_terminal():
-                    error = "Can only archive completed/stopped/failed runs (use --force for stuck flows)."
+                    if record.status in (FlowRunStatus.STOPPING, FlowRunStatus.PAUSED):
+                        self._stop_flow_worker(repo_root, record.id)
+                    else:
+                        error = "Can only archive completed/stopped/failed runs (use --force for stuck flows)."
             finally:
                 store.close()
 
@@ -1080,10 +1105,9 @@ You are the first ticket in a new ticket_flow run.
                 )
                 return
             if record is None:
-                paused_runs = store.list_flow_runs(
-                    flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+                record = _select_latest_run(
+                    store, lambda run: run.status == FlowRunStatus.PAUSED
                 )
-                record = paused_runs[0] if paused_runs else None
             if record is None:
                 await self._send_message(
                     message.chat_id,
@@ -1141,12 +1165,11 @@ You are the first ticket in a new ticket_flow run.
                 )
                 return
             if record is None:
-                runs = store.list_flow_runs(flow_type="ticket_flow")
-                record = runs[0] if runs else None
+                record = _select_latest_run(store, lambda run: run.status.is_active())
             if record is None:
                 await self._send_message(
                     message.chat_id,
-                    "No ticket flow run found.",
+                    "No active ticket flow run found.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1190,12 +1213,11 @@ You are the first ticket in a new ticket_flow run.
                 )
                 return
             if record is None:
-                runs = store.list_flow_runs(flow_type="ticket_flow")
-                record = runs[0] if runs else None
+                record = _select_latest_run(store, lambda run: run.status.is_active())
             if record is None:
                 await self._send_message(
                     message.chat_id,
-                    "No ticket flow run found.",
+                    "No active ticket flow run found.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1259,21 +1281,22 @@ You are the first ticket in a new ticket_flow run.
                 )
                 return
             if record is None:
-                runs = store.list_flow_runs(flow_type="ticket_flow")
-                record = runs[0] if runs else None
+                record = _select_latest_run(
+                    store,
+                    lambda run: run.status.is_terminal()
+                    or run.status == FlowRunStatus.PAUSED
+                    or (force and run.status == FlowRunStatus.STOPPING),
+                )
             if record is None:
                 await self._send_message(
                     message.chat_id,
-                    "No ticket flow run found.",
+                    "No paused or terminal ticket flow run found.",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
                 return
             if not record.status.is_terminal():
-                if force and record.status in (
-                    FlowRunStatus.STOPPING,
-                    FlowRunStatus.PAUSED,
-                ):
+                if record.status in (FlowRunStatus.STOPPING, FlowRunStatus.PAUSED):
                     self._stop_flow_worker(repo_root, record.id)
                 else:
                     await self._send_message(
