@@ -1,9 +1,11 @@
 import asyncio
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Optional, Union
 
 from ...core.circuit_breaker import CircuitBreaker
+from ...core.logging_utils import log_event
 from ...core.ports.agent_backend import AgentBackend, AgentEvent, now_iso
 from ...core.ports.run_event import (
     ApprovalRequested,
@@ -172,10 +174,14 @@ class CodexAppServerBackend(AgentBackend):
         if not self._thread_id:
             await self.start_session(target={}, context={})
 
-        _logger.info(
-            "Running turn on thread %s with message: %s",
-            self._thread_id or "unknown",
-            message[:100],
+        message_hash = hashlib.sha256(message.encode()).hexdigest()[:16]
+        log_event(
+            self._logger,
+            logging.INFO,
+            "agent.turn_started",
+            thread_id=self._thread_id,
+            message_length=len(message),
+            message_hash=message_hash,
         )
 
         turn_kwargs: Dict[str, Any] = {}
@@ -220,10 +226,15 @@ class CodexAppServerBackend(AgentBackend):
         else:
             actual_session_id = self._thread_id
 
-        _logger.info(
-            "Running turn events on thread %s with message: %s",
-            actual_session_id or "unknown",
-            message[:100],
+        message_hash = hashlib.sha256(message.encode()).hexdigest()[:16]
+        log_event(
+            self._logger,
+            logging.INFO,
+            "agent.turn_events_started",
+            thread_id=actual_session_id,
+            turn_id=self._turn_id,
+            message_length=len(message),
+            message_hash=message_hash,
         )
 
         yield Started(
