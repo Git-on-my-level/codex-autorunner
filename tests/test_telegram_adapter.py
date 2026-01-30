@@ -9,6 +9,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     BindCallback,
     CancelCallback,
     CompactCallback,
+    FlowRunCallback,
     PageCallback,
     QuestionCancelCallback,
     QuestionCustomCallback,
@@ -26,6 +27,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     allowlist_allows,
     build_approval_keyboard,
     build_bind_keyboard,
+    build_flow_runs_keyboard,
     build_question_keyboard,
     build_resume_keyboard,
     build_review_commit_keyboard,
@@ -35,6 +37,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     encode_bind_callback,
     encode_cancel_callback,
     encode_compact_callback,
+    encode_flow_run_callback,
     encode_page_callback,
     encode_question_cancel_callback,
     encode_question_custom_callback,
@@ -594,6 +597,9 @@ def test_callback_encoding_and_parsing() -> None:
     page = encode_page_callback("resume", 2)
     parsed_page = parse_callback_data(page)
     assert parsed_page == PageCallback(kind="resume", page=2)
+    flow_run = encode_flow_run_callback("run-123")
+    parsed_flow_run = parse_callback_data(flow_run)
+    assert parsed_flow_run == FlowRunCallback(run_id="run-123")
 
 
 def test_build_keyboards() -> None:
@@ -625,6 +631,10 @@ def test_build_keyboards() -> None:
     review_keyboard = build_review_commit_keyboard([("abc123", "1) abc123")])
     assert review_keyboard["inline_keyboard"][0][0]["callback_data"].startswith(
         "review_commit:"
+    )
+    flow_runs_keyboard = build_flow_runs_keyboard([("run-1", "1) run-1")])
+    assert flow_runs_keyboard["inline_keyboard"][0][0]["callback_data"].startswith(
+        "flow_run:"
     )
 
 

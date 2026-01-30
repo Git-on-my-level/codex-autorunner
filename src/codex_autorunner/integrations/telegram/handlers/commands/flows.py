@@ -42,7 +42,7 @@ from ...adapter import (
 )
 from ...config import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from ...helpers import _truncate_text
-from ...types import PendingQuestion
+from ...types import PendingQuestion, SelectionState
 from .shared import SharedHelpers
 
 _logger = logging.getLogger(__name__)
@@ -103,6 +103,7 @@ def _flow_help_lines() -> list[str]:
     return [
         "Flow commands:",
         "/flow status [run_id]",
+        "/flow runs [N]",
         "/flow bootstrap [--force-new]",
         "/flow issue <issue#|url>",
         "/flow plan <text>",
@@ -347,6 +348,9 @@ class FlowCommands(SharedHelpers):
 
         if action == "status":
             await self._handle_flow_status_action(message, repo_root, rest_argv)
+            return
+        if action == "runs":
+            await self._handle_flow_runs(message, repo_root, rest_argv)
             return
         if action == "bootstrap":
             await self._handle_flow_bootstrap(message, repo_root, rest_argv)
@@ -854,6 +858,64 @@ class FlowCommands(SharedHelpers):
         await self._send_message(
             message.chat_id,
             text,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            reply_markup=keyboard,
+        )
+
+    async def _handle_flow_runs(
+        self, message: TelegramMessage, repo_root: Path, argv: list[str]
+    ) -> None:
+        limit = 5
+        limit_raw = self._first_non_flag(argv)
+        if limit_raw:
+            limit_value = self._coerce_int(limit_raw)
+            if limit_value is None or limit_value <= 0:
+                await self._send_message(
+                    message.chat_id,
+                    "Provide a positive integer for /flow runs [N].",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            limit = min(limit_value, 50)
+
+        store = FlowStore(_flow_paths(repo_root)[0])
+        try:
+            store.initialize()
+            runs = store.list_flow_runs(flow_type="ticket_flow")
+        finally:
+            store.close()
+
+        if not runs:
+            await self._send_message(
+                message.chat_id,
+                "No ticket flow runs found. Use /flow bootstrap to start.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        items: list[tuple[str, str]] = []
+        button_labels: dict[str, str] = {}
+        for run in runs[:limit]:
+            created_at = getattr(run, "created_at", None) or "unknown"
+            status = getattr(run, "status", None)
+            status_label = status.value if status is not None else "unknown"
+            items.append((run.id, f"{status_label} • {created_at}"))
+            short_id = run.id.split("-")[0]
+            button_label = f"{short_id} {status_label}"
+            button_labels[run.id] = _truncate_text(button_label, 32)
+
+        state = SelectionState(items=items, button_labels=button_labels)
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        self._flow_run_options[key] = state
+        self._touch_cache_timestamp("flow_run_options", key)
+        prompt = self._flow_runs_prompt(state)
+        keyboard = self._build_flow_runs_keyboard(state)
+        await self._send_message(
+            message.chat_id,
+            prompt,
             thread_id=message.thread_id,
             reply_to=message.message_id,
             reply_markup=keyboard,

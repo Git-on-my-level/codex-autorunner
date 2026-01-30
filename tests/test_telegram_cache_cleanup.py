@@ -43,5 +43,15 @@ async def test_cache_cleanup_eviction(tmp_path: Path) -> None:
             "resume_options", SELECTION_STATE_TTL_SECONDS
         )
         assert "topic-1" not in service._resume_options
+
+        state = SelectionState(items=[("run-1", "Run 1")], page=0)
+        service._flow_run_options["topic-2"] = state
+        service._cache_timestamps["flow_run_options"] = {
+            "topic-2": time.monotonic() - SELECTION_STATE_TTL_SECONDS - 1.0
+        }
+        service._evict_expired_cache_entries(
+            "flow_run_options", SELECTION_STATE_TTL_SECONDS
+        )
+        assert "topic-2" not in service._flow_run_options
     finally:
         await service._bot.close()

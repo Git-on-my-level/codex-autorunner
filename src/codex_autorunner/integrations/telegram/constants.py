@@ -65,6 +65,7 @@ UPDATE_PICKER_PROMPT = "Select update target (buttons below)."
 REVIEW_COMMIT_PICKER_PROMPT = (
     "Select a commit to review (buttons below or reply with number)."
 )
+FLOW_RUNS_PICKER_PROMPT = "Select a ticket flow run (buttons below)."
 REVIEW_COMMIT_BUTTON_LABEL_LIMIT = 80
 UPDATE_TARGET_OPTIONS = (
     ("both", "Both (web + Telegram)"),
