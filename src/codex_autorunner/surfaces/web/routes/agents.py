@@ -9,10 +9,10 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ...agents.codex.harness import CodexHarness
-from ...agents.opencode.harness import OpenCodeHarness
-from ...agents.opencode.supervisor import OpenCodeSupervisorError
-from ...agents.types import ModelCatalog
+from ....agents.codex.harness import CodexHarness
+from ....agents.opencode.harness import OpenCodeHarness
+from ....agents.opencode.supervisor import OpenCodeSupervisorError
+from ....agents.types import ModelCatalog
 from .shared import SSE_HEADERS
 
 

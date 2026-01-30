@@ -1,4 +1,3 @@
-"""Telegram surface for Codex AutoRunner (Telegram bot interface)."""
+"""Telegram surface (Telegram bot and adapters)."""
 
-# This module is a placeholder for Telegram-specific surface code
-# Actual Telegram adapter code lives in src/codex_autorunner/integrations/telegram/
+__all__ = []

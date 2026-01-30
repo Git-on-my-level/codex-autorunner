@@ -14,6 +14,7 @@ import typer
 import uvicorn
 import yaml
 
+from ...agents.registry import validate_agent_id
 from ...bootstrap import seed_hub_files, seed_repo_files
 from ...core.config import (
     CONFIG_FILENAME,
@@ -55,14 +56,19 @@ from ...integrations.telegram.service import (
 )
 from ...integrations.telegram.state import TelegramStateStore
 from ...manifest import load_manifest
-from ...server import create_hub_app
 from ...voice import VoiceConfig
+from ..web.app import create_hub_app
 
-logger = logging.getLogger("codex_autorunner.surfaces.cli")
+logger = logging.getLogger("codex_autorunner.cli")
 
 app = typer.Typer(add_completion=False)
 hub_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
+
+
+def main() -> None:
+    """Entrypoint for CLI execution."""
+    app()
 
 
 def _raise_exit(message: str, *, cause: Optional[BaseException] = None) -> NoReturn:
@@ -85,6 +91,7 @@ def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> Engine:
             hub_path=hub,
             backend_factory=build_agent_backend_factory(repo_root, config),
             app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+            agent_id_validator=validate_agent_id,
         )
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
@@ -886,6 +893,7 @@ def hub_create(
         config,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        agent_id_validator=validate_agent_id,
     )
     try:
         snapshot = supervisor.create_repo(
@@ -918,6 +926,7 @@ def hub_clone(
         config,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        agent_id_validator=validate_agent_id,
     )
     try:
         snapshot = supervisor.clone_repo(
@@ -967,6 +976,7 @@ def hub_scan(path: Optional[Path] = typer.Option(None, "--path", help="Hub root 
         config,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        agent_id_validator=validate_agent_id,
     )
     snapshots = supervisor.scan()
     typer.echo(f"Scanned hub at {config.root} (repos_root={config.repos_root})")
@@ -1126,10 +1136,10 @@ def flow(
         except ValueError:
             _raise_exit("Invalid run_id format; must be a UUID")
 
-        from .core.flows import FlowController, FlowStore
-        from .core.flows.models import FlowRunStatus
-        from .flows.ticket_flow import build_ticket_flow_definition
-        from .tickets import AgentPool
+        from ...core.flows import FlowController, FlowStore
+        from ...core.flows.models import FlowRunStatus
+        from ...integrations.agents import AgentPool
+        from ...integrations.agents.ticket_flow import build_ticket_flow_definition
 
         db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
         artifacts_root = engine.repo_root / ".codex-autorunner" / "flows"

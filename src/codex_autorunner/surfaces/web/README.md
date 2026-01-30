@@ -1,43 +1,28 @@
 # Web Surface
 
-The web surface provides the FastAPI server and web UI for Codex AutoRunner.
+FastAPI web UI, API routes, and web-specific workflows.
 
 ## Responsibilities
 
-- FastAPI application and server lifecycle
-- HTTP routes for web API endpoints
-- Static asset serving (HTML, CSS, JS)
-- WebSocket connections for terminal sessions
-- Request middleware and authentication
-- Web-specific schemas and data models
+- Render web UI and provide REST API
+- Handle HTTP/websocket connections
+- Stream real-time events via SSE
+- Provide web-based ergonomics (logs, dashboards)
 
 ## Allowed Dependencies
 
-- **CAN import from**: `core/`, `integrations/`, `agents/`, `tickets/`, `workspace/`
-- **MUST NOT import from**: Other surface packages (`cli/`, `telegram/`)
-- **CAN be imported by**: `server.py`, other web surface modules
+- `core.*` (engine, state, config, etc.)
+- `integrations.*` (app_server, telegram, etc.)
+- `surfaces.cli` (shared CLI utilities)
+- Third-party web frameworks (FastAPI, starlette)
 
-## Architecture
+## Key Components
 
-Web surface sits at the top of the layer hierarchy:
-```
-[ Web Surface ] → [ Adapters ] → [ Control Plane ] → [ Engine ]
-```
-
-It orchestrates adapters and coordinates with the engine to provide a user-facing API.
-
-## Key Modules
-
-- `app.py`: FastAPI application factory and startup/shutdown logic
-- `routes/`: HTTP route handlers organized by feature
-- `middleware.py`: Request/response middleware
-- `schemas.py`: Pydantic models for API requests/responses
-- `static_assets.py`: Static file serving and HTML rendering
-- `pty_session.py`: PTY terminal session management
-- `review.py`: Review workflow orchestration (web-triggered)
-
-## Integration Notes
-
-- Uses OpenCode and app-server adapters via `integrations/`
-- Coordinates with engine via `core/engine.py`
-- Stores runtime state in `.codex-autorunner/` directory
+- `app.py`: Main FastAPI application factory
+- `routes/`: API route handlers
+- `middleware.py`: HTTP middleware (auth, base path, security headers)
+- `schemas.py`: Request/response schemas
+- `review.py`: Review workflow orchestration (moved from core/)
+- `runner_manager.py`: Runner process lifecycle management
+- `terminal_sessions.py`: PTY session management for TUI
+- `static_assets.py`: Static asset management and caching

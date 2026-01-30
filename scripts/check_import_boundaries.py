@@ -3,6 +3,7 @@
 
 Fails only on new violations compared to the allowlist.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -99,7 +100,9 @@ def module_for_path(path: Path) -> ModuleContext | None:
     return ModuleContext(module=".".join(parts), is_init=is_init)
 
 
-def resolve_import_from(module: str | None, level: int, context: ModuleContext) -> str | None:
+def resolve_import_from(
+    module: str | None, level: int, context: ModuleContext
+) -> str | None:
     if level == 0:
         return module
     package_parts = context.package
@@ -175,7 +178,9 @@ def check_file(path: Path) -> list[Violation]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check import boundaries between CAR layers.")
+    parser = argparse.ArgumentParser(
+        description="Check import boundaries between CAR layers."
+    )
     parser.add_argument(
         "--allowlist",
         default=str(REPO_ROOT / "scripts" / "import_boundaries_allowlist.json"),
@@ -190,7 +195,9 @@ def main() -> int:
 
     violations.sort(key=lambda v: (v.importer, v.line, v.imported))
     unallowlisted = [v for v in violations if v.key() not in allowlist.entries]
-    stale = [key for key in allowlist.entries if key not in {v.key() for v in violations}]
+    stale = [
+        key for key in allowlist.entries if key not in {v.key() for v in violations}
+    ]
 
     if unallowlisted:
         print("New import boundary violations detected:")

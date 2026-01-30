@@ -1,9 +1,9 @@
-"""Backward-compatible Codex CLI helpers.
+"""Codex CLI helpers for the CLI surface.
 
-Delegates to core.utils to avoid duplicated logic.
+Delegates to core.utils to keep logic centralized.
 """
 
-from .core.utils import (  # noqa: F401
+from ...core.utils import (  # noqa: F401
     apply_codex_options,
     extract_flag_value,
     inject_flag,

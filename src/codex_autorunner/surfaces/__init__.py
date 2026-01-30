@@ -1,3 +1,5 @@
-"""Codex autorunner surfaces package."""
+"""Surface packages for codex-autorunner."""
 
-__all__ = ["web", "cli", "telegram"]
+from . import cli, telegram, web
+
+__all__ = ["cli", "telegram", "web"]

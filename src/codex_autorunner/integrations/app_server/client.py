@@ -23,10 +23,15 @@ from typing import (
     no_type_check,
 )
 
+from ...core.app_server_utils import (
+    _extract_thread_id,
+    _extract_thread_id_for_turn,
+    _extract_turn_id,
+)
 from ...core.circuit_breaker import CircuitBreaker
 from ...core.exceptions import (
+    AppServerError,
     CircuitOpenError,
-    CodexError,
     PermanentError,
     TransientError,
 )
@@ -62,7 +67,7 @@ _INVALID_JSON_PREVIEW_BYTES = 200
 _CLIENT_INSTANCES: weakref.WeakSet = weakref.WeakSet()
 
 
-class CodexAppServerError(CodexError):
+class CodexAppServerError(AppServerError):
     """Base error for app-server client failures."""
 
 
@@ -1579,52 +1584,10 @@ def _preview_excerpt(text: str, limit: int = 256) -> str:
     return f"{normalized[:limit].rstrip()}..."
 
 
-def _extract_turn_id(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("turnId", "turn_id", "id"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            return value
-    turn = payload.get("turn")
-    if isinstance(turn, dict):
-        for key in ("id", "turnId", "turn_id"):
-            value = turn.get(key)
-            if isinstance(value, str):
-                return value
-    return None
-
-
 def _turn_key(thread_id: Optional[str], turn_id: Optional[str]) -> Optional[TurnKey]:
     if not thread_id or not turn_id:
         return None
     return (thread_id, turn_id)
-
-
-def _extract_thread_id_for_turn(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for candidate in (payload, payload.get("turn"), payload.get("item")):
-        thread_id = _extract_thread_id_from_container(candidate)
-        if thread_id:
-            return thread_id
-    return None
-
-
-def _extract_thread_id_from_container(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("threadId", "thread_id"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            return value
-    thread = payload.get("thread")
-    if isinstance(thread, dict):
-        for key in ("id", "threadId", "thread_id"):
-            value = thread.get(key)
-            if isinstance(value, str):
-                return value
-    return None
 
 
 def _extract_review_text(item: Any) -> Optional[str]:
@@ -1669,22 +1632,6 @@ def _extract_error_message(payload: Any) -> Optional[str]:
             return f"{message} ({details})"
         return details
     return message
-
-
-def _extract_thread_id(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("threadId", "thread_id", "id"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            return value
-    thread = payload.get("thread")
-    if isinstance(thread, dict):
-        for key in ("id", "threadId", "thread_id"):
-            value = thread.get(key)
-            if isinstance(value, str):
-                return value
-    return None
 
 
 _SANDBOX_POLICY_CANONICAL = {

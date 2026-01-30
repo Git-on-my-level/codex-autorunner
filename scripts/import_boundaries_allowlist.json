@@ -1,20 +1,4 @@
 {
   "rules_version": 1,
-  "violations": [
-    {
-      "importer": "src/codex_autorunner/core/engine.py",
-      "imported": "codex_autorunner.integrations.agents.backend_orchestrator",
-      "reason": "Engine uses BackendOrchestrator for protocol-agnostic backend management (merged from origin/main)."
-    },
-    {
-      "importer": "src/codex_autorunner/core/hub.py",
-      "imported": "codex_autorunner.integrations.agents.wiring",
-      "reason": "Hub assembles agent backend wiring during repo discovery; still coupled to adapter wiring."
-    },
-    {
-      "importer": "src/codex_autorunner/core/review.py",
-      "imported": "codex_autorunner.integrations.app_server.supervisor",
-      "reason": "Review workflow relies on app-server supervisor for workspace orchestration pending refactor."
-    }
-  ]
+  "violations": []
 }

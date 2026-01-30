@@ -16,19 +16,36 @@ from fastapi.responses import (
     JSONResponse,
 )
 
-from ...core.config import HubConfig
-from ...core.logging_utils import safe_log
-from ...core.state import SessionRecord, now_iso, persist_session_registry
-from .pty_session import REPLAY_END, ActiveSession, PTYSession
-from .schemas import VersionResponse
+from ....core.config import HubConfig
+from ....core.logging_utils import safe_log
+from ....core.state import SessionRecord, now_iso, persist_session_registry
+from ..pty_session import REPLAY_END, ActiveSession, PTYSession
+from ..schemas import VersionResponse
+from ..static_assets import index_response_headers, render_index_html
+from ..static_refresh import refresh_static_assets
 from .shared import (
     build_codex_terminal_cmd,
     build_opencode_terminal_cmd,
 )
-from .static_assets import index_response_headers, render_index_html
-from .static_refresh import refresh_static_assets
 
 ALT_SCREEN_ENTER = b"\x1b[?1049h"
+
+
+def _get_pty_session_cls() -> type:
+    """
+    Prefer legacy shim PTYSession if monkeypatched via codex_autorunner.routes.base.
+
+    The surface refactor moved PTYSession into the web package, but tests still
+    patch the old path. Look for that module at call time so the patch applies.
+    """
+    import sys
+
+    legacy_module = sys.modules.get("codex_autorunner.routes.base")
+    if legacy_module is not None:
+        patched = getattr(legacy_module, "PTYSession", None)
+        if patched is not None:
+            return patched
+    return PTYSession
 
 
 def _serve_index(request: Request, static_dir: Path):
@@ -296,7 +313,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         reasoning=reasoning,
                     )
                 try:
-                    pty = PTYSession(cmd, cwd=str(engine.repo_root), env=session_env)
+                    pty_cls = _get_pty_session_cls()
+                    pty = pty_cls(cmd, cwd=str(engine.repo_root), env=session_env)
                     active_session = ActiveSession(
                         session_id, pty, asyncio.get_running_loop()
                     )

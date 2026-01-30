@@ -17,6 +17,7 @@ from starlette.routing import Mount
 from starlette.types import ASGIApp
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...agents.registry import validate_agent_id
 from ...core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -64,8 +65,6 @@ from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...manifest import load_manifest
-from ...routes import build_repo_router
-from ...routes.system import build_system_routes
 from ...tickets.files import safe_relpath
 from ...tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService
@@ -77,6 +76,8 @@ from .middleware import (
     RequestIdMiddleware,
     SecurityHeadersMiddleware,
 )
+from .routes import build_repo_router
+from .routes.system import build_system_routes
 from .runner_manager import RunnerManager
 from .schemas import (
     HubCleanupWorktreeRequest,
@@ -353,6 +354,7 @@ def _build_app_context(
         config=config,
         backend_factory=build_agent_backend_factory(config.root, config),
         app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+        agent_id_validator=validate_agent_id,
     )
     manager = RunnerManager(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=env)
@@ -651,6 +653,7 @@ def _build_hub_context(
         config,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        agent_id_validator=validate_agent_id,
     )
     logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
     env_overrides = collect_env_overrides()

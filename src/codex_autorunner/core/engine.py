@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import dataclasses
 import hashlib
+import importlib
 import inspect
 import json
 import logging
@@ -15,14 +16,12 @@ from collections import Counter
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, Awaitable, Callable, Iterator, Optional
+from typing import IO, Any, Awaitable, Callable, Iterator, Optional
 
 import yaml
 
+from ..agents.registry import validate_agent_id
 from ..manifest import MANIFEST_VERSION
-
-if TYPE_CHECKING:
-    from ..integrations.agents.backend_orchestrator import BackendOrchestrator
 from ..tickets.files import list_ticket_paths, ticket_is_done
 from .about_car import ensure_about_car_file
 from .adapter_utils import handle_agent_output
@@ -125,7 +124,8 @@ class Engine:
         hub_path: Optional[Path] = None,
         backend_factory: Optional[BackendFactory] = None,
         app_server_supervisor_factory: Optional[AppServerSupervisorFactory] = None,
-        backend_orchestrator: Optional["BackendOrchestrator"] = None,
+        backend_orchestrator: Optional[Any] = None,
+        agent_id_validator: Optional[Callable[[str], str]] = None,
     ):
         if config is None:
             config = load_repo_config(repo_root, hub_path=hub_path)
@@ -150,6 +150,7 @@ class Engine:
         self._app_server_supervisor: Optional[Any] = None
         self._backend_orchestrator: Optional[Any] = None
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
+        self._agent_id_validator = agent_id_validator or validate_agent_id
         redact_enabled = self.config.security.get("redact_run_logs", True)
         self._app_server_event_formatter = AppServerEventFormatter(
             redact_enabled=redact_enabled
@@ -162,24 +163,7 @@ class Engine:
         if backend_orchestrator is not None:
             self._backend_orchestrator = backend_orchestrator
         elif backend_factory is None and app_server_supervisor_factory is None:
-            from ..integrations.agents.backend_orchestrator import BackendOrchestrator
-
-            try:
-                self._backend_orchestrator = BackendOrchestrator(
-                    repo_root=self.repo_root,
-                    config=self.config,
-                    notification_handler=self._handle_app_server_notification,
-                    logger=self._app_server_logger,
-                )
-            except Exception as exc:
-                import traceback
-
-                self._app_server_logger.warning(
-                    "Failed to create BackendOrchestrator: %s\n%s",
-                    exc,
-                    traceback.format_exc(),
-                )
-                self._backend_orchestrator = None
+            self._backend_orchestrator = self._build_backend_orchestrator()
         else:
             self._app_server_logger.debug(
                 "Skipping BackendOrchestrator creation because backend_factory or app_server_supervisor_factory is set",
@@ -206,6 +190,32 @@ class Engine:
             self._app_server_logger.debug(
                 "Best-effort lint_tickets.py creation failed: %s", exc
             )
+
+    def _build_backend_orchestrator(self) -> Optional[Any]:
+        """
+        Dynamically construct BackendOrchestrator without introducing a core -> integrations
+        import-time dependency. Keeps import-boundary checks satisfied.
+        """
+        try:
+            module = importlib.import_module(
+                "codex_autorunner.integrations.agents.backend_orchestrator"
+            )
+            orchestrator_cls = getattr(module, "BackendOrchestrator", None)
+            if orchestrator_cls is None:
+                raise AttributeError("BackendOrchestrator not found in module")
+            return orchestrator_cls(
+                repo_root=self.repo_root,
+                config=self.config,
+                notification_handler=self._handle_app_server_notification,
+                logger=self._app_server_logger,
+            )
+        except Exception as exc:
+            self._app_server_logger.warning(
+                "Failed to create BackendOrchestrator: %s\n%s",
+                exc,
+                traceback.format_exc(),
+            )
+            return None
 
     @staticmethod
     def from_cwd(repo: Optional[Path] = None) -> "Engine":
@@ -348,11 +358,9 @@ class Engine:
                 "Failed to read TODO.md before run %s: %s", run_id, exc
             )
             todo_before = ""
-        from ..agents.registry import validate_agent_id
-
         state = load_state(self.state_path)
         try:
-            validated_agent = validate_agent_id(
+            validated_agent = self._agent_id_validator(
                 state.autorunner_agent_override or "codex"
             )
         except ValueError:

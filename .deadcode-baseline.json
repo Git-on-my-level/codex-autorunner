@@ -1,5 +1,10 @@
 {
   "findings": [
+    "python:class:src/codex_autorunner/core/supervisor_protocol.py:7:AppServerSupervisorProtocol",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:141:GithubIssueRequest",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:145:GithubContextRequest",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:149:GithubPrSyncRequest",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:176:StateResponse",
     "python:function:src/codex_autorunner/core/docs.py:63:validate_todo_markdown",
     "python:function:src/codex_autorunner/core/git_utils.py:110:git_ls_files",
     "python:function:src/codex_autorunner/core/git_utils.py:138:git_diff_name_status",
@@ -12,8 +17,8 @@
     "python:function:src/codex_autorunner/integrations/agents/runner.py:20:run_turn_with_backend",
     "python:function:src/codex_autorunner/integrations/agents/runner.py:71:stream_turn_events",
     "python:function:src/codex_autorunner/integrations/github/service.py:257:parse_pr_input",
-    "python:function:src/codex_autorunner/routes/shared.py:134:log_stream",
-    "python:function:src/codex_autorunner/routes/shared.py:167:jsonl_event_stream",
-    "python:function:src/codex_autorunner/routes/shared.py:213:state_stream"
+    "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:138:log_stream",
+    "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:171:jsonl_event_stream",
+    "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:217:state_stream"
   ]
 }

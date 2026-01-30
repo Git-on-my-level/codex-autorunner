@@ -19,12 +19,12 @@ from typing import Any, AsyncIterator, Dict, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ...agents.registry import validate_agent_id
-from ...core import drafts as draft_utils
-from ...core.state import now_iso
-from ...core.utils import atomic_write, find_repo_root
-from ...integrations.app_server.event_buffer import format_sse
-from ...workspace.paths import (
+from ....agents.registry import validate_agent_id
+from ....core import drafts as draft_utils
+from ....core.state import now_iso
+from ....core.utils import atomic_write, find_repo_root
+from ....integrations.app_server.event_buffer import format_sse
+from ....workspace.paths import (
     WORKSPACE_DOC_KINDS,
     normalize_workspace_rel_path,
     workspace_doc_path,
@@ -509,7 +509,7 @@ def build_file_chat_routes() -> APIRouter:
         thread_key: Optional[str] = None,
         stall_timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
-        from ..agents.opencode.runtime import (
+        from ....agents.opencode.runtime import (
             PERMISSION_ALLOW,
             collect_opencode_output,
             extract_session_id,

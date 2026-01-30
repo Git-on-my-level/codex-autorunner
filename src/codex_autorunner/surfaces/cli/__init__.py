@@ -1,3 +1,6 @@
-"""CLI surface for Codex AutoRunner (Typer-based command-line interface)."""
+"""CLI surface (command-line interface)."""
 
-__all__ = ["cli"]
+from .cli import main as cli_main
+from .codex_cli import apply_codex_options, supports_reasoning
+
+__all__ = ["cli_main", "apply_codex_options", "supports_reasoning"]

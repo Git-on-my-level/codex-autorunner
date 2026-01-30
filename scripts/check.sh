@@ -54,6 +54,9 @@ echo "Linting injected context hints..."
 echo "Linting command resolution..."
 "$PYTHON_BIN" scripts/check_command_resolution.py
 
+echo "Checking import boundaries..."
+"$PYTHON_BIN" scripts/check_import_boundaries.py
+
 echo "Checking work docs..."
 "$PYTHON_BIN" scripts/check_docs.py
 

@@ -1,33 +1,21 @@
 # Telegram Surface
 
-The Telegram surface provides Telegram bot-specific user interface code for Codex AutoRunner.
+Telegram bot and adapters.
 
 ## Responsibilities
 
-- Telegram-specific command handlers and interactions
-- Telegram message formatting and rendering
-- Telegram-specific UI components (buttons, menus)
-- Telegram workflow orchestration (when different from general adapter code)
+- Telegram bot interface
+- Message routing and handlers
+- Telegram-specific ergonomics
+- Telegram state management
 
 ## Allowed Dependencies
 
-- **CAN import from**: `core/`, `integrations/`, `agents/`, `tickets/`, `workspace/`
-- **MUST NOT import from**: Other surface packages (`cli/`, `web/routes/`)
-- **CAN be imported by**: `integrations/telegram/` adapter
+- `core.*` (engine, config, state, etc.)
+- `integrations.*` (telegram, app_server, etc.)
+- Third-party Telegram libraries (python-telegram-bot, etc.)
 
-## Architecture
+## Key Components
 
-Telegram surface coordinates with the Telegram adapter:
-```
-[ Telegram Surface ] → [ Telegram Adapter ] → [ Control Plane ] → [ Engine ]
-```
-
-The actual Telegram adapter implementation lives in `integrations/telegram/`. This surface package contains Telegram-specific UI and interaction code.
-
-## Current Status
-
-This package is currently a placeholder. All Telegram-specific code is in:
-- `src/codex_autorunner/integrations/telegram/` - Telegram adapter implementation
-- `src/codex_autorunner/surfaces/cli/cli.py` - Telegram CLI commands
-
-Future Telegram-specific UI components (beyond adapter code) can be added here.
+- Telegram bot entry points and handlers are in `integrations/telegram/`
+- This surface package may contain Telegram-specific UI/rendering code if needed in the future

@@ -10,14 +10,14 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ...core.usage import (
+from ....core.usage import (
     UsageError,
     default_codex_home,
     get_repo_usage_series_cached,
     get_repo_usage_summary_cached,
     parse_iso_datetime,
 )
-from .schemas import RepoUsageResponse, UsageSeriesResponse
+from ..schemas import RepoUsageResponse, UsageSeriesResponse
 
 
 def build_usage_routes() -> APIRouter:

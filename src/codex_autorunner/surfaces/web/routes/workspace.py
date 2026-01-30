@@ -7,12 +7,12 @@ from dataclasses import asdict
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
-from ...core import drafts as draft_utils
-from ...tickets.spec_ingest import (
+from ....core import drafts as draft_utils
+from ....tickets.spec_ingest import (
     SpecIngestTicketsError,
     ingest_workspace_spec_to_tickets,
 )
-from ...workspace.paths import (
+from ....workspace.paths import (
     PINNED_DOC_FILENAMES,
     WORKSPACE_DOC_KINDS,
     list_workspace_files,
@@ -26,7 +26,7 @@ from ...workspace.paths import (
     write_workspace_doc,
     write_workspace_file,
 )
-from .schemas import (
+from ..schemas import (
     SpecIngestTicketsResponse,
     WorkspaceFileListResponse,
     WorkspaceResponse,
