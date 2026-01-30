@@ -43,6 +43,21 @@ def test_list_and_create_and_move(repo: Path) -> None:
     assert res.returncode == 0
 
 
+def test_create_quotes_special_scalars(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+
+    res = _run(repo, "create", "--title", "Fix #123: timing", "--agent", "qa:bot")
+    assert res.returncode == 0
+
+    ticket_path = tickets / "TICKET-001.md"
+    content = ticket_path.read_text(encoding="utf-8")
+    assert "Fix #123: timing" in content
+
+    res = _run(repo, "lint")
+    assert res.returncode == 0
+
+
 def test_insert_requires_anchor(repo: Path) -> None:
     tickets = repo / ".codex-autorunner" / "tickets"
     tickets.mkdir(parents=True, exist_ok=True)

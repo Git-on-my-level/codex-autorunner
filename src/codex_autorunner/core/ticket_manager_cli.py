@@ -274,6 +274,20 @@ def cmd_insert(ticket_dir: Path, *, before: Optional[int], after: Optional[int],
     return 0
 
 
+def _yaml_scalar(value: str) -> str:
+    '''Render a Python string as a safe single-line YAML scalar.
+
+    Returns a double-quoted value with backslashes, quotes, and newlines escaped.
+    '''
+
+    escaped = (
+        value.replace("\\\\", "\\\\\\\\")
+        .replace('"', '\\\\\"')
+        .replace("\\n", "\\\\n")
+    )
+    return f'"{escaped}"'
+
+
 def cmd_create(ticket_dir: Path, *, title: str, agent: str, at: Optional[int]) -> int:
     tickets, errors = _ticket_files(ticket_dir)
     if errors:
@@ -292,10 +306,12 @@ def cmd_create(ticket_dir: Path, *, title: str, agent: str, at: Optional[int]) -
     name = _fmt_name(index, \"\", width)
     path = ticket_dir / name
     path.parent.mkdir(parents=True, exist_ok=True)
+    title_scalar = _yaml_scalar(title)
+    agent_scalar = _yaml_scalar(agent)
     body = (
         f\"---\\n\"
-        f\"title: {title}\\n\"
-        f\"agent: {agent}\\n\"
+        f\"title: {title_scalar}\\n\"
+        f\"agent: {agent_scalar}\\n\"
         f\"done: false\\n\"
         f\"---\\n\\n\"
         f\"## Goal\\n- \\n\"
