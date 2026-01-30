@@ -1419,6 +1419,21 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
+@media (pointer: coarse) {
+  button,
+  .tab,
+  .ticket-fm-toggle,
+  select {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  button.icon-btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+}
+
 button:hover:not(:disabled) {
   border-color: var(--muted);
   background: #161b28;
@@ -6304,11 +6319,16 @@ button.loading::after {
   .hub-shell {
     padding: 4px;
     padding-top: max(4px, env(safe-area-inset-top));
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
   }
 
   .hub-hero {
     padding: 8px 10px;
     gap: 8px;
+    flex-wrap: wrap;
+    overflow: visible;
   }
 
   .hub-hero h1 {
@@ -6320,11 +6340,21 @@ button.loading::after {
   }
 
   .hub-hero-actions {
-    gap: 4px;
+    gap: 6px;
+    flex-wrap: wrap;
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .hub-hero-actions button {
     padding: 6px 10px;
+  }
+
+  .hub-version {
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .hub-stats {
@@ -6395,6 +6425,10 @@ button.loading::after {
   .hub-repo-note {
     font-size: 9px;
     margin-top: 3px;
+  }
+
+  .hub-usage-chart {
+    display: none;
   }
 
   /* Compact usage on mobile */
@@ -9050,6 +9084,21 @@ button.loading::after {
   min-height: 0;
 }
 
+.messages-detail-header {
+  display: none;
+}
+
+.messages-back-btn {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
 .messages-thread {
   text-align: left;
   border: 1px solid var(--border);
@@ -9855,6 +9904,58 @@ button.loading::after {
   }
 }
 
+@media (max-width: 640px) {
+  .messages-layout {
+    display: block;
+    gap: 0;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .messages-sidebar {
+    display: block;
+    height: 100%;
+  }
+
+  .messages-main {
+    display: none;
+    height: 100%;
+  }
+
+  .messages-layout.viewing-detail .messages-sidebar {
+    display: none;
+  }
+
+  .messages-layout.viewing-detail .messages-main {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .messages-detail-header {
+    display: flex;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+  }
+
+  .messages-back-btn {
+    min-height: 44px;
+    padding: 8px 16px;
+    font-size: 12px;
+  }
+
+  .messages-thread-list {
+    max-height: none;
+    height: calc(100vh - 120px);
+  }
+
+  .messages-thread-detail {
+    flex: 1;
+    min-height: 0;
+  }
+}
+
 /* ===== Ticket Editor Modal - Full Screen ===== */
 #ticket-editor-modal {
   z-index: 2500;
@@ -10114,19 +10215,39 @@ button.loading::after {
 }
 
 @media (max-width: 600px) {
+  .ticket-editor-header {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
   .ticket-header-row {
-    flex-wrap: wrap;
-    gap: 4px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    align-items: center;
+  }
+
+  .ticket-header-row .ticket-fm-select {
+    width: 100%;
   }
 
   .ticket-header-row .ticket-fm-input {
+    grid-column: 1 / -1;
     order: 10;
     width: 100%;
-    flex: none;
+  }
+
+  .ticket-header-actions {
+    grid-column: 1 / -1;
+    order: 20;
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
   }
 
   .ticket-header-row #ticket-editor-close {
-    order: 5;
+    order: 30;
   }
 }
 

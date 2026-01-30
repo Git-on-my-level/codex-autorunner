@@ -11,12 +11,25 @@ let selectedRunId = null;
 const MESSAGE_REFRESH_REASONS = ["initial", "background", "manual"];
 const threadsEl = document.getElementById("messages-thread-list");
 const detailEl = document.getElementById("messages-thread-detail");
+const layoutEl = document.querySelector(".messages-layout");
+const backBtn = document.getElementById("messages-back-btn");
 const refreshEl = document.getElementById("messages-refresh");
 const replyBodyEl = document.getElementById("messages-reply-body");
 const replyFilesEl = document.getElementById("messages-reply-files");
 const replySendEl = document.getElementById("messages-reply-send");
 let threadListRefreshCount = 0;
 let threadDetailRefreshCount = 0;
+function isMobileViewport() {
+    return window.innerWidth <= 640;
+}
+function showThreadList() {
+    layoutEl?.classList.remove("viewing-detail");
+}
+function showThreadDetail() {
+    if (isMobileViewport()) {
+        layoutEl?.classList.add("viewing-detail");
+    }
+}
 function setThreadListRefreshing(active) {
     if (!threadsEl)
         return;
@@ -202,6 +215,7 @@ const threadListRefresh = createSmartRefresh({
                     selectedRunId = runId;
                     syncSelectedThread();
                     updateUrlParams({ tab: "inbox", run_id: runId });
+                    showThreadDetail();
                     void loadThread(runId, "manual");
                 });
             });
@@ -627,6 +641,12 @@ export function initMessages() {
     if (!threadsEl || !detailEl)
         return;
     messagesInitialized = true;
+    backBtn?.addEventListener("click", showThreadList);
+    window.addEventListener("resize", () => {
+        if (!isMobileViewport()) {
+            layoutEl?.classList.remove("viewing-detail");
+        }
+    });
     refreshEl?.addEventListener("click", () => {
         void loadThreads("manual");
         const runId = selectedRunId;
@@ -642,6 +662,7 @@ export function initMessages() {
         const runId = params.get("run_id");
         if (runId) {
             selectedRunId = runId;
+            showThreadDetail();
             void loadThread(runId, "initial");
             return;
         }
@@ -649,6 +670,7 @@ export function initMessages() {
         if (activeRunId) {
             selectedRunId = activeRunId;
             updateUrlParams({ run_id: activeRunId });
+            showThreadDetail();
             void loadThread(activeRunId, "initial");
         }
     });
@@ -660,6 +682,7 @@ export function initMessages() {
             const runId = params.get("run_id");
             if (runId) {
                 selectedRunId = runId;
+                showThreadDetail();
                 void loadThread(runId, "manual");
             }
         }
