@@ -88,6 +88,30 @@ def test_preserve_ticket_structure_no_frontmatter() -> None:
     assert "[... TRUNCATED" in truncated or "[... TRU" in truncated
 
 
+def test_preserve_ticket_structure_never_exceeds_budget() -> None:
+    # Ticket block with the TICKET CONTENT prefix (as used in _build_prompt)
+    ticket = (
+        "\n\n---\n\n"
+        "TICKET CONTENT (edit this file to track progress; update frontmatter.done when complete):\n"
+        "PATH: .codex-autorunner/tickets/TICKET-001.md\n"
+        "\n"
+        "---\n"
+        "agent: codex\n"
+        "done: false\n"
+        "title: Test\n"
+        "goal: Finish test\n"
+        "---\n\n"
+        "x" * 10000  # Large body
+    )
+    # Test various budget sizes to ensure we never exceed them
+    for budget in [100, 200, 500, 1000, 5000]:
+        truncated = _preserve_ticket_structure(ticket, budget)
+        actual_bytes = len(truncated.encode("utf-8"))
+        assert (
+            actual_bytes <= budget
+        ), f"Budget {budget}: got {actual_bytes} bytes (exceeds by {actual_bytes - budget})"
+
+
 def test_shrink_prompt_truncates_in_order() -> None:
     sections = {
         "low_priority": "A" * 1000,

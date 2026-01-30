@@ -89,13 +89,16 @@ def _preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
     preserve_end = third_marker_idx + len(marker)
     preserved_part = ticket_block[:preserve_end]
 
-    # Check if we still have room
+    # Check if we still have room (account for truncation marker that will be added)
     preserved_bytes = len(preserved_part.encode("utf-8"))
+    marker_bytes = len(TRUNCATION_MARKER.encode("utf-8"))
     remaining_bytes = max(max_bytes - preserved_bytes, 0)
 
     if remaining_bytes > 0:
         body = ticket_block[preserve_end:]
-        truncated_body = _truncate_text_by_bytes(body, remaining_bytes)
+        # Account for marker in the body budget
+        body_budget = max(remaining_bytes - marker_bytes, 0)
+        truncated_body = _truncate_text_by_bytes(body, body_budget)
         return preserved_part + truncated_body
 
     # Not enough room even for preserved part, fall back to simple truncation
