@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Portable ticket management CLI (self-contained, no repo imports)."""
+
+from __future__ import annotations
 
 from pathlib import Path
 
