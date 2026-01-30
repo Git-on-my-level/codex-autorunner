@@ -18,6 +18,7 @@ from .runtime import (
 from .supervisor import OpenCodeSupervisor
 
 _logger = logging.getLogger(__name__)
+_DEFAULT_TICKET_MODEL = "zai-coding-plan/glm-4.7"
 
 
 def _coerce_providers(payload: Any) -> list[dict[str, Any]]:
@@ -168,6 +169,8 @@ class OpenCodeHarness(AgentHarness):
         sandbox_policy: Optional[Any],
     ) -> TurnRef:
         client = await self._supervisor.get_client(workspace_root)
+        if model is None:
+            model = _DEFAULT_TICKET_MODEL
         model_payload = split_model_id(model)
         await client.prompt_async(
             conversation_id,
@@ -192,6 +195,8 @@ class OpenCodeHarness(AgentHarness):
         sandbox_policy: Optional[Any],
     ) -> TurnRef:
         client = await self._supervisor.get_client(workspace_root)
+        if model is None:
+            model = _DEFAULT_TICKET_MODEL
         arguments = prompt if prompt else ""
 
         async def _send_review() -> None:
