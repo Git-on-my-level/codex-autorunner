@@ -73,6 +73,7 @@ from .run_index import RunIndexStore
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .state_roots import resolve_global_state_root, resolve_repo_state_root
 from .ticket_linter_cli import ensure_ticket_linter
+from .ticket_manager_cli import ensure_ticket_manager
 from .utils import (
     RepoNotFoundError,
     atomic_write,
@@ -189,6 +190,12 @@ class Engine:
         except (OSError, IOError) as exc:
             self._app_server_logger.debug(
                 "Best-effort lint_tickets.py creation failed: %s", exc
+            )
+        try:
+            ensure_ticket_manager(self.config.root)
+        except (OSError, IOError) as exc:
+            self._app_server_logger.debug(
+                "Best-effort ticket_tool.py creation failed: %s", exc
             )
 
     def _build_backend_orchestrator(self) -> Optional[Any]:

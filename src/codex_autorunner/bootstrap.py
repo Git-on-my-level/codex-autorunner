@@ -12,6 +12,7 @@ from .core.config import (
 )
 from .core.state import RunnerState, save_state
 from .core.ticket_linter_cli import ensure_ticket_linter
+from .core.ticket_manager_cli import ensure_ticket_manager
 from .core.utils import atomic_write
 from .manifest import load_manifest
 
@@ -117,6 +118,7 @@ def seed_repo_files(
         force=force,
     )
     ensure_ticket_linter(repo_root, force=force)
+    ensure_ticket_manager(repo_root, force=force)
 
 
 def seed_hub_files(hub_root: Path, force: bool = False) -> None:
