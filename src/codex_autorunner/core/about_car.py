@@ -94,7 +94,7 @@ def build_about_car_markdown(
         "- **Inbox**: Where the agent receives files/messages.\n\n"
         "## Ticket helpers\n"
         "- Use `.codex-autorunner/bin/ticket_tool.py` to list/create/insert/move tickets; it is portable and venv-free.\n"
-        "- Common workflows: insert gap before N (`python3 .codex-autorunner/bin/ticket_tool.py insert --before N`); move a block (`... move --start A --end B --to T`); create with auto-quoted frontmatter (`... create --title \"Fix #123\" --agent codex`).\n"
+        '- Common workflows: insert gap before N (`python3 .codex-autorunner/bin/ticket_tool.py insert --before N`); move a block (`... move --start A --end B --to T`); create with auto-quoted frontmatter (`... create --title "Fix #123" --agent codex`).\n'
         "- After any ticket edits, lint all tickets: `python3 .codex-autorunner/bin/lint_tickets.py`.\n\n"
         "## How CAR works (short)\n"
         "- The web UI provides ticket editing + unified file chat.\n"
