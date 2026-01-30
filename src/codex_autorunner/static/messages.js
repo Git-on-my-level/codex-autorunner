@@ -15,6 +15,20 @@ const refreshEl = document.getElementById("messages-refresh");
 const replyBodyEl = document.getElementById("messages-reply-body");
 const replyFilesEl = document.getElementById("messages-reply-files");
 const replySendEl = document.getElementById("messages-reply-send");
+let threadListRefreshCount = 0;
+let threadDetailRefreshCount = 0;
+function setThreadListRefreshing(active) {
+    if (!threadsEl)
+        return;
+    threadListRefreshCount = Math.max(0, threadListRefreshCount + (active ? 1 : -1));
+    threadsEl.classList.toggle("refreshing", threadListRefreshCount > 0);
+}
+function setThreadDetailRefreshing(active) {
+    if (!detailEl)
+        return;
+    threadDetailRefreshCount = Math.max(0, threadDetailRefreshCount + (active ? 1 : -1));
+    detailEl.classList.toggle("refreshing", threadDetailRefreshCount > 0);
+}
 function formatTimestamp(ts) {
     if (!ts)
         return "–";
@@ -231,17 +245,26 @@ async function loadThreads(reason = "manual") {
     if (!MESSAGE_REFRESH_REASONS.includes(reason)) {
         reason = "manual";
     }
-    if (reason !== "background") {
+    const showFullLoading = reason === "initial";
+    if (showFullLoading) {
         threadsEl.innerHTML = "Loading…";
+    }
+    else {
+        setThreadListRefreshing(true);
     }
     try {
         await threadListRefresh.refresh(fetchThreadsPayload, { reason });
     }
     catch (_err) {
-        if (reason !== "background") {
+        if (showFullLoading) {
             threadsEl.innerHTML = "";
         }
         flash("Failed to load inbox", "error");
+    }
+    finally {
+        if (!showFullLoading) {
+            setThreadListRefreshing(false);
+        }
     }
 }
 function formatBytes(size) {
@@ -473,8 +496,12 @@ async function loadThread(runId, reason = "manual") {
     if (!MESSAGE_REFRESH_REASONS.includes(reason)) {
         reason = "manual";
     }
-    if (reason !== "background") {
+    const showFullLoading = reason === "initial";
+    if (showFullLoading) {
         detailEl.innerHTML = "Loading…";
+    }
+    else {
+        setThreadDetailRefreshing(true);
     }
     try {
         await threadDetailRefresh.refresh(async () => {
@@ -486,10 +513,15 @@ async function loadThread(runId, reason = "manual") {
         }, { reason });
     }
     catch (_err) {
-        if (reason !== "background") {
+        if (showFullLoading) {
             detailEl.innerHTML = "";
         }
         flash("Failed to load message thread", "error");
+    }
+    finally {
+        if (!showFullLoading) {
+            setThreadDetailRefreshing(false);
+        }
     }
 }
 function isAtBottom(el) {

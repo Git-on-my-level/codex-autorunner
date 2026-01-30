@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { subscribe } from "./bus.js";
 import { downloadArchiveFile, fetchArchiveSnapshot, listArchiveSnapshots, listArchiveTree, readArchiveFile, } from "./archiveApi.js";
-import { escapeHtml, flash, statusPill } from "./utils.js";
+import { escapeHtml, flash, statusPill, setButtonLoading } from "./utils.js";
 let initialized = false;
 let snapshots = [];
 let selected = null;
@@ -733,6 +733,10 @@ async function loadSnapshots(forceReload = false) {
     if (!listEl)
         return;
     const isInitialLoad = snapshots.length === 0;
+    const showRefreshIndicator = !isInitialLoad;
+    if (showRefreshIndicator) {
+        setButtonLoading(refreshBtn, true);
+    }
     // Only show loading indicator on initial load to avoid UI flicker
     if (isInitialLoad) {
         listEl.innerHTML = "Loading…";
@@ -781,6 +785,11 @@ async function loadSnapshots(forceReload = false) {
         if (emptyEl)
             emptyEl.classList.add("hidden");
         flash("Failed to load archive snapshots.", "error");
+    }
+    finally {
+        if (showRefreshIndicator) {
+            setButtonLoading(refreshBtn, false);
+        }
     }
 }
 function handleListClick(event) {

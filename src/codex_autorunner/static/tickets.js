@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal, inputModal, } from "./utils.js";
+import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal, inputModal, setButtonLoading, } from "./utils.js";
 import { activateTab } from "./tabs.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
@@ -36,6 +36,7 @@ let eventSourceRetryAttempt = 0;
 let eventSourceRetryTimerId = null;
 const lastSeenSeqByRun = {};
 let ticketListCache = null;
+let ticketFlowLoaded = false;
 function isFlowActiveStatus(status) {
     // Mirror backend FlowRunStatus.is_active(): pending | running | stopping
     return status === "pending" || status === "running" || status === "stopping";
@@ -1155,7 +1156,7 @@ async function loadDispatchHistory(runId, ctx) {
     }
 }
 async function loadTicketFlow(ctx) {
-    const { status, run, current, turn, elapsed, progress, reason, lastActivity, stalePill, reconnectBtn, workerStatus, workerPill, recoverBtn, resumeBtn, bootstrapBtn, stopBtn, archiveBtn } = els();
+    const { status, run, current, turn, elapsed, progress, reason, lastActivity, stalePill, reconnectBtn, workerStatus, workerPill, recoverBtn, resumeBtn, bootstrapBtn, stopBtn, archiveBtn, refreshBtn, } = els();
     if (!isRepoHealthy()) {
         if (status)
             statusPill(status, "error");
@@ -1184,10 +1185,15 @@ async function loadTicketFlow(ctx) {
         if (reason)
             reason.textContent = "Repo offline or uninitialized.";
         setButtonsDisabled(true);
+        setButtonLoading(refreshBtn, false);
         stopElapsedTimer();
         stopLastActivityTimer();
         disconnectEventStream();
         return;
+    }
+    const showRefreshIndicator = ticketFlowLoaded;
+    if (showRefreshIndicator) {
+        setButtonLoading(refreshBtn, true);
     }
     try {
         const runs = (await api("/api/flows/runs?flow_type=ticket_flow"));
@@ -1350,6 +1356,12 @@ async function loadTicketFlow(ctx) {
         if (reason)
             reason.textContent = err.message || "Ticket flow unavailable";
         flash(err.message || "Failed to load ticket flow state", "error");
+    }
+    finally {
+        ticketFlowLoaded = true;
+        if (showRefreshIndicator) {
+            setButtonLoading(refreshBtn, false);
+        }
     }
 }
 async function bootstrapTicketFlow() {

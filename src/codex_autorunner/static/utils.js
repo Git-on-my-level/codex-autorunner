@@ -126,6 +126,17 @@ export function statusPill(el, status) {
         el.classList.add("pill-idle");
     }
 }
+export function setButtonLoading(button, loading) {
+    if (!button)
+        return;
+    button.classList.toggle("loading", loading);
+    if (loading) {
+        button.setAttribute("aria-busy", "true");
+    }
+    else {
+        button.removeAttribute("aria-busy");
+    }
+}
 function extractErrorDetail(payload) {
     if (!payload || typeof payload !== "object")
         return "";

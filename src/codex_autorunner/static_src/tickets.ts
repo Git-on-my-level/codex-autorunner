@@ -7,6 +7,7 @@ import {
   getAuthToken,
   openModal,
   inputModal,
+  setButtonLoading,
 } from "./utils.js";
 import { activateTab } from "./tabs.js";
 import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
@@ -123,6 +124,7 @@ let eventSourceRetryAttempt = 0;
 let eventSourceRetryTimerId: ReturnType<typeof setTimeout> | null = null;
 const lastSeenSeqByRun: Record<string, number> = {};
 let ticketListCache: { ticket_dir?: string; tickets?: TicketFile[] } | null = null;
+let ticketFlowLoaded = false;
 
 function isFlowActiveStatus(status: string | null): boolean {
   // Mirror backend FlowRunStatus.is_active(): pending | running | stopping
@@ -1383,7 +1385,26 @@ async function loadDispatchHistory(runId: string | null, ctx?: RefreshContext): 
 }
 
 async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
-  const { status, run, current, turn, elapsed, progress, reason, lastActivity, stalePill, reconnectBtn, workerStatus, workerPill, recoverBtn, resumeBtn, bootstrapBtn, stopBtn, archiveBtn } = els();
+  const {
+    status,
+    run,
+    current,
+    turn,
+    elapsed,
+    progress,
+    reason,
+    lastActivity,
+    stalePill,
+    reconnectBtn,
+    workerStatus,
+    workerPill,
+    recoverBtn,
+    resumeBtn,
+    bootstrapBtn,
+    stopBtn,
+    archiveBtn,
+    refreshBtn,
+  } = els();
   if (!isRepoHealthy()) {
     if (status) statusPill(status, "error");
     if (run) run.textContent = "–";
@@ -1399,10 +1420,15 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
     if (recoverBtn) recoverBtn.style.display = "none";
     if (reason) reason.textContent = "Repo offline or uninitialized.";
     setButtonsDisabled(true);
+    setButtonLoading(refreshBtn, false);
     stopElapsedTimer();
     stopLastActivityTimer();
     disconnectEventStream();
     return;
+  }
+  const showRefreshIndicator = ticketFlowLoaded;
+  if (showRefreshIndicator) {
+    setButtonLoading(refreshBtn, true);
   }
   try {
     const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
@@ -1577,6 +1603,11 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
   } catch (err) {
     if (reason) reason.textContent = (err as Error).message || "Ticket flow unavailable";
     flash((err as Error).message || "Failed to load ticket flow state", "error");
+  } finally {
+    ticketFlowLoaded = true;
+    if (showRefreshIndicator) {
+      setButtonLoading(refreshBtn, false);
+    }
   }
 }
 

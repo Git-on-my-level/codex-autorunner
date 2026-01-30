@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash } from "./utils.js";
+import { api, flash, setButtonLoading } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 import { fetchWorkspace, ingestSpecToTickets, listTickets, fetchWorkspaceTree, uploadWorkspaceFiles, downloadWorkspaceZip, createWorkspaceFolder, writeWorkspace, } from "./workspaceApi.js";
 import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, } from "./fileChat.js";
@@ -47,6 +47,7 @@ const workspaceChat = createDocChat({
 });
 const WORKSPACE_DOC_KINDS = new Set(["active_context", "decisions", "spec"]);
 const WORKSPACE_REFRESH_REASONS = ["initial", "background", "manual"];
+let workspaceRefreshCount = 0;
 function hashString(value) {
     let hash = 5381;
     for (let i = 0; i < value.length; i += 1) {
@@ -171,6 +172,13 @@ function setStatus(text) {
         status.textContent = text;
     if (statusMobile)
         statusMobile.textContent = text;
+}
+function setWorkspaceRefreshing(active) {
+    const { reloadBtn, reloadBtnMobile } = els();
+    workspaceRefreshCount = Math.max(0, workspaceRefreshCount + (active ? 1 : -1));
+    const isRefreshing = workspaceRefreshCount > 0;
+    setButtonLoading(reloadBtn, isRefreshing);
+    setButtonLoading(reloadBtnMobile, isRefreshing);
 }
 function renderPatch() {
     const { patchMain, patchBody, patchSummary, patchMeta, textarea, saveBtn, reloadBtn } = els();
@@ -380,9 +388,13 @@ async function refreshWorkspaceFile(path, reason = "manual") {
     if (!WORKSPACE_REFRESH_REASONS.includes(reason)) {
         reason = "manual";
     }
-    if (reason !== "background") {
+    const isInitial = reason === "initial";
+    if (isInitial) {
         state.loading = true;
         setStatus("Loading…");
+    }
+    else {
+        setWorkspaceRefreshing(true);
     }
     try {
         await workspaceContentRefresh.refresh(async () => ({ path, content: await readWorkspaceContent(path) }), { reason });
@@ -394,6 +406,9 @@ async function refreshWorkspaceFile(path, reason = "manual") {
     }
     finally {
         state.loading = false;
+        if (!isInitial) {
+            setWorkspaceRefreshing(false);
+        }
     }
 }
 async function loadPendingDraft() {
@@ -616,7 +631,18 @@ async function loadFiles(defaultPath, reason = "manual") {
     if (!WORKSPACE_REFRESH_REASONS.includes(reason)) {
         reason = "manual";
     }
-    await workspaceTreeRefresh.refresh(async () => ({ tree: await fetchWorkspaceTree(), defaultPath }), { reason });
+    const isInitial = reason === "initial";
+    if (!isInitial) {
+        setWorkspaceRefreshing(true);
+    }
+    try {
+        await workspaceTreeRefresh.refresh(async () => ({ tree: await fetchWorkspaceTree(), defaultPath }), { reason });
+    }
+    finally {
+        if (!isInitial) {
+            setWorkspaceRefreshing(false);
+        }
+    }
 }
 export async function initWorkspace() {
     const { generateBtn, uploadBtn, uploadInput, newFolderBtn, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();

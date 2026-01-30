@@ -1,4 +1,4 @@
-import { api, flash } from "./utils.js";
+import { api, flash, setButtonLoading } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 import {
   fetchWorkspace,
@@ -94,6 +94,7 @@ const workspaceChat = createDocChat({
 
 const WORKSPACE_DOC_KINDS = new Set<WorkspaceKind>(["active_context", "decisions", "spec"]);
 const WORKSPACE_REFRESH_REASONS: SmartRefreshReason[] = ["initial", "background", "manual"];
+let workspaceRefreshCount = 0;
 
 function hashString(value: string): string {
   let hash = 5381;
@@ -222,6 +223,14 @@ function setStatus(text: string): void {
   const { status, statusMobile } = els();
   if (status) status.textContent = text;
   if (statusMobile) statusMobile.textContent = text;
+}
+
+function setWorkspaceRefreshing(active: boolean): void {
+  const { reloadBtn, reloadBtnMobile } = els();
+  workspaceRefreshCount = Math.max(0, workspaceRefreshCount + (active ? 1 : -1));
+  const isRefreshing = workspaceRefreshCount > 0;
+  setButtonLoading(reloadBtn, isRefreshing);
+  setButtonLoading(reloadBtnMobile, isRefreshing);
 }
 
 function renderPatch(): void {
@@ -436,9 +445,12 @@ async function refreshWorkspaceFile(path: string, reason: SmartRefreshReason = "
   if (!WORKSPACE_REFRESH_REASONS.includes(reason)) {
     reason = "manual";
   }
-  if (reason !== "background") {
+  const isInitial = reason === "initial";
+  if (isInitial) {
     state.loading = true;
     setStatus("Loading…");
+  } else {
+    setWorkspaceRefreshing(true);
   }
   try {
     await workspaceContentRefresh.refresh(
@@ -451,6 +463,9 @@ async function refreshWorkspaceFile(path: string, reason: SmartRefreshReason = "
     setStatus(message);
   } finally {
     state.loading = false;
+    if (!isInitial) {
+      setWorkspaceRefreshing(false);
+    }
   }
 }
 
@@ -681,10 +696,20 @@ async function loadFiles(defaultPath?: string, reason: SmartRefreshReason = "man
   if (!WORKSPACE_REFRESH_REASONS.includes(reason)) {
     reason = "manual";
   }
-  await workspaceTreeRefresh.refresh(
-    async () => ({ tree: await fetchWorkspaceTree(), defaultPath }),
-    { reason }
-  );
+  const isInitial = reason === "initial";
+  if (!isInitial) {
+    setWorkspaceRefreshing(true);
+  }
+  try {
+    await workspaceTreeRefresh.refresh(
+      async () => ({ tree: await fetchWorkspaceTree(), defaultPath }),
+      { reason }
+    );
+  } finally {
+    if (!isInitial) {
+      setWorkspaceRefreshing(false);
+    }
+  }
 }
 
 export async function initWorkspace(): Promise<void> {

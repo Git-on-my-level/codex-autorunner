@@ -109,6 +109,20 @@ const refreshEl = document.getElementById("messages-refresh") as HTMLButtonEleme
 const replyBodyEl = document.getElementById("messages-reply-body") as HTMLTextAreaElement | null;
 const replyFilesEl = document.getElementById("messages-reply-files") as HTMLInputElement | null;
 const replySendEl = document.getElementById("messages-reply-send") as HTMLButtonElement | null;
+let threadListRefreshCount = 0;
+let threadDetailRefreshCount = 0;
+
+function setThreadListRefreshing(active: boolean): void {
+  if (!threadsEl) return;
+  threadListRefreshCount = Math.max(0, threadListRefreshCount + (active ? 1 : -1));
+  threadsEl.classList.toggle("refreshing", threadListRefreshCount > 0);
+}
+
+function setThreadDetailRefreshing(active: boolean): void {
+  if (!detailEl) return;
+  threadDetailRefreshCount = Math.max(0, threadDetailRefreshCount + (active ? 1 : -1));
+  detailEl.classList.toggle("refreshing", threadDetailRefreshCount > 0);
+}
 
 function formatTimestamp(ts?: string | null): string {
   if (!ts) return "–";
@@ -335,16 +349,23 @@ async function loadThreads(reason: SmartRefreshReason = "manual"): Promise<void>
   if (!MESSAGE_REFRESH_REASONS.includes(reason)) {
     reason = "manual";
   }
-  if (reason !== "background") {
+  const showFullLoading = reason === "initial";
+  if (showFullLoading) {
     threadsEl.innerHTML = "Loading…";
+  } else {
+    setThreadListRefreshing(true);
   }
   try {
     await threadListRefresh.refresh(fetchThreadsPayload, { reason });
   } catch (_err) {
-    if (reason !== "background") {
+    if (showFullLoading) {
       threadsEl.innerHTML = "";
     }
     flash("Failed to load inbox", "error");
+  } finally {
+    if (!showFullLoading) {
+      setThreadListRefreshing(false);
+    }
   }
 }
 
@@ -606,8 +627,11 @@ async function loadThread(runId: string, reason: SmartRefreshReason = "manual"):
   if (!MESSAGE_REFRESH_REASONS.includes(reason)) {
     reason = "manual";
   }
-  if (reason !== "background") {
+  const showFullLoading = reason === "initial";
+  if (showFullLoading) {
     detailEl.innerHTML = "Loading…";
+  } else {
+    setThreadDetailRefreshing(true);
   }
   try {
     await threadDetailRefresh.refresh(async () => {
@@ -618,10 +642,14 @@ async function loadThread(runId: string, reason: SmartRefreshReason = "manual"):
       return { status: "ok", runId, detail };
     }, { reason });
   } catch (_err) {
-    if (reason !== "background") {
+    if (showFullLoading) {
       detailEl.innerHTML = "";
     }
     flash("Failed to load message thread", "error");
+  } finally {
+    if (!showFullLoading) {
+      setThreadDetailRefreshing(false);
+    }
   }
 }
 
