@@ -13,7 +13,8 @@
     "lint:html": "html-validate \"src/codex_autorunner/static/index.html\"",
     "lint": "eslint \"src/codex_autorunner/static_src/**/*.ts\"",
     "typecheck": "tsc -p tsconfig.json",
-    "build": "tsc -p tsconfig.json && node scripts/add-static-banner.js",
+    "build": "tsc -p tsconfig.json",
+    "postbuild": "node scripts/add-static-banner.js",
     "test:dom": "node scripts/check_dom_structure.mjs"
   },
   "devDependencies": {

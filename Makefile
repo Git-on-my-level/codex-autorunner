@@ -21,7 +21,10 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check
+.PHONY: install dev hooks build test check format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners
+
+_inject-static-banners:
+	pnpm run postbuild
 
 build: npm-install
 	pnpm build
@@ -96,6 +99,7 @@ format:
 		echo "Fixing JS files (eslint)..."; \
 		./node_modules/.bin/eslint --fix "src/codex_autorunner/static_src/**/*.ts" || true; \
 	fi
+	$(MAKE) _inject-static-banners
 
 deadcode-baseline:
 	$(PYTHON) scripts/deadcode.py --update-baseline
