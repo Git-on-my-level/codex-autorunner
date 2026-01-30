@@ -299,7 +299,7 @@ class FlowCommands(SharedHelpers):
             await self._handle_flow_recover(message, repo_root, rest_argv)
             return
         if action == "restart":
-            await self._handle_flow_restart(message, repo_root)
+            await self._handle_flow_restart(message, repo_root, rest_argv)
             return
         if action == "archive":
             await self._handle_flow_archive(message, repo_root, rest_argv)
@@ -497,7 +497,8 @@ class FlowCommands(SharedHelpers):
                 date=None,
                 is_topic_message=callback.thread_id is not None,
             )
-            await self._handle_flow_restart(message, repo_root)
+            argv = [run_id_raw] if run_id_raw else []
+            await self._handle_flow_restart(message, repo_root, argv)
             notice = "Restarted."
         else:
             await self._answer_callback(callback, "Unknown action")
@@ -1211,20 +1212,29 @@ You are the first ticket in a new ticket_flow run.
         )
 
     async def _handle_flow_restart(
-        self, message: TelegramMessage, repo_root: Path
+        self,
+        message: TelegramMessage,
+        repo_root: Path,
+        argv: Optional[list[str]] = None,
     ) -> None:
+        argv = argv or []
         store = FlowStore(_flow_paths(repo_root)[0])
-        latest = None
+        record = None
         try:
             store.initialize()
-            runs = store.list_flow_runs(flow_type="ticket_flow")
-            latest = runs[0] if runs else None
+            run_id_raw = self._first_non_flag(argv)
+            if run_id_raw:
+                run_id, error = self._resolve_run_id_input(store, run_id_raw)
+                if error is None and run_id:
+                    record = store.get_flow_run(run_id)
+            else:
+                record = _select_latest_run(store, lambda run: run.status.is_active())
         finally:
             store.close()
-        if latest and not latest.status.is_terminal():
+        if record and not record.status.is_terminal():
             controller = _get_ticket_controller(repo_root)
-            self._stop_flow_worker(repo_root, latest.id)
-            await controller.stop_flow(latest.id)
+            self._stop_flow_worker(repo_root, record.id)
+            await controller.stop_flow(record.id)
         await self._handle_flow_bootstrap(message, repo_root, argv=["--force-new"])
 
     async def _handle_flow_archive(
