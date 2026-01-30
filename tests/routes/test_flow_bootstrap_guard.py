@@ -231,18 +231,11 @@ def test_start_flow_worker_skips_when_process_alive(tmp_path, monkeypatch):
         message=None,
     )
     monkeypatch.setattr(
-        flow_routes, "check_worker_health", lambda *_args, **_kwargs: health
+        flow_routes,
+        "ensure_worker",
+        lambda *_args, **_kwargs: {"status": "reused", "health": health},
     )
-
-    called = {"spawn": 0}
-
-    def fake_spawn(*_args, **_kwargs):
-        called["spawn"] += 1
-        return None
-
-    monkeypatch.setattr(flow_routes, "spawn_flow_worker", fake_spawn)
 
     proc = flow_routes._start_flow_worker(repo_root, run_id)
 
     assert proc is None
-    assert called["spawn"] == 0

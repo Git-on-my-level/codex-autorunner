@@ -12,13 +12,21 @@ from .....agents.registry import validate_agent_id
 from .....core.config import load_repo_config
 from .....core.engine import Engine
 from .....core.flows import FlowController, FlowStore
-from .....core.flows.models import FlowEventType, FlowRunStatus
+from .....core.flows.models import FlowRunStatus
 from .....core.flows.reconciler import reconcile_flow_run
+from .....core.flows.ux_helpers import (
+    bootstrap_check,
+    build_flow_status_snapshot,
+    ensure_worker,
+    issue_md_has_content,
+    issue_md_path,
+    seed_issue_from_github,
+    seed_issue_from_text,
+)
 from .....core.flows.worker_process import (
     FlowWorkerHealth,
     check_worker_health,
     clear_worker_metadata,
-    spawn_flow_worker,
 )
 from .....core.state import now_iso
 from .....core.utils import atomic_write, canonicalize_path
@@ -55,22 +63,8 @@ def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
     return db_path, artifacts_root
 
 
-def _issue_md_path(repo_root: Path) -> Path:
-    return repo_root.resolve() / ".codex-autorunner" / "ISSUE.md"
-
-
 def _ticket_dir(repo_root: Path) -> Path:
     return repo_root.resolve() / ".codex-autorunner" / "tickets"
-
-
-def _issue_md_has_content(repo_root: Path) -> bool:
-    issue_path = _issue_md_path(repo_root)
-    if not issue_path.exists():
-        return False
-    try:
-        return bool(issue_path.read_text(encoding="utf-8").strip())
-    except OSError:
-        return False
 
 
 def _normalize_run_id(value: str) -> Optional[str]:
@@ -117,52 +111,6 @@ def _flow_help_lines() -> list[str]:
     ]
 
 
-def _format_issue_as_markdown(issue: dict, repo_slug: Optional[str] = None) -> str:
-    number = issue.get("number")
-    title = issue.get("title") or ""
-    url = issue.get("url") or ""
-    state = issue.get("state") or ""
-    author = issue.get("author") or {}
-    author_name = (
-        author.get("login")
-        if isinstance(author, dict)
-        else str(author or "unknown").strip()
-    )
-    labels = issue.get("labels")
-    label_names = []
-    if isinstance(labels, list):
-        for label in labels:
-            name = ""
-            if isinstance(label, dict):
-                name = label.get("name") or ""
-            else:
-                name = str(label or "")
-            if name:
-                label_names.append(str(name))
-    comments = issue.get("comments")
-    comment_count = None
-    if isinstance(comments, dict):
-        total = comments.get("totalCount")
-        if isinstance(total, int):
-            comment_count = total
-
-    body = issue.get("body") or "(no description)"
-    lines = [
-        f"# Issue #{number}: {title}".strip(),
-        "",
-        f"**Repo:** {repo_slug or 'unknown'}",
-        f"**URL:** {url}",
-        f"**State:** {state}",
-        f"**Author:** {author_name}",
-    ]
-    if label_names:
-        lines.append(f"**Labels:** {', '.join(label_names)}")
-    if comment_count is not None:
-        lines.append(f"**Comments:** {comment_count}")
-    lines.extend(["", "## Description", "", str(body).strip(), ""])
-    return "\n".join(lines)
-
-
 def _get_ticket_controller(repo_root: Path) -> FlowController:
     db_path, artifacts_root = _flow_paths(repo_root)
     config = load_repo_config(repo_root)
@@ -184,13 +132,14 @@ def _get_ticket_controller(repo_root: Path) -> FlowController:
 
 
 def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
-    health = check_worker_health(repo_root, run_id)
-    _ensure_worker_not_stale(health)
-    if health.is_alive:
+    result = ensure_worker(repo_root, run_id)
+    if result["status"] == "reused":
+        health = result["health"]
         _logger.info("Worker already active for run %s (pid=%s)", run_id, health.pid)
         return
-
-    proc, out, err = spawn_flow_worker(repo_root, run_id)
+    proc = result["proc"]
+    out = result["stdout"]
+    err = result["stderr"]
     try:
         # We don't track handles in Telegram commands, close in parent after spawn.
         out.close()
@@ -198,14 +147,6 @@ def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
     finally:
         if proc.poll() is not None:
             _logger.warning("Flow worker for %s exited immediately", run_id)
-
-
-def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
-    if health.status in {"dead", "mismatch", "invalid"}:
-        try:
-            clear_worker_metadata(health.artifact_path.parent)
-        except Exception:
-            _logger.debug("Failed to clear worker metadata: %s", health.artifact_path)
 
 
 def _select_latest_run(
@@ -219,15 +160,8 @@ def _select_latest_run(
 
 class FlowCommands(SharedHelpers):
     def _github_bootstrap_status(self, repo_root: Path) -> tuple[bool, Optional[str]]:
-        try:
-            gh = GitHubService(repo_root=repo_root)
-            gh_available = gh.gh_available() and gh.gh_authenticated()
-            if gh_available:
-                repo_info = gh.repo_info()
-                return True, repo_info.name_with_owner
-        except Exception:
-            pass
-        return False, None
+        result = bootstrap_check(repo_root, github_service_factory=GitHubService)
+        return bool(result.github_available), result.repo_slug
 
     async def _prompt_flow_text_input(
         self,
@@ -298,21 +232,15 @@ class FlowCommands(SharedHelpers):
     async def _seed_issue_from_ref(
         self, repo_root: Path, issue_ref: str
     ) -> tuple[int, str]:
-        gh = GitHubService(repo_root=repo_root)
-        if not (gh.gh_available() and gh.gh_authenticated()):
-            raise RuntimeError(
-                "GitHub CLI is not available or not authenticated. Use /flow plan <text> instead."
-            )
-        number = gh.validate_issue_same_repo(issue_ref)
-        issue = gh.issue_view(number=number)
-        repo_info = gh.repo_info()
-        content = _format_issue_as_markdown(issue, repo_info.name_with_owner)
-        atomic_write(_issue_md_path(repo_root), content)
-        return number, repo_info.name_with_owner
+        seed = seed_issue_from_github(
+            repo_root, issue_ref, github_service_factory=GitHubService
+        )
+        atomic_write(issue_md_path(repo_root), seed.content)
+        return seed.issue_number, seed.repo_slug
 
     def _seed_issue_from_plan(self, repo_root: Path, plan_text: str) -> None:
-        content = f"# Issue\n\n{plan_text.strip()}\n"
-        atomic_write(_issue_md_path(repo_root), content)
+        content = seed_issue_from_text(plan_text)
+        atomic_write(issue_md_path(repo_root), content)
 
     async def _handle_flow_status(self, message: TelegramMessage, args: str) -> None:
         text = args.strip()
@@ -624,35 +552,6 @@ class FlowCommands(SharedHelpers):
             return None, "No ticket flow run found. Use /flow bootstrap to start."
         return record, None
 
-    def _derive_effective_current_ticket(
-        self, record: object, store: Optional[FlowStore]
-    ) -> Optional[str]:
-        if store is None:
-            return None
-        try:
-            if (
-                getattr(record, "flow_type", None) != "ticket_flow"
-                or not record.status.is_active()
-            ):
-                return None
-            last_started = store.get_last_event_seq_by_types(
-                record.id, [FlowEventType.STEP_STARTED]
-            )
-            last_finished = store.get_last_event_seq_by_types(
-                record.id, [FlowEventType.STEP_COMPLETED, FlowEventType.STEP_FAILED]
-            )
-            in_progress = bool(
-                last_started is not None
-                and (last_finished is None or last_started > last_finished)
-            )
-            if not in_progress:
-                return None
-            return store.get_latest_step_progress_current_ticket(
-                record.id, after_seq=last_finished
-            )
-        except Exception:
-            return None
-
     def _format_flow_status_lines(
         self,
         repo_root: Path,
@@ -660,9 +559,12 @@ class FlowCommands(SharedHelpers):
         store: Optional[FlowStore],
         *,
         health: Optional[FlowWorkerHealth] = None,
+        snapshot: Optional[dict] = None,
     ) -> list[str]:
         if record is None:
             return ["Run: none"]
+        if snapshot is None:
+            snapshot = build_flow_status_snapshot(repo_root, record, store)
         run = record
         status = getattr(run, "status", None)
         status_value = status.value if status else "unknown"
@@ -685,11 +587,7 @@ class FlowCommands(SharedHelpers):
         state = run.state or {}
         engine = state.get("ticket_engine") if isinstance(state, dict) else None
         engine = engine if isinstance(engine, dict) else {}
-        current = engine.get("current_ticket")
-        if not (isinstance(current, str) and current.strip()):
-            effective = self._derive_effective_current_ticket(run, store)
-            if effective:
-                current = effective
+        current = snapshot.get("effective_current_ticket") if snapshot else None
         if isinstance(current, str) and current.strip():
             lines.append(f"Current: {current.strip()}")
         reason_summary = None
@@ -708,14 +606,17 @@ class FlowCommands(SharedHelpers):
         error_message = getattr(run, "error_message", None)
         if isinstance(error_message, str) and error_message.strip():
             lines.append(f"Error: {_truncate_text(error_message.strip(), 300)}")
-        if store:
-            last_seq, last_at = store.get_last_event_meta(run.id)
+        if snapshot:
+            last_seq = snapshot.get("last_event_seq")
+            last_at = snapshot.get("last_event_at")
             if last_seq or last_at:
                 seq_label = str(last_seq) if last_seq is not None else "?"
                 at_label = last_at or "unknown time"
                 lines.append(f"Last event: {seq_label} @ {at_label}")
         if health is None:
-            health = check_worker_health(repo_root, run.id)
+            health = snapshot.get("worker_health") if snapshot else None
+        if health is None:
+            return lines
         worker_line = f"Worker: {health.status}"
         if health.pid:
             worker_line += f" (pid {health.pid})"
@@ -791,8 +692,11 @@ class FlowCommands(SharedHelpers):
                 "\n".join(self._format_flow_status_lines(repo_root, record, store)),
                 None,
             )
-        health = check_worker_health(repo_root, record.id)
-        lines = self._format_flow_status_lines(repo_root, record, store, health=health)
+        snapshot = build_flow_status_snapshot(repo_root, record, store)
+        health = snapshot.get("worker_health")
+        lines = self._format_flow_status_lines(
+            repo_root, record, store, health=health, snapshot=snapshot
+        )
         keyboard = self._build_flow_status_keyboard(record, health=health)
         return "\n".join(lines), keyboard
 
@@ -931,7 +835,7 @@ class FlowCommands(SharedHelpers):
         ticket_dir.mkdir(parents=True, exist_ok=True)
         existing_tickets = list_ticket_paths(ticket_dir)
         tickets_exist = bool(existing_tickets)
-        issue_exists = _issue_md_has_content(repo_root)
+        issue_exists = issue_md_has_content(repo_root)
 
         store = FlowStore(_flow_paths(repo_root)[0])
         active_run = None

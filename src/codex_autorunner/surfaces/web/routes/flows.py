@@ -20,18 +20,22 @@ from ....core.engine import Engine
 from ....core.flows import (
     FlowController,
     FlowDefinition,
-    FlowEventType,
     FlowRunRecord,
     FlowRunStatus,
     FlowStore,
 )
 from ....core.flows.reconciler import reconcile_flow_run
-from ....core.flows.worker_process import (
-    FlowWorkerHealth,
-    check_worker_health,
-    clear_worker_metadata,
-    spawn_flow_worker,
+from ....core.flows.ux_helpers import (
+    bootstrap_check as ux_bootstrap_check,
 )
+from ....core.flows.ux_helpers import (
+    build_flow_status_snapshot,
+    ensure_worker,
+    issue_md_path,
+    seed_issue_from_github,
+    seed_issue_from_text,
+)
+from ....core.flows.worker_process import FlowWorkerHealth, check_worker_health
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
 from ....integrations.agents.wiring import (
@@ -71,11 +75,6 @@ def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     artifacts_root = repo_root / ".codex-autorunner" / "flows"
     return db_path, artifacts_root
-
-
-def _issue_md_path(repo_root: Path) -> Path:
-    repo_root = repo_root.resolve()
-    return repo_root / ".codex-autorunner" / "ISSUE.md"
 
 
 def _ticket_dir(repo_root: Path) -> Path:
@@ -234,15 +233,6 @@ def _reap_dead_worker(run_id: str) -> None:
         _cleanup_worker_handle(run_id)
 
 
-def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
-    # Clear metadata if stale to allow clean respawn.
-    if health.status in {"dead", "mismatch", "invalid"}:
-        try:
-            clear_worker_metadata(health.artifact_path.parent)
-        except Exception:
-            _logger.debug("Failed to clear worker metadata: %s", health.artifact_path)
-
-
 class FlowStartRequest(BaseModel):
     input_data: Dict = Field(default_factory=dict)
     metadata: Optional[Dict] = None
@@ -340,118 +330,37 @@ def _build_flow_status_response(
     *,
     store: Optional[FlowStore] = None,
 ) -> FlowStatusResponse:
-    last_event_seq = None
-    last_event_at = None
-    if store:
-        last_event_seq, last_event_at = store.get_last_event_meta(record.id)
-    health = check_worker_health(repo_root, record.id)
+    snapshot = build_flow_status_snapshot(repo_root, record, store)
     resp = FlowStatusResponse.from_record(
         record,
-        last_event_seq=last_event_seq,
-        last_event_at=last_event_at,
-        worker_health=health,
+        last_event_seq=snapshot["last_event_seq"],
+        last_event_at=snapshot["last_event_at"],
+        worker_health=snapshot["worker_health"],
     )
-    # Best-effort: surface an "effective" current ticket during an in-flight step.
-    # This avoids UI flakiness when the run state hasn't been persisted yet.
-    try:
-        if store and record.flow_type == "ticket_flow" and record.status.is_active():
-            state = resp.state if isinstance(resp.state, dict) else {}
-            ticket_engine = (
-                state.get("ticket_engine") if isinstance(state, dict) else None
-            )
-            ticket_engine = (
-                dict(ticket_engine) if isinstance(ticket_engine, dict) else {}
-            )
-            existing = ticket_engine.get("current_ticket")
-            if not (isinstance(existing, str) and existing.strip()):
-                last_started = store.get_last_event_seq_by_types(
-                    record.id, [FlowEventType.STEP_STARTED]
-                )
-                last_finished = store.get_last_event_seq_by_types(
-                    record.id, [FlowEventType.STEP_COMPLETED, FlowEventType.STEP_FAILED]
-                )
-                in_progress = bool(
-                    last_started is not None
-                    and (last_finished is None or last_started > last_finished)
-                )
-                if in_progress:
-                    effective = store.get_latest_step_progress_current_ticket(
-                        record.id, after_seq=last_finished
-                    )
-                    if effective:
-                        ticket_engine["current_ticket"] = effective
-                        state = dict(state)
-                        state["ticket_engine"] = ticket_engine
-                        resp.state = state
-    except Exception:
-        # Never fail the UI because this is an optional enhancement.
-        pass
+    if snapshot.get("state") is not None:
+        resp.state = snapshot["state"]
     return resp
 
 
 def _start_flow_worker(repo_root: Path, run_id: str) -> Optional[subprocess.Popen]:
     normalized_run_id = _normalize_run_id(run_id)
 
-    health = check_worker_health(repo_root, normalized_run_id)
-    _ensure_worker_not_stale(health)
-    if health.is_alive:
+    _reap_dead_worker(normalized_run_id)
+    result = ensure_worker(repo_root, normalized_run_id)
+    if result["status"] == "reused":
+        health = result["health"]
         _logger.info(
             "Worker already active for run %s (pid=%s), skipping spawn",
             normalized_run_id,
             health.pid,
         )
         return None
-
-    _reap_dead_worker(normalized_run_id)
-
-    proc, stdout_handle, stderr_handle = spawn_flow_worker(repo_root, normalized_run_id)
+    proc = result["proc"]
+    stdout_handle = result["stdout"]
+    stderr_handle = result["stderr"]
     _active_workers[normalized_run_id] = (proc, stdout_handle, stderr_handle)
     _logger.info("Started flow worker for run %s (pid=%d)", normalized_run_id, proc.pid)
     return proc
-
-
-def _format_issue_as_markdown(issue: dict, repo_slug: Optional[str] = None) -> str:
-    """Render GitHub issue data as ISSUE.md content."""
-    number = issue.get("number")
-    title = issue.get("title") or ""
-    url = issue.get("url") or ""
-    state = issue.get("state") or ""
-    author = issue.get("author") or {}
-    author_name = (
-        author.get("login") if isinstance(author, dict) else str(author or "unknown")
-    )
-    labels = issue.get("labels")
-    label_names: list[str] = []
-    if isinstance(labels, list):
-        for lbl in labels:
-            if isinstance(lbl, dict):
-                name = lbl.get("name")
-            else:
-                name = lbl
-            if name:
-                label_names.append(str(name))
-    comments = issue.get("comments")
-    comment_count = None
-    if isinstance(comments, dict):
-        total = comments.get("totalCount")
-        if isinstance(total, int):
-            comment_count = total
-
-    body = issue.get("body") or "(no description)"
-    lines = [
-        f"# Issue #{number}: {title}".strip(),
-        "",
-        f"**Repo:** {repo_slug or 'unknown'}",
-        f"**URL:** {url}",
-        f"**State:** {state}",
-        f"**Author:** {author_name}",
-    ]
-    if label_names:
-        lines.append(f"**Labels:** {', '.join(label_names)}")
-    if comment_count is not None:
-        lines.append(f"**Comments:** {comment_count}")
-    lines.extend(["", "## Description", "", str(body).strip(), ""])
-    return "\n".join(lines)
 
 
 def _stop_worker(run_id: str, timeout: float = 10.0) -> None:
@@ -613,67 +522,41 @@ def build_flow_routes() -> APIRouter:
         for fetching an issue before bootstrapping the ticket flow.
         """
         repo_root = find_repo_root()
-
-        # If tickets already exist, consider the repo ready regardless of ISSUE.md.
-        if list_ticket_paths(_ticket_dir(repo_root)):
+        result = ux_bootstrap_check(repo_root, github_service_factory=GitHubService)
+        if result.status == "ready":
             return BootstrapCheckResponse(status="ready")
-
-        issue_path = _issue_md_path(repo_root)
-        if issue_path.exists():
-            try:
-                content = issue_path.read_text(encoding="utf-8")
-                if content.strip():
-                    return BootstrapCheckResponse(status="ready")
-            except OSError:
-                # Fall through to needs_issue branch
-                pass
-
-        gh_available = False
-        repo_slug: Optional[str] = None
-        try:
-            gh = GitHubService(repo_root=repo_root)
-            gh_available = gh.gh_available() and gh.gh_authenticated()
-            if gh_available:
-                repo_info = gh.repo_info()
-                repo_slug = repo_info.name_with_owner
-        except Exception:
-            gh_available = False
-
         return BootstrapCheckResponse(
-            status="needs_issue", github_available=gh_available, repo=repo_slug
+            status=result.status,
+            github_available=result.github_available,
+            repo=result.repo_slug,
         )
 
     @router.post("/ticket_flow/seed-issue")
     async def seed_issue(request: SeedIssueRequest):
         """Create .codex-autorunner/ISSUE.md from GitHub issue or user-provided text."""
         repo_root = find_repo_root()
-        issue_path = _issue_md_path(repo_root)
+        issue_path = issue_md_path(repo_root)
         issue_path.parent.mkdir(parents=True, exist_ok=True)
 
         # GitHub-backed path
         if request.issue_ref:
-            gh = GitHubService(repo_root=repo_root)
-            if not (gh.gh_available() and gh.gh_authenticated()):
-                raise HTTPException(
-                    status_code=400,
-                    detail="GitHub CLI is not available or not authenticated.",
-                )
             try:
-                number = gh.validate_issue_same_repo(request.issue_ref)
-                issue = gh.issue_view(number=number)
-                repo_info = gh.repo_info()
-                content = _format_issue_as_markdown(issue, repo_info.name_with_owner)
-                atomic_write(issue_path, content)
+                seed = seed_issue_from_github(
+                    repo_root, request.issue_ref, github_service_factory=GitHubService
+                )
+                atomic_write(issue_path, seed.content)
                 return {
                     "status": "ok",
                     "source": "github",
-                    "issue_number": number,
-                    "repo": repo_info.name_with_owner,
+                    "issue_number": seed.issue_number,
+                    "repo": seed.repo_slug,
                 }
             except GitHubError as exc:
                 raise HTTPException(
                     status_code=exc.status_code, detail=str(exc)
                 ) from exc
+            except RuntimeError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             except Exception as exc:  # pragma: no cover - defensive
                 _logger.exception("Failed to seed ISSUE.md from GitHub: %s", exc)
                 raise HTTPException(
@@ -682,7 +565,7 @@ def build_flow_routes() -> APIRouter:
 
         # Manual text path
         if request.plan_text:
-            content = f"# Issue\n\n{request.plan_text.strip()}\n"
+            content = seed_issue_from_text(request.plan_text)
             atomic_write(issue_path, content)
             return {"status": "ok", "source": "user_input"}
 
