@@ -538,11 +538,17 @@ class TelegramBotConfig:
 
         default_notification_chat_raw = cfg.get("default_notification_chat_id")
         default_notification_chat_id: Optional[int] = None
-        try:
-            if default_notification_chat_raw is not None:
+        env_chat_candidates = _parse_int_list(env.get(chat_id_env))
+        if default_notification_chat_raw is not None:
+            try:
                 default_notification_chat_id = int(default_notification_chat_raw)
-        except (TypeError, ValueError):
-            default_notification_chat_id = None
+            except (TypeError, ValueError):
+                default_notification_chat_id = None
+        if default_notification_chat_id is None:
+            if env_chat_candidates:
+                default_notification_chat_id = env_chat_candidates[0]
+            elif allowed_chat_ids:
+                default_notification_chat_id = min(allowed_chat_ids)
 
         agent_binaries = dict(agent_binaries or {})
         command_reg_raw_value = cfg.get("command_registration")
