@@ -73,11 +73,7 @@ async function refreshSettings() {
     await loadThreadTools();
 }
 export function initRepoSettingsPanel() {
-    if (ui.settingsBtn) {
-        ui.settingsBtn.addEventListener("click", () => {
-            refreshSettings();
-        });
-    }
+    window.__CAR_SETTINGS = { loadThreadTools, refreshSettings };
     if (ui.threadNew) {
         ui.threadNew.addEventListener("click", async () => {
             try {

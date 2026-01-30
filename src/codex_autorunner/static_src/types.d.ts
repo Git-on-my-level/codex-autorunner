@@ -5,4 +5,8 @@ interface Window {
   __CAR_BASE_PATH?: string;
   __AUTH_TOKEN_PRESENT?: boolean;
   __assetSuffix?: string;
+  __CAR_SETTINGS?: {
+    loadThreadTools: () => Promise<unknown>;
+    refreshSettings: () => Promise<void>;
+  };
 }

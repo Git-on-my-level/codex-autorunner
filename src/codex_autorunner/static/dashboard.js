@@ -648,6 +648,11 @@ function initSettings() {
                 returnFocusTo: triggerEl,
                 onRequestClose: hideModal,
             });
+            // Trigger settings refresh when modal opens
+            const { refreshSettings } = window.__CAR_SETTINGS || {};
+            if (typeof refreshSettings === "function") {
+                refreshSettings();
+            }
         });
     }
     if (closeBtn && modal) {
