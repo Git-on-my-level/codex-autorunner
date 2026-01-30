@@ -27,6 +27,11 @@ Use this guide when Telegram replies are missing, delayed, or out of order.
 
 If you see `app_server.turn.completed` but no `telegram.turn.completed`, the bot likely dropped the completion event or crashed mid-turn.
 
+## Flow Command Sanity Checks
+
+- In Telegram, run `/flow status` to confirm the ticket flow handler is responding.
+- If a run is paused, use `/flow reply <message>` then `/flow resume` to continue (`/reply` is a legacy alias).
+
 ## Outbox Checks
 
 - Inspect the outbox:

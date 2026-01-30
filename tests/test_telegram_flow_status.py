@@ -12,6 +12,7 @@ from codex_autorunner.core.flows.models import (
     FlowRunStatus,
 )
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
+from codex_autorunner.integrations.telegram.adapter import TelegramMessage
 from codex_autorunner.integrations.telegram.handlers.commands import (
     flows as flows_module,
 )
@@ -125,3 +126,66 @@ def test_flow_status_keyboard_terminal(tmp_path: Path) -> None:
     rows = keyboard["inline_keyboard"]
     texts = [button["text"] for row in rows for button in row]
     assert texts == ["Restart", "Archive", "Refresh"]
+
+
+class _FlowStatusHandler(FlowCommands):
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.markups: list[dict[str, object] | None] = []
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id: int | None = None,
+        reply_to: int | None = None,
+        reply_markup: dict[str, object] | None = None,
+    ) -> None:
+        _ = (thread_id, reply_to)
+        self.sent.append(text)
+        self.markups.append(reply_markup)
+
+
+@pytest.mark.anyio
+async def test_flow_status_action_sends_keyboard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = FlowStore(tmp_path / ".codex-autorunner" / "flows.db")
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    store.create_flow_run(run_id, "ticket_flow", {})
+    store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+    record = store.get_flow_run(run_id)
+    assert record is not None
+    store.close()
+
+    snapshot = {
+        "worker_health": _health(tmp_path),
+        "effective_current_ticket": None,
+        "last_event_seq": None,
+        "last_event_at": None,
+    }
+    monkeypatch.setattr(
+        flows_module,
+        "build_flow_status_snapshot",
+        lambda _root, _record, _store: snapshot,
+    )
+
+    handler = _FlowStatusHandler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow status",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_flow_status_action(message, tmp_path, argv=[])
+
+    assert handler.sent
+    assert any("Run:" in line for line in handler.sent[0].splitlines())
+    assert handler.markups[0] is not None
