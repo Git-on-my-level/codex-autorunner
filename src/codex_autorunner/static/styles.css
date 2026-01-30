@@ -9482,6 +9482,91 @@ button.loading::after {
   cursor: pointer;
 }
 
+.archive-file-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.archive-file-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.archive-quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.archive-file-path-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.archive-file-grid {
+  flex: 1;
+  min-height: 0;
+}
+
+.archive-file-browser {
+  min-height: 0;
+}
+
+.archive-file-browser .workspace-file-list {
+  max-height: none;
+  flex: 1;
+}
+
+.archive-file-main {
+  min-height: 0;
+}
+
+.archive-file-viewer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.archive-file-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.archive-file-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.archive-file-content {
+  flex: 1;
+  min-height: 180px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  white-space: pre-wrap;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+  font-size: 12px;
+  overflow: auto;
+}
+
+.archive-file-empty {
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
 .archive-empty-state {
   border: 1px dashed var(--border);
   border-radius: var(--radius);
