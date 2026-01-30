@@ -256,6 +256,7 @@ class TelegramBotService(
         )
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
+        self._flow_run_options: dict[str, SelectionState] = {}
         self._update_options: dict[str, SelectionState] = {}
         self._update_confirm_options: dict[str, bool] = {}
         self._review_commit_options: dict[str, ReviewCommitSelectionState] = {}
@@ -892,6 +893,8 @@ class TelegramBotService(
                 self._resume_options.pop(key, None)
             elif cache_name == "bind_options":
                 self._bind_options.pop(key, None)
+            elif cache_name == "flow_run_options":
+                self._flow_run_options.pop(key, None)
             elif cache_name == "agent_options":
                 self._agent_options.pop(key, None)
             elif cache_name == "update_options":
@@ -943,6 +946,9 @@ class TelegramBotService(
             )
             self._evict_expired_cache_entries(
                 "bind_options", self._config.cache.selection_state_ttl_seconds
+            )
+            self._evict_expired_cache_entries(
+                "flow_run_options", self._config.cache.selection_state_ttl_seconds
             )
             self._evict_expired_cache_entries(
                 "agent_options", self._config.cache.selection_state_ttl_seconds

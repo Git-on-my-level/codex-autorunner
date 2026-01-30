@@ -259,6 +259,17 @@ class PageCallback:
     page: int
 
 
+@dataclass(frozen=True)
+class FlowCallback:
+    action: str
+    run_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class FlowRunCallback:
+    run_id: str
+
+
 def parse_command(
     text: Optional[str],
     *,
@@ -741,6 +752,27 @@ def encode_compact_callback(action: str) -> str:
     return data
 
 
+def encode_flow_callback(action: str, run_id: Optional[str] = None) -> str:
+    action = str(action or "").strip()
+    if not action:
+        raise ValueError("flow action required")
+    if run_id:
+        data = f"flow:{action}:{run_id}"
+    else:
+        data = f"flow:{action}"
+    _validate_callback_data(data)
+    return data
+
+
+def encode_flow_run_callback(run_id: str) -> str:
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        raise ValueError("flow run id required")
+    data = f"flow_run:{run_id}"
+    _validate_callback_data(data)
+    return data
+
+
 def parse_callback_data(
     data: Optional[str],
 ) -> Optional[
@@ -760,6 +792,8 @@ def parse_callback_data(
         ReviewCommitCallback,
         CancelCallback,
         CompactCallback,
+        FlowCallback,
+        FlowRunCallback,
         PageCallback,
     ]
 ]:
@@ -857,6 +891,19 @@ def parse_callback_data(
         if not page.isdigit():
             return None
         return PageCallback(kind=kind, page=int(page))
+    if data.startswith("flow:"):
+        _, _, rest = data.partition(":")
+        action, sep, run_id = rest.partition(":")
+        if not action:
+            return None
+        if sep and not run_id:
+            return None
+        return FlowCallback(action=action, run_id=run_id or None)
+    if data.startswith("flow_run:"):
+        _, _, run_id = data.partition(":")
+        if not run_id:
+            return None
+        return FlowRunCallback(run_id=run_id)
     return None
 
 
@@ -1059,6 +1106,24 @@ def build_bind_keyboard(
         rows.append([InlineButton(label, callback_data)])
     if include_cancel:
         rows.append([InlineButton("Cancel", encode_cancel_callback("bind"))])
+    return build_inline_keyboard(rows)
+
+
+def build_flow_runs_keyboard(
+    options: Sequence[tuple[str, str]],
+    *,
+    page_button: Optional[tuple[str, str]] = None,
+    include_cancel: bool = False,
+) -> dict[str, Any]:
+    rows = [
+        [InlineButton(label, encode_flow_run_callback(run_id))]
+        for run_id, label in options
+    ]
+    if page_button:
+        label, callback_data = page_button
+        rows.append([InlineButton(label, callback_data)])
+    if include_cancel:
+        rows.append([InlineButton("Cancel", encode_cancel_callback("flow-runs"))])
     return build_inline_keyboard(rows)
 
 

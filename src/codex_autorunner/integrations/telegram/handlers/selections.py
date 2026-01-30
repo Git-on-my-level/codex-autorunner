@@ -7,6 +7,8 @@ from ..adapter import (
     AgentCallback,
     CancelCallback,
     EffortCallback,
+    FlowCallback,
+    FlowRunCallback,
     ModelCallback,
     PageCallback,
     ReviewCommitCallback,
@@ -18,6 +20,7 @@ from ..adapter import (
     build_agent_keyboard,
     build_bind_keyboard,
     build_effort_keyboard,
+    build_flow_runs_keyboard,
     build_model_keyboard,
     build_resume_keyboard,
     build_review_commit_keyboard,
@@ -29,6 +32,7 @@ from ..constants import (
     BIND_PICKER_PROMPT,
     DEFAULT_PAGE_SIZE,
     EFFORT_PICKER_PROMPT,
+    FLOW_RUNS_PICKER_PROMPT,
     MODEL_PICKER_PROMPT,
     RESUME_BUTTON_PREVIEW_LIMIT,
     RESUME_PICKER_PROMPT,
@@ -393,6 +397,21 @@ class TelegramSelectionHandlers:
             delivery=state.delivery,
         )
 
+    async def _handle_flow_run_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: FlowRunCallback,
+    ) -> None:
+        state = self._flow_run_options.get(key)
+        if not state or not _selection_contains(state.items, parsed.run_id):
+            await self._answer_callback(callback, "Selection expired")
+            return
+        self._flow_run_options.pop(key, None)
+        await self._handle_flow_callback(
+            callback, FlowCallback(action="status", run_id=parsed.run_id)
+        )
+
     def _selection_prompt(self, base: str, state: SelectionState) -> str:
         total_pages = _page_count(len(state.items), DEFAULT_PAGE_SIZE)
         return _format_selection_prompt(base, state.page, total_pages)
@@ -486,6 +505,37 @@ class TelegramSelectionHandlers:
             include_cancel=True,
         )
 
+    def _build_flow_runs_keyboard(self, state: SelectionState) -> dict[str, Any]:
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        options = []
+        for idx, (item_id, label) in enumerate(page_items, 1):
+            button_label = label
+            if state.button_labels:
+                button_label = state.button_labels.get(item_id, label)
+            options.append(
+                (
+                    item_id,
+                    f"{idx}) {_compact_preview(button_label, RESUME_BUTTON_PREVIEW_LIMIT)}",
+                )
+            )
+        return build_flow_runs_keyboard(
+            options,
+            page_button=self._page_button("flow-runs", state),
+            include_cancel=True,
+        )
+
+    def _flow_runs_prompt(self, state: SelectionState) -> str:
+        total_pages = _page_count(len(state.items), DEFAULT_PAGE_SIZE)
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        lines = [FLOW_RUNS_PICKER_PROMPT]
+        for run_id, label in page_items:
+            if label:
+                lines.append(f"- {run_id} — {label}")
+            else:
+                lines.append(f"- {run_id}")
+        base = "\n".join(lines)
+        return _format_selection_prompt(base, state.page, total_pages)
+
     def _build_effort_keyboard(self, option: ModelOption) -> dict[str, Any]:
         options = []
         for effort in option.efforts:
@@ -566,6 +616,9 @@ class TelegramSelectionHandlers:
         elif parsed.kind == "review-custom":
             self._pending_review_custom.pop(key, None)
             text = "Custom review cancelled."
+        elif parsed.kind == "flow-runs":
+            self._flow_run_options.pop(key, None)
+            text = "Flow run selection cancelled."
         else:
             await self._answer_callback(callback, "Selection expired")
             return
@@ -605,6 +658,10 @@ class TelegramSelectionHandlers:
                 Callable[[SelectionState], dict[str, Any]],
                 self._build_review_commit_keyboard,
             )
+        elif parsed.kind == "flow-runs":
+            state = self._flow_run_options.get(key)
+            prompt_base = ""
+            build_keyboard = self._build_flow_runs_keyboard
         else:
             await self._answer_callback(callback, "Selection expired")
             return
@@ -617,7 +674,10 @@ class TelegramSelectionHandlers:
             return
         page = parsed.page % total_pages
         state.page = page
-        prompt = _format_selection_prompt(prompt_base, page, total_pages)
+        if parsed.kind == "flow-runs":
+            prompt = self._flow_runs_prompt(state)
+        else:
+            prompt = _format_selection_prompt(prompt_base, page, total_pages)
         keyboard = build_keyboard(state)
         await self._update_selection_message(key, callback, prompt, keyboard)
         await self._answer_callback(callback, f"Page {page + 1}/{total_pages}")

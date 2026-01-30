@@ -4,6 +4,8 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramCallbackQuery,
     encode_bind_callback,
     encode_compact_callback,
+    encode_flow_callback,
+    encode_flow_run_callback,
     encode_question_custom_callback,
     encode_question_done_callback,
     encode_question_option_callback,
@@ -17,6 +19,7 @@ class _HandlerStub:
     def __init__(self) -> None:
         self._resume_options: dict[str, SelectionState] = {}
         self._bind_options: dict[str, SelectionState] = {}
+        self._flow_run_options: dict[str, SelectionState] = {}
         self._compact_pending: dict[str, CompactState] = {}
         self.calls: list[tuple[str, object]] = []
 
@@ -51,6 +54,16 @@ class _HandlerStub:
         self, _callback: TelegramCallbackQuery, parsed: object
     ) -> None:
         self.calls.append(("question", parsed))
+
+    async def _handle_flow_callback(
+        self, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("flow", parsed))
+
+    async def _handle_flow_run_callback(
+        self, key: str, _callback: TelegramCallbackQuery, parsed: object
+    ) -> None:
+        self.calls.append(("flow-run", key, parsed))
 
 
 @pytest.mark.anyio
@@ -196,3 +209,39 @@ async def test_handle_callback_question_done() -> None:
     await handle_callback(handlers, callback)
     assert handlers.calls
     assert handlers.calls[0][0] == "question"
+
+
+@pytest.mark.anyio
+async def test_handle_callback_flow_action() -> None:
+    handlers = _HandlerStub()
+    callback = TelegramCallbackQuery(
+        update_id=8,
+        callback_id="cb8",
+        from_user_id=9,
+        data=encode_flow_callback("resume", "run-123"),
+        message_id=12,
+        chat_id=40,
+        thread_id=41,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls
+    assert handlers.calls[0][0] == "flow"
+
+
+@pytest.mark.anyio
+async def test_handle_callback_flow_run_action() -> None:
+    handlers = _HandlerStub()
+    key = await handlers._resolve_topic_key(42, None)
+    handlers._flow_run_options[key] = SelectionState(items=[("run-1", "Run 1")])
+    callback = TelegramCallbackQuery(
+        update_id=9,
+        callback_id="cb9",
+        from_user_id=10,
+        data=encode_flow_run_callback("run-1"),
+        message_id=13,
+        chat_id=42,
+        thread_id=None,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls
+    assert handlers.calls[0][0] == "flow-run"

@@ -263,6 +263,7 @@ async def handle_message_inner(
     if text and text.startswith("!") and not has_media:
         handlers._resume_options.pop(key, None)
         handlers._bind_options.pop(key, None)
+        handlers._flow_run_options.pop(key, None)
         handlers._agent_options.pop(key, None)
         handlers._model_options.pop(key, None)
         handlers._model_pending.pop(key, None)

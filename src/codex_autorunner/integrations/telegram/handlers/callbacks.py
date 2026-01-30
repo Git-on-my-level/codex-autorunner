@@ -9,6 +9,8 @@ from ..adapter import (
     CancelCallback,
     CompactCallback,
     EffortCallback,
+    FlowCallback,
+    FlowRunCallback,
     ModelCallback,
     PageCallback,
     QuestionCancelCallback,
@@ -91,3 +93,8 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
     elif isinstance(parsed, PageCallback):
         if key:
             await handlers._handle_selection_page(key, parsed, callback)
+    elif isinstance(parsed, FlowCallback):
+        await handlers._handle_flow_callback(callback, parsed)
+    elif isinstance(parsed, FlowRunCallback):
+        if key:
+            await handlers._handle_flow_run_callback(key, callback, parsed)
