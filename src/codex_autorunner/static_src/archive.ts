@@ -15,6 +15,12 @@ let snapshots: ArchiveSnapshotSummary[] = [];
 let selected: ArchiveSnapshotSummary | null = null;
 let activeSnapshotKey = "";
 let activeSubTab: "snapshot" | "files" = "snapshot";
+let lastSnapshotsSignature = "";
+
+/** Compute a signature of the snapshots list for change detection. */
+function snapshotsSignature(items: ArchiveSnapshotSummary[]): string {
+  return items.map((s) => `${s.snapshot_id}:${s.worktree_repo_id}:${s.status || ""}`).join("|");
+}
 
 const listEl = document.getElementById("archive-snapshot-list");
 const detailEl = document.getElementById("archive-snapshot-detail");
@@ -768,9 +774,13 @@ function selectSnapshot(target: ArchiveSnapshotSummary): void {
   void loadSnapshotDetail(target);
 }
 
-async function loadSnapshots(): Promise<void> {
+async function loadSnapshots(forceReload = false): Promise<void> {
   if (!listEl) return;
-  listEl.innerHTML = "Loading…";
+  const isInitialLoad = snapshots.length === 0;
+  // Only show loading indicator on initial load to avoid UI flicker
+  if (isInitialLoad) {
+    listEl.innerHTML = "Loading…";
+  }
   if (emptyEl) emptyEl.classList.add("hidden");
   try {
     const items = await listArchiveSnapshots();
@@ -780,15 +790,36 @@ async function loadSnapshots(): Promise<void> {
       if (aTime !== bTime) return bTime - aTime;
       return (b.snapshot_id || "").localeCompare(a.snapshot_id || "");
     });
+
+    // Check if snapshots have changed
+    const newSignature = snapshotsSignature(sorted);
+    const hasChanged = newSignature !== lastSnapshotsSignature;
+
+    // Skip update if nothing changed and not forced
+    if (!forceReload && !hasChanged && !isInitialLoad) {
+      return;
+    }
+
+    lastSnapshotsSignature = newSignature;
     snapshots = sorted;
     renderList(sorted);
+
     if (!sorted.length) return;
+
     const selectedKey = selected ? snapshotKey(selected) : "";
     const match = selectedKey
       ? sorted.find((item) => snapshotKey(item) === selectedKey)
       : null;
-    const next = match || sorted[0];
-    selectSnapshot(next);
+
+    // Only reload detail if selection changed or forced
+    if (forceReload || !match || isInitialLoad) {
+      const next = match || sorted[0];
+      selectSnapshot(next);
+    } else if (match) {
+      // Update selected reference but don't reload detail
+      selected = match;
+      renderList(sorted);
+    }
   } catch (err) {
     listEl.innerHTML = "";
     renderEmptyDetail("Unable to load archive snapshots.");
@@ -819,15 +850,15 @@ export function initArchive(): void {
 
   listEl.addEventListener("click", handleListClick);
   refreshBtn?.addEventListener("click", () => {
-    void loadSnapshots();
+    void loadSnapshots(true); // Force reload on manual refresh
   });
 
   subscribe("repo:health", (payload: unknown) => {
     const status = (payload as { status?: string } | null)?.status || "";
     if (status === "ok" || status === "degraded") {
-      void loadSnapshots();
+      void loadSnapshots(); // Non-forced: only updates if data changed
     }
   });
 
-  void loadSnapshots();
+  void loadSnapshots(true); // Initial load
 }
