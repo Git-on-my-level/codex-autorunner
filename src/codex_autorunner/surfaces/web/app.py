@@ -1822,11 +1822,20 @@ def create_hub_app(
         worktree_repo_id = payload.worktree_repo_id
         delete_branch = payload.delete_branch
         delete_remote = payload.delete_remote
+        archive = payload.archive
+        force_archive = payload.force_archive
+        archive_note = payload.archive_note
         safe_log(
             app.state.logger,
             logging.INFO,
-            "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s"
-            % (worktree_repo_id, delete_branch, delete_remote),
+            "Hub cleanup worktree id=%s delete_branch=%s delete_remote=%s archive=%s force_archive=%s"
+            % (
+                worktree_repo_id,
+                delete_branch,
+                delete_remote,
+                archive,
+                force_archive,
+            ),
         )
         try:
             await asyncio.to_thread(
@@ -1834,6 +1843,9 @@ def create_hub_app(
                 worktree_repo_id=str(worktree_repo_id),
                 delete_branch=delete_branch,
                 delete_remote=delete_remote,
+                archive=archive,
+                force_archive=force_archive,
+                archive_note=archive_note,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1846,6 +1858,9 @@ def create_hub_app(
                 worktree_repo_id=str(payload.worktree_repo_id),
                 delete_branch=payload.delete_branch,
                 delete_remote=payload.delete_remote,
+                archive=payload.archive,
+                force_archive=payload.force_archive,
+                archive_note=payload.archive_note,
             )
             return {"status": "ok"}
 

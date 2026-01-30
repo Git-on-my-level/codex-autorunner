@@ -197,6 +197,11 @@ def _build_meta(
     return payload
 
 
+def build_snapshot_id(branch: Optional[str], head_sha: str) -> str:
+    head_short = head_sha[:7] if head_sha and head_sha != "unknown" else "unknown"
+    return f"{_snapshot_timestamp()}--{_sanitize_branch(branch)}--{head_short}"
+
+
 def archive_worktree_snapshot(
     *,
     base_repo_root: Path,
@@ -206,16 +211,15 @@ def archive_worktree_snapshot(
     branch: Optional[str],
     worktree_of: str,
     note: Optional[str] = None,
+    snapshot_id: Optional[str] = None,
+    head_sha: Optional[str] = None,
+    source_path: Optional[Path | str] = None,
 ) -> ArchiveResult:
     base_repo_root = base_repo_root.resolve()
     worktree_repo_root = worktree_repo_root.resolve()
     branch_name = branch or git_branch(worktree_repo_root) or "unknown"
-    head_sha = git_head_sha(worktree_repo_root) or "unknown"
-    head_short = head_sha[:7] if head_sha != "unknown" else "unknown"
-
-    snapshot_id = (
-        f"{_snapshot_timestamp()}--{_sanitize_branch(branch_name)}--{head_short}"
-    )
+    resolved_head_sha = head_sha or git_head_sha(worktree_repo_root) or "unknown"
+    snapshot_id = snapshot_id or build_snapshot_id(branch_name, resolved_head_sha)
     snapshot_root = (
         base_repo_root
         / ".codex-autorunner"
@@ -286,8 +290,10 @@ def archive_worktree_snapshot(
             worktree_repo_id=worktree_repo_id,
             worktree_of=worktree_of,
             branch=branch_name,
-            head_sha=head_sha,
-            source_path=worktree_repo_root,
+            head_sha=resolved_head_sha,
+            source_path=(
+                Path(source_path) if source_path is not None else worktree_repo_root
+            ),
             copied_paths=copied_paths,
             missing_paths=missing_paths,
             skipped_symlinks=skipped_symlinks,
@@ -310,8 +316,10 @@ def archive_worktree_snapshot(
             worktree_repo_id=worktree_repo_id,
             worktree_of=worktree_of,
             branch=branch_name,
-            head_sha=head_sha,
-            source_path=worktree_repo_root,
+            head_sha=resolved_head_sha,
+            source_path=(
+                Path(source_path) if source_path is not None else worktree_repo_root
+            ),
             copied_paths=copied_paths,
             missing_paths=missing_paths,
             skipped_symlinks=skipped_symlinks,

@@ -16,12 +16,15 @@ from ..manifest import (
     sanitize_repo_id,
     save_manifest,
 )
+from .archive import archive_worktree_snapshot, build_snapshot_id
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .engine import AppServerSupervisorFactory, BackendFactory, Engine
 from .git_utils import (
     GitError,
     git_available,
+    git_branch,
     git_default_branch,
+    git_head_sha,
     git_is_clean,
     git_upstream_status,
     run_git,
@@ -658,6 +661,9 @@ class HubSupervisor:
         worktree_repo_id: str,
         delete_branch: bool = False,
         delete_remote: bool = False,
+        archive: bool = True,
+        force_archive: bool = False,
+        archive_note: Optional[str] = None,
     ) -> None:
         self._invalidate_list_cache()
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
@@ -677,6 +683,44 @@ class HubSupervisor:
         runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
         if runner:
             runner.stop()
+
+        if archive:
+            branch_name = entry.branch or git_branch(worktree_path) or "unknown"
+            head_sha = git_head_sha(worktree_path) or "unknown"
+            snapshot_id = build_snapshot_id(branch_name, head_sha)
+            logger.info(
+                "Hub archive worktree start id=%s snapshot_id=%s",
+                worktree_repo_id,
+                snapshot_id,
+            )
+            try:
+                result = archive_worktree_snapshot(
+                    base_repo_root=base_path,
+                    base_repo_id=base.id,
+                    worktree_repo_root=worktree_path,
+                    worktree_repo_id=worktree_repo_id,
+                    branch=branch_name,
+                    worktree_of=entry.worktree_of,
+                    note=archive_note,
+                    snapshot_id=snapshot_id,
+                    head_sha=head_sha,
+                    source_path=entry.path,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Hub archive worktree failed id=%s snapshot_id=%s",
+                    worktree_repo_id,
+                    snapshot_id,
+                )
+                if not force_archive:
+                    raise ValueError(f"Worktree archive failed: {exc}") from exc
+            else:
+                logger.info(
+                    "Hub archive worktree complete id=%s snapshot_id=%s status=%s",
+                    worktree_repo_id,
+                    result.snapshot_id,
+                    result.status,
+                )
 
         # Remove worktree from base repo.
         try:

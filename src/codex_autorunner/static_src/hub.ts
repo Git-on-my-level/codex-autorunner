@@ -1330,7 +1330,12 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
       );
       if (!ok) return;
       await startHubJob("/hub/jobs/worktrees/cleanup", {
-        body: { worktree_repo_id: repoId },
+        body: {
+          worktree_repo_id: repoId,
+          archive: true,
+          force_archive: false,
+          archive_note: null,
+        },
         startedMessage: "Worktree cleanup queued",
       });
       flash(`Removed worktree: ${repoId}`, "success");
