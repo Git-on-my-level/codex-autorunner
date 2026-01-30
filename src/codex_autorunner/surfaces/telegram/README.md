@@ -37,6 +37,7 @@ Command reference:
 - `/flow restart`
 - `/flow archive [run_id] [--force]`
 - `/flow-archive [run_id] [--force]` (alias for `/flow archive`)
+- `/flow-interrupt` (alias for `/interrupt`)
 - `/flow reply <message>`
 
 Aliases:

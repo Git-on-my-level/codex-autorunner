@@ -889,6 +889,7 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         "flow",
         "flow_status",
         "flow_archive",
+        "flow_interrupt",
         "reply",
         "pr",
         "agent",
@@ -937,6 +938,8 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/flow archive [run_id] [--force]")
         if "flow_archive" in command_specs:
             lines.append("/flow-archive [run_id] [--force]")
+        if "flow_interrupt" in command_specs:
+            lines.append("/flow-interrupt")
         lines.append("/flow reply <message>")
         if "flow_status" in command_specs:
             lines.append("/flow_status [run_id]")

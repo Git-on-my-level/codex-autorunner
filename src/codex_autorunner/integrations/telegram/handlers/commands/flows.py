@@ -107,6 +107,7 @@ def _flow_help_lines() -> list[str]:
         "/flow restart",
         "/flow archive [run_id] [--force]",
         "/flow-archive [run_id] [--force]",
+        "/flow-interrupt",
         "/flow reply <message>",
         "Aliases: /flow start, /flow_status, /flow-archive",
     ]

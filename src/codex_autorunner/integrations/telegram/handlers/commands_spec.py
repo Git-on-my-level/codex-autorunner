@@ -56,6 +56,14 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             ),
             allow_during_turn=True,
         ),
+        "flow_interrupt": CommandSpec(
+            "flow_interrupt",
+            "interrupt current turn (alias for /interrupt)",
+            lambda message, _args, runtime: handlers._handle_interrupt(
+                message, runtime
+            ),
+            allow_during_turn=True,
+        ),
         "reply": CommandSpec(
             "reply",
             "reply to a paused ticket flow dispatch (prefer /flow reply)",

@@ -144,6 +144,13 @@ def test_parse_command_fallback_accepts_hyphen_alias() -> None:
     )
 
 
+def test_parse_command_fallback_accepts_flow_interrupt_alias() -> None:
+    command = parse_command("/flow-interrupt")
+    assert command == TelegramCommand(
+        name="flow_interrupt", args="", raw="/flow-interrupt"
+    )
+
+
 def test_parse_command_fallback_rejects_question() -> None:
     command = parse_command("/foo?")
     assert command is None

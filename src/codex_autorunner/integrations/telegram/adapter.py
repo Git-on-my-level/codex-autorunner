@@ -35,6 +35,9 @@ INTERRUPT_ALIASES = {
     "ctrl+c",
     "esc",
     "escape",
+    "/flow-interrupt",
+    "/flow_interrupt",
+    "/interrupt",
     "/stop",
 }
 
@@ -338,9 +341,7 @@ def is_interrupt_alias(text: Optional[str]) -> bool:
     if not text:
         return False
     normalized = text.strip().lower()
-    if normalized in INTERRUPT_ALIASES:
-        return True
-    return normalized == "/interrupt"
+    return normalized in INTERRUPT_ALIASES
 
 
 def parse_update(update: dict[str, Any]) -> Optional[TelegramUpdate]:
