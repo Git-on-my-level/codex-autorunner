@@ -397,6 +397,76 @@ class FlowStore:
             return None, None
         return row["seq"], row["timestamp"]
 
+    def get_last_event_seq_by_types(
+        self, run_id: str, event_types: list[FlowEventType]
+    ) -> Optional[int]:
+        if not event_types:
+            return None
+        conn = self._get_conn()
+        placeholders = ", ".join("?" for _ in event_types)
+        params = [run_id, *[t.value for t in event_types]]
+        row = conn.execute(
+            f"""
+            SELECT seq
+            FROM flow_events
+            WHERE run_id = ? AND event_type IN ({placeholders})
+            ORDER BY seq DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        if row is None:
+            return None
+        return cast(int, row["seq"])
+
+    def get_last_event_by_type(
+        self, run_id: str, event_type: FlowEventType
+    ) -> Optional[FlowEvent]:
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT *
+            FROM flow_events
+            WHERE run_id = ? AND event_type = ?
+            ORDER BY seq DESC
+            LIMIT 1
+            """,
+            (run_id, event_type.value),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_flow_event(row)
+
+    def get_latest_step_progress_current_ticket(
+        self, run_id: str, *, after_seq: Optional[int] = None, limit: int = 50
+    ) -> Optional[str]:
+        """Return the most recent step_progress.data.current_ticket for a run.
+
+        This is intentionally lightweight to support UI polling endpoints.
+        """
+        conn = self._get_conn()
+        query = """
+            SELECT seq, data
+            FROM flow_events
+            WHERE run_id = ? AND event_type = ?
+        """
+        params: List[Any] = [run_id, FlowEventType.STEP_PROGRESS.value]
+        if after_seq is not None:
+            query += " AND seq > ?"
+            params.append(after_seq)
+        query += " ORDER BY seq DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        for row in rows:
+            try:
+                data = json.loads(row["data"] or "{}")
+            except Exception:
+                data = {}
+            current_ticket = data.get("current_ticket")
+            if isinstance(current_ticket, str) and current_ticket.strip():
+                return current_ticket.strip()
+        return None
+
     def create_artifact(
         self,
         artifact_id: str,

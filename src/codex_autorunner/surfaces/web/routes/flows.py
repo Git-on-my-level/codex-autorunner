@@ -20,6 +20,7 @@ from ....core.engine import Engine
 from ....core.flows import (
     FlowController,
     FlowDefinition,
+    FlowEventType,
     FlowRunRecord,
     FlowRunStatus,
     FlowStore,
@@ -344,12 +345,48 @@ def _build_flow_status_response(
     if store:
         last_event_seq, last_event_at = store.get_last_event_meta(record.id)
     health = check_worker_health(repo_root, record.id)
-    return FlowStatusResponse.from_record(
+    resp = FlowStatusResponse.from_record(
         record,
         last_event_seq=last_event_seq,
         last_event_at=last_event_at,
         worker_health=health,
     )
+    # Best-effort: surface an "effective" current ticket during an in-flight step.
+    # This avoids UI flakiness when the run state hasn't been persisted yet.
+    try:
+        if store and record.flow_type == "ticket_flow" and record.status.is_active():
+            state = resp.state if isinstance(resp.state, dict) else {}
+            ticket_engine = (
+                state.get("ticket_engine") if isinstance(state, dict) else None
+            )
+            ticket_engine = (
+                dict(ticket_engine) if isinstance(ticket_engine, dict) else {}
+            )
+            existing = ticket_engine.get("current_ticket")
+            if not (isinstance(existing, str) and existing.strip()):
+                last_started = store.get_last_event_seq_by_types(
+                    record.id, [FlowEventType.STEP_STARTED]
+                )
+                last_finished = store.get_last_event_seq_by_types(
+                    record.id, [FlowEventType.STEP_COMPLETED, FlowEventType.STEP_FAILED]
+                )
+                in_progress = bool(
+                    last_started is not None
+                    and (last_finished is None or last_started > last_finished)
+                )
+                if in_progress:
+                    effective = store.get_latest_step_progress_current_ticket(
+                        record.id, after_seq=last_finished
+                    )
+                    if effective:
+                        ticket_engine["current_ticket"] = effective
+                        state = dict(state)
+                        state["ticket_engine"] = ticket_engine
+                        resp.state = state
+    except Exception:
+        # Never fail the UI because this is an optional enhancement.
+        pass
+    return resp
 
 
 def _start_flow_worker(repo_root: Path, run_id: str) -> Optional[subprocess.Popen]:

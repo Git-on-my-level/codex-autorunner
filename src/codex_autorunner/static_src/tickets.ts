@@ -112,6 +112,11 @@ let eventSourceRetryTimerId: ReturnType<typeof setTimeout> | null = null;
 const lastSeenSeqByRun: Record<string, number> = {};
 let ticketListCache: { ticket_dir?: string; tickets?: TicketFile[] } | null = null;
 
+function isFlowActiveStatus(status: string | null): boolean {
+  // Mirror backend FlowRunStatus.is_active(): pending | running | stopping
+  return status === "pending" || status === "running" || status === "stopping";
+}
+
 // Dispatch panel collapse state (persisted to localStorage)
 const DISPATCH_PANEL_COLLAPSED_KEY = "car-dispatch-panel-collapsed";
 let dispatchPanelCollapsed = false;
@@ -639,7 +644,7 @@ function handleFlowEvent(event: FlowEvent): void {
     const nextTicket = event.data?.current_ticket as string | undefined;
     if (nextTicket) {
       currentActiveTicket = nextTicket;
-      currentFlowStatus = "running";
+      // Don't force flow status here; it comes from the runs endpoint.
       const { current } = els();
       if (current) current.textContent = currentActiveTicket;
       if (ticketListCache) {
@@ -869,7 +874,11 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | n
     const fm = (ticket.frontmatter || {}) as Record<string, unknown>;
     const done = Boolean(fm?.done);
     // Check if this ticket is currently being worked on
-    const isActive = currentActiveTicket && ticket.path === currentActiveTicket && currentFlowStatus === "running";
+    const isActive = Boolean(
+      currentActiveTicket &&
+        ticket.path === currentActiveTicket &&
+        isFlowActiveStatus(currentFlowStatus)
+    );
     item.className = `ticket-item ${done ? "done" : ""} ${isActive ? "active" : ""} clickable`;
     item.title = "Click to edit";
 
@@ -1256,22 +1265,10 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
     const ticketEngine = (latest?.state as Record<string, unknown> | undefined)?.ticket_engine as
       | Record<string, unknown>
       | undefined;
-    // FIX: Only update currentActiveTicket from API if it's not null,
-    // or if the flow is no longer running. This prevents stale API data
-    // from clearing the real-time state from the event stream.
+    // The server now provides an effective current_ticket during in-flight steps.
+    // Trust the API value even when null so we don't show stale DONE+WORKING between steps.
     const apiActiveTicket = (ticketEngine?.current_ticket as string) || null;
-    const isFlowActive = latest?.status === "running" || latest?.status === "pending";
-
-    if (!isFlowActive) {
-      // Terminal state - trust the API
-      currentActiveTicket = apiActiveTicket;
-    } else if (apiActiveTicket) {
-      // API has a specific ticket - trust it
-      currentActiveTicket = apiActiveTicket;
-    } else {
-      // Flow is active but API says null - preserve existing currentActiveTicket
-      // (which was likely set by a real-time event stream 'step_progress' event)
-    }
+    currentActiveTicket = apiActiveTicket;
     const ticketTurns = (ticketEngine?.ticket_turns as number) ?? null;
     const totalTurns = (ticketEngine?.total_turns as number) ?? null;
 
@@ -1282,7 +1279,7 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
     
     // Display turn counter
     if (turn) {
-      if (ticketTurns !== null && currentFlowStatus === "running") {
+      if (ticketTurns !== null && isFlowActiveStatus(currentFlowStatus)) {
         turn.textContent = `${ticketTurns}${totalTurns !== null ? ` (${totalTurns} total)` : ""}`;
       } else {
         turn.textContent = "–";
