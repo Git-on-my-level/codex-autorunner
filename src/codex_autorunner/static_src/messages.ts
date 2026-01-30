@@ -8,6 +8,8 @@ import {
 } from "./utils.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
+import { preserveScroll } from "./preserve.js";
+import { createSmartRefresh, type SmartRefreshReason } from "./smartRefresh.js";
 
 /**
  * Dispatch: Agent-to-human communication.
@@ -99,6 +101,7 @@ let bellInitialized = false;
 let messagesInitialized = false;
 let activeRunId: string | null = null;
 let selectedRunId: string | null = null;
+const MESSAGE_REFRESH_REASONS: SmartRefreshReason[] = ["initial", "background", "manual"];
 
 const threadsEl = document.getElementById("messages-thread-list");
 const detailEl = document.getElementById("messages-thread-detail");
@@ -174,6 +177,7 @@ function renderThreadItem(thread: ConversationSummary): string {
   const title = latestDispatch?.title || (isHandoff ? "Handoff" : "Dispatch");
   const subtitle = latestDispatch?.body ? latestDispatch.body.slice(0, 120) : "";
   const isPaused = thread.status === "paused";
+  const isActive = selectedRunId && thread.run_id === selectedRunId;
 
   // Only show action indicator if there's an unreplied handoff (pause)
   // Compare dispatch_seq vs reply_seq to check if user has responded
@@ -187,7 +191,7 @@ function renderThreadItem(thread: ConversationSummary): string {
   const replies = thread.reply_count ?? 0;
   const metaLine = `${dispatches} dispatch${dispatches !== 1 ? "es" : ""} · ${replies} repl${replies !== 1 ? "ies" : "y"}`;
   return `
-    <button class="messages-thread" data-run-id="${escapeHtml(thread.run_id)}">
+    <button class="messages-thread${isActive ? " active" : ""}" data-run-id="${escapeHtml(thread.run_id)}">
       <div class="messages-thread-title">${indicator}${escapeHtml(title)}</div>
       <div class="messages-thread-subtitle muted">${escapeHtml(subtitle)}</div>
       <div class="messages-thread-meta-line">${escapeHtml(metaLine)}</div>
@@ -195,36 +199,153 @@ function renderThreadItem(thread: ConversationSummary): string {
   `;
 }
 
-async function loadThreads(): Promise<void> {
+function syncSelectedThread(): void {
   if (!threadsEl) return;
-  threadsEl.innerHTML = "Loading…";
-  if (!isRepoHealthy()) {
-    threadsEl.innerHTML = "<div class=\"muted\">Repo offline or uninitialized</div>";
-    return;
-  }
-  let res: ThreadsResponse;
-  try {
-    res = (await api("/api/messages/threads")) as ThreadsResponse;
-  } catch (err) {
-    threadsEl.innerHTML = "";
-    flash("Failed to load inbox", "error");
-    return;
-  }
-
-  const conversations = res?.conversations || [];
-  if (!conversations.length) {
-    threadsEl.innerHTML = "<div class=\"muted\">No dispatches</div>";
-    return;
-  }
-  threadsEl.innerHTML = conversations.map(renderThreadItem).join("");
-  threadsEl.querySelectorAll<HTMLButtonElement>(".messages-thread").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const runId = btn.dataset.runId || "";
-      if (!runId) return;
-      updateUrlParams({ tab: "inbox", run_id: runId });
-      void loadThread(runId);
-    });
+  const buttons = threadsEl.querySelectorAll<HTMLButtonElement>(".messages-thread");
+  buttons.forEach((btn) => {
+    const runId = btn.dataset.runId || "";
+    btn.classList.toggle("active", Boolean(runId) && runId === selectedRunId);
   });
+}
+
+type ThreadListPayload = {
+  status: "ok" | "offline";
+  conversations: ConversationSummary[];
+};
+
+type ThreadDetailPayload = {
+  status: "ok" | "offline";
+  runId: string;
+  detail?: ThreadDetail;
+};
+
+function threadListSignature(conversations: ConversationSummary[]): string {
+  return conversations
+    .map((thread) => {
+      const latest = thread.latest;
+      const dispatch = latest?.dispatch;
+      const ticketState = thread.ticket_state;
+      return [
+        thread.run_id,
+        thread.status ?? "",
+        latest?.seq ?? "",
+        latest?.created_at ?? "",
+        dispatch?.mode ?? "",
+        dispatch?.is_handoff ? "1" : "0",
+        thread.dispatch_count ?? "",
+        thread.reply_count ?? "",
+        ticketState?.dispatch_seq ?? "",
+        ticketState?.reply_seq ?? "",
+        ticketState?.status ?? "",
+      ].join("|");
+    })
+    .join("::");
+}
+
+function threadDetailSignature(detail: ThreadDetail): string {
+  const dispatches = detail.dispatch_history || [];
+  const replies = detail.reply_history || [];
+  const maxDispatchSeq = dispatches.reduce((max, entry) => Math.max(max, entry.seq || 0), 0);
+  const maxReplySeq = replies.reduce((max, entry) => Math.max(max, entry.seq || 0), 0);
+  const lastDispatchAt = dispatches.find((entry) => entry.seq === maxDispatchSeq)?.created_at ?? "";
+  const lastReplyAt = replies.find((entry) => entry.seq === maxReplySeq)?.created_at ?? "";
+  const ticketState = detail.ticket_state;
+  return [
+    detail.run?.status ?? "",
+    detail.run?.created_at ?? "",
+    detail.dispatch_count ?? dispatches.length,
+    detail.reply_count ?? replies.length,
+    maxDispatchSeq,
+    maxReplySeq,
+    lastDispatchAt ?? "",
+    lastReplyAt ?? "",
+    ticketState?.dispatch_seq ?? "",
+    ticketState?.reply_seq ?? "",
+    ticketState?.status ?? "",
+    ticketState?.current_ticket ?? "",
+    ticketState?.total_turns ?? "",
+    ticketState?.ticket_turns ?? "",
+  ].join("|");
+}
+
+const threadListRefresh = createSmartRefresh<ThreadListPayload>({
+  getSignature: (payload) => {
+    if (payload.status !== "ok") return payload.status;
+    return `ok::${threadListSignature(payload.conversations)}`;
+  },
+  render: (payload) => {
+    if (!threadsEl) return;
+    const renderList = () => {
+      if (payload.status !== "ok") {
+        threadsEl.innerHTML = "<div class=\"muted\">Repo offline or uninitialized</div>";
+        return;
+      }
+      const conversations = payload.conversations || [];
+      if (!conversations.length) {
+        threadsEl.innerHTML = "<div class=\"muted\">No dispatches</div>";
+        return;
+      }
+      threadsEl.innerHTML = conversations.map(renderThreadItem).join("");
+      threadsEl.querySelectorAll<HTMLButtonElement>(".messages-thread").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const runId = btn.dataset.runId || "";
+          if (!runId) return;
+          selectedRunId = runId;
+          syncSelectedThread();
+          updateUrlParams({ tab: "inbox", run_id: runId });
+          void loadThread(runId, "manual");
+        });
+      });
+    };
+    preserveScroll(threadsEl, renderList, { restoreOnNextFrame: true });
+  },
+});
+
+const threadDetailRefresh = createSmartRefresh<ThreadDetailPayload>({
+  getSignature: (payload) => {
+    if (payload.status !== "ok") return `${payload.status}::${payload.runId}`;
+    if (!payload.detail) return `empty::${payload.runId}`;
+    return `ok::${payload.runId}::${threadDetailSignature(payload.detail)}`;
+  },
+  render: (payload, ctx) => {
+    if (!detailEl) return;
+    if (payload.status !== "ok") {
+      detailEl.innerHTML = "<div class=\"muted\">Repo offline or uninitialized.</div>";
+      return;
+    }
+    const detail = payload.detail;
+    if (!detail) {
+      detailEl.innerHTML = "<div class=\"muted\">No thread selected.</div>";
+      return;
+    }
+    renderThreadDetail(detail, payload.runId, ctx);
+  },
+});
+
+async function fetchThreadsPayload(): Promise<ThreadListPayload> {
+  if (!isRepoHealthy()) {
+    return { status: "offline", conversations: [] };
+  }
+  const res = (await api("/api/messages/threads")) as ThreadsResponse;
+  return { status: "ok", conversations: res?.conversations || [] };
+}
+
+async function loadThreads(reason: SmartRefreshReason = "manual"): Promise<void> {
+  if (!threadsEl) return;
+  if (!MESSAGE_REFRESH_REASONS.includes(reason)) {
+    reason = "manual";
+  }
+  if (reason !== "background") {
+    threadsEl.innerHTML = "Loading…";
+  }
+  try {
+    await threadListRefresh.refresh(fetchThreadsPayload, { reason });
+  } catch (_err) {
+    if (reason !== "background") {
+      threadsEl.innerHTML = "";
+    }
+    flash("Failed to load inbox", "error");
+  }
 }
 
 function formatBytes(size?: number | null): string {
@@ -478,23 +599,39 @@ function buildThreadedTimeline(
   return rendered.join("");
 }
 
-async function loadThread(runId: string): Promise<void> {
+async function loadThread(runId: string, reason: SmartRefreshReason = "manual"): Promise<void> {
   selectedRunId = runId;
+  syncSelectedThread();
   if (!detailEl) return;
-  detailEl.innerHTML = "Loading…";
-  if (!isRepoHealthy()) {
-    detailEl.innerHTML = "<div class=\"muted\">Repo offline or uninitialized.</div>";
-    return;
+  if (!MESSAGE_REFRESH_REASONS.includes(reason)) {
+    reason = "manual";
   }
-  let detail: ThreadDetail;
+  if (reason !== "background") {
+    detailEl.innerHTML = "Loading…";
+  }
   try {
-    detail = (await api(`/api/messages/threads/${encodeURIComponent(runId)}`)) as ThreadDetail;
+    await threadDetailRefresh.refresh(async () => {
+      if (!isRepoHealthy()) {
+        return { status: "offline", runId };
+      }
+      const detail = (await api(`/api/messages/threads/${encodeURIComponent(runId)}`)) as ThreadDetail;
+      return { status: "ok", runId, detail };
+    }, { reason });
   } catch (_err) {
-    detailEl.innerHTML = "";
+    if (reason !== "background") {
+      detailEl.innerHTML = "";
+    }
     flash("Failed to load message thread", "error");
-    return;
   }
+}
 
+function isAtBottom(el: HTMLElement): boolean {
+  const threshold = 8;
+  return el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+}
+
+function renderThreadDetail(detail: ThreadDetail, runId: string, ctx: { reason: SmartRefreshReason }): void {
+  if (!detailEl) return;
   const runStatus = (detail.run?.status || "").toString();
   const isPaused = runStatus === "paused";
   const dispatchHistory = detail.dispatch_history || [];
@@ -525,16 +662,25 @@ async function loadThread(runId: string): Promise<void> {
     runStatus
   );
 
-  detailEl.innerHTML = `
-    <div class="messages-thread-history">
-      ${threadedContent || '<div class="muted">No dispatches yet</div>'}
-    </div>
-    <div class="messages-thread-footer">
-      <code title="${escapeHtml(runId)}">${escapeHtml(shortRunId)}</code>
-      <span class="pill pill-small ${statusPillClass}">${escapeHtml(statusLabel)}</span>
-      <span class="messages-footer-stats">${escapeHtml(statsLine)}</span>
-    </div>
-  `;
+  const renderDetail = () => {
+    detailEl.innerHTML = `
+      <div class="messages-thread-history">
+        ${threadedContent || '<div class="muted">No dispatches yet</div>'}
+      </div>
+      <div class="messages-thread-footer">
+        <code title="${escapeHtml(runId)}">${escapeHtml(shortRunId)}</code>
+        <span class="pill pill-small ${statusPillClass}">${escapeHtml(statusLabel)}</span>
+        <span class="messages-footer-stats">${escapeHtml(statsLine)}</span>
+      </div>
+    `;
+  };
+
+  const preserve = ctx.reason === "background" && detailEl.scrollHeight > 0 && !isAtBottom(detailEl);
+  if (preserve) {
+    preserveScroll(detailEl, renderDetail, { restoreOnNextFrame: true });
+  } else {
+    renderDetail();
+  }
 
   // Only show reply box for paused runs - replies to other states won't be seen
   const replyBoxEl = document.querySelector(".messages-reply-box") as HTMLElement | null;
@@ -542,12 +688,13 @@ async function loadThread(runId: string): Promise<void> {
     replyBoxEl.classList.toggle("hidden", !isPaused);
   }
 
-  // Always scroll to bottom of the thread detail (the scrollable container)
-  requestAnimationFrame(() => {
-    if (detailEl) {
-      detailEl.scrollTop = detailEl.scrollHeight;
-    }
-  });
+  if (!preserve) {
+    requestAnimationFrame(() => {
+      if (detailEl) {
+        detailEl.scrollTop = detailEl.scrollHeight;
+      }
+    });
+  }
 }
 
 async function sendReply(): Promise<void> {
@@ -590,9 +737,9 @@ export function initMessages(): void {
   messagesInitialized = true;
 
   refreshEl?.addEventListener("click", () => {
-    void loadThreads();
+    void loadThreads("manual");
     const runId = selectedRunId;
-    if (runId) void loadThread(runId);
+    if (runId) void loadThread(runId, "manual");
   });
 
   replySendEl?.addEventListener("click", () => {
@@ -600,35 +747,45 @@ export function initMessages(): void {
   });
 
   // Load threads immediately, and try to open run_id from URL if present.
-  void loadThreads().then(() => {
+  void loadThreads("initial").then(() => {
     const params = getUrlParams();
     const runId = params.get("run_id");
     if (runId) {
       selectedRunId = runId;
-      void loadThread(runId);
+      void loadThread(runId, "initial");
       return;
     }
     // Fall back to active message if any.
     if (activeRunId) {
       selectedRunId = activeRunId;
       updateUrlParams({ run_id: activeRunId });
-      void loadThread(activeRunId);
+      void loadThread(activeRunId, "initial");
     }
   });
 
   subscribe("tab:change", (tabId: unknown) => {
     if (tabId === "inbox") {
       void refreshBell();
-      void loadThreads();
+      void loadThreads("manual");
       const params = getUrlParams();
       const runId = params.get("run_id");
       if (runId) {
         selectedRunId = runId;
-        void loadThread(runId);
+        void loadThread(runId, "manual");
       }
     }
   });
   subscribe("state:update", () => {
     void refreshBell();
+  });
+
+  subscribe("repo:health", (payload: unknown) => {
+    const status = (payload as { status?: string } | null)?.status || "";
+    if (status === "ok" || status === "degraded" || status === "offline") {
+      void loadThreads("background");
+      if (selectedRunId) {
+        void loadThread(selectedRunId, "background");
+      }
+    }
   });
 }
