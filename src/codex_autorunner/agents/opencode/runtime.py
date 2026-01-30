@@ -757,8 +757,9 @@ async def collect_opencode_output_from_events(
     error: Optional[str] = None
     message_roles: dict[str, str] = {}
     message_roles_seen = False
-    last_role_seen: Optional[str] = None
     pending_text: dict[str, list[str]] = {}
+    pending_no_id: list[str] = []
+    no_id_role: Optional[str] = None
     fallback_message: Optional[tuple[Optional[str], Optional[str], str]] = None
     last_usage_total: Optional[int] = None
     last_context_window: Optional[int] = None
@@ -793,7 +794,7 @@ async def collect_opencode_output_from_events(
         return None
 
     def _register_message_role(payload: Any) -> tuple[Optional[str], Optional[str]]:
-        nonlocal last_role_seen, message_roles_seen
+        nonlocal message_roles_seen
         if not isinstance(payload, dict):
             return None, None
         info = payload.get("info")
@@ -806,18 +807,27 @@ async def collect_opencode_output_from_events(
         if isinstance(role, str) and msg_id:
             message_roles[msg_id] = role
             message_roles_seen = True
-            last_role_seen = role
         return msg_id, role if isinstance(role, str) else None
+
+    def _flush_pending_no_id_as_assistant() -> None:
+        nonlocal no_id_role
+        if pending_no_id:
+            text_parts.extend(pending_no_id)
+            pending_no_id.clear()
+        no_id_role = "assistant"
+
+    def _discard_pending_no_id() -> None:
+        if pending_no_id:
+            pending_no_id.clear()
 
     def _append_text_for_message(message_id: Optional[str], text: str) -> None:
         if not text:
             return
         if message_id is None:
-            if not message_roles_seen:
+            if no_id_role == "assistant":
                 text_parts.append(text)
-                return
-            if last_role_seen != "user":
-                text_parts.append(text)
+            else:
+                pending_no_id.append(text)
             return
         role = message_roles.get(message_id)
         if role == "user":
@@ -839,12 +849,32 @@ async def collect_opencode_output_from_events(
             text_parts.extend(pending)
 
     def _flush_all_pending_text() -> None:
-        if not pending_text:
+        if pending_text:
+            for pending in list(pending_text.values()):
+                if pending:
+                    text_parts.extend(pending)
+            pending_text.clear()
+        if pending_no_id:
+            # If we have not seen a role yet, assume assistant for backwards
+            # compatibility with providers that omit roles entirely. Otherwise,
+            # only flush when we have already classified no-id text as assistant
+            # or when we have no other text (to avoid echoing user prompts).
+            if not message_roles_seen or no_id_role == "assistant" or not text_parts:
+                text_parts.extend(pending_no_id)
+            pending_no_id.clear()
+
+    def _handle_role_update(message_id: Optional[str], role: Optional[str]) -> None:
+        nonlocal no_id_role
+        if not role:
             return
-        for pending in list(pending_text.values()):
-            if pending:
-                text_parts.extend(pending)
-        pending_text.clear()
+        if role == "assistant":
+            _flush_pending_text(message_id)
+            _flush_pending_no_id_as_assistant()
+            return
+        if role == "user":
+            _flush_pending_text(message_id)
+            _discard_pending_no_id()
+            no_id_role = None
 
     async def _resolve_session_model_ids() -> tuple[Optional[str], Optional[str]]:
         nonlocal session_model_ids
@@ -1002,7 +1032,7 @@ async def collect_opencode_output_from_events(
                         status_type=status_type,
                         idle_seconds=idle_seconds,
                     )
-                    if not text_parts and pending_text:
+                    if not text_parts and (pending_text or pending_no_id):
                         _flush_all_pending_text()
                     break
                 if last_primary_completion_at is not None:
@@ -1079,7 +1109,7 @@ async def collect_opencode_output_from_events(
                             status_type=status_type,
                             idle_seconds=idle_seconds,
                         )
-                        if not text_parts and pending_text:
+                        if not text_parts and (pending_text or pending_no_id):
                             _flush_all_pending_text()
                         break
                     if last_primary_completion_at is not None:
@@ -1296,8 +1326,7 @@ async def collect_opencode_output_from_events(
             if event.event in ("message.updated", "message.completed"):
                 if is_primary_session:
                     msg_id, role = _register_message_role(payload)
-                    if role == "assistant":
-                        _flush_pending_text(msg_id)
+                    _handle_role_update(msg_id, role)
             if event.event == "message.part.updated":
                 properties = (
                     payload.get("properties") if isinstance(payload, dict) else None
@@ -1470,7 +1499,7 @@ async def collect_opencode_output_from_events(
             ):
                 if not is_primary_session:
                     continue
-                if not text_parts and pending_text:
+                if not text_parts and (pending_text or pending_no_id):
                     _flush_all_pending_text()
                 break
             if event.event == "message.completed" and is_primary_session:
@@ -1485,7 +1514,7 @@ async def collect_opencode_output_from_events(
             resolved_role = message_roles.get(msg_id)
         if resolved_role == "assistant":
             _append_text_for_message(msg_id, text)
-            if pending_text:
+            if pending_text or pending_no_id:
                 _flush_all_pending_text()
 
     return OpenCodeTurnOutput(text="".join(text_parts).strip(), error=error)

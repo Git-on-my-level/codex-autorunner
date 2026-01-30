@@ -399,6 +399,39 @@ async def test_collect_output_drops_user_completed_when_role_missing() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_drops_user_prompt_without_message_ids() -> None:
+    events = [
+        # User prompt arrives without a message id; should not be echoed.
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"User prompt"},'
+            '"part":{"type":"text","text":"User prompt"}}}',
+        ),
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"u1","role":"user"}}',
+        ),
+        # Assistant reply also lacks a message id; should be preserved.
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"Assistant reply"},'
+            '"part":{"type":"text","text":"Assistant reply"}}}',
+        ),
+        SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"a1","role":"assistant"}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Assistant reply"
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_dedupes_completed_before_part_updates() -> None:
     events = [
         SSEEvent(
