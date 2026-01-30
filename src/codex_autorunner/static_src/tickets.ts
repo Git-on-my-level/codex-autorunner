@@ -7,6 +7,7 @@ import {
   getAuthToken,
   openModal,
   inputModal,
+  setButtonLoading,
 } from "./utils.js";
 import { activateTab } from "./tabs.js";
 import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
@@ -18,6 +19,7 @@ import { parseAppServerEvent, type AgentEvent, type ParsedAgentEvent } from "./a
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
 import { preserveScroll } from "./preserve.js";
+import { createSmartRefresh } from "./smartRefresh.js";
 
 type FlowEvent = {
   seq?: number;
@@ -85,6 +87,18 @@ type DispatchEntry = {
   attachments?: DispatchAttachment[];
 };
 
+type TicketListPayload = {
+  ticket_dir?: string;
+  tickets?: TicketFile[];
+  activeTicket?: string | null;
+  flowStatus?: string | null;
+};
+
+type DispatchHistoryPayload = {
+  runId: string | null;
+  history?: DispatchEntry[];
+};
+
 let currentRunId: string | null = null;
 let ticketsExist = false;
 let currentActiveTicket: string | null = null;
@@ -105,13 +119,12 @@ const LIVE_EVENT_MAX = 50;
 let liveOutputEvents: AgentEvent[] = [];
 let liveOutputEventIndex: Record<string, number> = {};
 let currentReasonFull: string | null = null; // Full reason text for modal display
-let ticketsHydrated = false;
-let dispatchHistoryHydrated = false;
 let dispatchHistoryRunId: string | null = null;
 let eventSourceRetryAttempt = 0;
 let eventSourceRetryTimerId: ReturnType<typeof setTimeout> | null = null;
 const lastSeenSeqByRun: Record<string, number> = {};
 let ticketListCache: { ticket_dir?: string; tickets?: TicketFile[] } | null = null;
+let ticketFlowLoaded = false;
 
 function isFlowActiveStatus(status: string | null): boolean {
   // Mirror backend FlowRunStatus.is_active(): pending | running | stopping
@@ -128,6 +141,64 @@ const STALE_THRESHOLD_MS = 30000;
 // Throttling state
 let liveOutputRenderPending = false;
 let liveOutputTextPending = false;
+
+const ticketListRefresh = createSmartRefresh<TicketListPayload>({
+  getSignature: (payload) => {
+    const list = (payload.tickets || []) as TicketFile[];
+    const pieces = list.map((ticket) => {
+      const fm = (ticket.frontmatter || {}) as Record<string, unknown>;
+      const title = fm?.title ? String(fm.title) : "";
+      const done = fm?.done ? "1" : "0";
+      const agent = fm?.agent ? String(fm.agent) : "";
+      const mtime = (ticket as { mtime?: string | number | null }).mtime ?? "";
+      const errors = Array.isArray(ticket.errors) ? ticket.errors.join(",") : "";
+      return [ticket.path ?? "", ticket.index ?? "", title, done, agent, mtime, errors].join("|");
+    });
+    return [
+      payload.ticket_dir ?? "",
+      payload.activeTicket ?? "",
+      payload.flowStatus ?? "",
+      pieces.join(";"),
+    ].join("::");
+  },
+  render: (payload) => {
+    const { tickets } = els();
+    preserveScroll(
+      tickets,
+      () => {
+        renderTickets({
+          ticket_dir: payload.ticket_dir,
+          tickets: payload.tickets,
+        });
+      },
+      { restoreOnNextFrame: true }
+    );
+  },
+  onSkip: () => {
+    updateScrollFade();
+  },
+});
+
+const dispatchHistoryRefresh = createSmartRefresh<DispatchHistoryPayload>({
+  getSignature: (payload) => {
+    const entries = payload.history || [];
+    const latestSeq = entries[0]?.seq ?? "";
+    return [payload.runId ?? "", latestSeq, entries.length].join("::");
+  },
+  render: (payload) => {
+    const { history } = els();
+    preserveScroll(
+      history,
+      () => {
+        renderDispatchHistory(payload.runId, { history: payload.history });
+      },
+      { restoreOnNextFrame: true }
+    );
+  },
+  onSkip: () => {
+    updateScrollFade();
+  },
+});
 
 function scheduleLiveOutputRender(): void {
   if (liveOutputRenderPending) return;
@@ -1223,19 +1294,28 @@ function summarizeReason(run: FlowRun | null): string {
 
 async function loadTicketFiles(ctx?: RefreshContext): Promise<void> {
   const { tickets } = els();
-  if (tickets && (!ticketsHydrated || ctx?.reason === "manual")) {
+  const isInitial = ticketListRefresh.getSignature() === null;
+  if (tickets && isInitial) {
     tickets.textContent = "Loading tickets…";
   }
   try {
-    const data = (await api("/api/flows/ticket_flow/tickets")) as {
-      ticket_dir?: string;
-      tickets?: TicketFile[];
-    };
-    preserveScroll(tickets, () => {
-      renderTickets(data);
-    }, { restoreOnNextFrame: true });
-    ticketsHydrated = true;
+    await ticketListRefresh.refresh(
+      async () => {
+        const data = (await api("/api/flows/ticket_flow/tickets")) as {
+          ticket_dir?: string;
+          tickets?: TicketFile[];
+        };
+        return {
+          ticket_dir: data.ticket_dir,
+          tickets: data.tickets,
+          activeTicket: currentActiveTicket,
+          flowStatus: currentFlowStatus,
+        };
+      },
+      { reason: ctx?.reason === "manual" ? "manual" : "background" }
+    );
   } catch (err) {
+    ticketListRefresh.reset();
     ticketListCache = null;
     preserveScroll(tickets, () => {
       renderTickets(null);
@@ -1266,29 +1346,38 @@ async function openTicketByIndex(index: number): Promise<void> {
 async function loadDispatchHistory(runId: string | null, ctx?: RefreshContext): Promise<void> {
   const { history } = els();
   const runChanged = dispatchHistoryRunId !== runId;
-  if (history && (!dispatchHistoryHydrated || runChanged || ctx?.reason === "manual")) {
-    history.textContent = "Loading dispatch history…";
-  }
   if (!runId) {
     renderDispatchHistory(null, null);
-    dispatchHistoryHydrated = false;
+    dispatchHistoryRefresh.reset();
     dispatchHistoryRunId = null;
     return;
   }
   if (runChanged) {
-    dispatchHistoryHydrated = false;
     dispatchHistoryRunId = runId;
+    dispatchHistoryRefresh.reset();
+  }
+  const isInitial = dispatchHistoryRefresh.getSignature() === null;
+  if (history && isInitial) {
+    history.textContent = "Loading dispatch history…";
   }
   try {
-    // Use dispatch_history endpoint
-    const data = (await api(`/api/flows/${runId}/dispatch_history`)) as {
-      history?: DispatchEntry[];
-    };
-    preserveScroll(history, () => {
-      renderDispatchHistory(runId, data);
-    }, { restoreOnNextFrame: true });
-    dispatchHistoryHydrated = true;
+    await dispatchHistoryRefresh.refresh(
+      async () => {
+        const data = (await api(`/api/flows/${runId}/dispatch_history`)) as {
+          history?: DispatchEntry[];
+        };
+        return {
+          runId,
+          history: data.history,
+        };
+      },
+      {
+        reason: ctx?.reason === "manual" ? "manual" : "background",
+        force: runChanged,
+      }
+    );
   } catch (err) {
+    dispatchHistoryRefresh.reset();
     preserveScroll(history, () => {
       renderDispatchHistory(runId, null);
     }, { restoreOnNextFrame: true });
@@ -1297,7 +1386,26 @@ async function loadDispatchHistory(runId: string | null, ctx?: RefreshContext): 
 }
 
 async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
-  const { status, run, current, turn, elapsed, progress, reason, lastActivity, stalePill, reconnectBtn, workerStatus, workerPill, recoverBtn, resumeBtn, bootstrapBtn, stopBtn, archiveBtn } = els();
+  const {
+    status,
+    run,
+    current,
+    turn,
+    elapsed,
+    progress,
+    reason,
+    lastActivity,
+    stalePill,
+    reconnectBtn,
+    workerStatus,
+    workerPill,
+    recoverBtn,
+    resumeBtn,
+    bootstrapBtn,
+    stopBtn,
+    archiveBtn,
+    refreshBtn,
+  } = els();
   if (!isRepoHealthy()) {
     if (status) statusPill(status, "error");
     if (run) run.textContent = "–";
@@ -1313,10 +1421,15 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
     if (recoverBtn) recoverBtn.style.display = "none";
     if (reason) reason.textContent = "Repo offline or uninitialized.";
     setButtonsDisabled(true);
+    setButtonLoading(refreshBtn, false);
     stopElapsedTimer();
     stopLastActivityTimer();
     disconnectEventStream();
     return;
+  }
+  const showRefreshIndicator = ticketFlowLoaded;
+  if (showRefreshIndicator) {
+    setButtonLoading(refreshBtn, true);
   }
   try {
     const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
@@ -1491,6 +1604,11 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
   } catch (err) {
     if (reason) reason.textContent = (err as Error).message || "Ticket flow unavailable";
     flash((err as Error).message || "Failed to load ticket flow state", "error");
+  } finally {
+    ticketFlowLoaded = true;
+    if (showRefreshIndicator) {
+      setButtonLoading(refreshBtn, false);
+    }
   }
 }
 

@@ -1,4 +1,5 @@
 import { api, flash } from "./utils.js";
+import { createSmartRefresh, type SmartRefreshReason } from "./smartRefresh.js";
 
 interface Agent {
   id: string;
@@ -31,6 +32,13 @@ interface AgentControl extends AgentControlConfig {
   reasoningSelect?: HTMLSelectElement | null;
 }
 
+interface AgentControlsPayload {
+  agents: Agent[];
+  defaultAgent: string;
+  selectedAgent: string;
+  catalog: ModelCatalog | null;
+}
+
 const STORAGE_KEYS = {
   selected: "car.agent.selected",
   model: (agent: string) => `car.agent.${agent}.model`,
@@ -48,6 +56,23 @@ let agentList: Agent[] = [...FALLBACK_AGENTS];
 let defaultAgent = "codex";
 const modelCatalogs = new Map<string, ModelCatalog | null>();
 const modelCatalogPromises = new Map<string, Promise<ModelCatalog | null>>();
+
+const agentControlsRefresh = createSmartRefresh<AgentControlsPayload>({
+  getSignature: (payload) => {
+    const agentsSig = payload.agents
+      .map((agent) => `${agent.id}:${agent.name || ""}:${agent.version || ""}:${agent.protocol_version || ""}`)
+      .join("|");
+    const catalogSig = payload.catalog
+      ? `${payload.catalog.default_model || ""}:${payload.catalog.models
+        .map((model) => `${model.id}:${model.display_name || ""}:${model.supports_reasoning ? "1" : "0"}:${model.reasoning_options.join(",")}`)
+        .join("|")}`
+      : "none";
+    return `${agentsSig}::${payload.defaultAgent}::${catalogSig}`;
+  },
+  render: (payload) => {
+    renderAgentControls(payload);
+  },
+});
 
 function safeGetStorage(key: string): string | null {
   try {
@@ -197,7 +222,7 @@ function getLabelText(agentId: string): string {
   return entry?.name || agentId;
 }
 
-  function ensureAgentOptions(select: HTMLSelectElement | null | undefined): void {
+function ensureAgentOptions(select: HTMLSelectElement | null | undefined): void {
   if (!select) return;
   const selected = getSelectedAgent();
   select.innerHTML = "";
@@ -283,7 +308,7 @@ function resolveSelectedReasoning(agent: string, model: ModelCatalogModel | null
   return model.reasoning_options[0] || "";
 }
 
-async function refreshControls(): Promise<void> {
+async function loadAgentControlsPayload(): Promise<AgentControlsPayload> {
   try {
     await loadAgents();
   } catch (err) {
@@ -293,12 +318,6 @@ async function refreshControls(): Promise<void> {
 
   const selectedAgent = getSelectedAgent();
 
-  // Always update agent options first (uses in-memory agentList)
-  controls.forEach((control) => {
-    ensureAgentOptions(control.agentSelect);
-  });
-
-  // Then try to load model catalog
   let catalog = modelCatalogs.get(selectedAgent);
   if (!catalog) {
     try {
@@ -308,6 +327,24 @@ async function refreshControls(): Promise<void> {
       catalog = null;
     }
   }
+
+  return {
+    agents: [...agentList],
+    defaultAgent,
+    selectedAgent,
+    catalog: catalog || null,
+  };
+}
+
+function renderAgentControls(payload: AgentControlsPayload): void {
+  const selectedAgent = payload.selectedAgent;
+
+  // Always update agent options first (uses in-memory agentList)
+  controls.forEach((control) => {
+    ensureAgentOptions(control.agentSelect);
+  });
+
+  const catalog = payload.catalog;
 
   // Update model and reasoning options
   controls.forEach((control) => {
@@ -331,6 +368,12 @@ async function refreshControls(): Promise<void> {
   });
 }
 
+export async function refreshAgentControls(
+  request: { force?: boolean; reason?: SmartRefreshReason } = {}
+): Promise<void> {
+  await agentControlsRefresh.refresh(loadAgentControlsPayload, request);
+}
+
 async function handleAgentChange(nextAgent: string): Promise<void> {
   const previous = getSelectedAgent();
   setSelectedAgent(nextAgent);
@@ -343,19 +386,19 @@ async function handleAgentChange(nextAgent: string): Promise<void> {
       "error"
     );
   }
-  await refreshControls();
+  await refreshAgentControls({ force: true, reason: "manual" });
 }
 
 async function handleModelChange(nextModel: string): Promise<void> {
   const agent = getSelectedAgent();
   setSelectedModel(agent, nextModel);
-  await refreshControls();
+  await refreshAgentControls({ force: true, reason: "manual" });
 }
 
 async function handleReasoningChange(nextReasoning: string): Promise<void> {
   const agent = getSelectedAgent();
   setSelectedReasoning(agent, nextReasoning);
-  await refreshControls();
+  await refreshAgentControls({ force: true, reason: "manual" });
 }
 
 /**
@@ -394,11 +437,11 @@ export function initAgentControls(config: AgentControlConfig = {}): void {
   }
 
   // Async refresh to load from API (will update if API returns different data)
-  refreshControls().catch((err) => {
+  refreshAgentControls({ force: true, reason: "initial" }).catch((err) => {
     console.warn("Failed to refresh agent controls", err);
   });
 }
 
 export async function ensureAgentCatalog(): Promise<void> {
-  await refreshControls();
+  await refreshAgentControls({ force: true, reason: "manual" });
 }

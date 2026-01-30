@@ -138,6 +138,16 @@ export function statusPill(el: HTMLElement, status: string): void {
   }
 }
 
+export function setButtonLoading(button: HTMLButtonElement | null, loading: boolean): void {
+  if (!button) return;
+  button.classList.toggle("loading", loading);
+  if (loading) {
+    button.setAttribute("aria-busy", "true");
+  } else {
+    button.removeAttribute("aria-busy");
+  }
+}
+
 interface ErrorDetailItem {
   msg?: string;
   message?: string;

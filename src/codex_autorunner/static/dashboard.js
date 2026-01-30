@@ -4,6 +4,7 @@ import { saveToCache, loadFromCache } from "./cache.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { preserveScroll } from "./preserve.js";
+import { createSmartRefresh } from "./smartRefresh.js";
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 const ANALYTICS_SUMMARY_CACHE_KEY = "analytics-summary";
 const usageChartState = {
@@ -13,6 +14,17 @@ const usageChartState = {
 };
 let usageSeriesRetryTimer = null;
 let usageSummaryRetryTimer = null;
+const DASHBOARD_REFRESH_REASONS = ["initial", "background", "manual"];
+function normalizeRefreshReason(reason) {
+    if (reason && DASHBOARD_REFRESH_REASONS.includes(reason))
+        return reason;
+    return "manual";
+}
+function mapAutoRefreshReason(ctx) {
+    if (ctx.reason === "manual")
+        return "manual";
+    return "background";
+}
 function setUsageLoading(loading) {
     const btn = document.getElementById("usage-refresh");
     if (!btn)
@@ -60,6 +72,27 @@ function renderUsageProgressBar(container, percent, windowMinutes) {
     </div>
     <span class="usage-progress-label">${hasData ? `${pct}%` : "–"}${windowMinutes ? `/${windowMinutes}m` : ""}</span>
   `;
+}
+function usageSummarySignature(data) {
+    if (!data)
+        return "none";
+    const totals = data.totals || {};
+    const primary = data.latest_rate_limits?.primary || {};
+    const secondary = data.latest_rate_limits?.secondary || {};
+    return [
+        data.status || "",
+        data.events ?? "",
+        data.codex_home ?? "",
+        totals.total_tokens ?? "",
+        totals.input_tokens ?? "",
+        totals.cached_input_tokens ?? "",
+        totals.output_tokens ?? "",
+        totals.reasoning_output_tokens ?? "",
+        primary.used_percent ?? "",
+        primary.window_minutes ?? "",
+        secondary.used_percent ?? "",
+        secondary.window_minutes ?? "",
+    ].join("|");
 }
 function renderUsage(data) {
     if (data)
@@ -109,16 +142,85 @@ function renderUsage(data) {
     if (metaEl)
         metaEl.textContent = codexHome;
 }
-async function loadTicketAnalytics() {
+function analyticsSummarySignature(data) {
+    if (!data)
+        return "none";
+    const run = data.run;
+    const tickets = data.tickets;
+    const turns = data.turns;
+    const agent = data.agent;
+    return [
+        run?.id ?? "",
+        run?.short_id ?? "",
+        run?.status ?? "",
+        run?.started_at ?? "",
+        run?.finished_at ?? "",
+        run?.duration_seconds ?? "",
+        run?.current_step ?? "",
+        tickets?.todo_count ?? "",
+        tickets?.done_count ?? "",
+        tickets?.total_count ?? "",
+        tickets?.current_ticket ?? "",
+        turns?.total ?? "",
+        turns?.current_ticket ?? "",
+        turns?.dispatches ?? "",
+        turns?.replies ?? "",
+        agent?.id ?? "",
+        agent?.model ?? "",
+    ].join("|");
+}
+const usageSummaryRefresh = createSmartRefresh({
+    getSignature: (payload) => usageSummarySignature(payload),
+    render: (payload) => {
+        renderUsage(payload);
+    },
+});
+const analyticsSummaryRefresh = createSmartRefresh({
+    getSignature: (payload) => analyticsSummarySignature(payload),
+    render: (payload) => {
+        renderTicketAnalytics(payload);
+    },
+});
+function runHistorySignature(runs) {
+    if (!runs.length)
+        return "none";
+    return runs
+        .map((run) => [
+        run.id,
+        run.status || "",
+        run.current_step || "",
+        run.created_at || "",
+        run.started_at || "",
+        run.finished_at || "",
+    ].join(":"))
+        .join("|");
+}
+const runHistoryRefresh = createSmartRefresh({
+    getSignature: (payload) => runHistorySignature(payload),
+    render: (payload) => {
+        renderRunHistory(payload);
+    },
+});
+async function fetchTicketAnalytics() {
     try {
         const data = (await api("/api/analytics/summary"));
         saveToCache(ANALYTICS_SUMMARY_CACHE_KEY, data);
-        renderTicketAnalytics(data);
+        return data;
     }
     catch (err) {
         const cached = loadFromCache(ANALYTICS_SUMMARY_CACHE_KEY);
+        flash(err.message || "Failed to load analytics", "error");
         if (cached)
-            renderTicketAnalytics(cached);
+            return cached;
+        return null;
+    }
+}
+async function loadTicketAnalytics(reason = "manual") {
+    const resolvedReason = normalizeRefreshReason(reason);
+    try {
+        await analyticsSummaryRefresh.refresh(fetchTicketAnalytics, { reason: resolvedReason });
+    }
+    catch (err) {
         flash(err.message || "Failed to load analytics", "error");
     }
 }
@@ -185,11 +287,14 @@ function renderTicketAnalytics(data) {
         agentEl.textContent = agent?.id || "–";
     }
 }
-async function loadRunHistory() {
+async function fetchRunHistory() {
+    const runs = (await api("/api/flows/runs?flow_type=ticket_flow"));
+    return Array.isArray(runs) ? runs.slice(0, 10) : [];
+}
+async function loadRunHistory(reason = "manual") {
+    const resolvedReason = normalizeRefreshReason(reason);
     try {
-        const runs = (await api("/api/flows/runs?flow_type=ticket_flow"));
-        const runHistory = Array.isArray(runs) ? runs.slice(0, 10) : [];
-        renderRunHistory(runHistory);
+        await runHistoryRefresh.refresh(fetchRunHistory, { reason: resolvedReason });
     }
     catch (err) {
         flash(err.message || "Failed to load run history", "error");
@@ -260,6 +365,31 @@ function buildUsageSeriesQuery() {
     params.set("segment", usageChartState.segment);
     return params.toString();
 }
+function usageSeriesSignature(data) {
+    if (!data)
+        return "none";
+    const buckets = data.buckets || [];
+    const series = data.series || [];
+    const seriesSig = series
+        .map((entry) => {
+        const values = entry.values || [];
+        return [
+            entry.key ?? "",
+            entry.model ?? "",
+            entry.token_type ?? "",
+            entry.total ?? "",
+            values.join(","),
+        ].join(":");
+    })
+        .join("|");
+    return `${data.status || ""}::${buckets.join(",")}::${seriesSig}`;
+}
+const usageSeriesRefresh = createSmartRefresh({
+    getSignature: (payload) => usageSeriesSignature(payload),
+    render: (payload) => {
+        renderUsageChart(payload);
+    },
+});
 function renderUsageChart(data) {
     const container = document.getElementById("usage-chart-canvas");
     if (!container)
@@ -469,12 +599,13 @@ function attachUsageChartInteraction(container, state) {
         tooltip.style.opacity = "0";
     });
 }
-async function loadUsageSeries() {
+async function loadUsageSeries(reason = "manual") {
+    const resolvedReason = normalizeRefreshReason(reason);
     const container = document.getElementById("usage-chart-canvas");
     try {
         const data = await api(`/api/usage/series?${buildUsageSeriesQuery()}`);
         setChartLoading(container, data?.status === "loading");
-        renderUsageChart(data);
+        await usageSeriesRefresh.refresh(async () => data, { reason: resolvedReason });
         if (data?.status === "loading") {
             scheduleUsageSeriesRetry();
         }
@@ -484,7 +615,7 @@ async function loadUsageSeries() {
     }
     catch (err) {
         setChartLoading(container, false);
-        renderUsageChart(null);
+        await usageSeriesRefresh.refresh(async () => null, { reason: resolvedReason });
         clearUsageSeriesRetry();
     }
 }
@@ -512,44 +643,52 @@ function clearUsageSummaryRetry() {
         usageSummaryRetryTimer = null;
     }
 }
-async function loadUsage() {
-    setUsageLoading(true);
+async function fetchUsageSummary() {
     try {
         const data = await api("/api/usage");
         const cachedUsage = loadFromCache("usage");
         const hasSummary = data && data.totals && typeof data.events === "number";
         if (data?.status === "loading") {
             if (hasSummary) {
-                renderUsage(data);
+                scheduleUsageSummaryRetry();
+                return data;
             }
-            else if (cachedUsage) {
-                renderUsage(cachedUsage);
-            }
-            else {
-                renderUsage(data);
+            if (cachedUsage) {
+                scheduleUsageSummaryRetry();
+                return cachedUsage;
             }
             scheduleUsageSummaryRetry();
+            return data;
         }
-        else {
-            renderUsage(data);
-            clearUsageSummaryRetry();
-        }
-        loadUsageSeries();
+        clearUsageSummaryRetry();
+        return data;
     }
     catch (err) {
         const cachedUsage = loadFromCache("usage");
-        if (cachedUsage) {
-            renderUsage(cachedUsage);
-        }
-        else {
-            renderUsage(null);
-        }
         flash(err.message || "Failed to load usage", "error");
         clearUsageSummaryRetry();
+        if (cachedUsage) {
+            return cachedUsage;
+        }
+        return null;
+    }
+}
+async function loadUsage(reason = "manual") {
+    const resolvedReason = normalizeRefreshReason(reason);
+    const showLoading = resolvedReason !== "background";
+    if (showLoading)
+        setUsageLoading(true);
+    try {
+        await usageSummaryRefresh.refresh(fetchUsageSummary, { reason: resolvedReason });
+    }
+    catch (err) {
+        flash(err.message || "Failed to load usage", "error");
     }
     finally {
-        setUsageLoading(false);
+        if (showLoading)
+            setUsageLoading(false);
     }
+    await loadUsageSeries(resolvedReason);
 }
 function initUsageChartControls() {
     const segmentSelect = document.getElementById("usage-chart-segment");
@@ -594,10 +733,10 @@ function bindAction(buttonId, action) {
 export function initDashboard() {
     initUsageChartControls();
     // initReview(); // Removed - review.ts was deleted
-    bindAction("usage-refresh", loadUsage);
+    bindAction("usage-refresh", () => loadUsage("manual"));
     bindAction("analytics-refresh", async () => {
-        await loadTicketAnalytics();
-        await loadRunHistory();
+        await loadTicketAnalytics("manual");
+        await loadRunHistory("manual");
     });
     const cachedUsage = loadFromCache("usage");
     if (cachedUsage)
@@ -605,15 +744,14 @@ export function initDashboard() {
     const cachedAnalytics = loadFromCache(ANALYTICS_SUMMARY_CACHE_KEY);
     if (cachedAnalytics)
         renderTicketAnalytics(cachedAnalytics);
-    loadUsage();
-    loadTicketAnalytics();
-    loadRunHistory();
+    loadUsage("initial");
+    loadTicketAnalytics("initial");
+    loadRunHistory("initial");
     loadVersion();
     checkUpdateStatus();
     registerAutoRefresh("dashboard-usage", {
         callback: async (ctx) => {
-            void ctx;
-            await loadUsage();
+            await loadUsage(mapAutoRefreshReason(ctx));
         },
         tabId: "analytics",
         interval: CONSTANTS.UI.AUTO_REFRESH_USAGE_INTERVAL,
@@ -622,9 +760,9 @@ export function initDashboard() {
     });
     registerAutoRefresh("dashboard-analytics", {
         callback: async (ctx) => {
-            void ctx;
-            await loadTicketAnalytics();
-            await loadRunHistory();
+            const reason = mapAutoRefreshReason(ctx);
+            await loadTicketAnalytics(reason);
+            await loadRunHistory(reason);
         },
         tabId: "analytics",
         interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,

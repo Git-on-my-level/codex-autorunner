@@ -1,5 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
+import { createSmartRefresh } from "./smartRefresh.js";
 const STORAGE_KEYS = {
     selected: "car.agent.selected",
     model: (agent) => `car.agent.${agent}.model`,
@@ -15,6 +16,22 @@ let agentList = [...FALLBACK_AGENTS];
 let defaultAgent = "codex";
 const modelCatalogs = new Map();
 const modelCatalogPromises = new Map();
+const agentControlsRefresh = createSmartRefresh({
+    getSignature: (payload) => {
+        const agentsSig = payload.agents
+            .map((agent) => `${agent.id}:${agent.name || ""}:${agent.version || ""}:${agent.protocol_version || ""}`)
+            .join("|");
+        const catalogSig = payload.catalog
+            ? `${payload.catalog.default_model || ""}:${payload.catalog.models
+                .map((model) => `${model.id}:${model.display_name || ""}:${model.supports_reasoning ? "1" : "0"}:${model.reasoning_options.join(",")}`)
+                .join("|")}`
+            : "none";
+        return `${agentsSig}::${payload.defaultAgent}::${catalogSig}`;
+    },
+    render: (payload) => {
+        renderAgentControls(payload);
+    },
+});
 function safeGetStorage(key) {
     try {
         return localStorage.getItem(key);
@@ -242,7 +259,7 @@ function resolveSelectedReasoning(agent, model) {
     }
     return model.reasoning_options[0] || "";
 }
-async function refreshControls() {
+async function loadAgentControlsPayload() {
     try {
         await loadAgents();
     }
@@ -251,11 +268,6 @@ async function refreshControls() {
         ensureFallbackAgents();
     }
     const selectedAgent = getSelectedAgent();
-    // Always update agent options first (uses in-memory agentList)
-    controls.forEach((control) => {
-        ensureAgentOptions(control.agentSelect);
-    });
-    // Then try to load model catalog
     let catalog = modelCatalogs.get(selectedAgent);
     if (!catalog) {
         try {
@@ -266,6 +278,20 @@ async function refreshControls() {
             catalog = null;
         }
     }
+    return {
+        agents: [...agentList],
+        defaultAgent,
+        selectedAgent,
+        catalog: catalog || null,
+    };
+}
+function renderAgentControls(payload) {
+    const selectedAgent = payload.selectedAgent;
+    // Always update agent options first (uses in-memory agentList)
+    controls.forEach((control) => {
+        ensureAgentOptions(control.agentSelect);
+    });
+    const catalog = payload.catalog;
     // Update model and reasoning options
     controls.forEach((control) => {
         ensureModelOptions(control.modelSelect, catalog);
@@ -288,6 +314,9 @@ async function refreshControls() {
         }
     });
 }
+export async function refreshAgentControls(request = {}) {
+    await agentControlsRefresh.refresh(loadAgentControlsPayload, request);
+}
 async function handleAgentChange(nextAgent) {
     const previous = getSelectedAgent();
     setSelectedAgent(nextAgent);
@@ -298,17 +327,17 @@ async function handleAgentChange(nextAgent) {
         setSelectedAgent(previous);
         flash(`Failed to load ${getLabelText(nextAgent)} models; staying on ${getLabelText(previous)}.`, "error");
     }
-    await refreshControls();
+    await refreshAgentControls({ force: true, reason: "manual" });
 }
 async function handleModelChange(nextModel) {
     const agent = getSelectedAgent();
     setSelectedModel(agent, nextModel);
-    await refreshControls();
+    await refreshAgentControls({ force: true, reason: "manual" });
 }
 async function handleReasoningChange(nextReasoning) {
     const agent = getSelectedAgent();
     setSelectedReasoning(agent, nextReasoning);
-    await refreshControls();
+    await refreshAgentControls({ force: true, reason: "manual" });
 }
 /**
  * @param {AgentControlConfig} [config]
@@ -343,10 +372,10 @@ export function initAgentControls(config = {}) {
         });
     }
     // Async refresh to load from API (will update if API returns different data)
-    refreshControls().catch((err) => {
+    refreshAgentControls({ force: true, reason: "initial" }).catch((err) => {
         console.warn("Failed to refresh agent controls", err);
     });
 }
 export async function ensureAgentCatalog() {
-    await refreshControls();
+    await refreshAgentControls({ force: true, reason: "manual" });
 }

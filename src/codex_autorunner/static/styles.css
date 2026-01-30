@@ -9041,6 +9041,7 @@ button.loading::after {
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 
 .messages-main {
@@ -9107,6 +9108,23 @@ button.loading::after {
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+  position: relative;
+}
+
+.messages-thread-list.refreshing::after,
+.messages-thread-detail.refreshing::after {
+  content: "";
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  opacity: 0.8;
+  pointer-events: none;
 }
 
 /* Empty state styling */
