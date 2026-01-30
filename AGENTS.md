@@ -41,6 +41,13 @@ This repo dogfoods codex-autorunner to build itself. Read this before running th
 
 Reference docs in `docs/` (e.g., configuration, operations, debugging).
 
+## Worktree archives
+- Snapshots live under `.codex-autorunner/archive/worktrees/<worktree_repo_id>/<snapshot_id>/` in the base repo.
+- Archives are local runtime artifacts (gitignored, not committed).
+- Worktree cleanup archives by default; failures abort cleanup unless `force_archive` is set.
+- Browse snapshots in the web UI Archive tab (repo view).
+- More details: `docs/ops/worktree-archives.md`.
+
 ## Python venv
 - Always use the project venv (`.venv/bin/python`) for running Python and tests.
 
