@@ -72,6 +72,12 @@ const AUTOSAVE_DELAY_MS = 1000;
 let ticketDocEditor: DocEditor | null = null;
 let ticketNavCache: TicketData[] = [];
 
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
+
 async function fetchTicketList(): Promise<TicketData[]> {
   const data = (await api("/api/flows/ticket_flow/tickets")) as { tickets?: TicketData[] };
   const list = (data?.tickets || []).filter((ticket) => typeof ticket.index === "number");
@@ -947,6 +953,16 @@ export function initTicketEditor(): void {
       e.preventDefault();
       undoChange();
     }
+  });
+
+  // Alt+Left / Alt+Right navigates between tickets when editor is open
+  document.addEventListener("keydown", (e) => {
+    if (!state.isOpen) return;
+    if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (isTypingTarget(e.target)) return;
+    e.preventDefault();
+    void navigateTicket(e.key === "ArrowLeft" ? -1 : 1);
   });
 
   // Enter key creates new TODO checkbox when on a checkbox line

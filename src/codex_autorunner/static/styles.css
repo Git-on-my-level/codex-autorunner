@@ -9507,11 +9507,15 @@ button.loading::after {
   padding: 0;
   font-size: 14px;
   line-height: 1;
+  border-radius: var(--radius);
 }
 
 .ticket-header-actions .ticket-nav-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: not-allowed;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
 }
 
 .ticket-header-row .ticket-fm-select {
