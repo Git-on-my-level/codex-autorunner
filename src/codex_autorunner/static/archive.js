@@ -16,11 +16,14 @@ let fileState = null;
 let fileEls = null;
 let treeRequestToken = 0;
 let fileRequestToken = 0;
+let artifactRequestToken = 0;
 const QUICK_LINKS = [
     { label: "Active Context", path: "workspace/active_context.md", kind: "file" },
     { label: "Decisions", path: "workspace/decisions.md", kind: "file" },
     { label: "Spec", path: "workspace/spec.md", kind: "file" },
     { label: "Tickets", path: "tickets", kind: "folder" },
+    { label: "Runs", path: "runs", kind: "folder" },
+    { label: "Flows", path: "flows", kind: "folder" },
     { label: "Logs", path: "logs", kind: "folder" },
 ];
 function formatTimestamp(ts) {
@@ -138,6 +141,90 @@ function renderSummaryGrid(summary, meta) {
     </div>
     ${summaryBlock}
     ${metaBlock}
+  `;
+}
+function getMetaSourceList(meta, key) {
+    if (!meta || typeof meta !== "object")
+        return [];
+    const source = meta.source;
+    if (!source || typeof source !== "object")
+        return [];
+    const list = source[key];
+    if (!Array.isArray(list))
+        return [];
+    return list.filter((item) => typeof item === "string");
+}
+function pathPresence(meta, path) {
+    if (!meta)
+        return "–";
+    const copied = getMetaSourceList(meta, "copied_paths");
+    if (copied.includes(path))
+        return "Yes";
+    const missing = getMetaSourceList(meta, "missing_paths");
+    if (missing.includes(path))
+        return "No";
+    return "–";
+}
+function summaryValue(summary, key) {
+    const summaryObj = summary.summary && typeof summary.summary === "object" ? summary.summary : null;
+    return summaryObj ? summaryObj[key] : undefined;
+}
+function formatSummaryCount(value) {
+    if (typeof value === "number" && Number.isFinite(value))
+        return String(value);
+    return "–";
+}
+function formatSummaryString(value) {
+    if (typeof value === "string" && value)
+        return value;
+    return "–";
+}
+function renderArtifactSection(summary, meta) {
+    const flowCount = formatSummaryCount(summaryValue(summary, "flow_run_count"));
+    const latestFlow = formatSummaryString(summaryValue(summary, "latest_flow_run_id"));
+    const runsPresent = pathPresence(meta, "runs");
+    const flowsPresent = pathPresence(meta, "flows");
+    const flowsDbPresent = pathPresence(meta, "flows.db");
+    return `
+    <div class="archive-summary-block">
+      <div class="archive-section-title">Runs &amp; Flows</div>
+      <div class="archive-meta-grid">
+        <div class="archive-meta-row">
+          <div class="archive-meta-label muted small">Runs present</div>
+          <div class="archive-meta-value">${escapeHtml(runsPresent)}</div>
+        </div>
+        <div class="archive-meta-row">
+          <div class="archive-meta-label muted small">Flows present</div>
+          <div class="archive-meta-value">${escapeHtml(flowsPresent)}</div>
+        </div>
+        <div class="archive-meta-row">
+          <div class="archive-meta-label muted small">Flows DB present</div>
+          <div class="archive-meta-value">${escapeHtml(flowsDbPresent)}</div>
+        </div>
+        <div class="archive-meta-row">
+          <div class="archive-meta-label muted small">Flow run count</div>
+          <div class="archive-meta-value">${escapeHtml(flowCount)}</div>
+        </div>
+        <div class="archive-meta-row">
+          <div class="archive-meta-label muted small">Latest flow run</div>
+          <div class="archive-meta-value">${escapeHtml(latestFlow)}</div>
+        </div>
+      </div>
+      <div class="archive-quick-links archive-artifact-actions" id="archive-artifact-actions">
+        <button class="ghost sm" data-archive-path="runs" data-archive-kind="folder">Runs</button>
+        <button class="ghost sm" data-archive-path="flows" data-archive-kind="folder">Flows</button>
+      </div>
+      <div class="archive-meta-grid">
+        <div class="archive-meta-row">
+          <div class="archive-meta-label muted small">Run IDs</div>
+          <div class="archive-meta-value" id="archive-run-list">Loading…</div>
+        </div>
+        <div class="archive-meta-row">
+          <div class="archive-meta-label muted small">Flow IDs</div>
+          <div class="archive-meta-value" id="archive-flow-list">Loading…</div>
+        </div>
+      </div>
+    </div>
   `;
 }
 function renderFileSection() {
@@ -472,7 +559,16 @@ function initArchiveFileViewer(summary) {
         selectedFile: null,
     };
     resetFileViewer();
-    fileEls.quickLinks?.addEventListener("click", (event) => {
+    wireArchivePathButtons(fileEls.quickLinks);
+    fileEls.refreshBtn?.addEventListener("click", () => {
+        void navigateTo(fileState?.currentPath || "");
+    });
+    void navigateTo("");
+}
+function wireArchivePathButtons(container) {
+    if (!container)
+        return;
+    container.addEventListener("click", (event) => {
         const target = event.target;
         if (!target)
             return;
@@ -490,10 +586,57 @@ function initArchiveFileViewer(summary) {
             void openFilePath(path);
         }
     });
-    fileEls.refreshBtn?.addEventListener("click", () => {
-        void navigateTo(fileState?.currentPath || "");
-    });
-    void navigateTo("");
+}
+function renderArtifactList(container, nodes, emptyMessage) {
+    if (!container)
+        return;
+    const folders = nodes.filter((node) => node.type === "folder");
+    if (!folders.length) {
+        container.textContent = emptyMessage;
+        return;
+    }
+    container.innerHTML = folders
+        .map((node) => `<button class="ghost sm" data-archive-path="${escapeHtml(node.path)}" data-archive-kind="folder">${escapeHtml(node.name)}</button>`)
+        .join(" ");
+}
+async function loadArtifactListings(summary) {
+    const runList = document.getElementById("archive-run-list");
+    const flowList = document.getElementById("archive-flow-list");
+    const requestId = ++artifactRequestToken;
+    if (runList)
+        runList.textContent = "Loading…";
+    if (flowList)
+        flowList.textContent = "Loading…";
+    try {
+        const runs = await listArchiveTree(summary.snapshot_id, summary.worktree_repo_id, "runs");
+        if (!fileState || fileState.snapshotKey !== activeSnapshotKey)
+            return;
+        if (requestId !== artifactRequestToken)
+            return;
+        renderArtifactList(runList, runs.nodes || [], "No run IDs found.");
+    }
+    catch {
+        if (requestId !== artifactRequestToken)
+            return;
+        if (runList)
+            runList.textContent = "Runs folder not present.";
+    }
+    try {
+        const flows = await listArchiveTree(summary.snapshot_id, summary.worktree_repo_id, "flows");
+        if (!fileState || fileState.snapshotKey !== activeSnapshotKey)
+            return;
+        if (requestId !== artifactRequestToken)
+            return;
+        renderArtifactList(flowList, flows.nodes || [], "No flow IDs found.");
+    }
+    catch {
+        if (requestId !== artifactRequestToken)
+            return;
+        if (flowList)
+            flowList.textContent = "Flows folder not present.";
+    }
+    wireArchivePathButtons(runList);
+    wireArchivePathButtons(flowList);
 }
 async function loadSnapshotDetail(target) {
     if (!detailEl)
@@ -512,12 +655,15 @@ async function loadSnapshotDetail(target) {
         <span class="pill pill-idle" id="archive-detail-status">${escapeHtml(summary.status || "unknown")}</span>
       </div>
       ${renderSummaryGrid(summary, meta)}
+      ${renderArtifactSection(summary, meta)}
       ${renderFileSection()}
     `;
         const statusEl = document.getElementById("archive-detail-status");
         if (statusEl)
             statusPill(statusEl, summary.status || "unknown");
         initArchiveFileViewer(summary);
+        wireArchivePathButtons(document.getElementById("archive-artifact-actions"));
+        void loadArtifactListings(summary);
     }
     catch (err) {
         detailEl.innerHTML = `<div class="archive-empty-state">
