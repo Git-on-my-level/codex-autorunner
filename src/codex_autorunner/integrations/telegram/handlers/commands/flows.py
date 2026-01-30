@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ from .....core.flows.worker_process import (
     clear_worker_metadata,
     spawn_flow_worker,
 )
+from .....core.state import now_iso
 from .....core.utils import atomic_write, canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
 from .....integrations.agents.wiring import (
@@ -28,8 +30,15 @@ from .....tickets import AgentPool
 from .....tickets.files import list_ticket_paths
 from .....tickets.outbox import resolve_outbox_paths
 from ....github.service import GitHubError, GitHubService
-from ...adapter import TelegramMessage
+from ...adapter import (
+    InlineButton,
+    TelegramMessage,
+    build_inline_keyboard,
+    encode_question_cancel_callback,
+)
+from ...config import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from ...helpers import _truncate_text
+from ...types import PendingQuestion
 from .shared import SharedHelpers
 
 _logger = logging.getLogger(__name__)
@@ -186,6 +195,102 @@ def _spawn_flow_worker(repo_root: Path, run_id: str) -> None:
 
 
 class FlowCommands(SharedHelpers):
+    def _github_bootstrap_status(self, repo_root: Path) -> tuple[bool, Optional[str]]:
+        try:
+            gh = GitHubService(repo_root=repo_root)
+            gh_available = gh.gh_available() and gh.gh_authenticated()
+            if gh_available:
+                repo_info = gh.repo_info()
+                return True, repo_info.name_with_owner
+        except Exception:
+            pass
+        return False, None
+
+    async def _prompt_flow_text_input(
+        self,
+        message: TelegramMessage,
+        prompt_text: str,
+    ) -> Optional[str]:
+        request_id = str(uuid.uuid4())
+        topic_key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        payload_text, parse_mode = self._prepare_outgoing_text(
+            prompt_text,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            topic_key=topic_key,
+        )
+        keyboard = build_inline_keyboard(
+            [[InlineButton("Cancel", encode_question_cancel_callback(request_id))]]
+        )
+        response = await self._bot.send_message(
+            message.chat_id,
+            payload_text,
+            message_thread_id=message.thread_id,
+            reply_to_message_id=message.message_id,
+            reply_markup=keyboard,
+            parse_mode=parse_mode,
+        )
+        message_id = response.get("message_id") if isinstance(response, dict) else None
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Optional[str]] = loop.create_future()
+        pending = PendingQuestion(
+            request_id=request_id,
+            turn_id=f"flow-bootstrap:{request_id}",
+            codex_thread_id=None,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            topic_key=topic_key,
+            message_id=message_id if isinstance(message_id, int) else None,
+            created_at=now_iso(),
+            question_index=0,
+            prompt=prompt_text,
+            options=[],
+            future=future,
+            multiple=False,
+            custom=True,
+            selected_indices=set(),
+            awaiting_custom_input=True,
+        )
+        self._pending_questions[request_id] = pending
+        self._touch_cache_timestamp("pending_questions", request_id)
+        try:
+            result = await asyncio.wait_for(
+                future, timeout=DEFAULT_APPROVAL_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            self._pending_questions.pop(request_id, None)
+            if pending.message_id is not None:
+                await self._edit_message_text(
+                    pending.chat_id,
+                    pending.message_id,
+                    "Question timed out.",
+                    reply_markup={"inline_keyboard": []},
+                )
+            return None
+        if not result:
+            return None
+        return result.strip() or None
+
+    async def _seed_issue_from_ref(
+        self, repo_root: Path, issue_ref: str
+    ) -> tuple[int, str]:
+        gh = GitHubService(repo_root=repo_root)
+        if not (gh.gh_available() and gh.gh_authenticated()):
+            raise RuntimeError(
+                "GitHub CLI is not available or not authenticated. Use /flow plan <text> instead."
+            )
+        number = gh.validate_issue_same_repo(issue_ref)
+        issue = gh.issue_view(number=number)
+        repo_info = gh.repo_info()
+        content = _format_issue_as_markdown(issue, repo_info.name_with_owner)
+        atomic_write(_issue_md_path(repo_root), content)
+        return number, repo_info.name_with_owner
+
+    def _seed_issue_from_plan(self, repo_root: Path, plan_text: str) -> None:
+        content = f"# Issue\n\n{plan_text.strip()}\n"
+        atomic_write(_issue_md_path(repo_root), content)
+
     async def _handle_flow_status(self, message: TelegramMessage, args: str) -> None:
         text = args.strip()
         if text:
@@ -419,31 +524,89 @@ class FlowCommands(SharedHelpers):
         issue_exists = _issue_md_has_content(repo_root)
 
         store = FlowStore(_flow_paths(repo_root)[0])
-        latest = None
+        active_run = None
         try:
             store.initialize()
             runs = store.list_flow_runs(flow_type="ticket_flow")
-            latest = runs[0] if runs else None
+            for record in runs:
+                if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
+                    active_run = record
+                    break
         finally:
             store.close()
 
-        if (
-            not force_new
-            and latest
-            and latest.status
-            in (
-                FlowRunStatus.RUNNING,
-                FlowRunStatus.PAUSED,
-            )
-        ):
-            _spawn_flow_worker(repo_root, latest.id)
+        if not force_new and active_run:
+            _spawn_flow_worker(repo_root, active_run.id)
             await self._send_message(
                 message.chat_id,
-                f"Reusing ticket flow run {latest.id} ({latest.status.value}).",
+                f"Reusing ticket flow run {active_run.id} ({active_run.status.value}).",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
+
+        if not tickets_exist and not issue_exists:
+            gh_available, repo_slug = self._github_bootstrap_status(repo_root)
+            if gh_available:
+                repo_label = f" for {repo_slug}" if repo_slug else ""
+                prompt = (
+                    "Enter GitHub issue number or URL" f"{repo_label} to seed ISSUE.md:"
+                )
+                issue_ref = await self._prompt_flow_text_input(message, prompt)
+                if not issue_ref:
+                    await self._send_message(
+                        message.chat_id,
+                        "Bootstrap cancelled (no issue provided).",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                try:
+                    number, _repo = await self._seed_issue_from_ref(
+                        repo_root, issue_ref
+                    )
+                except GitHubError as exc:
+                    await self._send_message(
+                        message.chat_id,
+                        f"GitHub error: {exc}",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                except Exception as exc:
+                    await self._send_message(
+                        message.chat_id,
+                        f"Failed to fetch issue: {exc}",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                await self._send_message(
+                    message.chat_id,
+                    f"Seeded ISSUE.md from GitHub issue {number}.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                issue_exists = True
+            else:
+                prompt = "Describe the work to seed ISSUE.md:"
+                plan_text = await self._prompt_flow_text_input(message, prompt)
+                if not plan_text:
+                    await self._send_message(
+                        message.chat_id,
+                        "Bootstrap cancelled (no description provided).",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return
+                self._seed_issue_from_plan(repo_root, plan_text)
+                await self._send_message(
+                    message.chat_id,
+                    "Seeded ISSUE.md from your plan.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                issue_exists = True
 
         seeded = False
         if not tickets_exist:
@@ -497,17 +660,13 @@ You are the first ticket in a new ticket_flow run.
         gh_status = (
             "No ISSUE.md found. Use /flow plan <text> to seed it from a short plan."
         )
-        try:
-            gh = GitHubService(repo_root=repo_root)
-            gh_available = gh.gh_available() and gh.gh_authenticated()
-            if gh_available:
-                repo_info = gh.repo_info()
-                gh_status = (
-                    f"No ISSUE.md found. Use /flow issue <issue#|url> for "
-                    f"{repo_info.name_with_owner}, or /flow plan <text>."
-                )
-        except Exception:
-            pass
+        gh_available, repo_slug = self._github_bootstrap_status(repo_root)
+        if gh_available:
+            repo_label = repo_slug or "your repo"
+            gh_status = (
+                f"No ISSUE.md found. Use /flow issue <issue#|url> for {repo_label}, "
+                "or /flow plan <text>."
+            )
         await self._send_message(
             message.chat_id,
             gh_status,
@@ -527,25 +686,20 @@ You are the first ticket in a new ticket_flow run.
                 reply_to=message.message_id,
             )
             return
-        gh = GitHubService(repo_root=repo_root)
-        if not (gh.gh_available() and gh.gh_authenticated()):
-            await self._send_message(
-                message.chat_id,
-                "GitHub CLI is not available or not authenticated. Use /flow plan <text> instead.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
         try:
-            number = gh.validate_issue_same_repo(issue_ref)
-            issue = gh.issue_view(number=number)
-            repo_info = gh.repo_info()
-            content = _format_issue_as_markdown(issue, repo_info.name_with_owner)
-            atomic_write(_issue_md_path(repo_root), content)
+            number, _repo = await self._seed_issue_from_ref(repo_root, issue_ref)
         except GitHubError as exc:
             await self._send_message(
                 message.chat_id,
                 f"GitHub error: {exc}",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        except RuntimeError as exc:
+            await self._send_message(
+                message.chat_id,
+                str(exc),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -577,8 +731,7 @@ You are the first ticket in a new ticket_flow run.
                 reply_to=message.message_id,
             )
             return
-        content = f"# Issue\n\n{plan_text}\n"
-        atomic_write(_issue_md_path(repo_root), content)
+        self._seed_issue_from_plan(repo_root, plan_text)
         await self._send_message(
             message.chat_id,
             "Seeded ISSUE.md from your plan.",
