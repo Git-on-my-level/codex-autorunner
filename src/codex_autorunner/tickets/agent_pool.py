@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, cast
 
-from ..agents.opencode.runtime import collect_opencode_output
+from ..agents.opencode.constants import DEFAULT_TICKET_MODEL
+from ..agents.opencode.runtime import collect_opencode_output, split_model_id
 from ..agents.opencode.supervisor import OpenCodeSupervisor
 from ..core.config import RepoConfig
 from ..core.flows.models import FlowEventType
@@ -274,6 +275,24 @@ class AgentPool:
         client = handle
         directory = str(req.workspace_root)
 
+        options = req.options if isinstance(req.options, dict) else {}
+        model_raw = options.get("model")
+        model_payload = None
+        if isinstance(model_raw, dict):
+            provider_id = model_raw.get("providerID") or model_raw.get("providerId")
+            model_id = model_raw.get("modelID") or model_raw.get("modelId")
+            if provider_id and model_id:
+                model_payload = {"providerID": provider_id, "modelID": model_id}
+        elif isinstance(model_raw, str) and model_raw.strip():
+            model_payload = split_model_id(model_raw.strip())
+        if model_payload is None:
+            model_payload = split_model_id(DEFAULT_TICKET_MODEL)
+
+        variant = None
+        reasoning_raw = options.get("reasoning")
+        if isinstance(reasoning_raw, str) and reasoning_raw.strip():
+            variant = reasoning_raw.strip()
+
         session_id = req.conversation_id
         if not session_id:
             created = await client.create_session(title="ticket", directory=directory)
@@ -281,7 +300,9 @@ class AgentPool:
             if not session_id:
                 raise RuntimeError("OpenCode create_session returned no session id")
 
-        prompt_response = await client.prompt_async(session_id, message=req.prompt)
+        prompt_response = await client.prompt_async(
+            session_id, message=req.prompt, model=model_payload, variant=variant
+        )
 
         import uuid
 
@@ -340,6 +361,7 @@ class AgentPool:
             client,
             session_id=session_id,
             workspace_path=directory,
+            model_payload=model_payload,
             part_handler=_part_handler if req.emit_event is not None else None,
         )
 
