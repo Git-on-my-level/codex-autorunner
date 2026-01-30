@@ -1,10 +1,10 @@
 {
   "findings": [
     "python:class:src/codex_autorunner/core/supervisor_protocol.py:7:AppServerSupervisorProtocol",
-    "python:class:src/codex_autorunner/surfaces/web/schemas.py:148:GithubIssueRequest",
-    "python:class:src/codex_autorunner/surfaces/web/schemas.py:152:GithubContextRequest",
-    "python:class:src/codex_autorunner/surfaces/web/schemas.py:156:GithubPrSyncRequest",
-    "python:class:src/codex_autorunner/surfaces/web/schemas.py:183:StateResponse",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:181:GithubIssueRequest",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:185:GithubContextRequest",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:189:GithubPrSyncRequest",
+    "python:class:src/codex_autorunner/surfaces/web/schemas.py:216:StateResponse",
     "python:function:src/codex_autorunner/core/docs.py:63:validate_todo_markdown",
     "python:function:src/codex_autorunner/core/git_utils.py:110:git_ls_files",
     "python:function:src/codex_autorunner/core/git_utils.py:138:git_diff_name_status",

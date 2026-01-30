@@ -12,6 +12,11 @@ def test_repo_openapi_contract_has_core_paths(hub_env) -> None:
 
     expected = {
         "/api/version": {"get"},
+        "/api/archive/snapshots": {"get"},
+        "/api/archive/snapshots/{snapshot_id}": {"get"},
+        "/api/archive/tree": {"get"},
+        "/api/archive/file": {"get"},
+        "/api/archive/download": {"get"},
         "/api/workspace": {"get"},
         "/api/workspace/{kind}": {"put"},
         "/api/workspace/file": {"get", "put", "delete"},
