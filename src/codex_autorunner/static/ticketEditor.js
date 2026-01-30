@@ -718,9 +718,15 @@ export function initTicketEditor() {
     if (undoBtn)
         undoBtn.addEventListener("click", undoChange);
     if (prevBtn)
-        prevBtn.addEventListener("click", () => void navigateTicket(-1));
+        prevBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            void navigateTicket(-1);
+        });
     if (nextBtn)
-        nextBtn.addEventListener("click", () => void navigateTicket(1));
+        nextBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            void navigateTicket(1);
+        });
     // Autosave on content changes
     if (content) {
         content.addEventListener("input", onContentChange);
@@ -793,15 +799,18 @@ export function initTicketEditor() {
             undoChange();
         }
     });
-    // Alt+Left / Alt+Right navigates between tickets when editor is open
+    // Left/Right arrows navigate between tickets when editor is open and not typing
     document.addEventListener("keydown", (e) => {
         if (!state.isOpen)
             return;
-        if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey)
-            return;
+        // Check for navigation keys
         if (e.key !== "ArrowLeft" && e.key !== "ArrowRight")
             return;
+        // Don't interfere with typing
         if (isTypingTarget(e.target))
+            return;
+        // Only allow Alt or no modifier (no Ctrl/Meta/Shift)
+        if (e.ctrlKey || e.metaKey || e.shiftKey)
             return;
         e.preventDefault();
         void navigateTicket(e.key === "ArrowLeft" ? -1 : 1);
