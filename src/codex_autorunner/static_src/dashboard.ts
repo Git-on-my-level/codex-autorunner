@@ -1,8 +1,9 @@
 import { api, flash, statusPill } from "./utils.js";
 import { saveToCache, loadFromCache } from "./cache.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
+import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { preserveScroll } from "./preserve.js";
+import { createSmartRefresh, type SmartRefreshReason } from "./smartRefresh.js";
 
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 const ANALYTICS_SUMMARY_CACHE_KEY = "analytics-summary";
@@ -21,6 +22,18 @@ const usageChartState: UsageChartState = {
 
 let usageSeriesRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let usageSummaryRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+const DASHBOARD_REFRESH_REASONS: SmartRefreshReason[] = ["initial", "background", "manual"];
+
+function normalizeRefreshReason(reason?: SmartRefreshReason): SmartRefreshReason {
+  if (reason && DASHBOARD_REFRESH_REASONS.includes(reason)) return reason;
+  return "manual";
+}
+
+function mapAutoRefreshReason(ctx: RefreshContext): SmartRefreshReason {
+  if (ctx.reason === "manual") return "manual";
+  return "background";
+}
 
 function setUsageLoading(loading: boolean): void {
   const btn = document.getElementById("usage-refresh");
@@ -87,6 +100,27 @@ interface UsageData {
   };
   codex_home?: string | null;
   status?: string;
+}
+
+function usageSummarySignature(data: UsageData | null): string {
+  if (!data) return "none";
+  const totals = data.totals || {};
+  const primary = data.latest_rate_limits?.primary || {};
+  const secondary = data.latest_rate_limits?.secondary || {};
+  return [
+    data.status || "",
+    data.events ?? "",
+    data.codex_home ?? "",
+    totals.total_tokens ?? "",
+    totals.input_tokens ?? "",
+    totals.cached_input_tokens ?? "",
+    totals.output_tokens ?? "",
+    totals.reasoning_output_tokens ?? "",
+    primary.used_percent ?? "",
+    primary.window_minutes ?? "",
+    secondary.used_percent ?? "",
+    secondary.window_minutes ?? "",
+  ].join("|");
 }
 
 function renderUsage(data: UsageData | null): void {
@@ -175,6 +209,33 @@ interface AnalyticsSummary {
   };
 }
 
+function analyticsSummarySignature(data: AnalyticsSummary | null): string {
+  if (!data) return "none";
+  const run = data.run;
+  const tickets = data.tickets;
+  const turns = data.turns;
+  const agent = data.agent;
+  return [
+    run?.id ?? "",
+    run?.short_id ?? "",
+    run?.status ?? "",
+    run?.started_at ?? "",
+    run?.finished_at ?? "",
+    run?.duration_seconds ?? "",
+    run?.current_step ?? "",
+    tickets?.todo_count ?? "",
+    tickets?.done_count ?? "",
+    tickets?.total_count ?? "",
+    tickets?.current_ticket ?? "",
+    turns?.total ?? "",
+    turns?.current_ticket ?? "",
+    turns?.dispatches ?? "",
+    turns?.replies ?? "",
+    agent?.id ?? "",
+    agent?.model ?? "",
+  ].join("|");
+}
+
 interface FlowRun {
   id: string;
   flow_type: string;
@@ -186,14 +247,59 @@ interface FlowRun {
   state?: Record<string, unknown>;
 }
 
-async function loadTicketAnalytics(): Promise<void> {
+const usageSummaryRefresh = createSmartRefresh<UsageData | null>({
+  getSignature: (payload) => usageSummarySignature(payload),
+  render: (payload) => {
+    renderUsage(payload);
+  },
+});
+
+const analyticsSummaryRefresh = createSmartRefresh<AnalyticsSummary | null>({
+  getSignature: (payload) => analyticsSummarySignature(payload),
+  render: (payload) => {
+    renderTicketAnalytics(payload);
+  },
+});
+
+function runHistorySignature(runs: FlowRun[]): string {
+  if (!runs.length) return "none";
+  return runs
+    .map((run) => [
+      run.id,
+      run.status || "",
+      run.current_step || "",
+      run.created_at || "",
+      run.started_at || "",
+      run.finished_at || "",
+    ].join(":"))
+    .join("|");
+}
+
+const runHistoryRefresh = createSmartRefresh<FlowRun[]>({
+  getSignature: (payload) => runHistorySignature(payload),
+  render: (payload) => {
+    renderRunHistory(payload);
+  },
+});
+
+async function fetchTicketAnalytics(): Promise<AnalyticsSummary | null> {
   try {
     const data = (await api("/api/analytics/summary")) as AnalyticsSummary;
     saveToCache(ANALYTICS_SUMMARY_CACHE_KEY, data);
-    renderTicketAnalytics(data);
+    return data;
   } catch (err) {
     const cached = loadFromCache(ANALYTICS_SUMMARY_CACHE_KEY) as AnalyticsSummary | null;
-    if (cached) renderTicketAnalytics(cached);
+    flash((err as Error).message || "Failed to load analytics", "error");
+    if (cached) return cached;
+    return null;
+  }
+}
+
+async function loadTicketAnalytics(reason: SmartRefreshReason = "manual"): Promise<void> {
+  const resolvedReason = normalizeRefreshReason(reason);
+  try {
+    await analyticsSummaryRefresh.refresh(fetchTicketAnalytics, { reason: resolvedReason });
+  } catch (err) {
     flash((err as Error).message || "Failed to load analytics", "error");
   }
 }
@@ -254,11 +360,15 @@ function renderTicketAnalytics(data: AnalyticsSummary | null): void {
   }
 }
 
-async function loadRunHistory(): Promise<void> {
+async function fetchRunHistory(): Promise<FlowRun[]> {
+  const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
+  return Array.isArray(runs) ? runs.slice(0, 10) : [];
+}
+
+async function loadRunHistory(reason: SmartRefreshReason = "manual"): Promise<void> {
+  const resolvedReason = normalizeRefreshReason(reason);
   try {
-    const runs = (await api("/api/flows/runs?flow_type=ticket_flow")) as FlowRun[];
-    const runHistory = Array.isArray(runs) ? runs.slice(0, 10) : [];
-    renderRunHistory(runHistory);
+    await runHistoryRefresh.refresh(fetchRunHistory, { reason: resolvedReason });
   } catch (err) {
     flash((err as Error).message || "Failed to load run history", "error");
   }
@@ -343,6 +453,32 @@ interface UsageChartData {
   series?: SeriesEntry[];
   status?: string;
 }
+
+function usageSeriesSignature(data: UsageChartData | null): string {
+  if (!data) return "none";
+  const buckets = data.buckets || [];
+  const series = data.series || [];
+  const seriesSig = series
+    .map((entry) => {
+      const values = entry.values || [];
+      return [
+        entry.key ?? "",
+        entry.model ?? "",
+        entry.token_type ?? "",
+        entry.total ?? "",
+        values.join(","),
+      ].join(":");
+    })
+    .join("|");
+  return `${data.status || ""}::${buckets.join(",")}::${seriesSig}`;
+}
+
+const usageSeriesRefresh = createSmartRefresh<UsageChartData | null>({
+  getSignature: (payload) => usageSeriesSignature(payload),
+  render: (payload) => {
+    renderUsageChart(payload);
+  },
+});
 
 function renderUsageChart(data: UsageChartData | null): void {
   const container = document.getElementById("usage-chart-canvas") as HTMLElement | null;
@@ -611,12 +747,13 @@ function attachUsageChartInteraction(container: HTMLElement, state: ChartInterac
   });
 }
 
-async function loadUsageSeries(): Promise<void> {
+async function loadUsageSeries(reason: SmartRefreshReason = "manual"): Promise<void> {
+  const resolvedReason = normalizeRefreshReason(reason);
   const container = document.getElementById("usage-chart-canvas") as HTMLElement | null;
   try {
     const data = await api(`/api/usage/series?${buildUsageSeriesQuery()}`) as UsageChartData;
     setChartLoading(container, data?.status === "loading");
-    renderUsageChart(data);
+    await usageSeriesRefresh.refresh(async () => data, { reason: resolvedReason });
     if (data?.status === "loading") {
       scheduleUsageSeriesRetry();
     } else {
@@ -624,7 +761,7 @@ async function loadUsageSeries(): Promise<void> {
     }
   } catch (err) {
     setChartLoading(container, false);
-    renderUsageChart(null);
+    await usageSeriesRefresh.refresh(async () => null, { reason: resolvedReason });
     clearUsageSeriesRetry();
   }
 }
@@ -657,38 +794,48 @@ function clearUsageSummaryRetry(): void {
   }
 }
 
-async function loadUsage(): Promise<void> {
-  setUsageLoading(true);
+async function fetchUsageSummary(): Promise<UsageData | null> {
   try {
     const data = await api("/api/usage") as UsageData;
     const cachedUsage = loadFromCache("usage");
     const hasSummary = data && data.totals && typeof data.events === "number";
     if (data?.status === "loading") {
       if (hasSummary) {
-        renderUsage(data);
-      } else if (cachedUsage) {
-        renderUsage(cachedUsage as UsageData);
-      } else {
-        renderUsage(data);
+        scheduleUsageSummaryRetry();
+        return data;
+      }
+      if (cachedUsage) {
+        scheduleUsageSummaryRetry();
+        return cachedUsage as UsageData;
       }
       scheduleUsageSummaryRetry();
-    } else {
-      renderUsage(data);
-      clearUsageSummaryRetry();
+      return data;
     }
-    loadUsageSeries();
+    clearUsageSummaryRetry();
+    return data;
   } catch (err) {
     const cachedUsage = loadFromCache("usage");
-    if (cachedUsage) {
-      renderUsage(cachedUsage as UsageData);
-    } else {
-      renderUsage(null);
-    }
     flash((err as Error).message || "Failed to load usage", "error");
     clearUsageSummaryRetry();
-  } finally {
-    setUsageLoading(false);
+    if (cachedUsage) {
+      return cachedUsage as UsageData;
+    }
+    return null;
   }
+}
+
+async function loadUsage(reason: SmartRefreshReason = "manual"): Promise<void> {
+  const resolvedReason = normalizeRefreshReason(reason);
+  const showLoading = resolvedReason !== "background";
+  if (showLoading) setUsageLoading(true);
+  try {
+    await usageSummaryRefresh.refresh(fetchUsageSummary, { reason: resolvedReason });
+  } catch (err) {
+    flash((err as Error).message || "Failed to load usage", "error");
+  } finally {
+    if (showLoading) setUsageLoading(false);
+  }
+  await loadUsageSeries(resolvedReason);
 }
 
 function initUsageChartControls(): void {
@@ -733,10 +880,10 @@ function bindAction(buttonId: string, action: () => Promise<void>): void {
 export function initDashboard(): void {
   initUsageChartControls();
   // initReview(); // Removed - review.ts was deleted
-  bindAction("usage-refresh", loadUsage);
+  bindAction("usage-refresh", () => loadUsage("manual"));
   bindAction("analytics-refresh", async () => {
-    await loadTicketAnalytics();
-    await loadRunHistory();
+    await loadTicketAnalytics("manual");
+    await loadRunHistory("manual");
   });
 
   const cachedUsage = loadFromCache("usage");
@@ -744,16 +891,15 @@ export function initDashboard(): void {
   const cachedAnalytics = loadFromCache(ANALYTICS_SUMMARY_CACHE_KEY);
   if (cachedAnalytics) renderTicketAnalytics(cachedAnalytics as AnalyticsSummary);
 
-  loadUsage();
-  loadTicketAnalytics();
-  loadRunHistory();
+  loadUsage("initial");
+  loadTicketAnalytics("initial");
+  loadRunHistory("initial");
   loadVersion();
   checkUpdateStatus();
 
   registerAutoRefresh("dashboard-usage", {
     callback: async (ctx) => {
-      void ctx;
-      await loadUsage();
+      await loadUsage(mapAutoRefreshReason(ctx));
     },
     tabId: "analytics",
     interval: CONSTANTS.UI.AUTO_REFRESH_USAGE_INTERVAL,
@@ -762,9 +908,9 @@ export function initDashboard(): void {
   });
   registerAutoRefresh("dashboard-analytics", {
     callback: async (ctx) => {
-      void ctx;
-      await loadTicketAnalytics();
-      await loadRunHistory();
+      const reason = mapAutoRefreshReason(ctx);
+      await loadTicketAnalytics(reason);
+      await loadRunHistory(reason);
     },
     tabId: "analytics",
     interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
