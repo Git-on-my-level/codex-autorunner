@@ -1918,6 +1918,21 @@ export function initTicketFlow(): void {
     void loadTicketFiles();
   });
 
+  // Update selection when editor opens a ticket
+  subscribe("ticket-editor:opened", (payload: unknown) => {
+    const data = payload as { path?: string | null; index?: number | null } | null;
+    if (data?.path) {
+      updateSelectedTicket(data.path);
+      return;
+    }
+    if (data?.index != null && ticketListCache?.tickets?.length) {
+      const match = ticketListCache.tickets.find((ticket) => ticket.index === data.index);
+      if (match?.path) {
+        updateSelectedTicket(match.path);
+      }
+    }
+  });
+
   // Clear selection when editor is closed
   subscribe("ticket-editor:closed", () => {
     updateSelectedTicket(null);

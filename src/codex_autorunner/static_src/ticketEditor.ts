@@ -70,6 +70,68 @@ const state: EditorState = {
 // Autosave debounce timer
 const AUTOSAVE_DELAY_MS = 1000;
 let ticketDocEditor: DocEditor | null = null;
+let ticketNavCache: TicketData[] = [];
+
+async function fetchTicketList(): Promise<TicketData[]> {
+  const data = (await api("/api/flows/ticket_flow/tickets")) as { tickets?: TicketData[] };
+  const list = (data?.tickets || []).filter((ticket) => typeof ticket.index === "number");
+  list.sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  return list;
+}
+
+async function updateTicketNavButtons(): Promise<void> {
+  const { prevBtn, nextBtn } = els();
+  if (!prevBtn || !nextBtn) return;
+
+  if (state.mode !== "edit" || state.ticketIndex == null) {
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    return;
+  }
+
+  try {
+    const list = await fetchTicketList();
+    ticketNavCache = list;
+  } catch {
+    // If fetch fails, fall back to the last known list.
+  }
+
+  const list = ticketNavCache;
+  if (!list.length) {
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    return;
+  }
+
+  const idx = list.findIndex((ticket) => ticket.index === state.ticketIndex);
+  const hasPrev = idx > 0;
+  const hasNext = idx >= 0 && idx < list.length - 1;
+  prevBtn.disabled = !hasPrev;
+  nextBtn.disabled = !hasNext;
+}
+
+async function navigateTicket(delta: -1 | 1): Promise<void> {
+  if (state.mode !== "edit" || state.ticketIndex == null) return;
+
+  await performAutosave();
+
+  let list = ticketNavCache;
+  if (!list.length) {
+    try {
+      list = await fetchTicketList();
+      ticketNavCache = list;
+    } catch {
+      return;
+    }
+  }
+  const idx = list.findIndex((ticket) => ticket.index === state.ticketIndex);
+  const target = idx >= 0 ? list[idx + delta] : null;
+  if (target && target.index != null) {
+    openTicketEditor(target);
+  }
+
+  void updateTicketNavButtons();
+}
 
 function els(): {
   modal: HTMLElement | null;
@@ -80,6 +142,8 @@ function els(): {
   newBtn: HTMLButtonElement | null;
   insertCheckboxBtn: HTMLButtonElement | null;
   undoBtn: HTMLButtonElement | null;
+  prevBtn: HTMLButtonElement | null;
+  nextBtn: HTMLButtonElement | null;
   autosaveStatus: HTMLElement | null;
   // Frontmatter form elements
   fmAgent: HTMLSelectElement | null;
@@ -109,6 +173,8 @@ function els(): {
     newBtn: document.getElementById("ticket-new-btn") as HTMLButtonElement | null,
     insertCheckboxBtn: document.getElementById("ticket-insert-checkbox") as HTMLButtonElement | null,
     undoBtn: document.getElementById("ticket-undo-btn") as HTMLButtonElement | null,
+    prevBtn: document.getElementById("ticket-nav-prev") as HTMLButtonElement | null,
+    nextBtn: document.getElementById("ticket-nav-next") as HTMLButtonElement | null,
     autosaveStatus: document.getElementById("ticket-autosave-status"),
     // Frontmatter form elements
     fmAgent: document.getElementById("ticket-fm-agent") as HTMLSelectElement | null,
@@ -650,6 +716,12 @@ export function openTicketEditor(ticket?: TicketData): void {
     updateUrlParams({ ticket: ticket.index });
   }
 
+  if (ticket?.path) {
+    publish("ticket-editor:opened", { path: ticket.path, index: ticket.index ?? null });
+  }
+
+  void updateTicketNavButtons();
+
   // Focus on title field for new tickets, body for existing
   if (state.mode === "create" && fmTitle) {
     fmTitle.focus();
@@ -689,6 +761,8 @@ export function closeTicketEditor(): void {
 
   // Clear ticket from URL
   updateUrlParams({ ticket: null });
+
+  void updateTicketNavButtons();
   
   // Reset chat state
   resetTicketChatState();
@@ -759,6 +833,8 @@ export function initTicketEditor(): void {
     newBtn,
     insertCheckboxBtn,
     undoBtn,
+    prevBtn,
+    nextBtn,
     fmAgent,
     fmModel,
     fmReasoning,
@@ -798,6 +874,8 @@ export function initTicketEditor(): void {
   if (newBtn) newBtn.addEventListener("click", () => openTicketEditor());
   if (insertCheckboxBtn) insertCheckboxBtn.addEventListener("click", insertCheckbox);
   if (undoBtn) undoBtn.addEventListener("click", undoChange);
+  if (prevBtn) prevBtn.addEventListener("click", () => void navigateTicket(-1));
+  if (nextBtn) nextBtn.addEventListener("click", () => void navigateTicket(1));
 
   // Autosave on content changes
   if (content) {
