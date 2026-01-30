@@ -10,6 +10,7 @@ import { parseAppServerEvent } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
 import { preserveScroll } from "./preserve.js";
+import { createSmartRefresh } from "./smartRefresh.js";
 let currentRunId = null;
 let ticketsExist = false;
 let currentActiveTicket = null;
@@ -30,8 +31,6 @@ const LIVE_EVENT_MAX = 50;
 let liveOutputEvents = [];
 let liveOutputEventIndex = {};
 let currentReasonFull = null; // Full reason text for modal display
-let ticketsHydrated = false;
-let dispatchHistoryHydrated = false;
 let dispatchHistoryRunId = null;
 let eventSourceRetryAttempt = 0;
 let eventSourceRetryTimerId = null;
@@ -50,6 +49,53 @@ const STALE_THRESHOLD_MS = 30000;
 // Throttling state
 let liveOutputRenderPending = false;
 let liveOutputTextPending = false;
+const ticketListRefresh = createSmartRefresh({
+    getSignature: (payload) => {
+        const list = (payload.tickets || []);
+        const pieces = list.map((ticket) => {
+            const fm = (ticket.frontmatter || {});
+            const title = fm?.title ? String(fm.title) : "";
+            const done = fm?.done ? "1" : "0";
+            const agent = fm?.agent ? String(fm.agent) : "";
+            const mtime = ticket.mtime ?? "";
+            return [ticket.path ?? "", ticket.index ?? "", title, done, agent, mtime].join("|");
+        });
+        return [
+            payload.ticket_dir ?? "",
+            payload.activeTicket ?? "",
+            payload.flowStatus ?? "",
+            pieces.join(";"),
+        ].join("::");
+    },
+    render: (payload) => {
+        const { tickets } = els();
+        preserveScroll(tickets, () => {
+            renderTickets({
+                ticket_dir: payload.ticket_dir,
+                tickets: payload.tickets,
+            });
+        }, { restoreOnNextFrame: true });
+    },
+    onSkip: () => {
+        updateScrollFade();
+    },
+});
+const dispatchHistoryRefresh = createSmartRefresh({
+    getSignature: (payload) => {
+        const entries = payload.history || [];
+        const latestSeq = entries[0]?.seq ?? "";
+        return [payload.runId ?? "", latestSeq, entries.length].join("::");
+    },
+    render: (payload) => {
+        const { history } = els();
+        preserveScroll(history, () => {
+            renderDispatchHistory(payload.runId, { history: payload.history });
+        }, { restoreOnNextFrame: true });
+    },
+    onSkip: () => {
+        updateScrollFade();
+    },
+});
 function scheduleLiveOutputRender() {
     if (liveOutputRenderPending)
         return;
@@ -1029,17 +1075,23 @@ function summarizeReason(run) {
 }
 async function loadTicketFiles(ctx) {
     const { tickets } = els();
-    if (tickets && (!ticketsHydrated || ctx?.reason === "manual")) {
+    const isInitial = ticketListRefresh.getSignature() === null;
+    if (tickets && isInitial) {
         tickets.textContent = "Loading tickets…";
     }
     try {
-        const data = (await api("/api/flows/ticket_flow/tickets"));
-        preserveScroll(tickets, () => {
-            renderTickets(data);
-        }, { restoreOnNextFrame: true });
-        ticketsHydrated = true;
+        await ticketListRefresh.refresh(async () => {
+            const data = (await api("/api/flows/ticket_flow/tickets"));
+            return {
+                ticket_dir: data.ticket_dir,
+                tickets: data.tickets,
+                activeTicket: currentActiveTicket,
+                flowStatus: currentFlowStatus,
+            };
+        }, { reason: ctx?.reason === "manual" ? "manual" : "background" });
     }
     catch (err) {
+        ticketListRefresh.reset();
         ticketListCache = null;
         preserveScroll(tickets, () => {
             renderTickets(null);
@@ -1068,28 +1120,34 @@ async function openTicketByIndex(index) {
 async function loadDispatchHistory(runId, ctx) {
     const { history } = els();
     const runChanged = dispatchHistoryRunId !== runId;
-    if (history && (!dispatchHistoryHydrated || runChanged || ctx?.reason === "manual")) {
-        history.textContent = "Loading dispatch history…";
-    }
     if (!runId) {
         renderDispatchHistory(null, null);
-        dispatchHistoryHydrated = false;
+        dispatchHistoryRefresh.reset();
         dispatchHistoryRunId = null;
         return;
     }
     if (runChanged) {
-        dispatchHistoryHydrated = false;
         dispatchHistoryRunId = runId;
+        dispatchHistoryRefresh.reset();
+    }
+    const isInitial = dispatchHistoryRefresh.getSignature() === null;
+    if (history && isInitial) {
+        history.textContent = "Loading dispatch history…";
     }
     try {
-        // Use dispatch_history endpoint
-        const data = (await api(`/api/flows/${runId}/dispatch_history`));
-        preserveScroll(history, () => {
-            renderDispatchHistory(runId, data);
-        }, { restoreOnNextFrame: true });
-        dispatchHistoryHydrated = true;
+        await dispatchHistoryRefresh.refresh(async () => {
+            const data = (await api(`/api/flows/${runId}/dispatch_history`));
+            return {
+                runId,
+                history: data.history,
+            };
+        }, {
+            reason: ctx?.reason === "manual" ? "manual" : "background",
+            force: runChanged,
+        });
     }
     catch (err) {
+        dispatchHistoryRefresh.reset();
         preserveScroll(history, () => {
             renderDispatchHistory(runId, null);
         }, { restoreOnNextFrame: true });
