@@ -34,8 +34,16 @@ from .app_server_logging import AppServerEventFormatter
 from .app_server_prompts import build_autorunner_prompt
 from .app_server_threads import AppServerThreadRegistry, default_app_server_threads_path
 from .config import (
+    CONFIG_FILENAME,
+    CONFIG_VERSION,
+    DEFAULT_REPO_CONFIG,
+    ConfigError,
     RepoConfig,
+    _build_repo_config,
     _is_loopback_host,
+    _load_yaml_dict,
+    _merge_defaults,
+    _validate_repo_config,
     derive_repo_config,
     load_hub_config,
     load_repo_config,
@@ -2896,226 +2904,399 @@ def _manifest_has_worktrees(manifest_path: Path) -> bool:
     return False
 
 
-def doctor(start_path: Path) -> DoctorReport:
-    hub_config = load_hub_config(start_path)
-    repo_config: Optional[RepoConfig] = None
-    try:
-        repo_root = find_repo_root(start_path)
-        repo_config = derive_repo_config(hub_config, repo_root)
-    except RepoNotFoundError:
-        repo_config = None
+def _append_repo_check(
+    checks: list[DoctorCheck],
+    prefix: str,
+    check_id: str,
+    status: str,
+    message: str,
+    fix: Optional[str] = None,
+) -> None:
+    full_id = f"{prefix}.{check_id}" if prefix else check_id
+    _append_check(checks, full_id, status, message, fix)
+
+
+def _load_isolated_repo_config(repo_root: Path) -> RepoConfig:
+    config_path = repo_root / CONFIG_FILENAME
+    raw_config = _load_yaml_dict(config_path) if config_path.exists() else {}
+    raw = _merge_defaults(DEFAULT_REPO_CONFIG, raw_config or {})
+    raw["mode"] = "repo"
+    raw["version"] = raw.get("version") or CONFIG_VERSION
+    _validate_repo_config(raw, root=repo_root)
+    return _build_repo_config(config_path, raw)
+
+
+def _repo_checks(
+    repo_config: RepoConfig,
+    global_state_root: Path,
+    prefix: str = "",
+) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
-    config = repo_config or hub_config
-    root = config.root
-    global_state_root = resolve_global_state_root(config=config)
-    if repo_config is not None:
-        repo_state_root = resolve_repo_state_root(repo_config.root)
-        _append_check(
+    repo_state_root = resolve_repo_state_root(repo_config.root)
+    _append_repo_check(
+        checks,
+        prefix,
+        "state.roots",
+        "ok",
+        f"Repo state root: {repo_state_root}; Global state root: {global_state_root}",
+    )
+
+    missing = []
+    configured_docs = repo_config.docs or {}
+    for key in configured_docs:
+        path = repo_config.doc_path(key)
+        if not path.exists():
+            missing.append(path)
+    if missing:
+        names = ", ".join(str(p) for p in missing)
+        _append_repo_check(
             checks,
-            "state.roots",
-            "ok",
-            f"Repo state root: {repo_state_root}; Global state root: {global_state_root}",
+            prefix,
+            "docs.required",
+            "warning",
+            f"Configured doc files are missing: {names}",
+            "Create the missing files (workspace docs are optional but recommended).",
         )
     else:
-        _append_check(
+        _append_repo_check(
             checks,
-            "state.roots",
-            "warning",
-            f"Global state root: {global_state_root}",
-            "Run doctor from a repo to report repo-local state root.",
+            prefix,
+            "docs.required",
+            "ok",
+            "Configured doc files are present.",
         )
 
-    if repo_config is not None:
-        missing = []
-        for key in ("todo", "progress", "opinions"):
-            path = repo_config.doc_path(key)
-            if not path.exists():
-                missing.append(path)
-        if missing:
-            names = ", ".join(str(p) for p in missing)
-            _append_check(
+    if ensure_executable(repo_config.codex_binary):
+        _append_repo_check(
+            checks,
+            prefix,
+            "codex.binary",
+            "ok",
+            f"Codex binary resolved: {repo_config.codex_binary}",
+        )
+    else:
+        _append_repo_check(
+            checks,
+            prefix,
+            "codex.binary",
+            "error",
+            f"Codex binary not found in PATH: {repo_config.codex_binary}",
+            "Install Codex or set codex.binary to a full path.",
+        )
+
+    voice_enabled = bool(repo_config.voice.get("enabled", True))
+    if voice_enabled:
+        missing_voice = missing_optional_dependencies(
+            (
+                ("httpx", "httpx"),
+                (("multipart", "python_multipart"), "python-multipart"),
+            )
+        )
+        if missing_voice:
+            deps_list = ", ".join(missing_voice)
+            _append_repo_check(
                 checks,
-                "docs.required",
+                prefix,
+                "voice.dependencies",
                 "error",
-                f"Missing doc files: {names}",
-                "Run `car init` or create the missing files.",
+                f"Voice is enabled but missing optional deps: {deps_list}",
+                "Install with `pip install codex-autorunner[voice]`.",
             )
         else:
-            _append_check(
+            _append_repo_check(
                 checks,
-                "docs.required",
+                prefix,
+                "voice.dependencies",
                 "ok",
-                "Required doc files are present.",
+                "Voice dependencies are installed.",
             )
-
-        if ensure_executable(repo_config.codex_binary):
-            _append_check(
-                checks,
-                "codex.binary",
-                "ok",
-                f"Codex binary resolved: {repo_config.codex_binary}",
-            )
-        else:
-            _append_check(
-                checks,
-                "codex.binary",
-                "error",
-                f"Codex binary not found in PATH: {repo_config.codex_binary}",
-                "Install Codex or set codex.binary to a full path.",
-            )
-
-        voice_enabled = bool(repo_config.voice.get("enabled", True))
-        if voice_enabled:
-            missing_voice = missing_optional_dependencies(
-                (
-                    ("httpx", "httpx"),
-                    (("multipart", "python_multipart"), "python-multipart"),
-                )
-            )
-            if missing_voice:
-                deps_list = ", ".join(missing_voice)
-                _append_check(
-                    checks,
-                    "voice.dependencies",
-                    "error",
-                    f"Voice is enabled but missing optional deps: {deps_list}",
-                    "Install with `pip install codex-autorunner[voice]`.",
-                )
-            else:
-                _append_check(
-                    checks,
-                    "voice.dependencies",
-                    "ok",
-                    "Voice dependencies are installed.",
-                )
 
     env_candidates = [
-        root / ".env",
-        root / ".codex-autorunner" / ".env",
+        repo_config.root / ".env",
+        repo_config.root / ".codex-autorunner" / ".env",
     ]
     env_found = [str(path) for path in env_candidates if path.exists()]
     if env_found:
-        _append_check(
+        _append_repo_check(
             checks,
+            prefix,
             "dotenv.locations",
             "ok",
             f"Found .env files: {', '.join(env_found)}",
         )
     else:
-        _append_check(
+        _append_repo_check(
             checks,
+            prefix,
             "dotenv.locations",
             "warning",
             "No .env files found in repo root or .codex-autorunner/.env.",
             "Create one of these files if you rely on env vars.",
         )
 
-    host = str(config.server_host or "")
+    host = str(repo_config.server_host or "")
     if not _is_loopback_host(host):
-        if not config.server_auth_token_env:
-            _append_check(
+        if not repo_config.server_auth_token_env:
+            _append_repo_check(
                 checks,
+                prefix,
                 "server.auth",
                 "error",
                 f"Non-loopback host {host} requires server.auth_token_env.",
                 "Set server.auth_token_env or bind to 127.0.0.1.",
             )
         else:
-            token_val = os.environ.get(config.server_auth_token_env)
+            token_val = os.environ.get(repo_config.server_auth_token_env)
             if not token_val:
-                _append_check(
+                _append_repo_check(
                     checks,
+                    prefix,
                     "server.auth",
                     "warning",
-                    f"Auth token env var {config.server_auth_token_env} is not set.",
+                    f"Auth token env var {repo_config.server_auth_token_env} is not set.",
                     "Export the env var or add it to .env.",
                 )
             else:
-                _append_check(
+                _append_repo_check(
                     checks,
+                    prefix,
                     "server.auth",
                     "ok",
                     "Server auth token env var is set for non-loopback host.",
                 )
 
+    return checks
+
+
+def _iter_hub_repos(hub_config) -> list[tuple[str, Path]]:
+    repos: list[tuple[str, Path]] = []
     if hub_config.manifest_path.exists():
-        version = _parse_manifest_version(hub_config.manifest_path)
-        if version is None:
-            _append_check(
-                checks,
-                "hub.manifest.version",
-                "error",
-                f"Failed to read manifest version from {hub_config.manifest_path}.",
-                "Fix the manifest YAML or regenerate it with `car hub scan`.",
-            )
-        elif version != MANIFEST_VERSION:
-            _append_check(
-                checks,
-                "hub.manifest.version",
-                "error",
-                f"Hub manifest version {version} unsupported (expected {MANIFEST_VERSION}).",
-                "Regenerate the manifest (delete it and run `car hub scan`).",
-            )
-        else:
-            _append_check(
-                checks,
-                "hub.manifest.version",
-                "ok",
-                f"Hub manifest version {version} is supported.",
-            )
-    else:
-        _append_check(
-            checks,
-            "hub.manifest.exists",
-            "warning",
-            f"Hub manifest missing at {hub_config.manifest_path}.",
-            "Run `car hub scan` or `car hub create` to generate it.",
-        )
+        try:
+            raw = yaml.safe_load(hub_config.manifest_path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            raw = None
+        if isinstance(raw, dict):
+            entries = raw.get("repos")
+            if isinstance(entries, list):
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    if not entry.get("enabled", True):
+                        continue
+                    path_val = entry.get("path")
+                    if not isinstance(path_val, str):
+                        continue
+                    repo_id = str(entry.get("id") or path_val)
+                    repos.append((repo_id, (hub_config.root / path_val).resolve()))
+    if not repos and hub_config.repos_root.exists():
+        for child in hub_config.repos_root.iterdir():
+            if child.is_dir():
+                repos.append((child.name, child.resolve()))
+    return repos
 
-    if not hub_config.repos_root.exists():
+
+def doctor(start_path: Path) -> DoctorReport:
+    checks: list[DoctorCheck] = []
+    hub_config = None
+    try:
+        hub_config = load_hub_config(start_path)
+    except ConfigError:
+        hub_config = None
+
+    repo_root: Optional[Path] = None
+    try:
+        repo_root = find_repo_root(start_path)
+    except RepoNotFoundError:
+        repo_root = None
+
+    repo_config: Optional[RepoConfig] = None
+    if hub_config is not None and repo_root is not None:
+        try:
+            repo_config = derive_repo_config(hub_config, repo_root)
+        except ConfigError:
+            repo_config = None
+    elif hub_config is None and repo_root is not None:
+        try:
+            repo_config = load_repo_config(start_path)
+        except ConfigError:
+            repo_config = _load_isolated_repo_config(repo_root)
+
+    if hub_config is not None:
+        global_state_root = resolve_global_state_root(config=hub_config)
         _append_check(
             checks,
-            "hub.repos_root",
-            "error",
-            f"Hub repos_root does not exist: {hub_config.repos_root}",
-            "Create the directory or update hub.repos_root in config.",
-        )
-    elif not hub_config.repos_root.is_dir():
-        _append_check(
-            checks,
-            "hub.repos_root",
-            "error",
-            f"Hub repos_root is not a directory: {hub_config.repos_root}",
-            "Point hub.repos_root at a directory.",
-        )
-    else:
-        _append_check(
-            checks,
-            "hub.repos_root",
+            "state.roots",
             "ok",
-            f"Hub repos_root exists: {hub_config.repos_root}",
+            f"Hub root: {hub_config.root}; Global state root: {global_state_root}",
         )
+    elif repo_config is not None:
+        global_state_root = resolve_global_state_root(config=repo_config)
+        _append_check(
+            checks,
+            "state.roots",
+            "ok",
+            f"Repo state root: {resolve_repo_state_root(repo_config.root)}; Global state root: {global_state_root}",
+        )
+    else:
+        raise ConfigError("No hub or repo configuration found for doctor check.")
 
-    manifest_has_worktrees = (
-        hub_config.manifest_path.exists()
-        and _manifest_has_worktrees(hub_config.manifest_path)
-    )
-    worktrees_enabled = hub_config.worktrees_root.exists() or manifest_has_worktrees
-    if worktrees_enabled:
-        if ensure_executable("git"):
+    if hub_config is not None:
+        if hub_config.manifest_path.exists():
+            version = _parse_manifest_version(hub_config.manifest_path)
+            if version is None:
+                _append_check(
+                    checks,
+                    "hub.manifest.version",
+                    "error",
+                    f"Failed to read manifest version from {hub_config.manifest_path}.",
+                    "Fix the manifest YAML or regenerate it with `car hub scan`.",
+                )
+            elif version != MANIFEST_VERSION:
+                _append_check(
+                    checks,
+                    "hub.manifest.version",
+                    "error",
+                    f"Hub manifest version {version} unsupported (expected {MANIFEST_VERSION}).",
+                    "Regenerate the manifest (delete it and run `car hub scan`).",
+                )
+            else:
+                _append_check(
+                    checks,
+                    "hub.manifest.version",
+                    "ok",
+                    f"Hub manifest version {version} is supported.",
+                )
+        else:
             _append_check(
                 checks,
-                "hub.git",
-                "ok",
-                "git is available for hub worktrees.",
+                "hub.manifest.exists",
+                "warning",
+                f"Hub manifest missing at {hub_config.manifest_path}.",
+                "Run `car hub scan` or `car hub create` to generate it.",
+            )
+
+        if not hub_config.repos_root.exists():
+            _append_check(
+                checks,
+                "hub.repos_root",
+                "error",
+                f"Hub repos_root does not exist: {hub_config.repos_root}",
+                "Create the directory or update hub.repos_root in config.",
+            )
+        elif not hub_config.repos_root.is_dir():
+            _append_check(
+                checks,
+                "hub.repos_root",
+                "error",
+                f"Hub repos_root is not a directory: {hub_config.repos_root}",
+                "Point hub.repos_root at a directory.",
             )
         else:
             _append_check(
                 checks,
-                "hub.git",
-                "error",
-                "git is not available but hub worktrees are enabled.",
-                "Install git or disable worktrees.",
+                "hub.repos_root",
+                "ok",
+                f"Hub repos_root exists: {hub_config.repos_root}",
             )
+
+        manifest_has_worktrees = (
+            hub_config.manifest_path.exists()
+            and _manifest_has_worktrees(hub_config.manifest_path)
+        )
+        worktrees_enabled = hub_config.worktrees_root.exists() or manifest_has_worktrees
+        if worktrees_enabled:
+            if ensure_executable("git"):
+                _append_check(
+                    checks,
+                    "hub.git",
+                    "ok",
+                    "git is available for hub worktrees.",
+                )
+            else:
+                _append_check(
+                    checks,
+                    "hub.git",
+                    "error",
+                    "git is not available but hub worktrees are enabled.",
+                    "Install git or disable worktrees.",
+                )
+
+        env_candidates = [
+            hub_config.root / ".env",
+            hub_config.root / ".codex-autorunner" / ".env",
+        ]
+        env_found = [str(path) for path in env_candidates if path.exists()]
+        if env_found:
+            _append_check(
+                checks,
+                "dotenv.locations",
+                "ok",
+                f"Found .env files: {', '.join(env_found)}",
+            )
+        else:
+            _append_check(
+                checks,
+                "dotenv.locations",
+                "warning",
+                "No .env files found in repo root or .codex-autorunner/.env.",
+                "Create one of these files if you rely on env vars.",
+            )
+
+        host = str(hub_config.server_host or "")
+        if not _is_loopback_host(host):
+            if not hub_config.server_auth_token_env:
+                _append_check(
+                    checks,
+                    "server.auth",
+                    "error",
+                    f"Non-loopback host {host} requires server.auth_token_env.",
+                    "Set server.auth_token_env or bind to 127.0.0.1.",
+                )
+            else:
+                token_val = os.environ.get(hub_config.server_auth_token_env)
+                if not token_val:
+                    _append_check(
+                        checks,
+                        "server.auth",
+                        "warning",
+                        f"Auth token env var {hub_config.server_auth_token_env} is not set.",
+                        "Export the env var or add it to .env.",
+                    )
+                else:
+                    _append_check(
+                        checks,
+                        "server.auth",
+                        "ok",
+                        "Server auth token env var is set for non-loopback host.",
+                    )
+
+        for repo_id, repo_path in _iter_hub_repos(hub_config):
+            prefix = f"repo[{repo_id}]"
+            if not repo_path.exists():
+                _append_repo_check(
+                    checks,
+                    prefix,
+                    "state.roots",
+                    "error",
+                    f"Repo path not found: {repo_path}",
+                    "Clone or initialize the repo, or update the hub manifest.",
+                )
+                continue
+            try:
+                repo_cfg = derive_repo_config(hub_config, repo_path)
+            except ConfigError as exc:
+                _append_repo_check(
+                    checks,
+                    prefix,
+                    "config",
+                    "error",
+                    f"Failed to derive repo config: {exc}",
+                )
+                continue
+            checks.extend(_repo_checks(repo_cfg, global_state_root, prefix=prefix))
+
+    else:
+        assert repo_config is not None
+        checks.extend(_repo_checks(repo_config, global_state_root))
 
     return DoctorReport(checks=checks)
