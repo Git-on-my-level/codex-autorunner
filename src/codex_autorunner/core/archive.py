@@ -98,16 +98,16 @@ def _copy_entry(
     *,
     visited: set[Path],
     skipped_symlinks: list[str],
-) -> None:
+) -> bool:
     if src.is_symlink():
         try:
             resolved = src.resolve()
         except FileNotFoundError:
             skipped_symlinks.append(str(src))
-            return
+            return False
         if not _is_within(worktree_root, resolved):
             skipped_symlinks.append(str(src))
-            return
+            return False
         if resolved.is_dir():
             _copy_tree(
                 resolved,
@@ -117,10 +117,11 @@ def _copy_entry(
                 visited=visited,
                 skipped_symlinks=skipped_symlinks,
             )
-            return
+            return True
         if resolved.is_file():
             _copy_file(resolved, dest, stats)
-        return
+            return True
+        return False
 
     if src.is_dir():
         _copy_tree(
@@ -131,10 +132,13 @@ def _copy_entry(
             visited=visited,
             skipped_symlinks=skipped_symlinks,
         )
-        return
+        return True
 
     if src.is_file():
         _copy_file(src, dest, stats)
+        return True
+
+    return False
 
 
 def _flow_summary(flows_dir: Path) -> tuple[int, Optional[str]]:
@@ -264,7 +268,7 @@ def archive_worktree_snapshot(
             if not src.exists() and not src.is_symlink():
                 missing_paths.append(str(rel))
                 continue
-            _copy_entry(
+            copied = _copy_entry(
                 src,
                 dest,
                 worktree_repo_root,
@@ -272,7 +276,8 @@ def archive_worktree_snapshot(
                 visited=visited,
                 skipped_symlinks=skipped_symlinks,
             )
-            copied_paths.append(str(rel))
+            if copied:
+                copied_paths.append(str(rel))
 
         flow_run_count, latest_flow_run_id = _flow_summary(snapshot_root / "flows")
         status: ArchiveStatus = "complete" if not missing_paths else "partial"
