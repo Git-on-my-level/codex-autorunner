@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from codex_autorunner.agents.registry import (
+    CAR_PLUGIN_API_VERSION,
     AgentDescriptor,
     _check_codex_health,
     _check_opencode_health,
@@ -112,6 +113,29 @@ class TestHasCapability:
 
     def test_opencode_doesnt_have_approvals(self):
         assert has_capability("opencode", "approvals") is False
+
+
+class _StubEntryPoint:
+    def __init__(self, obj):
+        self._obj = obj
+        self.group = "codex_autorunner.agent_backends"
+        self.name = "stub"
+
+    def load(self):
+        return self._obj
+
+
+def _run_with_entrypoints(monkeypatch, entrypoints):
+    """Reload registry with supplied entry points for plugin tests."""
+
+    def _select(_group):
+        return entrypoints
+
+    import codex_autorunner.agents.registry as registry
+
+    monkeypatch.setattr(registry, "_select_entry_points", _select)
+    registry.reload_agents()
+    return registry
 
 
 class TestGetRegisteredAgents:
@@ -237,3 +261,32 @@ class TestMakeOpenCodeHarness:
     def test_missing_supervisor_raises(self, app_ctx_missing_supervisors):
         with pytest.raises(RuntimeError, match="supervisor missing"):
             _make_opencode_harness(app_ctx_missing_supervisors)
+
+
+class TestPluginApiCompatibility:
+    def test_accepts_older_api_version(self, monkeypatch):
+        older = AgentDescriptor(
+            id="older",
+            name="Older",
+            capabilities=frozenset(),
+            make_harness=lambda ctx: None,
+            plugin_api_version=CAR_PLUGIN_API_VERSION - 1,
+        )
+        registry = _run_with_entrypoints(monkeypatch, [_StubEntryPoint(older)])
+        agents = registry.get_registered_agents()
+        assert "older" in agents
+
+    def test_rejects_newer_api_version(self, monkeypatch):
+        newer = AgentDescriptor(
+            id="newer",
+            name="Newer",
+            capabilities=frozenset(),
+            make_harness=lambda ctx: None,
+            plugin_api_version=CAR_PLUGIN_API_VERSION + 1,
+        )
+        registry = _run_with_entrypoints(monkeypatch, [_StubEntryPoint(newer)])
+        agents = registry.get_registered_agents()
+        assert "newer" not in agents
+        # built-ins remain
+        assert "codex" in agents
+        assert "opencode" in agents

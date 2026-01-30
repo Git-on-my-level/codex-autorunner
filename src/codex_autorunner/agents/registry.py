@@ -163,14 +163,33 @@ def _load_agent_plugins() -> dict[str, AgentDescriptor]:
             )
             continue
 
-        if descriptor.plugin_api_version != CAR_PLUGIN_API_VERSION:
+        api_version_raw = getattr(descriptor, "plugin_api_version", None)
+        try:
+            api_version = int(api_version_raw)
+        except Exception:
+            api_version = None
+        if api_version is None:
             _logger.warning(
-                "Ignoring agent plugin %s (api_version=%s): expected %s",
+                "Ignoring agent plugin %s: invalid api_version %s",
                 agent_id,
-                descriptor.plugin_api_version,
+                api_version_raw,
+            )
+            continue
+        if api_version > CAR_PLUGIN_API_VERSION:
+            _logger.warning(
+                "Ignoring agent plugin %s (api_version=%s) requires newer core (%s)",
+                agent_id,
+                api_version,
                 CAR_PLUGIN_API_VERSION,
             )
             continue
+        if api_version < CAR_PLUGIN_API_VERSION:
+            _logger.info(
+                "Loaded agent plugin %s with older api_version=%s (current=%s)",
+                agent_id,
+                api_version,
+                CAR_PLUGIN_API_VERSION,
+            )
 
         if agent_id in _BUILTIN_AGENTS:
             _logger.warning(
