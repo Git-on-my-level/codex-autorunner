@@ -1,4 +1,4 @@
-import { api, flash, confirmModal, openModal, statusPill } from "./utils.js";
+import { api, flash, statusPill } from "./utils.js";
 import { saveToCache, loadFromCache } from "./cache.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
@@ -370,6 +370,7 @@ function renderUsageChart(data: UsageChartData | null): void {
     "#84d1ff",
     "#9be26f",
     "#f2a0c5",
+    "#373",
   ];
 
   const { series: displaySeries } = normalizeSeries(
@@ -690,147 +691,6 @@ async function loadUsage(): Promise<void> {
   }
 }
 
-const UPDATE_TARGET_LABELS: Record<string, string> = {
-  both: "web + Telegram",
-  web: "web only",
-  telegram: "Telegram only",
-};
-
-type UpdateTarget = "both" | "web" | "telegram";
-
-function normalizeUpdateTarget(value: unknown): UpdateTarget {
-  if (!value) return "both";
-  if (value === "both" || value === "web" || value === "telegram") return value as UpdateTarget;
-  return "both";
-}
-
-function getUpdateTarget(selectId: string | null): UpdateTarget {
-  const select = selectId ? document.getElementById(selectId) as HTMLSelectElement | null : null;
-  return normalizeUpdateTarget(select ? select.value : "both");
-}
-
-function describeUpdateTarget(target: UpdateTarget): string {
-  return UPDATE_TARGET_LABELS[target] || UPDATE_TARGET_LABELS.both;
-}
-
-interface UpdateCheckResponse {
-  update_available?: boolean;
-  message?: string;
-}
-
-interface UpdateResponse {
-  message?: string;
-}
-
-async function handleSystemUpdate(btnId: string, targetSelectId: string | null): Promise<void> {
-  const btn = document.getElementById(btnId) as HTMLButtonElement | null;
-  if (!btn) return;
-  
-  const originalText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "Checking...";
-  const updateTarget = getUpdateTarget(targetSelectId);
-  const targetLabel = describeUpdateTarget(updateTarget);
-  
-  let check: UpdateCheckResponse | undefined;
-  try {
-    check = await api("/system/update/check") as UpdateCheckResponse;
-  } catch (err) {
-    check = { update_available: true, message: (err as Error).message || "Unable to check for updates." };
-  }
-
-  if (!check?.update_available) {
-    flash(check?.message || "No update available.", "info");
-    btn.disabled = false;
-    btn.textContent = originalText;
-    return;
-  }
-
-  const restartNotice =
-    updateTarget === "telegram"
-      ? "The Telegram bot will restart."
-      : "The service will restart.";
-  const confirmed = await confirmModal(
-    `${check?.message || "Update available."} Update Codex Autorunner (${targetLabel})? ${restartNotice}`
-  );
-  if (!confirmed) {
-    btn.disabled = false;
-    btn.textContent = originalText;
-    return;
-  }
-
-  btn.textContent = "Updating...";
-
-  try {
-    const res = await api("/system/update", {
-      method: "POST",
-      body: { target: updateTarget },
-    }) as UpdateResponse;
-    flash(res.message || `Update started (${targetLabel}).`, "success");
-    if (updateTarget === "telegram") {
-      btn.disabled = false;
-      btn.textContent = originalText;
-      return;
-    }
-    document.body.style.pointerEvents = "none";
-    setTimeout(() => {
-      const url = new URL(window.location.href);
-      url.searchParams.set("v", String(Date.now()));
-      window.location.replace(url.toString());
-    }, 8000);
-  } catch (err) {
-    flash((err as Error).message || "Update failed", "error");
-    btn.disabled = false;
-    btn.textContent = originalText;
-  }
-}
-
-function initSettings(): void {
-  const settingsBtn = document.getElementById("repo-settings") as HTMLButtonElement | null;
-  const modal = document.getElementById("repo-settings-modal");
-  const closeBtn = document.getElementById("repo-settings-close");
-  const updateBtn = document.getElementById("repo-update-btn") as HTMLButtonElement | null;
-  const updateTarget = document.getElementById("repo-update-target") as HTMLSelectElement | null;
-  let closeModal: (() => void) | null = null;
-
-  const hideModal = () => {
-    if (closeModal) {
-      const close = closeModal;
-      closeModal = null;
-      close();
-    }
-  };
-
-  if (settingsBtn && modal) {
-    settingsBtn.addEventListener("click", () => {
-      const triggerEl = document.activeElement;
-      hideModal();
-      closeModal = openModal(modal, {
-        initialFocus: closeBtn || updateBtn || modal,
-        returnFocusTo: triggerEl as HTMLElement | null,
-        onRequestClose: hideModal,
-      });
-      // Trigger settings refresh when modal opens
-      const { refreshSettings } = window.__CAR_SETTINGS || {};
-      if (typeof refreshSettings === "function") {
-        refreshSettings();
-      }
-    });
-  }
-
-  if (closeBtn && modal) {
-    closeBtn.addEventListener("click", () => {
-      hideModal();
-    });
-  }
-
-  if (updateBtn) {
-    updateBtn.addEventListener("click", () =>
-      handleSystemUpdate("repo-update-btn", updateTarget ? updateTarget.id : null)
-    );
-  }
-}
-
 function initUsageChartControls(): void {
   const segmentSelect = document.getElementById("usage-chart-segment") as HTMLSelectElement | null;
   const rangeSelect = document.getElementById("usage-chart-range") as HTMLSelectElement | null;
@@ -871,7 +731,6 @@ function bindAction(buttonId: string, action: () => Promise<void>): void {
 }
 
 export function initDashboard(): void {
-  initSettings();
   initUsageChartControls();
   // initReview(); // Removed - review.ts was deleted
   bindAction("usage-refresh", loadUsage);
@@ -911,7 +770,7 @@ export function initDashboard(): void {
     interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
     refreshOnActivation: true,
     immediate: true,
-  });
+    });
 }
 
 async function loadVersion(): Promise<void> {
