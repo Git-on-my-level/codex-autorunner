@@ -23,6 +23,117 @@ from .replies import ensure_reply_dirs, parse_user_reply, resolve_reply_paths
 _logger = logging.getLogger(__name__)
 
 WORKSPACE_DOC_MAX_CHARS = 4000
+TRUNCATION_MARKER = "\n\n[... TRUNCATED ...]\n\n"
+
+
+def _truncate_text_by_bytes(text: str, max_bytes: int) -> str:
+    """Truncate text to fit within max_bytes UTF-8 encoded size."""
+    if max_bytes <= 0:
+        return ""
+    normalized = text or ""
+    encoded = normalized.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return normalized
+    marker_bytes = len(TRUNCATION_MARKER.encode("utf-8"))
+    if max_bytes <= marker_bytes:
+        return TRUNCATION_MARKER.encode("utf-8")[:max_bytes].decode(
+            "utf-8", errors="ignore"
+        )
+    target_bytes = max_bytes - marker_bytes
+    truncated = encoded[:target_bytes].decode("utf-8", errors="ignore")
+    return truncated + TRUNCATION_MARKER
+
+
+def _preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
+    """Truncate ticket block while preserving prefix and ticket frontmatter.
+
+    ticket_block format:
+        "\\n\\n---\\n\\nTICKET CONTENT ...\\nPATH: ...\\n\\n{ticket_raw_content}"
+    where ticket_raw_content itself contains markdown frontmatter.
+    """
+    if len(ticket_block.encode("utf-8")) <= max_bytes:
+        return ticket_block
+
+    # ticket_block structure:
+    #   "\n\n---\n\n" - prefix separator
+    #   "TICKET CONTENT (edit this file to track progress; update frontmatter.done when complete):\n"
+    #   "PATH: {rel_ticket}\n"
+    #   "\n" - newline before ticket frontmatter
+    #   "---\n" - ticket frontmatter start
+    #   "agent: ...\n"
+    #   "done: ...\n"
+    #   "title: ...\n"
+    #   "goal: ...\n"
+    #   "---\n" - ticket frontmatter end (what we want to preserve)
+    #   ticket body...
+
+    # Find the three occurrences of "\n---\n"
+    # 1st: in prefix (header separator)
+    # 2nd: frontmatter start (after PATH: line)
+    # 3rd: frontmatter end (what we want to preserve up to)
+
+    marker = "\n---\n"
+    first_marker_idx = ticket_block.find(marker)
+    if first_marker_idx == -1:
+        return _truncate_text_by_bytes(ticket_block, max_bytes)
+
+    second_marker_idx = ticket_block.find(marker, first_marker_idx + 1)
+    if second_marker_idx == -1:
+        return _truncate_text_by_bytes(ticket_block, max_bytes)
+
+    third_marker_idx = ticket_block.find(marker, second_marker_idx + 1)
+    if third_marker_idx == -1:
+        return _truncate_text_by_bytes(ticket_block, max_bytes)
+
+    # Preserve everything up to and including the third marker
+    preserve_end = third_marker_idx + len(marker)
+    preserved_part = ticket_block[:preserve_end]
+
+    # Check if we still have room
+    preserved_bytes = len(preserved_part.encode("utf-8"))
+    remaining_bytes = max(max_bytes - preserved_bytes, 0)
+
+    if remaining_bytes > 0:
+        body = ticket_block[preserve_end:]
+        truncated_body = _truncate_text_by_bytes(body, remaining_bytes)
+        return preserved_part + truncated_body
+
+    # Not enough room even for preserved part, fall back to simple truncation
+    return _truncate_text_by_bytes(ticket_block, max_bytes)
+
+
+def _shrink_prompt(
+    *,
+    max_bytes: int,
+    render: Callable[[], str],
+    sections: dict[str, str],
+    order: list[str],
+) -> str:
+    """Shrink prompt by truncating sections in order of priority."""
+    prompt = render()
+    if len(prompt.encode("utf-8")) <= max_bytes:
+        return prompt
+
+    for key in order:
+        if len(prompt.encode("utf-8")) <= max_bytes:
+            break
+        value = sections.get(key, "")
+        if not value:
+            continue
+        overflow = len(prompt.encode("utf-8")) - max_bytes
+        value_bytes = len(value.encode("utf-8"))
+        new_limit = max(value_bytes - overflow, 0)
+
+        if key == "ticket_block":
+            sections[key] = _preserve_ticket_structure(value, new_limit)
+        else:
+            sections[key] = _truncate_text_by_bytes(value, new_limit)
+        prompt = render()
+
+    if len(prompt.encode("utf-8")) > max_bytes:
+        prompt = _truncate_text_by_bytes(prompt, max_bytes)
+
+    return prompt
 
 
 class TicketRunner:
@@ -835,11 +946,12 @@ class TicketRunner:
                 + "\n"
             )
 
+        ticket_raw_content = ticket_path.read_text(encoding="utf-8")
         ticket_block = (
             "\n\n---\n\n"
             "TICKET CONTENT (edit this file to track progress; update frontmatter.done when complete):\n"
             f"PATH: {rel_ticket}\n"
-            "\n" + ticket_path.read_text(encoding="utf-8")
+            "\n" + ticket_raw_content
         )
 
         prev_block = ""
@@ -848,14 +960,35 @@ class TicketRunner:
                 "\n\n---\n\nPREVIOUS AGENT OUTPUT (same ticket):\n" + last_agent_output
             )
 
-        return (
-            header
-            + checkpoint_block
-            + commit_block
-            + lint_block
-            + workspace_block
-            + reply_block
-            + prev_ticket_block
-            + ticket_block
-            + prev_block
+        sections = {
+            "prev_block": prev_block,
+            "prev_ticket_block": prev_ticket_block,
+            "workspace_block": workspace_block,
+            "ticket_block": ticket_block,
+        }
+
+        def render() -> str:
+            return (
+                header
+                + checkpoint_block
+                + commit_block
+                + lint_block
+                + sections["workspace_block"]
+                + reply_block
+                + sections["prev_ticket_block"]
+                + sections["ticket_block"]
+                + sections["prev_block"]
+            )
+
+        prompt = _shrink_prompt(
+            max_bytes=self._config.prompt_max_bytes,
+            render=render,
+            sections=sections,
+            order=[
+                "prev_block",
+                "prev_ticket_block",
+                "workspace_block",
+                "ticket_block",
+            ],
         )
+        return prompt
