@@ -1097,6 +1097,30 @@ main {
   overflow: hidden;
 }
 
+.hub-repo-usage-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 10px;
+}
+
+.hub-usage-pill {
+  background: rgba(108, 245, 216, 0.08);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.hub-usage-pill-meta {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.hub-usage-unmatched-note {
+  margin-top: 4px;
+  padding-left: 2px;
+}
+
 a.hub-pr-pill {
   text-decoration: none;
   border-color: rgba(108, 245, 216, 0.35);
@@ -6394,6 +6418,8 @@ button.loading::after {
 
   .hub-repo-row {
     gap: 6px;
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .hub-repo-left {
@@ -6413,8 +6439,16 @@ button.loading::after {
     font-size: 10px;
   }
 
+  .hub-repo-usage-line {
+    font-size: 10px;
+    width: 100%;
+  }
+
   .hub-repo-right {
     gap: 3px;
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .hub-repo-right button {

@@ -17,7 +17,6 @@ const lastScanEl = document.getElementById("hub-last-scan");
 const totalEl = document.getElementById("hub-count-total");
 const runningEl = document.getElementById("hub-count-running");
 const missingEl = document.getElementById("hub-count-missing");
-const hubUsageList = document.getElementById("hub-usage-list");
 const hubUsageMeta = document.getElementById("hub-usage-meta");
 const hubUsageRefresh = document.getElementById("hub-usage-refresh");
 const hubUsageChartCanvas = document.getElementById("hub-usage-chart-canvas");
@@ -36,6 +35,8 @@ const hubUsageChartState = {
 };
 let hubUsageSeriesRetryTimer = null;
 let hubUsageSummaryRetryTimer = null;
+let hubUsageIndex = {};
+let hubUsageUnmatched = null;
 function saveSessionCache(key, value) {
     try {
         const payload = { at: Date.now(), value };
@@ -178,48 +179,36 @@ function formatTokensAxis(val) {
         return `${(num / 1000).toFixed(1)}k`;
     return Math.round(num).toString();
 }
-function renderHubUsage(data) {
-    if (!hubUsageList)
+function getRepoUsage(repoId) {
+    const usage = hubUsageIndex[repoId];
+    if (!usage)
+        return { label: "—", meta: "", hasData: false };
+    const totals = usage.totals || {};
+    const cached = totals.cached_input_tokens || 0;
+    const input = totals.input_tokens || 0;
+    const cachePercent = input ? Math.round((cached / input) * 100) : 0;
+    const meta = usage.events === undefined
+        ? ""
+        : `${usage.events}ev${input ? ` · ${cachePercent}%↻` : ""}`;
+    return {
+        label: formatTokensCompact(totals.total_tokens),
+        meta,
+        hasData: true,
+    };
+}
+function indexHubUsage(data) {
+    hubUsageIndex = {};
+    hubUsageUnmatched = data?.unmatched || null;
+    if (!data?.repos)
         return;
+    data.repos.forEach((repo) => {
+        if (repo?.id)
+            hubUsageIndex[repo.id] = repo;
+    });
+}
+function renderHubUsageMeta(data) {
     if (hubUsageMeta) {
         hubUsageMeta.textContent = data?.codex_home || "–";
-    }
-    if (!data || !data.repos) {
-        hubUsageList.innerHTML =
-            '<span class="muted small">Usage unavailable</span>';
-        return;
-    }
-    if (!data.repos.length && (!data.unmatched || !data.unmatched.events)) {
-        hubUsageList.innerHTML = '<span class="muted small">No token events</span>';
-        return;
-    }
-    hubUsageList.innerHTML = "";
-    const entries = [...data.repos].sort((a, b) => (b.totals?.total_tokens || 0) - (a.totals?.total_tokens || 0));
-    entries.forEach((repo) => {
-        const div = document.createElement("div");
-        div.className = "hub-usage-chip";
-        const totals = repo.totals || {};
-        const cached = totals.cached_input_tokens || 0;
-        const cachePercent = totals.input_tokens
-            ? Math.round((cached / totals.input_tokens) * 100)
-            : 0;
-        div.innerHTML = `
-      <span class="hub-usage-chip-name">${escapeHtml(repo.id)}</span>
-      <span class="hub-usage-chip-total">${escapeHtml(formatTokensCompact(totals.total_tokens))}</span>
-      <span class="hub-usage-chip-meta">${escapeHtml(`${repo.events ?? 0}ev · ${cachePercent}%↻`)}</span>
-    `;
-        hubUsageList.appendChild(div);
-    });
-    if (data.unmatched && data.unmatched.events) {
-        const div = document.createElement("div");
-        div.className = "hub-usage-chip hub-usage-chip-unmatched";
-        const totals = data.unmatched.totals || {};
-        div.innerHTML = `
-      <span class="hub-usage-chip-name">other</span>
-      <span class="hub-usage-chip-total">${escapeHtml(formatTokensCompact(totals.total_tokens))}</span>
-      <span class="hub-usage-chip-meta">${escapeHtml(`${data.unmatched.events}ev`)}</span>
-    `;
-        hubUsageList.appendChild(div);
     }
 }
 function scheduleHubUsageSummaryRetry() {
@@ -236,30 +225,23 @@ function clearHubUsageSummaryRetry() {
 }
 function handleHubUsagePayload(data, { cachedUsage, allowRetry }) {
     const hasSummary = data && Array.isArray(data.repos);
+    const effective = hasSummary ? data : cachedUsage;
+    if (effective) {
+        indexHubUsage(effective);
+        renderHubUsageMeta(effective);
+        renderReposWithScroll(hubData.repos || []);
+    }
     if (data?.status === "loading") {
-        if (hasSummary) {
-            renderHubUsage(data);
-        }
-        else if (cachedUsage) {
-            renderHubUsage(cachedUsage);
-        }
-        else {
-            renderHubUsage(data);
-        }
         if (allowRetry)
             scheduleHubUsageSummaryRetry();
-        return hasSummary;
+        return Boolean(hasSummary);
     }
     if (hasSummary) {
-        renderHubUsage(data);
         clearHubUsageSummaryRetry();
         return true;
     }
-    if (cachedUsage) {
-        renderHubUsage(cachedUsage);
-    }
-    else {
-        renderHubUsage(null);
+    if (!effective && !data) {
+        renderReposWithScroll(hubData.repos || []);
     }
     return false;
 }
@@ -281,10 +263,7 @@ async function loadHubUsage({ silent = false, allowRetry = true } = {}) {
     catch (err) {
         const cachedUsage = loadSessionCache(HUB_USAGE_CACHE_KEY, HUB_CACHE_TTL_MS);
         if (cachedUsage) {
-            renderHubUsage(cachedUsage);
-        }
-        else {
-            renderHubUsage(null);
+            handleHubUsagePayload(cachedUsage, { cachedUsage, allowRetry: false });
         }
         if (!silent) {
             flash(err.message || "Failed to load usage", "error");
@@ -830,6 +809,16 @@ function renderRepos(repos) {
         const infoLine = infoItems.length > 0
             ? `<span class="hub-repo-info-line">${escapeHtml(infoItems.join(" · "))}</span>`
             : "";
+        const usageInfo = getRepoUsage(repo.id);
+        const usageLine = `
+      <div class="hub-repo-usage-line${usageInfo.hasData ? "" : " muted"}">
+        <span class="pill pill-small hub-usage-pill">
+          ${escapeHtml(usageInfo.label)}
+        </span>
+        ${usageInfo.meta
+            ? `<span class="hub-usage-pill-meta">${escapeHtml(usageInfo.meta)}</span>`
+            : ""}
+      </div>`;
         card.innerHTML = `
       <div class="hub-repo-row">
         <div class="hub-repo-left">
@@ -843,6 +832,7 @@ function renderRepos(repos) {
           <div class="hub-repo-subline">
             ${infoLine}
           </div>
+          ${usageLine}
         </div>
         <div class="hub-repo-right">
           ${actions || ""}
@@ -891,6 +881,13 @@ function renderRepos(repos) {
             .sort((a, b) => String(a.id).localeCompare(String(b.id)))
             .forEach((wt) => renderRepoCard(wt, { isWorktreeRow: true }));
     }
+    if (hubUsageUnmatched && hubUsageUnmatched.events) {
+        const note = document.createElement("div");
+        note.className = "hub-usage-unmatched-note muted small";
+        const total = formatTokensCompact(hubUsageUnmatched.totals?.total_tokens);
+        note.textContent = `Other: ${total} · ${hubUsageUnmatched.events}ev (unattributed)`;
+        repoListEl.appendChild(note);
+    }
 }
 function renderReposWithScroll(repos) {
     preserveScroll(repoListEl, () => {
@@ -907,7 +904,7 @@ async function refreshHub() {
         renderSummary(data.repos || []);
         renderReposWithScroll(data.repos || []);
         await loadHubInbox().catch(() => { });
-        await loadHubUsage().catch(() => { });
+        loadHubUsage({ silent: true }).catch(() => { });
     }
     catch (err) {
         flash(err.message || "Hub request failed", "error");
@@ -1336,7 +1333,8 @@ export function initHub() {
     }
     const cachedUsage = loadSessionCache(HUB_USAGE_CACHE_KEY, HUB_CACHE_TTL_MS);
     if (cachedUsage) {
-        renderHubUsage(cachedUsage);
+        indexHubUsage(cachedUsage);
+        renderHubUsageMeta(cachedUsage);
     }
     loadHubUsageSeries();
     refreshHub();
@@ -1355,5 +1353,4 @@ export function initHub() {
 }
 export const __hubTest = {
     renderRepos,
-    renderHubUsage,
 };

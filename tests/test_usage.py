@@ -176,6 +176,100 @@ def test_hub_usage_assigns_unmatched(tmp_path):
     assert unmatched.events == 1
 
 
+def test_hub_usage_heuristic_rolls_worktree_into_base(tmp_path):
+    base_repo = tmp_path / "codex-autorunner"
+    stray_worktree = tmp_path / "codex-autorunner--feature-x"
+    base_repo.mkdir()
+    stray_worktree.mkdir()
+    codex_home = tmp_path / "codex"
+
+    _write_session(
+        codex_home,
+        stray_worktree,
+        [
+            {
+                "timestamp": "2025-12-01T01:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 10,
+                            "cached_input_tokens": 2,
+                            "output_tokens": 3,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 15,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 10,
+                            "cached_input_tokens": 2,
+                            "output_tokens": 3,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 15,
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    per_repo, unmatched = summarize_hub_usage(
+        [("codex-autorunner", base_repo)],
+        codex_home=codex_home,
+    )
+
+    assert per_repo["codex-autorunner"].totals.total_tokens == 15
+    assert per_repo["codex-autorunner"].events == 1
+    assert unmatched.events == 0
+
+
+def test_hub_usage_heuristic_skips_unrelated_double_dash(tmp_path):
+    base_repo = tmp_path / "codex-autorunner"
+    unrelated = tmp_path / "another--repo"
+    base_repo.mkdir()
+    unrelated.mkdir()
+    codex_home = tmp_path / "codex"
+
+    _write_session(
+        codex_home,
+        unrelated,
+        [
+            {
+                "timestamp": "2025-12-01T02:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 6,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 2,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 8,
+                        },
+                        "last_token_usage": {
+                            "input_tokens": 6,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 2,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 8,
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    per_repo, unmatched = summarize_hub_usage(
+        [("codex-autorunner", base_repo)],
+        codex_home=codex_home,
+    )
+
+    assert per_repo["codex-autorunner"].events == 0
+    assert unmatched.events == 1
+    assert unmatched.totals.total_tokens == 8
+
+
 def test_usage_series_groups_by_model(tmp_path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()

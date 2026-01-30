@@ -522,8 +522,35 @@ def summarize_hub_usage(
                 return repo_id
         return None
 
+    base_repo_ids = sorted(
+        {repo_id for repo_id, _ in repo_map}, key=lambda rid: (-len(rid), rid)
+    )
+
+    def _heuristic_match_base(cwd: Optional[Path]) -> Optional[str]:
+        if not cwd:
+            return None
+        for repo_id in base_repo_ids:
+            prefix = f"{repo_id}--"
+            if cwd.name.startswith(prefix):
+                logger.debug(
+                    "Heuristic matched cwd %s to base %s via name", cwd, repo_id
+                )
+                return repo_id
+            for part in cwd.parts:
+                if part.startswith(prefix):
+                    logger.debug(
+                        "Heuristic matched cwd %s to base %s via path part %s",
+                        cwd,
+                        repo_id,
+                        part,
+                    )
+                    return repo_id
+        return None
+
     for event in iter_token_events(codex_home, since=since, until=until):
         repo_id = _match_repo(event.cwd)
+        if repo_id is None:
+            repo_id = _heuristic_match_base(event.cwd)
         if repo_id is None:
             unmatched.totals.add(event.delta)
             unmatched.events += 1
@@ -540,6 +567,8 @@ def summarize_hub_usage(
         [path for _, path in repo_map], since=since, until=until
     ):
         repo_id = _match_repo(event.cwd)
+        if repo_id is None:
+            repo_id = _heuristic_match_base(event.cwd)
         if repo_id is None:
             continue
         summary = per_repo[repo_id]
@@ -1323,6 +1352,31 @@ class UsageSeriesCache:
                     return repo_id
             return None
 
+        base_repo_ids = sorted(
+            {repo_id for repo_id, _ in repo_map}, key=lambda rid: (-len(rid), rid)
+        )
+
+        def _heuristic_match_base(cwd: Optional[Path]) -> Optional[str]:
+            if not cwd:
+                return None
+            for repo_id in base_repo_ids:
+                prefix = f"{repo_id}--"
+                if cwd.name.startswith(prefix):
+                    logger.debug(
+                        "Heuristic matched cwd %s to base %s via name", cwd, repo_id
+                    )
+                    return repo_id
+                for part in cwd.parts:
+                    if part.startswith(prefix):
+                        logger.debug(
+                            "Heuristic matched cwd %s to base %s via path part %s",
+                            cwd,
+                            repo_id,
+                            part,
+                        )
+                        return repo_id
+            return None
+
         rollups = cast(Dict[str, Any], payload.get("summary", {}).get("by_cwd", {}))
         per_repo: Dict[str, _SummaryAccumulator] = {
             repo_id: _SummaryAccumulator() for repo_id, _ in repo_map
@@ -1336,6 +1390,8 @@ class UsageSeriesCache:
                 logger.debug("Failed to create Path from cwd %r: %s", cwd, exc)
                 cwd_path = None
             repo_id = _match_repo(cwd_path)
+            if repo_id is None:
+                repo_id = _heuristic_match_base(cwd_path)
             if repo_id is None:
                 unmatched.add_entry(entry)
             else:
