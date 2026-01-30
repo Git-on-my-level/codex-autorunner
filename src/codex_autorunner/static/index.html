@@ -277,6 +277,30 @@
           </div>
         </div>
       </section>
+      <section class="panel" id="archive">
+        <div class="cards">
+          <div class="card">
+            <div class="archive-layout">
+              <aside class="archive-sidebar">
+                <div class="archive-header">
+                  <span class="label">Archive</span>
+                  <button class="ghost sm" id="archive-refresh">Refresh</button>
+                </div>
+                <div class="archive-empty muted small hidden" id="archive-empty">
+                  No archived snapshots found yet. Clean up a worktree to create a snapshot.
+                </div>
+                <div class="archive-list" id="archive-snapshot-list"></div>
+              </aside>
+              <div class="archive-detail" id="archive-snapshot-detail">
+                <div class="archive-empty-state">
+                  <div class="archive-empty-title">Select a snapshot</div>
+                  <div class="archive-empty-hint">Choose a snapshot to view metadata and summary.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
       <section class="panel" id="workspace">
         <div class="workspace-header workspace-header-desktop">
           <div class="workspace-header-left">

@@ -13,6 +13,7 @@ import { initLiveUpdates } from "./liveUpdates.js";
 import { initHealthGate } from "./health.js";
 import { initWorkspace } from "./workspace.js";
 import { initDashboard } from "./dashboard.js";
+import { initArchive } from "./archive.js";
 async function initRepoShell() {
     await initHealthGate();
     if (REPO_ID) {
@@ -37,6 +38,7 @@ async function initRepoShell() {
     registerTab("tickets", "Tickets");
     registerTab("inbox", "Inbox");
     registerTab("analytics", "Analytics");
+    registerTab("archive", "Archive");
     registerTab("workspace", "Workspace");
     registerTab("terminal", "Terminal");
     const initializedTabs = new Set();
@@ -51,6 +53,9 @@ async function initRepoShell() {
         }
         else if (tabId === "analytics") {
             initDashboard();
+        }
+        else if (tabId === "archive") {
+            initArchive();
         }
         else if (tabId === "tickets") {
             initTicketFlow();

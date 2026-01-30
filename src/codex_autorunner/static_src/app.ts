@@ -12,6 +12,7 @@ import { initLiveUpdates } from "./liveUpdates.js";
 import { initHealthGate } from "./health.js";
 import { initWorkspace } from "./workspace.js";
 import { initDashboard } from "./dashboard.js";
+import { initArchive } from "./archive.js";
 
 async function initRepoShell(): Promise<void> {
   await initHealthGate();
@@ -27,7 +28,7 @@ async function initRepoShell(): Promise<void> {
       navBar.insertBefore(backBtn, navBar.firstChild);
     }
     const brand = document.querySelector(".nav-brand");
-  if (brand) {
+    if (brand) {
       const repoName = document.createElement("span");
       repoName.className = "nav-repo-name";
       repoName.textContent = REPO_ID;
@@ -40,6 +41,7 @@ async function initRepoShell(): Promise<void> {
   registerTab("tickets", "Tickets");
   registerTab("inbox", "Inbox");
   registerTab("analytics", "Analytics");
+  registerTab("archive", "Archive");
   registerTab("workspace", "Workspace");
   registerTab("terminal", "Terminal");
 
@@ -52,6 +54,8 @@ async function initRepoShell(): Promise<void> {
       initMessages();
     } else if (tabId === "analytics") {
       initDashboard();
+    } else if (tabId === "archive") {
+      initArchive();
     } else if (tabId === "tickets") {
       initTicketFlow();
     }
