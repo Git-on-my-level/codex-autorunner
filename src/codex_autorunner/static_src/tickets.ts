@@ -151,7 +151,8 @@ const ticketListRefresh = createSmartRefresh<TicketListPayload>({
       const done = fm?.done ? "1" : "0";
       const agent = fm?.agent ? String(fm.agent) : "";
       const mtime = (ticket as { mtime?: string | number | null }).mtime ?? "";
-      return [ticket.path ?? "", ticket.index ?? "", title, done, agent, mtime].join("|");
+      const errors = Array.isArray(ticket.errors) ? ticket.errors.join(",") : "";
+      return [ticket.path ?? "", ticket.index ?? "", title, done, agent, mtime, errors].join("|");
     });
     return [
       payload.ticket_dir ?? "",
