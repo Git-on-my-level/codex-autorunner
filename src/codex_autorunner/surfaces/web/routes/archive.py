@@ -58,7 +58,9 @@ def _normalize_archive_rel_path(base: Path, rel_path: str) -> tuple[Path, str]:
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("invalid archive path")
     base_real = base.resolve(strict=False)
-    candidate = (base / relative).resolve(strict=False)
+    candidate = (base / relative).resolve(
+        strict=False
+    )  # codeql[py/path-injection] base is validated snapshot root
     try:
         rel_posix = candidate.relative_to(base_real).as_posix()
     except ValueError:
@@ -194,9 +196,13 @@ def _iter_snapshots(repo_root: Path) -> list[ArchiveSnapshotSummary]:
 
 def _list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
     target, rel_posix = _normalize_archive_rel_path(snapshot_root, rel_path)
-    if not target.exists():
+    if (
+        not target.exists()
+    ):  # codeql[py/path-injection] target normalized to snapshot root
         raise FileNotFoundError("path not found")
-    if not target.is_dir():
+    if (
+        not target.is_dir()
+    ):  # codeql[py/path-injection] target normalized to snapshot root
         raise ValueError("path is not a directory")
 
     root_real = snapshot_root.resolve(strict=False)
@@ -341,8 +347,9 @@ def build_archive_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="file not found")
 
         return FileResponse(
-            path=target, filename=target.name
-        )  # codeql[py/path-injection] target validated by normalize helpers
+            path=target,  # codeql[py/path-injection] target validated by normalize helper
+            filename=target.name,
+        )
 
     return router
 
