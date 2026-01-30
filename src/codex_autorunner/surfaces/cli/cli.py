@@ -42,6 +42,7 @@ from ...core.usage import (
     summarize_repo_usage,
 )
 from ...core.utils import RepoNotFoundError, default_editor, find_repo_root
+from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
@@ -85,10 +86,12 @@ def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> Engine:
         _raise_exit("No .git directory found for repo commands.", cause=exc)
     try:
         config = load_repo_config(repo_root, hub_path=hub)
+        backend_orchestrator = build_backend_orchestrator(repo_root, config)
         return Engine(
             repo_root,
             config=config,
             hub_path=hub,
+            backend_orchestrator=backend_orchestrator,
             backend_factory=build_agent_backend_factory(repo_root, config),
             app_server_supervisor_factory=build_app_server_supervisor_factory(config),
             agent_id_validator=validate_agent_id,
@@ -893,6 +896,7 @@ def hub_create(
         config,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
         agent_id_validator=validate_agent_id,
     )
     try:

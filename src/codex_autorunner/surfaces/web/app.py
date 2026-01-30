@@ -56,6 +56,7 @@ from ...core.utils import (
     set_repo_root_context,
 )
 from ...housekeeping import run_housekeeping_once
+from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
@@ -349,9 +350,11 @@ def _build_app_context(
         if base_path is not None
         else config.server_base_path
     )
+    backend_orchestrator = build_backend_orchestrator(config.root, config)
     engine = Engine(
         config.root,
         config=config,
+        backend_orchestrator=backend_orchestrator,
         backend_factory=build_agent_backend_factory(config.root, config),
         app_server_supervisor_factory=build_app_server_supervisor_factory(config),
         agent_id_validator=validate_agent_id,
@@ -653,6 +656,7 @@ def _build_hub_context(
         config,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
         agent_id_validator=validate_agent_id,
     )
     logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)

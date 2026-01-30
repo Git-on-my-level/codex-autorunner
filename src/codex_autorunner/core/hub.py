@@ -30,14 +30,20 @@ from .git_utils import (
     run_git,
 )
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
+from .ports.backend_orchestrator import (
+    BackendOrchestrator as BackendOrchestratorProtocol,
+)
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub")
 
+logger = logging.getLogger("codex_autorunner.hub")
+
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
 AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFactory]
+BackendOrchestratorBuilder = Callable[[Path, RepoConfig], BackendOrchestratorProtocol]
 
 
 def _git_failure_detail(proc) -> str:
@@ -205,6 +211,7 @@ class RepoRunner:
         app_server_supervisor_factory_builder: Optional[
             AppServerSupervisorFactoryBuilder
         ] = None,
+        backend_orchestrator_builder: Optional[BackendOrchestratorBuilder] = None,
         agent_id_validator: Optional[Callable[[str], str]] = None,
     ):
         self.repo_id = repo_id
@@ -218,9 +225,19 @@ class RepoRunner:
             if app_server_supervisor_factory_builder is not None
             else None
         )
+        backend_orchestrator = (
+            backend_orchestrator_builder(repo_root, repo_config)
+            if backend_orchestrator_builder is not None
+            else None
+        )
+        if backend_orchestrator is None:
+            raise ValueError(
+                "backend_orchestrator_builder is required for HubSupervisor"
+            )
         self._engine = Engine(
             repo_root,
             config=repo_config,
+            backend_orchestrator=backend_orchestrator,
             backend_factory=backend_factory,
             app_server_supervisor_factory=app_server_supervisor_factory,
             agent_id_validator=agent_id_validator,
@@ -254,6 +271,7 @@ class HubSupervisor:
         app_server_supervisor_factory_builder: Optional[
             AppServerSupervisorFactoryBuilder
         ] = None,
+        backend_orchestrator_builder: Optional[BackendOrchestratorBuilder] = None,
         agent_id_validator: Optional[Callable[[str], str]] = None,
     ):
         self.hub_config = hub_config
@@ -264,6 +282,7 @@ class HubSupervisor:
         self._app_server_supervisor_factory_builder = (
             app_server_supervisor_factory_builder
         )
+        self._backend_orchestrator_builder = backend_orchestrator_builder
         self._agent_id_validator = agent_id_validator
         self.state = load_hub_state(self.state_path, self.hub_config.root)
         self._list_cache_at: Optional[float] = None
@@ -279,12 +298,14 @@ class HubSupervisor:
         app_server_supervisor_factory_builder: Optional[
             AppServerSupervisorFactoryBuilder
         ] = None,
+        backend_orchestrator_builder: Optional[BackendOrchestratorBuilder] = None,
     ) -> "HubSupervisor":
         config = load_hub_config(path)
         return cls(
             config,
             backend_factory_builder=backend_factory_builder,
             app_server_supervisor_factory_builder=app_server_supervisor_factory_builder,
+            backend_orchestrator_builder=backend_orchestrator_builder,
         )
 
     def scan(self) -> List[RepoSnapshot]:
@@ -330,10 +351,18 @@ class HubSupervisor:
                     if self._app_server_supervisor_factory_builder is not None
                     else None
                 )
+                backend_orchestrator = (
+                    self._backend_orchestrator_builder(
+                        record.absolute_path, repo_config
+                    )
+                    if self._backend_orchestrator_builder is not None
+                    else None
+                )
                 controller = ProcessRunnerController(
                     Engine(
                         record.absolute_path,
                         config=repo_config,
+                        backend_orchestrator=backend_orchestrator,
                         backend_factory=backend_factory,
                         app_server_supervisor_factory=app_server_supervisor_factory,
                         agent_id_validator=self._agent_id_validator,
@@ -890,6 +919,7 @@ class HubSupervisor:
             app_server_supervisor_factory_builder=(
                 self._app_server_supervisor_factory_builder
             ),
+            backend_orchestrator_builder=self._backend_orchestrator_builder,
             agent_id_validator=self._agent_id_validator,
         )
         self._runners[repo_id] = runner

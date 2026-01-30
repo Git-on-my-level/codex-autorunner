@@ -20,6 +20,9 @@ from codex_autorunner.core.config import (
 from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.integrations.agents.backend_orchestrator import (
+    build_backend_orchestrator,
+)
 from codex_autorunner.integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
@@ -302,6 +305,7 @@ def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         spawn_fn=spawn_fn,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
     )
     supervisor.scan()
     supervisor.run_repo("alpha", once=True)
@@ -350,6 +354,7 @@ def test_hub_remove_repo_with_worktrees(tmp_path: Path):
         load_hub_config(hub_root),
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
     )
     base = supervisor.create_repo("base")
     _init_git_repo(base.path)

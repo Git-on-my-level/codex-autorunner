@@ -38,6 +38,7 @@ from ....core.flows.ux_helpers import (
 from ....core.flows.worker_process import FlowWorkerHealth, check_worker_health
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
+from ....integrations.agents.backend_orchestrator import BackendOrchestrator
 from ....integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
@@ -126,9 +127,16 @@ def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
 
     if flow_type == "ticket_flow":
         config = load_repo_config(repo_root)
+        backend_orchestrator = BackendOrchestrator(
+            repo_root=repo_root,
+            config=config,
+            notification_handler=None,
+            logger=_logger,
+        )
         engine = Engine(
             repo_root,
             config=config,
+            backend_orchestrator=backend_orchestrator,
             backend_factory=build_agent_backend_factory(repo_root, config),
             app_server_supervisor_factory=build_app_server_supervisor_factory(config),
             agent_id_validator=validate_agent_id,
@@ -926,7 +934,7 @@ You are the first ticket in a new ticket_flow run.
                     run_id, after_seq=resume_after
                 ):
                     data = event.model_dump(mode="json")
-                    yield f"id: {event.seq}\n" f"data: {json.dumps(data)}\n\n"
+                    yield f"id: {event.seq}\ndata: {json.dumps(data)}\n\n"
             except Exception as e:
                 _logger.exception("Error streaming events for run %s: %s", run_id, e)
                 raise

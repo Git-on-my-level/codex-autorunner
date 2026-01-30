@@ -31,6 +31,7 @@ from .....core.flows.worker_process import (
 from .....core.state import now_iso
 from .....core.utils import atomic_write, canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
+from .....integrations.agents import build_backend_orchestrator
 from .....integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
@@ -114,9 +115,11 @@ def _flow_help_lines() -> list[str]:
 def _get_ticket_controller(repo_root: Path) -> FlowController:
     db_path, artifacts_root = _flow_paths(repo_root)
     config = load_repo_config(repo_root)
+    backend_orchestrator = build_backend_orchestrator(repo_root, config)
     engine = Engine(
         repo_root,
         config=config,
+        backend_orchestrator=backend_orchestrator,
         backend_factory=build_agent_backend_factory(repo_root, config),
         app_server_supervisor_factory=build_app_server_supervisor_factory(config),
         agent_id_validator=validate_agent_id,
@@ -865,7 +868,7 @@ class FlowCommands(SharedHelpers):
             if gh_available:
                 repo_label = f" for {repo_slug}" if repo_slug else ""
                 prompt = (
-                    "Enter GitHub issue number or URL" f"{repo_label} to seed ISSUE.md:"
+                    f"Enter GitHub issue number or URL{repo_label} to seed ISSUE.md:"
                 )
                 issue_ref = await self._prompt_flow_text_input(message, prompt)
                 if not issue_ref:
