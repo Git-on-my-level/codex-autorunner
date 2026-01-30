@@ -137,9 +137,11 @@ def test_parse_command_fallback_whitespace() -> None:
     assert command == TelegramCommand(name="review", args="pr", raw="/review  pr")
 
 
-def test_parse_command_fallback_rejects_hyphen() -> None:
-    command = parse_command("/foo-bar")
-    assert command is None
+def test_parse_command_fallback_accepts_hyphen_alias() -> None:
+    command = parse_command("/flow-archive --force")
+    assert command == TelegramCommand(
+        name="flow_archive", args="--force", raw="/flow-archive --force"
+    )
 
 
 def test_parse_command_fallback_rejects_question() -> None:

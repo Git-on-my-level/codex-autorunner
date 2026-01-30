@@ -36,6 +36,7 @@ Command reference:
 - `/flow recover [run_id]`
 - `/flow restart`
 - `/flow archive [run_id] [--force]`
+- `/flow-archive [run_id] [--force]` (alias for `/flow archive`)
 - `/flow reply <message>`
 
 Aliases:

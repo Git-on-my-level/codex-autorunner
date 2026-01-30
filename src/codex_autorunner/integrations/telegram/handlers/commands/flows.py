@@ -106,8 +106,9 @@ def _flow_help_lines() -> list[str]:
         "/flow recover [run_id]",
         "/flow restart",
         "/flow archive [run_id] [--force]",
+        "/flow-archive [run_id] [--force]",
         "/flow reply <message>",
-        "Aliases: /flow start, /flow_status",
+        "Aliases: /flow start, /flow_status, /flow-archive",
     ]
 
 
@@ -248,6 +249,15 @@ class FlowCommands(SharedHelpers):
             await self._handle_flow(message, f"status {text}")
         else:
             await self._handle_flow(message, "status")
+
+    async def _handle_flow_archive_command(
+        self, message: TelegramMessage, args: str
+    ) -> None:
+        text = args.strip()
+        if text:
+            await self._handle_flow(message, f"archive {text}")
+        else:
+            await self._handle_flow(message, "archive")
 
     async def _handle_flow(self, message: TelegramMessage, args: str) -> None:
         argv = self._parse_command_args(args)
