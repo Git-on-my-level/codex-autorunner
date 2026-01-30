@@ -1325,7 +1325,7 @@ You are the first ticket in a new ticket_flow run.
         if not text:
             await self._send_message(
                 message.chat_id,
-                "Provide a reply: `/reply <message>`",
+                "Provide a reply: /flow reply <message> (or /reply <message>).",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
