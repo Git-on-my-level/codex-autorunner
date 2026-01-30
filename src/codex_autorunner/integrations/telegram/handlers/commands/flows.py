@@ -12,9 +12,10 @@ from .....agents.registry import validate_agent_id
 from .....core.config import load_repo_config
 from .....core.engine import Engine
 from .....core.flows import FlowController, FlowStore
-from .....core.flows.models import FlowRunStatus
+from .....core.flows.models import FlowEventType, FlowRunStatus
 from .....core.flows.reconciler import reconcile_flow_run
 from .....core.flows.worker_process import (
+    FlowWorkerHealth,
     check_worker_health,
     clear_worker_metadata,
     spawn_flow_worker,
@@ -31,9 +32,12 @@ from .....tickets.files import list_ticket_paths
 from .....tickets.outbox import resolve_outbox_paths
 from ....github.service import GitHubError, GitHubService
 from ...adapter import (
+    FlowCallback,
     InlineButton,
+    TelegramCallbackQuery,
     TelegramMessage,
     build_inline_keyboard,
+    encode_flow_callback,
     encode_question_cancel_callback,
 )
 from ...config import DEFAULT_APPROVAL_TIMEOUT_SECONDS
@@ -363,6 +367,191 @@ class FlowCommands(SharedHelpers):
         await self._send_flow_help_block(message)
         return
 
+    async def _render_flow_status_callback(
+        self,
+        callback: TelegramCallbackQuery,
+        repo_root: Path,
+        run_id_raw: Optional[str],
+    ) -> None:
+        store = FlowStore(_flow_paths(repo_root)[0])
+        try:
+            store.initialize()
+            record, error = self._resolve_status_record(store, run_id_raw)
+            if error:
+                await self._edit_callback_message(
+                    callback, error, reply_markup={"inline_keyboard": []}
+                )
+                return
+            text, keyboard = self._build_flow_status_card(repo_root, record, store)
+        finally:
+            store.close()
+        await self._edit_callback_message(callback, text, reply_markup=keyboard)
+
+    async def _handle_flow_callback(
+        self, callback: TelegramCallbackQuery, parsed: FlowCallback
+    ) -> None:
+        if callback.chat_id is None:
+            return
+        key = await self._resolve_topic_key(callback.chat_id, callback.thread_id)
+        record = await self._store.get_topic(key)
+        if not record or not record.workspace_path:
+            await self._answer_callback(callback, "No workspace bound")
+            await self._edit_callback_message(
+                callback,
+                "No workspace bound. Use /bind to bind this topic to a repo first.",
+                reply_markup={"inline_keyboard": []},
+            )
+            return
+
+        repo_root = canonicalize_path(Path(record.workspace_path))
+        action = (parsed.action or "").strip().lower()
+        run_id_raw = parsed.run_id
+
+        if action in {"refresh", "status"}:
+            await self._answer_callback(callback, "Refreshing...")
+            await self._render_flow_status_callback(callback, repo_root, run_id_raw)
+            return
+
+        error = None
+        notice = None
+        if action == "resume":
+            store = FlowStore(_flow_paths(repo_root)[0])
+            try:
+                store.initialize()
+                run_id, error = self._resolve_run_id_input(store, run_id_raw)
+                record = store.get_flow_run(run_id) if run_id else None
+                if run_id_raw and error:
+                    record = None
+                if error is None and record is None:
+                    paused_runs = store.list_flow_runs(
+                        flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+                    )
+                    record = paused_runs[0] if paused_runs else None
+                if error is None and record is None:
+                    error = "No paused ticket flow run found."
+                if error is None and record.status != FlowRunStatus.PAUSED:
+                    error = f"Run {record.id} is {record.status.value}, not paused."
+            finally:
+                store.close()
+            if error is None:
+                controller = _get_ticket_controller(repo_root)
+                updated = await controller.resume_flow(record.id)
+                _spawn_flow_worker(repo_root, updated.id)
+                notice = "Resumed."
+        elif action == "stop":
+            store = FlowStore(_flow_paths(repo_root)[0])
+            try:
+                store.initialize()
+                run_id, error = self._resolve_run_id_input(store, run_id_raw)
+                record = store.get_flow_run(run_id) if run_id else None
+                if run_id_raw and error:
+                    record = None
+                if error is None and record is None:
+                    runs = store.list_flow_runs(flow_type="ticket_flow")
+                    record = runs[0] if runs else None
+                if error is None and record is None:
+                    error = "No ticket flow run found."
+                if error is None and record.status.is_terminal():
+                    error = f"Run {record.id} is already {record.status.value}."
+            finally:
+                store.close()
+            if error is None:
+                controller = _get_ticket_controller(repo_root)
+                self._stop_flow_worker(repo_root, record.id)
+                await controller.stop_flow(record.id)
+                notice = "Stopped."
+        elif action == "recover":
+            store = FlowStore(_flow_paths(repo_root)[0])
+            try:
+                store.initialize()
+                run_id, error = self._resolve_run_id_input(store, run_id_raw)
+                record = store.get_flow_run(run_id) if run_id else None
+                if run_id_raw and error:
+                    record = None
+                if error is None and record is None:
+                    runs = store.list_flow_runs(flow_type="ticket_flow")
+                    record = runs[0] if runs else None
+                if error is None and record is None:
+                    error = "No ticket flow run found."
+                if error is None:
+                    record, updated, locked = reconcile_flow_run(
+                        repo_root, record, store
+                    )
+                    if locked:
+                        error = f"Run {record.id} is locked for reconcile; try again."
+                    else:
+                        notice = "Recovered." if updated else "No changes needed."
+            finally:
+                store.close()
+        elif action == "archive":
+            store = FlowStore(_flow_paths(repo_root)[0])
+            record = None
+            try:
+                store.initialize()
+                run_id, error = self._resolve_run_id_input(store, run_id_raw)
+                record = store.get_flow_run(run_id) if run_id else None
+                if run_id_raw and error:
+                    record = None
+                if error is None and record is None:
+                    runs = store.list_flow_runs(flow_type="ticket_flow")
+                    record = runs[0] if runs else None
+                if error is None and record is None:
+                    error = "No ticket flow run found."
+                if error is None and not record.status.is_terminal():
+                    error = "Can only archive completed/stopped/failed runs (use --force for stuck flows)."
+            finally:
+                store.close()
+
+            if error is None:
+                _, artifacts_root = _flow_paths(repo_root)
+                archive_dir = artifacts_root / record.id / "archived_tickets"
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                ticket_dir = _ticket_dir(repo_root)
+                for ticket_path in list_ticket_paths(ticket_dir):
+                    dest = archive_dir / ticket_path.name
+                    shutil.move(str(ticket_path), str(dest))
+
+                runs_dir = Path(
+                    record.input_data.get("runs_dir") or ".codex-autorunner/runs"
+                )
+                outbox_paths = resolve_outbox_paths(
+                    workspace_root=repo_root, runs_dir=runs_dir, run_id=record.id
+                )
+                run_dir = outbox_paths.run_dir
+                if run_dir.exists() and run_dir.is_dir():
+                    archived_runs_dir = artifacts_root / record.id / "archived_runs"
+                    shutil.move(str(run_dir), str(archived_runs_dir))
+
+                store = FlowStore(_flow_paths(repo_root)[0])
+                try:
+                    store.initialize()
+                    store.delete_flow_run(record.id)
+                finally:
+                    store.close()
+                notice = "Archived."
+        elif action == "restart":
+            message = TelegramMessage(
+                update_id=callback.update_id,
+                message_id=callback.message_id or 0,
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+                from_user_id=callback.from_user_id,
+                text=None,
+                date=None,
+                is_topic_message=callback.thread_id is not None,
+            )
+            await self._handle_flow_restart(message, repo_root)
+            notice = "Restarted."
+        else:
+            await self._answer_callback(callback, "Unknown action")
+            return
+
+        if error:
+            await self._answer_callback(callback, error)
+        elif notice:
+            await self._answer_callback(callback, notice)
+        await self._render_flow_status_callback(callback, repo_root, run_id_raw)
+
     def _resolve_run_id_input(
         self, store: FlowStore, raw_run_id: Optional[str]
     ) -> tuple[Optional[str], Optional[str]]:
@@ -392,8 +581,56 @@ class FlowCommands(SharedHelpers):
         prefix = f"{name}="
         return any(part == name or part.startswith(prefix) for part in argv)
 
+    def _resolve_status_record(
+        self, store: FlowStore, run_id_raw: Optional[str]
+    ) -> tuple[Optional[object], Optional[str]]:
+        run_id, error = self._resolve_run_id_input(store, run_id_raw)
+        if run_id_raw and error:
+            return None, error
+        record = store.get_flow_run(run_id) if run_id else None
+        if record is None:
+            runs = store.list_flow_runs(flow_type="ticket_flow")
+            record = runs[0] if runs else None
+        if record is None:
+            return None, "No ticket flow run found. Use /flow bootstrap to start."
+        return record, None
+
+    def _derive_effective_current_ticket(
+        self, record: object, store: Optional[FlowStore]
+    ) -> Optional[str]:
+        if store is None:
+            return None
+        try:
+            if (
+                getattr(record, "flow_type", None) != "ticket_flow"
+                or not record.status.is_active()
+            ):
+                return None
+            last_started = store.get_last_event_seq_by_types(
+                record.id, [FlowEventType.STEP_STARTED]
+            )
+            last_finished = store.get_last_event_seq_by_types(
+                record.id, [FlowEventType.STEP_COMPLETED, FlowEventType.STEP_FAILED]
+            )
+            in_progress = bool(
+                last_started is not None
+                and (last_finished is None or last_started > last_finished)
+            )
+            if not in_progress:
+                return None
+            return store.get_latest_step_progress_current_ticket(
+                record.id, after_seq=last_finished
+            )
+        except Exception:
+            return None
+
     def _format_flow_status_lines(
-        self, repo_root: Path, record: Optional[object], store: Optional[FlowStore]
+        self,
+        repo_root: Path,
+        record: Optional[object],
+        store: Optional[FlowStore],
+        *,
+        health: Optional[FlowWorkerHealth] = None,
     ) -> list[str]:
         if record is None:
             return ["Run: none"]
@@ -401,28 +638,55 @@ class FlowCommands(SharedHelpers):
         status = getattr(run, "status", None)
         status_value = status.value if status else "unknown"
         lines = [f"Run: {run.id}", f"Status: {status_value}"]
+        flow_type = getattr(run, "flow_type", None)
+        if flow_type:
+            lines.append(f"Flow: {flow_type}")
+        created_at = getattr(run, "created_at", None)
+        if created_at:
+            lines.append(f"Created: {created_at}")
+        started_at = getattr(run, "started_at", None)
+        if started_at:
+            lines.append(f"Started: {started_at}")
+        finished_at = getattr(run, "finished_at", None)
+        if finished_at:
+            lines.append(f"Finished: {finished_at}")
+        current_step = getattr(run, "current_step", None)
+        if current_step:
+            lines.append(f"Step: {current_step}")
         state = run.state or {}
         engine = state.get("ticket_engine") if isinstance(state, dict) else None
         engine = engine if isinstance(engine, dict) else {}
         current = engine.get("current_ticket")
-        if not (isinstance(current, str) and current.strip()) and store:
-            effective = store.get_latest_step_progress_current_ticket(run.id)
+        if not (isinstance(current, str) and current.strip()):
+            effective = self._derive_effective_current_ticket(run, store)
             if effective:
                 current = effective
-        if current:
-            lines.append(f"Current: {current}")
+        if isinstance(current, str) and current.strip():
+            lines.append(f"Current: {current.strip()}")
+        reason_summary = None
+        if isinstance(state, dict):
+            value = state.get("reason_summary")
+            if isinstance(value, str) and value.strip():
+                reason_summary = value.strip()
+        if reason_summary:
+            lines.append(f"Summary: {_truncate_text(reason_summary, 300)}")
         reason = engine.get("reason") if isinstance(engine, dict) else None
-        if not reason:
-            reason = run.error_message or ""
-        if reason:
-            lines.append(f"Reason: {_truncate_text(str(reason), 300)}")
+        if isinstance(reason, str) and reason.strip():
+            if reason_summary and reason.strip() == reason_summary:
+                pass
+            else:
+                lines.append(f"Reason: {_truncate_text(reason.strip(), 300)}")
+        error_message = getattr(run, "error_message", None)
+        if isinstance(error_message, str) and error_message.strip():
+            lines.append(f"Error: {_truncate_text(error_message.strip(), 300)}")
         if store:
             last_seq, last_at = store.get_last_event_meta(run.id)
             if last_seq or last_at:
                 seq_label = str(last_seq) if last_seq is not None else "?"
                 at_label = last_at or "unknown time"
                 lines.append(f"Last event: {seq_label} @ {at_label}")
-        health = check_worker_health(repo_root, run.id)
+        if health is None:
+            health = check_worker_health(repo_root, run.id)
         worker_line = f"Worker: {health.status}"
         if health.pid:
             worker_line += f" (pid {health.pid})"
@@ -432,6 +696,76 @@ class FlowCommands(SharedHelpers):
         if status == FlowRunStatus.PAUSED:
             lines.append("Paused: use /flow reply <message>, then /flow resume.")
         return lines
+
+    def _build_flow_status_keyboard(
+        self, record: Optional[object], *, health: Optional[FlowWorkerHealth]
+    ) -> Optional[dict[str, object]]:
+        if record is None or health is None:
+            return None
+        status = getattr(record, "status", None)
+        if status is None:
+            return None
+        run_id = record.id
+        rows: list[list[InlineButton]] = []
+        if status == FlowRunStatus.PAUSED:
+            rows.append(
+                [
+                    InlineButton("Resume", encode_flow_callback("resume", run_id)),
+                    InlineButton("Restart", encode_flow_callback("restart", run_id)),
+                ]
+            )
+            rows.append(
+                [InlineButton("Archive", encode_flow_callback("archive", run_id))]
+            )
+        elif status.is_terminal():
+            rows.append(
+                [
+                    InlineButton("Restart", encode_flow_callback("restart", run_id)),
+                    InlineButton("Archive", encode_flow_callback("archive", run_id)),
+                ]
+            )
+            rows.append(
+                [InlineButton("Refresh", encode_flow_callback("refresh", run_id))]
+            )
+        else:
+            if health.status in {"dead", "mismatch", "invalid", "absent"}:
+                rows.append(
+                    [
+                        InlineButton(
+                            "Recover", encode_flow_callback("recover", run_id)
+                        ),
+                        InlineButton(
+                            "Refresh", encode_flow_callback("refresh", run_id)
+                        ),
+                    ]
+                )
+            elif status == FlowRunStatus.RUNNING:
+                rows.append(
+                    [
+                        InlineButton("Stop", encode_flow_callback("stop", run_id)),
+                        InlineButton(
+                            "Refresh", encode_flow_callback("refresh", run_id)
+                        ),
+                    ]
+                )
+            else:
+                rows.append(
+                    [InlineButton("Refresh", encode_flow_callback("refresh", run_id))]
+                )
+        return build_inline_keyboard(rows) if rows else None
+
+    def _build_flow_status_card(
+        self, repo_root: Path, record: Optional[object], store: Optional[FlowStore]
+    ) -> tuple[str, Optional[dict[str, object]]]:
+        if record is None:
+            return (
+                "\n".join(self._format_flow_status_lines(repo_root, record, store)),
+                None,
+            )
+        health = check_worker_health(repo_root, record.id)
+        lines = self._format_flow_status_lines(repo_root, record, store, health=health)
+        keyboard = self._build_flow_status_keyboard(record, health=health)
+        return "\n".join(lines), keyboard
 
     async def _send_flow_help_block(self, message: TelegramMessage) -> None:
         await self._send_message(
@@ -480,9 +814,8 @@ class FlowCommands(SharedHelpers):
         try:
             store.initialize()
             run_id_raw = self._first_non_flag(argv)
-            run_id, error = self._resolve_run_id_input(store, run_id_raw)
-            record = store.get_flow_run(run_id) if run_id else None
-            if run_id_raw and error:
+            record, error = self._resolve_status_record(store, run_id_raw)
+            if error:
                 await self._send_message(
                     message.chat_id,
                     error,
@@ -490,25 +823,15 @@ class FlowCommands(SharedHelpers):
                     reply_to=message.message_id,
                 )
                 return
-            if record is None:
-                runs = store.list_flow_runs(flow_type="ticket_flow")
-                record = runs[0] if runs else None
-            if record is None:
-                await self._send_message(
-                    message.chat_id,
-                    "No ticket flow run found. Use /flow bootstrap to start.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            lines = self._format_flow_status_lines(repo_root, record, store)
+            text, keyboard = self._build_flow_status_card(repo_root, record, store)
         finally:
             store.close()
         await self._send_message(
             message.chat_id,
-            "\n".join(lines),
+            text,
             thread_id=message.thread_id,
             reply_to=message.message_id,
+            reply_markup=keyboard,
         )
 
     async def _handle_flow_bootstrap(

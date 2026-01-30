@@ -259,6 +259,12 @@ class PageCallback:
     page: int
 
 
+@dataclass(frozen=True)
+class FlowCallback:
+    action: str
+    run_id: Optional[str] = None
+
+
 def parse_command(
     text: Optional[str],
     *,
@@ -741,6 +747,18 @@ def encode_compact_callback(action: str) -> str:
     return data
 
 
+def encode_flow_callback(action: str, run_id: Optional[str] = None) -> str:
+    action = str(action or "").strip()
+    if not action:
+        raise ValueError("flow action required")
+    if run_id:
+        data = f"flow:{action}:{run_id}"
+    else:
+        data = f"flow:{action}"
+    _validate_callback_data(data)
+    return data
+
+
 def parse_callback_data(
     data: Optional[str],
 ) -> Optional[
@@ -760,6 +778,7 @@ def parse_callback_data(
         ReviewCommitCallback,
         CancelCallback,
         CompactCallback,
+        FlowCallback,
         PageCallback,
     ]
 ]:
@@ -857,6 +876,14 @@ def parse_callback_data(
         if not page.isdigit():
             return None
         return PageCallback(kind=kind, page=int(page))
+    if data.startswith("flow:"):
+        _, _, rest = data.partition(":")
+        action, sep, run_id = rest.partition(":")
+        if not action:
+            return None
+        if sep and not run_id:
+            return None
+        return FlowCallback(action=action, run_id=run_id or None)
     return None
 
 
