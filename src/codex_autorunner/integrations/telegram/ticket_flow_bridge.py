@@ -571,6 +571,7 @@ def _ticket_controller_for(repo_root: Path) -> FlowController:
     repo_root = repo_root.resolve()
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     artifacts_root = repo_root / ".codex-autorunner" / "flows"
+    from ...agents.registry import validate_agent_id
     from ...core.config import load_repo_config
     from ...core.engine import Engine
     from ...integrations.agents.wiring import (
@@ -584,6 +585,7 @@ def _ticket_controller_for(repo_root: Path) -> FlowController:
         config=config,
         backend_factory=build_agent_backend_factory(repo_root, config),
         app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+        agent_id_validator=validate_agent_id,
     )
     agent_pool = AgentPool(engine.config)
     definition = build_ticket_flow_definition(agent_pool=agent_pool)

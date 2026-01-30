@@ -15,15 +15,11 @@ from collections import Counter
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, Awaitable, Callable, Iterator, Optional
+from typing import IO, Any, Awaitable, Callable, Iterator, Optional
 
 import yaml
 
-from ..agents.registry import validate_agent_id
 from ..manifest import MANIFEST_VERSION
-
-if TYPE_CHECKING:
-    from ..integrations.agents.backend_orchestrator import BackendOrchestrator
 from ..tickets.files import list_ticket_paths, ticket_is_done
 from .about_car import ensure_about_car_file
 from .adapter_utils import handle_agent_output
@@ -57,6 +53,7 @@ from .locks import (
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
 from .ports.agent_backend import AgentBackend
+from .ports.backend_orchestrator import BackendOrchestrator
 from .ports.run_event import (
     ApprovalRequested,
     Completed,
@@ -126,7 +123,8 @@ class Engine:
         hub_path: Optional[Path] = None,
         backend_factory: Optional[BackendFactory] = None,
         app_server_supervisor_factory: Optional[AppServerSupervisorFactory] = None,
-        backend_orchestrator: Optional["BackendOrchestrator"] = None,
+        backend_orchestrator: Optional[BackendOrchestrator] = None,
+        agent_id_validator: Optional[Callable[[str], str]] = None,
     ):
         if config is None:
             config = load_repo_config(repo_root, hub_path=hub_path)
@@ -149,7 +147,8 @@ class Engine:
         self._backend_factory = backend_factory
         self._app_server_supervisor_factory = app_server_supervisor_factory
         self._app_server_supervisor: Optional[Any] = None
-        self._backend_orchestrator: Optional[Any] = None
+        self._backend_orchestrator: Optional[BackendOrchestrator] = None
+        self._agent_id_validator = agent_id_validator
         self._app_server_logger = logging.getLogger("codex_autorunner.app_server")
         redact_enabled = self.config.security.get("redact_run_logs", True)
         self._app_server_event_formatter = AppServerEventFormatter(
@@ -157,35 +156,8 @@ class Engine:
         )
         self._opencode_supervisor: Optional[Any] = None
 
-        # Backend orchestrator for protocol-agnostic backend management
-        # Use provided orchestrator if available (for testing), otherwise create it
-        self._backend_orchestrator = None
-        if backend_orchestrator is not None:
-            self._backend_orchestrator = backend_orchestrator
-        elif backend_factory is None and app_server_supervisor_factory is None:
-            from ..integrations.agents.backend_orchestrator import BackendOrchestrator
-
-            try:
-                self._backend_orchestrator = BackendOrchestrator(
-                    repo_root=self.repo_root,
-                    config=self.config,
-                    notification_handler=self._handle_app_server_notification,
-                    logger=self._app_server_logger,
-                )
-            except Exception as exc:
-                import traceback
-
-                self._app_server_logger.warning(
-                    "Failed to create BackendOrchestrator: %s\n%s",
-                    exc,
-                    traceback.format_exc(),
-                )
-                self._backend_orchestrator = None
-        else:
-            self._app_server_logger.debug(
-                "Skipping BackendOrchestrator creation because backend_factory or app_server_supervisor_factory is set",
-            )
-            self._backend_orchestrator = None
+        # Backend orchestrator for protocol-agnostic backend management.
+        self._backend_orchestrator = backend_orchestrator
         self._run_telemetry_lock = threading.Lock()
         self._run_telemetry: Optional[RunTelemetry] = None
         self._last_telemetry_update_time: float = 0.0
@@ -349,19 +321,20 @@ class Engine:
                 "Failed to read TODO.md before run %s: %s", run_id, exc
             )
             todo_before = ""
-        from ..agents.registry import validate_agent_id
-
         state = load_state(self.state_path)
-        try:
-            validated_agent = validate_agent_id(
-                state.autorunner_agent_override or "codex"
-            )
-        except ValueError:
-            validated_agent = "codex"
-            self.log_line(
-                run_id,
-                f"info: unknown agent '{state.autorunner_agent_override}', defaulting to codex",
-            )
+        candidate_agent = (state.autorunner_agent_override or "codex").strip()
+        if not candidate_agent:
+            candidate_agent = "codex"
+        if self._agent_id_validator is not None:
+            try:
+                candidate_agent = self._agent_id_validator(candidate_agent)
+            except ValueError:
+                self.log_line(
+                    run_id,
+                    f"info: unknown agent '{candidate_agent}', defaulting to codex",
+                )
+                candidate_agent = "codex"
+        validated_agent = candidate_agent
         self._update_state("running", run_id, None, started=True)
         self._last_run_interrupted = False
         self._start_run_telemetry(run_id)
@@ -1559,9 +1532,9 @@ class Engine:
         a turn on the backend, handling all events and emitting canonical events.
         """
         orchestrator = self._backend_orchestrator
-        assert orchestrator is not None, (
-            "orchestrator should be set when calling this method"
-        )
+        assert (
+            orchestrator is not None
+        ), "orchestrator should be set when calling this method"
 
         events: asyncio.Queue[Optional[RunEvent]] = asyncio.Queue()
 
@@ -1765,18 +1738,17 @@ class Engine:
                 output_messages,
             )
 
-        context = orchestrator.get_context()
-        if context:
-            turn_id = context.turn_id or orchestrator.get_last_turn_id()
-            thread_info = context.thread_info or orchestrator.get_last_thread_info()
-            token_total = orchestrator.get_last_token_total()
+        turn_id = orchestrator.get_last_turn_id()
+        thread_info = orchestrator.get_last_thread_info()
+        token_total = orchestrator.get_last_token_total()
+        if turn_id or token_total:
             self._update_run_telemetry(
                 run_id,
                 turn_id=turn_id,
                 token_total=token_total,
             )
-            if thread_info:
-                self._update_run_telemetry(run_id, thread_info=thread_info)
+        if thread_info:
+            self._update_run_telemetry(run_id, thread_info=thread_info)
 
         return 0
 
@@ -1911,7 +1883,7 @@ class Engine:
                         break
                     if isinstance(event, Started) and event.session_id:
                         self._update_run_telemetry(
-                            run_id, thread_id=event.session_id, turn_id=event.event_id
+                            run_id, thread_id=event.session_id, turn_id=event.turn_id
                         )
                     elif isinstance(event, OutputDelta):
                         self._emit_canonical_event(

@@ -16,13 +16,13 @@ from fastapi.responses import (
     JSONResponse,
 )
 
-from ..core.config import HubConfig
-from ..core.logging_utils import safe_log
-from ..core.state import SessionRecord, now_iso, persist_session_registry
-from ..web.pty_session import REPLAY_END, ActiveSession, PTYSession
-from ..web.schemas import VersionResponse
-from ..web.static_assets import index_response_headers, render_index_html
-from ..web.static_refresh import refresh_static_assets
+from ....core.config import HubConfig
+from ....core.logging_utils import safe_log
+from ....core.state import SessionRecord, now_iso, persist_session_registry
+from ..pty_session import REPLAY_END, ActiveSession, PTYSession
+from ..schemas import VersionResponse
+from ..static_assets import index_response_headers, render_index_html
+from ..static_refresh import refresh_static_assets
 from .shared import (
     build_codex_terminal_cmd,
     build_opencode_terminal_cmd,

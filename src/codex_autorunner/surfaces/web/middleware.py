@@ -10,9 +10,9 @@ from urllib.parse import parse_qs, urlparse
 
 from fastapi.responses import RedirectResponse, Response
 
-from ..core.config import _normalize_base_path
-from ..core.logging_utils import log_event
-from ..core.request_context import reset_request_id, set_request_id
+from ...core.config import _normalize_base_path
+from ...core.logging_utils import log_event
+from ...core.request_context import reset_request_id, set_request_id
 from .static_assets import security_headers
 
 logger = logging.getLogger("codex_autorunner.web.middleware")

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from ..core.state import persist_session_registry
+from ...core.state import persist_session_registry
 from .pty_session import ActiveSession
 
 

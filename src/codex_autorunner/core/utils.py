@@ -9,7 +9,7 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 from typing import (
-    TYPE_CHECKING,
+    Any,
     Dict,
     Iterable,
     Mapping,
@@ -19,10 +19,6 @@ from typing import (
     Union,
     cast,
 )
-
-if TYPE_CHECKING:
-    from ..agents.opencode.supervisor import OpenCodeSupervisor
-
 
 SUBCOMMAND_HINTS = ("exec", "resume")
 
@@ -301,7 +297,7 @@ def build_opencode_supervisor(
     session_stall_timeout_seconds: Optional[float] = None,
     base_env: Optional[MutableMapping[str, str]] = None,
     subagent_models: Optional[Mapping[str, str]] = None,
-) -> Optional["OpenCodeSupervisor"]:
+) -> Optional[Any]:
     """
     Unified factory for building OpenCodeSupervisor instances.
 
@@ -361,7 +357,7 @@ def build_opencode_supervisor(
         base_env=base_env,
         subagent_models=subagent_models,
     )
-    return cast("OpenCodeSupervisor", supervisor)
+    return cast(Any, supervisor)
 
 
 def _command_available(

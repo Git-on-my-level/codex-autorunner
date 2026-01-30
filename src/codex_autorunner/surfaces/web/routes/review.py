@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from ..review import ReviewBusyError, ReviewError, ReviewService
-from .schemas import (
+from ..schemas import (
     ReviewControlResponse,
     ReviewStartRequest,
     ReviewStatusResponse,

@@ -8,8 +8,8 @@ import uuid
 from collections import deque
 from typing import Any, Awaitable, Callable, Deque, Dict, Optional
 
-from ..core.logging_utils import log_event
-from ..core.state import now_iso
+from ...core.logging_utils import log_event
+from ...core.state import now_iso
 
 
 @dataclasses.dataclass

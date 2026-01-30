@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 from uuid import uuid4
 
-from ..core.logging_utils import safe_log
+from ...core.logging_utils import safe_log
 
 _ASSET_VERSION_TOKEN = "__CAR_ASSET_VERSION__"
 _REQUIRED_STATIC_ASSETS = (

@@ -185,8 +185,8 @@ class AgentPool:
             raise RuntimeError(
                 "OpenCode supervisor unavailable (missing opencode command/binary)."
             )
-        self._opencode_supervisor = supervisor
-        return supervisor
+        self._opencode_supervisor = cast(OpenCodeSupervisor, supervisor)
+        return self._opencode_supervisor
 
     async def close(self) -> None:
         if self._app_server_supervisor is not None:

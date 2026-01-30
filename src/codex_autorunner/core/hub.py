@@ -202,6 +202,7 @@ class RepoRunner:
         app_server_supervisor_factory_builder: Optional[
             AppServerSupervisorFactoryBuilder
         ] = None,
+        agent_id_validator: Optional[Callable[[str], str]] = None,
     ):
         self.repo_id = repo_id
         backend_factory = (
@@ -219,6 +220,7 @@ class RepoRunner:
             config=repo_config,
             backend_factory=backend_factory,
             app_server_supervisor_factory=app_server_supervisor_factory,
+            agent_id_validator=agent_id_validator,
         )
         self._controller = ProcessRunnerController(self._engine, spawn_fn=spawn_fn)
 
@@ -249,6 +251,7 @@ class HubSupervisor:
         app_server_supervisor_factory_builder: Optional[
             AppServerSupervisorFactoryBuilder
         ] = None,
+        agent_id_validator: Optional[Callable[[str], str]] = None,
     ):
         self.hub_config = hub_config
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
@@ -258,6 +261,7 @@ class HubSupervisor:
         self._app_server_supervisor_factory_builder = (
             app_server_supervisor_factory_builder
         )
+        self._agent_id_validator = agent_id_validator
         self.state = load_hub_state(self.state_path, self.hub_config.root)
         self._list_cache_at: Optional[float] = None
         self._list_cache: Optional[List[RepoSnapshot]] = None
@@ -329,6 +333,7 @@ class HubSupervisor:
                         config=repo_config,
                         backend_factory=backend_factory,
                         app_server_supervisor_factory=app_server_supervisor_factory,
+                        agent_id_validator=self._agent_id_validator,
                     )
                 )
                 controller.reconcile()
@@ -841,6 +846,7 @@ class HubSupervisor:
             app_server_supervisor_factory_builder=(
                 self._app_server_supervisor_factory_builder
             ),
+            agent_id_validator=self._agent_id_validator,
         )
         self._runners[repo_id] = runner
         return runner
