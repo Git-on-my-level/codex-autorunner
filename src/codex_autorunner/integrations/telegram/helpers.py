@@ -886,6 +886,9 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         "new",
         "resume",
         "review",
+        "flow",
+        "flow_status",
+        "reply",
         "pr",
         "agent",
         "model",
@@ -917,6 +920,25 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/review commit <sha> (or /review commit to pick)")
         lines.append("/review custom <instructions> (or /review custom to prompt)")
         lines.append("/review detached ...")
+
+    if "flow" in command_specs:
+        lines.append("")
+        lines.append("Flow:")
+        lines.append("/flow")
+        lines.append("/flow status [run_id]")
+        lines.append("/flow bootstrap [--force-new]")
+        lines.append("/flow issue <issue#|url>")
+        lines.append("/flow plan <text>")
+        lines.append("/flow resume [run_id]")
+        lines.append("/flow stop [run_id]")
+        lines.append("/flow recover [run_id]")
+        lines.append("/flow restart")
+        lines.append("/flow archive [run_id] [--force]")
+        lines.append("/flow reply <message>")
+        if "flow_status" in command_specs:
+            lines.append("/flow_status [run_id]")
+        if "reply" in command_specs:
+            lines.append("/reply <message> (legacy)")
 
     lines.append("")
     lines.append("Other:")
