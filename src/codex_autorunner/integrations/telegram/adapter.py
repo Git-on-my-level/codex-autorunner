@@ -27,7 +27,7 @@ from .retry import _extract_retry_after_seconds
 
 _RATE_LIMIT_BUFFER_SECONDS = 0.0
 
-_COMMAND_NAME_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+_COMMAND_NAME_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 INTERRUPT_ALIASES = {
     "^c",
@@ -35,9 +35,6 @@ INTERRUPT_ALIASES = {
     "ctrl+c",
     "esc",
     "escape",
-    "/flow-interrupt",
-    "/flow_interrupt",
-    "/interrupt",
     "/stop",
 }
 
@@ -309,8 +306,9 @@ def parse_command(
                 if bot_username and target.lower() != bot_username.lower():
                     return None
                 command = name
-            normalized = command.lower().replace("-", "_")
-            return TelegramCommand(name=normalized, args=tail.strip(), raw=text.strip())
+            return TelegramCommand(
+                name=command.lower(), args=tail.strip(), raw=text.strip()
+            )
         return None
 
     # Fallback: simple text-based parsing when entities are missing
@@ -330,9 +328,8 @@ def parse_command(
             return None
         if not _COMMAND_NAME_RE.fullmatch(command):
             return None
-        normalized = command.replace("-", "_")
         args = parts[1].strip() if len(parts) > 1 else ""
-        return TelegramCommand(name=normalized, args=args, raw=trimmed)
+        return TelegramCommand(name=command.lower(), args=args, raw=trimmed)
 
     return None
 
@@ -341,7 +338,9 @@ def is_interrupt_alias(text: Optional[str]) -> bool:
     if not text:
         return False
     normalized = text.strip().lower()
-    return normalized in INTERRUPT_ALIASES
+    if normalized in INTERRUPT_ALIASES:
+        return True
+    return normalized == "/interrupt"
 
 
 def parse_update(update: dict[str, Any]) -> Optional[TelegramUpdate]:

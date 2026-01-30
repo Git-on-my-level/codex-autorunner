@@ -69,15 +69,6 @@ async def test_flow_status_alias_forwards_to_flow() -> None:
 
 
 @pytest.mark.anyio
-async def test_flow_archive_alias_forwards_to_flow() -> None:
-    handler = _FlowStatusAliasHandler()
-    await handler._handle_flow_archive_command(
-        _message("/flow-archive"), "run-123 --force"
-    )
-    assert handler.seen == ["archive run-123 --force"]
-
-
-@pytest.mark.anyio
 async def test_flow_reply_alias_routes_to_flow_reply(tmp_path: Path) -> None:
     handler = _FlowReplyAliasHandler(tmp_path)
     await handler._handle_flow(_message("/flow reply hello"), "reply hello world")

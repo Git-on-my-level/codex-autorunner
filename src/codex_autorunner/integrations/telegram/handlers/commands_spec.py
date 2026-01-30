@@ -48,22 +48,6 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             lambda message, args, _runtime: handlers._handle_flow_status(message, args),
             allow_during_turn=True,
         ),
-        "flow_archive": CommandSpec(
-            "flow_archive",
-            "archive ticket flow (alias for /flow archive)",
-            lambda message, args, _runtime: handlers._handle_flow_archive_command(
-                message, args
-            ),
-            allow_during_turn=True,
-        ),
-        "flow_interrupt": CommandSpec(
-            "flow_interrupt",
-            "interrupt current turn (alias for /interrupt)",
-            lambda message, _args, runtime: handlers._handle_interrupt(
-                message, runtime
-            ),
-            allow_during_turn=True,
-        ),
         "reply": CommandSpec(
             "reply",
             "reply to a paused ticket flow dispatch (prefer /flow reply)",
