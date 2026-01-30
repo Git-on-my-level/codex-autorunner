@@ -2920,7 +2920,8 @@ def doctor(start_path: Path) -> DoctorReport:
 
     if repo_config is not None:
         missing = []
-        for key in ("todo", "progress", "opinions"):
+        configured_docs = repo_config.docs or {}
+        for key in configured_docs:
             path = repo_config.doc_path(key)
             if not path.exists():
                 missing.append(path)
@@ -2929,16 +2930,16 @@ def doctor(start_path: Path) -> DoctorReport:
             _append_check(
                 checks,
                 "docs.required",
-                "error",
-                f"Missing doc files: {names}",
-                "Run `car init` or create the missing files.",
+                "warning",
+                f"Configured doc files are missing: {names}",
+                "Create the missing files (workspace docs are optional but recommended).",
             )
         else:
             _append_check(
                 checks,
                 "docs.required",
                 "ok",
-                "Required doc files are present.",
+                "Configured doc files are present.",
             )
 
         if ensure_executable(repo_config.codex_binary):
