@@ -25,6 +25,9 @@ import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
 import { createDocChat, type ChatState } from "./docChatCore.js";
 import { initDocChatVoice } from "./docChatVoice.js";
 import { renderDiff } from "./diffRenderer.js";
+import { createSmartRefresh, type SmartRefreshReason } from "./smartRefresh.js";
+import { subscribe } from "./bus.js";
+import { isRepoHealthy } from "./health.js";
 
 type WorkspaceTarget = {
   path: string; // relative to workspace dir
@@ -56,6 +59,16 @@ const state: WorkspaceState = {
 const WORKSPACE_CHAT_EVENT_LIMIT = 8;
 const WORKSPACE_CHAT_EVENT_MAX = 50;
 
+type WorkspaceTreePayload = {
+  tree: WorkspaceNode[];
+  defaultPath?: string | null;
+};
+
+type WorkspaceContentPayload = {
+  path: string;
+  content: string;
+};
+
 const workspaceChat = createDocChat({
   idPrefix: "workspace-chat",
   storage: { keyPrefix: "car-workspace-chat-", maxMessages: 50, version: 1 },
@@ -80,6 +93,35 @@ const workspaceChat = createDocChat({
 });
 
 const WORKSPACE_DOC_KINDS = new Set<WorkspaceKind>(["active_context", "decisions", "spec"]);
+const WORKSPACE_REFRESH_REASONS: SmartRefreshReason[] = ["initial", "background", "manual"];
+
+function hashString(value: string): string {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 33) ^ value.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function workspaceTreeSignature(nodes: WorkspaceNode[]): string {
+  const parts: string[] = [];
+  const walk = (list: WorkspaceNode[]): void => {
+    list.forEach((node) => {
+      parts.push(
+        [
+          node.path || "",
+          node.type || "",
+          node.is_pinned ? "1" : "0",
+          node.modified_at || "",
+          node.size ?? "",
+        ].join("|")
+      );
+      if (node.children?.length) walk(node.children);
+    });
+  };
+  walk(nodes || []);
+  return parts.join("::");
+}
 
 function els() {
   return {
@@ -311,7 +353,7 @@ async function handleCreateSubmit(): Promise<void> {
       flash("File created", "success");
     }
     closeCreateModal();
-    await loadFiles(createMode === "file" ? path : state.target?.path || undefined);
+    await loadFiles(createMode === "file" ? path : state.target?.path || undefined, "manual");
     if (createMode === "file") {
       state.browser?.select(path);
     }
@@ -320,12 +362,49 @@ async function handleCreateSubmit(): Promise<void> {
   }
 }
 
-async function loadWorkspaceFile(path: string): Promise<void> {
-  state.loading = true;
-  setStatus("Loading…");
-  try {
-    const text = await readWorkspaceContent(path);
-    state.content = text as string;
+const workspaceTreeRefresh = createSmartRefresh<WorkspaceTreePayload>({
+  getSignature: (payload) => workspaceTreeSignature(payload.tree || []),
+  render: (payload) => {
+    state.files = payload.tree;
+    const { fileList, fileSelect, breadcrumbs } = els();
+    if (!fileList) return;
+
+    if (!state.browser) {
+      state.browser = new WorkspaceFileBrowser({
+        container: fileList,
+        selectEl: fileSelect,
+        breadcrumbsEl: breadcrumbs,
+        onSelect: (file) => {
+          state.target = { path: file.path, isPinned: Boolean(file.is_pinned) };
+          workspaceChat.setTarget(target());
+          void refreshWorkspaceFile(file.path, "manual");
+        },
+        onPathChange: () => updateDownloadButton(),
+        onRefresh: () => loadFiles(state.target?.path, "manual"),
+        onConfirm: (message) =>
+          (window as unknown as { workspaceConfirm?: (msg: string) => Promise<boolean> }).workspaceConfirm?.(
+            message
+          ) ?? Promise.resolve(confirm(message)),
+      });
+    }
+
+    const defaultPath = payload.defaultPath ?? state.target?.path ?? undefined;
+    state.browser.setTree(payload.tree, defaultPath || undefined);
+    updateDownloadButton();
+    if (state.target) {
+      workspaceChat.setTarget(target());
+    }
+  },
+  onSkip: () => {
+    updateDownloadButton();
+  },
+});
+
+const workspaceContentRefresh = createSmartRefresh<WorkspaceContentPayload>({
+  getSignature: (payload) => `${payload.path}::${hashString(payload.content || "")}`,
+  render: async (payload, ctx) => {
+    if (payload.path !== state.target?.path) return;
+    state.content = payload.content as string;
     if (state.docEditor) {
       state.docEditor.destroy();
     }
@@ -336,9 +415,9 @@ async function loadWorkspaceFile(path: string): Promise<void> {
       textarea,
       saveButton: saveBtn,
       statusEl: status,
-      onLoad: async () => text as string,
+      onLoad: async () => payload.content as string,
       onSave: async (content) => {
-        const saved = await writeWorkspaceContent(path, content);
+        const saved = await writeWorkspaceContent(payload.path, content);
         state.content = saved;
         if (saved !== content) {
           textarea.value = saved;
@@ -347,7 +426,25 @@ async function loadWorkspaceFile(path: string): Promise<void> {
     });
     await loadPendingDraft();
     renderPatch();
-    setStatus("Loaded");
+    if (ctx.reason !== "background") {
+      setStatus("Loaded");
+    }
+  },
+});
+
+async function refreshWorkspaceFile(path: string, reason: SmartRefreshReason = "manual"): Promise<void> {
+  if (!WORKSPACE_REFRESH_REASONS.includes(reason)) {
+    reason = "manual";
+  }
+  if (reason !== "background") {
+    state.loading = true;
+    setStatus("Loading…");
+  }
+  try {
+    await workspaceContentRefresh.refresh(
+      async () => ({ path, content: await readWorkspaceContent(path) }),
+      { reason }
+    );
   } catch (err) {
     const message = (err as Error).message || "Failed to load workspace file";
     flash(message, "error");
@@ -364,7 +461,7 @@ async function loadPendingDraft(): Promise<void> {
 
 async function reloadWorkspace(): Promise<void> {
   if (!state.target) return;
-  await loadWorkspaceFile(state.target.path);
+  await refreshWorkspaceFile(state.target.path, "manual");
 }
 
 async function maybeShowGenerate(): Promise<void> {
@@ -580,35 +677,14 @@ async function resetThread(): Promise<void> {
   }
 }
 
-async function loadFiles(defaultPath?: string): Promise<void> {
-  const tree = await fetchWorkspaceTree();
-  state.files = tree;
-  const { fileList, fileSelect, breadcrumbs } = els();
-  if (!fileList) return;
-
-  if (!state.browser) {
-    state.browser = new WorkspaceFileBrowser({
-      container: fileList,
-      selectEl: fileSelect,
-      breadcrumbsEl: breadcrumbs,
-      onSelect: (file) => {
-        state.target = { path: file.path, isPinned: Boolean(file.is_pinned) };
-        workspaceChat.setTarget(target());
-        void loadWorkspaceFile(file.path);
-      },
-      onPathChange: () => updateDownloadButton(),
-      onRefresh: () => loadFiles(state.target?.path),
-      onConfirm: (message) =>
-        (window as unknown as { workspaceConfirm?: (msg: string) => Promise<boolean> }).workspaceConfirm?.(message) ??
-        Promise.resolve(confirm(message)),
-    });
+async function loadFiles(defaultPath?: string, reason: SmartRefreshReason = "manual"): Promise<void> {
+  if (!WORKSPACE_REFRESH_REASONS.includes(reason)) {
+    reason = "manual";
   }
-
-  state.browser.setTree(tree, defaultPath || state.target?.path || undefined);
-  updateDownloadButton();
-  if (state.target) {
-    workspaceChat.setTarget(target());
-  }
+  await workspaceTreeRefresh.refresh(
+    async () => ({ tree: await fetchWorkspaceTree(), defaultPath }),
+    { reason }
+  );
 }
 
 export async function initWorkspace(): Promise<void> {
@@ -642,11 +718,11 @@ export async function initWorkspace(): Promise<void> {
   });
 
   await maybeShowGenerate();
-  await loadFiles();
+  await loadFiles(undefined, "initial");
   workspaceChat.setTarget(target());
 
   const reloadEverything = async () => {
-    await loadFiles(state.target?.path);
+    await loadFiles(state.target?.path, "manual");
     await reloadWorkspace();
   };
 
@@ -663,7 +739,7 @@ export async function initWorkspace(): Promise<void> {
     try {
       await uploadWorkspaceFiles(files, subdir || undefined);
       flash(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"}`, "success");
-      await loadFiles(state.target?.path);
+      await loadFiles(state.target?.path, "manual");
     } catch (err) {
       flash((err as Error).message || "Upload failed", "error");
     } finally {
@@ -732,5 +808,17 @@ export async function initWorkspace(): Promise<void> {
   confirmCancel?.addEventListener("click", () => closeConfirm(false));
   confirmModal?.addEventListener("click", (evt) => {
     if (evt.target === confirmModal) closeConfirm(false);
+  });
+
+  subscribe("repo:health", (payload: unknown) => {
+    const status = (payload as { status?: string } | null)?.status || "";
+    if (status !== "ok" && status !== "degraded") return;
+    if (!isRepoHealthy()) return;
+    void loadFiles(state.target?.path, "background");
+    const textarea = els().textarea;
+    const hasLocalEdits = textarea ? textarea.value !== state.content : false;
+    if (state.target && !state.draft && !hasLocalEdits) {
+      void refreshWorkspaceFile(state.target.path, "background");
+    }
   });
 }
