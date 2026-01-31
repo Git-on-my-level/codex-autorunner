@@ -97,3 +97,68 @@ def test_ticket_list_returns_body_even_when_frontmatter_invalid(tmp_path, monkey
         assert "Describe the task details here" in (ticket["body"] or "")
         # Errors surface frontmatter problems.
         assert ticket["errors"]
+
+
+def test_get_ticket_by_index(tmp_path, monkeypatch):
+    """GET /api/flows/ticket_flow/tickets/{index} returns a single ticket."""
+
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    ticket_path = ticket_dir / "TICKET-002.md"
+    ticket_path.write_text(
+        "---\nagent: codex\ndone: false\ntitle: Demo\n---\n\nBody here\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get("/api/flows/ticket_flow/tickets/2")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["index"] == 2
+        assert payload["frontmatter"]["agent"] == "codex"
+        assert "Body here" in payload["body"]
+
+
+def test_get_ticket_by_index_returns_body_on_invalid_frontmatter(tmp_path, monkeypatch):
+    """Single-ticket endpoint should mirror list behavior when frontmatter is broken."""
+
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    ticket_path = ticket_dir / "TICKET-003.md"
+    ticket_path.write_text(
+        "---\nagent: codex\n# missing done\n---\n\nStill show body\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get("/api/flows/ticket_flow/tickets/3")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["index"] == 3
+        # Invalid frontmatter should not block access; parsed fields may be partial.
+        assert payload["frontmatter"].get("agent") == "codex"
+        assert "Still show body" in (payload["body"] or "")
+
+
+def test_get_ticket_by_index_404(tmp_path, monkeypatch):
+    """GET /api/flows/ticket_flow/tickets/{index} returns 404 when missing."""
+
+    (tmp_path / ".codex-autorunner" / "tickets").mkdir(parents=True)
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get("/api/flows/ticket_flow/tickets/99")
+        assert resp.status_code == 404
