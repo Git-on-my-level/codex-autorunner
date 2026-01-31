@@ -134,6 +134,11 @@ def seed_hub_files(hub_root: Path, force: bool = False) -> None:
 
     write_hub_config(hub_root, force=force)
 
+    pma_dir = ca_dir / "pma"
+    pma_dir.mkdir(parents=True, exist_ok=True)
+    _seed_doc(pma_dir / "prompt.md", force, _pma_prompt_content())
+    _seed_doc(pma_dir / "notes.md", force, "")
+
     manifest_path = hub_root / DEFAULT_HUB_CONFIG["hub"]["manifest"]
     load_manifest(manifest_path, hub_root)
 
@@ -143,3 +148,28 @@ def seed_hub_files(hub_root: Path, force: bool = False) -> None:
             hub_state_path,
             '{\n  "last_scan_at": null,\n  "repos": []\n}\n',
         )
+
+
+def _pma_prompt_content() -> str:
+    return """# Project Management Agent (PMA)
+
+You are the hub-level Project Management Agent (PMA), the user's primary interface for coordinating work across repos.
+
+## Role
+
+You coordinate tickets and flows across multiple repos. You delegate code changes to repo agents rather than making edits directly.
+
+## Behavior
+
+- Ask questions when requirements are ambiguous.
+- Escalate to the user when you are stuck.
+- Prefer CAR tools and CLI commands.
+- Use template tools/CLI internally when appropriate.
+- Keep messages concise; avoid spamming.
+
+## Constraints
+
+- You have hub context (manifest/worktrees, repo statuses, paused flows, dispatch inbox).
+- You coordinate but do not directly edit code in repos.
+- Treat prompt.md as code: keep it short and stable.
+"""

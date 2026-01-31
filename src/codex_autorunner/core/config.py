@@ -471,6 +471,12 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
     "mode": "hub",
     "repo_defaults": DEFAULT_REPO_DEFAULTS,
+    "pma": {
+        "enabled": False,
+        "default_agent": "opencode",
+        "model": None,
+        "reasoning": None,
+    },
     "templates": {
         "enabled": True,
         "repos": [
