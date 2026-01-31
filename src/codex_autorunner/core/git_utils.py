@@ -252,8 +252,8 @@ def git_diff_stats(
     """
     try:
         if from_ref:
-            # Compare from_ref to HEAD
-            proc = run_git(["diff", "--numstat", f"{from_ref}..HEAD"], repo_root)
+            # Compare from_ref to working tree (includes all changes: committed + staged + unstaged)
+            proc = run_git(["diff", "--numstat", from_ref], repo_root)
         elif include_staged:
             # Working tree + staged vs HEAD
             proc = run_git(["diff", "--numstat", "HEAD"], repo_root)
