@@ -27,8 +27,8 @@ from .....agents.opencode.runtime import (
     split_model_id,
 )
 from .....agents.opencode.supervisor import OpenCodeSupervisorError
-from .....core.about_car import CAR_CONTEXT_HINT, CAR_CONTEXT_KEYWORDS
 from .....core.config import load_repo_config
+from .....core.context_awareness import CAR_AWARENESS_BLOCK
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
@@ -547,18 +547,11 @@ class ExecutionCommands(SharedHelpers):
         return f"{prompt_text}{separator}{injection}", True
 
     def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:
+        if CAR_AWARENESS_BLOCK in prompt_text:
+            return prompt_text, False
         if not prompt_text or not prompt_text.strip():
-            return prompt_text, False
-        lowered = prompt_text.lower()
-        if "about_car.md" in lowered:
-            return prompt_text, False
-        if CAR_CONTEXT_HINT in prompt_text:
-            return prompt_text, False
-        if not any(keyword in lowered for keyword in CAR_CONTEXT_KEYWORDS):
-            return prompt_text, False
-        separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-        injection = wrap_injected_context(CAR_CONTEXT_HINT)
-        return f"{prompt_text}{separator}{injection}", True
+            return CAR_AWARENESS_BLOCK, True
+        return f"{CAR_AWARENESS_BLOCK}\n\n{prompt_text}", True
 
     def _maybe_inject_outbox_context(
         self,
