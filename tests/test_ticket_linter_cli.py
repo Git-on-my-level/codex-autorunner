@@ -91,3 +91,28 @@ def test_linter_flags_invalid_yaml_with_suffix(repo: Path) -> None:
     result_good = _run_linter(repo)
     assert result_good.returncode == 0
     assert "OK" in result_good.stdout
+
+
+def test_linter_detects_duplicate_indices(repo: Path) -> None:
+    tickets_dir = repo / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create duplicate ticket files
+    (tickets_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8"
+    )
+    (tickets_dir / "TICKET-001-dup.md").write_text(
+        "---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8"
+    )
+
+    result = _run_linter(repo)
+    assert result.returncode == 1
+    assert "Duplicate ticket index 001" in result.stderr
+    assert "TICKET-001.md" in result.stderr
+    assert "TICKET-001-dup.md" in result.stderr
+
+    # Remove duplicate and verify linter passes
+    (tickets_dir / "TICKET-001-dup.md").unlink()
+    result_clean = _run_linter(repo)
+    assert result_clean.returncode == 0
+    assert "OK" in result_clean.stdout
