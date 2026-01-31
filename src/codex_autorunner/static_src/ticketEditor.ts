@@ -962,16 +962,16 @@ export function initTicketEditor(): void {
   // Left/Right arrows navigate between tickets when editor is open and not typing
   document.addEventListener("keydown", (e) => {
     if (!state.isOpen) return;
-    
+
     // Check for navigation keys
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    
+
     // Don't interfere with typing
     if (isTypingTarget(e.target)) return;
-    
-    // Only allow Alt or no modifier (no Ctrl/Meta/Shift)
-    if (e.ctrlKey || e.metaKey || e.shiftKey) return;
-    
+
+    // Require Alt modifier for navigation (no Ctrl/Meta/Shift)
+    if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+
     e.preventDefault();
     void navigateTicket(e.key === "ArrowLeft" ? -1 : 1);
   });

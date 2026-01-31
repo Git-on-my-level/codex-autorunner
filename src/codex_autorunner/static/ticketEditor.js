@@ -806,8 +806,8 @@ export function initTicketEditor() {
         // Don't interfere with typing
         if (isTypingTarget(e.target))
             return;
-        // Only allow Alt or no modifier (no Ctrl/Meta/Shift)
-        if (e.ctrlKey || e.metaKey || e.shiftKey)
+        // Require Alt modifier for navigation (no Ctrl/Meta/Shift)
+        if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey)
             return;
         e.preventDefault();
         void navigateTicket(e.key === "ArrowLeft" ? -1 : 1);
