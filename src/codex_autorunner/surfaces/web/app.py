@@ -1562,11 +1562,10 @@ def create_hub_app(
                 if not db_path.exists():
                     continue
                 try:
-                    store = FlowStore(db_path)
-                    store.initialize()
-                    paused = store.list_flow_runs(
-                        flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-                    )
+                    with FlowStore(db_path) as store:
+                        paused = store.list_flow_runs(
+                            flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+                        )
                 except Exception:
                     continue
                 if not paused:

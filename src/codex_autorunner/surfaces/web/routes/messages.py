@@ -387,14 +387,13 @@ def build_messages_routes() -> APIRouter:
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             raise HTTPException(status_code=404, detail="No flows database")
-        store = _load_store_or_404(db_path)
         try:
-            record = store.get_flow_run(run_id)
-        finally:
-            try:
-                store.close()
-            except Exception:
-                pass
+            with FlowStore(db_path) as store:
+                record = store.get_flow_run(run_id)
+        except Exception:
+            raise HTTPException(
+                status_code=404, detail="Flows database unavailable"
+            ) from None
         if not record:
             raise HTTPException(status_code=404, detail="Run not found")
 

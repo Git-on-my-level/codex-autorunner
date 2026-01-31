@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import sqlite3
@@ -30,6 +32,13 @@ class FlowStore:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self._local: threading.local = threading.local()
+
+    def __enter__(self) -> FlowStore:
+        self.initialize()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
 
     def _get_conn(self) -> sqlite3.Connection:
         if not hasattr(self._local, "conn"):
