@@ -48,17 +48,17 @@ def _preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
     """Truncate ticket block while preserving prefix and ticket frontmatter.
 
     ticket_block format:
-        "\\n\\n---\\n\\nTICKET CONTENT ...\\nPATH: ...\\n\\n{ticket_raw_content}"
+        "\\n\\n<CAR_CURRENT_TICKET_FILE>\\nPATH: ...\\n<TICKET_MARKDOWN>\\n"
+        "{ticket_raw_content}\\n</TICKET_MARKDOWN>\\n</CAR_CURRENT_TICKET_FILE>\\n"
     where ticket_raw_content itself contains markdown frontmatter.
     """
     if len(ticket_block.encode("utf-8")) <= max_bytes:
         return ticket_block
 
     # ticket_block structure:
-    #   "\n\n---\n\n" - prefix separator
-    #   "TICKET CONTENT (edit this file to track progress; update frontmatter.done when complete):\n"
+    #   "<CAR_CURRENT_TICKET_FILE>\n"
     #   "PATH: {rel_ticket}\n"
-    #   "\n" - newline before ticket frontmatter
+    #   "<TICKET_MARKDOWN>\n"
     #   "---\n" - ticket frontmatter start
     #   "agent: ...\n"
     #   "done: ...\n"
@@ -66,14 +66,16 @@ def _preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
     #   "goal: ...\n"
     #   "---\n" - ticket frontmatter end (what we want to preserve)
     #   ticket body...
+    #   "</TICKET_MARKDOWN>\n"
+    #   "</CAR_CURRENT_TICKET_FILE>\n"
 
-    # Find the three occurrences of "\n---\n"
-    # 1st: in prefix (header separator)
-    # 2nd: frontmatter start (after PATH: line)
-    # 3rd: frontmatter end (what we want to preserve up to)
-
+    # Find the frontmatter markers after <TICKET_MARKDOWN>.
     marker = "\n---\n"
-    first_marker_idx = ticket_block.find(marker)
+    ticket_md_idx = ticket_block.find("<TICKET_MARKDOWN>")
+    if ticket_md_idx == -1:
+        return _truncate_text_by_bytes(ticket_block, max_bytes)
+
+    first_marker_idx = ticket_block.find(marker, ticket_md_idx)
     if first_marker_idx == -1:
         return _truncate_text_by_bytes(ticket_block, max_bytes)
 
@@ -81,12 +83,8 @@ def _preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
     if second_marker_idx == -1:
         return _truncate_text_by_bytes(ticket_block, max_bytes)
 
-    third_marker_idx = ticket_block.find(marker, second_marker_idx + 1)
-    if third_marker_idx == -1:
-        return _truncate_text_by_bytes(ticket_block, max_bytes)
-
-    # Preserve everything up to and including the third marker
-    preserve_end = third_marker_idx + len(marker)
+    # Preserve everything up to and including the second marker
+    preserve_end = second_marker_idx + len(marker)
     preserved_part = ticket_block[:preserve_end]
 
     # Check if we still have room (account for truncation marker that will be added)
@@ -879,68 +877,41 @@ class TicketRunner:
             outbox_paths.dispatch_path, self._workspace_root
         )
 
-        header = (
-            "You are running inside Codex AutoRunner (CAR) in a ticket-based workflow.\n"
-            "Complete the current ticket by making changes in the repo.\n\n"
-            "How to operate within CAR:\n"
-            f"- Current ticket file: {rel_ticket}\n"
-            "- Ticket completion is controlled by YAML frontmatter: set 'done: true' when finished.\n"
-            "- To message the user, optionally write attachments first to the dispatch directory, then write DISPATCH.md last.\n"
-            f"  - Dispatch directory: {rel_dispatch_dir}\n"
-            f"  - DISPATCH.md path: {rel_dispatch_path}\n"
-            "    DISPATCH.md frontmatter supports: mode: notify|pause (pause will wait for a user response; notify will continue without waiting for user input).\n"
-            "    Example: `---\\nmode: pause\\n---\\nNeed clarification on X before proceeding.`\n"
-            "- No need to dispatch a final notification to the user; your final turn summary is dispatched automatically. Only dispatch if you want something important to stand out to the user, or if you need their input (pause).\n"
-            "- If you are completely blocked (missing info, unclear requirements, external dependency), dispatch with mode: pause immediately rather than guessing.\n"
-            "- You may create new tickets only if blocking the current SPEC or if the current ticket is too ambiguous and you want to scope it out further. Keep tickets minimal and avoid scope creep.\n"
-            "- Avoid stubs, TODOs, or placeholder logic. Either implement fully, create a follow-up ticket, or pause for user input.\n"
-            "- Only set 'done: true' when the ticket is truly complete. If partially done, update the ticket body with progress so the next agent can continue.\n"
-            "- Each ticket is handled by a new series of agents in a loop, where each new agent gets the context of the previous agent. No context is shared across tickets EXCEPT via the workspace files.\n"
-            "- You may update or add new workspace docs and add files under `.codex-autorunner/workspace/` to leave context for future agents.\n"
-            "- active_context and spec are ALWAYS passed to each agent and should be considered the most precious context.\n"
-            "- decisions.md: can contain conditional decision context that many only be relevant to some tickets.\n"
-            "- If you create new documents that future agents should reference, modify their tickets and leave a pointer to your new files.\n"
-            "- All files and folders under `.codex-autorunner/workspace/` are viewable and editable by the user. If you need the user's input on something, make sure it's in the workspace including copies of any artifacts they should review.\n"
-            "- Do NOT add any files under `.codex-autorunner/` to git unless they are already tracked and not gitignored."
-        )
-
         checkpoint_block = ""
         if last_checkpoint_error:
             checkpoint_block = (
-                "\n\n---\n\n"
+                "<CAR_CHECKPOINT_WARNING>\n"
                 "WARNING: The previous checkpoint git commit failed (often due to pre-commit hooks).\n"
                 "Resolve this before proceeding, or future turns may fail to checkpoint.\n\n"
                 "Checkpoint error:\n"
                 f"{last_checkpoint_error}\n"
+                "</CAR_CHECKPOINT_WARNING>"
             )
 
         commit_block = ""
         if commit_required:
             attempts_remaining = max(commit_max_attempts - commit_attempt + 1, 0)
             commit_block = (
-                "\n\n---\n\n"
-                "ACTION REQUIRED: Commit your changes, ensuring any pre-commit hooks pass.\n"
-                "- Use a meaningful commit message that matches what you implemented.\n"
-                "- If hooks fail, fix the underlying issues and retry the commit.\n"
-                f"- Attempts remaining before user intervention: {attempts_remaining}\n"
+                "<CAR_COMMIT_REQUIRED>\n"
+                "ACTION REQUIRED: The repo is dirty but the ticket is marked done.\n"
+                "Commit your changes (ensuring any pre-commit hooks pass) so the flow can advance.\n\n"
+                f"Attempts remaining before user intervention: {attempts_remaining}\n"
+                "</CAR_COMMIT_REQUIRED>"
             )
 
         if lint_errors:
             lint_block = (
-                "\n\nTicket frontmatter lint failed. Fix ONLY the ticket frontmatter to satisfy:\n- "
+                "<CAR_TICKET_FRONTMATTER_LINT_REPAIR>\n"
+                "Ticket frontmatter lint failed. Fix ONLY the ticket YAML frontmatter to satisfy:\n- "
                 + "\n- ".join(lint_errors)
-                + "\n"
+                + "\n</CAR_TICKET_FRONTMATTER_LINT_REPAIR>"
             )
         else:
             lint_block = ""
 
         reply_block = ""
         if reply_context:
-            reply_block = (
-                "\n\n---\n\nHUMAN REPLIES (from reply_history; newest since last turn):\n"
-                + reply_context
-                + "\n"
-            )
+            reply_block = reply_context
 
         workspace_block = ""
         workspace_docs: list[tuple[str, str, str]] = []
@@ -972,51 +943,98 @@ class TicketRunner:
             blocks = ["Workspace docs (truncated; skip if not relevant):"]
             for label, rel, body in workspace_docs:
                 blocks.append(f"{label} [{rel}]:\n{body}")
-            workspace_block = "\n\n---\n\n" + "\n\n".join(blocks) + "\n"
+            workspace_block = "\n\n".join(blocks)
 
         prev_ticket_block = ""
         if previous_ticket_content:
             prev_ticket_block = (
-                "\n\n---\n\n"
                 "PREVIOUS TICKET CONTEXT (truncated to 16KB; for reference only; do not edit):\n"
                 "Cross-ticket context should flow through workspace docs (active_context.md, decisions.md, spec.md) "
                 "rather than implicit previous ticket content. This is included only for legacy compatibility.\n"
                 + previous_ticket_content
-                + "\n"
             )
 
         ticket_raw_content = ticket_path.read_text(encoding="utf-8")
         ticket_block = (
-            "\n\n---\n\n"
-            "TICKET CONTENT (edit this file to track progress; update frontmatter.done when complete):\n"
+            "<CAR_CURRENT_TICKET_FILE>\n"
             f"PATH: {rel_ticket}\n"
-            "\n" + ticket_raw_content
+            "<TICKET_MARKDOWN>\n"
+            f"{ticket_raw_content}\n"
+            "</TICKET_MARKDOWN>\n"
+            "</CAR_CURRENT_TICKET_FILE>"
         )
 
         prev_block = ""
         if last_agent_output:
-            prev_block = (
-                "\n\n---\n\nPREVIOUS AGENT OUTPUT (same ticket):\n" + last_agent_output
-            )
+            prev_block = last_agent_output
 
         sections = {
             "prev_block": prev_block,
             "prev_ticket_block": prev_ticket_block,
             "workspace_block": workspace_block,
+            "reply_block": reply_block,
             "ticket_block": ticket_block,
         }
 
         def render() -> str:
             return (
-                header
-                + checkpoint_block
-                + commit_block
-                + lint_block
-                + sections["workspace_block"]
-                + reply_block
-                + sections["prev_ticket_block"]
-                + sections["ticket_block"]
-                + sections["prev_block"]
+                "<CAR_TICKET_FLOW_PROMPT>\n\n"
+                "<CAR_TICKET_FLOW_INSTRUCTIONS>\n"
+                "You are running inside Codex Autorunner (CAR) in a ticket-based workflow.\n\n"
+                "Your job in this turn:\n"
+                "- Read the current ticket file.\n"
+                "- Make the required repo changes.\n"
+                "- Update the ticket file to reflect progress.\n"
+                "- Set `done: true` in the ticket YAML frontmatter only when the ticket is truly complete.\n\n"
+                "CAR orientation (80/20):\n"
+                "- `.codex-autorunner/tickets/` is the queue that drives the flow (files named `TICKET-###*.md`, processed in numeric order).\n"
+                "- `.codex-autorunner/workspace/` holds durable context shared across ticket turns (especially `active_context.md` and `spec.md`).\n"
+                "- `.codex-autorunner/ABOUT_CAR.md` is the repo-local briefing (what CAR auto-generates + helper scripts) if you need operational details.\n\n"
+                "Communicating with the user (optional):\n"
+                "- To send a message or request input, write to the dispatch directory:\n"
+                "  1) write any attachments to the dispatch directory\n"
+                "  2) write `DISPATCH.md` last\n"
+                "- `DISPATCH.md` YAML supports `mode: notify|pause`.\n"
+                "  - `pause` waits for user input; `notify` continues without waiting.\n"
+                "  - Example:\n"
+                "    ---\n"
+                "    mode: pause\n"
+                "    ---\n"
+                "    Need clarification on X before proceeding.\n"
+                "- You do not need a “final” dispatch when you finish; the runner will archive your turn output automatically. Dispatch only if you want something to stand out or you need user input.\n\n"
+                "If blocked:\n"
+                "- Dispatch with `mode: pause` rather than guessing.\n\n"
+                "Creating follow-up tickets (optional):\n"
+                "- New tickets live under `.codex-autorunner/tickets/` and follow the `TICKET-###*.md` naming pattern.\n"
+                "- If present, `.codex-autorunner/bin/ticket_tool.py` can create/insert/move tickets; `.codex-autorunner/bin/lint_tickets.py` lints ticket frontmatter (see `.codex-autorunner/ABOUT_CAR.md`).\n\n"
+                "Workspace docs:\n"
+                "- You may update or add context under `.codex-autorunner/workspace/` so future ticket turns have durable context.\n"
+                "- Prefer referencing these docs instead of creating duplicate “shadow” docs elsewhere.\n\n"
+                "Repo hygiene:\n"
+                "- Do not add new `.codex-autorunner/` artifacts to git unless they are already tracked.\n"
+                "</CAR_TICKET_FLOW_INSTRUCTIONS>\n\n"
+                "<CAR_RUNTIME_PATHS>\n"
+                f"Current ticket file: {rel_ticket}\n"
+                f"Dispatch directory: {rel_dispatch_dir}\n"
+                f"DISPATCH.md path: {rel_dispatch_path}\n"
+                "</CAR_RUNTIME_PATHS>\n\n"
+                f"{checkpoint_block}\n\n"
+                f"{commit_block}\n\n"
+                f"{lint_block}\n\n"
+                "<CAR_WORKSPACE_DOCS>\n"
+                f"{sections['workspace_block']}\n"
+                "</CAR_WORKSPACE_DOCS>\n\n"
+                "<CAR_HUMAN_REPLIES>\n"
+                f"{sections['reply_block']}\n"
+                "</CAR_HUMAN_REPLIES>\n\n"
+                "<CAR_PREVIOUS_TICKET_REFERENCE>\n"
+                f"{sections['prev_ticket_block']}\n"
+                "</CAR_PREVIOUS_TICKET_REFERENCE>\n\n"
+                f"{sections['ticket_block']}\n\n"
+                "<CAR_PREVIOUS_AGENT_OUTPUT>\n"
+                f"{sections['prev_block']}\n"
+                "</CAR_PREVIOUS_AGENT_OUTPUT>\n\n"
+                "</CAR_TICKET_FLOW_PROMPT>"
             )
 
         prompt = _shrink_prompt(
@@ -1026,6 +1044,7 @@ class TicketRunner:
             order=[
                 "prev_block",
                 "prev_ticket_block",
+                "reply_block",
                 "workspace_block",
                 "ticket_block",
             ],
