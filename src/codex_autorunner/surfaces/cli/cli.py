@@ -1130,7 +1130,7 @@ def flow(
             typer.echo(f"DB path: {db_path}")
             typer.echo(f"Artifacts root: {artifacts_root}")
 
-            store = FlowStore(db_path)
+            store = FlowStore(db_path, durable=engine.config.durable_writes)
             store.initialize()
 
             record = store.get_flow_run(run_id)
@@ -1178,6 +1178,7 @@ def flow(
                 definition=definition,
                 db_path=db_path,
                 artifacts_root=artifacts_root,
+                durable=engine.config.durable_writes,
             )
             controller.initialize()
 

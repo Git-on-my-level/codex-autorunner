@@ -147,12 +147,21 @@ def is_within(root: Path, target: Path) -> bool:
         return False
 
 
-def atomic_write(path: Path, content: str) -> None:
+def atomic_write(path: Path, content: str, durable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     with tmp_path.open("w", encoding="utf-8") as f:
         f.write(content)
+        if durable:
+            f.flush()
+            os.fsync(f.fileno())
     tmp_path.replace(path)
+    if durable:
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
 
 def read_json(path: Path) -> Optional[dict]:

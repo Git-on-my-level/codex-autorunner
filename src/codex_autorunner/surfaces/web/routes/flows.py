@@ -82,7 +82,8 @@ def _ticket_dir(repo_root: Path) -> Path:
 
 def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
     db_path, _ = _flow_paths(repo_root)
-    store = FlowStore(db_path)
+    config = load_repo_config(repo_root)
+    store = FlowStore(db_path, durable=config.durable_writes)
     try:
         store.initialize()
         return store
@@ -140,11 +141,13 @@ def _get_flow_controller(repo_root: Path, flow_type: str) -> FlowController:
 
     db_path, artifacts_root = _flow_paths(repo_root)
     definition = _build_flow_definition(repo_root, flow_type)
+    config = load_repo_config(repo_root)
 
     controller = FlowController(
         definition=definition,
         db_path=db_path,
         artifacts_root=artifacts_root,
+        durable=config.durable_writes,
     )
     try:
         controller.initialize()

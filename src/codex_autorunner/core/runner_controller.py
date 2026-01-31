@@ -33,8 +33,9 @@ class ProcessRunnerController:
             if not lock_pid:
                 self.ctx.lock_path.unlink(missing_ok=True)
 
+        durable = self.ctx.config.durable_writes
         with state_lock(self.ctx.state_path):
-            state = load_state(self.ctx.state_path)
+            state = load_state(self.ctx.state_path, durable=durable)
             if lock_pid:
                 if state.runner_pid != lock_pid or state.status != "running":
                     new_state = RunnerState(
@@ -53,7 +54,7 @@ class ProcessRunnerController:
                         sessions=state.sessions,
                         repo_to_session=state.repo_to_session,
                     )
-                    save_state(self.ctx.state_path, new_state)
+                    save_state(self.ctx.state_path, new_state, durable=durable)
                 self.ctx.reconcile_run_index()
                 return
 
@@ -84,7 +85,7 @@ class ProcessRunnerController:
                     sessions=state.sessions,
                     repo_to_session=state.repo_to_session,
                 )
-                save_state(self.ctx.state_path, new_state)
+                save_state(self.ctx.state_path, new_state, durable=durable)
 
         self.ctx.reconcile_run_index()
 
@@ -110,8 +111,9 @@ class ProcessRunnerController:
         if not assessment.freeable:
             return assessment
         self.ctx.lock_path.unlink(missing_ok=True)
+        durable = self.ctx.config.durable_writes
         with state_lock(self.ctx.state_path):
-            state = load_state(self.ctx.state_path)
+            state = load_state(self.ctx.state_path, durable=durable)
             if state.status == "running" or state.runner_pid:
                 exit_code = state.last_exit_code
                 if exit_code is None:
@@ -132,7 +134,7 @@ class ProcessRunnerController:
                     sessions=state.sessions,
                     repo_to_session=state.repo_to_session,
                 )
-                save_state(self.ctx.state_path, new_state)
+                save_state(self.ctx.state_path, new_state, durable=durable)
         return assessment
 
     def clear_freeable_lock(self):

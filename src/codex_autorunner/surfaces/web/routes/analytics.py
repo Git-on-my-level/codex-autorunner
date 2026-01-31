@@ -106,12 +106,16 @@ def _count_history_dirs(history_dir: Path) -> int:
 
 
 def _build_summary(repo_root: Path) -> Dict[str, Any]:
+    from ....core.config import load_repo_config
+
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
     db_path = _flows_db_path(repo_root)
     records: list[FlowRunRecord] = []
     if db_path.exists():
         try:
-            with FlowStore(db_path) as store:
+            with FlowStore(
+                db_path, durable=load_repo_config(repo_root).durable_writes
+            ) as store:
                 records = store.list_flow_runs(flow_type="ticket_flow")
         except Exception:
             records = []

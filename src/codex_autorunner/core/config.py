@@ -426,6 +426,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
             },
         ],
     },
+    "storage": {
+        "durable_writes": False,
+    },
 }
 
 REPO_DEFAULT_KEYS = {
@@ -725,6 +728,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
             },
         ],
     },
+    "storage": {
+        "durable_writes": False,
+    },
 }
 
 
@@ -870,6 +876,7 @@ class RepoConfig:
     voice: Dict[str, Any]
     static_assets: StaticAssetsConfig
     housekeeping: HousekeepingConfig
+    durable_writes: bool
 
     def doc_path(self, key: str) -> Path:
         return self.root / self.docs[key]
@@ -918,6 +925,7 @@ class HubConfig:
     server_log: LogConfig
     static_assets: StaticAssetsConfig
     housekeeping: HousekeepingConfig
+    durable_writes: bool
 
     def agent_binary(self, agent_id: str) -> str:
         agent = self.agents.get(agent_id)
@@ -1629,6 +1637,11 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     autorunner_reuse_session = (
         bool(reuse_session_value) if reuse_session_value is not None else False
     )
+    storage_cfg = cfg.get("storage")
+    storage_cfg = cast(
+        Dict[str, Any], storage_cfg if isinstance(storage_cfg, dict) else {}
+    )
+    durable_writes = bool(storage_cfg.get("durable_writes", False))
     return RepoConfig(
         raw=cfg,
         root=root,
@@ -1702,6 +1715,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
             cfg.get("static_assets"), root, DEFAULT_REPO_CONFIG["static_assets"]
         ),
         housekeeping=parse_housekeeping_config(cfg.get("housekeeping")),
+        durable_writes=durable_writes,
     )
 
 
@@ -1739,6 +1753,11 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
     )
     update_skip_checks = bool(update_cfg.get("skip_checks", False))
+    storage_cfg = cfg.get("storage")
+    storage_cfg = cast(
+        Dict[str, Any], storage_cfg if isinstance(storage_cfg, dict) else {}
+    )
+    durable_writes = bool(storage_cfg.get("durable_writes", False))
 
     return HubConfig(
         raw=cfg,
@@ -1756,6 +1775,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         update_repo_url=str(hub_cfg.get("update_repo_url", "")),
         update_repo_ref=str(hub_cfg.get("update_repo_ref", "main")),
         update_skip_checks=update_skip_checks,
+        durable_writes=durable_writes,
         app_server=_parse_app_server_config(
             cfg.get("app_server"),
             root,
