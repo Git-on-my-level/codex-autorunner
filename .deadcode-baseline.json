@@ -17,6 +17,7 @@
     "python:function:src/codex_autorunner/core/prompt.py:63:build_final_summary_prompt",
     "python:function:src/codex_autorunner/core/redaction.py:28:get_redaction_patterns",
     "python:function:src/codex_autorunner/core/review_context.py:64:build_spec_progress_review_context",
+    "python:function:src/codex_autorunner/core/state_roots.py:60:resolve_hub_templates_root",
     "python:function:src/codex_autorunner/core/state_roots.py:55:resolve_repo_state_root",
     "python:function:src/codex_autorunner/core/utils.py:230:ensure_executable",
     "python:function:src/codex_autorunner/core/patch_utils.py:127:ensure_patch_targets_allowed",

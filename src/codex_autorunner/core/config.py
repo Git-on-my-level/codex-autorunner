@@ -464,12 +464,24 @@ REPO_SHARED_KEYS = {
     "housekeeping",
     "update",
     "usage",
+    "templates",
 }
 
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "version": CONFIG_VERSION,
     "mode": "hub",
     "repo_defaults": DEFAULT_REPO_DEFAULTS,
+    "templates": {
+        "enabled": True,
+        "repos": [
+            {
+                "id": "blessed",
+                "url": "https://github.com/Git-on-my-level/car-ticket-templates",
+                "trusted": True,
+                "default_ref": "main",
+            }
+        ],
+    },
     "agents": {
         "codex": {
             "binary": "codex",
@@ -834,6 +846,20 @@ class AgentConfig:
     subagent_models: Optional[Dict[str, str]]
 
 
+@dataclasses.dataclass(frozen=True)
+class TemplateRepoConfig:
+    id: str
+    url: str
+    trusted: bool
+    default_ref: str
+
+
+@dataclasses.dataclass(frozen=True)
+class TemplatesConfig:
+    enabled: bool
+    repos: List[TemplateRepoConfig]
+
+
 @dataclasses.dataclass
 class RepoConfig:
     raw: Dict[str, Any]
@@ -877,6 +903,7 @@ class RepoConfig:
     static_assets: StaticAssetsConfig
     housekeeping: HousekeepingConfig
     durable_writes: bool
+    templates: TemplatesConfig
 
     def doc_path(self, key: str) -> Path:
         return self.root / self.docs[key]
@@ -902,6 +929,7 @@ class HubConfig:
     mode: str
     repo_defaults: Dict[str, Any]
     agents: Dict[str, AgentConfig]
+    templates: TemplatesConfig
     repos_root: Path
     worktrees_root: Path
     manifest_path: Path
@@ -1346,6 +1374,55 @@ def _parse_agents_config(
     return agents
 
 
+def _parse_templates_config(
+    cfg: Optional[Dict[str, Any]],
+    defaults: Optional[Dict[str, Any]],
+) -> TemplatesConfig:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+    enabled_raw = cfg.get("enabled", defaults.get("enabled", True))
+    if "enabled" in cfg and not isinstance(enabled_raw, bool):
+        raise ConfigError("templates.enabled must be boolean")
+    enabled = bool(enabled_raw)
+    repos_raw = cfg.get("repos", defaults.get("repos", []))
+    if repos_raw is None:
+        repos_raw = []
+    if not isinstance(repos_raw, list):
+        raise ConfigError("templates.repos must be a list")
+    repos: List[TemplateRepoConfig] = []
+    seen_ids: set[str] = set()
+    for idx, repo in enumerate(repos_raw):
+        if not isinstance(repo, dict):
+            raise ConfigError(f"templates.repos[{idx}] must be a mapping")
+        repo_id = repo.get("id")
+        if not isinstance(repo_id, str) or not repo_id.strip():
+            raise ConfigError(f"templates.repos[{idx}].id must be a non-empty string")
+        repo_id = repo_id.strip()
+        if repo_id in seen_ids:
+            raise ConfigError(f"templates.repos[{idx}].id must be unique")
+        seen_ids.add(repo_id)
+        url = repo.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise ConfigError(f"templates.repos[{idx}].url must be a non-empty string")
+        trusted = repo.get("trusted", False)
+        if "trusted" in repo and not isinstance(trusted, bool):
+            raise ConfigError(f"templates.repos[{idx}].trusted must be boolean")
+        default_ref = repo.get("default_ref", "main")
+        if not isinstance(default_ref, str) or not default_ref.strip():
+            raise ConfigError(
+                f"templates.repos[{idx}].default_ref must be a non-empty string"
+            )
+        repos.append(
+            TemplateRepoConfig(
+                id=repo_id,
+                url=url.strip(),
+                trusted=bool(trusted),
+                default_ref=default_ref.strip(),
+            )
+        )
+    return TemplatesConfig(enabled=enabled, repos=repos)
+
+
 def _parse_static_assets_config(
     cfg: Optional[Dict[str, Any]],
     root: Path,
@@ -1716,6 +1793,9 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         ),
         housekeeping=parse_housekeeping_config(cfg.get("housekeeping")),
         durable_writes=durable_writes,
+        templates=_parse_templates_config(
+            cfg.get("templates"), DEFAULT_HUB_CONFIG.get("templates")
+        ),
     )
 
 
@@ -1766,6 +1846,9 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         mode="hub",
         repo_defaults=cast(Dict[str, Any], cfg.get("repo_defaults") or {}),
         agents=_parse_agents_config(cfg, DEFAULT_HUB_CONFIG),
+        templates=_parse_templates_config(
+            cfg.get("templates"), DEFAULT_HUB_CONFIG.get("templates")
+        ),
         repos_root=(root / hub_cfg["repos_root"]).resolve(),
         worktrees_root=(root / hub_cfg["worktrees_root"]).resolve(),
         manifest_path=root / hub_cfg["manifest"],

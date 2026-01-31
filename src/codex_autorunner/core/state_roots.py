@@ -55,3 +55,8 @@ def resolve_global_state_root(
 def resolve_repo_state_root(repo_root: Path) -> Path:
     """Return the repo-local state root (.codex-autorunner)."""
     return repo_root / ".codex-autorunner"
+
+
+def resolve_hub_templates_root(hub_root: Path) -> Path:
+    """Return the hub-scoped templates root."""
+    return hub_root / ".codex-autorunner" / "templates"
