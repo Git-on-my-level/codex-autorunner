@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Optional
 
 import pytest
@@ -114,4 +115,5 @@ async def test_scan_rejection_is_cached(hub_env) -> None:
     cached = get_scan_record(hub_env.hub_root, template.blob_sha)
     assert cached is not None
     assert cached.decision == "reject"
-    assert exc.value.record == cached
+    assert cached.evidence is None
+    assert cached == dataclasses.replace(exc.value.record, evidence=None)

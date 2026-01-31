@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from .frontmatter import parse_markdown_frontmatter
@@ -73,3 +73,34 @@ def safe_relpath(path: Path, root: Path) -> str:
         return str(path.relative_to(root))
     except ValueError:
         return str(path)
+
+
+def normalize_ticket_dir(repo_root: Path, ticket_dir: Optional[str]) -> Path:
+    """Normalize a user-supplied ticket directory and ensure it stays in-tree."""
+
+    base = (repo_root / ".codex-autorunner").resolve(strict=False)
+    if not ticket_dir:
+        return base / "tickets"
+
+    cleaned = str(ticket_dir).strip()
+    if not cleaned:
+        return base / "tickets"
+    if "\\" in cleaned:
+        raise ValueError("Ticket directory may not include backslashes.")
+
+    raw_path = Path(cleaned)
+    if raw_path.is_absolute():
+        candidate = raw_path.resolve(strict=False)
+    else:
+        relative = PurePosixPath(cleaned)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("Ticket directory must be a relative path.")
+        candidate = (repo_root / relative).resolve(strict=False)
+
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        raise ValueError(
+            "Ticket directory must live under .codex-autorunner."
+        ) from None
+    return candidate

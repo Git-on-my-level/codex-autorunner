@@ -68,15 +68,22 @@ def build_template_scan_prompt(template: FetchedTemplate) -> str:
 
 
 def _extract_output_text(events: Iterable[RunEvent]) -> str:
+    deltas: list[str] = []
+    final_message: Optional[str] = None
     for event in events:
         if isinstance(event, Completed):
-            return event.final_message
+            final_message = event.final_message
+            continue
         if isinstance(event, OutputDelta) and event.delta_type in {
             "assistant_message",
             "assistant_stream",
         }:
             if event.content:
-                return event.content
+                deltas.append(event.content)
+    if final_message:
+        return final_message
+    if deltas:
+        return "".join(deltas)
     return ""
 
 

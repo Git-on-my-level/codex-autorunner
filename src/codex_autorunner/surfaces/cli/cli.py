@@ -751,7 +751,8 @@ def repos_add(
     templates_config = data.get("templates", {})
     if not isinstance(templates_config, dict):
         templates_config = {}
-    if not templates_config.get("enabled"):
+    enabled = templates_config.get("enabled", True)
+    if enabled is False:
         _raise_exit(
             "Templates are disabled. Set templates.enabled=true in the hub config to enable."
         )
@@ -759,6 +760,7 @@ def repos_add(
     templates_config = data.setdefault("templates", {})
     if not isinstance(templates_config, dict):
         _raise_exit("Invalid templates config in hub config")
+    templates_config.setdefault("enabled", True)
     repos = templates_config.setdefault("repos", [])
     if not isinstance(repos, list):
         _raise_exit("Invalid repos config in hub config")

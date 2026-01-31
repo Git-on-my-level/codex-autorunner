@@ -25,7 +25,7 @@ from ....integrations.templates import (
     format_template_scan_rejection,
     run_template_scan,
 )
-from ....tickets.files import safe_relpath
+from ....tickets.files import normalize_ticket_dir, safe_relpath
 from ....tickets.frontmatter import split_markdown_frontmatter
 from ....tickets.lint import parse_ticket_index
 from ..schemas import (
@@ -156,32 +156,24 @@ async def _fetch_template_with_scan(
 
 
 def _resolve_ticket_dir(repo_root: Path, ticket_dir: Optional[str]) -> Path:
-    if not ticket_dir:
-        return repo_root / ".codex-autorunner" / "tickets"
-    candidate = Path(ticket_dir)
-    if not candidate.is_absolute():
-        candidate = (repo_root / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
-    allowed_root = (repo_root / ".codex-autorunner").resolve()
     try:
-        candidate.relative_to(allowed_root)
+        return normalize_ticket_dir(repo_root, ticket_dir)
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
-            detail=_error_detail(
-                "ticket_dir_invalid",
-                "Ticket directory must live under .codex-autorunner.",
-            ),
+            detail=_error_detail("ticket_dir_invalid", str(exc)),
         ) from exc
-    return candidate
 
 
 def _collect_ticket_indices(ticket_dir: Path) -> list[int]:
     indices: list[int] = []
     if not ticket_dir.exists() or not ticket_dir.is_dir():
         return indices
-    for path in ticket_dir.iterdir():
+    for (
+        path
+    ) in (
+        ticket_dir.iterdir()
+    ):  # codeql[py/path-injection] validated by normalize_ticket_dir
         if not path.is_file():
             continue
         idx = parse_ticket_index(path.name)
@@ -268,7 +260,9 @@ def _format_fetch_response(
         commit_sha=fetched.commit_sha,
         blob_sha=fetched.blob_sha,
         trusted=fetched.trusted,
-        scan_decision=scan_record.to_dict() if scan_record else None,
+        scan_decision=(
+            scan_record.to_dict(include_evidence=False) if scan_record else None
+        ),
     )
 
 
@@ -320,7 +314,9 @@ def build_templates_routes() -> APIRouter:
                 ),
             )
         try:
-            resolved_dir.mkdir(parents=True, exist_ok=True)
+            resolved_dir.mkdir(
+                parents=True, exist_ok=True
+            )  # codeql[py/path-injection] validated by normalize_ticket_dir
         except OSError as exc:
             raise HTTPException(
                 status_code=500,
@@ -383,7 +379,9 @@ def build_templates_routes() -> APIRouter:
             content = _apply_agent_override(content, payload.set_agent)
 
         try:
-            path.write_text(content, encoding="utf-8")
+            path.write_text(
+                content, encoding="utf-8"
+            )  # codeql[py/path-injection] validated by normalize_ticket_dir
         except OSError as exc:
             raise HTTPException(
                 status_code=500,
@@ -397,7 +395,9 @@ def build_templates_routes() -> APIRouter:
             "commit_sha": fetched.commit_sha,
             "blob_sha": fetched.blob_sha,
             "trusted": fetched.trusted,
-            "scan_decision": scan_record.to_dict() if scan_record else None,
+            "scan_decision": (
+                scan_record.to_dict(include_evidence=False) if scan_record else None
+            ),
         }
         return TemplateApplyResponse(
             created_path=safe_relpath(path, request.app.state.engine.repo_root),

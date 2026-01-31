@@ -26,7 +26,7 @@ class TemplateScanRecord:
     scanned_at: str
     scanner: Optional[dict[str, str]]
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, include_evidence: bool = True) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "blob_sha": self.blob_sha,
             "repo_id": self.repo_id,
@@ -39,7 +39,7 @@ class TemplateScanRecord:
             "reason": self.reason,
             "scanned_at": self.scanned_at,
         }
-        if self.evidence:
+        if include_evidence and self.evidence:
             payload["evidence"] = list(self.evidence)
         if self.scanner:
             payload["scanner"] = dict(self.scanner)
@@ -102,7 +102,9 @@ def get_scan_record(hub_root: Path, blob_sha: str) -> Optional[TemplateScanRecor
 
 def write_scan_record(record: TemplateScanRecord, hub_root: Path) -> None:
     path = scan_record_path(hub_root, record.blob_sha)
-    payload = record.to_dict()
+    payload = record.to_dict(include_evidence=False)
+    if record.evidence:
+        payload["evidence_redacted"] = True
     atomic_write(path, json.dumps(payload, indent=2) + "\n")
 
 
