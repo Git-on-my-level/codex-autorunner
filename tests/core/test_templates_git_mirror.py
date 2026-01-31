@@ -136,3 +136,112 @@ def test_fetch_template_network_unavailable(tmp_path: Path) -> None:
             hub_root=hub_root,
             template_ref="local:tickets/MISSING.md",
         )
+
+
+def test_fetch_template_content_change_changes_blob_sha(tmp_path: Path) -> None:
+    """Test that changing content in the same file results in a new blob_sha."""
+    repo_path = tmp_path / "repo"
+    branch = _init_repo(repo_path)
+    initial_content = "# Initial Template\nHello"
+    initial_commit, initial_blob_sha = _commit_file(
+        repo_path, "tickets/TICKET-CHANGE.md", initial_content
+    )
+
+    repo = TemplateRepoConfig(
+        id="local",
+        url=str(repo_path),
+        trusted=True,
+        default_ref=branch,
+    )
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+
+    fetched_initial = fetch_template(
+        repo=repo,
+        hub_root=hub_root,
+        template_ref="local:tickets/TICKET-CHANGE.md",
+    )
+
+    assert fetched_initial.commit_sha == initial_commit
+    assert fetched_initial.blob_sha == initial_blob_sha
+    assert fetched_initial.content == initial_content
+
+    modified_content = "# Modified Template\nChanged"
+    modified_commit, modified_blob_sha = _commit_file(
+        repo_path, "tickets/TICKET-CHANGE.md", modified_content
+    )
+
+    fetched_modified = fetch_template(
+        repo=repo,
+        hub_root=hub_root,
+        template_ref="local:tickets/TICKET-CHANGE.md",
+    )
+
+    assert fetched_modified.commit_sha == modified_commit
+    assert fetched_modified.blob_sha == modified_blob_sha
+    assert fetched_modified.content == modified_content
+
+    assert initial_commit != modified_commit
+    assert initial_blob_sha != modified_blob_sha
+
+
+def test_fetch_template_different_file_different_blob_sha(tmp_path: Path) -> None:
+    """Test that fetching different files results in different blob_shas."""
+    repo_path = tmp_path / "repo"
+    branch = _init_repo(repo_path)
+    content1 = "# Template One\nOne"
+    content2 = "# Template Two\nTwo"
+    _, blob_sha1 = _commit_file(repo_path, "tickets/TICKET-ONE.md", content1)
+    _, blob_sha2 = _commit_file(repo_path, "tickets/TICKET-TWO.md", content2)
+
+    repo = TemplateRepoConfig(
+        id="local",
+        url=str(repo_path),
+        trusted=True,
+        default_ref=branch,
+    )
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+
+    fetched_one = fetch_template(
+        repo=repo,
+        hub_root=hub_root,
+        template_ref="local:tickets/TICKET-ONE.md",
+    )
+    fetched_two = fetch_template(
+        repo=repo,
+        hub_root=hub_root,
+        template_ref="local:tickets/TICKET-TWO.md",
+    )
+
+    assert fetched_one.blob_sha == blob_sha1
+    assert fetched_two.blob_sha == blob_sha2
+    assert fetched_one.blob_sha != fetched_two.blob_sha
+
+
+def test_fetch_template_with_explicit_ref(tmp_path: Path) -> None:
+    """Test fetching with explicit ref in template_ref string."""
+    repo_path = tmp_path / "repo"
+    _init_repo(repo_path, branch="main")
+    content = "# Branch Template\nBranch content"
+    commit, blob_sha = _commit_file(repo_path, "tickets/TICKET-BRANCH.md", content)
+
+    repo = TemplateRepoConfig(
+        id="local",
+        url=str(repo_path),
+        trusted=True,
+        default_ref="other",
+    )
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+
+    fetched = fetch_template(
+        repo=repo,
+        hub_root=hub_root,
+        template_ref="local:tickets/TICKET-BRANCH.md@main",
+    )
+
+    assert fetched.commit_sha == commit
+    assert fetched.blob_sha == blob_sha
+    assert fetched.content == content
+    assert fetched.ref == "main"
