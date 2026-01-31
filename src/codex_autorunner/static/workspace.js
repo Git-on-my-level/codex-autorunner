@@ -82,6 +82,13 @@ function els() {
         statusMobile: document.getElementById("workspace-status-mobile"),
         uploadBtn: document.getElementById("workspace-upload"),
         uploadInput: document.getElementById("workspace-upload-input"),
+        mobileMenuToggle: document.getElementById("workspace-mobile-menu-toggle"),
+        mobileDropdown: document.getElementById("workspace-mobile-dropdown"),
+        mobileUpload: document.getElementById("workspace-mobile-upload"),
+        mobileNewFolder: document.getElementById("workspace-mobile-new-folder"),
+        mobileNewFile: document.getElementById("workspace-mobile-new-file"),
+        mobileDownload: document.getElementById("workspace-mobile-download"),
+        mobileGenerate: document.getElementById("workspace-mobile-generate"),
         newFolderBtn: document.getElementById("workspace-new-folder"),
         newFileBtn: document.getElementById("workspace-new-file"),
         downloadAllBtn: document.getElementById("workspace-download-all"),
@@ -224,15 +231,33 @@ function renderPatch() {
 function renderChat() {
     workspaceChat.render();
 }
+function closeMobileMenu() {
+    const dropdown = els().mobileDropdown;
+    if (dropdown)
+        dropdown.classList.add("hidden");
+}
+function toggleMobileMenu() {
+    const dropdown = els().mobileDropdown;
+    if (dropdown)
+        dropdown.classList.toggle("hidden");
+}
 function updateDownloadButton() {
-    const { downloadAllBtn } = els();
-    if (!downloadAllBtn)
-        return;
+    const { downloadAllBtn, mobileDownload } = els();
     const currentPath = state.browser?.getCurrentPath() || "";
     const isRoot = !currentPath;
     const folderName = currentPath.split("/").pop() || "";
-    downloadAllBtn.title = isRoot ? "Download all as ZIP" : `Download ${folderName}/ as ZIP`;
-    downloadAllBtn.onclick = () => downloadWorkspaceZip(isRoot ? undefined : currentPath);
+    const download = () => downloadWorkspaceZip(isRoot ? undefined : currentPath);
+    if (downloadAllBtn) {
+        downloadAllBtn.title = isRoot ? "Download all as ZIP" : `Download ${folderName}/ as ZIP`;
+        downloadAllBtn.onclick = download;
+    }
+    if (mobileDownload) {
+        mobileDownload.textContent = isRoot ? "Download ZIP (all)" : `Download ${folderName || "folder"}`;
+        mobileDownload.onclick = () => {
+            closeMobileMenu();
+            download();
+        };
+    }
 }
 let createMode = null;
 function listFolderPaths(nodes, base = "") {
@@ -431,9 +456,12 @@ async function maybeShowGenerate() {
     catch {
         state.hasTickets = true;
     }
-    const btn = els().generateBtn;
-    if (btn)
-        btn.classList.toggle("hidden", state.hasTickets);
+    const { generateBtn, mobileGenerate } = els();
+    const hidden = state.hasTickets;
+    if (generateBtn)
+        generateBtn.classList.toggle("hidden", hidden);
+    if (mobileGenerate)
+        mobileGenerate.classList.toggle("hidden", hidden);
 }
 async function generateTickets() {
     try {
@@ -645,7 +673,7 @@ async function loadFiles(defaultPath, reason = "manual") {
     }
 }
 export async function initWorkspace() {
-    const { generateBtn, uploadBtn, uploadInput, newFolderBtn, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();
+    const { generateBtn, uploadBtn, uploadInput, mobileMenuToggle, mobileDropdown, mobileUpload, mobileNewFolder, mobileNewFile, mobileDownload, mobileGenerate, newFolderBtn, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, chatSend, chatCancel, chatNewThread, } = els();
     if (!document.getElementById("workspace"))
         return;
     initAgentControls({
@@ -685,6 +713,44 @@ export async function initWorkspace() {
         finally {
             uploadInput.value = "";
         }
+    });
+    // Mobile action sheet
+    mobileMenuToggle?.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        toggleMobileMenu();
+    });
+    document.addEventListener("click", (evt) => {
+        if (!mobileDropdown || mobileDropdown.classList.contains("hidden"))
+            return;
+        if (evt.target instanceof Node && mobileDropdown.contains(evt.target))
+            return;
+        closeMobileMenu();
+    });
+    document.addEventListener("keydown", (evt) => {
+        if (evt.key === "Escape" && mobileDropdown && !mobileDropdown.classList.contains("hidden")) {
+            closeMobileMenu();
+        }
+    });
+    mobileUpload?.addEventListener("click", () => {
+        closeMobileMenu();
+        uploadInput?.click();
+    });
+    mobileNewFolder?.addEventListener("click", () => {
+        closeMobileMenu();
+        openCreateModal("folder");
+    });
+    mobileNewFile?.addEventListener("click", () => {
+        closeMobileMenu();
+        openCreateModal("file");
+    });
+    mobileDownload?.addEventListener("click", () => {
+        closeMobileMenu();
+        const currentPath = state.browser?.getCurrentPath() || "";
+        downloadWorkspaceZip(currentPath || undefined);
+    });
+    mobileGenerate?.addEventListener("click", () => {
+        closeMobileMenu();
+        void generateTickets();
     });
     newFolderBtn?.addEventListener("click", () => openCreateModal("folder"));
     els().newFileBtn?.addEventListener("click", () => openCreateModal("file"));
