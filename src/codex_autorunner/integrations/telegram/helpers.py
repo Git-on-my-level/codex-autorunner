@@ -893,6 +893,7 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         "agent",
         "model",
         "approvals",
+        "pma",
         "status",
         "diff",
         "mention",

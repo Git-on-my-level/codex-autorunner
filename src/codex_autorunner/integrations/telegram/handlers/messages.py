@@ -352,7 +352,8 @@ async def handle_message_inner(
     record = await handlers._router.get_topic(key)
     paused = None
     workspace_root: Optional[Path] = None
-    if record and record.workspace_path:
+    pma_enabled = bool(record and getattr(record, "pma_enabled", False))
+    if not pma_enabled and record and record.workspace_path:
         workspace_root = canonicalize_path(Path(record.workspace_path))
         preferred_run_id = handlers._ticket_flow_pause_targets.get(
             str(workspace_root), None

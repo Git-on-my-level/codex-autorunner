@@ -69,6 +69,12 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             "set approval and sandbox policy",
             handlers._handle_approvals,
         ),
+        "pma": CommandSpec(
+            "pma",
+            "toggle PMA mode for this topic",
+            handlers._handle_pma,
+            allow_during_turn=True,
+        ),
         "status": CommandSpec(
             "status",
             "show current binding and thread status",

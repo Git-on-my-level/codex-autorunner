@@ -2,7 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.telegram.state import TelegramStateStore
+from codex_autorunner.integrations.telegram.state import (
+    TelegramStateStore,
+    topic_key,
+)
 
 
 @pytest.mark.anyio
@@ -30,5 +33,23 @@ async def test_telegram_state_json_path_with_sqlite(tmp_path: Path) -> None:
     try:
         records = await store.list_pending_voice()
         assert records == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_state_pma_toggle(tmp_path: Path) -> None:
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    key = topic_key(123, None)
+    try:
+        record = await store.ensure_topic(key)
+        assert record.pma_enabled is False
+        record = await store.update_topic(
+            key, lambda record: setattr(record, "pma_enabled", True)
+        )
+        assert record.pma_enabled is True
+        record = await store.get_topic(key)
+        assert record is not None
+        assert record.pma_enabled is True
     finally:
         await store.close()

@@ -190,6 +190,7 @@ class TelegramTopicRecord:
     repo_id: Optional[str] = None
     workspace_path: Optional[str] = None
     workspace_id: Optional[str] = None
+    pma_enabled: bool = False
     active_thread_id: Optional[str] = None
     thread_ids: list[str] = dataclasses.field(default_factory=list)
     thread_summaries: dict[str, ThreadSummary] = dataclasses.field(default_factory=dict)
@@ -220,6 +221,9 @@ class TelegramTopicRecord:
         workspace_id = payload.get("workspace_id") or payload.get("workspaceId")
         if not isinstance(workspace_id, str):
             workspace_id = None
+        pma_enabled = payload.get("pma_enabled") or payload.get("pmaEnabled")
+        if not isinstance(pma_enabled, bool):
+            pma_enabled = False
         active_thread_id = payload.get("active_thread_id") or payload.get(
             "activeThreadId"
         )
@@ -301,6 +305,7 @@ class TelegramTopicRecord:
             repo_id=repo_id,
             workspace_path=workspace_path,
             workspace_id=workspace_id,
+            pma_enabled=pma_enabled,
             active_thread_id=active_thread_id,
             thread_ids=thread_ids,
             thread_summaries=thread_summaries,
@@ -324,6 +329,7 @@ class TelegramTopicRecord:
             "repo_id": self.repo_id,
             "workspace_path": self.workspace_path,
             "workspace_id": self.workspace_id,
+            "pma_enabled": self.pma_enabled,
             "active_thread_id": self.active_thread_id,
             "thread_ids": list(self.thread_ids),
             "thread_summaries": {

@@ -1108,6 +1108,55 @@ class TelegramCommandHandlers(
             reply_to=message.message_id,
         )
 
+    async def _handle_pma(
+        self, message: TelegramMessage, args: str, _runtime: Any
+    ) -> None:
+        if not self._hub_root:
+            await self._send_message(
+                message.chat_id,
+                "PMA unavailable; hub root not configured.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        argv = self._parse_command_args(args)
+        action = argv[0].lower() if argv else ""
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
+        current = bool(record and record.pma_enabled)
+        if action in ("status", "show"):
+            enabled = current
+        elif action in ("on", "enable", "true"):
+            enabled = True
+        elif action in ("off", "disable", "false"):
+            enabled = False
+        elif action:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /pma [on|off|status]",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        else:
+            enabled = not current
+
+        if record is None:
+            await self._router.ensure_topic(message.chat_id, message.thread_id)
+        await self._router.update_topic(
+            message.chat_id,
+            message.thread_id,
+            lambda record: setattr(record, "pma_enabled", enabled),
+        )
+        status = "enabled" if enabled else "disabled"
+        hint = "Use /pma off to exit." if enabled else "Back to repo mode."
+        await self._send_message(
+            message.chat_id,
+            f"PMA mode {status}. {hint}",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
     async def _opencode_review_arguments(target: dict[str, Any]) -> str:
         target_type = target.get("type")
         if target_type == "uncommittedChanges":

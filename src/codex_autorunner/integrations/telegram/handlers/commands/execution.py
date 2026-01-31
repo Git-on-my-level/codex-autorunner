@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import math
@@ -27,10 +28,16 @@ from .....agents.opencode.runtime import (
     split_model_id,
 )
 from .....agents.opencode.supervisor import OpenCodeSupervisorError
+from .....core.app_server_threads import (
+    PMA_KEY,
+    PMA_OPENCODE_KEY,
+    AppServerThreadRegistry,
+)
 from .....core.config import load_repo_config
 from .....core.context_awareness import CAR_AWARENESS_BLOCK
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
+from .....core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
 from .....integrations.github.service import GitHubService
@@ -1039,6 +1046,8 @@ class ExecutionCommands(SharedHelpers):
         missing_thread_message: Optional[str],
         transcript_message_id: Optional[int],
         transcript_text: Optional[str],
+        pma_thread_registry: Optional[AppServerThreadRegistry] = None,
+        pma_thread_key: Optional[str] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         supervisor = getattr(self, "_opencode_supervisor", None)
         if supervisor is None:
@@ -1102,6 +1111,7 @@ class ExecutionCommands(SharedHelpers):
                 transcript_text,
             )
 
+        pma_mode = bool(pma_thread_registry and pma_thread_key)
         try:
             if not thread_id:
                 if not allow_new_thread:
@@ -1157,27 +1167,34 @@ class ExecutionCommands(SharedHelpers):
                         rollout_path=record.rollout_path,
                     )
 
-                record = await self._router.update_topic(
-                    message.chat_id, message.thread_id, apply
-                )
+                if pma_mode:
+                    pma_thread_registry.set_thread_id(pma_thread_key, thread_id)
+                else:
+                    record = await self._router.update_topic(
+                        message.chat_id, message.thread_id, apply
+                    )
             else:
-                record = await self._router.set_active_thread(
-                    message.chat_id, message.thread_id, thread_id
-                )
+                if not pma_mode:
+                    record = await self._router.set_active_thread(
+                        message.chat_id, message.thread_id, thread_id
+                    )
 
-            user_preview = _preview_from_text(prompt_text, RESUME_PREVIEW_USER_LIMIT)
-            await self._router.update_topic(
-                message.chat_id,
-                message.thread_id,
-                lambda record: _set_thread_summary(
-                    record,
-                    thread_id,
-                    user_preview=user_preview,
-                    last_used_at=now_iso(),
-                    workspace_path=record.workspace_path,
-                    rollout_path=record.rollout_path,
-                ),
-            )
+            if not pma_mode:
+                user_preview = _preview_from_text(
+                    prompt_text, RESUME_PREVIEW_USER_LIMIT
+                )
+                await self._router.update_topic(
+                    message.chat_id,
+                    message.thread_id,
+                    lambda record: _set_thread_summary(
+                        record,
+                        thread_id,
+                        user_preview=user_preview,
+                        last_used_at=now_iso(),
+                        workspace_path=record.workspace_path,
+                        rollout_path=record.rollout_path,
+                    ),
+                )
 
             pending_seed = None
             pending_seed_thread_id = record.pending_compact_seed_thread_id
@@ -1917,6 +1934,8 @@ class ExecutionCommands(SharedHelpers):
         missing_thread_message: Optional[str],
         transcript_message_id: Optional[int],
         transcript_text: Optional[str],
+        pma_thread_registry: Optional[AppServerThreadRegistry] = None,
+        pma_thread_key: Optional[str] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         turn_handle = None
         turn_key: Optional[TurnKey] = None
@@ -1959,6 +1978,7 @@ class ExecutionCommands(SharedHelpers):
                 failure_message, None, transcript_message_id, transcript_text
             )
 
+        pma_mode = bool(pma_thread_registry and pma_thread_key)
         try:
             if not thread_id:
                 if not allow_new_thread:
@@ -2014,18 +2034,22 @@ class ExecutionCommands(SharedHelpers):
                         transcript_message_id,
                         transcript_text,
                     )
-                record = await self._apply_thread_result(
-                    message.chat_id,
-                    message.thread_id,
-                    thread,
-                    active_thread_id=thread_id,
-                )
+                if pma_mode:
+                    pma_thread_registry.set_thread_id(pma_thread_key, thread_id)
+                else:
+                    record = await self._apply_thread_result(
+                        message.chat_id,
+                        message.thread_id,
+                        thread,
+                        active_thread_id=thread_id,
+                    )
             else:
-                record = await self._router.set_active_thread(
-                    message.chat_id, message.thread_id, thread_id
-                )
+                if not pma_mode:
+                    record = await self._router.set_active_thread(
+                        message.chat_id, message.thread_id, thread_id
+                    )
 
-            if thread_id:
+            if thread_id and not pma_mode:
                 user_preview = _preview_from_text(
                     prompt_text, RESUME_PREVIEW_USER_LIMIT
                 )
@@ -2045,7 +2069,9 @@ class ExecutionCommands(SharedHelpers):
             pending_seed = None
             pending_seed_thread_id = record.pending_compact_seed_thread_id
             if record.pending_compact_seed:
-                if pending_seed_thread_id is None:
+                if pma_mode:
+                    pending_seed = None
+                elif pending_seed_thread_id is None:
                     pending_seed = record.pending_compact_seed
                 elif thread_id and pending_seed_thread_id == thread_id:
                     pending_seed = record.pending_compact_seed
@@ -2381,6 +2407,21 @@ class ExecutionCommands(SharedHelpers):
         )
         return prompt_text
 
+    def _pma_registry_key(self, record: "TelegramTopicRecord") -> str:
+        agent = self._effective_agent(record)
+        if agent == "opencode":
+            return PMA_OPENCODE_KEY
+        return PMA_KEY
+
+    async def _prepare_pma_prompt(self, message_text: str) -> Optional[str]:
+        hub_root = getattr(self, "_hub_root", None)
+        if hub_root is None:
+            return None
+        supervisor = getattr(self, "_hub_supervisor", None)
+        snapshot = await build_hub_snapshot(supervisor)
+        base_prompt = load_pma_prompt(hub_root)
+        return format_pma_prompt(base_prompt, snapshot, message_text)
+
     async def _prepare_turn_context(
         self,
         message: TelegramMessage,
@@ -2486,6 +2527,26 @@ class ExecutionCommands(SharedHelpers):
     ) -> _TurnRunResult | _TurnRunFailure:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = record or await self._router.get_topic(key)
+        pma_enabled = bool(record and getattr(record, "pma_enabled", False))
+        if pma_enabled:
+            hub_root = getattr(self, "_hub_root", None)
+            if hub_root is None:
+                failure_message = "PMA unavailable; hub root not configured."
+                if send_failure_response:
+                    await self._send_message(
+                        message.chat_id,
+                        failure_message,
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                return _TurnRunFailure(
+                    failure_message, None, transcript_message_id, transcript_text
+                )
+            if record is None:
+                from ...state import TelegramTopicRecord
+
+                record = TelegramTopicRecord(pma_enabled=True)
+            record = dataclasses.replace(record, workspace_path=str(hub_root))
         if record is None or not record.workspace_path:
             failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
             if send_failure_response:
@@ -2499,7 +2560,7 @@ class ExecutionCommands(SharedHelpers):
                 failure_message, None, transcript_message_id, transcript_text
             )
 
-        if record.active_thread_id:
+        if record.active_thread_id and not pma_enabled:
             conflict_key = await self._find_thread_conflict(
                 record.active_thread_id,
                 key=key,
@@ -2529,16 +2590,38 @@ class ExecutionCommands(SharedHelpers):
                 )
             record = verified
 
-        thread_id = record.active_thread_id
+        pma_thread_registry = (
+            getattr(self, "_hub_thread_registry", None) if pma_enabled else None
+        )
+        pma_thread_key = self._pma_registry_key(record) if pma_enabled else None
+        thread_id = None if pma_enabled else record.active_thread_id
+        if pma_enabled and pma_thread_registry and pma_thread_key:
+            thread_id = pma_thread_registry.get_thread_id(pma_thread_key)
         prompt_text = (
             text_override if text_override is not None else (message.text or "")
         )
         prompt_text = self._prepare_turn_prompt(
             prompt_text, transcript_text=transcript_text
         )
-        prompt_text, key = await self._prepare_turn_context(
-            message, prompt_text, record
-        )
+        if pma_enabled:
+            pma_prompt = await self._prepare_pma_prompt(prompt_text)
+            if pma_prompt is None:
+                failure_message = "PMA unavailable; hub snapshot failed."
+                if send_failure_response:
+                    await self._send_message(
+                        message.chat_id,
+                        failure_message,
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                return _TurnRunFailure(
+                    failure_message, None, transcript_message_id, transcript_text
+                )
+            prompt_text = pma_prompt
+        else:
+            prompt_text, key = await self._prepare_turn_context(
+                message, prompt_text, record
+            )
 
         turn_semaphore = self._ensure_turn_semaphore()
         queued = turn_semaphore.locked()
@@ -2567,6 +2650,8 @@ class ExecutionCommands(SharedHelpers):
                 missing_thread_message=missing_thread_message,
                 transcript_message_id=transcript_message_id,
                 transcript_text=transcript_text,
+                pma_thread_registry=pma_thread_registry,
+                pma_thread_key=pma_thread_key,
             )
 
         return await self._execute_codex_turn(
@@ -2585,4 +2670,6 @@ class ExecutionCommands(SharedHelpers):
             missing_thread_message=missing_thread_message,
             transcript_message_id=transcript_message_id,
             transcript_text=transcript_text,
+            pma_thread_registry=pma_thread_registry,
+            pma_thread_key=pma_thread_key,
         )

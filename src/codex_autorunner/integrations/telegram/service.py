@@ -16,7 +16,12 @@ if TYPE_CHECKING:
     from .state import TelegramTopicRecord
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...core.app_server_threads import (
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
 from ...core.flows.models import FlowRunRecord
+from ...core.hub import HubSupervisor
 from ...core.locks import process_alive
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
@@ -173,6 +178,31 @@ class TelegramBotService(
         self._logger = logger or logging.getLogger(__name__)
         self._hub_root = hub_root
         self._manifest_path = manifest_path
+        self._hub_supervisor = None
+        self._hub_thread_registry = None
+        if self._hub_root:
+            try:
+                self._hub_supervisor = HubSupervisor.from_path(self._hub_root)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.pma.hub_supervisor.unavailable",
+                    hub_root=str(self._hub_root),
+                    exc=exc,
+                )
+            try:
+                self._hub_thread_registry = AppServerThreadRegistry(
+                    default_app_server_threads_path(self._hub_root)
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.pma.thread_registry.unavailable",
+                    hub_root=str(self._hub_root),
+                    exc=exc,
+                )
         self._update_repo_url = update_repo_url
         self._update_repo_ref = update_repo_ref
         self._update_skip_checks = update_skip_checks
