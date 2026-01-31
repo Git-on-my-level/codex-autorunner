@@ -14,9 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from ....agents.registry import validate_agent_id
 from ....core.config import load_repo_config
-from ....core.engine import Engine
 from ....core.flows import (
     FlowController,
     FlowDefinition,
@@ -36,12 +34,9 @@ from ....core.flows.ux_helpers import (
     seed_issue_from_text,
 )
 from ....core.flows.worker_process import FlowWorkerHealth, check_worker_health
+from ....core.runtime import RuntimeContext
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
-from ....integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
-)
 from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets import AgentPool
 from ....tickets.files import (
@@ -80,6 +75,14 @@ def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
 def _ticket_dir(repo_root: Path) -> Path:
     repo_root = repo_root.resolve()
     return repo_root / ".codex-autorunner" / "tickets"
+
+
+def _find_ticket_path_by_index(ticket_dir: Path, index: int) -> Optional[Path]:
+    for path in list_ticket_paths(ticket_dir):
+        idx = parse_ticket_index(path.name)
+        if idx == index:
+            return path
+    return None
 
 
 def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
@@ -126,12 +129,9 @@ def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
 
     if flow_type == "ticket_flow":
         config = load_repo_config(repo_root)
-        engine = Engine(
-            repo_root,
+        engine = RuntimeContext(
+            repo_root=repo_root,
             config=config,
-            backend_factory=build_agent_backend_factory(repo_root, config),
-            app_server_supervisor_factory=build_app_server_supervisor_factory(config),
-            agent_id_validator=validate_agent_id,
         )
         agent_pool = AgentPool(engine.config)
         definition = build_ticket_flow_definition(agent_pool=agent_pool)
@@ -471,6 +471,17 @@ def build_flow_routes() -> APIRouter:
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root, flow_type)
 
+        if flow_type == "ticket_flow" and force_new:
+            ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+            if not list_ticket_paths(ticket_dir):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "No tickets found under .codex-autorunner/tickets. "
+                        "Use /api/flows/ticket_flow/bootstrap to seed tickets."
+                    ),
+                )
+
         # Reuse an active/paused run unless force_new is requested.
         if not force_new:
             runs = _safe_list_flow_runs(
@@ -724,12 +735,10 @@ You are the first ticket in a new ticket_flow run.
         """Update an existing ticket by index."""
         repo_root = find_repo_root()
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-        ticket_path = ticket_dir / f"TICKET-{index:03d}.md"
+        ticket_path = _find_ticket_path_by_index(ticket_dir, index)
 
-        if not ticket_path.exists():
-            raise HTTPException(
-                status_code=404, detail=f"Ticket TICKET-{index:03d}.md not found"
-            )
+        if not ticket_path:
+            raise HTTPException(status_code=404, detail=f"Ticket {index:03d} not found")
 
         # Validate frontmatter before saving
         data, body = parse_markdown_frontmatter(request.content)
@@ -761,12 +770,10 @@ You are the first ticket in a new ticket_flow run.
         """Delete a ticket by index."""
         repo_root = find_repo_root()
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-        ticket_path = ticket_dir / f"TICKET-{index:03d}.md"
+        ticket_path = _find_ticket_path_by_index(ticket_dir, index)
 
-        if not ticket_path.exists():
-            raise HTTPException(
-                status_code=404, detail=f"Ticket TICKET-{index:03d}.md not found"
-            )
+        if not ticket_path:
+            raise HTTPException(status_code=404, detail=f"Ticket {index:03d} not found")
 
         rel_path = safe_relpath(ticket_path, repo_root)
         ticket_path.unlink()

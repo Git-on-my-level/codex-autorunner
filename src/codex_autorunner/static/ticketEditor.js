@@ -88,7 +88,13 @@ async function navigateTicket(delta) {
     const idx = list.findIndex((ticket) => ticket.index === state.ticketIndex);
     const target = idx >= 0 ? list[idx + delta] : null;
     if (target && target.index != null) {
-        openTicketEditor(target);
+        try {
+            const data = (await api(`/api/flows/ticket_flow/tickets/${target.index}`));
+            openTicketEditor(data);
+        }
+        catch (err) {
+            flash(`Failed to navigate to ticket: ${err.message}`, "error");
+        }
     }
     void updateTicketNavButtons();
 }
@@ -806,8 +812,8 @@ export function initTicketEditor() {
         // Don't interfere with typing
         if (isTypingTarget(e.target))
             return;
-        // Only allow Alt or no modifier (no Ctrl/Meta/Shift)
-        if (e.ctrlKey || e.metaKey || e.shiftKey)
+        // Require Alt modifier for navigation (no Ctrl/Meta/Shift)
+        if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey)
             return;
         e.preventDefault();
         void navigateTicket(e.key === "ArrowLeft" ? -1 : 1);

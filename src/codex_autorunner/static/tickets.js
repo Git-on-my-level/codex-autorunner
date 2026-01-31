@@ -837,6 +837,17 @@ function renderTickets(data) {
     if (!tickets)
         return;
     tickets.innerHTML = "";
+    // Display lint errors if present
+    if (data?.lint_errors && data.lint_errors.length > 0) {
+        const lintBanner = document.createElement("div");
+        lintBanner.className = "ticket-lint-errors";
+        data.lint_errors.forEach((error) => {
+            const errorLine = document.createElement("div");
+            errorLine.textContent = error;
+            lintBanner.appendChild(errorLine);
+        });
+        tickets.appendChild(lintBanner);
+    }
     const list = (data?.tickets || []);
     ticketsExist = list.length > 0;
     // Update progress bar
@@ -870,9 +881,19 @@ function renderTickets(data) {
         item.title = "Click to edit";
         item.setAttribute("data-ticket-path", ticket.path || "");
         // Make ticket item clickable to open editor
-        item.addEventListener("click", () => {
+        item.addEventListener("click", async () => {
             updateSelectedTicket(ticket.path || null);
-            openTicketEditor(ticket);
+            try {
+                if (ticket.index == null) {
+                    flash("Invalid ticket: missing index", "error");
+                    return;
+                }
+                const data = (await api(`/api/flows/ticket_flow/tickets/${ticket.index}`));
+                openTicketEditor(data);
+            }
+            catch (err) {
+                flash(`Failed to load ticket: ${err.message}`, "error");
+            }
         });
         const head = document.createElement("div");
         head.className = "ticket-item-head";
@@ -1185,6 +1206,7 @@ async function loadTicketFiles(ctx) {
             return {
                 ticket_dir: data.ticket_dir,
                 tickets: data.tickets,
+                lint_errors: data.lint_errors,
                 activeTicket: currentActiveTicket,
                 flowStatus: currentFlowStatus,
             };
@@ -1204,10 +1226,9 @@ async function loadTicketFiles(ctx) {
  */
 async function openTicketByIndex(index) {
     try {
-        const data = (await api("/api/flows/ticket_flow/tickets"));
-        const ticket = data.tickets?.find((t) => t.index === index);
-        if (ticket) {
-            openTicketEditor(ticket);
+        const data = (await api(`/api/flows/ticket_flow/tickets/${index}`));
+        if (data) {
+            openTicketEditor(data);
         }
         else {
             flash(`Ticket TICKET-${String(index).padStart(3, "0")} not found`, "error");

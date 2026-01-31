@@ -34,7 +34,6 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
-from ...core.engine import Engine, LockError
 from ...core.flows.models import FlowRunStatus
 from ...core.flows.reconciler import reconcile_flow_runs
 from ...core.flows.store import FlowStore
@@ -42,6 +41,7 @@ from ...core.hub import HubSupervisor
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.request_context import get_request_id
+from ...core.runtime import LockError, RuntimeContext
 from ...core.state import load_state, persist_session_registry
 from ...core.usage import (
     UsageError,
@@ -56,6 +56,7 @@ from ...core.utils import (
     set_repo_root_context,
 )
 from ...housekeeping import run_housekeeping_once
+from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
@@ -101,7 +102,7 @@ from .terminal_sessions import parse_tui_idle_seconds, prune_terminal_registry
 class AppContext:
     base_path: str
     env: Mapping[str, str]
-    engine: Engine
+    engine: RuntimeContext
     manager: RunnerManager
     app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
     app_server_prune_interval: Optional[float]
@@ -349,12 +350,11 @@ def _build_app_context(
         if base_path is not None
         else config.server_base_path
     )
-    engine = Engine(
+    backend_orchestrator = build_backend_orchestrator(config.root, config)
+    engine = RuntimeContext(
         config.root,
         config=config,
-        backend_factory=build_agent_backend_factory(config.root, config),
-        app_server_supervisor_factory=build_app_server_supervisor_factory(config),
-        agent_id_validator=validate_agent_id,
+        backend_orchestrator=backend_orchestrator,
     )
     manager = RunnerManager(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=env)
@@ -653,6 +653,7 @@ def _build_hub_context(
         config,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
         agent_id_validator=validate_agent_id,
     )
     logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
@@ -1561,11 +1562,11 @@ def create_hub_app(
                 if not db_path.exists():
                     continue
                 try:
-                    store = FlowStore(db_path)
-                    store.initialize()
-                    paused = store.list_flow_runs(
-                        flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-                    )
+                    config = load_repo_config(repo_root)
+                    with FlowStore(db_path, durable=config.durable_writes) as store:
+                        paused = store.list_flow_runs(
+                            flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+                        )
                 except Exception:
                     continue
                 if not paused:

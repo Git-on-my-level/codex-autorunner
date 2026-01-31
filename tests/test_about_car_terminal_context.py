@@ -4,7 +4,7 @@ from codex_autorunner.core.about_car import (
     ABOUT_CAR_GENERATED_MARKER,
     ABOUT_CAR_REL_PATH,
 )
-from codex_autorunner.core.engine import Engine
+from codex_autorunner.core.runtime import RuntimeContext
 from codex_autorunner.routes.shared import build_codex_terminal_cmd
 
 
@@ -21,7 +21,7 @@ def test_about_car_is_seeded(repo: Path):
 
 
 def test_terminal_new_cmd_does_not_seed_about_prompt(repo: Path):
-    engine = Engine(repo)
+    engine = RuntimeContext(repo)
     about_text = (repo / ABOUT_CAR_REL_PATH).read_text(encoding="utf-8")
     cmd = build_codex_terminal_cmd(engine, resume_mode=False)
     assert "--input" not in cmd
@@ -29,7 +29,7 @@ def test_terminal_new_cmd_does_not_seed_about_prompt(repo: Path):
 
 
 def test_terminal_resume_cmd_does_not_seed_about_prompt(repo: Path):
-    engine = Engine(repo)
+    engine = RuntimeContext(repo)
     about_text = (repo / ABOUT_CAR_REL_PATH).read_text(encoding="utf-8")
     cmd = build_codex_terminal_cmd(engine, resume_mode=True)
     assert "resume" in cmd

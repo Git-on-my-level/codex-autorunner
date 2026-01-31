@@ -14,7 +14,6 @@ from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import has_capability, validate_agent_id
 from ...core.config import RepoConfig
-from ...core.engine import Engine
 from ...core.locks import (
     FileLock,
     FileLockBusy,
@@ -22,6 +21,7 @@ from ...core.locks import (
     process_alive,
     read_lock_info,
 )
+from ...core.runtime import RuntimeContext
 from ...core.state import now_iso
 from ...core.utils import atomic_write, read_json
 
@@ -252,7 +252,7 @@ Stop digging deeper when:
 """
 REVIEW_PROMPT_SPEC_PROGRESS = """# Autorunner Final Review (Spec + Progress Focus)
 
-You are coordinating a multi-agent review immediately after an autorunner loop completes. The goal is to validate work against SPEC.md and PROGRESS.md, not to suggest generic code style fixes.
+You are coordinating a multi-agent review immediately after an autorunner loop completes. The goal is to validate work against spec.md, not to suggest generic code style fixes.
 
 ## Required Scratchpad + Output
 
@@ -269,16 +269,16 @@ You are coordinating a multi-agent review immediately after an autorunner loop c
 
 ## Source of Truth + Focus
 
-* Read AUTORUNNER_CONTEXT.md first. It contains the exit reason, SPEC.md, PROGRESS.md, optional TODO/SUMMARY, and the last-run artifacts (output/diff/plan excerpts).
-* Treat SPEC.md + PROGRESS.md as contracts: extract explicit requirements, promised validation steps, and open questions.
+* Read AUTORUNNER_CONTEXT.md first. It contains the exit reason, spec.md, and last-run artifacts (output/diff/plan excerpts).
+* Treat spec.md as the contract: extract explicit requirements, promised validation steps, and open questions.
 * Derive must-hold invariants directly from SPEC (not generic guesses).
 * Buckets should be anchored to spec sections mapped to implementation areas, plus any recently changed/critical modules from AUTORUNNER_CONTEXT.md.
 
 ## North Star
 
-* Spec compliance and claim verification over style.
-* High-signal risks and regressions that would violate SPEC/PROGRESS commitments.
-* Trackable output that can be turned into TODO items.
+* Spec compliance over style.
+* High-signal risks and regressions that would violate spec commitments.
+* Trackable output that can be turned into tickets.
 
 ## Phase 0: Setup (Coordinator)
 
@@ -288,8 +288,7 @@ Prepare scratchpad files under {{scratchpad_dir}} (see list above).
 
 1) Read AUTORUNNER_CONTEXT.md and summarize:
    * Project shape and runtime assumptions
-   * SPEC requirements + invariants
-   * PROGRESS claims + validation evidence
+   * Spec requirements + invariants
    * Open questions/gaps
 2) Define buckets in BUCKETS.md:
    * Buckets by review dimension + code areas (spec sections → code paths)
@@ -299,7 +298,6 @@ Prepare scratchpad files under {{scratchpad_dir}} (see list above).
 
 Launch subagents by review dimension:
 * Spec compliance agent: requirement → evidence mapping.
-* Progress verification agent: PROGRESS claims → repo/tests evidence.
 * Risk & regression agent: likely failure modes introduced by recent changes.
 * Optional: Test adequacy agent if tests are in-scope.
 
@@ -320,8 +318,8 @@ Create the final report at {{final_output_path}} with this structure:
 ## Spec-to-Implementation Matrix
 | Spec item | Status (met/partial/missing) | Evidence | Notes |
 
-## Progress Claim Verification
-- Claim: ... (cite PROGRESS.md section)
+## Spec Verification
+- Spec requirement: ... (cite spec section)
   - Verified by: ...
   - Not verified because: ...
 
@@ -393,19 +391,19 @@ def _default_state() -> dict[str, Any]:
 class ReviewService:
     def __init__(
         self,
-        engine: Engine,
+        ctx: RuntimeContext,
         *,
         opencode_supervisor: Optional[OpenCodeSupervisor] = None,
         app_server_supervisor: Optional[Any] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
-        self.engine = engine
+        self.ctx = ctx
         self._opencode_supervisor = opencode_supervisor
         self._app_server_supervisor = app_server_supervisor
         self._logger = logger or logging.getLogger("codex_autorunner.review")
-        self._state_path = _workflow_root(engine.repo_root) / "state.json"
+        self._state_path = _workflow_root(self.ctx.repo_root) / "state.json"
         self._lock_path = (
-            engine.repo_root / ".codex-autorunner" / "locks" / "review.lock"
+            self.ctx.repo_root / ".codex-autorunner" / "locks" / "review.lock"
         )
         self._thread: Optional[threading.Thread] = None
         self._thread_lock = threading.Lock()
@@ -413,9 +411,9 @@ class ReviewService:
         self._lock_handle: Optional[FileLock] = None
 
     def _repo_config(self) -> RepoConfig:
-        if not isinstance(self.engine.config, RepoConfig):
+        if not isinstance(self.ctx.config, RepoConfig):
             raise ReviewError("Review requires a repo workspace config")
-        return self.engine.config
+        return self.ctx.config
 
     def status(self) -> dict[str, Any]:
         state = self._load_state()
@@ -438,7 +436,7 @@ class ReviewService:
                 raise ReviewBusyError("Review already running", status_code=409)
             if self._thread and self._thread.is_alive():
                 raise ReviewBusyError("Review already running", status_code=409)
-            busy_reason = self.engine.repo_busy_reason()
+            busy_reason = self.ctx.repo_busy_reason()
             if busy_reason:
                 raise ReviewConflictError(
                     f"Cannot start review: {busy_reason}", status_code=409
@@ -475,7 +473,7 @@ class ReviewService:
             state = self.status()
             if state.get("status") in ("running", "stopping"):
                 raise ReviewBusyError("Review already running", status_code=409)
-            busy_reason = self.engine.repo_busy_reason()
+            busy_reason = self.ctx.repo_busy_reason()
             if busy_reason and not ignore_repo_busy:
                 raise ReviewConflictError(
                     f"Cannot start review: {busy_reason}", status_code=409
@@ -680,7 +678,7 @@ class ReviewService:
             )
 
         run_id = state["id"]
-        runs_dir = _workflow_root(self.engine.repo_root) / "runs"
+        runs_dir = _workflow_root(self.ctx.repo_root) / "runs"
         run_dir = runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -735,7 +733,7 @@ class ReviewService:
         if agent_id == "codex":
             if self._app_server_supervisor is None:
                 raise ReviewError("Codex backend is not configured")
-            client = await self._app_server_supervisor.get_client(self.engine.repo_root)
+            client = await self._app_server_supervisor.get_client(self.ctx.repo_root)
             thread_id = uuid.uuid4().hex
             review_kwargs: dict[str, Any] = {}
             if state.get("model"):
@@ -746,7 +744,7 @@ class ReviewService:
                 thread_id=thread_id,
                 target={"type": "custom", "instructions": prompt},
                 delivery="inline",
-                cwd=str(self.engine.repo_root),
+                cwd=str(self.ctx.repo_root),
                 **review_kwargs,
             )
 
@@ -802,7 +800,7 @@ class ReviewService:
             subagent_model = review_cfg.get("subagent_model")
             if subagent_agent_id:
                 await self._opencode_supervisor.ensure_subagent_config(
-                    workspace_root=self.engine.repo_root,
+                    workspace_root=self.ctx.repo_root,
                     agent_id=subagent_agent_id,
                     model=subagent_model,
                 )
@@ -812,7 +810,7 @@ class ReviewService:
                 model=state["model"],
                 reasoning=state.get("reasoning"),
                 prompt=prompt,
-                workspace_root=str(self.engine.repo_root),
+                workspace_root=str(self.ctx.repo_root),
                 timeout_seconds=timeout_seconds,
                 interrupt_grace_seconds=REVIEW_INTERRUPT_GRACE_SECONDS,
                 permission_policy="allow",

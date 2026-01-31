@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+from ...core.config import load_repo_config
 from ...core.flows import FlowStore
 from ...core.flows.controller import FlowController
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
@@ -241,7 +242,8 @@ class TelegramTicketFlowBridge:
         db_path = workspace_root / ".codex-autorunner" / "flows.db"
         if not db_path.exists():
             return None
-        store = FlowStore(db_path)
+        config = load_repo_config(workspace_root)
+        store = FlowStore(db_path, durable=config.durable_writes)
         try:
             store.initialize()
             runs = store.list_flow_runs(
@@ -305,7 +307,8 @@ class TelegramTicketFlowBridge:
         db_path = workspace_root / ".codex-autorunner" / "flows.db"
         if not db_path.exists():
             return None
-        store = FlowStore(db_path)
+        config = load_repo_config(workspace_root)
+        store = FlowStore(db_path, durable=config.durable_writes)
         try:
             store.initialize()
             if preferred_run_id:
@@ -573,16 +576,19 @@ def _ticket_controller_for(repo_root: Path) -> FlowController:
     artifacts_root = repo_root / ".codex-autorunner" / "flows"
     from ...agents.registry import validate_agent_id
     from ...core.config import load_repo_config
-    from ...core.engine import Engine
+    from ...core.runtime import RuntimeContext
+    from ...integrations.agents import build_backend_orchestrator
     from ...integrations.agents.wiring import (
         build_agent_backend_factory,
         build_app_server_supervisor_factory,
     )
 
     config = load_repo_config(repo_root)
-    engine = Engine(
+    backend_orchestrator = build_backend_orchestrator(repo_root, config)
+    engine = RuntimeContext(
         repo_root,
         config=config,
+        backend_orchestrator=backend_orchestrator,
         backend_factory=build_agent_backend_factory(repo_root, config),
         app_server_supervisor_factory=build_app_server_supervisor_factory(config),
         agent_id_validator=validate_agent_id,

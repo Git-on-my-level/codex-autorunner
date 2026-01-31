@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from ...core.engine import Engine
 from ...core.runner_controller import ProcessRunnerController
+from ...core.runtime import RuntimeContext
 
 
 class RunnerManager:
-    def __init__(self, engine: Engine):
+    def __init__(self, engine: RuntimeContext):
         self._controller = ProcessRunnerController(engine)
 
     @property

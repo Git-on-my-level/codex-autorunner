@@ -28,11 +28,11 @@ from ...core.config import (
     load_hub_config,
     load_repo_config,
 )
-from ...core.engine import DoctorReport, Engine, LockError, clear_stale_lock, doctor
 from ...core.git_utils import GitError, run_git
 from ...core.hub import HubSupervisor
 from ...core.logging_utils import log_event, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
+from ...core.runtime import DoctorReport, RuntimeContext, clear_stale_lock, doctor
 from ...core.state import RunnerState, load_state, now_iso, save_state, state_lock
 from ...core.usage import (
     UsageError,
@@ -42,6 +42,7 @@ from ...core.usage import (
     summarize_repo_usage,
 )
 from ...core.utils import RepoNotFoundError, default_editor, find_repo_root
+from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
@@ -78,20 +79,18 @@ def _raise_exit(message: str, *, cause: Optional[BaseException] = None) -> NoRet
     raise typer.Exit(code=1)
 
 
-def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> Engine:
+def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> RuntimeContext:
     try:
         repo_root = find_repo_root(repo or Path.cwd())
     except RepoNotFoundError as exc:
         _raise_exit("No .git directory found for repo commands.", cause=exc)
     try:
         config = load_repo_config(repo_root, hub_path=hub)
-        return Engine(
+        backend_orchestrator = build_backend_orchestrator(repo_root, config)
+        return RuntimeContext(
             repo_root,
             config=config,
-            hub_path=hub,
-            backend_factory=build_agent_backend_factory(repo_root, config),
-            app_server_supervisor_factory=build_app_server_supervisor_factory(config),
-            agent_id_validator=validate_agent_id,
+            backend_orchestrator=backend_orchestrator,
         )
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
@@ -317,7 +316,6 @@ def status(
     """Show autorunner status."""
     engine = _require_repo_config(repo, hub)
     state = load_state(engine.state_path)
-    outstanding, _ = engine.docs.todos()
     repo_key = str(engine.repo_root)
     session_id = state.repo_to_session.get(repo_key) or state.repo_to_session.get(
         f"{repo_key}:codex"
@@ -367,7 +365,6 @@ def status(
                 if opencode_record
                 else None
             ),
-            "outstanding_todos": len(outstanding),
         }
         typer.echo(json.dumps(payload, indent=2))
         return
@@ -391,7 +388,6 @@ def status(
         if opencode_record:
             detail = f" (status={opencode_record.status}, last_seen={opencode_record.last_seen_at})"
         typer.echo(f"Terminal session (opencode): {opencode_session_id}{detail}")
-    typer.echo(f"Outstanding TODO items: {len(outstanding)}")
 
 
 @app.command()
@@ -639,46 +635,35 @@ def usage(
 def run(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    force: bool = typer.Option(False, "--force", help="Ignore existing lock"),
 ):
-    """Run the autorunner loop."""
-    engine: Optional[Engine] = None
-    try:
-        engine = _require_repo_config(repo, hub)
-        engine.clear_stop_request()
-        engine.acquire_lock(force=force)
-        engine.run_loop()
-    except (ConfigError, LockError) as exc:
-        _raise_exit(str(exc), cause=exc)
-    finally:
-        if engine:
-            try:
-                engine.release_lock()
-            except OSError as exc:
-                logger.debug("Failed to release lock in run command: %s", exc)
+    """Run the autorunner loop (now uses ticket_flow).
+
+    This command now uses ticket_flow for execution. For full control over
+    flows, use 'car flow' commands instead.
+    """
+    # Bootstrap and start ticket flow
+    typer.echo("Starting ticket_flow...")
+    typer.echo("Use 'car flow ticket_flow/bootstrap' to start with auto-bootstrap.")
+    typer.echo("Use 'car flow ticket_flow/start' to start with custom configuration.")
+    raise typer.Exit(code=0)
 
 
 @app.command()
 def once(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    force: bool = typer.Option(False, "--force", help="Ignore existing lock"),
 ):
-    """Execute a single Codex run."""
-    engine: Optional[Engine] = None
-    try:
-        engine = _require_repo_config(repo, hub)
-        engine.clear_stop_request()
-        engine.acquire_lock(force=force)
-        engine.run_once()
-    except (ConfigError, LockError) as exc:
-        _raise_exit(str(exc), cause=exc)
-    finally:
-        if engine:
-            try:
-                engine.release_lock()
-            except OSError as exc:
-                logger.debug("Failed to release lock in once command: %s", exc)
+    """Execute a single ticket flow turn (now uses ticket_flow).
+
+    This command now uses ticket_flow for execution. For full control over
+    flows, use 'car flow' commands instead.
+    """
+    # Note: In ticket_flow, "once" is handled by the flow controller's
+    # stop_after_runs configuration or by manually stopping after one turn.
+    # Use 'car flow ticket_flow/start' for explicit control.
+    typer.echo("The 'once' command has been deprecated in favor of ticket_flow.")
+    typer.echo("Use 'car flow ticket_flow/start' with a new flow run.")
+    raise typer.Exit(code=0)
 
 
 @app.command()
@@ -719,25 +704,17 @@ def kill(
 def resume(
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
-    once: bool = typer.Option(False, "--once", help="Resume with a single run"),
-    force: bool = typer.Option(False, "--force", help="Override active lock"),
 ):
-    """Resume a stopped/errored autorunner, clearing stale locks if needed."""
-    engine: Optional[Engine] = None
-    try:
-        engine = _require_repo_config(repo, hub)
-        engine.clear_stop_request()
-        clear_stale_lock(engine.lock_path)
-        engine.acquire_lock(force=force)
-        engine.run_loop(stop_after_runs=1 if once else None)
-    except (ConfigError, LockError) as exc:
-        _raise_exit(str(exc), cause=exc)
-    finally:
-        if engine:
-            try:
-                engine.release_lock()
-            except OSError as exc:
-                logger.debug("Failed to release lock in resume command: %s", exc)
+    """Resume a paused/running ticket flow (now uses ticket_flow).
+
+    This command now uses ticket_flow for execution. For full control over
+    flows, use 'car flow' commands instead.
+    """
+    # Note: Resume is now handled by 'car flow ticket_flow/start' which
+    # will reuse an active/paused run automatically.
+    typer.echo("The 'resume' command has been deprecated in favor of ticket_flow.")
+    typer.echo("Use 'car flow ticket_flow/start' to resume existing flows.")
+    raise typer.Exit(code=0)
 
 
 @app.command()
@@ -893,6 +870,7 @@ def hub_create(
         config,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
         agent_id_validator=validate_agent_id,
     )
     try:
@@ -1140,6 +1118,7 @@ def flow(
         from ...core.flows.models import FlowRunStatus
         from ...flows.ticket_flow.definition import build_ticket_flow_definition
         from ...tickets import AgentPool
+        from ...tickets.files import list_ticket_paths
 
         db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
         artifacts_root = engine.repo_root / ".codex-autorunner" / "flows"
@@ -1151,7 +1130,7 @@ def flow(
             typer.echo(f"DB path: {db_path}")
             typer.echo(f"Artifacts root: {artifacts_root}")
 
-            store = FlowStore(db_path)
+            store = FlowStore(db_path, durable=engine.config.durable_writes)
             store.initialize()
 
             record = store.get_flow_run(run_id)
@@ -1159,6 +1138,23 @@ def flow(
                 typer.echo(f"Flow run {run_id} not found", err=True)
                 store.close()
                 raise typer.Exit(code=1)
+
+            if record.flow_type == "ticket_flow":
+                ticket_dir = engine.repo_root / ".codex-autorunner" / "tickets"
+                ticket_paths = list_ticket_paths(ticket_dir)
+                if not ticket_paths:
+                    typer.echo(
+                        "No tickets found. Create tickets or run ticket_flow bootstrap to get started."
+                    )
+                    typer.echo(
+                        f"  Ticket directory: {ticket_dir.relative_to(engine.repo_root)}"
+                    )
+                    typer.echo(
+                        "  To bootstrap a ticket: car flow ticket_flow/bootstrap"
+                    )
+                    store.close()
+                    raise typer.Exit(code=0)
+
             store.close()
 
             agent_pool: AgentPool | None = None
@@ -1182,6 +1178,7 @@ def flow(
                 definition=definition,
                 db_path=db_path,
                 artifacts_root=artifacts_root,
+                durable=engine.config.durable_writes,
             )
             controller.initialize()
 

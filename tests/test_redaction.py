@@ -1,4 +1,4 @@
-from codex_autorunner.core.redaction import get_redaction_patterns, redact_text
+from codex_autorunner.core.redaction import redact_text
 
 
 def test_redaction_scrubs_common_tokens() -> None:
@@ -35,14 +35,6 @@ def test_redaction_handles_mixed_content() -> None:
     assert "sk-1234567890" not in out
     assert "sk-[REDACTED]" in out
     assert "SAFE_VAR=some_value" in out
-
-
-def test_get_redaction_patterns() -> None:
-    patterns = get_redaction_patterns()
-    assert isinstance(patterns, list)
-    assert len(patterns) > 0
-    for pattern in patterns:
-        assert isinstance(pattern, str)
 
 
 def test_redaction_with_github_tokens() -> None:

@@ -26,18 +26,6 @@ def _flows_db_path(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "flows.db"
 
 
-def _load_flow_store(repo_root: Path) -> Optional[FlowStore]:
-    db_path = _flows_db_path(repo_root)
-    if not db_path.exists():
-        return None
-    store = FlowStore(db_path)
-    try:
-        store.initialize()
-    except Exception:
-        return None
-    return store
-
-
 def _select_primary_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:
     """Select the primary run for analytics display.
 
@@ -154,19 +142,19 @@ def _aggregate_diff_stats(dispatch_history_dir: Path) -> Dict[str, int]:
 
 
 def _build_summary(repo_root: Path) -> Dict[str, Any]:
+    from ....core.config import load_repo_config
+
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-    store = _load_flow_store(repo_root)
+    db_path = _flows_db_path(repo_root)
     records: list[FlowRunRecord] = []
-    if store:
+    if db_path.exists():
         try:
-            records = store.list_flow_runs(flow_type="ticket_flow")
+            with FlowStore(
+                db_path, durable=load_repo_config(repo_root).durable_writes
+            ) as store:
+                records = store.list_flow_runs(flow_type="ticket_flow")
         except Exception:
             records = []
-        finally:
-            try:
-                store.close()
-            except Exception:
-                pass
 
     run_record = _select_primary_run(records)
 

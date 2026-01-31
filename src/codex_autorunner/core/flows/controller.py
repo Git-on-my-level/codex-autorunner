@@ -18,11 +18,12 @@ class FlowController:
         definition: FlowDefinition,
         db_path: Path,
         artifacts_root: Path,
+        durable: bool = False,
     ):
         self.definition = definition
         self.db_path = db_path
         self.artifacts_root = artifacts_root
-        self.store = FlowStore(db_path)
+        self.store = FlowStore(db_path, durable=durable)
         self._event_listeners: Set[Callable[[FlowEvent], None]] = set()
         self._lock = asyncio.Lock()
 

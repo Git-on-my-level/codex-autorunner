@@ -57,18 +57,15 @@ echo "Linting command resolution..."
 echo "Checking import boundaries..."
 "$PYTHON_BIN" scripts/check_import_boundaries.py
 
-echo "Checking work docs..."
-"$PYTHON_BIN" scripts/check_docs.py
-
-echo "Checking import boundaries..."
-"$PYTHON_BIN" scripts/check_import_boundaries.py
-
 echo "Validating hub interface contracts..."
 "$PYTHON_BIN" scripts/validate_interfaces.py
 
 echo "Checking core imports (no adapter implementations)..."
 # Temporarily disabled for merge: allowlisted violations not supported by check_core_imports.py
 # "$PYTHON_BIN" scripts/check_core_imports.py
+
+echo "Checking for legacy TODO/SUMMARY pipeline code..."
+"$PYTHON_BIN" scripts/check_legacy_pipeline.py
 
 echo "Type check (mypy)..."
 "$PYTHON_BIN" -m mypy src/codex_autorunner/core src/codex_autorunner/integrations/app_server

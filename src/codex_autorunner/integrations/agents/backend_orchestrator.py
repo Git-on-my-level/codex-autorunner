@@ -20,6 +20,9 @@ from ...core.app_server_threads import (
 )
 from ...core.config import RepoConfig
 from ...core.ports.agent_backend import AgentBackend
+from ...core.ports.backend_orchestrator import (
+    BackendOrchestrator as BackendOrchestratorProtocol,
+)
 from ...core.ports.run_event import RunEvent
 from ...core.state import RunnerState
 from .codex_backend import CodexAppServerBackend
@@ -278,7 +281,22 @@ class BackendOrchestrator:
         return factory_fn(event_prefix, notification_handler)
 
 
+def build_backend_orchestrator(
+    repo_root: Path, config: RepoConfig
+) -> BackendOrchestratorProtocol:
+    """
+    Build a BackendOrchestrator for protocol-agnostic backend management.
+    """
+    return BackendOrchestrator(
+        repo_root=repo_root,
+        config=config,
+        notification_handler=None,
+        logger=logging.getLogger("codex_autorunner.backend"),
+    )
+
+
 __all__ = [
     "BackendOrchestrator",
     "BackendContext",
+    "build_backend_orchestrator",
 ]

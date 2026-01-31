@@ -47,17 +47,6 @@ def _flows_db_path(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "flows.db"
 
 
-def _load_store_or_404(db_path: Path) -> FlowStore:
-    store = FlowStore(db_path)
-    try:
-        store.initialize()
-        return store
-    except Exception as exc:
-        raise HTTPException(
-            status_code=404, detail="Flows database unavailable"
-        ) from exc
-
-
 def _timestamp(path: Path) -> Optional[str]:
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
@@ -236,20 +225,22 @@ def build_messages_routes() -> APIRouter:
 
     @router.get("/api/messages/active")
     def get_active_message(request: Request):
+        from ....core.config import load_repo_config
+
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             return {"active": False}
-        store = FlowStore(db_path)
         try:
-            store.initialize()
+            with FlowStore(
+                db_path, durable=load_repo_config(repo_root).durable_writes
+            ) as store:
+                paused = store.list_flow_runs(
+                    flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+                )
         except Exception:
             # Corrupt flows db should not 500 the UI.
             return {"active": False}
-
-        paused = store.list_flow_runs(
-            flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-        )
         if not paused:
             return {"active": False}
 
@@ -281,16 +272,20 @@ def build_messages_routes() -> APIRouter:
 
     @router.get("/api/messages/threads")
     def list_threads():
+        from ....core.config import load_repo_config
+
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             return {"conversations": []}
-        store = FlowStore(db_path)
         try:
-            store.initialize()
+            with FlowStore(
+                db_path, durable=load_repo_config(repo_root).durable_writes
+            ) as store:
+                runs = store.list_flow_runs(flow_type="ticket_flow")
         except Exception:
             return {"conversations": []}
-        runs = store.list_flow_runs(flow_type="ticket_flow")
+
         conversations: list[dict[str, Any]] = []
         for record in runs:
             record_input = dict(record.input_data or {})
@@ -327,6 +322,8 @@ def build_messages_routes() -> APIRouter:
 
     @router.get("/api/messages/threads/{run_id}")
     def get_thread(run_id: str):
+        from ....core.config import load_repo_config
+
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
         empty_response = {
@@ -337,14 +334,15 @@ def build_messages_routes() -> APIRouter:
         }
         if not db_path.exists():
             return empty_response
-        store = _load_store_or_404(db_path)
         try:
-            record = store.get_flow_run(run_id)
-        finally:
-            try:
-                store.close()
-            except Exception:
-                pass
+            with FlowStore(
+                db_path, durable=load_repo_config(repo_root).durable_writes
+            ) as store:
+                record = store.get_flow_run(run_id)
+        except Exception:
+            raise HTTPException(
+                status_code=404, detail="Flows database unavailable"
+            ) from None
         if not record:
             return empty_response
         input_data = dict(record.input_data or {})
@@ -378,23 +376,26 @@ def build_messages_routes() -> APIRouter:
         body: str = Form(""),
         title: Optional[str] = Form(None),
         # NOTE: FastAPI/starlette will supply either a single UploadFile or a list
-        # depending on how the multipart form is encoded. Declaring this as a
+        # depending on how is multipart form is encoded. Declaring this as a
         # concrete list avoids a common 422 where a single file upload is treated
         # as a non-list value.
         files: list[UploadFile] = File(default=[]),  # noqa: B006,B008
     ):
+        from ....core.config import load_repo_config
+
         repo_root = find_repo_root()
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             raise HTTPException(status_code=404, detail="No flows database")
-        store = _load_store_or_404(db_path)
         try:
-            record = store.get_flow_run(run_id)
-        finally:
-            try:
-                store.close()
-            except Exception:
-                pass
+            with FlowStore(
+                db_path, durable=load_repo_config(repo_root).durable_writes
+            ) as store:
+                record = store.get_flow_run(run_id)
+        except Exception:
+            raise HTTPException(
+                status_code=404, detail="Flows database unavailable"
+            ) from None
         if not record:
             raise HTTPException(status_code=404, detail="Run not found")
 

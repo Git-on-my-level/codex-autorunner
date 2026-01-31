@@ -43,6 +43,7 @@ _SCRIPT = dedent(
 
         tickets: List[tuple[int, Path]] = []
         errors: List[str] = []
+        index_to_paths: dict[int, List[Path]] = {}
         for path in sorted(tickets_dir.iterdir()):
             if not path.is_file():
                 continue
@@ -60,7 +61,21 @@ _SCRIPT = dedent(
                 )
                 continue
             tickets.append((idx, path))
+            # Track paths by index to detect duplicates
+            if idx not in index_to_paths:
+                index_to_paths[idx] = []
+            index_to_paths[idx].append(path)
         tickets.sort(key=lambda pair: pair[0])
+
+        # Check for duplicate indices
+        for idx, paths in index_to_paths.items():
+            if len(paths) > 1:
+                paths_str = ", ".join([str(p) for p in paths])
+                errors.append(
+                    f\"Duplicate ticket index {idx:03d}: multiple files share the same index ({paths_str}). \"
+                    \"Rename or remove duplicates to ensure deterministic ordering.\"
+                )
+
         return [p for _, p in tickets], errors
 
 

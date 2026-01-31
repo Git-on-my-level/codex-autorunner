@@ -1,13 +1,15 @@
+from __future__ import annotations
+
 import json
 import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, cast
 
-from ..sqlite_utils import SQLITE_PRAGMAS
+from ..sqlite_utils import SQLITE_PRAGMAS, SQLITE_PRAGMAS_DURABLE
+from ..time_utils import now_iso
 from .models import (
     FlowArtifact,
     FlowEvent,
@@ -22,18 +24,22 @@ SCHEMA_VERSION = 2
 UNSET = object()
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 class FlowStore:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, durable: bool = False):
         self.db_path = db_path
+        self._durable = durable
         self._local: threading.local = threading.local()
+
+    def __enter__(self) -> FlowStore:
+        self.initialize()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
 
     def _get_conn(self) -> sqlite3.Connection:
         if not hasattr(self._local, "conn"):
-            # Ensure parent directory exists so sqlite can create/open the file.
+            # Ensure parent directory exists so sqlite can create/open file.
             try:
                 self.db_path.parent.mkdir(parents=True, exist_ok=True)
             except Exception:
@@ -43,7 +49,8 @@ class FlowStore:
                 self.db_path, check_same_thread=False, isolation_level=None
             )
             self._local.conn.row_factory = sqlite3.Row
-            for pragma in SQLITE_PRAGMAS:
+            pragmas = SQLITE_PRAGMAS_DURABLE if self._durable else SQLITE_PRAGMAS
+            for pragma in pragmas:
                 self._local.conn.execute(pragma)
         return cast(sqlite3.Connection, self._local.conn)
 

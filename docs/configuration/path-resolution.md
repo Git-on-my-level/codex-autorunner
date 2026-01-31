@@ -18,17 +18,18 @@ All config paths without leading `/` or `~` are interpreted as **relative to the
 
 ```yaml
 docs:
-  todo: .codex-autorunner/TODO.md
-  progress: .codex-autorunner/PROGRESS.md
+  spec: .codex-autorunner/workspace/spec.md
+  active_context: .codex-autorunner/workspace/active_context.md
 
 log:
   path: .codex-autorunner/codex-autorunner.log
 ```
 
-If the repo root is `/repo`, these resolve to:
-- `docs.todo` → `/repo/.codex-autorunner/TODO.md`
-- `docs.progress` → `/repo/.codex-autorunner/PROGRESS.md`
+If repo root is `/repo`, these resolve to:
+- `docs.spec` → `/repo/.codex-autorunner/workspace/spec.md`
+- `docs.active_context` → `/repo/.codex-autorunner/workspace/active_context.md`
 - `log.path` → `/repo/.codex-autorunner/codex-autorunner.log`
+
 
 ## Home Directory Expansion
 
@@ -74,13 +75,13 @@ Path segments containing `..` are rejected at config load time for security reas
 
 ```yaml
 docs:
-  todo: ../external/TODO.md  # Rejected at load time
+  spec: ../external/spec.md  # Rejected at load time
 ```
 
 **Error message:**
 
 ```
-ConfigError: docs.todo must not contain '..' segments
+ConfigError: docs.spec must not contain '..' segments
 ```
 
 ### Paths Outside Repo Root
@@ -91,7 +92,7 @@ Relative paths that resolve outside the repo root are rejected.
 
 ```yaml
 docs:
-  todo: /etc/config  # Absolute paths not allowed for docs
+  spec: /etc/config  # Absolute paths not allowed for docs
 ```
 
 **Valid:**
@@ -232,7 +233,7 @@ export CAR_GLOBAL_STATE_ROOT=/srv/codex-autorunner
 ## Error Messages
 
 When a path is invalid, the error message includes:
-- The config key (e.g., `docs.todo`)
+- The config key (e.g., `docs.spec`)
 - The invalid path value
 - The resolved path (for `~` expansion)
 - A helpful hint for fixing it
@@ -240,7 +241,7 @@ When a path is invalid, the error message includes:
 **Example:**
 
 ```
-ConfigError: docs.todo must not contain '..' segments: '../external/TODO.md'
+ConfigError: docs.spec must not contain '..' segments: '../external/spec.md'
 ```
 
 ## Migration Notes

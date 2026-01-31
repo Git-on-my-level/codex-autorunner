@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal, Optional
 
@@ -101,6 +102,9 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
 
 # Lazy-loaded cache of built-in + plugin agents.
 _AGENT_CACHE: Optional[dict[str, AgentDescriptor]] = None
+
+# Lock to protect cache initialization and reload from concurrent access.
+_AGENT_CACHE_LOCK = threading.Lock()
 
 
 def _select_entry_points(group: str) -> Iterable[importlib.metadata.EntryPoint]:
@@ -215,9 +219,11 @@ def _load_agent_plugins() -> dict[str, AgentDescriptor]:
 def _all_agents() -> dict[str, AgentDescriptor]:
     global _AGENT_CACHE
     if _AGENT_CACHE is None:
-        agents = _BUILTIN_AGENTS.copy()
-        agents.update(_load_agent_plugins())
-        _AGENT_CACHE = agents
+        with _AGENT_CACHE_LOCK:
+            if _AGENT_CACHE is None:
+                agents = _BUILTIN_AGENTS.copy()
+                agents.update(_load_agent_plugins())
+                _AGENT_CACHE = agents
     return _AGENT_CACHE
 
 
@@ -228,7 +234,8 @@ def reload_agents() -> dict[str, AgentDescriptor]:
     """
 
     global _AGENT_CACHE
-    _AGENT_CACHE = None
+    with _AGENT_CACHE_LOCK:
+        _AGENT_CACHE = None
     return get_registered_agents()
 
 

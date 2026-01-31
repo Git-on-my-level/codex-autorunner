@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Iterable, Optional
 from .utils import is_within
 
 if TYPE_CHECKING:
-    from .engine import Engine
+    from .runtime import RuntimeContext
 
 
 TRUNCATION_SUFFIX = "... (truncated)\n"
@@ -27,18 +27,19 @@ def _safe_read(path: Path) -> str:
 
 
 def _artifact_entries(
-    engine: "Engine", run_id: Optional[int], max_doc_chars: Optional[int]
+    ctx: "RuntimeContext", run_id: Optional[int], max_doc_chars: Optional[int]
 ) -> list[tuple[str, str]]:
     if run_id is None:
         return []
-    index = engine._load_run_index()
-    entry = index.get(str(run_id))
+    entry = ctx.run_index_store.get_entry(run_id)
+    if not isinstance(entry, dict):
+        return []
     if not isinstance(entry, dict):
         return []
     artifacts = entry.get("artifacts")
     if not isinstance(artifacts, dict):
         return []
-    repo_root = engine.repo_root
+    repo_root = ctx.repo_root
     limit = (
         max_doc_chars if isinstance(max_doc_chars, int) and max_doc_chars > 0 else 4000
     )
@@ -61,7 +62,7 @@ def _artifact_entries(
 
 
 def build_spec_progress_review_context(
-    engine: "Engine",
+    ctx: "RuntimeContext",
     *,
     exit_reason: str,
     last_run_id: Optional[int],
@@ -98,13 +99,14 @@ def build_spec_progress_review_context(
 
     def doc_label(name: str) -> str:
         try:
-            return engine.config.doc_path(name).relative_to(engine.repo_root).as_posix()
+            return ctx.config.doc_path(name).relative_to(ctx.repo_root).as_posix()
         except Exception:
             return name
 
     def read_doc(name: str) -> str:
         try:
-            return engine.docs.read_doc(name)
+            path = ctx.config.doc_path(name)
+            return _safe_read(path)
         except Exception as exc:
             return f"(failed to read {name}: {exc})"
 
@@ -147,7 +149,7 @@ def build_spec_progress_review_context(
             return "".join(parts)
         add("## Last run artifacts\n")
         artifacts = _artifact_entries(
-            engine,
+            ctx,
             last_run_id,
             remaining if remaining is not None else max_doc_chars,
         )

@@ -23,7 +23,3 @@ def redact_text(text: str) -> str:
     for pattern, replacement in _REDACTIONS:
         redacted = pattern.sub(replacement, redacted)
     return redacted
-
-
-def get_redaction_patterns() -> List[str]:
-    return [pattern.pattern for pattern, _ in _REDACTIONS]

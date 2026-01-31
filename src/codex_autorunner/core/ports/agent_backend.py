@@ -1,14 +1,11 @@
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, AsyncGenerator, Dict, Optional
 
+from ..time_utils import now_iso
+
 _logger = logging.getLogger(__name__)
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class AgentEventType(str, Enum):

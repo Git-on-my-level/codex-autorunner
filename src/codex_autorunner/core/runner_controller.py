@@ -1,40 +1,41 @@
-from __future__ import annotations
-
 import threading
-from collections.abc import Callable
+from typing import Callable, Optional
 
-from .engine import Engine, LockError
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive, read_lock_info
 from .runner_process import build_runner_cmd, spawn_detached
+from .runtime import LockError, RuntimeContext
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 
-SpawnRunnerFn = Callable[[list[str], Engine], object]
+SpawnRunnerFn = Callable[[list[str], RuntimeContext], object]
 
 
-def _spawn_detached(cmd: list[str], engine: Engine) -> object:
-    return spawn_detached(cmd, cwd=engine.repo_root)
+def _spawn_detached(cmd: list[str], ctx: RuntimeContext) -> object:
+    return spawn_detached(cmd, cwd=ctx.repo_root)
 
 
 class ProcessRunnerController:
-    def __init__(self, engine: Engine, *, spawn_fn: SpawnRunnerFn | None = None):
-        self.engine = engine
+    def __init__(
+        self, ctx: RuntimeContext, *, spawn_fn: Optional[SpawnRunnerFn] = None
+    ):
+        self.ctx = ctx
         self._spawn_fn = spawn_fn or _spawn_detached
         self._lock = threading.Lock()
 
     @property
     def running(self) -> bool:
-        return self.engine.runner_pid() is not None
+        return self.ctx.runner_pid() is not None
 
     def reconcile(self) -> None:
         lock_pid = None
-        if self.engine.lock_path.exists():
-            info = read_lock_info(self.engine.lock_path)
+        if self.ctx.lock_path.exists():
+            info = read_lock_info(self.ctx.lock_path)
             lock_pid = info.pid if info.pid and process_alive(info.pid) else None
             if not lock_pid:
-                self.engine.lock_path.unlink(missing_ok=True)
+                self.ctx.lock_path.unlink(missing_ok=True)
 
-        with state_lock(self.engine.state_path):
-            state = load_state(self.engine.state_path)
+        durable = self.ctx.config.durable_writes
+        with state_lock(self.ctx.state_path):
+            state = load_state(self.ctx.state_path, durable=durable)
             if lock_pid:
                 if state.runner_pid != lock_pid or state.status != "running":
                     new_state = RunnerState(
@@ -53,8 +54,8 @@ class ProcessRunnerController:
                         sessions=state.sessions,
                         repo_to_session=state.repo_to_session,
                     )
-                    save_state(self.engine.state_path, new_state)
-                self.engine.reconcile_run_index()
+                    save_state(self.ctx.state_path, new_state, durable=durable)
+                self.ctx.reconcile_run_index()
                 return
 
             pid = state.runner_pid
@@ -84,17 +85,17 @@ class ProcessRunnerController:
                     sessions=state.sessions,
                     repo_to_session=state.repo_to_session,
                 )
-                save_state(self.engine.state_path, new_state)
+                save_state(self.ctx.state_path, new_state, durable=durable)
 
-        self.engine.reconcile_run_index()
+        self.ctx.reconcile_run_index()
 
     def _ensure_unlocked(self) -> None:
-        if not self.engine.lock_path.exists():
+        if not self.ctx.lock_path.exists():
             return
         assessment = self._clear_freeable_lock()
         if assessment.freeable:
             return
-        info = read_lock_info(self.engine.lock_path)
+        info = read_lock_info(self.ctx.lock_path)
         pid = info.pid
         if pid and process_alive(pid):
             raise LockError(
@@ -104,14 +105,15 @@ class ProcessRunnerController:
 
     def _clear_freeable_lock(self):
         assessment = assess_lock(
-            self.engine.lock_path,
+            self.ctx.lock_path,
             expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
         )
         if not assessment.freeable:
             return assessment
-        self.engine.lock_path.unlink(missing_ok=True)
-        with state_lock(self.engine.state_path):
-            state = load_state(self.engine.state_path)
+        self.ctx.lock_path.unlink(missing_ok=True)
+        durable = self.ctx.config.durable_writes
+        with state_lock(self.ctx.state_path):
+            state = load_state(self.ctx.state_path, durable=durable)
             if state.status == "running" or state.runner_pid:
                 exit_code = state.last_exit_code
                 if exit_code is None:
@@ -132,7 +134,7 @@ class ProcessRunnerController:
                     sessions=state.sessions,
                     repo_to_session=state.repo_to_session,
                 )
-                save_state(self.engine.state_path, new_state)
+                save_state(self.ctx.state_path, new_state, durable=durable)
         return assessment
 
     def clear_freeable_lock(self):
@@ -141,17 +143,17 @@ class ProcessRunnerController:
 
     def _spawn_runner(self, *, action: str, once: bool = False) -> None:
         cmd = build_runner_cmd(
-            self.engine.repo_root,
+            self.ctx.repo_root,
             action=action,
             once=once,
         )
-        self._spawn_fn(cmd, self.engine)
+        self._spawn_fn(cmd, self.ctx)
 
     def start(self, once: bool = False) -> None:
         with self._lock:
             self.reconcile()
             self._ensure_unlocked()
-            self.engine.clear_stop_request()
+            self.ctx.clear_stop_request()
             action = "once" if once else "run"
             self._spawn_runner(action=action)
 
@@ -159,13 +161,13 @@ class ProcessRunnerController:
         with self._lock:
             self.reconcile()
             self._ensure_unlocked()
-            self.engine.clear_stop_request()
+            self.ctx.clear_stop_request()
             self._spawn_runner(action="resume", once=once)
 
     def stop(self) -> None:
         with self._lock:
-            self.engine.request_stop()
+            self.ctx.request_stop()
 
-    def kill(self) -> int | None:
+    def kill(self) -> Optional[int]:
         with self._lock:
-            return self.engine.kill_running_process()
+            return self.ctx.kill_running_process()

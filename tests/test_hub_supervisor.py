@@ -1,6 +1,5 @@
 import json
 import shutil
-import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -17,9 +16,12 @@ from codex_autorunner.core.config import (
     DEFAULT_HUB_CONFIG,
     load_hub_config,
 )
-from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.core.runner_controller import ProcessRunnerController
+from codex_autorunner.integrations.agents.backend_orchestrator import (
+    build_backend_orchestrator,
+)
 from codex_autorunner.integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
@@ -277,38 +279,23 @@ def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     run_calls = []
 
-    def fake_run_loop(self, stop_after_runs=None, external_stop_flag=None):
-        run_calls.append(self.repo_root.name)
+    def fake_start(self, once: bool = False) -> None:
+        run_calls.append(self.ctx.repo_root.name)
         time.sleep(0.05)
 
-    monkeypatch.setattr(Engine, "run_loop", fake_run_loop)
-
-    threads: list[threading.Thread] = []
-
-    def spawn_fn(cmd: list[str], engine: Engine) -> object:
-        action = cmd[3] if len(cmd) > 3 else ""
-        once = action == "once" or "--once" in cmd
-
-        def _run() -> None:
-            engine.run_loop(stop_after_runs=1 if once else None)
-
-        thread = threading.Thread(target=_run, daemon=True)
-        threads.append(thread)
-        thread.start()
-        return thread
+    monkeypatch.setattr(ProcessRunnerController, "start", fake_start)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
-        spawn_fn=spawn_fn,
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
     )
     supervisor.scan()
     supervisor.run_repo("alpha", once=True)
     supervisor.run_repo("beta", once=True)
 
-    for thread in threads:
-        thread.join(timeout=1.0)
+    time.sleep(0.2)
 
     snapshots = supervisor.list_repos()
     assert set(run_calls) == {"alpha", "beta"}
@@ -350,6 +337,7 @@ def test_hub_remove_repo_with_worktrees(tmp_path: Path):
         load_hub_config(hub_root),
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
     )
     base = supervisor.create_repo("base")
     _init_git_repo(base.path)

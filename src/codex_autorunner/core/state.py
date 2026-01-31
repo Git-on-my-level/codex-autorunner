@@ -1,12 +1,12 @@
 import dataclasses
 import json
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from .locks import file_lock
 from .sqlite_utils import open_sqlite
+from .time_utils import now_iso
 
 
 @dataclasses.dataclass
@@ -91,10 +91,6 @@ class SessionRecord:
             "status": self.status,
             "agent": self.agent,
         }
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _ensure_state_schema(conn) -> None:
@@ -197,8 +193,8 @@ def _apply_overrides(state: RunnerState, raw: Optional[str]) -> None:
         state.runner_stop_after_runs = runner_stop_after_runs
 
 
-def load_state(state_path: Path) -> RunnerState:
-    with open_sqlite(state_path) as conn:
+def load_state(state_path: Path, durable: bool = False) -> RunnerState:
+    with open_sqlite(state_path, durable=durable) as conn:
         _ensure_state_schema(conn)
         row = conn.execute(
             """
@@ -253,9 +249,9 @@ def load_state(state_path: Path) -> RunnerState:
         return state
 
 
-def save_state(state_path: Path, state: RunnerState) -> None:
+def save_state(state_path: Path, state: RunnerState, durable: bool = False) -> None:
     overrides_json = _encode_overrides(state)
-    with open_sqlite(state_path) as conn:
+    with open_sqlite(state_path, durable=durable) as conn:
         _ensure_state_schema(conn)
         updated_at = now_iso()
         with conn:
@@ -343,9 +339,10 @@ def persist_session_registry(
     state_path: Path,
     sessions: dict[str, SessionRecord],
     repo_to_session: dict[str, str],
+    durable: bool = False,
 ) -> None:
     with state_lock(state_path):
-        with open_sqlite(state_path) as conn:
+        with open_sqlite(state_path, durable=durable) as conn:
             _ensure_state_schema(conn)
             with conn:
                 conn.execute("DELETE FROM sessions")

@@ -240,7 +240,6 @@ async def state_stream(
         emitted = False
         try:
             state = await asyncio.to_thread(load_state, engine.state_path)
-            outstanding, done = await asyncio.to_thread(engine.docs.todos)
             status, runner_pid, running = resolve_runner_status(engine, state)
             lock_payload = resolve_lock_payload(engine)
             payload = {
@@ -249,8 +248,6 @@ async def state_stream(
                 "last_exit_code": state.last_exit_code,
                 "last_run_started_at": state.last_run_started_at,
                 "last_run_finished_at": state.last_run_finished_at,
-                "outstanding_count": len(outstanding),
-                "done_count": len(done),
                 "running": running,
                 "runner_pid": runner_pid,
                 **lock_payload,
