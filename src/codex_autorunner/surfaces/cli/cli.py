@@ -34,6 +34,16 @@ from ...core.logging_utils import log_event, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.runtime import DoctorReport, RuntimeContext, clear_stale_lock, doctor
 from ...core.state import RunnerState, load_state, now_iso, save_state, state_lock
+from ...core.templates import (
+    NetworkUnavailableError,
+    RefNotFoundError,
+    RepoNotConfiguredError,
+    TemplateNotFoundError,
+    fetch_template,
+    get_scan_record,
+    parse_template_ref,
+    scan_lock,
+)
 from ...core.usage import (
     UsageError,
     default_codex_home,
@@ -56,6 +66,12 @@ from ...integrations.telegram.service import (
     TelegramBotService,
 )
 from ...integrations.telegram.state import TelegramStateStore
+from ...integrations.templates.scan_agent import (
+    TemplateScanError,
+    TemplateScanRejectedError,
+    format_template_scan_rejection,
+    run_template_scan,
+)
 from ...manifest import load_manifest
 from ...voice import VoiceConfig
 from ..web.app import create_hub_app
@@ -65,6 +81,7 @@ logger = logging.getLogger("codex_autorunner.cli")
 app = typer.Typer(add_completion=False)
 hub_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
+templates_app = typer.Typer(add_completion=False)
 
 
 def main() -> None:
@@ -101,6 +118,20 @@ def _require_hub_config(path: Optional[Path]) -> HubConfig:
         return load_hub_config(path or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
+
+
+def _require_templates_enabled(config: RepoConfig) -> None:
+    if not config.templates.enabled:
+        _raise_exit(
+            "Templates are disabled. Set templates.enabled=true in the hub config to enable."
+        )
+
+
+def _find_template_repo(config: RepoConfig, repo_id: str):
+    for repo in config.templates.repos:
+        if repo.id == repo_id:
+            return repo
+    return None
 
 
 def _build_server_url(config, path: str) -> str:
@@ -223,6 +254,7 @@ def _require_optional_feature(
 
 app.add_typer(hub_app, name="hub")
 app.add_typer(telegram_app, name="telegram")
+app.add_typer(templates_app, name="templates")
 
 
 def _has_nested_git(path: Path) -> bool:
@@ -388,6 +420,96 @@ def status(
         if opencode_record:
             detail = f" (status={opencode_record.status}, last_seen={opencode_record.last_seen_at})"
         typer.echo(f"Terminal session (opencode): {opencode_session_id}{detail}")
+
+
+@templates_app.command("fetch")
+def templates_fetch(
+    template: str = typer.Argument(
+        ..., help="Template ref formatted as REPO_ID:PATH[@REF]"
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Write template content to a file"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Fetch a template from a configured templates repo."""
+    ctx = _require_repo_config(repo, hub)
+    _require_templates_enabled(ctx.config)
+
+    try:
+        parsed = parse_template_ref(template)
+    except ValueError as exc:
+        _raise_exit(str(exc), cause=exc)
+
+    repo_cfg = _find_template_repo(ctx.config, parsed.repo_id)
+    if repo_cfg is None:
+        _raise_exit(f"Template repo not configured: {parsed.repo_id}")
+
+    hub_config_path = _resolve_hub_config_path_for_cli(ctx.repo_root, hub)
+    if hub_config_path is None:
+        try:
+            hub_config = load_hub_config(ctx.repo_root)
+            hub_root = hub_config.root
+        except ConfigError as exc:
+            _raise_exit(str(exc), cause=exc)
+    else:
+        hub_root = hub_config_path.parent.parent.resolve()
+
+    try:
+        fetched = fetch_template(
+            repo=repo_cfg, hub_root=hub_root, template_ref=template
+        )
+    except NetworkUnavailableError:
+        _raise_exit(
+            "Network fetch failed and no cached copy exists; pause and notify user."
+        )
+    except (
+        RepoNotConfiguredError,
+        RefNotFoundError,
+        TemplateNotFoundError,
+        GitError,
+    ) as exc:
+        _raise_exit(str(exc), cause=exc)
+
+    scan_record = None
+    if not fetched.trusted:
+        with scan_lock(hub_root, fetched.blob_sha):
+            scan_record = get_scan_record(hub_root, fetched.blob_sha)
+            if scan_record is None:
+                try:
+                    scan_record = asyncio.run(
+                        run_template_scan(ctx=ctx, template=fetched)
+                    )
+                except TemplateScanRejectedError as exc:
+                    _raise_exit(str(exc), cause=exc)
+                except TemplateScanError as exc:
+                    _raise_exit(str(exc), cause=exc)
+            elif scan_record.decision != "approve":
+                _raise_exit(format_template_scan_rejection(scan_record))
+
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(fetched.content, encoding="utf-8")
+        typer.echo(f"Wrote template to {out}", err=True)
+
+    if output_json:
+        payload = {
+            "content": fetched.content,
+            "repo_id": fetched.repo_id,
+            "path": fetched.path,
+            "ref": fetched.ref,
+            "commit_sha": fetched.commit_sha,
+            "blob_sha": fetched.blob_sha,
+            "trusted": fetched.trusted,
+            "scan_decision": scan_record.to_dict() if scan_record else None,
+        }
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    if out is None:
+        typer.echo(fetched.content, nl=False)
 
 
 @app.command()
