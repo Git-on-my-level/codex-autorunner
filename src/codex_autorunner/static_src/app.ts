@@ -13,6 +13,31 @@ import { initHealthGate } from "./health.js";
 import { initWorkspace } from "./workspace.js";
 import { initDashboard } from "./dashboard.js";
 import { initArchive } from "./archive.js";
+import { initPMA } from "./pma.js";
+
+let pmaInitialized = false;
+
+async function initPMAView(): Promise<void> {
+  if (!pmaInitialized) {
+    await initPMA();
+    pmaInitialized = true;
+  }
+}
+
+function showHubView(): void {
+  const hubShell = document.getElementById("hub-shell");
+  const pmaShell = document.getElementById("pma-shell");
+  if (hubShell) hubShell.classList.remove("hidden");
+  if (pmaShell) pmaShell.classList.add("hidden");
+}
+
+function showPMAView(): void {
+  const hubShell = document.getElementById("hub-shell");
+  const pmaShell = document.getElementById("pma-shell");
+  if (hubShell) hubShell.classList.add("hidden");
+  if (pmaShell) pmaShell.classList.remove("hidden");
+  void initPMAView();
+}
 
 async function initRepoShell(): Promise<void> {
   await initHealthGate();
@@ -106,11 +131,31 @@ async function initRepoShell(): Promise<void> {
 function bootstrap() {
   const hubShell = document.getElementById("hub-shell");
   const repoShell = document.getElementById("repo-shell");
+  const hubPmaBtn = document.getElementById("hub-pma") as HTMLButtonElement | null;
+  const pmaBackBtn = document.getElementById("pma-back") as HTMLButtonElement | null;
 
   if (!REPO_ID) {
     if (hubShell) hubShell.classList.remove("hidden");
     if (repoShell) repoShell.classList.add("hidden");
     initHub();
+
+    if (hubPmaBtn) {
+      hubPmaBtn.addEventListener("click", () => {
+        showPMAView();
+      });
+    }
+
+    if (pmaBackBtn) {
+      pmaBackBtn.addEventListener("click", () => {
+        showHubView();
+      });
+    }
+
+    // Check URL params for PMA view
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get("view") === "pma") {
+      showPMAView();
+    }
     return;
   }
 

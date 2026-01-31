@@ -14,6 +14,31 @@ import { initHealthGate } from "./health.js";
 import { initWorkspace } from "./workspace.js";
 import { initDashboard } from "./dashboard.js";
 import { initArchive } from "./archive.js";
+import { initPMA } from "./pma.js";
+let pmaInitialized = false;
+async function initPMAView() {
+    if (!pmaInitialized) {
+        await initPMA();
+        pmaInitialized = true;
+    }
+}
+function showHubView() {
+    const hubShell = document.getElementById("hub-shell");
+    const pmaShell = document.getElementById("pma-shell");
+    if (hubShell)
+        hubShell.classList.remove("hidden");
+    if (pmaShell)
+        pmaShell.classList.add("hidden");
+}
+function showPMAView() {
+    const hubShell = document.getElementById("hub-shell");
+    const pmaShell = document.getElementById("pma-shell");
+    if (hubShell)
+        hubShell.classList.add("hidden");
+    if (pmaShell)
+        pmaShell.classList.remove("hidden");
+    void initPMAView();
+}
 async function initRepoShell() {
     await initHealthGate();
     if (REPO_ID) {
@@ -96,12 +121,29 @@ async function initRepoShell() {
 function bootstrap() {
     const hubShell = document.getElementById("hub-shell");
     const repoShell = document.getElementById("repo-shell");
+    const hubPmaBtn = document.getElementById("hub-pma");
+    const pmaBackBtn = document.getElementById("pma-back");
     if (!REPO_ID) {
         if (hubShell)
             hubShell.classList.remove("hidden");
         if (repoShell)
             repoShell.classList.add("hidden");
         initHub();
+        if (hubPmaBtn) {
+            hubPmaBtn.addEventListener("click", () => {
+                showPMAView();
+            });
+        }
+        if (pmaBackBtn) {
+            pmaBackBtn.addEventListener("click", () => {
+                showHubView();
+            });
+        }
+        // Check URL params for PMA view
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get("view") === "pma") {
+            showPMAView();
+        }
         return;
     }
     if (repoShell)

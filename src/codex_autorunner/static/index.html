@@ -24,6 +24,7 @@
       <div class="hub-hero-actions">
         <button class="primary sm" id="hub-new-repo">+ New</button>
         <button class="sm" id="hub-scan">Scan</button>
+        <button class="ghost sm" id="hub-pma">PM</button>
         <button class="ghost sm" id="hub-refresh">Refresh</button>
         <button class="ghost sm icon-btn" id="hub-settings" title="Settings">⚙</button>
       </div>
@@ -82,6 +83,70 @@
         <div class="muted small">Loading…</div>
       </div>
     </section>
+    <div class="hub-shell hidden" id="pma-shell">
+      <header class="hub-hero">
+        <div class="hub-hero-text">
+          <h1>Project Manager</h1>
+        </div>
+        <div class="hub-hero-actions">
+          <button class="ghost sm" id="pma-back">← Hub</button>
+        </div>
+      </header>
+      <section class="pma-chat-section">
+        <div class="pma-chat-main">
+          <div class="pma-chat-compose">
+            <div class="pma-chat-agent-controls">
+              <select id="pma-chat-agent-select" title="Agent"></select>
+              <select id="pma-chat-model-select" title="Model"></select>
+              <select id="pma-chat-reasoning-select" title="Reasoning"></select>
+            </div>
+            <div class="pma-chat-input-row">
+              <textarea id="pma-chat-input" class="pma-chat-input" enterkeyhint="enter"
+                placeholder="Ask PMA to help coordinate work..." rows="1" spellcheck="false"></textarea>
+              <div class="pma-chat-input-buttons">
+                <button class="primary sm" id="pma-chat-send" title="Send">↑</button>
+              </div>
+            </div>
+            <div class="pma-chat-meta">
+              <div class="pma-chat-meta-left">
+                <span class="muted small">Cmd+Enter to send · Enter for newline</span>
+              </div>
+              <div class="pma-chat-meta-right">
+                <button class="ghost sm hidden" id="pma-chat-cancel" title="Cancel">✕</button>
+                <button class="ghost sm" id="pma-chat-new-thread" title="Start a new chat thread">New thread</button>
+                <span class="pill pill-idle" id="pma-chat-status">idle</span>
+              </div>
+            </div>
+          </div>
+          <div class="pma-chat-stream" id="pma-chat-stream">
+            <div class="pma-chat-error hidden" id="pma-chat-error"></div>
+            <div class="pma-chat-events hidden" id="pma-chat-events">
+              <div class="pma-chat-section-header">
+                <div class="pma-chat-section-title">
+                  Agent updates
+                  <span class="pma-chat-count" id="pma-chat-events-count">0</span>
+                </div>
+                <button class="ghost sm hidden" id="pma-chat-events-toggle">Show more</button>
+              </div>
+              <div class="pma-chat-events-list" id="pma-chat-events-list"></div>
+            </div>
+            <div class="pma-chat-section-header" id="pma-chat-history-header">
+              <div class="pma-chat-section-title">History</div>
+            </div>
+            <div class="pma-chat-messages" id="pma-chat-messages"></div>
+          </div>
+        </div>
+      </section>
+      <section class="hub-inbox">
+        <div class="hub-panel-header">
+          <span class="label">Inbox</span>
+          <div class="hub-panel-actions">
+            <button class="ghost sm" id="pma-inbox-refresh">Refresh</button>
+          </div>
+        </div>
+        <div class="pma-inbox-list" id="pma-inbox-list">Loading…</div>
+      </section>
+    </div>
   </div>
   <div class="app-shell" id="repo-shell">
     <nav class="nav-bar">
