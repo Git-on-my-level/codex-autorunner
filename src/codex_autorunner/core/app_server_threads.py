@@ -17,6 +17,8 @@ FILE_CHAT_KEY = "file_chat"
 FILE_CHAT_OPENCODE_KEY = "file_chat.opencode"
 FILE_CHAT_PREFIX = "file_chat."
 FILE_CHAT_OPENCODE_PREFIX = "file_chat.opencode."
+PMA_KEY = "pma"
+PMA_OPENCODE_KEY = "pma.opencode"
 
 LOGGER = logging.getLogger("codex_autorunner.app_server")
 
@@ -24,6 +26,8 @@ LOGGER = logging.getLogger("codex_autorunner.app_server")
 FEATURE_KEYS = {
     FILE_CHAT_KEY,
     FILE_CHAT_OPENCODE_KEY,
+    PMA_KEY,
+    PMA_OPENCODE_KEY,
     "autorunner",
     "autorunner.opencode",
 }
@@ -92,6 +96,8 @@ class AppServerThreadRegistry:
             "file_chat_opencode": threads.get(FILE_CHAT_OPENCODE_KEY),
             "autorunner": threads.get("autorunner"),
             "autorunner_opencode": threads.get("autorunner.opencode"),
+            "pma": threads.get(PMA_KEY),
+            "pma_opencode": threads.get(PMA_OPENCODE_KEY),
         }
         notice = self.corruption_notice()
         if notice:

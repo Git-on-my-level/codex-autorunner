@@ -136,6 +136,10 @@ class HubAppContext:
     job_manager: HubJobManager
     app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
     app_server_prune_interval: Optional[float]
+    app_server_threads: AppServerThreadRegistry
+    app_server_events: AppServerEventBuffer
+    opencode_supervisor: Optional[OpenCodeSupervisor]
+    opencode_prune_interval: Optional[float]
     static_dir: Path
     static_assets_context: Optional[object]
     asset_version: str
@@ -670,10 +674,32 @@ def _build_hub_context(
         logging.INFO,
         f"Hub app ready at {config.root}",
     )
+    app_server_events = AppServerEventBuffer()
     app_server_supervisor, app_server_prune_interval = _build_app_server_supervisor(
         config.app_server,
         logger=logger,
         event_prefix="hub.app_server",
+        notification_handler=app_server_events.handle_notification,
+    )
+    app_server_threads = AppServerThreadRegistry(
+        default_app_server_threads_path(config.root)
+    )
+    opencode_command = config.agent_serve_command("opencode")
+    try:
+        opencode_binary = config.agent_binary("opencode")
+    except ConfigError:
+        opencode_binary = None
+    agent_config = config.agents.get("opencode")
+    subagent_models = agent_config.subagent_models if agent_config else None
+    opencode_supervisor, opencode_prune_interval = _build_opencode_supervisor(
+        config.app_server,
+        workspace_root=config.root,
+        opencode_binary=opencode_binary,
+        opencode_command=opencode_command,
+        logger=logger,
+        env=resolve_env_for_root(config.root),
+        subagent_models=subagent_models,
+        session_stall_timeout_seconds=config.opencode.session_stall_timeout_seconds,
     )
     static_dir, static_context = materialize_static_assets(
         config.static_assets.cache_root,
@@ -700,6 +726,10 @@ def _build_hub_context(
         job_manager=HubJobManager(logger=logger),
         app_server_supervisor=app_server_supervisor,
         app_server_prune_interval=app_server_prune_interval,
+        app_server_threads=app_server_threads,
+        app_server_events=app_server_events,
+        opencode_supervisor=opencode_supervisor,
+        opencode_prune_interval=opencode_prune_interval,
         static_dir=static_dir,
         static_assets_context=static_context,
         asset_version=asset_version(static_dir),
@@ -714,6 +744,10 @@ def _apply_hub_context(app: FastAPI, context: HubAppContext) -> None:
     app.state.job_manager = context.job_manager
     app.state.app_server_supervisor = context.app_server_supervisor
     app.state.app_server_prune_interval = context.app_server_prune_interval
+    app.state.app_server_threads = context.app_server_threads
+    app.state.app_server_events = context.app_server_events
+    app.state.opencode_supervisor = context.opencode_supervisor
+    app.state.opencode_prune_interval = context.opencode_prune_interval
     app.state.static_dir = context.static_dir
     app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
@@ -1420,6 +1454,24 @@ def create_hub_app(
                         )
 
             asyncio.create_task(_app_server_prune_loop())
+        opencode_supervisor = getattr(app.state, "opencode_supervisor", None)
+        opencode_prune_interval = getattr(app.state, "opencode_prune_interval", None)
+        if opencode_supervisor is not None and opencode_prune_interval:
+
+            async def _opencode_prune_loop():
+                while True:
+                    await asyncio.sleep(opencode_prune_interval)
+                    try:
+                        await opencode_supervisor.prune_idle()
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub opencode prune task failed",
+                            exc,
+                        )
+
+            asyncio.create_task(_opencode_prune_loop())
         mount_lock = await _get_mount_lock()
         async with mount_lock:
             for prefix in list(mount_order):
@@ -1444,6 +1496,17 @@ def create_hub_app(
                         app.state.logger,
                         logging.WARNING,
                         "Hub app-server shutdown failed",
+                        exc,
+                    )
+            opencode_supervisor = getattr(app.state, "opencode_supervisor", None)
+            if opencode_supervisor is not None:
+                try:
+                    await opencode_supervisor.close_all()
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "Hub opencode shutdown failed",
                         exc,
                     )
             static_context = getattr(app.state, "static_assets_context", None)
