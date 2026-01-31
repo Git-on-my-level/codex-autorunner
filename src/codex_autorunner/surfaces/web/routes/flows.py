@@ -96,8 +96,9 @@ def _safe_list_flow_runs(
     repo_root: Path, flow_type: Optional[str] = None, *, recover_stuck: bool = False
 ) -> list[FlowRunRecord]:
     db_path, _ = _flow_paths(repo_root)
+    config = load_repo_config(repo_root)
     try:
-        with FlowStore(db_path) as store:
+        with FlowStore(db_path, durable=config.durable_writes) as store:
             records = store.list_flow_runs(flow_type=flow_type)
             if recover_stuck:
                 # Recover any flows stuck in active states with dead workers
@@ -1049,8 +1050,9 @@ You are the first ticket in a new ticket_flow run.
     def get_reply_history_file(run_id: str, seq: str, file_path: str):
         repo_root = find_repo_root()
         db_path, _ = _flow_paths(repo_root)
+        config = load_repo_config(repo_root)
         try:
-            with FlowStore(db_path) as store:
+            with FlowStore(db_path, durable=config.durable_writes) as store:
                 record = store.get_flow_run(run_id)
         except Exception:
             raise HTTPException(

@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+from ...core.config import load_repo_config
 from ...core.flows import FlowStore
 from ...core.flows.controller import FlowController
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
@@ -241,7 +242,8 @@ class TelegramTicketFlowBridge:
         db_path = workspace_root / ".codex-autorunner" / "flows.db"
         if not db_path.exists():
             return None
-        store = FlowStore(db_path)
+        config = load_repo_config(workspace_root)
+        store = FlowStore(db_path, durable=config.durable_writes)
         try:
             store.initialize()
             runs = store.list_flow_runs(
@@ -305,7 +307,8 @@ class TelegramTicketFlowBridge:
         db_path = workspace_root / ".codex-autorunner" / "flows.db"
         if not db_path.exists():
             return None
-        store = FlowStore(db_path)
+        config = load_repo_config(workspace_root)
+        store = FlowStore(db_path, durable=config.durable_writes)
         try:
             store.initialize()
             if preferred_run_id:

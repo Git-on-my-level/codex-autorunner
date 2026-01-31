@@ -1562,7 +1562,8 @@ def create_hub_app(
                 if not db_path.exists():
                     continue
                 try:
-                    with FlowStore(db_path) as store:
+                    config = load_repo_config(repo_root)
+                    with FlowStore(db_path, durable=config.durable_writes) as store:
                         paused = store.list_flow_runs(
                             flow_type="ticket_flow", status=FlowRunStatus.PAUSED
                         )

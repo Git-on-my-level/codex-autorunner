@@ -68,6 +68,11 @@ def _ticket_dir(repo_root: Path) -> Path:
     return repo_root.resolve() / ".codex-autorunner" / "tickets"
 
 
+def _load_flow_store(repo_root: Path) -> FlowStore:
+    config = load_repo_config(repo_root)
+    return FlowStore(_flow_paths(repo_root)[0], durable=config.durable_writes)
+
+
 def _normalize_run_id(value: str) -> Optional[str]:
     try:
         return str(uuid.UUID(str(value)))
@@ -326,7 +331,7 @@ class FlowCommands(SharedHelpers):
         repo_root: Path,
         run_id_raw: Optional[str],
     ) -> None:
-        store = FlowStore(_flow_paths(repo_root)[0])
+        store = _load_flow_store(repo_root)
         try:
             store.initialize()
             record, error = self._resolve_status_record(store, run_id_raw)
@@ -368,7 +373,7 @@ class FlowCommands(SharedHelpers):
         error = None
         notice = None
         if action == "resume":
-            store = FlowStore(_flow_paths(repo_root)[0])
+            store = _load_flow_store(repo_root)
             try:
                 store.initialize()
                 run_id, error = self._resolve_run_id_input(store, run_id_raw)
@@ -391,7 +396,7 @@ class FlowCommands(SharedHelpers):
                 _spawn_flow_worker(repo_root, updated.id)
                 notice = "Resumed."
         elif action == "stop":
-            store = FlowStore(_flow_paths(repo_root)[0])
+            store = _load_flow_store(repo_root)
             try:
                 store.initialize()
                 run_id, error = self._resolve_run_id_input(store, run_id_raw)
@@ -414,7 +419,7 @@ class FlowCommands(SharedHelpers):
                 await controller.stop_flow(record.id)
                 notice = "Stopped."
         elif action == "recover":
-            store = FlowStore(_flow_paths(repo_root)[0])
+            store = _load_flow_store(repo_root)
             try:
                 store.initialize()
                 run_id, error = self._resolve_run_id_input(store, run_id_raw)
@@ -438,7 +443,7 @@ class FlowCommands(SharedHelpers):
             finally:
                 store.close()
         elif action == "archive":
-            store = FlowStore(_flow_paths(repo_root)[0])
+            store = _load_flow_store(repo_root)
             record = None
             try:
                 store.initialize()
@@ -482,7 +487,7 @@ class FlowCommands(SharedHelpers):
                     archived_runs_dir = artifacts_root / record.id / "archived_runs"
                     shutil.move(str(run_dir), str(archived_runs_dir))
 
-                store = FlowStore(_flow_paths(repo_root)[0])
+                store = _load_flow_store(repo_root)
                 try:
                     store.initialize()
                     store.delete_flow_run(record.id)
@@ -724,7 +729,7 @@ class FlowCommands(SharedHelpers):
             f"Workspace: {repo_root}" if repo_root else "Workspace: unbound",
         ]
         if repo_root:
-            store = FlowStore(_flow_paths(repo_root)[0])
+            store = _load_flow_store(repo_root)
             try:
                 store.initialize()
                 runs = store.list_flow_runs(flow_type="ticket_flow")
@@ -747,7 +752,7 @@ class FlowCommands(SharedHelpers):
     async def _handle_flow_status_action(
         self, message: TelegramMessage, repo_root: Path, argv: list[str]
     ) -> None:
-        store = FlowStore(_flow_paths(repo_root)[0])
+        store = _load_flow_store(repo_root)
         try:
             store.initialize()
             run_id_raw = self._first_non_flag(argv)
@@ -788,7 +793,7 @@ class FlowCommands(SharedHelpers):
                 return
             limit = min(limit_value, 50)
 
-        store = FlowStore(_flow_paths(repo_root)[0])
+        store = _load_flow_store(repo_root)
         try:
             store.initialize()
             runs = store.list_flow_runs(flow_type="ticket_flow")
@@ -841,7 +846,7 @@ class FlowCommands(SharedHelpers):
         tickets_exist = bool(existing_tickets)
         issue_exists = issue_md_has_content(repo_root)
 
-        store = FlowStore(_flow_paths(repo_root)[0])
+        store = _load_flow_store(repo_root)
         active_run = None
         try:
             store.initialize()
@@ -1060,7 +1065,7 @@ You are the first ticket in a new ticket_flow run.
     async def _handle_flow_resume(
         self, message: TelegramMessage, repo_root: Path, argv: list[str]
     ) -> None:
-        store = FlowStore(_flow_paths(repo_root)[0])
+        store = _load_flow_store(repo_root)
         try:
             store.initialize()
             run_id_raw = self._first_non_flag(argv)
@@ -1120,7 +1125,7 @@ You are the first ticket in a new ticket_flow run.
     async def _handle_flow_stop(
         self, message: TelegramMessage, repo_root: Path, argv: list[str]
     ) -> None:
-        store = FlowStore(_flow_paths(repo_root)[0])
+        store = _load_flow_store(repo_root)
         try:
             store.initialize()
             run_id_raw = self._first_non_flag(argv)
@@ -1168,7 +1173,7 @@ You are the first ticket in a new ticket_flow run.
     async def _handle_flow_recover(
         self, message: TelegramMessage, repo_root: Path, argv: list[str]
     ) -> None:
-        store = FlowStore(_flow_paths(repo_root)[0])
+        store = _load_flow_store(repo_root)
         try:
             store.initialize()
             run_id_raw = self._first_non_flag(argv)
@@ -1221,7 +1226,7 @@ You are the first ticket in a new ticket_flow run.
         argv: Optional[list[str]] = None,
     ) -> None:
         argv = argv or []
-        store = FlowStore(_flow_paths(repo_root)[0])
+        store = _load_flow_store(repo_root)
         record = None
         try:
             store.initialize()
@@ -1244,7 +1249,7 @@ You are the first ticket in a new ticket_flow run.
         self, message: TelegramMessage, repo_root: Path, argv: list[str]
     ) -> None:
         force = self._has_flag(argv, "--force")
-        store = FlowStore(_flow_paths(repo_root)[0])
+        store = _load_flow_store(repo_root)
         record = None
         try:
             store.initialize()
@@ -1307,7 +1312,7 @@ You are the first ticket in a new ticket_flow run.
             archived_runs_dir = artifacts_root / record.id / "archived_runs"
             shutil.move(str(run_dir), str(archived_runs_dir))
 
-        store = FlowStore(_flow_paths(repo_root)[0])
+        store = _load_flow_store(repo_root)
         try:
             store.initialize()
             store.delete_flow_run(record.id)
