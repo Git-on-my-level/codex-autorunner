@@ -2128,22 +2128,27 @@ export function initTicketFlow(): void {
 
   if (overflowToggle && overflowDropdown) {
     const toggleMenu = (e: Event) => {
+      e.preventDefault();
       e.stopPropagation();
       const isHidden = overflowDropdown.classList.contains("hidden");
       overflowDropdown.classList.toggle("hidden", !isHidden);
     };
-    overflowToggle.addEventListener("click", toggleMenu);
-    overflowToggle.addEventListener("touchend", (e) => {
-      e.preventDefault(); // Prevent ghost click
-      toggleMenu(e);
+    const closeMenu = () => overflowDropdown.classList.add("hidden");
+
+    overflowToggle.addEventListener("pointerdown", toggleMenu);
+    overflowToggle.addEventListener("click", (e) => {
+      e.preventDefault(); // swallow synthetic click after pointerdown
+    });
+    overflowToggle.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") toggleMenu(e);
     });
 
     // Close on outside click
-    document.addEventListener("click", (e) => {
+    document.addEventListener("pointerdown", (e) => {
       if (!overflowDropdown.classList.contains("hidden") && 
           !overflowToggle.contains(e.target as Node) && 
           !overflowDropdown.contains(e.target as Node)) {
-        overflowDropdown.classList.add("hidden");
+        closeMenu();
       }
     });
   }

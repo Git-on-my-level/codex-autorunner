@@ -715,11 +715,21 @@ export async function initWorkspace() {
         }
     });
     // Mobile action sheet
-    mobileMenuToggle?.addEventListener("click", (evt) => {
+    const handleMobileToggle = (evt) => {
+        evt.preventDefault();
         evt.stopPropagation();
         toggleMobileMenu();
+    };
+    mobileMenuToggle?.addEventListener("pointerdown", handleMobileToggle);
+    mobileMenuToggle?.addEventListener("click", (evt) => {
+        evt.preventDefault(); // swallow synthetic click after pointerdown
     });
-    document.addEventListener("click", (evt) => {
+    mobileMenuToggle?.addEventListener("keydown", (evt) => {
+        if (evt.key === "Enter" || evt.key === " ") {
+            handleMobileToggle(evt);
+        }
+    });
+    document.addEventListener("pointerdown", (evt) => {
         if (!mobileDropdown || mobileDropdown.classList.contains("hidden"))
             return;
         if (evt.target instanceof Node && mobileDropdown.contains(evt.target))
