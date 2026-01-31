@@ -5,11 +5,11 @@ import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, cast
 
 from ..sqlite_utils import SQLITE_PRAGMAS
+from ..time_utils import now_iso
 from .models import (
     FlowArtifact,
     FlowEvent,
@@ -22,10 +22,6 @@ _logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 2
 UNSET = object()
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class FlowStore:

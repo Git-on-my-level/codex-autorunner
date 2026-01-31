@@ -1,12 +1,12 @@
 import dataclasses
 import json
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from .locks import file_lock
 from .sqlite_utils import open_sqlite
+from .time_utils import now_iso
 
 
 @dataclasses.dataclass
@@ -91,10 +91,6 @@ class SessionRecord:
             "status": self.status,
             "agent": self.agent,
         }
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _ensure_state_schema(conn) -> None:
