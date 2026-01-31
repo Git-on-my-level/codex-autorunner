@@ -138,6 +138,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "approval_mode": "yolo",
         # Keep ticket_flow deterministic by default; surfaces can tighten this.
         "default_approval_decision": "accept",
+        "include_previous_ticket_context": False,
     },
     "git": {
         "auto_commit": False,

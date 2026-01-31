@@ -458,6 +458,22 @@ def build_flow_routes() -> APIRouter:
             )
 
         repo_root = find_repo_root()
+
+        # Merge repo config into input_data for ticket_flow
+        merged_input_data = dict(request.input_data or {})
+        if flow_type == "ticket_flow":
+            config = load_repo_config(repo_root)
+            ticket_flow_config = config.ticket_flow
+            if isinstance(ticket_flow_config, dict):
+                # Merge ticket_flow config into input_data only if not already set
+                if (
+                    "include_previous_ticket_context" in ticket_flow_config
+                    and "include_previous_ticket_context" not in merged_input_data
+                ):
+                    merged_input_data["include_previous_ticket_context"] = (
+                        ticket_flow_config["include_previous_ticket_context"]
+                    )
+
         controller = _get_flow_controller(repo_root, flow_type)
 
         # For ticket_flow, check if tickets exist before starting a new run.
@@ -498,8 +514,12 @@ def build_flow_routes() -> APIRouter:
 
         run_id = _normalize_run_id(uuid.uuid4())
 
+        # Use merged_input_data for ticket_flow, otherwise use request.input_data
+        input_to_use = (
+            merged_input_data if flow_type == "ticket_flow" else request.input_data
+        )
         record = await controller.start_flow(
-            input_data=request.input_data,
+            input_data=input_to_use,
             run_id=run_id,
             metadata=request.metadata,
         )
@@ -636,8 +656,22 @@ You are the first ticket in a new ticket_flow run.
             seeded = True
 
         meta = flow_request.metadata if isinstance(flow_request.metadata, dict) else {}
+
+        # Merge repo config into input_data for ticket_flow
+        merged_input_data = dict(flow_request.input_data or {})
+        config = load_repo_config(repo_root)
+        ticket_flow_config = config.ticket_flow
+        if isinstance(ticket_flow_config, dict):
+            if (
+                "include_previous_ticket_context" in ticket_flow_config
+                and "include_previous_ticket_context" not in merged_input_data
+            ):
+                merged_input_data["include_previous_ticket_context"] = (
+                    ticket_flow_config["include_previous_ticket_context"]
+                )
+
         payload = FlowStartRequest(
-            input_data=flow_request.input_data,
+            input_data=merged_input_data,
             metadata=meta | {"seeded_ticket": seeded},
         )
         return await _start_flow("ticket_flow", payload, force_new=force_new)
