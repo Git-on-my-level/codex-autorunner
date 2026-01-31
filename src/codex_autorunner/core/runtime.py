@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .config import RepoConfig, load_repo_config
-from .docs import DocsManager
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock
 from .notifications import NotificationManager
 from .run_index import RunIndexStore
@@ -289,9 +288,6 @@ class RuntimeContext:
         # Run index store
         self._run_index_store: Optional[RunIndexStore] = None
 
-        # Docs manager
-        self._docs: Optional[DocsManager] = None
-
         # Notification manager (for run-level events)
         self._notifier: Optional[NotificationManager] = None
 
@@ -310,13 +306,6 @@ class RuntimeContext:
     def config(self) -> RepoConfig:
         """Get repository config."""
         return self._config
-
-    @property
-    def docs(self) -> DocsManager:
-        """Get docs manager."""
-        if self._docs is None:
-            self._docs = DocsManager(self._config)
-        return self._docs
 
     @property
     def run_index_store(self) -> RunIndexStore:

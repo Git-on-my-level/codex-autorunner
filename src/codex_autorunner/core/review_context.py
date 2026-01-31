@@ -105,7 +105,8 @@ def build_spec_progress_review_context(
 
     def read_doc(name: str) -> str:
         try:
-            return ctx.docs.read_doc(name)
+            path = ctx.config.doc_path(name)
+            return _safe_read(path)
         except Exception as exc:
             return f"(failed to read {name}: {exc})"
 

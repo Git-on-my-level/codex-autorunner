@@ -143,18 +143,3 @@ class RunnerStateManager:
         if info.pid and process_alive(info.pid):
             return info.pid
         return None
-
-    def todos_done(self) -> bool:
-        """Check if all tickets are done."""
-        from ..tickets.files import list_ticket_paths, ticket_is_done
-
-        ticket_dir = self.repo_root / ".codex-autorunner" / "tickets"
-        ticket_paths = list_ticket_paths(ticket_dir)
-        if not ticket_paths:
-            return False
-        return all(ticket_is_done(path) for path in ticket_paths)
-
-    def summary_finalized(self) -> bool:
-        """Check if the summary is finalized (legacy, always returns True)."""
-        # Legacy docs finalization no longer applies (no SUMMARY doc).
-        return True

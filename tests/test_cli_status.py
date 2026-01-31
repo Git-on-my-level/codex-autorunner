@@ -27,10 +27,8 @@ def test_status_emits_valid_json(repo) -> None:
     assert "session_record" in parsed
     assert "opencode_session_id" in parsed
     assert "opencode_record" in parsed
-    assert "outstanding_todos" in parsed
 
     assert parsed["repo"] == str(repo)
-    assert isinstance(parsed["outstanding_todos"], int)
 
 
 def test_status_without_json_outputs_human_readable(repo) -> None:
@@ -48,6 +46,5 @@ def test_status_without_json_outputs_human_readable(repo) -> None:
     assert "Last start:" in output
     assert "Last finish:" in output
     assert "Runner pid:" in output
-    assert "Outstanding TODO items:" in output
 
     assert str(repo) in output

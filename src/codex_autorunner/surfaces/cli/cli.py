@@ -316,7 +316,6 @@ def status(
     """Show autorunner status."""
     engine = _require_repo_config(repo, hub)
     state = load_state(engine.state_path)
-    outstanding, _ = engine.docs.todos()
     repo_key = str(engine.repo_root)
     session_id = state.repo_to_session.get(repo_key) or state.repo_to_session.get(
         f"{repo_key}:codex"
@@ -366,7 +365,6 @@ def status(
                 if opencode_record
                 else None
             ),
-            "outstanding_todos": len(outstanding),
         }
         typer.echo(json.dumps(payload, indent=2))
         return
@@ -390,7 +388,6 @@ def status(
         if opencode_record:
             detail = f" (status={opencode_record.status}, last_seen={opencode_record.last_seen_at})"
         typer.echo(f"Terminal session (opencode): {opencode_session_id}{detail}")
-    typer.echo(f"Outstanding TODO items: {len(outstanding)}")
 
 
 @app.command()

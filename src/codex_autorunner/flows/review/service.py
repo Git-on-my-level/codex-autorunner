@@ -252,7 +252,7 @@ Stop digging deeper when:
 """
 REVIEW_PROMPT_SPEC_PROGRESS = """# Autorunner Final Review (Spec + Progress Focus)
 
-You are coordinating a multi-agent review immediately after an autorunner loop completes. The goal is to validate work against SPEC.md and PROGRESS.md, not to suggest generic code style fixes.
+You are coordinating a multi-agent review immediately after an autorunner loop completes. The goal is to validate work against spec.md, not to suggest generic code style fixes.
 
 ## Required Scratchpad + Output
 
@@ -269,16 +269,16 @@ You are coordinating a multi-agent review immediately after an autorunner loop c
 
 ## Source of Truth + Focus
 
-* Read AUTORUNNER_CONTEXT.md first. It contains the exit reason, SPEC.md, PROGRESS.md, optional TODO/SUMMARY, and the last-run artifacts (output/diff/plan excerpts).
-* Treat SPEC.md + PROGRESS.md as contracts: extract explicit requirements, promised validation steps, and open questions.
+* Read AUTORUNNER_CONTEXT.md first. It contains the exit reason, spec.md, and last-run artifacts (output/diff/plan excerpts).
+* Treat spec.md as the contract: extract explicit requirements, promised validation steps, and open questions.
 * Derive must-hold invariants directly from SPEC (not generic guesses).
 * Buckets should be anchored to spec sections mapped to implementation areas, plus any recently changed/critical modules from AUTORUNNER_CONTEXT.md.
 
 ## North Star
 
-* Spec compliance and claim verification over style.
-* High-signal risks and regressions that would violate SPEC/PROGRESS commitments.
-* Trackable output that can be turned into TODO items.
+* Spec compliance over style.
+* High-signal risks and regressions that would violate spec commitments.
+* Trackable output that can be turned into tickets.
 
 ## Phase 0: Setup (Coordinator)
 
@@ -288,8 +288,7 @@ Prepare scratchpad files under {{scratchpad_dir}} (see list above).
 
 1) Read AUTORUNNER_CONTEXT.md and summarize:
    * Project shape and runtime assumptions
-   * SPEC requirements + invariants
-   * PROGRESS claims + validation evidence
+   * Spec requirements + invariants
    * Open questions/gaps
 2) Define buckets in BUCKETS.md:
    * Buckets by review dimension + code areas (spec sections → code paths)
@@ -320,8 +319,8 @@ Create the final report at {{final_output_path}} with this structure:
 ## Spec-to-Implementation Matrix
 | Spec item | Status (met/partial/missing) | Evidence | Notes |
 
-## Progress Claim Verification
-- Claim: ... (cite PROGRESS.md section)
+## Spec Verification
+- Spec requirement: ... (cite spec section)
   - Verified by: ...
   - Not verified because: ...
 
