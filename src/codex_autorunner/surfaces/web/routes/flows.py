@@ -92,25 +92,19 @@ def _safe_list_flow_runs(
     repo_root: Path, flow_type: Optional[str] = None, *, recover_stuck: bool = False
 ) -> list[FlowRunRecord]:
     db_path, _ = _flow_paths(repo_root)
-    store = FlowStore(db_path)
     try:
-        store.initialize()
-        records = store.list_flow_runs(flow_type=flow_type)
-        if recover_stuck:
-            # Recover any flows stuck in active states with dead workers
-            records = [
-                reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
-                for rec in records
-            ]
-        return records
+        with FlowStore(db_path) as store:
+            records = store.list_flow_runs(flow_type=flow_type)
+            if recover_stuck:
+                # Recover any flows stuck in active states with dead workers
+                records = [
+                    reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
+                    for rec in records
+                ]
+            return records
     except Exception as exc:
         _logger.debug("FlowStore list runs failed: %s", exc)
         return []
-    finally:
-        try:
-            store.close()
-        except Exception:
-            pass
 
 
 def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
@@ -995,15 +989,13 @@ You are the first ticket in a new ticket_flow run.
     def get_reply_history_file(run_id: str, seq: str, file_path: str):
         repo_root = find_repo_root()
         db_path, _ = _flow_paths(repo_root)
-        store = FlowStore(db_path)
         try:
-            store.initialize()
-            record = store.get_flow_run(run_id)
-        finally:
-            try:
-                store.close()
-            except Exception:
-                pass
+            with FlowStore(db_path) as store:
+                record = store.get_flow_run(run_id)
+        except Exception:
+            raise HTTPException(
+                status_code=404, detail="Flows database unavailable"
+            ) from None
         if not record:
             raise HTTPException(status_code=404, detail="Run not found")
 

@@ -47,17 +47,6 @@ def _flows_db_path(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "flows.db"
 
 
-def _load_store_or_404(db_path: Path) -> FlowStore:
-    store = FlowStore(db_path)
-    try:
-        store.initialize()
-        return store
-    except Exception as exc:
-        raise HTTPException(
-            status_code=404, detail="Flows database unavailable"
-        ) from exc
-
-
 def _timestamp(path: Path) -> Optional[str]:
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
@@ -240,16 +229,14 @@ def build_messages_routes() -> APIRouter:
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             return {"active": False}
-        store = FlowStore(db_path)
         try:
-            store.initialize()
+            with FlowStore(db_path) as store:
+                paused = store.list_flow_runs(
+                    flow_type="ticket_flow", status=FlowRunStatus.PAUSED
+                )
         except Exception:
             # Corrupt flows db should not 500 the UI.
             return {"active": False}
-
-        paused = store.list_flow_runs(
-            flow_type="ticket_flow", status=FlowRunStatus.PAUSED
-        )
         if not paused:
             return {"active": False}
 
@@ -285,12 +272,12 @@ def build_messages_routes() -> APIRouter:
         db_path = _flows_db_path(repo_root)
         if not db_path.exists():
             return {"conversations": []}
-        store = FlowStore(db_path)
         try:
-            store.initialize()
+            with FlowStore(db_path) as store:
+                runs = store.list_flow_runs(flow_type="ticket_flow")
         except Exception:
             return {"conversations": []}
-        runs = store.list_flow_runs(flow_type="ticket_flow")
+
         conversations: list[dict[str, Any]] = []
         for record in runs:
             record_input = dict(record.input_data or {})
@@ -337,14 +324,13 @@ def build_messages_routes() -> APIRouter:
         }
         if not db_path.exists():
             return empty_response
-        store = _load_store_or_404(db_path)
         try:
-            record = store.get_flow_run(run_id)
-        finally:
-            try:
-                store.close()
-            except Exception:
-                pass
+            with FlowStore(db_path) as store:
+                record = store.get_flow_run(run_id)
+        except Exception:
+            raise HTTPException(
+                status_code=404, detail="Flows database unavailable"
+            ) from None
         if not record:
             return empty_response
         input_data = dict(record.input_data or {})
