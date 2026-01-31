@@ -3536,6 +3536,39 @@ button.icon-btn {
   display: none;
 }
 
+.workspace-mobile-menu {
+  position: relative;
+}
+
+.workspace-mobile-dropdown {
+  position: absolute;
+  right: 0;
+  top: 110%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  padding: 6px;
+  min-width: 170px;
+  z-index: 30;
+}
+
+.workspace-mobile-item {
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.workspace-mobile-item:hover,
+.workspace-mobile-item:active {
+  background: rgba(108, 245, 216, 0.1);
+}
+
 /* Mobile file selector button - clean, square aesthetic */
 .workspace-file-btn {
   display: inline-flex;
@@ -7036,6 +7069,14 @@ button.loading::after {
     gap: 8px;
     padding: 2px 0;
     margin: 0;
+  }
+
+  .workspace-mobile-menu {
+    margin-left: auto;
+  }
+
+  .workspace-mobile-dropdown {
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
   }
 
   /* Tighten spacing around toolbar */
