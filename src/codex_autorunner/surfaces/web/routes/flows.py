@@ -645,13 +645,22 @@ You are the first ticket in a new ticket_flow run.
         tickets = []
         for path in list_ticket_paths(ticket_dir):
             doc, errors = read_ticket(path)
+            idx = getattr(doc, "index", None) or parse_ticket_index(path.name)
+            # When frontmatter is broken, still surface the raw ticket body so
+            # the user can inspect and fix the file in the UI instead of seeing
+            # an empty card.
+            try:
+                raw_body = path.read_text(encoding="utf-8")
+                _, parsed_body = parse_markdown_frontmatter(raw_body)
+            except Exception:
+                parsed_body = None
             rel_path = safe_relpath(path, repo_root)
             tickets.append(
                 {
                     "path": rel_path,
-                    "index": getattr(doc, "index", None),
+                    "index": idx,
                     "frontmatter": asdict(doc.frontmatter) if doc else None,
-                    "body": doc.body if doc else None,
+                    "body": doc.body if doc else parsed_body,
                     "errors": errors,
                 }
             )
