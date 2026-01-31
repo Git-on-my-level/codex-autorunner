@@ -40,10 +40,13 @@ EXCLUDE_PATTERNS = [
     "*.egg-info",
     "tests",  # Tests may reference legacy code for testing purposes
     "docs/archive",  # Archived docs may reference old patterns
+    ".codex-autorunner/archive",  # Archived worktree snapshots are historical artifacts
     ".codex-autorunner/runs",  # Run dispatch/history are historical artifacts
     ".codex-autorunner/workspace/tickets-backup",  # Backup tickets are historical
     ".codex-autorunner/dispatch",  # Dispatch artifacts are historical
     ".codex-autorunner/tickets",  # Ticket files describe what was done and may reference legacy code
+    ".codex-autorunner/config.yml",  # Generated runtime config may reference legacy paths
+    ".codex-autorunner/github_context",  # Downloaded GH context may reference legacy docs
     "scripts/check_legacy_pipeline.py",  # Script itself contains legacy strings
     "src/codex_autorunner/flows/review/service.py",  # Review prompts mention legacy docs for context
 ]
