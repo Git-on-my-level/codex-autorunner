@@ -140,7 +140,68 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             state_key=f"workspace_{rel_suffix.replace('/', '_')}",
         )
 
-    raise HTTPException(status_code=400, detail="invalid target")
+
+def _build_file_chat_prompt(*, target: _Target, message: str, before: str) -> str:
+    if target.kind == "ticket":
+        file_role_context = (
+            "This file is a CAR ticket. Ticket flow processes "
+            "`.codex-autorunner/tickets/TICKET-###*.md` in numeric order.\n"
+            "Edits here change what the ticket flow agent will do; keep YAML "
+            "frontmatter valid."
+        )
+    elif target.kind == "workspace":
+        file_role_context = (
+            "This file is a CAR workspace doc under `.codex-autorunner/workspace/`."
+            " These docs act as shared memory across ticket turns."
+        )
+    else:
+        file_role_context = (
+            "This file is a normal repo file (not a CAR ticket/workspace doc)."
+        )
+
+    return (
+        "<injected context>\n"
+        "You are operating inside a Codex Autorunner (CAR) managed repo.\n\n"
+        "CAR’s durable control-plane lives under `.codex-autorunner/`:\n"
+        "- `.codex-autorunner/ABOUT_CAR.md` — short repo-local briefing "
+        "(ticket/workspace conventions + helper scripts).\n"
+        "- `.codex-autorunner/tickets/` — ordered ticket queue "
+        "(`TICKET-###*.md`) used by the ticket flow runner.\n"
+        "- `.codex-autorunner/workspace/` — shared context docs:\n"
+        "  - `active_context.md` — current “north star” context; kept fresh "
+        "for ongoing work.\n"
+        "  - `spec.md` — longer spec / acceptance criteria when needed.\n"
+        "  - `decisions.md` — prior decisions / tradeoffs when relevant.\n\n"
+        "Intent signals: if the user mentions tickets, “dispatch”, “resume”, "
+        "workspace docs, or `.codex-autorunner/`, they are likely referring "
+        "to CAR artifacts/workflow rather than generic repo files.\n\n"
+        "Use the above as orientation. If you need the operational details "
+        "(exact helper commands, what CAR auto-generates), read "
+        "`.codex-autorunner/ABOUT_CAR.md`.\n"
+        "</injected context>\n\n"
+        "<file_role_context>\n"
+        f"{file_role_context}\n"
+        "</file_role_context>\n\n"
+        "You are editing a single file in Codex Autorunner.\n\n"
+        "<target>\n"
+        f"{target.target}\n"
+        "</target>\n\n"
+        "<path>\n"
+        f"{target.rel_path}\n"
+        "</path>\n\n"
+        "<instructions>\n"
+        "- This is a single-turn edit request. Don’t ask the user questions.\n"
+        "- You may read other files for context, but only modify the target file.\n"
+        "- If no changes are needed, explain why without editing the file.\n"
+        "- Respond with a short summary of what you did.\n"
+        "</instructions>\n\n"
+        "<user_request>\n"
+        f"{message}\n"
+        "</user_request>\n\n"
+        "<FILE_CONTENT>\n"
+        f"{before[:12000]}\n"
+        "</FILE_CONTENT>\n"
+    )
 
 
 def _read_file(path: Path) -> str:
@@ -303,21 +364,7 @@ def build_file_chat_routes() -> APIRouter:
         before = _read_file(target.path)
         base_hash = _hash_content(before)
 
-        prompt = (
-            "You are editing a single file in Codex AutoRunner.\n\n"
-            f"Target: {target.target}\n"
-            f"Path: {target.rel_path}\n\n"
-            "Instructions:\n"
-            "- This run is non-interactive. Do not ask the user questions.\n"
-            "- Edit ONLY the target file.\n"
-            "- If no changes are needed, explain why without editing the file.\n"
-            "- Respond with a short summary of what you did.\n\n"
-            "User request:\n"
-            f"{message}\n\n"
-            "<FILE_CONTENT>\n"
-            f"{before[:12000]}\n"
-            "</FILE_CONTENT>\n"
-        )
+        prompt = _build_file_chat_prompt(target=target, message=message, before=before)
 
         interrupt_event = await _get_or_create_interrupt_event(target.state_key)
         if interrupt_event.is_set():

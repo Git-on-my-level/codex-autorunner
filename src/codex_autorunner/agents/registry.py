@@ -168,10 +168,13 @@ def _load_agent_plugins() -> dict[str, AgentDescriptor]:
             continue
 
         api_version_raw = getattr(descriptor, "plugin_api_version", None)
-        try:
-            api_version = int(api_version_raw)
-        except Exception:
+        if api_version_raw is None:
             api_version = None
+        else:
+            try:
+                api_version = int(api_version_raw)
+            except Exception:
+                api_version = None
         if api_version is None:
             _logger.warning(
                 "Ignoring agent plugin %s: invalid api_version %s",
