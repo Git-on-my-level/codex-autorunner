@@ -1466,6 +1466,117 @@ def hub_scan(path: Optional[Path] = typer.Option(None, "--path", help="Hub root 
         )
 
 
+@hub_app.command("snapshot")
+def hub_snapshot(
+    path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+    output_json: bool = typer.Option(
+        True, "--json/--no-json", help="Emit JSON output (default: true)"
+    ),
+    pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
+):
+    """Return a compact hub snapshot (repos + inbox items)."""
+    config = _require_hub_config(path)
+    repos_url = _build_server_url(config, "/hub/repos")
+    messages_url = _build_server_url(config, "/hub/messages?limit=50")
+
+    try:
+        repos_response = _request_json(
+            "GET", repos_url, token_env=config.server_auth_token_env
+        )
+        messages_response = _request_json(
+            "GET", messages_url, token_env=config.server_auth_token_env
+        )
+    except (
+        httpx.HTTPError,
+        httpx.ConnectError,
+        httpx.TimeoutException,
+        OSError,
+    ) as exc:
+        logger.debug("Failed to fetch hub snapshot from server: %s", exc)
+        _raise_exit(
+            "Failed to connect to hub server. Ensure 'car hub serve' is running.",
+            cause=exc,
+        )
+
+    repos_payload = repos_response if isinstance(repos_response, dict) else {}
+    messages_payload = messages_response if isinstance(messages_response, dict) else {}
+
+    repos = repos_payload.get("repos", []) if isinstance(repos_payload, dict) else []
+    messages_items = (
+        messages_payload.get("items", []) if isinstance(messages_payload, dict) else []
+    )
+
+    def _summarize_repo(repo: dict) -> dict:
+        if not isinstance(repo, dict):
+            return {}
+        return {
+            "id": repo.get("id"),
+            "display_name": repo.get("display_name"),
+            "status": repo.get("status"),
+            "initialized": repo.get("initialized"),
+            "exists_on_disk": repo.get("exists_on_disk"),
+            "last_run_id": repo.get("last_run_id"),
+            "last_run_started_at": repo.get("last_run_started_at"),
+            "last_run_finished_at": repo.get("last_run_finished_at"),
+        }
+
+    def _summarize_message(msg: dict) -> dict:
+        if not isinstance(msg, dict):
+            return {}
+        dispatch = msg.get("dispatch", {})
+        if not isinstance(dispatch, dict):
+            dispatch = {}
+        body = dispatch.get("body", "")
+        title = dispatch.get("title", "")
+        truncated_body = (body[:200] + "...") if len(body) > 200 else body
+        return {
+            "repo_id": msg.get("repo_id"),
+            "repo_display_name": msg.get("repo_display_name"),
+            "run_id": msg.get("run_id"),
+            "run_created_at": msg.get("run_created_at"),
+            "status": msg.get("status"),
+            "seq": msg.get("seq"),
+            "dispatch": {
+                "mode": dispatch.get("mode"),
+                "title": title,
+                "body": truncated_body,
+                "is_handoff": dispatch.get("is_handoff"),
+            },
+            "files_count": (
+                len(msg.get("files", [])) if isinstance(msg.get("files"), list) else 0
+            ),
+        }
+
+    snapshot = {
+        "last_scan_at": (
+            repos_payload.get("last_scan_at")
+            if isinstance(repos_payload, dict)
+            else None
+        ),
+        "repos": [_summarize_repo(repo) for repo in repos],
+        "inbox_items": [_summarize_message(msg) for msg in messages_items],
+    }
+
+    if not output_json:
+        typer.echo(
+            f"Hub Snapshot (repos={len(snapshot['repos'])}, inbox={len(snapshot['inbox_items'])})"
+        )
+        for repo in snapshot["repos"]:
+            typer.echo(
+                f"- {repo.get('id')}: status={repo.get('status')}, "
+                f"initialized={repo.get('initialized')}, exists={repo.get('exists_on_disk')}"
+            )
+        for msg in snapshot["inbox_items"]:
+            typer.echo(
+                f"- Inbox: repo={msg.get('repo_id')}, run_id={msg.get('run_id')}, "
+                f"title={msg.get('dispatch', {}).get('title')}"
+            )
+        return
+
+    indent = 2 if pretty else None
+    typer.echo(json.dumps(snapshot, indent=indent))
+
+
 @telegram_app.command("start")
 def telegram_start(
     path: Optional[Path] = typer.Option(None, "--path", help="Repo or hub root path"),

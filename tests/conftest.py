@@ -140,3 +140,89 @@ def hub_env(tmp_path: Path):
 def repo(hub_env) -> Path:
     """Backwards-compatible repo fixture (the hub's single test repo root)."""
     return hub_env.repo_root
+
+
+@pytest.fixture()
+def hub_root_only(tmp_path: Path) -> Path:
+    """Create a minimal hub without any repos, for testing server-dependent commands."""
+    from codex_autorunner.bootstrap import seed_hub_files
+
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    return hub_root
+
+
+@pytest.fixture()
+def hub_server(hub_root_only: Path):
+    """Create a hub with a TestClient for testing server-dependent CLI commands."""
+    import socket
+    import threading
+    import time
+
+    from codex_autorunner.server import create_hub_app
+
+    # Create the hub app
+    app = create_hub_app(hub_root_only)
+
+    # Find an available port
+    def find_available_port():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            s.listen(1)
+            port = s.getsockname()[1]
+        return port
+
+    port = find_available_port()
+
+    # Run the app in a thread
+    import uvicorn
+
+    server_thread = None
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
+    server = uvicorn.Server(config)
+
+    def run_server():
+        import asyncio
+
+        asyncio.run(server.serve())
+
+    server_thread = threading.Thread(target=run_server, daemon=True)
+    server_thread.start()
+
+    # Wait for server to be ready
+    max_wait = 5
+    for _i in range(max_wait * 10):
+        try:
+            import httpx
+
+            response = httpx.get(f"http://127.0.0.1:{port}/hub/repos", timeout=0.1)
+            if response.status_code == 200:
+                break
+        except Exception:
+            pass
+        time.sleep(0.1)
+    else:
+        raise RuntimeError("Server did not start in time")
+
+    # Update hub config to use the dynamic port
+    import yaml
+
+    from codex_autorunner.core.config import load_hub_config
+    from codex_autorunner.core.utils import atomic_write
+
+    config = load_hub_config(hub_root_only)
+    config_raw = config.raw if isinstance(config.raw, dict) else {}
+    config_raw["server"] = config_raw.get("server", {})
+    config_raw["server"]["port"] = port
+    config_raw["server"]["host"] = "127.0.0.1"
+
+    config_path = hub_root_only / "codex-autorunner.yml"
+    atomic_write(config_path, yaml.safe_dump(config_raw, sort_keys=False))
+
+    try:
+        yield hub_root_only, port
+    finally:
+        # Cleanup is handled by the daemon thread
+        pass
