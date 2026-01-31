@@ -198,6 +198,55 @@ class SessionStopRequest(Payload):
     repo_path: Optional[str] = None
 
 
+class TemplateRepoSummary(ResponseModel):
+    id: str
+    url: str
+    trusted: bool
+    default_ref: str
+
+
+class TemplateReposResponse(ResponseModel):
+    enabled: bool
+    repos: List[TemplateRepoSummary]
+
+
+class TemplateFetchRequest(Payload):
+    template: str
+
+
+class TemplateFetchResponse(ResponseModel):
+    content: str
+    repo_id: str
+    path: str
+    ref: str
+    commit_sha: str
+    blob_sha: str
+    trusted: bool
+    scan_decision: Optional[Dict[str, Any]] = None
+
+
+class TemplateApplyRequest(Payload):
+    template: str
+    ticket_dir: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("ticket_dir", "ticketDir")
+    )
+    at: Optional[int] = None
+    next_index: bool = Field(
+        default=True, validation_alias=AliasChoices("next_index", "nextIndex")
+    )
+    suffix: Optional[str] = None
+    set_agent: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("set_agent", "setAgent")
+    )
+
+
+class TemplateApplyResponse(ResponseModel):
+    created_path: str
+    index: int
+    filename: str
+    metadata: Dict[str, Any]
+
+
 class SystemUpdateRequest(Payload):
     target: Optional[str] = None
 
@@ -211,24 +260,6 @@ class HubJobResponse(ResponseModel):
     finished_at: Optional[str]
     result: Optional[Dict[str, Any]]
     error: Optional[str]
-
-
-class StateResponse(ResponseModel):
-    last_run_id: Optional[int]
-    status: str
-    last_exit_code: Optional[int]
-    last_run_started_at: Optional[str]
-    last_run_finished_at: Optional[str]
-    outstanding_count: int
-    done_count: int
-    running: bool
-    runner_pid: Optional[int]
-    lock_present: bool
-    lock_pid: Optional[int]
-    lock_freeable: bool
-    lock_freeable_reason: Optional[str]
-    terminal_idle_timeout_seconds: Optional[int]
-    codex_model: str
 
 
 class SessionSettingsResponse(ResponseModel):

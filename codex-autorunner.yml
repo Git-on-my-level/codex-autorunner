@@ -181,6 +181,15 @@ agents:
     #   - --port
     #   - "0"
 
+templates:
+  # Template repositories used by `car templates` commands.
+  enabled: true
+  repos:
+    - id: blessed
+      url: https://github.com/Git-on-my-level/car-ticket-templates
+      trusted: true
+      default_ref: main
+
 terminal:
   # Idle timeout for terminal sessions (seconds).
   idle_timeout_seconds: 43200

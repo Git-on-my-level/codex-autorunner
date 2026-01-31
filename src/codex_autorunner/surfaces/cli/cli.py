@@ -30,10 +30,21 @@ from ...core.config import (
 )
 from ...core.git_utils import GitError, run_git
 from ...core.hub import HubSupervisor
+from ...core.locks import file_lock
 from ...core.logging_utils import log_event, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.runtime import DoctorReport, RuntimeContext, clear_stale_lock, doctor
 from ...core.state import RunnerState, load_state, now_iso, save_state, state_lock
+from ...core.templates import (
+    NetworkUnavailableError,
+    RefNotFoundError,
+    RepoNotConfiguredError,
+    TemplateNotFoundError,
+    fetch_template,
+    get_scan_record,
+    parse_template_ref,
+    scan_lock,
+)
 from ...core.usage import (
     UsageError,
     default_codex_home,
@@ -56,7 +67,15 @@ from ...integrations.telegram.service import (
     TelegramBotService,
 )
 from ...integrations.telegram.state import TelegramStateStore
+from ...integrations.templates.scan_agent import (
+    TemplateScanError,
+    TemplateScanRejectedError,
+    format_template_scan_rejection,
+    run_template_scan,
+)
 from ...manifest import load_manifest
+from ...tickets.frontmatter import split_markdown_frontmatter
+from ...tickets.lint import parse_ticket_index
 from ...voice import VoiceConfig
 from ..web.app import create_hub_app
 
@@ -65,6 +84,8 @@ logger = logging.getLogger("codex_autorunner.cli")
 app = typer.Typer(add_completion=False)
 hub_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
+templates_app = typer.Typer(add_completion=False)
+repos_app = typer.Typer(add_completion=False)
 
 
 def main() -> None:
@@ -101,6 +122,159 @@ def _require_hub_config(path: Optional[Path]) -> HubConfig:
         return load_hub_config(path or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
+
+
+def _load_hub_config_yaml(path: Path) -> dict:
+    if not path.exists():
+        _raise_exit(f"Hub config file not found: {path}")
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            _raise_exit(f"Hub config must be a YAML mapping: {path}")
+        return data
+    except yaml.YAMLError as exc:
+        _raise_exit(f"Invalid YAML in hub config: {exc}", cause=exc)
+    except OSError as exc:
+        _raise_exit(f"Failed to read hub config: {exc}", cause=exc)
+
+
+def _write_hub_config_yaml(path: Path, data: dict) -> None:
+    lock_path = path.parent / (path.name + ".lock")
+    with file_lock(lock_path):
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def _require_templates_enabled(config: RepoConfig) -> None:
+    if not config.templates.enabled:
+        _raise_exit(
+            "Templates are disabled. Set templates.enabled=true in the hub config to enable."
+        )
+
+
+def _find_template_repo(config: RepoConfig, repo_id: str):
+    for repo in config.templates.repos:
+        if repo.id == repo_id:
+            return repo
+    return None
+
+
+def _fetch_template_with_scan(template: str, ctx: RuntimeContext, hub: Optional[Path]):
+    try:
+        parsed = parse_template_ref(template)
+    except ValueError as exc:
+        _raise_exit(str(exc), cause=exc)
+
+    repo_cfg = _find_template_repo(ctx.config, parsed.repo_id)
+    if repo_cfg is None:
+        _raise_exit(f"Template repo not configured: {parsed.repo_id}")
+
+    hub_config_path = _resolve_hub_config_path_for_cli(ctx.repo_root, hub)
+    if hub_config_path is None:
+        try:
+            hub_config = load_hub_config(ctx.repo_root)
+            hub_root = hub_config.root
+        except ConfigError as exc:
+            _raise_exit(str(exc), cause=exc)
+    else:
+        hub_root = hub_config_path.parent.parent.resolve()
+
+    try:
+        fetched = fetch_template(
+            repo=repo_cfg, hub_root=hub_root, template_ref=template
+        )
+    except NetworkUnavailableError:
+        _raise_exit(
+            "Network fetch failed and no cached copy exists; pause and notify user."
+        )
+    except (
+        RepoNotConfiguredError,
+        RefNotFoundError,
+        TemplateNotFoundError,
+        GitError,
+    ) as exc:
+        _raise_exit(str(exc), cause=exc)
+
+    scan_record = None
+    if not fetched.trusted:
+        with scan_lock(hub_root, fetched.blob_sha):
+            scan_record = get_scan_record(hub_root, fetched.blob_sha)
+            if scan_record is None:
+                try:
+                    scan_record = asyncio.run(
+                        run_template_scan(ctx=ctx, template=fetched)
+                    )
+                except TemplateScanRejectedError as exc:
+                    _raise_exit(str(exc), cause=exc)
+                except TemplateScanError as exc:
+                    _raise_exit(str(exc), cause=exc)
+            elif scan_record.decision != "approve":
+                _raise_exit(format_template_scan_rejection(scan_record))
+
+    return fetched, scan_record, hub_root
+
+
+def _resolve_ticket_dir(repo_root: Path, ticket_dir: Optional[Path]) -> Path:
+    if ticket_dir is None:
+        return repo_root / ".codex-autorunner" / "tickets"
+    if ticket_dir.is_absolute():
+        return ticket_dir
+    return repo_root / ticket_dir
+
+
+def _collect_ticket_indices(ticket_dir: Path) -> list[int]:
+    indices: list[int] = []
+    if not ticket_dir.exists() or not ticket_dir.is_dir():
+        return indices
+    for path in ticket_dir.iterdir():
+        if not path.is_file():
+            continue
+        idx = parse_ticket_index(path.name)
+        if idx is None:
+            continue
+        indices.append(idx)
+    return indices
+
+
+def _next_available_ticket_index(existing: list[int]) -> int:
+    if not existing:
+        return 1
+    seen = set(existing)
+    candidate = 1
+    while candidate in seen:
+        candidate += 1
+    return candidate
+
+
+def _ticket_filename(index: int, *, suffix: str, width: int) -> str:
+    return f"TICKET-{index:0{width}d}{suffix}.md"
+
+
+def _normalize_ticket_suffix(suffix: Optional[str]) -> str:
+    if not suffix:
+        return ""
+    cleaned = suffix.strip()
+    if not cleaned:
+        return ""
+    if "/" in cleaned or "\\" in cleaned:
+        _raise_exit("Ticket suffix may not include path separators.")
+    if not cleaned.startswith("-"):
+        return f"-{cleaned}"
+    return cleaned
+
+
+def _apply_agent_override(content: str, agent: str) -> str:
+    fm_yaml, body = split_markdown_frontmatter(content)
+    if fm_yaml is None:
+        _raise_exit("Template is missing YAML frontmatter; cannot set agent.")
+    try:
+        data = yaml.safe_load(fm_yaml)
+    except yaml.YAMLError as exc:
+        _raise_exit(f"Template frontmatter is invalid YAML: {exc}")
+    if not isinstance(data, dict):
+        _raise_exit("Template frontmatter must be a YAML mapping to set agent.")
+    data["agent"] = agent
+    rendered = yaml.safe_dump(data, sort_keys=False).rstrip()
+    return f"---\n{rendered}\n---{body}"
 
 
 def _build_server_url(config, path: str) -> str:
@@ -223,6 +397,8 @@ def _require_optional_feature(
 
 app.add_typer(hub_app, name="hub")
 app.add_typer(telegram_app, name="telegram")
+app.add_typer(templates_app, name="templates")
+templates_app.add_typer(repos_app, name="repos")
 
 
 def _has_nested_git(path: Path) -> bool:
@@ -388,6 +564,332 @@ def status(
         if opencode_record:
             detail = f" (status={opencode_record.status}, last_seen={opencode_record.last_seen_at})"
         typer.echo(f"Terminal session (opencode): {opencode_session_id}{detail}")
+
+
+@templates_app.command("fetch")
+def templates_fetch(
+    template: str = typer.Argument(
+        ..., help="Template ref formatted as REPO_ID:PATH[@REF]"
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Write template content to a file"
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Fetch a template from a configured templates repo."""
+    ctx = _require_repo_config(repo, hub)
+    _require_templates_enabled(ctx.config)
+    fetched, scan_record, _hub_root = _fetch_template_with_scan(template, ctx, hub)
+
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(fetched.content, encoding="utf-8")
+        typer.echo(f"Wrote template to {out}", err=True)
+
+    if output_json:
+        payload = {
+            "content": fetched.content,
+            "repo_id": fetched.repo_id,
+            "path": fetched.path,
+            "ref": fetched.ref,
+            "commit_sha": fetched.commit_sha,
+            "blob_sha": fetched.blob_sha,
+            "trusted": fetched.trusted,
+            "scan_decision": scan_record.to_dict() if scan_record else None,
+        }
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    if out is None:
+        typer.echo(fetched.content, nl=False)
+
+
+@templates_app.command("apply")
+def templates_apply(
+    template: str = typer.Argument(
+        ..., help="Template ref formatted as REPO_ID:PATH[@REF]"
+    ),
+    ticket_dir: Optional[Path] = typer.Option(
+        None,
+        "--ticket-dir",
+        help="Ticket directory (default .codex-autorunner/tickets)",
+    ),
+    at: Optional[int] = typer.Option(None, "--at", help="Explicit ticket index"),
+    next_index: bool = typer.Option(
+        True, "--next/--no-next", help="Use next available index (default)"
+    ),
+    suffix: Optional[str] = typer.Option(
+        None, "--suffix", help="Optional filename suffix (e.g. -foo)"
+    ),
+    set_agent: Optional[str] = typer.Option(
+        None, "--set-agent", help="Override frontmatter agent"
+    ),
+    repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Apply a template by writing it into the ticket directory."""
+    ctx = _require_repo_config(repo, hub)
+    _require_templates_enabled(ctx.config)
+
+    fetched, scan_record, _hub_root = _fetch_template_with_scan(template, ctx, hub)
+
+    resolved_dir = _resolve_ticket_dir(ctx.repo_root, ticket_dir)
+    if resolved_dir.exists() and not resolved_dir.is_dir():
+        _raise_exit(f"Ticket dir is not a directory: {resolved_dir}")
+    try:
+        resolved_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _raise_exit(f"Unable to create ticket dir: {exc}")
+
+    if at is None and not next_index:
+        _raise_exit("Specify --at or leave --next enabled to pick an index.")
+    if at is not None and at < 1:
+        _raise_exit("Ticket index must be >= 1.")
+
+    existing_indices = _collect_ticket_indices(resolved_dir)
+    if at is None:
+        index = _next_available_ticket_index(existing_indices)
+    else:
+        index = at
+        if index in existing_indices:
+            _raise_exit(
+                f"Ticket index {index} already exists. Choose another index or open a gap."
+            )
+
+    normalized_suffix = _normalize_ticket_suffix(suffix)
+    width = max(3, max([len(str(i)) for i in existing_indices + [index]]))
+    filename = _ticket_filename(index, suffix=normalized_suffix, width=width)
+    path = resolved_dir / filename
+    if path.exists():
+        _raise_exit(f"Ticket already exists: {path}")
+
+    content = fetched.content
+    if set_agent:
+        if set_agent != "user":
+            try:
+                validate_agent_id(set_agent)
+            except ValueError as exc:
+                _raise_exit(str(exc), cause=exc)
+        content = _apply_agent_override(content, set_agent)
+
+    try:
+        path.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        _raise_exit(f"Failed to write ticket: {exc}")
+
+    metadata = {
+        "repo_id": fetched.repo_id,
+        "path": fetched.path,
+        "ref": fetched.ref,
+        "commit_sha": fetched.commit_sha,
+        "blob_sha": fetched.blob_sha,
+        "trusted": fetched.trusted,
+        "scan": scan_record.to_dict() if scan_record else None,
+    }
+    typer.echo(
+        "Created ticket "
+        f"{path} (index={index}, template={fetched.repo_id}:{fetched.path}@{fetched.ref})"
+    )
+    typer.echo(json.dumps(metadata, indent=2))
+
+
+@repos_app.command("list")
+def repos_list(
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+):
+    """List configured template repos."""
+    config = _require_hub_config(hub)
+    hub_config_path = config.root / CONFIG_FILENAME
+    data = _load_hub_config_yaml(hub_config_path)
+
+    templates_config = data.get("templates", {})
+    if not isinstance(templates_config, dict):
+        templates_config = {}
+    repos = templates_config.get("repos", [])
+    if not isinstance(repos, list):
+        repos = []
+
+    if output_json:
+        payload = {"repos": repos}
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    if not repos:
+        typer.echo("No template repos configured.")
+        return
+
+    typer.echo(f"Template repos ({len(repos)}):")
+    for repo in repos:
+        if not isinstance(repo, dict):
+            continue
+        repo_id = repo.get("id", "")
+        url = repo.get("url", "")
+        trusted = repo.get("trusted", False)
+        default_ref = repo.get("default_ref", "main")
+        trusted_text = "trusted" if trusted else "untrusted"
+        typer.echo(f"  - {repo_id}: {url} [{trusted_text}] (default_ref={default_ref})")
+
+
+@repos_app.command("add")
+def repos_add(
+    repo_id: str = typer.Argument(..., help="Unique repo ID"),
+    url: str = typer.Argument(..., help="Git repo URL or path"),
+    trusted: Optional[bool] = typer.Option(
+        None, "--trusted/--untrusted", help="Trust level (default: untrusted)"
+    ),
+    default_ref: str = typer.Option("main", "--default-ref", help="Default git ref"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Add a template repo to the hub config."""
+    config = _require_hub_config(hub)
+    hub_config_path = config.root / CONFIG_FILENAME
+    data = _load_hub_config_yaml(hub_config_path)
+
+    templates_config = data.get("templates", {})
+    if not isinstance(templates_config, dict):
+        templates_config = {}
+    enabled = templates_config.get("enabled", True)
+    if enabled is False:
+        _raise_exit(
+            "Templates are disabled. Set templates.enabled=true in the hub config to enable."
+        )
+
+    templates_config = data.setdefault("templates", {})
+    if not isinstance(templates_config, dict):
+        _raise_exit("Invalid templates config in hub config")
+    templates_config.setdefault("enabled", True)
+    repos = templates_config.setdefault("repos", [])
+    if not isinstance(repos, list):
+        _raise_exit("Invalid repos config in hub config")
+
+    existing_ids = {repo.get("id") for repo in repos if isinstance(repo, dict)}
+    if repo_id in existing_ids:
+        _raise_exit(f"Repo ID '{repo_id}' already exists. Use a unique ID.")
+
+    new_repo = {
+        "id": repo_id,
+        "url": url,
+        "default_ref": default_ref,
+    }
+    if trusted is not None:
+        new_repo["trusted"] = trusted
+
+    repos.append(new_repo)
+
+    try:
+        _write_hub_config_yaml(hub_config_path, data)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
+
+    typer.echo(f"Added template repo '{repo_id}' to hub config.")
+
+
+@repos_app.command("remove")
+def repos_remove(
+    repo_id: str = typer.Argument(..., help="Repo ID to remove"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Remove a template repo from the hub config."""
+    config = _require_hub_config(hub)
+    hub_config_path = config.root / CONFIG_FILENAME
+    data = _load_hub_config_yaml(hub_config_path)
+
+    templates_config = data.get("templates", {})
+    if not isinstance(templates_config, dict):
+        templates_config = {}
+    repos = templates_config.get("repos", [])
+    if not isinstance(repos, list):
+        repos = []
+
+    original_count = len(repos)
+    filtered_repos = [
+        repo for repo in repos if isinstance(repo, dict) and repo.get("id") != repo_id
+    ]
+
+    if len(filtered_repos) == original_count:
+        _raise_exit(f"Repo ID '{repo_id}' not found in config.")
+
+    templates_config["repos"] = filtered_repos
+
+    try:
+        _write_hub_config_yaml(hub_config_path, data)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
+
+    typer.echo(f"Removed template repo '{repo_id}' from hub config.")
+
+
+@repos_app.command("trust")
+def repos_trust(
+    repo_id: str = typer.Argument(..., help="Repo ID to trust"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Mark a template repo as trusted (skip scanning)."""
+    config = _require_hub_config(hub)
+    hub_config_path = config.root / CONFIG_FILENAME
+    data = _load_hub_config_yaml(hub_config_path)
+
+    templates_config = data.get("templates", {})
+    if not isinstance(templates_config, dict):
+        templates_config = {}
+    repos = templates_config.get("repos", [])
+    if not isinstance(repos, list):
+        repos = []
+
+    found = False
+    for repo in repos:
+        if isinstance(repo, dict) and repo.get("id") == repo_id:
+            repo["trusted"] = True
+            found = True
+            break
+
+    if not found:
+        _raise_exit(f"Repo ID '{repo_id}' not found in config.")
+
+    try:
+        _write_hub_config_yaml(hub_config_path, data)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
+
+    typer.echo(f"Marked repo '{repo_id}' as trusted.")
+
+
+@repos_app.command("untrust")
+def repos_untrust(
+    repo_id: str = typer.Argument(..., help="Repo ID to untrust"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Mark a template repo as untrusted (require scanning)."""
+    config = _require_hub_config(hub)
+    hub_config_path = config.root / CONFIG_FILENAME
+    data = _load_hub_config_yaml(hub_config_path)
+
+    templates_config = data.get("templates", {})
+    if not isinstance(templates_config, dict):
+        templates_config = {}
+    repos = templates_config.get("repos", [])
+    if not isinstance(repos, list):
+        repos = []
+
+    found = False
+    for repo in repos:
+        if isinstance(repo, dict) and repo.get("id") == repo_id:
+            repo["trusted"] = False
+            found = True
+            break
+
+    if not found:
+        _raise_exit(f"Repo ID '{repo_id}' not found in config.")
+
+    try:
+        _write_hub_config_yaml(hub_config_path, data)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
+
+    typer.echo(f"Marked repo '{repo_id}' as untrusted.")
 
 
 @app.command()

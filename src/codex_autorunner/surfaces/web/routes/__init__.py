@@ -33,6 +33,7 @@ from .review import build_review_routes
 from .sessions import build_sessions_routes
 from .settings import build_settings_routes
 from .system import build_system_routes
+from .templates import build_templates_routes
 from .terminal_images import build_terminal_image_routes
 from .usage import build_usage_routes
 from .voice import build_voice_routes
@@ -66,6 +67,7 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     router.include_router(build_sessions_routes())
     router.include_router(build_settings_routes())
     router.include_router(build_system_routes())
+    router.include_router(build_templates_routes())
     router.include_router(build_terminal_image_routes())
     router.include_router(build_usage_routes())
     router.include_router(build_voice_routes())
