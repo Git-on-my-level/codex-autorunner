@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from codex_autorunner.agents.registry import (
@@ -11,6 +13,7 @@ from codex_autorunner.agents.registry import (
     get_available_agents,
     get_registered_agents,
     has_capability,
+    reload_agents,
     validate_agent_id,
 )
 
@@ -237,3 +240,63 @@ class TestMakeOpenCodeHarness:
     def test_missing_supervisor_raises(self, app_ctx_missing_supervisors):
         with pytest.raises(RuntimeError, match="supervisor missing"):
             _make_opencode_harness(app_ctx_missing_supervisors)
+
+
+class TestConcurrentAccess:
+    def test_concurrent_get_registered_agents_no_exceptions(self):
+        exceptions = []
+
+        def access_agents():
+            try:
+                get_registered_agents()
+            except Exception as e:
+                exceptions.append(e)
+
+        threads = [threading.Thread(target=access_agents) for _ in range(50)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert (
+            not exceptions
+        ), f"Exceptions occurred during concurrent access: {exceptions}"
+
+    def test_concurrent_get_registered_agents_consistent_results(self):
+        results = []
+
+        def access_agents():
+            results.append(get_registered_agents())
+
+        threads = [threading.Thread(target=access_agents) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 20
+        for result in results:
+            assert "codex" in result
+            assert "opencode" in result
+            assert len(result) >= 2
+
+    def test_concurrent_reload_and_access_no_exceptions(self):
+        exceptions = []
+
+        def reload_and_access():
+            try:
+                for _ in range(5):
+                    get_registered_agents()
+                    reload_agents()
+            except Exception as e:
+                exceptions.append(e)
+
+        threads = [threading.Thread(target=reload_and_access) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert (
+            not exceptions
+        ), f"Exceptions occurred during concurrent reload/access: {exceptions}"
