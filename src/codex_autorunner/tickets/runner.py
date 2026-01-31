@@ -390,14 +390,18 @@ class TicketRunner:
         )
 
         previous_ticket_content: Optional[str] = None
-        try:
-            if current_path in ticket_paths:
-                curr_idx = ticket_paths.index(current_path)
-                if curr_idx > 0:
-                    prev_path = ticket_paths[curr_idx - 1]
-                    previous_ticket_content = prev_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+        if self._config.include_previous_ticket_context:
+            try:
+                if current_path in ticket_paths:
+                    curr_idx = ticket_paths.index(current_path)
+                    if curr_idx > 0:
+                        prev_path = ticket_paths[curr_idx - 1]
+                        content = prev_path.read_text(encoding="utf-8")
+                        previous_ticket_content = _truncate_text_by_bytes(
+                            content, 16384
+                        )
+            except Exception:
+                pass
 
         prompt = self._build_prompt(
             ticket_path=current_path,
@@ -954,7 +958,9 @@ class TicketRunner:
         if previous_ticket_content:
             prev_ticket_block = (
                 "\n\n---\n\n"
-                "PREVIOUS TICKET CONTEXT (for reference only; do not edit):\n"
+                "PREVIOUS TICKET CONTEXT (truncated to 16KB; for reference only; do not edit):\n"
+                "Cross-ticket context should flow through workspace docs (active_context.md, decisions.md, spec.md) "
+                "rather than implicit previous ticket content. This is included only for legacy compatibility.\n"
                 + previous_ticket_content
                 + "\n"
             )

@@ -46,6 +46,11 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         auto_commit = bool(
             input_data.get("auto_commit") if "auto_commit" in input_data else True
         )
+        include_previous_ticket_context = bool(
+            input_data.get("include_previous_ticket_context")
+            if "include_previous_ticket_context" in input_data
+            else False
+        )
 
         runner = TicketRunner(
             workspace_root=workspace_root,
@@ -57,6 +62,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 max_lint_retries=max_lint_retries,
                 max_commit_retries=max_commit_retries,
                 auto_commit=auto_commit,
+                include_previous_ticket_context=include_previous_ticket_context,
             ),
             agent_pool=agent_pool,
         )
@@ -92,6 +98,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 "max_lint_retries": {"type": "integer"},
                 "max_commit_retries": {"type": "integer"},
                 "auto_commit": {"type": "boolean"},
+                "include_previous_ticket_context": {"type": "boolean"},
             },
         },
         steps={"ticket_turn": _ticket_turn_step},

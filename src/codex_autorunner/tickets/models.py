@@ -80,6 +80,7 @@ class TicketRunConfig:
     checkpoint_message_template: str = (
         "CAR checkpoint: run={run_id} turn={turn} agent={agent}"
     )
+    include_previous_ticket_context: bool = False
 
 
 @dataclass(frozen=True)
