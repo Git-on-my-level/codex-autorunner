@@ -14,6 +14,7 @@ from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import has_capability, validate_agent_id
 from ...core.config import RepoConfig
+from ...core.runtime import RuntimeContext
 from ...core.locks import (
     FileLock,
     FileLockBusy,
@@ -21,7 +22,6 @@ from ...core.locks import (
     process_alive,
     read_lock_info,
 )
-from ...core.runtime import RuntimeContext
 from ...core.state import now_iso
 from ...core.utils import atomic_write, read_json
 
@@ -403,9 +403,9 @@ class ReviewService:
         self._opencode_supervisor = opencode_supervisor
         self._app_server_supervisor = app_server_supervisor
         self._logger = logger or logging.getLogger("codex_autorunner.review")
-        self._state_path = _workflow_root(self.ctx.repo_root) / "state.json"
+        self._state_path = _workflow_root(engine.repo_root) / "state.json"
         self._lock_path = (
-            self.ctx.repo_root / ".codex-autorunner" / "locks" / "review.lock"
+            engine.repo_root / ".codex-autorunner" / "locks" / "review.lock"
         )
         self._thread: Optional[threading.Thread] = None
         self._thread_lock = threading.Lock()

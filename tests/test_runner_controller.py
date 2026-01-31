@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.engine import Engine, LockError
+from codex_autorunner.core.engine import Engine
 from codex_autorunner.core.locks import LockAssessment
 from codex_autorunner.core.runner_controller import ProcessRunnerController
+from codex_autorunner.core.runner_state import LockError
+from codex_autorunner.core.runtime import RuntimeContext
 from codex_autorunner.core.state import load_state, save_state
 
 
@@ -271,25 +273,29 @@ def test_reconcile_run_index_runner_active_different_run(
 
 
 def test_start_raises_when_active_lock(monkeypatch, repo: Path) -> None:
-    engine = Engine(repo)
+    ctx = RuntimeContext(repo)
     lock_payload = {
         "pid": 12345,
         "host": "localhost",
         "started_at": "2025-01-01T00:00:00Z",
     }
-    engine.lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
+    ctx.lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runner_controller.assess_lock",
+        "codex_autorunner.core.locks.assess_lock",
         lambda _path, **_kwargs: LockAssessment(
             freeable=False, reason=None, pid=12345, host="localhost"
         ),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.locks.process_alive",
+        lambda _pid: True,
     )
     monkeypatch.setattr(
         "codex_autorunner.core.runner_controller.process_alive",
         lambda _pid: True,
     )
 
-    controller = ProcessRunnerController(engine)
+    controller = ProcessRunnerController(ctx)
     with pytest.raises(LockError):
         controller.start()

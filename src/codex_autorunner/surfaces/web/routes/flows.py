@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 
 from ....agents.registry import validate_agent_id
 from ....core.config import load_repo_config
-from ....core.engine import Engine
 from ....core.flows import (
     FlowController,
     FlowDefinition,
@@ -36,6 +35,7 @@ from ....core.flows.ux_helpers import (
     seed_issue_from_text,
 )
 from ....core.flows.worker_process import FlowWorkerHealth, check_worker_health
+from ....core.runtime import RuntimeContext
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
 from ....integrations.agents.backend_orchestrator import BackendOrchestrator
@@ -133,7 +133,7 @@ def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
             notification_handler=None,
             logger=_logger,
         )
-        engine = Engine(
+        engine = RuntimeContext(
             repo_root,
             config=config,
             backend_orchestrator=backend_orchestrator,

@@ -18,7 +18,7 @@ from ..manifest import (
 )
 from .archive import archive_worktree_snapshot, build_snapshot_id
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
-from .engine import AppServerSupervisorFactory, BackendFactory, Engine
+from .engine import AppServerSupervisorFactory, BackendFactory
 from .git_utils import (
     GitError,
     git_available,
@@ -34,10 +34,9 @@ from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
 )
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
+from .runtime import RuntimeContext
 from .state import RunnerState, load_state, now_iso
 from .utils import atomic_write
-
-logger = logging.getLogger("codex_autorunner.hub")
 
 logger = logging.getLogger("codex_autorunner.hub")
 
@@ -215,16 +214,6 @@ class RepoRunner:
         agent_id_validator: Optional[Callable[[str], str]] = None,
     ):
         self.repo_id = repo_id
-        backend_factory = (
-            backend_factory_builder(repo_root, repo_config)
-            if backend_factory_builder is not None
-            else None
-        )
-        app_server_supervisor_factory = (
-            app_server_supervisor_factory_builder(repo_config)
-            if app_server_supervisor_factory_builder is not None
-            else None
-        )
         backend_orchestrator = (
             backend_orchestrator_builder(repo_root, repo_config)
             if backend_orchestrator_builder is not None
@@ -234,15 +223,12 @@ class RepoRunner:
             raise ValueError(
                 "backend_orchestrator_builder is required for HubSupervisor"
             )
-        self._engine = Engine(
-            repo_root,
+        self._ctx = RuntimeContext(
+            repo_root=repo_root,
             config=repo_config,
             backend_orchestrator=backend_orchestrator,
-            backend_factory=backend_factory,
-            app_server_supervisor_factory=app_server_supervisor_factory,
-            agent_id_validator=agent_id_validator,
         )
-        self._controller = ProcessRunnerController(self._engine, spawn_fn=spawn_fn)
+        self._controller = ProcessRunnerController(self._ctx, spawn_fn=spawn_fn)
 
     @property
     def running(self) -> bool:
@@ -341,16 +327,6 @@ class HubSupervisor:
                 repo_config = derive_repo_config(
                     self.hub_config, record.absolute_path, load_env=False
                 )
-                backend_factory = (
-                    self._backend_factory_builder(record.absolute_path, repo_config)
-                    if self._backend_factory_builder is not None
-                    else None
-                )
-                app_server_supervisor_factory = (
-                    self._app_server_supervisor_factory_builder(repo_config)
-                    if self._app_server_supervisor_factory_builder is not None
-                    else None
-                )
                 backend_orchestrator = (
                     self._backend_orchestrator_builder(
                         record.absolute_path, repo_config
@@ -359,13 +335,10 @@ class HubSupervisor:
                     else None
                 )
                 controller = ProcessRunnerController(
-                    Engine(
-                        record.absolute_path,
+                    RuntimeContext(
+                        repo_root=record.absolute_path,
                         config=repo_config,
                         backend_orchestrator=backend_orchestrator,
-                        backend_factory=backend_factory,
-                        app_server_supervisor_factory=app_server_supervisor_factory,
-                        agent_id_validator=self._agent_id_validator,
                     )
                 )
                 controller.reconcile()

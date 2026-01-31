@@ -34,7 +34,6 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
-from ...core.engine import Engine, LockError
 from ...core.flows.models import FlowRunStatus
 from ...core.flows.reconciler import reconcile_flow_runs
 from ...core.flows.store import FlowStore
@@ -42,6 +41,7 @@ from ...core.hub import HubSupervisor
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.request_context import get_request_id
+from ...core.runtime import LockError, RuntimeContext
 from ...core.state import load_state, persist_session_registry
 from ...core.usage import (
     UsageError,
@@ -102,7 +102,7 @@ from .terminal_sessions import parse_tui_idle_seconds, prune_terminal_registry
 class AppContext:
     base_path: str
     env: Mapping[str, str]
-    engine: Engine
+    engine: RuntimeContext
     manager: RunnerManager
     app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
     app_server_prune_interval: Optional[float]
@@ -351,13 +351,10 @@ def _build_app_context(
         else config.server_base_path
     )
     backend_orchestrator = build_backend_orchestrator(config.root, config)
-    engine = Engine(
+    engine = RuntimeContext(
         config.root,
         config=config,
         backend_orchestrator=backend_orchestrator,
-        backend_factory=build_agent_backend_factory(config.root, config),
-        app_server_supervisor_factory=build_app_server_supervisor_factory(config),
-        agent_id_validator=validate_agent_id,
     )
     manager = RunnerManager(engine)
     voice_config = VoiceConfig.from_raw(config.voice, env=env)

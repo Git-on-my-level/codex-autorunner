@@ -77,6 +77,7 @@ from .prompt import build_final_summary_prompt
 from .redaction import redact_text
 from .review_context import build_spec_progress_review_context
 from .run_index import RunIndexStore
+from .runtime import RuntimeContext
 from .state import RunnerState, load_state, now_iso, save_state, state_lock
 from .state_roots import resolve_global_state_root, resolve_repo_state_root
 from .ticket_linter_cli import ensure_ticket_linter
@@ -193,6 +194,16 @@ class Engine:
             self._app_server_logger.debug(
                 "Best-effort ticket_tool.py creation failed: %s", exc
             )
+
+    @property
+    def run_index_store(self) -> RunIndexStore:
+        """Public access to run index store for review context."""
+        return self._run_index_store
+
+    @property
+    def runtime_context(self) -> RuntimeContext:
+        """Get RuntimeContext for compatibility with new modules."""
+        return RuntimeContext(repo_root=self.repo_root, config=self.config)
 
     @staticmethod
     def from_cwd(repo: Optional[Path] = None, *, backend_orchestrator: Any) -> "Engine":
@@ -2615,7 +2626,7 @@ class Engine:
         from ..flows.review import ReviewService
 
         review_service = ReviewService(
-            self,
+            self.runtime_context,
             opencode_supervisor=opencode_supervisor,
             app_server_supervisor=app_server_supervisor,
             logger=self._app_server_logger,

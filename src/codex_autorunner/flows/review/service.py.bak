@@ -14,6 +14,7 @@ from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import has_capability, validate_agent_id
 from ...core.config import RepoConfig
+from ...core.runtime import RuntimeContext
 from ...core.locks import (
     FileLock,
     FileLockBusy,
@@ -21,7 +22,6 @@ from ...core.locks import (
     process_alive,
     read_lock_info,
 )
-from ...core.runtime import RuntimeContext
 from ...core.state import now_iso
 from ...core.utils import atomic_write, read_json
 
@@ -403,9 +403,9 @@ class ReviewService:
         self._opencode_supervisor = opencode_supervisor
         self._app_server_supervisor = app_server_supervisor
         self._logger = logger or logging.getLogger("codex_autorunner.review")
-        self._state_path = _workflow_root(self.ctx.repo_root) / "state.json"
+        self._state_path = _workflow_root(engine.repo_root) / "state.json"
         self._lock_path = (
-            self.ctx.repo_root / ".codex-autorunner" / "locks" / "review.lock"
+            engine.repo_root / ".codex-autorunner" / "locks" / "review.lock"
         )
         self._thread: Optional[threading.Thread] = None
         self._thread_lock = threading.Lock()
@@ -413,9 +413,9 @@ class ReviewService:
         self._lock_handle: Optional[FileLock] = None
 
     def _repo_config(self) -> RepoConfig:
-        if not isinstance(self.ctx.config, RepoConfig):
+        if not isinstance(self.engine.config, RepoConfig):
             raise ReviewError("Review requires a repo workspace config")
-        return self.ctx.config
+        return self.engine.config
 
     def status(self) -> dict[str, Any]:
         state = self._load_state()
@@ -438,7 +438,7 @@ class ReviewService:
                 raise ReviewBusyError("Review already running", status_code=409)
             if self._thread and self._thread.is_alive():
                 raise ReviewBusyError("Review already running", status_code=409)
-            busy_reason = self.ctx.repo_busy_reason()
+            busy_reason = self.engine.repo_busy_reason()
             if busy_reason:
                 raise ReviewConflictError(
                     f"Cannot start review: {busy_reason}", status_code=409
@@ -475,7 +475,7 @@ class ReviewService:
             state = self.status()
             if state.get("status") in ("running", "stopping"):
                 raise ReviewBusyError("Review already running", status_code=409)
-            busy_reason = self.ctx.repo_busy_reason()
+            busy_reason = self.engine.repo_busy_reason()
             if busy_reason and not ignore_repo_busy:
                 raise ReviewConflictError(
                     f"Cannot start review: {busy_reason}", status_code=409
@@ -680,7 +680,7 @@ class ReviewService:
             )
 
         run_id = state["id"]
-        runs_dir = _workflow_root(self.ctx.repo_root) / "runs"
+        runs_dir = _workflow_root(self.engine.repo_root) / "runs"
         run_dir = runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -735,7 +735,7 @@ class ReviewService:
         if agent_id == "codex":
             if self._app_server_supervisor is None:
                 raise ReviewError("Codex backend is not configured")
-            client = await self._app_server_supervisor.get_client(self.ctx.repo_root)
+            client = await self._app_server_supervisor.get_client(self.engine.repo_root)
             thread_id = uuid.uuid4().hex
             review_kwargs: dict[str, Any] = {}
             if state.get("model"):
@@ -746,7 +746,7 @@ class ReviewService:
                 thread_id=thread_id,
                 target={"type": "custom", "instructions": prompt},
                 delivery="inline",
-                cwd=str(self.ctx.repo_root),
+                cwd=str(self.engine.repo_root),
                 **review_kwargs,
             )
 
@@ -802,7 +802,7 @@ class ReviewService:
             subagent_model = review_cfg.get("subagent_model")
             if subagent_agent_id:
                 await self._opencode_supervisor.ensure_subagent_config(
-                    workspace_root=self.ctx.repo_root,
+                    workspace_root=self.engine.repo_root,
                     agent_id=subagent_agent_id,
                     model=subagent_model,
                 )
@@ -812,7 +812,7 @@ class ReviewService:
                 model=state["model"],
                 reasoning=state.get("reasoning"),
                 prompt=prompt,
-                workspace_root=str(self.ctx.repo_root),
+                workspace_root=str(self.engine.repo_root),
                 timeout_seconds=timeout_seconds,
                 interrupt_grace_seconds=REVIEW_INTERRUPT_GRACE_SECONDS,
                 permission_policy="allow",

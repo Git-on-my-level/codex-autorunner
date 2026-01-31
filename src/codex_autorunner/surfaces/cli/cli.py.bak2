@@ -28,11 +28,11 @@ from ...core.config import (
     load_hub_config,
     load_repo_config,
 )
+from ...core.engine import DoctorReport, Engine, LockError, clear_stale_lock, doctor
 from ...core.git_utils import GitError, run_git
 from ...core.hub import HubSupervisor
 from ...core.logging_utils import log_event, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
-from ...core.runtime import DoctorReport, RuntimeContext, clear_stale_lock, doctor
 from ...core.state import RunnerState, load_state, now_iso, save_state, state_lock
 from ...core.usage import (
     UsageError,
@@ -79,7 +79,7 @@ def _raise_exit(message: str, *, cause: Optional[BaseException] = None) -> NoRet
     raise typer.Exit(code=1)
 
 
-def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> RuntimeContext:
+def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> Engine:
     try:
         repo_root = find_repo_root(repo or Path.cwd())
     except RepoNotFoundError as exc:
@@ -87,10 +87,14 @@ def _require_repo_config(repo: Optional[Path], hub: Optional[Path]) -> RuntimeCo
     try:
         config = load_repo_config(repo_root, hub_path=hub)
         backend_orchestrator = build_backend_orchestrator(repo_root, config)
-        return RuntimeContext(
+        return Engine(
             repo_root,
             config=config,
+            hub_path=hub,
             backend_orchestrator=backend_orchestrator,
+            backend_factory=build_agent_backend_factory(repo_root, config),
+            app_server_supervisor_factory=build_app_server_supervisor_factory(config),
+            agent_id_validator=validate_agent_id,
         )
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)

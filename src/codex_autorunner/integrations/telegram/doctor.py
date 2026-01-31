@@ -3,8 +3,8 @@
 from typing import Any, Dict, Union
 
 from ...core.config import HubConfig, RepoConfig
-from ...core.engine import DoctorCheck
 from ...core.optional_dependencies import missing_optional_dependencies
+from ...core.runtime import DoctorCheck
 
 
 def telegram_doctor_checks(

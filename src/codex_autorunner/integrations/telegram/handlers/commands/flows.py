@@ -10,7 +10,6 @@ from typing import Callable, Optional
 
 from .....agents.registry import validate_agent_id
 from .....core.config import load_repo_config
-from .....core.engine import Engine
 from .....core.flows import FlowController, FlowStore
 from .....core.flows.models import FlowRunStatus
 from .....core.flows.reconciler import reconcile_flow_run
@@ -28,6 +27,7 @@ from .....core.flows.worker_process import (
     check_worker_health,
     clear_worker_metadata,
 )
+from .....core.runtime import RuntimeContext
 from .....core.state import now_iso
 from .....core.utils import atomic_write, canonicalize_path
 from .....flows.ticket_flow import build_ticket_flow_definition
@@ -116,7 +116,7 @@ def _get_ticket_controller(repo_root: Path) -> FlowController:
     db_path, artifacts_root = _flow_paths(repo_root)
     config = load_repo_config(repo_root)
     backend_orchestrator = build_backend_orchestrator(repo_root, config)
-    engine = Engine(
+    engine = RuntimeContext(
         repo_root,
         config=config,
         backend_orchestrator=backend_orchestrator,
