@@ -96,6 +96,12 @@ def build_about_car_markdown(
         "- Use `.codex-autorunner/bin/ticket_tool.py` to list/create/insert/move tickets; it is portable and venv-free.\n"
         '- Common workflows: insert gap before N (`python3 .codex-autorunner/bin/ticket_tool.py insert --before N`); move a block (`... move --start A --end B --to T`); create with auto-quoted frontmatter (`... create --title "Fix #123" --agent codex`).\n'
         "- After any ticket edits, lint all tickets: `python3 .codex-autorunner/bin/lint_tickets.py`.\n\n"
+        "## Ticket templates (optional)\n"
+        "- CAR can fetch ticket templates from configured git repos (treat templates as code).\n"
+        "- Fetch (prints template to stdout): `car templates fetch <repo_id>:<path>[@<ref>]`\n"
+        "- Pin to a commit for determinism: `...@<commit_sha>`\n"
+        "- Trusted repos skip scanning. Untrusted repos are scanned (cached by blob SHA) before content is returned.\n"
+        "- If fetch or scan fails, pause and notify the user rather than guessing.\n\n"
         "## How CAR works (short)\n"
         "- The web UI provides ticket editing + unified file chat.\n"
         "- `car serve` starts the hub web UI. The **Terminal** tab launches the configured `codex` binary in a PTY.\n"
