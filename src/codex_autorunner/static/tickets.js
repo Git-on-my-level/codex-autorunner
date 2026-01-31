@@ -820,6 +820,17 @@ function renderTickets(data) {
     if (!tickets)
         return;
     tickets.innerHTML = "";
+    // Display lint errors if present
+    if (data?.lint_errors && data.lint_errors.length > 0) {
+        const lintBanner = document.createElement("div");
+        lintBanner.className = "ticket-lint-errors";
+        data.lint_errors.forEach((error) => {
+            const errorLine = document.createElement("div");
+            errorLine.textContent = error;
+            lintBanner.appendChild(errorLine);
+        });
+        tickets.appendChild(lintBanner);
+    }
     const list = (data?.tickets || []);
     ticketsExist = list.length > 0;
     // Update progress bar
@@ -1118,6 +1129,7 @@ async function loadTicketFiles(ctx) {
             return {
                 ticket_dir: data.ticket_dir,
                 tickets: data.tickets,
+                lint_errors: data.lint_errors,
                 activeTicket: currentActiveTicket,
                 flowStatus: currentFlowStatus,
             };

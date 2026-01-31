@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from codex_autorunner.tickets.lint import (
     lint_dispatch_frontmatter,
+    lint_ticket_directory,
     lint_ticket_frontmatter,
 )
 
@@ -70,3 +73,102 @@ def test_lint_dispatch_frontmatter_defaults_notify_and_validates_mode() -> None:
 
     normalized, errors = lint_dispatch_frontmatter({"mode": "bad"})
     assert errors
+
+
+def test_lint_ticket_directory_detects_duplicate_indices(tmp_path: Path) -> None:
+    ticket_dir = tmp_path / "tickets"
+    ticket_dir.mkdir()
+
+    # Create duplicate ticket files with same index
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+    (ticket_dir / "TICKET-001-duplicate.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+
+    errors = lint_ticket_directory(ticket_dir)
+    assert len(errors) == 1
+    assert "001" in errors[0]
+    assert "TICKET-001.md" in errors[0]
+    assert "TICKET-001-duplicate.md" in errors[0]
+    assert "Duplicate ticket index" in errors[0]
+
+
+def test_lint_ticket_directory_no_duplicates(tmp_path: Path) -> None:
+    ticket_dir = tmp_path / "tickets"
+    ticket_dir.mkdir()
+
+    # Create tickets with unique indices (suffixes allowed)
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+    (ticket_dir / "TICKET-002-foo.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+    (ticket_dir / "TICKET-003.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+
+    errors = lint_ticket_directory(ticket_dir)
+    assert errors == []
+
+
+def test_lint_ticket_directory_multiple_duplicates(tmp_path: Path) -> None:
+    ticket_dir = tmp_path / "tickets"
+    ticket_dir.mkdir()
+
+    # Create multiple duplicate indices
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+    (ticket_dir / "TICKET-001-copy.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+    (ticket_dir / "TICKET-005.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+    (ticket_dir / "TICKET-005-v2.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+    (ticket_dir / "TICKET-005-v3.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+
+    errors = lint_ticket_directory(ticket_dir)
+    assert len(errors) == 2
+
+    # Verify both duplicates are reported
+    error_str = "\n".join(errors)
+    assert "001" in error_str
+    assert "005" in error_str
+
+
+def test_lint_ticket_directory_ignores_non_ticket_files(tmp_path: Path) -> None:
+    ticket_dir = tmp_path / "tickets"
+    ticket_dir.mkdir()
+
+    # Create valid tickets and ignore other files
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+    )
+    (ticket_dir / "README.md").write_text("readme", encoding="utf-8")
+    (ticket_dir / "notes.txt").write_text("notes", encoding="utf-8")
+
+    errors = lint_ticket_directory(ticket_dir)
+    assert errors == []
+
+
+def test_lint_ticket_directory_empty_directory(tmp_path: Path) -> None:
+    ticket_dir = tmp_path / "tickets"
+    ticket_dir.mkdir()
+
+    errors = lint_ticket_directory(ticket_dir)
+    assert errors == []
+
+
+def test_lint_ticket_directory_nonexistent_directory(tmp_path: Path) -> None:
+    ticket_dir = tmp_path / "nonexistent"
+
+    errors = lint_ticket_directory(ticket_dir)
+    assert errors == []

@@ -10,7 +10,7 @@ from ..workspace.paths import workspace_doc_path
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
 from .frontmatter import parse_markdown_frontmatter
-from .lint import lint_ticket_frontmatter
+from .lint import lint_ticket_directory, lint_ticket_frontmatter
 from .models import TicketFrontmatter, TicketResult, TicketRunConfig
 from .outbox import (
     archive_dispatch,
@@ -222,6 +222,16 @@ class TicketRunner:
                     f"{safe_relpath(ticket_dir, self._workspace_root)} and resume."
                 ),
                 reason_code="no_tickets",
+            )
+
+        # Check for duplicate ticket indices before proceeding.
+        dir_lint_errors = lint_ticket_directory(ticket_dir)
+        if dir_lint_errors:
+            return self._pause(
+                state,
+                reason="Duplicate ticket indices detected.",
+                reason_details="Errors:\n- " + "\n- ".join(dir_lint_errors),
+                reason_code="needs_user_fix",
             )
 
         current_ticket = state.get("current_ticket")

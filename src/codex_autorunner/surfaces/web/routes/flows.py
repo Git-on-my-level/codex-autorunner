@@ -41,12 +41,15 @@ from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets import AgentPool
 from ....tickets.files import (
     list_ticket_paths,
-    parse_ticket_index,
     read_ticket,
     safe_relpath,
 )
 from ....tickets.frontmatter import parse_markdown_frontmatter
-from ....tickets.lint import lint_ticket_frontmatter
+from ....tickets.lint import (
+    lint_ticket_directory,
+    lint_ticket_frontmatter,
+    parse_ticket_index,
+)
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..schemas import (
     TicketCreateRequest,
@@ -656,9 +659,14 @@ You are the first ticket in a new ticket_flow run.
                     "errors": errors,
                 }
             )
+
+        # Check for duplicate ticket indices.
+        dir_lint_errors = lint_ticket_directory(ticket_dir)
+
         return {
             "ticket_dir": safe_relpath(ticket_dir, repo_root),
             "tickets": tickets,
+            "lint_errors": dir_lint_errors,
         }
 
     @router.post("/ticket_flow/tickets", response_model=TicketResponse)

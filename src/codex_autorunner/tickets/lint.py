@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import re
+from collections import defaultdict
+from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from ..agents.registry import validate_agent_id
 from .models import TicketFrontmatter
+
+# Accept TICKET-###.md or TICKET-###<suffix>.md (suffix optional), case-insensitive.
+_TICKET_NAME_RE = re.compile(r"^TICKET-(\d{3,})(?:[^/]*)\.md$", re.IGNORECASE)
+
+
+def parse_ticket_index(name: str) -> Optional[int]:
+    match = _TICKET_NAME_RE.match(name)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 
 def _as_optional_str(value: Any) -> Optional[str]:
@@ -100,3 +116,37 @@ def lint_dispatch_frontmatter(
     normalized = dict(data)
     normalized["mode"] = mode
     return normalized, errors
+
+
+def lint_ticket_directory(ticket_dir: Path) -> list[str]:
+    """Validate ticket directory for duplicate indices.
+
+    Returns a list of error messages (empty if valid).
+
+    This check ensures that ticket indices are unique across all ticket files.
+    Duplicate indices lead to non-deterministic ordering and confusing behavior.
+    """
+
+    if not ticket_dir.exists() or not ticket_dir.is_dir():
+        return []
+
+    errors: list[str] = []
+    index_to_paths: dict[int, list[str]] = defaultdict(list)
+
+    for path in ticket_dir.iterdir():
+        if not path.is_file():
+            continue
+        idx = parse_ticket_index(path.name)
+        if idx is None:
+            continue
+        index_to_paths[idx].append(path.name)
+
+    for idx, filenames in index_to_paths.items():
+        if len(filenames) > 1:
+            filenames_str = ", ".join([f"'{f}'" for f in filenames])
+            errors.append(
+                f"Duplicate ticket index {idx:03d}: multiple files share the same index ({filenames_str}). "
+                "Rename or remove duplicates to ensure deterministic ordering."
+            )
+
+    return errors

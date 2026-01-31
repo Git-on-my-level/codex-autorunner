@@ -468,3 +468,42 @@ async def test_ticket_runner_consumes_reply_history(tmp_path: Path) -> None:
     assert r1.state.get("reply_seq") == 1
     assert r2.state.get("reply_seq") == 2
     assert len(pool.requests) == 2
+
+
+async def test_ticket_runner_pauses_on_duplicate_ticket_indices(tmp_path: Path) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_ticket(ticket_dir / "TICKET-001.md", done=False)
+    _write_ticket(ticket_dir / "TICKET-001-duplicate.md", done=False)
+    _write_ticket(ticket_dir / "TICKET-002.md", done=False)
+
+    runs_dir = workspace_root / ".codex-autorunner" / "runs"
+    run_id = "run-1"
+
+    pool = FakeAgentPool(
+        lambda req: AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv-1",
+            turn_id="t1",
+            text="done",
+        )
+    )
+
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id=run_id,
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=runs_dir,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    result = await runner.step({})
+
+    assert result.status == "paused"
+    assert "Duplicate ticket indices" in result.reason
+    assert "001" in result.reason_details

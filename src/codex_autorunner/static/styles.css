@@ -2777,6 +2777,29 @@ button.icon-btn {
   border-left: 2px solid #ff6450;
 }
 
+.ticket-card .ticket-lint-errors {
+  color: #ffb4a2;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 12px;
+  background: rgba(255, 100, 80, 0.15);
+  border-radius: 8px;
+  border-left: 3px solid #ff6450;
+  margin-bottom: 12px;
+}
+
+.ticket-card .ticket-lint-errors > div {
+  margin: 4px 0;
+}
+
+.ticket-card .ticket-lint-errors > div:first-child {
+  margin-top: 0;
+}
+
+.ticket-card .ticket-lint-errors > div:last-child {
+  margin-bottom: 0;
+}
+
 .ticket-card .ticket-attachments {
   display: flex;
   flex-wrap: wrap;

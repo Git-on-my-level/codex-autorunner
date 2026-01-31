@@ -108,6 +108,7 @@ function formatDispatchTime(ts?: string | null): string {
 type TicketListPayload = {
   ticket_dir?: string;
   tickets?: TicketFile[];
+  lint_errors?: string[];
   activeTicket?: string | null;
   flowStatus?: string | null;
 };
@@ -991,12 +992,24 @@ function truncate(text: string, max = 100): string {
   return `${text.slice(0, max).trim()}…`;
 }
 
-function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[] } | null): void {
+function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[]; lint_errors?: string[] } | null): void {
   ticketListCache = data;
   const { tickets, dir } = els();
   if (dir) dir.textContent = data?.ticket_dir || "–";
   if (!tickets) return;
   tickets.innerHTML = "";
+
+  // Display lint errors if present
+  if (data?.lint_errors && data.lint_errors.length > 0) {
+    const lintBanner = document.createElement("div");
+    lintBanner.className = "ticket-lint-errors";
+    data.lint_errors.forEach((error) => {
+      const errorLine = document.createElement("div");
+      errorLine.textContent = error;
+      lintBanner.appendChild(errorLine);
+    });
+    tickets.appendChild(lintBanner);
+  }
 
   const list = (data?.tickets || []) as TicketFile[];
   ticketsExist = list.length > 0;
@@ -1334,10 +1347,12 @@ async function loadTicketFiles(ctx?: RefreshContext): Promise<void> {
         const data = (await api("/api/flows/ticket_flow/tickets")) as {
           ticket_dir?: string;
           tickets?: TicketFile[];
+          lint_errors?: string[];
         };
         return {
           ticket_dir: data.ticket_dir,
           tickets: data.tickets,
+          lint_errors: data.lint_errors,
           activeTicket: currentActiveTicket,
           flowStatus: currentFlowStatus,
         };

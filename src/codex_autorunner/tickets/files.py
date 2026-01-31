@@ -1,25 +1,11 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Optional
 
 from .frontmatter import parse_markdown_frontmatter
-from .lint import lint_ticket_frontmatter
+from .lint import lint_ticket_frontmatter, parse_ticket_index
 from .models import TicketDoc, TicketFrontmatter
-
-# Accept TICKET-###.md or TICKET-###<suffix>.md (suffix optional), case-insensitive.
-_TICKET_NAME_RE = re.compile(r"^TICKET-(\d{3,})(?:[^/]*)\.md$", re.IGNORECASE)
-
-
-def parse_ticket_index(name: str) -> Optional[int]:
-    match = _TICKET_NAME_RE.match(name)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except ValueError:
-        return None
 
 
 def list_ticket_paths(ticket_dir: Path) -> list[Path]:
