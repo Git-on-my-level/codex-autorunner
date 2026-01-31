@@ -78,6 +78,7 @@ from .middleware import (
     SecurityHeadersMiddleware,
 )
 from .routes import build_repo_router
+from .routes.pma import build_pma_routes
 from .routes.system import build_system_routes
 from .runner_manager import RunnerManager
 from .schemas import (
@@ -751,6 +752,7 @@ def _apply_hub_context(app: FastAPI, context: HubAppContext) -> None:
     app.state.static_dir = context.static_dir
     app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
+    app.state.hub_supervisor = context.supervisor
 
 
 def _app_lifespan(context: AppContext):
@@ -1132,6 +1134,7 @@ def create_hub_app(
     app.state.static_assets_lock = threading.Lock()
     app.state.hub_static_assets = None
     app.mount("/static", static_files, name="static")
+    app.include_router(build_pma_routes())
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
     repo_apps: dict[str, ASGIApp] = {}
