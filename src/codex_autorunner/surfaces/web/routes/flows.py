@@ -688,12 +688,18 @@ You are the first ticket in a new ticket_flow run.
         for path in list_ticket_paths(ticket_dir):
             doc, errors = read_ticket(path)
             rel_path = safe_relpath(path, repo_root)
+
+            # Truncate body to first 200 chars for preview
+            body_preview = None
+            if doc and doc.body:
+                body_preview = doc.body[:200] + "…" if len(doc.body) > 200 else doc.body
+
             tickets.append(
                 {
                     "path": rel_path,
                     "index": getattr(doc, "index", None),
                     "frontmatter": asdict(doc.frontmatter) if doc else None,
-                    "body": doc.body if doc else None,
+                    "body": body_preview,
                     "errors": errors,
                 }
             )
@@ -705,6 +711,29 @@ You are the first ticket in a new ticket_flow run.
             "ticket_dir": safe_relpath(ticket_dir, repo_root),
             "tickets": tickets,
             "lint_errors": dir_lint_errors,
+        }
+
+    @router.get("/ticket_flow/tickets/{index}")
+    async def get_ticket_by_index(index: int):
+        """Get a single ticket's full content by index."""
+        repo_root = find_repo_root()
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        ticket_path = ticket_dir / f"TICKET-{index:03d}.md"
+
+        if not ticket_path.exists():
+            raise HTTPException(
+                status_code=404, detail=f"Ticket TICKET-{index:03d}.md not found"
+            )
+
+        doc, errors = read_ticket(ticket_path)
+        rel_path = safe_relpath(ticket_path, repo_root)
+
+        return {
+            "path": rel_path,
+            "index": getattr(doc, "index", None) if doc else None,
+            "frontmatter": asdict(doc.frontmatter) if doc else None,
+            "body": doc.body if doc else None,
+            "errors": errors,
         }
 
     @router.post("/ticket_flow/tickets", response_model=TicketResponse)

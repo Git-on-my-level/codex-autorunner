@@ -88,7 +88,13 @@ async function navigateTicket(delta) {
     const idx = list.findIndex((ticket) => ticket.index === state.ticketIndex);
     const target = idx >= 0 ? list[idx + delta] : null;
     if (target && target.index != null) {
-        openTicketEditor(target);
+        try {
+            const data = (await api(`/api/flows/ticket_flow/tickets/${target.index}`));
+            openTicketEditor(data);
+        }
+        catch (err) {
+            flash(`Failed to navigate to ticket: ${err.message}`, "error");
+        }
     }
     void updateTicketNavButtons();
 }

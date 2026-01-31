@@ -1049,9 +1049,18 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[]; lint
     item.setAttribute("data-ticket-path", ticket.path || "");
 
     // Make ticket item clickable to open editor
-    item.addEventListener("click", () => {
+    item.addEventListener("click", async () => {
       updateSelectedTicket(ticket.path || null);
-      openTicketEditor(ticket as TicketData);
+      try {
+        if (ticket.index == null) {
+          flash("Invalid ticket: missing index", "error");
+          return;
+        }
+        const data = (await api(`/api/flows/ticket_flow/tickets/${ticket.index}`)) as TicketFile;
+        openTicketEditor(data as TicketData);
+      } catch (err) {
+        flash(`Failed to load ticket: ${(err as Error).message}`, "error");
+      }
     });
 
     const head = document.createElement("div");
@@ -1374,12 +1383,9 @@ async function loadTicketFiles(ctx?: RefreshContext): Promise<void> {
  */
 async function openTicketByIndex(index: number): Promise<void> {
   try {
-    const data = (await api("/api/flows/ticket_flow/tickets")) as {
-      tickets?: TicketFile[];
-    };
-    const ticket = data.tickets?.find((t) => t.index === index);
-    if (ticket) {
-      openTicketEditor(ticket as TicketData);
+    const data = (await api(`/api/flows/ticket_flow/tickets/${index}`)) as TicketFile;
+    if (data) {
+      openTicketEditor(data as TicketData);
     } else {
       flash(`Ticket TICKET-${String(index).padStart(3, "0")} not found`, "error");
     }

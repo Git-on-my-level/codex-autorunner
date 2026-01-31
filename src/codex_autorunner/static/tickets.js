@@ -864,9 +864,19 @@ function renderTickets(data) {
         item.title = "Click to edit";
         item.setAttribute("data-ticket-path", ticket.path || "");
         // Make ticket item clickable to open editor
-        item.addEventListener("click", () => {
+        item.addEventListener("click", async () => {
             updateSelectedTicket(ticket.path || null);
-            openTicketEditor(ticket);
+            try {
+                if (ticket.index == null) {
+                    flash("Invalid ticket: missing index", "error");
+                    return;
+                }
+                const data = (await api(`/api/flows/ticket_flow/tickets/${ticket.index}`));
+                openTicketEditor(data);
+            }
+            catch (err) {
+                flash(`Failed to load ticket: ${err.message}`, "error");
+            }
         });
         const head = document.createElement("div");
         head.className = "ticket-item-head";
@@ -1149,10 +1159,9 @@ async function loadTicketFiles(ctx) {
  */
 async function openTicketByIndex(index) {
     try {
-        const data = (await api("/api/flows/ticket_flow/tickets"));
-        const ticket = data.tickets?.find((t) => t.index === index);
-        if (ticket) {
-            openTicketEditor(ticket);
+        const data = (await api(`/api/flows/ticket_flow/tickets/${index}`));
+        if (data) {
+            openTicketEditor(data);
         }
         else {
             flash(`Ticket TICKET-${String(index).padStart(3, "0")} not found`, "error");
