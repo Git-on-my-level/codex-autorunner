@@ -298,7 +298,6 @@ Prepare scratchpad files under {{scratchpad_dir}} (see list above).
 
 Launch subagents by review dimension:
 * Spec compliance agent: requirement → evidence mapping.
-* Progress verification agent: PROGRESS claims → repo/tests evidence.
 * Risk & regression agent: likely failure modes introduced by recent changes.
 * Optional: Test adequacy agent if tests are in-scope.
 
