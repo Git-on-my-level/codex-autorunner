@@ -989,6 +989,19 @@
             ],
             "type": "string"
           },
+          "skills": {
+            "description": "Additional skill folder paths",
+            "properties": {
+              "paths": {
+                "description": "Additional paths to skill folders",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
           "small_model": {
             "description": "Small model to use for tasks like title generation in the format of provider/model",
             "type": "string"
@@ -3938,6 +3951,9 @@
                 "$ref": "#/components/schemas/PermissionActionConfig"
               },
               "read": {
+                "$ref": "#/components/schemas/PermissionRuleConfig"
+              },
+              "skill": {
                 "$ref": "#/components/schemas/PermissionRuleConfig"
               },
               "task": {
