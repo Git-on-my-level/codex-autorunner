@@ -63,3 +63,47 @@ def test_insert_requires_anchor(repo: Path) -> None:
     tickets.mkdir(parents=True, exist_ok=True)
     res = _run(repo, "insert")
     assert res.returncode != 0
+
+
+def test_insert_with_title_creates_ticket(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+
+    _run(repo, "create", "--title", "First", "--agent", "codex")
+    _run(repo, "create", "--title", "Second", "--agent", "codex")
+
+    res = _run(repo, "insert", "--before", "1", "--title", "Inserted", "--agent", "bot")
+    assert res.returncode == 0
+    assert "Inserted gap and created" in res.stdout
+
+    ticket_paths = sorted(p.name for p in tickets.iterdir())
+    assert ticket_paths == ["TICKET-001.md", "TICKET-002.md", "TICKET-003.md"]
+
+    content = (tickets / "TICKET-001.md").read_text(encoding="utf-8")
+    assert "Inserted" in content
+    assert 'agent: "bot"' in content
+
+
+def test_insert_without_title_warns_next_step(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+
+    _run(repo, "create", "--title", "Only", "--agent", "codex")
+
+    res = _run(repo, "insert", "--after", "1")
+    assert res.returncode == 0
+    assert "run create --at 2" in res.stdout
+
+    ticket_paths = sorted(p.name for p in tickets.iterdir())
+    assert ticket_paths == ["TICKET-001.md"]
+
+
+def test_insert_rejects_title_with_count_gt_one(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+
+    _run(repo, "create", "--title", "Only", "--agent", "codex")
+
+    res = _run(repo, "insert", "--before", "1", "--count", "2", "--title", "Nope")
+    assert res.returncode != 0
+    assert "--title is only supported with --count 1" in res.stderr
