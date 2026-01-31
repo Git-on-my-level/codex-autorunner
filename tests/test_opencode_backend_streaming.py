@@ -94,12 +94,13 @@ async def test_opencode_streaming_coalesces_text_deltas(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_opencode_streaming_real_events_ignore_user_prompt(tmp_path: Path) -> None:
+async def test_opencode_streaming_real_events_ignore_user_prompt(
+    tmp_path: Path,
+) -> None:
     fixture_path = Path(__file__).parent / "fixtures" / "opencode_stream_real.json"
     raw_events = json.loads(fixture_path.read_text())
     sse_events = [
-        SSEEvent(event=entry["event"], data=entry["data"])
-        for entry in raw_events
+        SSEEvent(event=entry["event"], data=entry["data"]) for entry in raw_events
     ]
     session_id = next(
         sid
