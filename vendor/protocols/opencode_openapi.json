@@ -684,79 +684,12 @@
                 "description": "Enable the batch tool",
                 "type": "boolean"
               },
-              "chatMaxRetries": {
-                "description": "Number of retries for chat completions on failure",
-                "type": "number"
-              },
               "continue_loop_on_deny": {
                 "description": "Continue the agent loop when a tool call is denied",
                 "type": "boolean"
               },
               "disable_paste_summary": {
                 "type": "boolean"
-              },
-              "hook": {
-                "properties": {
-                  "file_edited": {
-                    "additionalProperties": {
-                      "items": {
-                        "properties": {
-                          "command": {
-                            "items": {
-                              "type": "string"
-                            },
-                            "type": "array"
-                          },
-                          "environment": {
-                            "additionalProperties": {
-                              "type": "string"
-                            },
-                            "propertyNames": {
-                              "type": "string"
-                            },
-                            "type": "object"
-                          }
-                        },
-                        "required": [
-                          "command"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    },
-                    "propertyNames": {
-                      "type": "string"
-                    },
-                    "type": "object"
-                  },
-                  "session_completed": {
-                    "items": {
-                      "properties": {
-                        "command": {
-                          "items": {
-                            "type": "string"
-                          },
-                          "type": "array"
-                        },
-                        "environment": {
-                          "additionalProperties": {
-                            "type": "string"
-                          },
-                          "propertyNames": {
-                            "type": "string"
-                          },
-                          "type": "object"
-                        }
-                      },
-                      "required": [
-                        "command"
-                      ],
-                      "type": "object"
-                    },
-                    "type": "array"
-                  }
-                },
-                "type": "object"
               },
               "mcp_timeout": {
                 "description": "Timeout in milliseconds for model context protocol (MCP) requests",
@@ -988,6 +921,19 @@
               "disabled"
             ],
             "type": "string"
+          },
+          "skills": {
+            "description": "Additional skill folder paths",
+            "properties": {
+              "paths": {
+                "description": "Additional paths to skill folders",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
           },
           "small_model": {
             "description": "Small model to use for tasks like title generation in the format of provider/model",
@@ -3938,6 +3884,9 @@
                 "$ref": "#/components/schemas/PermissionActionConfig"
               },
               "read": {
+                "$ref": "#/components/schemas/PermissionRuleConfig"
+              },
+              "skill": {
                 "$ref": "#/components/schemas/PermissionRuleConfig"
               },
               "task": {

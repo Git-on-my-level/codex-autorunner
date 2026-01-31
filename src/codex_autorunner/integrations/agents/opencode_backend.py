@@ -35,6 +35,7 @@ from ...core.ports.run_event import (
     TokenUsage,
     ToolCall,
 )
+from ...core.text_delta_coalescer import StreamingTextCoalescer
 
 _logger = logging.getLogger(__name__)
 
@@ -187,6 +188,7 @@ class OpenCodeBackend(AgentBackend):
 
         event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
         self._event_formatter.reset()
+        assistant_stream_coalescer = StreamingTextCoalescer()
 
         async def _enqueue_lines(lines: list[str]) -> None:
             for line in lines:
@@ -208,13 +210,14 @@ class OpenCodeBackend(AgentBackend):
                     self._event_formatter.format_part(part_type, part, delta_text)
                 )
             if part_type == "text" and isinstance(delta_text, str) and delta_text:
-                await event_queue.put(
-                    OutputDelta(
-                        timestamp=now_iso(),
-                        content=delta_text,
-                        delta_type="assistant_stream",
+                for chunk in assistant_stream_coalescer.add(delta_text):
+                    await event_queue.put(
+                        OutputDelta(
+                            timestamp=now_iso(),
+                            content=chunk,
+                            delta_type="assistant_stream",
+                        )
                     )
-                )
 
         ready_event = asyncio.Event()
         output_task = asyncio.create_task(
@@ -293,6 +296,14 @@ class OpenCodeBackend(AgentBackend):
                 await event_queue.put(
                     OutputDelta(
                         timestamp=now_iso(), content=line, delta_type="log_line"
+                    )
+                )
+            for chunk in assistant_stream_coalescer.flush():
+                await event_queue.put(
+                    OutputDelta(
+                        timestamp=now_iso(),
+                        content=chunk,
+                        delta_type="assistant_stream",
                     )
                 )
 

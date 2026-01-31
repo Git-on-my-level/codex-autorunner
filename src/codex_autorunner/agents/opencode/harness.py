@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator, Optional
 from ...integrations.app_server.event_buffer import format_sse
 from ..base import AgentHarness
 from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef
+from .constants import DEFAULT_TICKET_MODEL
 from .runtime import (
     build_turn_id,
     extract_session_id,
@@ -168,6 +169,8 @@ class OpenCodeHarness(AgentHarness):
         sandbox_policy: Optional[Any],
     ) -> TurnRef:
         client = await self._supervisor.get_client(workspace_root)
+        if model is None:
+            model = DEFAULT_TICKET_MODEL
         model_payload = split_model_id(model)
         await client.prompt_async(
             conversation_id,
@@ -192,6 +195,8 @@ class OpenCodeHarness(AgentHarness):
         sandbox_policy: Optional[Any],
     ) -> TurnRef:
         client = await self._supervisor.get_client(workspace_root)
+        if model is None:
+            model = DEFAULT_TICKET_MODEL
         arguments = prompt if prompt else ""
 
         async def _send_review() -> None:

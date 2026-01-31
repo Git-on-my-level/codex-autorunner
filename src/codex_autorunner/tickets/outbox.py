@@ -103,11 +103,21 @@ def create_turn_summary(
     ticket_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     turn_number: Optional[int] = None,
+    diff_stats: Optional[dict] = None,
 ) -> tuple[Optional[DispatchRecord], list[str]]:
     """Create a turn summary dispatch record for the agent's final output.
 
     This creates a synthetic dispatch with mode="turn_summary" to show
     the agent's final turn output in the dispatch history panel.
+
+    Args:
+        paths: Outbox paths for the run
+        next_seq: Sequence number for this dispatch
+        agent_output: The agent's output text
+        ticket_id: Optional ticket ID for context
+        agent_id: Optional agent ID (e.g., "codex", "opencode")
+        turn_number: Optional turn number
+        diff_stats: Optional dict with insertions/deletions/files_changed
 
     Returns (DispatchRecord, []) on success.
     Returns (None, errors) on failure.
@@ -123,6 +133,8 @@ def create_turn_summary(
         extra["agent_id"] = agent_id
     if turn_number is not None:
         extra["turn_number"] = turn_number
+    if diff_stats:
+        extra["diff_stats"] = diff_stats
     extra["is_turn_summary"] = True
 
     dispatch = Dispatch(

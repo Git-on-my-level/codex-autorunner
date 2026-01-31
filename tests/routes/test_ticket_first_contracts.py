@@ -67,3 +67,33 @@ def test_repo_health_is_ok_when_tickets_dir_exists(tmp_path):
         payload = resp.json()
         assert payload["status"] == "ok"
         assert payload["tickets"]["status"] == "ok"
+
+
+def test_ticket_list_returns_body_even_when_frontmatter_invalid(tmp_path, monkeypatch):
+    """Broken frontmatter should still surface raw ticket content for repair."""
+
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    ticket_path = ticket_dir / "TICKET-007.md"
+    ticket_path.write_text(
+        "---\nagent: codex\n# done is missing on purpose\n---\n\nDescribe the task details here...\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get("/api/flows/ticket_flow/tickets")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert len(payload["tickets"]) == 1
+        ticket = payload["tickets"][0]
+        # Index is derived from filename even when lint fails.
+        assert ticket["index"] == 7
+        # Body should be present so the UI can show/repair it.
+        assert "Describe the task details here" in (ticket["body"] or "")
+        # Errors surface frontmatter problems.
+        assert ticket["errors"]

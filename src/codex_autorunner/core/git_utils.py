@@ -232,3 +232,65 @@ def git_default_branch(repo_root: Path) -> Optional[str]:
     if raw.startswith("origin/"):
         return raw.split("/", 1)[1]
     return raw
+
+
+def git_diff_stats(
+    repo_root: Path, from_ref: Optional[str] = None, *, include_staged: bool = True
+) -> Optional[dict]:
+    """
+    Get diff statistics (insertions/deletions) for changes.
+
+    Args:
+        repo_root: Repository root path
+        from_ref: Compare against this ref (e.g., a commit SHA). If None, compares
+                  working tree against HEAD.
+        include_staged: When from_ref is None, include staged changes in the diff.
+
+    Returns:
+        Dict with insertions, deletions, files_changed, or None on error.
+        Example: {"insertions": 47, "deletions": 12, "files_changed": 5}
+    """
+    try:
+        if from_ref:
+            # Compare from_ref to working tree (includes all changes: committed + staged + unstaged)
+            proc = run_git(["diff", "--numstat", from_ref], repo_root)
+        elif include_staged:
+            # Working tree + staged vs HEAD
+            proc = run_git(["diff", "--numstat", "HEAD"], repo_root)
+        else:
+            # Only unstaged changes
+            proc = run_git(["diff", "--numstat"], repo_root)
+    except GitError:
+        return None
+    if proc.returncode != 0:
+        return None
+
+    insertions = 0
+    deletions = 0
+    files_changed = 0
+
+    for line in (proc.stdout or "").strip().splitlines():
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        # Binary files show "-" for both counts
+        add_str, del_str = parts[0], parts[1]
+        if add_str != "-":
+            try:
+                insertions += int(add_str)
+            except ValueError:
+                pass
+        if del_str != "-":
+            try:
+                deletions += int(del_str)
+            except ValueError:
+                pass
+        files_changed += 1
+
+    return {
+        "insertions": insertions,
+        "deletions": deletions,
+        "files_changed": files_changed,
+    }

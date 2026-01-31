@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..core.flows.models import FlowEventType
-from ..core.git_utils import run_git
+from ..core.git_utils import git_diff_stats, run_git
 from ..workspace.paths import workspace_doc_path
 from .agent_pool import AgentPool, AgentTurnRequest
 from .files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
@@ -526,6 +526,25 @@ class TicketRunner:
         # Create turn summary record for the agent's final output.
         # This appears in dispatch history as a distinct "turn summary" entry.
         turn_summary_seq = int(state.get("dispatch_seq") or 0) + 1
+
+        # Compute diff stats for this turn (changes since head_before_turn).
+        # This captures both committed and uncommitted changes made by the agent.
+        turn_diff_stats = None
+        try:
+            if head_before_turn:
+                # Compare current state (HEAD + working tree) against pre-turn commit
+                turn_diff_stats = git_diff_stats(
+                    self._workspace_root, from_ref=head_before_turn
+                )
+            else:
+                # No reference commit; show all uncommitted changes
+                turn_diff_stats = git_diff_stats(
+                    self._workspace_root, from_ref=None, include_staged=True
+                )
+        except Exception:
+            # Best-effort; don't block on stats computation errors
+            turn_diff_stats = None
+
         turn_summary, turn_summary_errors = create_turn_summary(
             outbox_paths,
             next_seq=turn_summary_seq,
@@ -533,6 +552,7 @@ class TicketRunner:
             ticket_id=current_ticket_id,
             agent_id=result.agent_id,
             turn_number=total_turns,
+            diff_stats=turn_diff_stats,
         )
         if turn_summary is not None:
             state["dispatch_seq"] = turn_summary.seq

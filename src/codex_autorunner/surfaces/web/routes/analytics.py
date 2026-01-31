@@ -18,7 +18,7 @@ from ....core.flows.models import FlowRunRecord, FlowRunStatus
 from ....core.flows.store import FlowStore
 from ....core.utils import find_repo_root
 from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
-from ....tickets.outbox import resolve_outbox_paths
+from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ....tickets.replies import resolve_reply_paths
 
 
@@ -105,6 +105,42 @@ def _count_history_dirs(history_dir: Path) -> int:
     return count
 
 
+def _aggregate_diff_stats(dispatch_history_dir: Path) -> Dict[str, int]:
+    """Aggregate diff stats from all turn summaries in dispatch history.
+
+    Returns dict with insertions, deletions, files_changed totals.
+    """
+    totals = {"insertions": 0, "deletions": 0, "files_changed": 0}
+    if not dispatch_history_dir.exists() or not dispatch_history_dir.is_dir():
+        return totals
+
+    try:
+        for entry_dir in dispatch_history_dir.iterdir():
+            if not entry_dir.is_dir():
+                continue
+            if not (len(entry_dir.name) == 4 and entry_dir.name.isdigit()):
+                continue
+            dispatch_path = entry_dir / "DISPATCH.md"
+            if not dispatch_path.exists():
+                continue
+            try:
+                dispatch, _errors = parse_dispatch(dispatch_path)
+                if dispatch and dispatch.extra:
+                    diff_stats = dispatch.extra.get("diff_stats")
+                    if isinstance(diff_stats, dict):
+                        totals["insertions"] += int(diff_stats.get("insertions") or 0)
+                        totals["deletions"] += int(diff_stats.get("deletions") or 0)
+                        totals["files_changed"] += int(
+                            diff_stats.get("files_changed") or 0
+                        )
+            except Exception:
+                continue
+    except OSError:
+        pass
+
+    return totals
+
+
 def _build_summary(repo_root: Path) -> Dict[str, Any]:
     from ....core.config import load_repo_config
 
@@ -178,6 +214,7 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
         )
         turns["dispatches"] = _count_history_dirs(outbox_paths.dispatch_history_dir)
         turns["replies"] = _count_history_dirs(reply_paths.reply_history_dir)
+        turns["diff_stats"] = _aggregate_diff_stats(outbox_paths.dispatch_history_dir)
 
         # If current ticket is known, read its frontmatter to pick agent id when available.
         if current_ticket:
@@ -204,6 +241,7 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
             "current_ticket": turns.get("current_ticket"),
             "dispatches": turns.get("dispatches"),
             "replies": turns.get("replies"),
+            "diff_stats": turns.get("diff_stats"),
         },
         "agent": {
             "id": agent_id,

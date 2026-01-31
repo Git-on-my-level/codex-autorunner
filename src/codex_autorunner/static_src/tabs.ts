@@ -187,11 +187,18 @@ export function initTabs(defaultTab: string = "analytics"): void {
     document.body.appendChild(menu);
 
     // Toggle menu on button click
-    btn.addEventListener("click", (e) => {
+    const toggleHandler = (e: Event) => {
       e.stopPropagation();
+      // Prevent ghost clicks on touch devices
+      if (e.type === "touchend") {
+        e.preventDefault();
+      }
       toggleHamburgerMenu();
       btn.setAttribute("aria-expanded", String(hamburgerMenuOpen));
-    });
+    };
+
+    btn.addEventListener("click", toggleHandler);
+    btn.addEventListener("touchend", toggleHandler);
 
     // Close menu on outside click (check both wrapper and menu since menu is in body)
     document.addEventListener("click", (e) => {

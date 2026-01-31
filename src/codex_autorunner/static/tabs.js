@@ -149,11 +149,17 @@ export function initTabs(defaultTab = "analytics") {
         // that would trap the menu below the backdrop (z-index:1999)
         document.body.appendChild(menu);
         // Toggle menu on button click
-        btn.addEventListener("click", (e) => {
+        const toggleHandler = (e) => {
             e.stopPropagation();
+            // Prevent ghost clicks on touch devices
+            if (e.type === "touchend") {
+                e.preventDefault();
+            }
             toggleHamburgerMenu();
             btn.setAttribute("aria-expanded", String(hamburgerMenuOpen));
-        });
+        };
+        btn.addEventListener("click", toggleHandler);
+        btn.addEventListener("touchend", toggleHandler);
         // Close menu on outside click (check both wrapper and menu since menu is in body)
         document.addEventListener("click", (e) => {
             if (hamburgerMenuOpen && !wrapper.contains(e.target) && !menu.contains(e.target)) {

@@ -9,7 +9,7 @@ import {
   inputModal,
   setButtonLoading,
 } from "./utils.js";
-import { activateTab } from "./tabs.js";
+// Note: activateTab removed - header now used for collapse, not inbox navigation
 import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
@@ -103,6 +103,19 @@ function formatDispatchTime(ts?: string | null): string {
   const diffDays = Math.floor(diffHours / 24);
   if (diffDays < 7) return `${diffDays}d`;
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+/**
+ * Format a number for compact display (e.g., 1200 -> "1.2k").
+ */
+function formatNumber(n: number): string {
+  if (n >= 1000000) {
+    return `${(n / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (n >= 1000) {
+    return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return n.toString();
 }
 
 type TicketListPayload = {
@@ -900,9 +913,14 @@ function els(): {
   resumeBtn: HTMLButtonElement | null;
   refreshBtn: HTMLButtonElement | null;
   stopBtn: HTMLButtonElement | null;
-  restartBtn: HTMLButtonElement | null;
-  archiveBtn: HTMLButtonElement | null;
-} {
+    restartBtn: HTMLButtonElement | null;
+    archiveBtn: HTMLButtonElement | null;
+    overflowToggle: HTMLButtonElement | null;
+    overflowDropdown: HTMLElement | null;
+    overflowNew: HTMLButtonElement | null;
+    overflowRestart: HTMLButtonElement | null;
+    overflowArchive: HTMLButtonElement | null;
+  } {
   return {
     card: document.getElementById("ticket-card"),
     status: document.getElementById("ticket-flow-status"),
@@ -932,6 +950,11 @@ function els(): {
     stopBtn: document.getElementById("ticket-flow-stop") as HTMLButtonElement | null,
     restartBtn: document.getElementById("ticket-flow-restart") as HTMLButtonElement | null,
     archiveBtn: document.getElementById("ticket-flow-archive") as HTMLButtonElement | null,
+    overflowToggle: document.getElementById("ticket-overflow-toggle") as HTMLButtonElement | null,
+    overflowDropdown: document.getElementById("ticket-overflow-dropdown"),
+    overflowNew: document.getElementById("ticket-overflow-new") as HTMLButtonElement | null,
+    overflowRestart: document.getElementById("ticket-overflow-restart") as HTMLButtonElement | null,
+    overflowArchive: document.getElementById("ticket-overflow-archive") as HTMLButtonElement | null,
   };
 }
 
@@ -1180,28 +1203,66 @@ function renderDispatchHistory(
   // Also render mini list for collapsed panel view
   renderDispatchMiniList(entries);
 
-  entries.forEach((entry) => {
+  entries.forEach((entry, index) => {
     const dispatch = entry.dispatch;
     const isTurnSummary = dispatch?.mode === "turn_summary" || dispatch?.extra?.is_turn_summary;
     const isHandoff = dispatch?.mode === "pause";
+    const isNotify = dispatch?.mode === "notify";
+    
+    // Expand only the first (newest) dispatch by default - entries are newest-first
+    const isFirst = index === 0;
+    const isCollapsed = !isFirst;
     
     const container = document.createElement("div");
-    container.className = `dispatch-item${isTurnSummary ? " turn-summary" : ""} clickable`;
-    container.title = isTurnSummary ? "Agent turn output" : "Click to view in Inbox";
-
-    // Add click handler to navigate to inbox (skip for turn summaries)
-    if (!isTurnSummary) {
-      container.addEventListener("click", () => {
-        if (runId) {
-          // Update URL with run_id so inbox tab loads the right thread
-          const url = new URL(window.location.href);
-          url.searchParams.set("run_id", runId);
-          window.history.replaceState({}, "", url.toString());
-          // Switch to inbox tab
-          activateTab("inbox");
-        }
-      });
-    }
+    container.className = `dispatch-item${isTurnSummary ? " turn-summary" : ""}${isHandoff ? " pause" : ""}${isNotify ? " notify" : ""}${isCollapsed ? " collapsed" : ""}`;
+    
+    // Reddit-style thin collapse bar on the left
+    const collapseBar = document.createElement("div");
+    collapseBar.className = "dispatch-collapse-bar";
+    collapseBar.title = isCollapsed ? "Click to expand" : "Click to collapse";
+    collapseBar.setAttribute("role", "button");
+    collapseBar.setAttribute("tabindex", "0");
+    collapseBar.setAttribute("aria-label", isCollapsed ? "Expand dispatch" : "Collapse dispatch");
+    collapseBar.setAttribute("aria-expanded", String(!isCollapsed));
+    
+    const toggleCollapse = () => {
+      container.classList.toggle("collapsed");
+      const isNowCollapsed = container.classList.contains("collapsed");
+      collapseBar.title = isNowCollapsed ? "Click to expand" : "Click to collapse";
+      collapseBar.setAttribute("aria-expanded", String(!isNowCollapsed));
+      collapseBar.setAttribute("aria-label", isNowCollapsed ? "Expand dispatch" : "Collapse dispatch");
+    };
+    
+    collapseBar.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleCollapse();
+    });
+    collapseBar.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleCollapse();
+      }
+    });
+    
+    // Content wrapper for header and body
+    const contentWrapper = document.createElement("div");
+    contentWrapper.className = "dispatch-content-wrapper";
+    
+    // Create collapsible structure
+    const header = document.createElement("div");
+    header.className = "dispatch-header";
+    
+    // Make header clickable to toggle collapse
+    header.addEventListener("click", (e) => {
+      // Don't toggle if clicking on a link or navigating to inbox
+      if ((e.target as HTMLElement).closest("a")) return;
+      toggleCollapse();
+    });
+    
+    // Header content area
+    const headerContent = document.createElement("div");
+    headerContent.className = "dispatch-header-content";
+    headerContent.title = isTurnSummary ? "Agent turn output" : "Click header to expand/collapse";
 
     // Determine mode label
     let modeLabel: string;
@@ -1212,7 +1273,7 @@ function renderDispatchHistory(
     } else {
       modeLabel = ((dispatch?.mode as string) || "notify").toUpperCase();
     }
-
+    
     const head = document.createElement("div");
     head.className = "dispatch-item-head";
     const seq = document.createElement("span");
@@ -1222,6 +1283,23 @@ function renderDispatchHistory(
     mode.className = `ticket-agent${isTurnSummary ? " turn-summary-badge" : ""}`;
     mode.textContent = modeLabel;
     head.append(seq, mode);
+    
+    headerContent.appendChild(head);
+    header.appendChild(headerContent);
+    contentWrapper.appendChild(header);
+    container.append(collapseBar, contentWrapper);
+
+    // Add diff stats if present (for turn summaries)
+    const diffStats = dispatch?.extra?.diff_stats as { insertions?: number; deletions?: number; files_changed?: number } | undefined;
+    if (diffStats && (diffStats.insertions || diffStats.deletions)) {
+      const statsEl = document.createElement("span");
+      statsEl.className = "dispatch-diff-stats";
+      const ins = diffStats.insertions || 0;
+      const del = diffStats.deletions || 0;
+      statsEl.innerHTML = `<span class="diff-add">+${formatNumber(ins)}</span><span class="diff-del">-${formatNumber(del)}</span>`;
+      statsEl.title = `${ins} insertions, ${del} deletions${diffStats.files_changed ? `, ${diffStats.files_changed} files` : ""}`;
+      head.appendChild(statsEl);
+    }
     
     // Add ticket reference if present
     const ticketId = dispatch?.extra?.ticket_id as string | undefined;
@@ -1246,13 +1324,15 @@ function renderDispatchHistory(
       head.appendChild(timeLabel);
     }
     
-    container.appendChild(head);
+    // Create collapsible body content
+    const bodyWrapper = document.createElement("div");
+    bodyWrapper.className = "dispatch-body-wrapper";
 
     if (entry.errors && entry.errors.length) {
       const err = document.createElement("div");
       err.className = "ticket-errors";
       err.textContent = entry.errors.join("; ");
-      container.appendChild(err);
+      bodyWrapper.appendChild(err);
     }
 
     const title = dispatch?.title as string | undefined;
@@ -1260,7 +1340,7 @@ function renderDispatchHistory(
       const titleEl = document.createElement("div");
       titleEl.className = "ticket-body ticket-dispatch-title";
       titleEl.textContent = title;
-      container.appendChild(titleEl);
+      bodyWrapper.appendChild(titleEl);
     }
 
     const bodyText = dispatch?.body as string | undefined;
@@ -1268,7 +1348,7 @@ function renderDispatchHistory(
       const body = document.createElement("div");
       body.className = "ticket-body ticket-dispatch-body messages-markdown";
       body.innerHTML = renderMarkdown(bodyText);
-      container.appendChild(body);
+      bodyWrapper.appendChild(body);
     }
 
     const attachments = (entry.attachments || []) as DispatchAttachment[];
@@ -1285,9 +1365,10 @@ function renderDispatchHistory(
         link.title = att.path || "";
         wrap.appendChild(link);
       });
-      container.appendChild(wrap);
+      bodyWrapper.appendChild(wrap);
     }
-
+    
+    contentWrapper.appendChild(bodyWrapper);
     history.appendChild(container);
   });
 
@@ -1623,7 +1704,7 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
     }
     
     // Show restart button when flow is paused, stopping, or in terminal state (allows starting fresh)
-    const { restartBtn } = els();
+    const { restartBtn, overflowRestart } = els();
     if (restartBtn) {
       const isPaused = latest?.status === "paused";
       const isStopping = latest?.status === "stopping";
@@ -1637,6 +1718,9 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
         Boolean(currentRunId);
       restartBtn.style.display = canRestart ? "" : "none";
       restartBtn.disabled = !canRestart;
+      if (overflowRestart) {
+        overflowRestart.style.display = canRestart ? "" : "none";
+      }
     }
     
     // Show archive button when flow is paused, stopping, or in terminal state and has tickets
@@ -1650,6 +1734,10 @@ async function loadTicketFlow(ctx?: RefreshContext): Promise<void> {
       const canArchive = (isPaused || isStopping || isTerminal) && ticketsExist && Boolean(currentRunId);
       archiveBtn.style.display = canArchive ? "" : "none";
       archiveBtn.disabled = !canArchive;
+      const { overflowArchive } = els();
+      if (overflowArchive) {
+        overflowArchive.style.display = canArchive ? "" : "none";
+      }
     }
     await loadDispatchHistory(currentRunId, ctx);
   } catch (err) {
@@ -2002,7 +2090,10 @@ async function archiveTicketFlow(): Promise<void> {
     if (resumeBtn) resumeBtn.disabled = true;
     if (stopBtn) stopBtn.disabled = true;
     if (restartBtn) restartBtn.style.display = "none";
+    const { overflowRestart, overflowArchive } = els();
+    if (overflowRestart) overflowRestart.style.display = "none";
     if (archiveBtn) archiveBtn.style.display = "none";
+    if (overflowArchive) overflowArchive.style.display = "none";
 
     // Refresh inbox badge and ticket list (tickets were archived/moved)
     void refreshBell();
@@ -2032,6 +2123,52 @@ export function initTicketFlow(): void {
   if (refreshBtn) refreshBtn.addEventListener("click", () => {
     void loadTicketFlow({ reason: "manual" });
   });
+
+  const { overflowToggle, overflowDropdown, overflowNew, overflowRestart, overflowArchive } = els();
+
+  if (overflowToggle && overflowDropdown) {
+    const toggleMenu = (e: Event) => {
+      e.stopPropagation();
+      const isHidden = overflowDropdown.classList.contains("hidden");
+      overflowDropdown.classList.toggle("hidden", !isHidden);
+    };
+    overflowToggle.addEventListener("click", toggleMenu);
+    overflowToggle.addEventListener("touchend", (e) => {
+      e.preventDefault(); // Prevent ghost click
+      toggleMenu(e);
+    });
+
+    // Close on outside click
+    document.addEventListener("click", (e) => {
+      if (!overflowDropdown.classList.contains("hidden") && 
+          !overflowToggle.contains(e.target as Node) && 
+          !overflowDropdown.contains(e.target as Node)) {
+        overflowDropdown.classList.add("hidden");
+      }
+    });
+  }
+
+  if (overflowNew) {
+    overflowNew.addEventListener("click", () => {
+      const newBtn = document.getElementById("ticket-new-btn");
+      newBtn?.click();
+      overflowDropdown?.classList.add("hidden");
+    });
+  }
+
+  if (overflowRestart) {
+    overflowRestart.addEventListener("click", () => {
+      void restartTicketFlow();
+      overflowDropdown?.classList.add("hidden");
+    });
+  }
+
+  if (overflowArchive) {
+    overflowArchive.addEventListener("click", () => {
+      void archiveTicketFlow();
+      overflowDropdown?.classList.add("hidden");
+    });
+  }
 
   // Initialize reason click handler for modal
   initReasonModal();

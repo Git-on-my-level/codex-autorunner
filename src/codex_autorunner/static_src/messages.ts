@@ -566,10 +566,13 @@ function renderFiles(files: Array<{ name: string; url: string; size?: number | n
 function renderDispatch(
   entry: DispatchHistoryEntry,
   isLatest: boolean,
-  runStatus: string
+  runStatus: string,
+  isLastInTimeline: boolean = false
 ): string {
   const dispatch = entry.dispatch;
   const isHandoff = dispatch?.is_handoff || dispatch?.mode === "pause";
+  const isNotify = dispatch?.mode === "notify";
+  const isTurnSummary = dispatch?.mode === "turn_summary" || dispatch?.extra?.is_turn_summary;
   const title = dispatch?.title || (isHandoff ? "Handoff" : "Agent update");
   
   let modeClass = "pill-info";
@@ -587,19 +590,48 @@ function renderDispatch(
     }
   }
 
+  // Determine dispatch type for color coding
+  let dispatchTypeClass = "";
+  if (isHandoff) {
+    dispatchTypeClass = "dispatch-pause";
+  } else if (isNotify) {
+    dispatchTypeClass = "dispatch-notify";
+  } else if (isTurnSummary) {
+    dispatchTypeClass = "dispatch-turn";
+  }
+  
+  // Collapse all but the last dispatch in the timeline
+  const isCollapsed = !isLastInTimeline;
+
   const modePill = dispatch?.mode ? ` <span class="pill pill-small ${modeClass}">${escapeHtml(modeLabel)}</span>` : "";
   const body = dispatch?.body ? `<div class="messages-body messages-markdown">${renderMarkdown(dispatch.body)}</div>` : "";
   const ts = entry.created_at ? formatTimestamp(entry.created_at) : "";
+  
+  const collapseTitle = isCollapsed ? "Click to expand" : "Click to collapse";
+  
   return `
-    <div class="messages-entry" data-seq="${entry.seq}" data-type="dispatch" data-created="${escapeHtml(entry.created_at || "")}">
-      <div class="messages-entry-header">
-        <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
-        <span class="messages-entry-title">${escapeHtml(title)}</span>
-        ${modePill}
-        <span class="messages-entry-time">${escapeHtml(ts)}</span>
+    <div class="messages-entry${dispatchTypeClass ? " " + dispatchTypeClass : ""}${isCollapsed ? " collapsed" : ""}" 
+         data-seq="${entry.seq}" 
+         data-type="dispatch" 
+         data-created="${escapeHtml(entry.created_at || "")}">
+      <div class="messages-collapse-bar" 
+           role="button" 
+           tabindex="0" 
+           title="${collapseTitle}"
+           aria-label="${isCollapsed ? "Expand dispatch" : "Collapse dispatch"}" 
+           aria-expanded="${String(!isCollapsed)}"></div>
+      <div class="messages-content-wrapper">
+        <div class="messages-entry-header">
+          <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
+          <span class="messages-entry-title">${escapeHtml(title)}</span>
+          ${modePill}
+          <span class="messages-entry-time">${escapeHtml(ts)}</span>
+        </div>
+        <div class="messages-entry-body">
+          ${body}
+          ${renderFiles(entry.files)}
+        </div>
       </div>
-      ${body}
-      ${renderFiles(entry.files)}
     </div>
   `;
 }
@@ -614,15 +646,25 @@ function renderReply(entry: { seq: number; reply?: ReplyMessage | null; files?: 
     : "";
   return `
     <div class="messages-entry messages-entry-reply" data-seq="${entry.seq}" data-type="reply" data-created="${escapeHtml(entry.created_at || "")}">
-      ${replyIndicator}
-      <div class="messages-entry-header">
-        <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
-        <span class="messages-entry-title">${escapeHtml(title)}</span>
-        <span class="pill pill-small pill-idle">you</span>
-        <span class="messages-entry-time">${escapeHtml(ts)}</span>
+      <div class="messages-collapse-bar" 
+           role="button" 
+           tabindex="0" 
+           title="Click to collapse"
+           aria-label="Collapse reply" 
+           aria-expanded="true"></div>
+      <div class="messages-content-wrapper">
+        ${replyIndicator}
+        <div class="messages-entry-header">
+          <span class="messages-entry-seq">#${entry.seq.toString().padStart(4, "0")}</span>
+          <span class="messages-entry-title">${escapeHtml(title)}</span>
+          <span class="pill pill-small pill-idle">you</span>
+          <span class="messages-entry-time">${escapeHtml(ts)}</span>
+        </div>
+        <div class="messages-entry-body">
+          ${body}
+          ${renderFiles(entry.files)}
+        </div>
       </div>
-      ${body}
-      ${renderFiles(entry.files)}
     </div>
   `;
 }
@@ -672,15 +714,26 @@ function buildThreadedTimeline(
     return a.seq - b.seq;
   });
 
+  // Count total dispatches in the sorted timeline
+  let dispatchCount = 0;
+  timeline.forEach((entry) => {
+    if (entry.type === "dispatch") {
+      dispatchCount++;
+    }
+  });
+
   // Render timeline, associating replies with preceding dispatches
   let lastDispatchSeq: number | undefined;
+  let currentDispatchIndex = 0;
   const rendered: string[] = [];
 
   timeline.forEach((entry) => {
     if (entry.type === "dispatch" && entry.dispatch) {
       lastDispatchSeq = entry.dispatch.seq;
       const isLatest = entry.dispatch.seq === maxDispatchSeq;
-      rendered.push(renderDispatch(entry.dispatch, isLatest, runStatus));
+      const isLastInTimeline = currentDispatchIndex === dispatchCount - 1;
+      rendered.push(renderDispatch(entry.dispatch, isLatest, runStatus, isLastInTimeline));
+      currentDispatchIndex++;
     } else if (entry.type === "reply" && entry.reply) {
       rendered.push(renderReply(entry.reply, lastDispatchSeq));
     }
@@ -739,6 +792,64 @@ function updateMobileDetailHeader(status: string, dispatchCount: number, replyCo
   }
 }
 
+function attachCollapseHandlers(): void {
+  if (!detailEl) return;
+  
+  // Helper to toggle collapse state
+  const toggleEntry = (entry: HTMLElement, bar: HTMLElement) => {
+    const isNowCollapsed = entry.classList.toggle("collapsed");
+    bar.title = isNowCollapsed ? "Click to expand" : "Click to collapse";
+    bar.setAttribute("aria-expanded", String(!isNowCollapsed));
+    bar.setAttribute("aria-label", isNowCollapsed ? "Expand dispatch" : "Collapse dispatch");
+  };
+  
+  // Attach handlers to collapse bars
+  const collapseBars = detailEl.querySelectorAll<HTMLElement>(".messages-collapse-bar");
+  collapseBars.forEach((bar) => {
+    // Remove existing listeners by cloning
+    const newBar = bar.cloneNode(true) as HTMLElement;
+    bar.parentNode?.replaceChild(newBar, bar);
+    
+    newBar.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const entry = newBar.closest(".messages-entry") as HTMLElement;
+      if (entry) {
+        toggleEntry(entry, newBar);
+      }
+    });
+    
+    // Keyboard support
+    newBar.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        const entry = newBar.closest(".messages-entry") as HTMLElement;
+        if (entry) {
+          toggleEntry(entry, newBar);
+        }
+      }
+    });
+  });
+  
+  // Also make headers clickable for collapse
+  const headers = detailEl.querySelectorAll<HTMLElement>(".messages-entry-header");
+  headers.forEach((header) => {
+    // Remove existing listeners by cloning
+    const newHeader = header.cloneNode(true) as HTMLElement;
+    header.parentNode?.replaceChild(newHeader, header);
+    
+    newHeader.addEventListener("click", (e) => {
+      // Don't toggle if clicking on a link
+      if ((e.target as HTMLElement).closest("a")) return;
+      e.stopPropagation();
+      const entry = newHeader.closest(".messages-entry") as HTMLElement;
+      const bar = entry?.querySelector(".messages-collapse-bar") as HTMLElement;
+      if (entry && bar) {
+        toggleEntry(entry, bar);
+      }
+    });
+  });
+}
+
 function renderThreadDetail(detail: ThreadDetail, runId: string, ctx: { reason: SmartRefreshReason }): void {
   if (!detailEl) return;
   const runStatus = (detail.run?.status || "").toString();
@@ -789,9 +900,13 @@ function renderThreadDetail(detail: ThreadDetail, runId: string, ctx: { reason: 
 
   const preserve = ctx.reason === "background" && detailEl.scrollHeight > 0 && !isAtBottom(detailEl);
   if (preserve) {
-    preserveScroll(detailEl, renderDetail, { restoreOnNextFrame: true });
+    preserveScroll(detailEl, () => {
+      renderDetail();
+      attachCollapseHandlers();
+    }, { restoreOnNextFrame: true });
   } else {
     renderDetail();
+    attachCollapseHandlers();
   }
 
   // Only show reply box for paused runs - replies to other states won't be seen

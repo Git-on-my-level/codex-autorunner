@@ -1444,6 +1444,7 @@ button {
 }
 
 @media (pointer: coarse) {
+
   button,
   .tab,
   .ticket-fm-toggle,
@@ -1922,12 +1923,15 @@ button.icon-btn {
 /* Compact dispatch items that don't stack */
 .dispatch-item {
   flex-shrink: 0;
-  padding: 10px 12px;
+  padding: 0;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border);
   border-radius: 8px;
-  cursor: pointer;
+  cursor: default;
   transition: background 0.15s ease, border-color 0.15s ease;
+  position: relative;
+  display: flex;
+  flex-direction: row;
 }
 
 .dispatch-item:hover {
@@ -1935,12 +1939,94 @@ button.icon-btn {
   border-color: var(--accent);
 }
 
+/* Reddit-style thin collapse bar on the left */
+.dispatch-collapse-bar {
+  flex-shrink: 0;
+  width: 4px;
+  min-height: 100%;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 8px 0 0 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, width 0.1s ease;
+  position: relative;
+}
+
+.dispatch-collapse-bar:hover {
+  background: var(--accent);
+  width: 6px;
+}
+
+.dispatch-collapse-bar:active {
+  background: var(--accent-hover, var(--accent));
+}
+
+/* Collapsed state - bar is dimmer */
+.dispatch-item.collapsed .dispatch-collapse-bar {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dispatch-item.collapsed .dispatch-collapse-bar:hover {
+  background: var(--accent);
+  width: 6px;
+}
+
+/* Dispatch content wrapper */
+.dispatch-content-wrapper {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Dispatch header */
+.dispatch-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s ease;
+  cursor: pointer;
+}
+
+.dispatch-header:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.dispatch-item.collapsed .dispatch-header {
+  border-bottom: none;
+}
+
+/* Hide old collapse button - replaced by bar */
+.dispatch-collapse-btn {
+  display: none;
+}
+
+/* Header content area */
+.dispatch-header-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.dispatch-item.turn-summary .dispatch-header-content {
+  cursor: default;
+}
+
 .dispatch-item-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 0;
   flex-wrap: wrap;
+}
+
+/* Dispatch body wrapper */
+.dispatch-body-wrapper {
+  padding: 0 10px 10px 10px;
+}
+
+.dispatch-item.collapsed .dispatch-body-wrapper {
+  display: none;
 }
 
 .dispatch-item .ticket-name {
@@ -2025,9 +2111,55 @@ button.icon-btn {
   border-color: rgba(63, 185, 80, 0.5);
 }
 
+.dispatch-item.turn-summary .dispatch-collapse-bar {
+  background: rgba(63, 185, 80, 0.5);
+}
+
+.dispatch-item.turn-summary .dispatch-collapse-bar:hover {
+  background: rgba(63, 185, 80, 0.8);
+}
+
 .dispatch-item .turn-summary-badge {
   background: rgba(63, 185, 80, 0.25);
   color: #8dc896;
+}
+
+/* Pause/handoff dispatch styling - red */
+.dispatch-item.pause {
+  background: rgba(248, 81, 73, 0.06);
+  border-color: rgba(248, 81, 73, 0.3);
+}
+
+.dispatch-item.pause:hover {
+  background: rgba(248, 81, 73, 0.1);
+  border-color: rgba(248, 81, 73, 0.5);
+}
+
+.dispatch-item.pause .dispatch-collapse-bar {
+  background: rgba(248, 81, 73, 0.5);
+}
+
+.dispatch-item.pause .dispatch-collapse-bar:hover {
+  background: rgba(248, 81, 73, 0.8);
+}
+
+/* Notify dispatch styling - orange */
+.dispatch-item.notify {
+  background: rgba(255, 163, 68, 0.06);
+  border-color: rgba(255, 163, 68, 0.3);
+}
+
+.dispatch-item.notify:hover {
+  background: rgba(255, 163, 68, 0.1);
+  border-color: rgba(255, 163, 68, 0.5);
+}
+
+.dispatch-item.notify .dispatch-collapse-bar {
+  background: rgba(255, 163, 68, 0.5);
+}
+
+.dispatch-item.notify .dispatch-collapse-bar:hover {
+  background: rgba(255, 163, 68, 0.8);
 }
 
 /* Ticket reference in dispatch items */
@@ -2046,6 +2178,36 @@ button.icon-btn {
   margin-left: auto;
   white-space: nowrap;
   margin-left: auto;
+}
+
+/* Diff stats in dispatch items (GitHub-style +/- indicators) */
+.dispatch-diff-stats {
+  display: inline-flex;
+  gap: 4px;
+  font-family: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.dispatch-diff-stats .diff-add {
+  color: #3fb950;
+}
+
+.dispatch-diff-stats .diff-del {
+  color: #f85149;
+}
+
+/* Diff stats in analytics metrics */
+.diff-stats-metric {
+  font-family: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
+}
+
+.diff-stats-metric .diff-add {
+  color: #3fb950;
+}
+
+.diff-stats-metric .diff-del {
+  color: #f85149;
 }
 
 
@@ -2464,7 +2626,16 @@ button.icon-btn {
 
   /* Compact dispatch items on mobile */
   .dispatch-item {
-    padding: 8px 10px;
+    padding: 0;
+  }
+  
+  /* Wider collapse bar on mobile for easier touch */
+  .dispatch-collapse-bar {
+    width: 6px;
+  }
+  
+  .dispatch-collapse-bar:hover {
+    width: 8px;
   }
 
   .ticket-dispatch-body {
@@ -6644,7 +6815,7 @@ button.loading::after {
     background: linear-gradient(to top, var(--panel) 0%, rgba(16, 19, 28, 0.98) 100%);
     border-top: 1px solid var(--border);
     box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
-    z-index: 100;
+    z-index: 1900;
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     transition: transform 0.18s ease;
@@ -9391,19 +9562,141 @@ button.loading::after {
 .messages-entry {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: 0;
   background: var(--panel);
   margin-top: 10px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  position: relative;
+  display: flex;
+  flex-direction: row;
 }
 
 .messages-entry:first-child {
   margin-top: 0;
 }
 
+/* Reddit-style thin collapse bar on the left */
+.messages-collapse-bar {
+  flex-shrink: 0;
+  width: 4px;
+  min-height: 100%;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius) 0 0 var(--radius);
+  cursor: pointer;
+  transition: background 0.15s ease, width 0.1s ease;
+}
+
+.messages-collapse-bar:hover {
+  background: var(--accent);
+  width: 6px;
+}
+
+.messages-collapse-bar:active {
+  background: var(--accent-hover, var(--accent));
+}
+
+/* Collapsed state - bar is dimmer */
+.messages-entry.collapsed .messages-collapse-bar {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.messages-entry.collapsed .messages-collapse-bar:hover {
+  background: var(--accent);
+  width: 6px;
+}
+
+/* Messages content wrapper */
+.messages-content-wrapper {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Hide old collapse button - replaced by bar */
+.messages-collapse-btn {
+  display: none;
+}
+
+/* Messages entry body wrapper */
+.messages-entry-body {
+  padding: 0 12px 10px 12px;
+  margin-top: 8px;
+}
+
+.messages-entry.collapsed .messages-entry-body {
+  display: none;
+}
+
 .messages-entry.messages-entry-reply {
   margin-left: 20px;
-  border-left: 2px solid rgba(108, 168, 255, 0.4);
   background: rgba(108, 168, 255, 0.04);
+}
+
+/* User reply collapse bar is blue */
+.messages-entry.messages-entry-reply .messages-collapse-bar {
+  background: rgba(108, 168, 255, 0.4);
+}
+
+.messages-entry.messages-entry-reply .messages-collapse-bar:hover {
+  background: rgba(108, 168, 255, 0.7);
+}
+
+/* Pause/handoff dispatch styling - red */
+.messages-entry.dispatch-pause {
+  border-color: rgba(248, 81, 73, 0.4);
+  background: rgba(248, 81, 73, 0.04);
+}
+
+.messages-entry.dispatch-pause:hover {
+  border-color: rgba(248, 81, 73, 0.6);
+  background: rgba(248, 81, 73, 0.08);
+}
+
+.messages-entry.dispatch-pause .messages-collapse-bar {
+  background: rgba(248, 81, 73, 0.5);
+}
+
+.messages-entry.dispatch-pause .messages-collapse-bar:hover {
+  background: rgba(248, 81, 73, 0.8);
+}
+
+/* Notify dispatch styling - orange */
+.messages-entry.dispatch-notify {
+  border-color: rgba(255, 163, 68, 0.4);
+  background: rgba(255, 163, 68, 0.04);
+}
+
+.messages-entry.dispatch-notify:hover {
+  border-color: rgba(255, 163, 68, 0.6);
+  background: rgba(255, 163, 68, 0.08);
+}
+
+.messages-entry.dispatch-notify .messages-collapse-bar {
+  background: rgba(255, 163, 68, 0.5);
+}
+
+.messages-entry.dispatch-notify .messages-collapse-bar:hover {
+  background: rgba(255, 163, 68, 0.8);
+}
+
+/* Turn summary dispatch styling - green */
+.messages-entry.dispatch-turn {
+  border-color: rgba(63, 185, 80, 0.4);
+  background: rgba(63, 185, 80, 0.04);
+}
+
+.messages-entry.dispatch-turn:hover {
+  border-color: rgba(63, 185, 80, 0.6);
+  background: rgba(63, 185, 80, 0.08);
+}
+
+.messages-entry.dispatch-turn .messages-collapse-bar {
+  background: rgba(63, 185, 80, 0.5);
+}
+
+.messages-entry.dispatch-turn .messages-collapse-bar:hover {
+  background: rgba(63, 185, 80, 0.8);
 }
 
 .messages-entry-header {
@@ -9413,6 +9706,13 @@ button.loading::after {
   font-weight: 500;
   font-size: 12px;
   color: var(--text);
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.messages-entry-header:hover {
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .messages-entry-seq {
@@ -9451,7 +9751,7 @@ button.loading::after {
   background: transparent;
   border: none;
   padding: 0;
-  margin: 10px 0 0;
+  margin: 0;
   color: var(--text);
 }
 
@@ -10026,6 +10326,15 @@ button.loading::after {
     gap: 0;
     flex: 1;
     min-height: 0;
+  }
+  
+  /* Wider collapse bar on mobile for easier touch */
+  .messages-collapse-bar {
+    width: 6px;
+  }
+  
+  .messages-collapse-bar:hover {
+    width: 8px;
   }
 
   .messages-sidebar {
@@ -11003,7 +11312,7 @@ button.loading::after {
   border-radius: var(--radius);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   padding: 4px;
-  z-index: 2000;
+  z-index: 3000;
   opacity: 0;
   visibility: hidden;
   transform: translateY(-5px);
@@ -11063,7 +11372,8 @@ button.loading::after {
 /* Mobile hamburger menu - bottom sheet style */
 @media (max-width: 640px) {
   .hamburger-wrapper {
-    position: static;
+    position: relative;
+    z-index: 2002;
   }
 
   .hamburger-btn {
@@ -11109,7 +11419,7 @@ button.loading::after {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.5);
-    z-index: 1999;
+    z-index: 2999;
     opacity: 0;
     visibility: hidden;
     transition: opacity 0.15s ease, visibility 0.15s ease;

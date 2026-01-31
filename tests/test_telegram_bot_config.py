@@ -29,6 +29,7 @@ def test_telegram_bot_config_env_resolution(tmp_path: Path) -> None:
     assert cfg.allowed_user_ids == {123}
     assert cfg.app_server_command == list(DEFAULT_APP_SERVER_COMMAND)
     assert cfg.shell.enabled is False
+    assert cfg.default_notification_chat_id == -100
 
 
 def test_telegram_bot_config_app_server_command_env_override(tmp_path: Path) -> None:
@@ -187,7 +188,7 @@ def test_telegram_bot_config_media_file_defaults(tmp_path: Path) -> None:
     assert cfg.pause_dispatch_notifications.send_attachments is True
     assert cfg.pause_dispatch_notifications.max_file_size_bytes == 50 * 1024 * 1024
     assert cfg.pause_dispatch_notifications.chunk_long_messages is True
-    assert cfg.default_notification_chat_id is None
+    assert cfg.default_notification_chat_id == 123
 
 
 def test_telegram_bot_config_message_overflow_default(tmp_path: Path) -> None:
@@ -249,6 +250,35 @@ def test_telegram_bot_config_default_notification_chat_id(tmp_path: Path) -> Non
     env = {"TEST_BOT_TOKEN": "token", "TEST_CHAT_ID": "123"}
     cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
     assert cfg.default_notification_chat_id == 42
+
+
+def test_telegram_bot_config_invalid_default_chat_falls_back_to_env(
+    tmp_path: Path,
+) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "default_notification_chat_id": "not-a-number",
+    }
+    env = {"TEST_BOT_TOKEN": "token", "TEST_CHAT_ID": "321"}
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    assert cfg.default_notification_chat_id == 321
+
+
+def test_telegram_bot_config_falls_back_to_allowed_chat_ids(tmp_path: Path) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_chat_ids": [999, 111],
+        "allowed_user_ids": [123],
+    }
+    env = {"TEST_BOT_TOKEN": "token", "TEST_CHAT_ID": ""}
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    assert cfg.allowed_chat_ids == {111, 999}
+    assert cfg.default_notification_chat_id == 111
 
 
 def test_telegram_bot_config_metrics_mode_default(tmp_path: Path) -> None:

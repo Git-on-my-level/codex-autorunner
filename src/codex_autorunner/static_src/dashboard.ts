@@ -202,6 +202,11 @@ interface AnalyticsSummary {
     current_ticket: number | null;
     dispatches: number;
     replies: number;
+    diff_stats?: {
+      insertions: number;
+      deletions: number;
+      files_changed: number;
+    } | null;
   };
   agent: {
     id: string | null;
@@ -231,6 +236,8 @@ function analyticsSummarySignature(data: AnalyticsSummary | null): string {
     turns?.current_ticket ?? "",
     turns?.dispatches ?? "",
     turns?.replies ?? "",
+    turns?.diff_stats?.insertions ?? "",
+    turns?.diff_stats?.deletions ?? "",
     agent?.id ?? "",
     agent?.model ?? "",
   ].join("|");
@@ -352,6 +359,21 @@ function renderTicketAnalytics(data: AnalyticsSummary | null): void {
   if (dispatchesEl) dispatchesEl.textContent = String(dispatchCount);
   if (repliesEl) repliesEl.textContent = turns?.replies != null ? String(turns.replies) : "0";
   if (runIdEl) runIdEl.textContent = run?.short_id || run?.id || "–";
+
+  // Diff stats (lines changed)
+  const diffStatsEl = document.getElementById("lines-changed");
+  if (diffStatsEl) {
+    const diffStats = turns?.diff_stats;
+    if (diffStats && (diffStats.insertions > 0 || diffStats.deletions > 0)) {
+      const ins = diffStats.insertions || 0;
+      const del = diffStats.deletions || 0;
+      diffStatsEl.innerHTML = `<span class="diff-add">+${formatTokensCompact(ins)}</span> <span class="diff-del">-${formatTokensCompact(del)}</span>`;
+      diffStatsEl.title = `${ins} insertions, ${del} deletions, ${diffStats.files_changed || 0} files changed`;
+    } else {
+      diffStatsEl.textContent = "–";
+      diffStatsEl.title = "";
+    }
+  }
 
   // Agent chip (optional future use)
   const agentEl = document.getElementById("ticket-agent");

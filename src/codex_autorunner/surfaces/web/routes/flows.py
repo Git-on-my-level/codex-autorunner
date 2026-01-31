@@ -41,15 +41,12 @@ from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets import AgentPool
 from ....tickets.files import (
     list_ticket_paths,
+    parse_ticket_index,
     read_ticket,
     safe_relpath,
 )
 from ....tickets.frontmatter import parse_markdown_frontmatter
-from ....tickets.lint import (
-    lint_ticket_directory,
-    lint_ticket_frontmatter,
-    parse_ticket_index,
-)
+from ....tickets.lint import lint_ticket_frontmatter
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..schemas import (
     TicketCreateRequest,
@@ -80,10 +77,17 @@ def _ticket_dir(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "tickets"
 
 
+def _find_ticket_path_by_index(ticket_dir: Path, index: int) -> Optional[Path]:
+    for path in list_ticket_paths(ticket_dir):
+        idx = parse_ticket_index(path.name)
+        if idx == index:
+            return path
+    return None
+
+
 def _require_flow_store(repo_root: Path) -> Optional[FlowStore]:
     db_path, _ = _flow_paths(repo_root)
-    config = load_repo_config(repo_root)
-    store = FlowStore(db_path, durable=config.durable_writes)
+    store = FlowStore(db_path)
     try:
         store.initialize()
         return store
@@ -96,20 +100,25 @@ def _safe_list_flow_runs(
     repo_root: Path, flow_type: Optional[str] = None, *, recover_stuck: bool = False
 ) -> list[FlowRunRecord]:
     db_path, _ = _flow_paths(repo_root)
-    config = load_repo_config(repo_root)
+    store = FlowStore(db_path)
     try:
-        with FlowStore(db_path, durable=config.durable_writes) as store:
-            records = store.list_flow_runs(flow_type=flow_type)
-            if recover_stuck:
-                # Recover any flows stuck in active states with dead workers
-                records = [
-                    reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
-                    for rec in records
-                ]
-            return records
+        store.initialize()
+        records = store.list_flow_runs(flow_type=flow_type)
+        if recover_stuck:
+            # Recover any flows stuck in active states with dead workers
+            records = [
+                reconcile_flow_run(repo_root, rec, store, logger=_logger)[0]
+                for rec in records
+            ]
+        return records
     except Exception as exc:
         _logger.debug("FlowStore list runs failed: %s", exc)
         return []
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass
 
 
 def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
@@ -142,13 +151,11 @@ def _get_flow_controller(repo_root: Path, flow_type: str) -> FlowController:
 
     db_path, artifacts_root = _flow_paths(repo_root)
     definition = _build_flow_definition(repo_root, flow_type)
-    config = load_repo_config(repo_root)
 
     controller = FlowController(
         definition=definition,
         db_path=db_path,
         artifacts_root=artifacts_root,
-        durable=config.durable_writes,
     )
     try:
         controller.initialize()
@@ -462,36 +469,16 @@ def build_flow_routes() -> APIRouter:
             )
 
         repo_root = find_repo_root()
-
-        # Merge repo config into input_data for ticket_flow
-        merged_input_data = dict(request.input_data or {})
-        if flow_type == "ticket_flow":
-            config = load_repo_config(repo_root)
-            ticket_flow_config = config.ticket_flow
-            if isinstance(ticket_flow_config, dict):
-                # Merge ticket_flow config into input_data only if not already set
-                if (
-                    "include_previous_ticket_context" in ticket_flow_config
-                    and "include_previous_ticket_context" not in merged_input_data
-                ):
-                    merged_input_data["include_previous_ticket_context"] = (
-                        ticket_flow_config["include_previous_ticket_context"]
-                    )
-
         controller = _get_flow_controller(repo_root, flow_type)
 
-        # For ticket_flow, check if tickets exist before starting a new run.
-        # This prevents starting a worker process when there's no work to do.
         if flow_type == "ticket_flow" and force_new:
-            ticket_dir = _ticket_dir(repo_root)
-            existing_tickets = list_ticket_paths(ticket_dir)
-            if not existing_tickets:
+            ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+            if not list_ticket_paths(ticket_dir):
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        "No tickets found. Create tickets under "
-                        f"{safe_relpath(ticket_dir, repo_root)} or use "
-                        "/api/flows/ticket_flow/bootstrap to create an initial ticket."
+                        "No tickets found under .codex-autorunner/tickets. "
+                        "Use /api/flows/ticket_flow/bootstrap to seed tickets."
                     ),
                 )
 
@@ -518,12 +505,8 @@ def build_flow_routes() -> APIRouter:
 
         run_id = _normalize_run_id(uuid.uuid4())
 
-        # Use merged_input_data for ticket_flow, otherwise use request.input_data
-        input_to_use = (
-            merged_input_data if flow_type == "ticket_flow" else request.input_data
-        )
         record = await controller.start_flow(
-            input_data=input_to_use,
+            input_data=request.input_data,
             run_id=run_id,
             metadata=request.metadata,
         )
@@ -660,22 +643,8 @@ You are the first ticket in a new ticket_flow run.
             seeded = True
 
         meta = flow_request.metadata if isinstance(flow_request.metadata, dict) else {}
-
-        # Merge repo config into input_data for ticket_flow
-        merged_input_data = dict(flow_request.input_data or {})
-        config = load_repo_config(repo_root)
-        ticket_flow_config = config.ticket_flow
-        if isinstance(ticket_flow_config, dict):
-            if (
-                "include_previous_ticket_context" in ticket_flow_config
-                and "include_previous_ticket_context" not in merged_input_data
-            ):
-                merged_input_data["include_previous_ticket_context"] = (
-                    ticket_flow_config["include_previous_ticket_context"]
-                )
-
         payload = FlowStartRequest(
-            input_data=merged_input_data,
+            input_data=flow_request.input_data,
             metadata=meta | {"seeded_ticket": seeded},
         )
         return await _start_flow("ticket_flow", payload, force_new=force_new)
@@ -687,53 +656,28 @@ You are the first ticket in a new ticket_flow run.
         tickets = []
         for path in list_ticket_paths(ticket_dir):
             doc, errors = read_ticket(path)
+            idx = getattr(doc, "index", None) or parse_ticket_index(path.name)
+            # When frontmatter is broken, still surface the raw ticket body so
+            # the user can inspect and fix the file in the UI instead of seeing
+            # an empty card.
+            try:
+                raw_body = path.read_text(encoding="utf-8")
+                _, parsed_body = parse_markdown_frontmatter(raw_body)
+            except Exception:
+                parsed_body = None
             rel_path = safe_relpath(path, repo_root)
-
-            # Truncate body to first 200 chars for preview
-            body_preview = None
-            if doc and doc.body:
-                body_preview = doc.body[:200] + "…" if len(doc.body) > 200 else doc.body
-
             tickets.append(
                 {
                     "path": rel_path,
-                    "index": getattr(doc, "index", None),
+                    "index": idx,
                     "frontmatter": asdict(doc.frontmatter) if doc else None,
-                    "body": body_preview,
+                    "body": doc.body if doc else parsed_body,
                     "errors": errors,
                 }
             )
-
-        # Check for duplicate ticket indices.
-        dir_lint_errors = lint_ticket_directory(ticket_dir)
-
         return {
             "ticket_dir": safe_relpath(ticket_dir, repo_root),
             "tickets": tickets,
-            "lint_errors": dir_lint_errors,
-        }
-
-    @router.get("/ticket_flow/tickets/{index}")
-    async def get_ticket_by_index(index: int):
-        """Get a single ticket's full content by index."""
-        repo_root = find_repo_root()
-        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-        ticket_path = ticket_dir / f"TICKET-{index:03d}.md"
-
-        if not ticket_path.exists():
-            raise HTTPException(
-                status_code=404, detail=f"Ticket TICKET-{index:03d}.md not found"
-            )
-
-        doc, errors = read_ticket(ticket_path)
-        rel_path = safe_relpath(ticket_path, repo_root)
-
-        return {
-            "path": rel_path,
-            "index": getattr(doc, "index", None) if doc else None,
-            "frontmatter": asdict(doc.frontmatter) if doc else None,
-            "body": doc.body if doc else None,
-            "errors": errors,
         }
 
     @router.post("/ticket_flow/tickets", response_model=TicketResponse)
@@ -791,12 +735,10 @@ You are the first ticket in a new ticket_flow run.
         """Update an existing ticket by index."""
         repo_root = find_repo_root()
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-        ticket_path = ticket_dir / f"TICKET-{index:03d}.md"
+        ticket_path = _find_ticket_path_by_index(ticket_dir, index)
 
-        if not ticket_path.exists():
-            raise HTTPException(
-                status_code=404, detail=f"Ticket TICKET-{index:03d}.md not found"
-            )
+        if not ticket_path:
+            raise HTTPException(status_code=404, detail=f"Ticket {index:03d} not found")
 
         # Validate frontmatter before saving
         data, body = parse_markdown_frontmatter(request.content)
@@ -828,12 +770,10 @@ You are the first ticket in a new ticket_flow run.
         """Delete a ticket by index."""
         repo_root = find_repo_root()
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-        ticket_path = ticket_dir / f"TICKET-{index:03d}.md"
+        ticket_path = _find_ticket_path_by_index(ticket_dir, index)
 
-        if not ticket_path.exists():
-            raise HTTPException(
-                status_code=404, detail=f"Ticket TICKET-{index:03d}.md not found"
-            )
+        if not ticket_path:
+            raise HTTPException(status_code=404, detail=f"Ticket {index:03d} not found")
 
         rel_path = safe_relpath(ticket_path, repo_root)
         ticket_path.unlink()
@@ -1002,7 +942,7 @@ You are the first ticket in a new ticket_flow run.
                     run_id, after_seq=resume_after
                 ):
                     data = event.model_dump(mode="json")
-                    yield f"id: {event.seq}\ndata: {json.dumps(data)}\n\n"
+                    yield f"id: {event.seq}\n" f"data: {json.dumps(data)}\n\n"
             except Exception as e:
                 _logger.exception("Error streaming events for run %s: %s", run_id, e)
                 raise
@@ -1079,14 +1019,15 @@ You are the first ticket in a new ticket_flow run.
     def get_reply_history_file(run_id: str, seq: str, file_path: str):
         repo_root = find_repo_root()
         db_path, _ = _flow_paths(repo_root)
-        config = load_repo_config(repo_root)
+        store = FlowStore(db_path)
         try:
-            with FlowStore(db_path, durable=config.durable_writes) as store:
-                record = store.get_flow_run(run_id)
-        except Exception:
-            raise HTTPException(
-                status_code=404, detail="Flows database unavailable"
-            ) from None
+            store.initialize()
+            record = store.get_flow_run(run_id)
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
         if not record:
             raise HTTPException(status_code=404, detail="Run not found")
 
