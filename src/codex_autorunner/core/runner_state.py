@@ -101,7 +101,9 @@ class RunnerStateManager:
 
         state = load_state(self.state_path)
         if state.status == "running":
-            return "Autorunner is currently running; try again later."
+            if state.runner_pid and process_alive(state.runner_pid):
+                return f"Autorunner is currently running (pid={state.runner_pid}); try again later."
+            return "Autorunner state is stale; use 'car resume' to continue."
         return None
 
     def request_stop(self) -> None:
