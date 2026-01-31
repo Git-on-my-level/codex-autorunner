@@ -159,11 +159,15 @@ def compare_codex_schema(vendor_path: Path) -> tuple[int, list[str]]:
     return 0, ["Codex schema: no drift"]
 
 
-def generate_current_opencode_openapi() -> dict | None:
-    """Generate current OpenAPI spec by running OpenCode server."""
+def generate_current_opencode_openapi() -> tuple[dict | None, str | None]:
+    """Generate current OpenAPI spec by running OpenCode server.
+
+    Returns:
+        (spec, opencode_bin_path)
+    """
     opencode_bin = get_opencode_bin()
     if not opencode_bin:
-        return None
+        return None, None
 
     async def fetch_openapi(base_url: str, timeout: float = 30.0) -> dict | None:
         """Fetch OpenAPI spec from running OpenCode server."""
@@ -256,7 +260,7 @@ def generate_current_opencode_openapi() -> dict | None:
                     return None
                 return await fetch_openapi(base_url)
 
-    return asyncio.run(run_generation())
+    return asyncio.run(run_generation()), opencode_bin
 
 
 def compare_opencode_openapi(vendor_path: Path) -> tuple[int, list[str]]:
@@ -268,13 +272,34 @@ def compare_opencode_openapi(vendor_path: Path) -> tuple[int, list[str]]:
         ]
 
     vendor_spec = json.loads(vendor_path.read_text(encoding="utf-8"))
-    current_spec = generate_current_opencode_openapi()
+    current_spec, opencode_bin = generate_current_opencode_openapi()
 
     if current_spec is None:
         return 0, [
             "OpenCode binary not found or server failed to start",
             "Skipping OpenCode OpenAPI check",
         ]
+
+    vendor_version = (vendor_spec.get("info") or {}).get("version")
+    current_version = (current_spec.get("info") or {}).get("version")
+
+    if vendor_version and current_version and vendor_version != current_version:
+        messages = [
+            "OpenCode version mismatch; skipping OpenAPI drift check",
+            f"  Vendor version:  {vendor_version}",
+            f"  Current version: {current_version}",
+        ]
+        if opencode_bin:
+            messages.append(f"  Binary path:    {opencode_bin}")
+        messages.extend(
+            [
+                "",
+                "Set OPENCODE_BIN to a binary matching the vendor snapshot, "
+                "or regenerate the vendor snapshot with the current binary:",
+                "  python scripts/update_vendor_opencode_openapi.py",
+            ]
+        )
+        return 0, messages
 
     differences = compare_dicts("opencode", vendor_spec, current_spec)
 
