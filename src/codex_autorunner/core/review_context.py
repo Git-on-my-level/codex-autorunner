@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Iterable, Optional
 from .utils import is_within
 
 if TYPE_CHECKING:
-    from .engine import Engine as RuntimeContext
+    from .runtime import RuntimeContext
 
 
 TRUNCATION_SUFFIX = "... (truncated)\n"

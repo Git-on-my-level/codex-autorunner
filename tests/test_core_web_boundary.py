@@ -4,7 +4,7 @@ import importlib
 import sys
 
 
-def test_core_engine_does_not_import_web_modules(monkeypatch):
+def test_core_runtime_does_not_import_web_modules(monkeypatch):
     # Ensure any previously loaded web modules don't mask regressions.
     for name in list(sys.modules):
         if name.startswith("codex_autorunner.web"):
@@ -12,7 +12,7 @@ def test_core_engine_does_not_import_web_modules(monkeypatch):
 
     importlib.invalidate_caches()
 
-    import codex_autorunner.core.engine  # noqa: F401
+    import codex_autorunner.core.runtime  # noqa: F401
 
     leaked = [name for name in sys.modules if name.startswith("codex_autorunner.web")]
-    assert not leaked, f"core.engine should not import web modules, found {leaked}"
+    assert not leaked, f"core.runtime should not import web modules, found {leaked}"

@@ -322,7 +322,7 @@ class RuntimeContext:
     def run_index_store(self) -> RunIndexStore:
         """Get run index store."""
         if self._run_index_store is None:
-            self._run_index_store = RunIndexStore(self.repo_root)
+            self._run_index_store = RunIndexStore(self.state_path)
         return self._run_index_store
 
     @property

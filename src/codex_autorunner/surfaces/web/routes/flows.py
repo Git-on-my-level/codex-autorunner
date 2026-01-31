@@ -14,7 +14,6 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from ....agents.registry import validate_agent_id
 from ....core.config import load_repo_config
 from ....core.flows import (
     FlowController,
@@ -38,11 +37,6 @@ from ....core.flows.worker_process import FlowWorkerHealth, check_worker_health
 from ....core.runtime import RuntimeContext
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
-from ....integrations.agents.backend_orchestrator import BackendOrchestrator
-from ....integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
-)
 from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets import AgentPool
 from ....tickets.files import (
@@ -127,19 +121,9 @@ def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
 
     if flow_type == "ticket_flow":
         config = load_repo_config(repo_root)
-        backend_orchestrator = BackendOrchestrator(
+        engine = RuntimeContext(
             repo_root=repo_root,
             config=config,
-            notification_handler=None,
-            logger=_logger,
-        )
-        engine = RuntimeContext(
-            repo_root,
-            config=config,
-            backend_orchestrator=backend_orchestrator,
-            backend_factory=build_agent_backend_factory(repo_root, config),
-            app_server_supervisor_factory=build_app_server_supervisor_factory(config),
-            agent_id_validator=validate_agent_id,
         )
         agent_pool = AgentPool(engine.config)
         definition = build_ticket_flow_definition(agent_pool=agent_pool)

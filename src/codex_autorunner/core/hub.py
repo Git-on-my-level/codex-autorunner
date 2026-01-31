@@ -18,7 +18,6 @@ from ..manifest import (
 )
 from .archive import archive_worktree_snapshot, build_snapshot_id
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
-from .engine import AppServerSupervisorFactory, BackendFactory
 from .git_utils import (
     GitError,
     git_available,
@@ -36,6 +35,7 @@ from .ports.backend_orchestrator import (
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
 from .state import RunnerState, load_state, now_iso
+from .types import AppServerSupervisorFactory, BackendFactory
 from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub")

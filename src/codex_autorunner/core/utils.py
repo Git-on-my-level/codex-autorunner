@@ -227,10 +227,6 @@ def resolve_executable(
     return resolved
 
 
-def ensure_executable(binary: str) -> bool:
-    return resolve_executable(binary) is not None
-
-
 def default_editor(*, fallback: str = "vi") -> str:
     return os.environ.get("EDITOR") or fallback
 
