@@ -18,6 +18,7 @@ from ....core.config import load_repo_config
 from ....core.flows import (
     FlowController,
     FlowDefinition,
+    FlowEventType,
     FlowRunRecord,
     FlowRunStatus,
     FlowStore,
@@ -416,6 +417,39 @@ def build_flow_routes() -> APIRouter:
             workspace_root=workspace_root, runs_dir=runs_dir, run_id=record.id
         )
 
+    def _get_diff_stats_by_dispatch_seq(
+        repo_root: Path, *, run_id: str
+    ) -> dict[int, dict[str, int]]:
+        """Return mapping of dispatch_seq -> diff stats for the run."""
+        store = _require_flow_store(repo_root)
+        if store is None:
+            return {}
+        try:
+            events = store.get_events_by_type(run_id, FlowEventType.DIFF_UPDATED)
+        except Exception:
+            events = []
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
+
+        by_seq: dict[int, dict[str, int]] = {}
+        for ev in events:
+            data = ev.data or {}
+            try:
+                seq_val = int(data.get("dispatch_seq") or 0)
+            except Exception:
+                continue
+            if seq_val <= 0:
+                continue
+            by_seq[seq_val] = {
+                "insertions": int(data.get("insertions") or 0),
+                "deletions": int(data.get("deletions") or 0),
+                "files_changed": int(data.get("files_changed") or 0),
+            }
+        return by_seq
+
     @router.get("")
     async def list_flow_definitions():
         repo_root = find_repo_root()
@@ -653,6 +687,39 @@ You are the first ticket in a new ticket_flow run.
     async def list_ticket_files():
         repo_root = find_repo_root()
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        # Compute cumulative diff stats per ticket for the active/paused run.
+        runs = _safe_list_flow_runs(
+            repo_root, flow_type="ticket_flow", recover_stuck=True
+        )
+        active_run = _active_or_paused_run(runs)
+        diff_by_ticket: dict[str, dict[str, int]] = {}
+        if active_run:
+            store = _require_flow_store(repo_root)
+            if store is not None:
+                try:
+                    events = store.get_events_by_type(
+                        active_run.id, FlowEventType.DIFF_UPDATED
+                    )
+                except Exception:
+                    events = []
+                finally:
+                    try:
+                        store.close()
+                    except Exception:
+                        pass
+                for ev in events:
+                    data = ev.data or {}
+                    ticket_id = data.get("ticket_id")
+                    if not isinstance(ticket_id, str) or not ticket_id.strip():
+                        continue
+                    stats = diff_by_ticket.setdefault(
+                        ticket_id,
+                        {"insertions": 0, "deletions": 0, "files_changed": 0},
+                    )
+                    stats["insertions"] += int(data.get("insertions") or 0)
+                    stats["deletions"] += int(data.get("deletions") or 0)
+                    stats["files_changed"] += int(data.get("files_changed") or 0)
+
         tickets = []
         for path in list_ticket_paths(ticket_dir):
             doc, errors = read_ticket(path)
@@ -673,6 +740,7 @@ You are the first ticket in a new ticket_flow run.
                     "frontmatter": asdict(doc.frontmatter) if doc else None,
                     "body": doc.body if doc else parsed_body,
                     "errors": errors,
+                    "diff_stats": diff_by_ticket.get(rel_path),
                 }
             )
         return {
@@ -1001,6 +1069,10 @@ You are the first ticket in a new ticket_flow run.
         record = _get_flow_record(repo_root, normalized)
         paths = _resolve_outbox_for_record(record, repo_root)
 
+        # Pull diff stats from FlowStore keyed by dispatch sequence number so we
+        # can enrich dispatch history entries without relying on DISPATCH.md metadata.
+        diff_by_seq = _get_diff_stats_by_dispatch_seq(repo_root, run_id=normalized)
+
         history_entries = []
         history_dir = paths.dispatch_history_dir
         if history_dir.exists() and history_dir.is_dir():
@@ -1018,6 +1090,13 @@ You are the first ticket in a new ticket_flow run.
                 dispatch_dict = asdict(dispatch) if dispatch else None
                 if dispatch_dict and dispatch:
                     dispatch_dict["is_handoff"] = dispatch.is_handoff
+                    # Add structured diff stats (per turn summary), matched by seq.
+                    try:
+                        entry_seq_int = int(entry.name)
+                    except Exception:
+                        entry_seq_int = 0
+                    if entry_seq_int and entry_seq_int in diff_by_seq:
+                        dispatch_dict["diff_stats"] = diff_by_seq[entry_seq_int]
                 attachments = []
                 for child in sorted(entry.rglob("*")):
                     if child.name == "DISPATCH.md":

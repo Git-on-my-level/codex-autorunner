@@ -2236,6 +2236,24 @@ button.icon-btn {
   color: #f85149;
 }
 
+/* Diff stats on ticket items (cumulative per ticket) */
+.ticket-diff-stats {
+  display: inline-flex;
+  gap: 4px;
+  font-family: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  margin-left: 6px;
+}
+
+.ticket-diff-stats .diff-add {
+  color: #3fb950;
+}
+
+.ticket-diff-stats .diff-del {
+  color: #f85149;
+}
+
 /* Diff stats in analytics metrics */
 .diff-stats-metric {
   font-family: 'JetBrains Mono', 'SF Mono', Monaco, monospace;

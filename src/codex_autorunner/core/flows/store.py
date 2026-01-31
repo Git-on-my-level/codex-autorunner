@@ -394,6 +394,51 @@ class FlowStore:
         rows = conn.execute(query, params).fetchall()
         return [self._row_to_flow_event(row) for row in rows]
 
+    def get_events_by_types(
+        self,
+        run_id: str,
+        event_types: list[FlowEventType],
+        *,
+        after_seq: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[FlowEvent]:
+        """Return events for a run filtered to specific event types."""
+        if not event_types:
+            return []
+        conn = self._get_conn()
+        placeholders = ", ".join("?" for _ in event_types)
+        query = f"""
+            SELECT *
+            FROM flow_events
+            WHERE run_id = ? AND event_type IN ({placeholders})
+        """
+        params: List[Any] = [run_id, *[t.value for t in event_types]]
+
+        if after_seq is not None:
+            query += " AND seq > ?"
+            params.append(after_seq)
+
+        query += " ORDER BY seq ASC"
+
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        return [self._row_to_flow_event(row) for row in rows]
+
+    def get_events_by_type(
+        self,
+        run_id: str,
+        event_type: FlowEventType,
+        *,
+        after_seq: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[FlowEvent]:
+        return self.get_events_by_types(
+            run_id, [event_type], after_seq=after_seq, limit=limit
+        )
+
     def get_last_event_meta(self, run_id: str) -> tuple[Optional[int], Optional[str]]:
         conn = self._get_conn()
         row = conn.execute(

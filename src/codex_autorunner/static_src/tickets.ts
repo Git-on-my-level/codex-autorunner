@@ -64,6 +64,11 @@ type TicketFile = {
   frontmatter?: Record<string, unknown> | null;
   body?: string | null;
   errors?: string[];
+  diff_stats?: {
+    insertions: number;
+    deletions: number;
+    files_changed: number;
+  } | null;
 };
 
 type DispatchAttachment = {
@@ -81,6 +86,11 @@ type DispatchEntry = {
     title?: string;
     body?: string;
     extra?: Record<string, unknown>;
+    diff_stats?: {
+      insertions: number;
+      deletions: number;
+      files_changed: number;
+    } | null;
     is_handoff?: boolean;
   } | null;
   errors?: string[];
@@ -1149,6 +1159,19 @@ function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[]; lint
     agent.className = "ticket-agent";
     agent.textContent = (fm?.agent as string) || "codex";
     badges.appendChild(agent);
+
+    // Cumulative diff stats (from FlowStore DIFF_UPDATED aggregation).
+    const diffStats = ticket.diff_stats || null;
+    if (diffStats && (diffStats.insertions > 0 || diffStats.deletions > 0)) {
+      const statsEl = document.createElement("span");
+      statsEl.className = "ticket-diff-stats";
+      const ins = diffStats.insertions || 0;
+      const del = diffStats.deletions || 0;
+      statsEl.innerHTML = `<span class="diff-add">+${formatNumber(ins)}</span><span class="diff-del">-${formatNumber(del)}</span>`;
+      statsEl.title = `${ins} insertions, ${del} deletions${diffStats.files_changed ? `, ${diffStats.files_changed} files` : ""}`;
+      badges.appendChild(statsEl);
+    }
+
     head.appendChild(badges);
     item.appendChild(head);
 
@@ -1290,7 +1313,14 @@ function renderDispatchHistory(
     container.append(collapseBar, contentWrapper);
 
     // Add diff stats if present (for turn summaries)
-    const diffStats = dispatch?.extra?.diff_stats as { insertions?: number; deletions?: number; files_changed?: number } | undefined;
+    // New path: dispatch.diff_stats (from FlowStore DIFF_UPDATED merge)
+    // Legacy fallback: dispatch.extra.diff_stats (DISPATCH.md frontmatter)
+    const diffStats = (dispatch?.diff_stats ||
+      (dispatch?.extra?.diff_stats as
+        | { insertions?: number; deletions?: number; files_changed?: number }
+        | undefined)) as
+      | { insertions?: number; deletions?: number; files_changed?: number }
+      | undefined;
     if (diffStats && (diffStats.insertions || diffStats.deletions)) {
       const statsEl = document.createElement("span");
       statsEl.className = "dispatch-diff-stats";

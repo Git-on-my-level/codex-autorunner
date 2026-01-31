@@ -117,7 +117,8 @@ def create_turn_summary(
         ticket_id: Optional ticket ID for context
         agent_id: Optional agent ID (e.g., "codex", "opencode")
         turn_number: Optional turn number
-        diff_stats: Optional dict with insertions/deletions/files_changed
+        diff_stats: Optional dict with insertions/deletions/files_changed.
+            Deprecated: diff stats are now stored as FlowStore DIFF_UPDATED events.
 
     Returns (DispatchRecord, []) on success.
     Returns (None, errors) on failure.
@@ -133,8 +134,8 @@ def create_turn_summary(
         extra["agent_id"] = agent_id
     if turn_number is not None:
         extra["turn_number"] = turn_number
-    if diff_stats:
-        extra["diff_stats"] = diff_stats
+    # NOTE: diff_stats is intentionally not persisted into DISPATCH.md frontmatter.
+    # It is stored as structured FlowStore DIFF_UPDATED events instead.
     extra["is_turn_summary"] = True
 
     dispatch = Dispatch(

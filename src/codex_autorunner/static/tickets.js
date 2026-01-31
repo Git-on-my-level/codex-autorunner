@@ -949,6 +949,17 @@ function renderTickets(data) {
         agent.className = "ticket-agent";
         agent.textContent = fm?.agent || "codex";
         badges.appendChild(agent);
+        // Cumulative diff stats (from FlowStore DIFF_UPDATED aggregation).
+        const diffStats = ticket.diff_stats || null;
+        if (diffStats && (diffStats.insertions > 0 || diffStats.deletions > 0)) {
+            const statsEl = document.createElement("span");
+            statsEl.className = "ticket-diff-stats";
+            const ins = diffStats.insertions || 0;
+            const del = diffStats.deletions || 0;
+            statsEl.innerHTML = `<span class="diff-add">+${formatNumber(ins)}</span><span class="diff-del">-${formatNumber(del)}</span>`;
+            statsEl.title = `${ins} insertions, ${del} deletions${diffStats.files_changed ? `, ${diffStats.files_changed} files` : ""}`;
+            badges.appendChild(statsEl);
+        }
         head.appendChild(badges);
         item.appendChild(head);
         if (ticket.errors && ticket.errors.length) {
@@ -1072,7 +1083,10 @@ function renderDispatchHistory(runId, data) {
         contentWrapper.appendChild(header);
         container.append(collapseBar, contentWrapper);
         // Add diff stats if present (for turn summaries)
-        const diffStats = dispatch?.extra?.diff_stats;
+        // New path: dispatch.diff_stats (from FlowStore DIFF_UPDATED merge)
+        // Legacy fallback: dispatch.extra.diff_stats (DISPATCH.md frontmatter)
+        const diffStats = (dispatch?.diff_stats ||
+            dispatch?.extra?.diff_stats);
         if (diffStats && (diffStats.insertions || diffStats.deletions)) {
             const statsEl = document.createElement("span");
             statsEl.className = "dispatch-diff-stats";

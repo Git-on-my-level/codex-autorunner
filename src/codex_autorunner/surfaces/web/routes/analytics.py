@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter
 
-from ....core.flows.models import FlowRunRecord, FlowRunStatus
+from ....core.flows.models import FlowEventType, FlowRunRecord, FlowRunStatus
 from ....core.flows.store import FlowStore
 from ....core.utils import find_repo_root
 from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
@@ -214,7 +214,26 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
         )
         turns["dispatches"] = _count_history_dirs(outbox_paths.dispatch_history_dir)
         turns["replies"] = _count_history_dirs(reply_paths.reply_history_dir)
-        turns["diff_stats"] = _aggregate_diff_stats(outbox_paths.dispatch_history_dir)
+        # Diff stats are now stored in FlowStore as DIFF_UPDATED events.
+        # Fallback to legacy dispatch history parsing if FlowStore query fails.
+        try:
+            with FlowStore(
+                db_path, durable=load_repo_config(repo_root).durable_writes
+            ) as store:
+                events = store.get_events_by_type(
+                    run_record.id, FlowEventType.DIFF_UPDATED
+                )
+            totals = {"insertions": 0, "deletions": 0, "files_changed": 0}
+            for ev in events:
+                data = ev.data or {}
+                totals["insertions"] += int(data.get("insertions") or 0)
+                totals["deletions"] += int(data.get("deletions") or 0)
+                totals["files_changed"] += int(data.get("files_changed") or 0)
+            turns["diff_stats"] = totals
+        except Exception:
+            turns["diff_stats"] = _aggregate_diff_stats(
+                outbox_paths.dispatch_history_dir
+            )
 
         # If current ticket is known, read its frontmatter to pick agent id when available.
         if current_ticket:

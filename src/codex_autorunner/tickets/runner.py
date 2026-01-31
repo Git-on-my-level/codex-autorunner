@@ -555,6 +555,26 @@ class TicketRunner:
         if turn_summary is not None:
             state["dispatch_seq"] = turn_summary.seq
 
+            # Persist per-turn diff stats in FlowStore as a structured event
+            # instead of embedding them into DISPATCH.md metadata.
+            if emit_event is not None and isinstance(turn_diff_stats, dict):
+                try:
+                    emit_event(
+                        FlowEventType.DIFF_UPDATED,
+                        {
+                            "ticket_id": current_ticket_id,
+                            "dispatch_seq": turn_summary.seq,
+                            "insertions": int(turn_diff_stats.get("insertions") or 0),
+                            "deletions": int(turn_diff_stats.get("deletions") or 0),
+                            "files_changed": int(
+                                turn_diff_stats.get("files_changed") or 0
+                            ),
+                        },
+                    )
+                except Exception:
+                    # Best-effort; do not block ticket execution on event emission.
+                    pass
+
         # Post-turn: ticket frontmatter must remain valid.
         updated_fm, fm_errors = self._recheck_ticket_frontmatter(current_path)
         if fm_errors:
