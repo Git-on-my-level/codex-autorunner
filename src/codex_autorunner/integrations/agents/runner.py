@@ -9,6 +9,7 @@ from ...core.ports.run_event import (
     OutputDelta,
     RunEvent,
     Started,
+    now_iso,
 )
 
 _logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ async def run_turn_with_backend(
             session_id = await backend.start_session(target={}, context={})
 
         if event_callback:
-            event_callback(Started(timestamp=timestamp(), session_id=session_id))
+            event_callback(Started(timestamp=now_iso(), session_id=session_id))
 
         if log_handler:
             log_handler(message)
@@ -64,7 +65,7 @@ async def run_turn_with_backend(
     except Exception as exc:
         _logger.error("Turn execution failed: %s", exc)
         if event_callback:
-            event_callback(Failed(timestamp=timestamp(), error_message=str(exc)))
+            event_callback(Failed(timestamp=now_iso(), error_message=str(exc)))
         return 1
 
 
@@ -83,9 +84,3 @@ async def stream_turn_events(
             yield event
     else:
         yield AgentEvent.stream_delta(content="", delta_type="noop")
-
-
-def timestamp() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
