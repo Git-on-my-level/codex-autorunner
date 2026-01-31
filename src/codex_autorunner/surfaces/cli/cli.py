@@ -30,6 +30,7 @@ from ...core.config import (
 )
 from ...core.git_utils import GitError, run_git
 from ...core.hub import HubSupervisor
+from ...core.locks import file_lock
 from ...core.logging_utils import log_event, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.runtime import DoctorReport, RuntimeContext, clear_stale_lock, doctor
@@ -84,6 +85,7 @@ app = typer.Typer(add_completion=False)
 hub_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
 templates_app = typer.Typer(add_completion=False)
+repos_app = typer.Typer(add_completion=False)
 
 
 def main() -> None:
@@ -120,6 +122,26 @@ def _require_hub_config(path: Optional[Path]) -> HubConfig:
         return load_hub_config(path or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
+
+
+def _load_hub_config_yaml(path: Path) -> dict:
+    if not path.exists():
+        _raise_exit(f"Hub config file not found: {path}")
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            _raise_exit(f"Hub config must be a YAML mapping: {path}")
+        return data
+    except yaml.YAMLError as exc:
+        _raise_exit(f"Invalid YAML in hub config: {exc}", cause=exc)
+    except OSError as exc:
+        _raise_exit(f"Failed to read hub config: {exc}", cause=exc)
+
+
+def _write_hub_config_yaml(path: Path, data: dict) -> None:
+    lock_path = path.parent / (path.name + ".lock")
+    with file_lock(lock_path):
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 def _require_templates_enabled(config: RepoConfig) -> None:
@@ -376,6 +398,7 @@ def _require_optional_feature(
 app.add_typer(hub_app, name="hub")
 app.add_typer(telegram_app, name="telegram")
 app.add_typer(templates_app, name="templates")
+templates_app.add_typer(repos_app, name="repos")
 
 
 def _has_nested_git(path: Path) -> bool:
@@ -670,6 +693,201 @@ def templates_apply(
         f"{path} (index={index}, template={fetched.repo_id}:{fetched.path}@{fetched.ref})"
     )
     typer.echo(json.dumps(metadata, indent=2))
+
+
+@repos_app.command("list")
+def repos_list(
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+):
+    """List configured template repos."""
+    config = _require_hub_config(hub)
+    hub_config_path = config.root / CONFIG_FILENAME
+    data = _load_hub_config_yaml(hub_config_path)
+
+    templates_config = data.get("templates", {})
+    if not isinstance(templates_config, dict):
+        templates_config = {}
+    repos = templates_config.get("repos", [])
+    if not isinstance(repos, list):
+        repos = []
+
+    if output_json:
+        payload = {"repos": repos}
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    if not repos:
+        typer.echo("No template repos configured.")
+        return
+
+    typer.echo(f"Template repos ({len(repos)}):")
+    for repo in repos:
+        if not isinstance(repo, dict):
+            continue
+        repo_id = repo.get("id", "")
+        url = repo.get("url", "")
+        trusted = repo.get("trusted", False)
+        default_ref = repo.get("default_ref", "main")
+        trusted_text = "trusted" if trusted else "untrusted"
+        typer.echo(f"  - {repo_id}: {url} [{trusted_text}] (default_ref={default_ref})")
+
+
+@repos_app.command("add")
+def repos_add(
+    repo_id: str = typer.Argument(..., help="Unique repo ID"),
+    url: str = typer.Argument(..., help="Git repo URL or path"),
+    trusted: Optional[bool] = typer.Option(
+        None, "--trusted/--untrusted", help="Trust level (default: untrusted)"
+    ),
+    default_ref: str = typer.Option("main", "--default-ref", help="Default git ref"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Add a template repo to the hub config."""
+    config = _require_hub_config(hub)
+    hub_config_path = config.root / CONFIG_FILENAME
+    data = _load_hub_config_yaml(hub_config_path)
+
+    templates_config = data.get("templates", {})
+    if not isinstance(templates_config, dict):
+        templates_config = {}
+    if not templates_config.get("enabled"):
+        _raise_exit(
+            "Templates are disabled. Set templates.enabled=true in the hub config to enable."
+        )
+
+    templates_config = data.setdefault("templates", {})
+    if not isinstance(templates_config, dict):
+        _raise_exit("Invalid templates config in hub config")
+    repos = templates_config.setdefault("repos", [])
+    if not isinstance(repos, list):
+        _raise_exit("Invalid repos config in hub config")
+
+    existing_ids = {repo.get("id") for repo in repos if isinstance(repo, dict)}
+    if repo_id in existing_ids:
+        _raise_exit(f"Repo ID '{repo_id}' already exists. Use a unique ID.")
+
+    new_repo = {
+        "id": repo_id,
+        "url": url,
+        "default_ref": default_ref,
+    }
+    if trusted is not None:
+        new_repo["trusted"] = trusted
+
+    repos.append(new_repo)
+
+    try:
+        _write_hub_config_yaml(hub_config_path, data)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
+
+    typer.echo(f"Added template repo '{repo_id}' to hub config.")
+
+
+@repos_app.command("remove")
+def repos_remove(
+    repo_id: str = typer.Argument(..., help="Repo ID to remove"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Remove a template repo from the hub config."""
+    config = _require_hub_config(hub)
+    hub_config_path = config.root / CONFIG_FILENAME
+    data = _load_hub_config_yaml(hub_config_path)
+
+    templates_config = data.get("templates", {})
+    if not isinstance(templates_config, dict):
+        templates_config = {}
+    repos = templates_config.get("repos", [])
+    if not isinstance(repos, list):
+        repos = []
+
+    original_count = len(repos)
+    filtered_repos = [
+        repo for repo in repos if isinstance(repo, dict) and repo.get("id") != repo_id
+    ]
+
+    if len(filtered_repos) == original_count:
+        _raise_exit(f"Repo ID '{repo_id}' not found in config.")
+
+    templates_config["repos"] = filtered_repos
+
+    try:
+        _write_hub_config_yaml(hub_config_path, data)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
+
+    typer.echo(f"Removed template repo '{repo_id}' from hub config.")
+
+
+@repos_app.command("trust")
+def repos_trust(
+    repo_id: str = typer.Argument(..., help="Repo ID to trust"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Mark a template repo as trusted (skip scanning)."""
+    config = _require_hub_config(hub)
+    hub_config_path = config.root / CONFIG_FILENAME
+    data = _load_hub_config_yaml(hub_config_path)
+
+    templates_config = data.get("templates", {})
+    if not isinstance(templates_config, dict):
+        templates_config = {}
+    repos = templates_config.get("repos", [])
+    if not isinstance(repos, list):
+        repos = []
+
+    found = False
+    for repo in repos:
+        if isinstance(repo, dict) and repo.get("id") == repo_id:
+            repo["trusted"] = True
+            found = True
+            break
+
+    if not found:
+        _raise_exit(f"Repo ID '{repo_id}' not found in config.")
+
+    try:
+        _write_hub_config_yaml(hub_config_path, data)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
+
+    typer.echo(f"Marked repo '{repo_id}' as trusted.")
+
+
+@repos_app.command("untrust")
+def repos_untrust(
+    repo_id: str = typer.Argument(..., help="Repo ID to untrust"),
+    hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+):
+    """Mark a template repo as untrusted (require scanning)."""
+    config = _require_hub_config(hub)
+    hub_config_path = config.root / CONFIG_FILENAME
+    data = _load_hub_config_yaml(hub_config_path)
+
+    templates_config = data.get("templates", {})
+    if not isinstance(templates_config, dict):
+        templates_config = {}
+    repos = templates_config.get("repos", [])
+    if not isinstance(repos, list):
+        repos = []
+
+    found = False
+    for repo in repos:
+        if isinstance(repo, dict) and repo.get("id") == repo_id:
+            repo["trusted"] = False
+            found = True
+            break
+
+    if not found:
+        _raise_exit(f"Repo ID '{repo_id}' not found in config.")
+
+    try:
+        _write_hub_config_yaml(hub_config_path, data)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
+
+    typer.echo(f"Marked repo '{repo_id}' as untrusted.")
 
 
 @app.command()
