@@ -1,9 +1,11 @@
+import json
 from pathlib import Path
 from typing import Optional
 
 import pytest
 
 from codex_autorunner.agents.opencode.events import SSEEvent
+from codex_autorunner.agents.opencode.runtime import extract_session_id
 from codex_autorunner.core.ports.run_event import Completed, OutputDelta
 from codex_autorunner.integrations.agents.opencode_backend import OpenCodeBackend
 
@@ -89,3 +91,37 @@ async def test_opencode_streaming_coalesces_text_deltas(tmp_path: Path) -> None:
     assert "".join(assistant_chunks) == "".join(deltas)
     # Regression: avoid emitting one OutputDelta per tiny delta
     assert len(assistant_chunks) <= len(deltas) // 2
+
+
+@pytest.mark.anyio
+async def test_opencode_streaming_real_events_ignore_user_prompt(tmp_path: Path) -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "opencode_stream_real.json"
+    raw_events = json.loads(fixture_path.read_text())
+    sse_events = [
+        SSEEvent(event=entry["event"], data=entry["data"])
+        for entry in raw_events
+    ]
+    session_id = next(
+        sid
+        for sid in (
+            extract_session_id(json.loads(entry["data"])) for entry in raw_events
+        )
+        if sid
+    )
+
+    backend = OpenCodeBackend(workspace_root=tmp_path, supervisor=None)
+    backend._client = _FakeOpenCodeClient(sse_events)
+
+    assistant_chunks: list[str] = []
+    final_message: Optional[str] = None
+
+    async for event in backend.run_turn_events(session_id, "Ping"):
+        if isinstance(event, OutputDelta) and event.delta_type == "assistant_stream":
+            assistant_chunks.append(event.content)
+        if isinstance(event, Completed):
+            final_message = event.final_message
+
+    assert final_message is not None
+    assert not final_message.startswith("Write a concise two-sentence")
+    assert final_message.startswith("Debugging")
+    assert "".join(assistant_chunks).strip() == final_message
