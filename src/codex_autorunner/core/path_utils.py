@@ -49,6 +49,7 @@ def resolve_config_path(
     3. Otherwise, resolve relative to repo_root
     4. Reject '..' segments unless allow_dotdot=True
     5. Reject paths escaping repo_root (except home expansion)
+       - allow_dotdot allows '..' segments inside the repo, not escaping the repo
 
     Args:
         value: Path string or Path object
@@ -112,7 +113,7 @@ def resolve_config_path(
 
     resolved = (repo_root / path).resolve()
 
-    if not allow_home and not allow_dotdot and not resolved.is_relative_to(repo_root):
+    if not resolved.is_relative_to(repo_root):
         raise ConfigPathError(
             "Path resolves outside repo root",
             path=value_str,

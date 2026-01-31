@@ -118,10 +118,20 @@ class TestResolveConfigPath:
         assert ".." in str(exc_info.value)
 
     def test_allow_dotdot_segments(self, tmp_path):
-        """.. segments allowed when allow_dotdot=True."""
+        """.. segments allowed when allow_dotdot=True (within repo)."""
         repo_root = Path(tmp_path)
-        path = resolve_config_path("../config.yml", repo_root, allow_dotdot=True)
-        assert path.resolve().name == "config.yml"
+        (repo_root / "docs").mkdir()
+        (repo_root / "config.yml").touch()
+        path = resolve_config_path("docs/../config.yml", repo_root, allow_dotdot=True)
+        assert path == repo_root / "config.yml"
+        assert path.is_relative_to(repo_root)
+
+    def test_reject_dotdot_segments_escape_repo(self, tmp_path):
+        """.. segments allowed but cannot escape repo when allow_dotdot=True."""
+        repo_root = Path(tmp_path)
+        with pytest.raises(ConfigPathError) as exc_info:
+            resolve_config_path("../outside.txt", repo_root, allow_dotdot=True)
+        assert "outside repo root" in str(exc_info.value).lower()
 
     def test_allow_absolute_path(self, tmp_path):
         """Absolute paths allowed when allow_absolute=True."""
