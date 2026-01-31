@@ -1,0 +1,286 @@
+[
+  {
+    "event": "server.connected",
+    "data": "{\"type\": \"server.connected\", \"properties\": {}}"
+  },
+  {
+    "event": "message.updated",
+    "data": "{\"type\": \"message.updated\", \"properties\": {\"info\": {\"id\": \"msg_c12cdc1ab0011K1xRsuTSNqTpF\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"role\": \"user\", \"time\": {\"created\": 1769842000299}, \"agent\": \"build\", \"model\": {\"providerID\": \"openai\", \"modelID\": \"gpt-4.1-mini\"}}}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdc1ab0027LHlU8EwvQ3iIB\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1ab0011K1xRsuTSNqTpF\", \"type\": \"text\", \"text\": \"Write a concise two-sentence status update about debugging OpenCode streaming duplication. End with a summary line prefixed with \\\"Summary:\\\"\"}}}"
+  },
+  {
+    "event": "session.updated",
+    "data": "{\"type\": \"session.updated\", \"properties\": {\"info\": {\"id\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"slug\": \"sunny-planet\", \"version\": \"1.1.45\", \"projectID\": \"3dba753db9418706bbd31d1ee2fab04ea23ec42c\", \"directory\": \"/Users/dazheng/car-workspace/codex-autorunner\", \"title\": \"Flow session 0\", \"time\": {\"created\": 1769842000278, \"updated\": 1769842000301}}}}"
+  },
+  {
+    "event": "session.status",
+    "data": "{\"type\": \"session.status\", \"properties\": {\"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"status\": {\"type\": \"busy\"}}}"
+  },
+  {
+    "event": "message.updated",
+    "data": "{\"type\": \"message.updated\", \"properties\": {\"info\": {\"id\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"role\": \"assistant\", \"time\": {\"created\": 1769842000304}, \"parentID\": \"msg_c12cdc1ab0011K1xRsuTSNqTpF\", \"modelID\": \"gpt-4.1-mini\", \"providerID\": \"openai\", \"mode\": \"build\", \"agent\": \"build\", \"path\": {\"cwd\": \"/Users/dazheng/car-workspace/codex-autorunner\", \"root\": \"/Users/dazheng/car-workspace/codex-autorunner\"}, \"cost\": 0, \"tokens\": {\"input\": 0, \"output\": 0, \"reasoning\": 0, \"cache\": {\"read\": 0, \"write\": 0}}}}}"
+  },
+  {
+    "event": "session.status",
+    "data": "{\"type\": \"session.status\", \"properties\": {\"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"status\": {\"type\": \"busy\"}}}"
+  },
+  {
+    "event": "message.updated",
+    "data": "{\"type\": \"message.updated\", \"properties\": {\"info\": {\"id\": \"msg_c12cdc1ab0011K1xRsuTSNqTpF\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"role\": \"user\", \"time\": {\"created\": 1769842000299}, \"summary\": {\"diffs\": []}, \"agent\": \"build\", \"model\": {\"providerID\": \"openai\", \"modelID\": \"gpt-4.1-mini\"}}}}"
+  },
+  {
+    "event": "session.updated",
+    "data": "{\"type\": \"session.updated\", \"properties\": {\"info\": {\"id\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"slug\": \"sunny-planet\", \"version\": \"1.1.45\", \"projectID\": \"3dba753db9418706bbd31d1ee2fab04ea23ec42c\", \"directory\": \"/Users/dazheng/car-workspace/codex-autorunner\", \"title\": \"Flow session 0\", \"time\": {\"created\": 1769842000278, \"updated\": 1769842000316}, \"summary\": {\"additions\": 0, \"deletions\": 0, \"files\": 0}}}}"
+  },
+  {
+    "event": "session.diff",
+    "data": "{\"type\": \"session.diff\", \"properties\": {\"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"diff\": []}}"
+  },
+  {
+    "event": "message.updated",
+    "data": "{\"type\": \"message.updated\", \"properties\": {\"info\": {\"id\": \"msg_c12cdc1ab0011K1xRsuTSNqTpF\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"role\": \"user\", \"time\": {\"created\": 1769842000299}, \"summary\": {\"title\": \"OpenCode streaming duplication debugging status update\", \"diffs\": []}, \"agent\": \"build\", \"model\": {\"providerID\": \"openai\", \"modelID\": \"gpt-4.1-mini\"}}}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdc7f8001R715Us7tMmFb7X\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"step-start\", \"snapshot\": \"0d06986821c82167abccafc6faf63935eb66071e\"}}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debug\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \"Debug\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \"ging\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" of\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of Open\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" Open\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \"Code\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" streaming\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" has\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" identified\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" a\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" duplication\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" issue\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" caused\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" by\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" redundant\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" event\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" triggers\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" in\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" the\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" data\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" pipeline\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline.\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \".\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" The\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" root\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" cause\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" is\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" being\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" isolated\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated,\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \",\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" and\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" a\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" fix\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" is\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" in\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" progress\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" to\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" ensure\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" unique\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" streaming\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" outputs\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \".\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\n\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \"  \\n\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \"Summary\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary:\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \":\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Dup\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" Dup\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Duplication\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \"lication\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Duplication traced\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" traced\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Duplication traced to\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" to\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Duplication traced to redundant\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" redundant\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Duplication traced to redundant triggers\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" triggers\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Duplication traced to redundant triggers,\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \",\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Duplication traced to redundant triggers, fix\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" fix\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Duplication traced to redundant triggers, fix underway\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \" underway\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Duplication traced to redundant triggers, fix underway.\", \"time\": {\"start\": 1769842002711}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}, \"delta\": \".\"}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcb17001BUjxLJKv6u3mKq\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"text\", \"text\": \"Debugging of OpenCode streaming has identified a duplication issue caused by redundant event triggers in the data pipeline. The root cause is being isolated, and a fix is in progress to ensure unique streaming outputs.  \\nSummary: Duplication traced to redundant triggers, fix underway.\", \"time\": {\"start\": 1769842003269, \"end\": 1769842003269}, \"metadata\": {\"openai\": {\"itemId\": \"msg_041e1af2fc00823a01697da55289d8819ea3532e5f87e54903\"}}}}}"
+  },
+  {
+    "event": "message.part.updated",
+    "data": "{\"type\": \"message.part.updated\", \"properties\": {\"part\": {\"id\": \"prt_c12cdcd51001bGLG4f1ku93buR\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"messageID\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"type\": \"step-finish\", \"reason\": \"stop\", \"snapshot\": \"0d06986821c82167abccafc6faf63935eb66071e\", \"cost\": 0.0043808, \"tokens\": {\"input\": 10732, \"output\": 55, \"reasoning\": 0, \"cache\": {\"read\": 0, \"write\": 0}}}}}"
+  },
+  {
+    "event": "message.updated",
+    "data": "{\"type\": \"message.updated\", \"properties\": {\"info\": {\"id\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"role\": \"assistant\", \"time\": {\"created\": 1769842000304}, \"parentID\": \"msg_c12cdc1ab0011K1xRsuTSNqTpF\", \"modelID\": \"gpt-4.1-mini\", \"providerID\": \"openai\", \"mode\": \"build\", \"agent\": \"build\", \"path\": {\"cwd\": \"/Users/dazheng/car-workspace/codex-autorunner\", \"root\": \"/Users/dazheng/car-workspace/codex-autorunner\"}, \"cost\": 0.0043808, \"tokens\": {\"input\": 10732, \"output\": 55, \"reasoning\": 0, \"cache\": {\"read\": 0, \"write\": 0}}, \"finish\": \"stop\"}}}"
+  },
+  {
+    "event": "message.updated",
+    "data": "{\"type\": \"message.updated\", \"properties\": {\"info\": {\"id\": \"msg_c12cdc1b0001baUvK2ool2j9nV\", \"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"role\": \"assistant\", \"time\": {\"created\": 1769842000304, \"completed\": 1769842003355}, \"parentID\": \"msg_c12cdc1ab0011K1xRsuTSNqTpF\", \"modelID\": \"gpt-4.1-mini\", \"providerID\": \"openai\", \"mode\": \"build\", \"agent\": \"build\", \"path\": {\"cwd\": \"/Users/dazheng/car-workspace/codex-autorunner\", \"root\": \"/Users/dazheng/car-workspace/codex-autorunner\"}, \"cost\": 0.0043808, \"tokens\": {\"input\": 10732, \"output\": 55, \"reasoning\": 0, \"cache\": {\"read\": 0, \"write\": 0}}, \"finish\": \"stop\"}}}"
+  },
+  {
+    "event": "session.status",
+    "data": "{\"type\": \"session.status\", \"properties\": {\"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"status\": {\"type\": \"busy\"}}}"
+  },
+  {
+    "event": "session.status",
+    "data": "{\"type\": \"session.status\", \"properties\": {\"sessionID\": \"ses_3ed323e69fferhn75MzRP8ySag\", \"status\": {\"type\": \"idle\"}}}"
+  }
+]
