@@ -1118,6 +1118,7 @@ def flow(
         from ...core.flows.models import FlowRunStatus
         from ...flows.ticket_flow.definition import build_ticket_flow_definition
         from ...tickets import AgentPool
+        from ...tickets.files import list_ticket_paths
 
         db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
         artifacts_root = engine.repo_root / ".codex-autorunner" / "flows"
@@ -1137,6 +1138,23 @@ def flow(
                 typer.echo(f"Flow run {run_id} not found", err=True)
                 store.close()
                 raise typer.Exit(code=1)
+
+            if record.flow_type == "ticket_flow":
+                ticket_dir = engine.repo_root / ".codex-autorunner" / "tickets"
+                ticket_paths = list_ticket_paths(ticket_dir)
+                if not ticket_paths:
+                    typer.echo(
+                        "No tickets found. Create tickets or run ticket_flow bootstrap to get started."
+                    )
+                    typer.echo(
+                        f"  Ticket directory: {ticket_dir.relative_to(engine.repo_root)}"
+                    )
+                    typer.echo(
+                        "  To bootstrap a ticket: car flow ticket_flow/bootstrap"
+                    )
+                    store.close()
+                    raise typer.Exit(code=0)
+
             store.close()
 
             agent_pool: AgentPool | None = None

@@ -457,6 +457,21 @@ def build_flow_routes() -> APIRouter:
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root, flow_type)
 
+        # For ticket_flow, check if tickets exist before starting a new run.
+        # This prevents starting a worker process when there's no work to do.
+        if flow_type == "ticket_flow" and force_new:
+            ticket_dir = _ticket_dir(repo_root)
+            existing_tickets = list_ticket_paths(ticket_dir)
+            if not existing_tickets:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "No tickets found. Create tickets under "
+                        f"{safe_relpath(ticket_dir, repo_root)} or use "
+                        "/api/flows/ticket_flow/bootstrap to create an initial ticket."
+                    ),
+                )
+
         # Reuse an active/paused run unless force_new is requested.
         if not force_new:
             runs = _safe_list_flow_runs(
