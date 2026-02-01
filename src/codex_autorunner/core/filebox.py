@@ -55,7 +55,9 @@ def sanitize_filename(name: str) -> str:
     base = Path(name or "").name
     if not base or base in {".", ".."}:
         raise ValueError("Missing filename")
-    # Prevent sneaky path segments
+    # Reject any path separators or traversal segments up-front.
+    if name != base or "/" in name or "\\" in name:
+        raise ValueError("Invalid filename")
     parts = Path(base).parts
     if any(part in {"", ".", ".."} for part in parts):
         raise ValueError("Invalid filename")
@@ -159,14 +161,30 @@ def _box_dir(repo_root: Path, box: str) -> Path:
     raise ValueError("Invalid filebox")
 
 
+def _target_path(repo_root: Path, box: str, filename: str) -> Path:
+    """Return a resolved path within the FileBox, rejecting traversal attempts."""
+
+    safe_name = sanitize_filename(filename)
+    target_dir = _box_dir(repo_root, box)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    root = target_dir.resolve()
+    candidate = (root / safe_name).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Invalid filename") from exc
+    if candidate.parent != root:
+        # Disallow sneaky path tricks that resolve inside nested folders.
+        raise ValueError("Invalid filename")
+    return candidate
+
+
 def save_file(repo_root: Path, box: str, filename: str, data: bytes) -> Path:
     if box not in BOXES:
         raise ValueError("Invalid box")
     ensure_structure(repo_root)
-    safe_name = sanitize_filename(filename)
-    target_dir = _box_dir(repo_root, box)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    path = target_dir / safe_name
+    path = _target_path(repo_root, box, filename)
     path.write_bytes(data)
     return path
 

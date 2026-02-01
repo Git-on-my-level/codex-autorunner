@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.core import filebox
 
 
@@ -54,3 +56,19 @@ def test_save_resolve_and_delete(tmp_path: Path) -> None:
     removed = filebox.delete_file(repo, "inbox", "note.md")
     assert removed
     assert filebox.resolve_file(repo, "inbox", "note.md") is None
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../secret.txt",
+        "subdir/file.txt",
+        "trailing/",
+        "/absolute.txt",
+        "..",
+        ".",
+    ],
+)
+def test_save_rejects_invalid_names(tmp_path: Path, name: str) -> None:
+    with pytest.raises(ValueError):
+        filebox.save_file(tmp_path, "inbox", name, b"x")

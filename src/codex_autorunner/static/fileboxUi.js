@@ -39,7 +39,7 @@ async function uploadFiles(config, box, files) {
         form.append(file.name, file);
         names.push(file.name);
     });
-    await fetch(resolvePath(`${prefix}/${box}`), {
+    await api(`${prefix}/${box}`, {
         method: "POST",
         body: form,
     });
