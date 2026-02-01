@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -111,6 +112,32 @@ class ResumeThreadData:
 
 
 class WorkspaceCommands(SharedHelpers):
+    def _resolve_workspace_path(
+        self,
+        record: Optional["TelegramTopicRecord"],
+        *,
+        allow_pma: bool = False,
+    ) -> tuple[Optional[str], Optional[str]]:
+        if record and record.workspace_path:
+            return record.workspace_path, None
+        if allow_pma and record and record.pma_enabled:
+            hub_root = getattr(self, "_hub_root", None)
+            if hub_root is None:
+                return None, "PMA unavailable; hub root not configured."
+            return str(hub_root), None
+        return None, "Topic not bound. Use /bind <repo_id> or /bind <path>."
+
+    def _record_with_workspace_path(
+        self,
+        record: Optional["TelegramTopicRecord"],
+        workspace_path: Optional[str],
+    ) -> Optional["TelegramTopicRecord"]:
+        if record is None or not workspace_path:
+            return record
+        if record.workspace_path == workspace_path:
+            return record
+        return dataclasses.replace(record, workspace_path=workspace_path)
+
     async def _apply_agent_change(
         self,
         chat_id: int,
@@ -168,8 +195,17 @@ class WorkspaceCommands(SharedHelpers):
             )
             return
         desired = normalize_agent(argv[0])
+        workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
+        if workspace_path is None:
+            await self._send_message(
+                message.chat_id,
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         try:
-            client = await self._client_for_workspace(record.workspace_path)
+            client = await self._client_for_workspace(workspace_path)
         except AppServerUnavailableError as exc:
             log_event(
                 self._logger,
@@ -189,7 +225,7 @@ class WorkspaceCommands(SharedHelpers):
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -535,11 +571,15 @@ class WorkspaceCommands(SharedHelpers):
         return await self._router.update_topic(chat_id, thread_id, apply)
 
     async def _require_bound_record(
-        self, message: TelegramMessage, *, prompt: Optional[str] = None
+        self,
+        message: TelegramMessage,
+        *,
+        prompt: Optional[str] = None,
+        allow_pma: bool = False,
     ) -> Optional["TelegramTopicRecord"]:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.get_topic(key)
-        if record is None or not record.workspace_path:
+        if record is None:
             await self._send_message(
                 message.chat_id,
                 prompt or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
@@ -547,7 +587,28 @@ class WorkspaceCommands(SharedHelpers):
                 reply_to=message.message_id,
             )
             return None
-        await self._refresh_workspace_id(key, record)
+        if record.workspace_path:
+            await self._refresh_workspace_id(key, record)
+            return record
+        if allow_pma and record.pma_enabled:
+            hub_root = getattr(self, "_hub_root", None)
+            if hub_root is None:
+                await self._send_message(
+                    message.chat_id,
+                    "PMA unavailable; hub root not configured.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return None
+            return record
+        if not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                prompt or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
         return record
 
     async def _ensure_thread_id(
@@ -1196,9 +1257,16 @@ class WorkspaceCommands(SharedHelpers):
         if await self._handle_resume_shortcuts(key, message, parsed_args):
             return
         record = await self._router.get_topic(key)
-        record = await self._ensure_resume_record(message, record)
+        record = await self._ensure_resume_record(message, record, allow_pma=True)
         if record is None:
             return
+        if record.pma_enabled and not parsed_args.show_unscoped:
+            parsed_args = ResumeCommandArgs(
+                trimmed=parsed_args.trimmed,
+                remaining=parsed_args.remaining,
+                show_unscoped=True,
+                refresh=parsed_args.refresh,
+            )
         if self._effective_agent(record) == "opencode":
             await self._handle_opencode_resume(
                 message,
@@ -1276,10 +1344,14 @@ class WorkspaceCommands(SharedHelpers):
         return False
 
     async def _ensure_resume_record(
-        self, message: TelegramMessage, record: Optional["TelegramTopicRecord"]
+        self,
+        message: TelegramMessage,
+        record: Optional["TelegramTopicRecord"],
+        *,
+        allow_pma: bool = False,
     ) -> Optional["TelegramTopicRecord"]:
         """Validate resume preconditions and return the topic record."""
-        if record is None or not record.workspace_path:
+        if record is None:
             await self._send_message(
                 message.chat_id,
                 "Topic not bound. Use /bind <repo_id> or /bind <path>.",
@@ -1287,6 +1359,28 @@ class WorkspaceCommands(SharedHelpers):
                 reply_to=message.message_id,
             )
             return None
+        if not record.workspace_path:
+            if allow_pma and record.pma_enabled:
+                workspace_path, error = self._resolve_workspace_path(
+                    record, allow_pma=True
+                )
+                if workspace_path is None:
+                    await self._send_message(
+                        message.chat_id,
+                        error or "PMA unavailable; hub root not configured.",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                    )
+                    return None
+                record = self._record_with_workspace_path(record, workspace_path)
+            else:
+                await self._send_message(
+                    message.chat_id,
+                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return None
         agent = self._effective_agent(record)
         if not self._agent_supports_resume(agent):
             await self._send_message(
@@ -1302,8 +1396,17 @@ class WorkspaceCommands(SharedHelpers):
         self, message: TelegramMessage, record: "TelegramTopicRecord"
     ) -> Optional[CodexAppServerClient]:
         """Resolve the app server client for the topic workspace."""
+        workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
+        if workspace_path is None:
+            await self._send_message(
+                message.chat_id,
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None
         try:
-            client = await self._client_for_workspace(record.workspace_path)
+            client = await self._client_for_workspace(workspace_path)
         except AppServerUnavailableError as exc:
             log_event(
                 self._logger,
@@ -1323,7 +1426,7 @@ class WorkspaceCommands(SharedHelpers):
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )

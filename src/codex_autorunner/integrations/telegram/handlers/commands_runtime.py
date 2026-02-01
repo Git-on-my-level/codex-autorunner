@@ -870,7 +870,7 @@ class TelegramCommandHandlers(
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         self._model_options.pop(key, None)
         self._model_pending.pop(key, None)
-        record = await self._router.get_topic(key)
+        record = await self._router.ensure_topic(message.chat_id, message.thread_id)
         agent = self._effective_agent(record)
         supports_effort = self._agent_supports_effort(agent)
         list_params = {
@@ -878,10 +878,17 @@ class TelegramCommandHandlers(
             "limit": DEFAULT_MODEL_LIST_LIMIT,
             "agent": agent,
         }
-        try:
-            client = await self._client_for_workspace(
-                record.workspace_path if record else None
+        workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
+        if workspace_path is None:
+            await self._send_message(
+                message.chat_id,
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
             )
+            return
+        try:
+            client = await self._client_for_workspace(workspace_path)
         except AppServerUnavailableError as exc:
             log_event(
                 self._logger,
@@ -901,16 +908,20 @@ class TelegramCommandHandlers(
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
             return
         argv = self._parse_command_args(args)
         if not argv:
+            record_for_models = self._record_with_workspace_path(record, workspace_path)
             try:
                 result = await self._fetch_model_list(
-                    record, agent=agent, client=client, list_params=list_params
+                    record_for_models,
+                    agent=agent,
+                    client=client,
+                    list_params=list_params,
                 )
             except OpenCodeSupervisorError as exc:
                 log_event(
@@ -993,9 +1004,13 @@ class TelegramCommandHandlers(
             )
             return
         if argv[0].lower() in ("list", "ls"):
+            record_for_models = self._record_with_workspace_path(record, workspace_path)
             try:
                 result = await self._fetch_model_list(
-                    record, agent=agent, client=client, list_params=list_params
+                    record_for_models,
+                    agent=agent,
+                    client=client,
+                    list_params=list_params,
                 )
             except OpenCodeSupervisorError as exc:
                 log_event(
@@ -1892,10 +1907,14 @@ class TelegramCommandHandlers(
     async def _apply_compact_summary(
         self, message: TelegramMessage, record: "TelegramTopicRecord", summary_text: str
     ) -> tuple[bool, str | None]:
-        if not record.workspace_path:
-            return (False, "Topic not bound. Use /bind <repo_id> or /bind <path>.")
+        workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
+        if not workspace_path:
+            return (
+                False,
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+            )
         try:
-            client = await self._client_for_workspace(record.workspace_path)
+            client = await self._client_for_workspace(workspace_path)
         except AppServerUnavailableError as exc:
             log_event(
                 self._logger,
@@ -1907,7 +1926,10 @@ class TelegramCommandHandlers(
             )
             return False, "App server unavailable; try again or check logs."
         if client is None:
-            return (False, "Topic not bound. Use /bind <repo_id> or /bind <path>.")
+            return (
+                False,
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+            )
         log_event(
             self._logger,
             logging.INFO,
@@ -1915,11 +1937,11 @@ class TelegramCommandHandlers(
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             summary_len=len(summary_text),
-            workspace_path=record.workspace_path,
+            workspace_path=workspace_path,
         )
         try:
             agent = self._effective_agent(record)
-            thread = await client.thread_start(record.workspace_path, agent=agent)
+            thread = await client.thread_start(workspace_path, agent=agent)
         except Exception as exc:
             log_event(
                 self._logger,
@@ -1931,7 +1953,7 @@ class TelegramCommandHandlers(
             )
             return False, "Failed to start a new thread."
         if not await self._require_thread_workspace(
-            message, record.workspace_path, thread, action="thread_start"
+            message, workspace_path, thread, action="thread_start"
         ):
             return False, "Failed to start a new thread."
         new_thread_id = _extract_thread_id(thread)
@@ -1969,7 +1991,7 @@ class TelegramCommandHandlers(
     ) -> None:
         argv = self._parse_command_args(args)
         if argv and argv[0].lower() in ("soft", "summary", "summarize"):
-            record = await self._require_bound_record(message)
+            record = await self._require_bound_record(message, allow_pma=True)
             if not record:
                 return
             await self._handle_normal_message(
@@ -1977,33 +1999,51 @@ class TelegramCommandHandlers(
             )
             return
         auto_apply = bool(argv and argv[0].lower() == "apply")
-        record = await self._require_bound_record(message)
+        record = await self._require_bound_record(message, allow_pma=True)
         if not record:
             return
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
-        if not record.active_thread_id:
-            await self._send_message(
-                message.chat_id,
-                "No active thread to compact. Use /new to start one.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
+        pma_enabled = bool(record.pma_enabled)
+        if pma_enabled:
+            registry = getattr(self, "_hub_thread_registry", None)
+            pma_key = self._pma_registry_key(record)
+            pma_thread_id = (
+                registry.get_thread_id(pma_key)
+                if registry is not None and pma_key
+                else None
             )
-            return
-        conflict_key = await self._find_thread_conflict(
-            record.active_thread_id, key=key
-        )
-        if conflict_key:
-            await self._router.set_active_thread(
-                message.chat_id, message.thread_id, None
+            if not pma_thread_id:
+                await self._send_message(
+                    message.chat_id,
+                    "No active PMA thread to compact. Send a message or use /new to start one.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+        else:
+            if not record.active_thread_id:
+                await self._send_message(
+                    message.chat_id,
+                    "No active thread to compact. Use /new to start one.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            conflict_key = await self._find_thread_conflict(
+                record.active_thread_id, key=key
             )
-            await self._handle_thread_conflict(
-                message, record.active_thread_id, conflict_key
-            )
-            return
-        verified = await self._verify_active_thread(message, record)
-        if not verified:
-            return
-        record = verified
+            if conflict_key:
+                await self._router.set_active_thread(
+                    message.chat_id, message.thread_id, None
+                )
+                await self._handle_thread_conflict(
+                    message, record.active_thread_id, conflict_key
+                )
+                return
+            verified = await self._verify_active_thread(message, record)
+            if not verified:
+                return
+            record = verified
         outcome = await self._run_turn_and_collect_result(
             message,
             runtime,
@@ -2692,14 +2732,23 @@ Summary applied.""",
     async def _handle_logout(
         self, message: TelegramMessage, _args: str, _runtime: Any
     ) -> None:
-        record = await self._require_bound_record(message)
+        record = await self._require_bound_record(message, allow_pma=True)
         if not record:
             return
-        client = await self._client_for_workspace(record.workspace_path)
+        workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
+        if workspace_path is None:
+            await self._send_message(
+                message.chat_id,
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        client = await self._client_for_workspace(workspace_path)
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2745,14 +2794,23 @@ Summary applied.""",
                 reply_to=message.message_id,
             )
             return
-        record = await self._require_bound_record(message)
+        record = await self._require_bound_record(message, allow_pma=True)
         if not record:
             return
-        client = await self._client_for_workspace(record.workspace_path)
+        workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
+        if workspace_path is None:
+            await self._send_message(
+                message.chat_id,
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        client = await self._client_for_workspace(workspace_path)
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
