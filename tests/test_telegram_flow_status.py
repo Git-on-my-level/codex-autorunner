@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 
@@ -267,3 +268,73 @@ async def test_flow_status_unbound_topic_uses_hub_overview() -> None:
 
     assert handler.hub_calls == 1
     assert not handler.sent
+
+
+@pytest.mark.anyio
+async def test_flow_hub_overview_allows_parse_mode_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Regression: /flow_status in PMA topics passes parse_mode to _send_message
+    # Ensure the transport accepts it.
+    class _StubStore:
+        def initialize(self) -> None: ...
+
+        def list_flow_runs(self, *args, **kwargs):
+            return []
+
+        def close(self) -> None: ...
+
+    class _HubOverviewHandler(FlowCommands):
+        def __init__(self) -> None:
+            self._manifest_path = tmp_path / "manifest.yml"
+            self._hub_root = tmp_path
+            self._store = _TopicStoreStub(None)
+            self.sent: list[tuple[str, Optional[str]]] = []
+
+        async def _resolve_topic_key(
+            self, _chat_id: int, _thread_id: int | None
+        ) -> str:
+            return "topic"
+
+        def _resolve_workspace(self, _arg: str) -> tuple[str, Path] | None:
+            return None
+
+        async def _send_message(
+            self,
+            _chat_id: int,
+            text: str,
+            *,
+            thread_id: int | None = None,
+            reply_to: int | None = None,
+            reply_markup: dict[str, object] | None = None,
+            parse_mode: str | None = None,
+        ) -> None:
+            _ = (thread_id, reply_to, reply_markup)
+            self.sent.append((text, parse_mode))
+
+    monkeypatch.setattr(flows_module, "_load_flow_store", lambda _root: _StubStore())
+    monkeypatch.setattr(
+        flows_module,
+        "load_manifest",
+        lambda _path, _root: SimpleNamespace(
+            repos=[SimpleNamespace(id="r1", enabled=True, path=".")]
+        ),
+    )
+
+    handler = _HubOverviewHandler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow_status",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._send_flow_hub_overview(message)
+
+    assert handler.sent
+    # parse_mode should be propagated without raising TypeError
+    assert handler.sent[0][1] == "Markdown"

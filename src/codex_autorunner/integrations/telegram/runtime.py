@@ -265,8 +265,11 @@ class TelegramRuntimeHelpers:
             text = f"{prefix}{text}"
         return self._prepare_message(text)
 
-    def _render_message(self, text: str) -> tuple[str, Optional[str]]:
-        parse_mode = self._config.parse_mode
+    def _render_message(
+        self, text: str, *, parse_mode: Optional[str] = None
+    ) -> tuple[str, Optional[str]]:
+        # Allow callers to override parse_mode (needed for ad-hoc Markdown/HTML sends)
+        parse_mode = self._config.parse_mode if parse_mode is None else parse_mode
         if not parse_mode:
             return text, None
         if parse_mode == "HTML":
@@ -275,8 +278,10 @@ class TelegramRuntimeHelpers:
             return _format_telegram_markdown(text, parse_mode), parse_mode
         return text, parse_mode
 
-    def _prepare_message(self, text: str) -> tuple[str, Optional[str]]:
-        rendered, parse_mode = self._render_message(text)
+    def _prepare_message(
+        self, text: str, *, parse_mode: Optional[str] = None
+    ) -> tuple[str, Optional[str]]:
+        rendered, parse_mode = self._render_message(text, parse_mode=parse_mode)
         # Avoid parse_mode when chunking to keep markup intact.
         if parse_mode and len(rendered) <= TELEGRAM_MAX_MESSAGE_LENGTH:
             return rendered, parse_mode

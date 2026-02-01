@@ -265,6 +265,7 @@ class TelegramMessageTransport:
         thread_id: Optional[int] = None,
         reply_to: Optional[int] = None,
         reply_markup: Optional[dict[str, Any]] = None,
+        parse_mode: Optional[str] = None,
     ) -> None:
         if _should_trace_message(text):
             text = _with_conversation_id(
@@ -279,9 +280,15 @@ class TelegramMessageTransport:
         )
         if prefix:
             text = f"{prefix}{text}"
-        parse_mode = self._config.parse_mode
-        if parse_mode:
-            rendered, used_mode = self._render_message(text)
+        effective_parse_mode = parse_mode or self._config.parse_mode
+        if effective_parse_mode:
+            try:
+                rendered, used_mode = self._render_message(
+                    text, parse_mode=effective_parse_mode
+                )
+            except TypeError:
+                # Back-compat for subclasses/tests that don't accept parse_mode kwarg
+                rendered, used_mode = self._render_message(text)  # type: ignore[misc]
             if used_mode and len(rendered) > TELEGRAM_MAX_MESSAGE_LENGTH:
                 overflow_mode = getattr(self._config, "message_overflow", "document")
                 if overflow_mode == "split" and used_mode in (
