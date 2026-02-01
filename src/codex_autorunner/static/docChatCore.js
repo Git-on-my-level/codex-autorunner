@@ -34,13 +34,14 @@ function addEvent(state, entry, limits) {
         });
     }
 }
-function buildMessage(role, content, isFinal) {
+function buildMessage(role, content, isFinal, meta) {
     return {
         id: `${role}-${Date.now()}`,
         role,
         content,
         time: new Date().toISOString(),
         isFinal,
+        meta,
     };
 }
 export function createDocChat(config) {
@@ -58,6 +59,24 @@ export function createDocChat(config) {
         eventsExpanded: false,
     };
     const elements = getElements(config.idPrefix);
+    function decorateFileLinks(root) {
+        const links = Array.from(root.querySelectorAll("a"));
+        for (const link of links) {
+            const href = link.getAttribute("href") || "";
+            if (!href)
+                continue;
+            // Only decorate PMA file links.
+            if (!href.includes("/hub/pma/files/"))
+                continue;
+            link.classList.add("pma-file-link");
+            link.setAttribute("download", "");
+            // Ensure downloads happen in-place (no new tab).
+            link.removeAttribute("target");
+            link.setAttribute("rel", "noopener");
+            if (!link.title)
+                link.title = "Download file";
+        }
+    }
     function saveHistory() {
         if (!config.storage || !state.target)
             return;
@@ -80,13 +99,16 @@ export function createDocChat(config) {
         state.messages.push(buildMessage("user", content, true));
         saveHistory();
     }
-    function addAssistantMessage(content, isFinal = true) {
+    function addAssistantMessage(content, isFinal = true, meta) {
         if (!content)
             return;
         const last = state.messages[state.messages.length - 1];
-        if (last && last.role === "assistant" && last.content === content)
+        if (last && last.role === "assistant" && last.content === content) {
+            if (meta)
+                last.meta = meta;
             return;
-        state.messages.push(buildMessage("assistant", content, isFinal));
+        }
+        state.messages.push(buildMessage("assistant", content, isFinal, meta));
         saveHistory();
     }
     function clearEvents() {
@@ -119,16 +141,30 @@ export function createDocChat(config) {
         const { eventsMain, eventsList, eventsCount, eventsToggle } = elements;
         if (!eventsMain || !eventsList || !eventsCount)
             return;
+        // If inlineEvents is enabled, we don't render to the separate events container
+        if (config.inlineEvents) {
+            // Still need to calculate showEvents to hide the container properly
+            // but return early before modifying innerHTML
+            if (eventsMain)
+                eventsMain.classList.add("hidden");
+            return;
+        }
         const hasEvents = state.events.length > 0;
         const isRunning = state.status === "running";
-        const showEvents = hasEvents || isRunning;
+        const showEvents = config.eventsOnlyWhileRunning ? isRunning : (hasEvents || isRunning);
         const compactMode = !!config.compactMode;
         const expanded = !!state.eventsExpanded;
         if (config.styling.eventsHiddenClass) {
             eventsMain.classList.toggle(config.styling.eventsHiddenClass, !showEvents);
         }
         else {
-            eventsMain.classList.toggle("hidden", !showEvents);
+            // In inline mode, never show the main event container since we render inline
+            if (config.inlineEvents) {
+                eventsMain.classList.add("hidden");
+            }
+            else {
+                eventsMain.classList.toggle("hidden", !showEvents);
+            }
         }
         eventsCount.textContent = String(state.events.length);
         if (!showEvents) {
@@ -242,9 +278,13 @@ export function createDocChat(config) {
             wrapper.appendChild(roleLabel);
             const content = document.createElement("div");
             content.className = `${config.styling.messageContentClass} messages-markdown`;
-            // Use markdown rendering for assistant messages, plain text for user
-            if (msg.role === "assistant") {
+            // Use markdown rendering for assistant messages.
+            // For user messages, keep plain text unless the message includes PMA file links
+            // (used for "uploaded file" pills).
+            const shouldRenderMarkdown = msg.role === "assistant" || msg.content.includes("/hub/pma/files/");
+            if (shouldRenderMarkdown) {
                 content.innerHTML = renderMarkdown(msg.content);
+                decorateFileLinks(content);
             }
             else {
                 content.textContent = msg.content;
@@ -253,11 +293,23 @@ export function createDocChat(config) {
             const meta = document.createElement("div");
             meta.className = config.styling.messageMetaClass;
             const time = msg.time ? new Date(msg.time) : new Date();
-            meta.textContent = time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            let metaText = time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            if (msg.meta) {
+                const parts = [];
+                if (msg.meta.steps)
+                    parts.push(`${msg.meta.steps} steps`);
+                if (msg.meta.duration)
+                    parts.push(`${msg.meta.duration.toFixed(1)}s`);
+                if (parts.length)
+                    metaText += ` · ${parts.join(" · ")}`;
+            }
+            meta.textContent = metaText;
             wrapper.appendChild(meta);
             messagesEl.appendChild(wrapper);
         });
-        if (hasStream) {
+        // While running, show an inline "Thinking" bubble at the bottom where the
+        // final assistant message will appear (even if we don't have streamed text yet).
+        if (hasStream || state.status === "running") {
             const streaming = document.createElement("div");
             streaming.className = [
                 config.styling.messagesClass,
@@ -273,11 +325,93 @@ export function createDocChat(config) {
             streaming.appendChild(roleLabel);
             const content = document.createElement("div");
             content.className = `${config.styling.messageContentClass} messages-markdown`;
-            content.innerHTML = renderMarkdown(state.streamText);
+            // If we have streamed text, show it. Otherwise show a compact "working" summary
+            // based on the most recent event/tool-call.
+            if (state.streamText) {
+                content.innerHTML = renderMarkdown(state.streamText);
+                decorateFileLinks(content);
+            }
+            else {
+                const stepCount = state.events.length;
+                const statusText = (state.statusText || "").trim();
+                const isNoiseEvent = (evt) => {
+                    const title = (evt.title || "").toLowerCase();
+                    const method = (evt.method || "").toLowerCase();
+                    // Hide token/partial deltas; they are too granular for the UI.
+                    if (title === "delta")
+                        return true;
+                    if (method.includes("delta"))
+                        return true;
+                    return false;
+                };
+                const meaningfulEvents = state.events.filter((evt) => !isNoiseEvent(evt));
+                const lastMeaningful = meaningfulEvents[meaningfulEvents.length - 1];
+                const headline = lastMeaningful
+                    ? (lastMeaningful.title || lastMeaningful.summary || statusText || "Working...")
+                    : (statusText || "Thinking...");
+                // Build DOM so we can attach a "Show details" toggle inside the Thinking bubble.
+                content.innerHTML = "";
+                const header = document.createElement("div");
+                header.className = "chat-thinking-inline";
+                const spinner = document.createElement("span");
+                spinner.className = "chat-thinking-spinner";
+                header.appendChild(spinner);
+                const headlineSpan = document.createElement("span");
+                headlineSpan.textContent = String(headline);
+                header.appendChild(headlineSpan);
+                if (stepCount > 0) {
+                    const steps = document.createElement("span");
+                    steps.className = "chat-thinking-steps";
+                    steps.textContent = `(${stepCount} steps)`;
+                    header.appendChild(steps);
+                    // Only show the toggle if we have more than a couple steps.
+                    if (meaningfulEvents.length > 2) {
+                        const toggle = document.createElement("button");
+                        toggle.type = "button";
+                        toggle.className = "ghost sm chat-thinking-details-btn";
+                        toggle.textContent = state.eventsExpanded ? "Hide details" : "Show details";
+                        toggle.addEventListener("click", (e) => {
+                            e.preventDefault();
+                            state.eventsExpanded = !state.eventsExpanded;
+                            renderMessages();
+                        });
+                        header.appendChild(toggle);
+                    }
+                }
+                content.appendChild(header);
+                const maxRecent = state.eventsExpanded
+                    ? Math.min(meaningfulEvents.length, config.limits.eventVisible || 20)
+                    : 3;
+                const recentEvents = meaningfulEvents.slice(-maxRecent);
+                if (recentEvents.length) {
+                    const list = document.createElement("ul");
+                    list.className = "chat-thinking-steps-list";
+                    for (const evt of recentEvents) {
+                        const li = document.createElement("li");
+                        const title = document.createElement("span");
+                        title.className = "chat-thinking-step-title";
+                        title.textContent = (evt.title || evt.kind || evt.method || "step").trim();
+                        li.appendChild(title);
+                        const summaryText = (evt.summary || "").trim();
+                        if (summaryText) {
+                            const summary = document.createElement("span");
+                            summary.className = "chat-thinking-step-summary";
+                            summary.textContent = ` — ${summaryText}`;
+                            li.appendChild(summary);
+                        }
+                        list.appendChild(li);
+                    }
+                    content.appendChild(list);
+                }
+            }
             streaming.appendChild(content);
             messagesEl.appendChild(streaming);
         }
         messagesEl.scrollTop = messagesEl.scrollHeight;
+        // Also scroll the parent container if it exists
+        if (elements.streamEl) {
+            elements.streamEl.scrollTop = elements.streamEl.scrollHeight;
+        }
     }
     function render() {
         const { statusEl, errorEl, cancelBtn, newThreadBtn, streamEl, } = elements;
@@ -299,12 +433,25 @@ export function createDocChat(config) {
             newThreadBtn.classList.toggle("hidden", !hasHistory || state.status === "running");
         }
         if (streamEl) {
+            // In inline mode, we always want to show the stream element if there's any activity
+            // or history, because the "Thinking" state is rendered as a message in the history list
+            // (technically in the messagesEl container), but we need the parent container visible.
             const hasContent = state.events.length > 0 ||
                 state.messages.length > 0 ||
                 !!state.streamText ||
                 state.status === "running";
             streamEl.classList.toggle("hidden", !hasContent);
+            // Auto-scroll to bottom when new content appears
+            streamEl.scrollTop = streamEl.scrollHeight;
         }
+        // Important: renderMessages handles the "Thinking" bubble creation
+        // when state.status === 'running' or we have a streamText.
+        // However, if we only have events but no streamText yet, we need to ensure
+        // renderMessages is called with a "virtual" stream state to trigger the bubble.
+        // We do this by checking if we are running.
+        // We need to pass a flag or rely on state.status in renderMessages?
+        // Actually renderMessages uses state.streamText. 
+        // Let's force a "pending" indicator in renderMessages if running but no text.
         renderEvents();
         renderMessages();
     }

@@ -444,9 +444,12 @@ function renderFiles(files) {
         .map((f) => {
         const size = formatBytes(f.size);
         const href = resolvePath(f.url || "");
+        const isHttp = /^https?:\/\//.test(href);
+        const targetAttrs = isHttp ? ' target="_blank" rel="noopener"' : "";
+        const downloadAttr = isHttp ? "" : " download";
         return `<li class="messages-file">
         <span class="messages-file-icon">📎</span>
-        <a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(f.name)}</a>
+        <a href="${escapeHtml(href)}"${downloadAttr}${targetAttrs}>${escapeHtml(f.name)}</a>
         ${size ? `<span class="messages-file-size muted small">${escapeHtml(size)}</span>` : ""}
       </li>`;
     })

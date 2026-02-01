@@ -1148,10 +1148,18 @@ function renderDispatchHistory(runId, data) {
                 if (!att.url)
                     return;
                 const link = document.createElement("a");
-                link.href = resolvePath(att.url);
+                const resolved = new URL(resolvePath(att.url), window.location.origin);
+                link.href = resolved.toString();
                 link.textContent = att.name || att.rel_path || "attachment";
-                link.target = "_blank";
-                link.rel = "noreferrer noopener";
+                // Prefer direct downloads for same-origin attachments.
+                if (resolved.origin === window.location.origin) {
+                    link.download = "";
+                    link.rel = "noopener";
+                }
+                else {
+                    link.target = "_blank";
+                    link.rel = "noreferrer noopener";
+                }
                 link.title = att.path || "";
                 wrap.appendChild(link);
             });

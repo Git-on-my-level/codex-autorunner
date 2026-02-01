@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ....agents.codex.harness import CodexHarness
 from ....agents.opencode.harness import OpenCodeHarness
@@ -32,6 +32,8 @@ def build_pma_routes() -> APIRouter:
     pma_lock = asyncio.Lock()
     pma_event: Optional[asyncio.Event] = None
     pma_active = False
+    pma_current: dict[str, Any] | None = None
+    pma_last_result: dict[str, Any] | None = None
 
     async def _get_interrupt_event() -> asyncio.Event:
         nonlocal pma_event
@@ -45,18 +47,54 @@ def build_pma_routes() -> APIRouter:
         async with pma_lock:
             pma_active = active
 
-    async def _begin_turn() -> bool:
-        nonlocal pma_active
+    async def _begin_turn(client_turn_id: str | None) -> bool:
+        nonlocal pma_active, pma_current
         async with pma_lock:
             if pma_active:
                 return False
             pma_active = True
+            pma_current = {
+                "client_turn_id": client_turn_id or "",
+                "status": "starting",
+                "agent": None,
+                "thread_id": None,
+                "turn_id": None,
+            }
             return True
 
     async def _clear_interrupt_event() -> None:
         nonlocal pma_event
         async with pma_lock:
             pma_event = None
+
+    async def _update_current(**updates: Any) -> None:
+        nonlocal pma_current
+        async with pma_lock:
+            if pma_current is None:
+                pma_current = {}
+            pma_current.update(updates)
+
+    async def _finalize_result(result: dict[str, Any]) -> None:
+        nonlocal pma_current, pma_last_result, pma_active, pma_event
+        async with pma_lock:
+            pma_last_result = dict(result or {})
+            pma_current = None
+            pma_active = False
+            pma_event = None
+
+    @router.get("/active")
+    async def pma_active_status(client_turn_id: str | None = None) -> dict[str, Any]:
+        async with pma_lock:
+            current = dict(pma_current or {})
+            last_result = dict(pma_last_result or {})
+            active = bool(pma_active)
+        if client_turn_id:
+            # If caller is asking about a specific client turn id, only return the matching last result.
+            if last_result.get("client_turn_id") != client_turn_id:
+                last_result = {}
+            if current.get("client_turn_id") != client_turn_id:
+                current = {}
+        return {"active": active, "current": current, "last_result": last_result}
 
     @router.get("/agents")
     def list_pma_agents(request: Request) -> dict[str, Any]:
@@ -101,6 +139,7 @@ def build_pma_routes() -> APIRouter:
         reasoning: Optional[str] = None,
         thread_registry: Optional[Any] = None,
         thread_key: Optional[str] = None,
+        on_meta: Optional[Any] = None,
     ) -> dict[str, Any]:
         client = await supervisor.get_client(hub_root)
 
@@ -136,6 +175,13 @@ def build_pma_routes() -> APIRouter:
             sandbox_policy="dangerFullAccess",
             **turn_kwargs,
         )
+        if on_meta is not None:
+            try:
+                maybe = on_meta(thread_id, handle.turn_id)
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+            except Exception:
+                logger.exception("pma meta callback failed")
 
         turn_task = asyncio.create_task(handle.wait(timeout=None))
         timeout_task = asyncio.create_task(asyncio.sleep(PMA_TIMEOUT_SECONDS))
@@ -181,6 +227,7 @@ def build_pma_routes() -> APIRouter:
         thread_registry: Optional[Any] = None,
         thread_key: Optional[str] = None,
         stall_timeout_seconds: Optional[float] = None,
+        on_meta: Optional[Any] = None,
     ) -> dict[str, Any]:
         from ....agents.opencode.runtime import (
             PERMISSION_ALLOW,
@@ -204,6 +251,13 @@ def build_pma_routes() -> APIRouter:
                 )
             if thread_registry is not None and thread_key:
                 thread_registry.set_thread_id(thread_key, session_id)
+        if on_meta is not None:
+            try:
+                maybe = on_meta(session_id, build_turn_id(session_id))
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+            except Exception:
+                logger.exception("pma meta callback failed")
 
         model_payload = split_model_id(model)
         await supervisor.mark_turn_started(hub_root)
@@ -285,11 +339,12 @@ def build_pma_routes() -> APIRouter:
         agent = body.get("agent")
         model = body.get("model")
         reasoning = body.get("reasoning")
+        client_turn_id = (body.get("client_turn_id") or "").strip() or None
 
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
 
-        if not await _begin_turn():
+        if not await _begin_turn(client_turn_id):
             raise HTTPException(status_code=409, detail="PMA chat already running")
 
         agents, available_default = _available_agents(request)
@@ -318,13 +373,22 @@ def build_pma_routes() -> APIRouter:
         hub_root = request.app.state.config.root
         prompt_base = load_pma_prompt(hub_root)
         supervisor = getattr(request.app.state, "hub_supervisor", None)
-        snapshot = await build_hub_snapshot(supervisor)
+        snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
         prompt = format_pma_prompt(prompt_base, snapshot, message)
 
         interrupt_event = await _get_interrupt_event()
         if interrupt_event.is_set():
             await _set_active(False)
             return {"status": "interrupted", "detail": "PMA chat interrupted"}
+
+        async def _meta(thread_id: str, turn_id: str) -> None:
+            await _update_current(
+                client_turn_id=client_turn_id or "",
+                status="running",
+                agent=agent_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+            )
 
         async def _run() -> dict[str, Any]:
             supervisor = getattr(request.app.state, "app_server_supervisor", None)
@@ -351,6 +415,7 @@ def build_pma_routes() -> APIRouter:
                     thread_registry=registry,
                     thread_key=PMA_OPENCODE_KEY,
                     stall_timeout_seconds=stall_timeout_seconds,
+                    on_meta=_meta,
                 )
             if supervisor is None:
                 return {"status": "error", "detail": "App-server unavailable"}
@@ -363,16 +428,38 @@ def build_pma_routes() -> APIRouter:
                 reasoning=reasoning,
                 thread_registry=registry,
                 thread_key=PMA_KEY,
+                on_meta=_meta,
             )
 
         async def _stream() -> AsyncIterator[str]:
+            # IMPORTANT: shield the underlying turn from client disconnects (e.g. page refresh).
+            # We also store the final result server-side so the UI can recover after reload.
+            run_task = asyncio.create_task(_run())
+
+            async def _finalize() -> None:
+                result: dict[str, Any]
+                try:
+                    result = await run_task
+                except Exception as exc:
+                    logger.exception("pma chat task failed")
+                    result = {
+                        "status": "error",
+                        "detail": str(exc) or "PMA chat failed",
+                    }
+                result = dict(result or {})
+                result["client_turn_id"] = client_turn_id or ""
+                await _finalize_result(result)
+
+            asyncio.create_task(_finalize())
+
             yield format_sse("status", {"status": "queued"})
             try:
-                result = await _run()
+                result = await asyncio.shield(run_task)
                 if result.get("status") == "ok":
                     raw_events = result.pop("raw_events", []) or []
                     for event in raw_events:
                         yield format_sse("app-server", event)
+                    result["client_turn_id"] = client_turn_id or ""
                     yield format_sse("update", result)
                     yield format_sse("done", {"status": "ok"})
                 elif result.get("status") == "interrupted":
@@ -384,12 +471,12 @@ def build_pma_routes() -> APIRouter:
                     yield format_sse(
                         "error", {"detail": result.get("detail") or "PMA chat failed"}
                     )
+            except asyncio.CancelledError:
+                # Client disconnected; the run continues in the background and can be recovered via /active.
+                return
             except Exception:
                 logger.exception("pma chat stream failed")
                 yield format_sse("error", {"detail": "PMA chat failed"})
-            finally:
-                await _set_active(False)
-                await _clear_interrupt_event()
 
         if stream:
             return StreamingResponse(
@@ -400,10 +487,13 @@ def build_pma_routes() -> APIRouter:
 
         try:
             result = await _run()
+            result = dict(result or {})
+            result["client_turn_id"] = client_turn_id or ""
+            await _finalize_result(result)
             return result
         finally:
-            await _set_active(False)
-            await _clear_interrupt_event()
+            # _finalize_result already clears active/interrupt state
+            pass
 
     @router.post("/interrupt")
     async def pma_interrupt() -> dict[str, Any]:
@@ -461,6 +551,74 @@ def build_pma_routes() -> APIRouter:
                 headers=SSE_HEADERS,
             )
         raise HTTPException(status_code=404, detail="Unknown agent")
+
+    @router.get("/files")
+    def list_pma_files(request: Request) -> dict[str, list[str]]:
+        hub_root = request.app.state.config.root
+        pma_dir = hub_root / ".codex-autorunner" / "pma"
+        result = {"inbox": [], "outbox": []}
+        for box in ["inbox", "outbox"]:
+            box_dir = pma_dir / box
+            if box_dir.exists():
+                files = [
+                    f.name
+                    for f in box_dir.iterdir()
+                    if f.is_file() and not f.name.startswith(".")
+                ]
+                result[box] = sorted(files)
+        return result
+
+    @router.post("/files/{box}")
+    async def upload_pma_file(box: str, request: Request):
+        if box not in ("inbox", "outbox"):
+            raise HTTPException(status_code=400, detail="Invalid box")
+        hub_root = request.app.state.config.root
+        box_dir = hub_root / ".codex-autorunner" / "pma" / box
+        box_dir.mkdir(parents=True, exist_ok=True)
+
+        form = await request.form()
+        for filename, file in form.items():
+            content = await file.read()
+            # Sanitize filename
+            safe_name = Path(filename).name
+            (box_dir / safe_name).write_bytes(content)
+        return {"status": "ok"}
+
+    @router.get("/files/{box}/{filename}")
+    def download_pma_file(box: str, filename: str, request: Request):
+        if box not in ("inbox", "outbox"):
+            raise HTTPException(status_code=400, detail="Invalid box")
+        hub_root = request.app.state.config.root
+        # Sanitize filename
+        safe_name = Path(filename).name
+        file_path = hub_root / ".codex-autorunner" / "pma" / box / safe_name
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(file_path, filename=safe_name)
+
+    @router.delete("/files/{box}/{filename}")
+    def delete_pma_file(box: str, filename: str, request: Request):
+        if box not in ("inbox", "outbox"):
+            raise HTTPException(status_code=400, detail="Invalid box")
+        hub_root = request.app.state.config.root
+        # Sanitize filename
+        safe_name = Path(filename).name
+        file_path = hub_root / ".codex-autorunner" / "pma" / box / safe_name
+        if file_path.exists():
+            file_path.unlink()
+        return {"status": "ok"}
+
+    @router.delete("/files/{box}")
+    def delete_pma_box(box: str, request: Request):
+        if box not in ("inbox", "outbox"):
+            raise HTTPException(status_code=400, detail="Invalid box")
+        hub_root = request.app.state.config.root
+        box_dir = hub_root / ".codex-autorunner" / "pma" / box
+        if box_dir.exists():
+            for f in box_dir.iterdir():
+                if f.is_file() and not f.name.startswith("."):
+                    f.unlink()
+        return {"status": "ok"}
 
     return router
 

@@ -89,33 +89,33 @@
       <button class="pma-back-btn" id="pma-back" title="Back to Hub">← Hub</button>
       <h1 class="pma-title">Project Manager</h1>
     </header>
+    <section class="pma-top-bar">
+      <div class="pma-chat-controls-row">
+        <div class="pma-chat-agent-controls">
+          <select id="pma-chat-agent-select" title="Agent"></select>
+          <select id="pma-chat-model-select" title="Model"></select>
+          <select id="pma-chat-reasoning-select" title="Reasoning"></select>
+        </div>
+        <div class="pma-chat-actions">
+          <button class="ghost sm hidden" id="pma-chat-cancel" title="Cancel">✕</button>
+          <button class="pma-new-thread-btn" id="pma-chat-new-thread" title="Start a new chat thread">New
+            thread</button>
+          <span class="pma-status-pill" id="pma-chat-status">idle</span>
+        </div>
+      </div>
+      <div class="pma-paused-runs-bar">
+        <div class="pma-inbox-list" id="pma-inbox-list">Loading…</div>
+        <button class="pma-inbox-refresh-btn" id="pma-inbox-refresh" title="Refresh inbox">↻</button>
+      </div>
+    </section>
     <section class="pma-chat-section">
       <div class="pma-chat-main">
-        <div class="pma-chat-compose">
-          <div class="pma-chat-controls-row">
-            <div class="pma-chat-agent-controls">
-              <select id="pma-chat-agent-select" title="Agent"></select>
-              <select id="pma-chat-model-select" title="Model"></select>
-              <select id="pma-chat-reasoning-select" title="Reasoning"></select>
-            </div>
-            <div class="pma-chat-actions">
-              <button class="ghost sm hidden" id="pma-chat-cancel" title="Cancel">✕</button>
-              <button class="pma-new-thread-btn" id="pma-chat-new-thread" title="Start a new chat thread">New
-                thread</button>
-              <span class="pma-status-pill" id="pma-chat-status">idle</span>
-            </div>
-          </div>
-          <div class="pma-chat-input-row">
-            <textarea id="pma-chat-input" class="pma-chat-input" enterkeyhint="enter"
-              placeholder="Ask PMA to help coordinate work..." rows="1" spellcheck="false"></textarea>
-            <button class="pma-send-btn" id="pma-chat-send" title="Send (Cmd+Enter)">↑</button>
-          </div>
-          <div class="pma-chat-hint">
-            <span class="muted small">⌘↵ send · ↵ newline</span>
-          </div>
-        </div>
         <div class="pma-chat-stream" id="pma-chat-stream">
           <div class="pma-chat-error hidden" id="pma-chat-error"></div>
+          <div class="pma-history-header" id="pma-chat-history-header">
+            <span class="pma-history-label">History</span>
+          </div>
+          <div class="pma-chat-messages" id="pma-chat-messages"></div>
           <div class="pma-chat-events hidden" id="pma-chat-events">
             <div class="pma-events-header">
               <span class="pma-events-label">Agent</span>
@@ -124,19 +124,31 @@
             </div>
             <div class="pma-chat-events-list" id="pma-chat-events-list"></div>
           </div>
-          <div class="pma-history-header" id="pma-chat-history-header">
-            <span class="pma-history-label">History</span>
+        </div>
+        <div class="pma-chat-compose">
+          <div class="pma-attachments-area" id="pma-attachments-area">
+            <div class="pma-files-row">
+              <span class="pma-files-label">In</span>
+              <div class="pma-file-list" id="pma-inbox-files"></div>
+            </div>
+            <div class="pma-files-row">
+              <span class="pma-files-label">Out</span>
+              <div class="pma-file-list" id="pma-outbox-files"></div>
+              <button class="pma-icon-btn-small" id="pma-outbox-refresh" title="Refresh files">↻</button>
+            </div>
           </div>
-          <div class="pma-chat-messages" id="pma-chat-messages"></div>
+          <div class="pma-chat-input-row">
+            <textarea id="pma-chat-input" class="pma-chat-input" enterkeyhint="enter"
+              placeholder="Ask PMA to help coordinate work..." rows="1" spellcheck="false"></textarea>
+            <input type="file" id="pma-chat-upload-input" multiple hidden />
+            <button class="ghost sm icon-btn pma-upload-btn" id="pma-chat-upload-btn" title="Upload file">📎</button>
+            <button class="pma-send-btn" id="pma-chat-send" title="Send (Cmd+Enter)">↑</button>
+          </div>
+          <div class="pma-chat-hint">
+            <span class="muted small">⌘↵ send · ↵ newline</span>
+          </div>
         </div>
       </div>
-    </section>
-    <section class="pma-inbox-section">
-      <div class="pma-inbox-header">
-        <span class="pma-inbox-label">Inbox</span>
-        <button class="pma-inbox-refresh-btn" id="pma-inbox-refresh" title="Refresh inbox">↻</button>
-      </div>
-      <div class="pma-inbox-list" id="pma-inbox-list">Loading…</div>
     </section>
   </div>
   <div class="app-shell" id="repo-shell">

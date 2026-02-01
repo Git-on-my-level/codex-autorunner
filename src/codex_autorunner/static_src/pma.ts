@@ -49,10 +49,180 @@ const pmaConfig: ChatConfig = {
   },
   styling: pmaStyling,
   compactMode: true,
+  // PMA should show agent progress inside the "Thinking" bubble, not in a standalone panel.
+  inlineEvents: true,
 };
 
 let pmaChat: DocChatInstance | null = null;
 let currentController: AbortController | null = null;
+let currentOutboxBaseline: Set<string> | null = null;
+let queuedTickerId: number | null = null;
+let queuedSinceMs: number | null = null;
+let isUnloading = false;
+let unloadHandlerInstalled = false;
+let currentEventsController: AbortController | null = null;
+const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
+
+type PendingTurn = {
+  clientTurnId: string;
+  message: string;
+  startedAtMs: number;
+};
+
+function newClientTurnId(): string {
+  // crypto.randomUUID is not guaranteed everywhere; keep a safe fallback.
+  try {
+     
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // ignore
+  }
+  return `pma-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function loadPendingTurn(): PendingTurn | null {
+  try {
+    const raw = localStorage.getItem(PMA_PENDING_TURN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PendingTurn>;
+    if (!parsed || typeof parsed !== "object") return null;
+    if (!parsed.clientTurnId || !parsed.message || !parsed.startedAtMs) return null;
+    return parsed as PendingTurn;
+  } catch {
+    return null;
+  }
+}
+
+function savePendingTurn(turn: PendingTurn): void {
+  try {
+    localStorage.setItem(PMA_PENDING_TURN_KEY, JSON.stringify(turn));
+  } catch {
+    // ignore
+  }
+}
+
+function clearPendingTurn(): void {
+  try {
+    localStorage.removeItem(PMA_PENDING_TURN_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function stopTurnEventsStream(): void {
+  if (currentEventsController) {
+    try {
+      currentEventsController.abort();
+    } catch {
+      // ignore
+    }
+    currentEventsController = null;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function startTurnEventsStream(meta: {
+  agent: string;
+  threadId: string;
+  turnId: string;
+}): Promise<void> {
+  stopTurnEventsStream();
+  if (!meta.threadId || !meta.turnId) return;
+
+  const ctrl = new AbortController();
+  currentEventsController = ctrl;
+
+  const token = getAuthToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const url = resolvePath(
+    `/hub/pma/turns/${encodeURIComponent(meta.turnId)}/events?thread_id=${encodeURIComponent(
+      meta.threadId
+    )}&agent=${encodeURIComponent(meta.agent || "codex")}`
+  );
+
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers,
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return;
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("text/event-stream")) return;
+    await readPMAStream(res);
+  } catch {
+    // ignore (abort / network)
+  }
+}
+
+async function pollForTurnMeta(clientTurnId: string, timeoutMs = 8000): Promise<void> {
+  if (!clientTurnId) return;
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    if (!pmaChat || pmaChat.state.status !== "running") return;
+    if (currentEventsController) return;
+
+    try {
+      const payload = (await api(
+        `/hub/pma/active?client_turn_id=${encodeURIComponent(clientTurnId)}`,
+        { method: "GET" }
+      )) as { current?: Record<string, unknown> };
+      const cur = (payload.current || {}) as Record<string, unknown>;
+      const threadId = typeof cur.thread_id === "string" ? cur.thread_id : "";
+      const turnId = typeof cur.turn_id === "string" ? cur.turn_id : "";
+      const agent = typeof cur.agent === "string" ? cur.agent : "codex";
+      if (threadId && turnId) {
+        void startTurnEventsStream({ agent, threadId, turnId });
+        return;
+      }
+    } catch {
+      // ignore and retry
+    }
+
+    await sleep(250);
+  }
+}
+
+function clearQueuedTicker(): void {
+  if (queuedTickerId !== null) {
+    window.clearInterval(queuedTickerId);
+    queuedTickerId = null;
+  }
+  queuedSinceMs = null;
+}
+
+function startQueuedTicker(): void {
+  if (!pmaChat) return;
+  if (queuedTickerId !== null) return;
+  if (!queuedSinceMs) queuedSinceMs = Date.now();
+  queuedTickerId = window.setInterval(() => {
+    if (!pmaChat) {
+      clearQueuedTicker();
+      return;
+    }
+    if (pmaChat.state.status !== "running") {
+      clearQueuedTicker();
+      return;
+    }
+    const status = (pmaChat.state.statusText || "").toLowerCase();
+    if (status !== "queued") {
+      // Once we transition away from queued, stop the ticker.
+      clearQueuedTicker();
+      return;
+    }
+    const elapsed = Math.max(0, Math.floor((Date.now() - (queuedSinceMs || Date.now())) / 1000));
+    pmaChat.state.statusText = `waiting to start (${elapsed}s)`;
+    pmaChat.render();
+  }, 500);
+}
 
 function getElements() {
   return {
@@ -74,10 +244,87 @@ function getElements() {
     reasoningSelect: document.getElementById("pma-chat-reasoning-select") as HTMLSelectElement | null,
     inboxList: document.getElementById("pma-inbox-list"),
     inboxRefresh: document.getElementById("pma-inbox-refresh") as HTMLButtonElement | null,
+    chatUploadInput: document.getElementById("pma-chat-upload-input") as HTMLInputElement | null,
+    chatUploadBtn: document.getElementById("pma-chat-upload-btn") as HTMLButtonElement | null,
+    inboxFiles: document.getElementById("pma-inbox-files"),
+    outboxFiles: document.getElementById("pma-outbox-files"),
+    outboxRefresh: document.getElementById("pma-outbox-refresh") as HTMLButtonElement | null,
   };
 }
 
 const decoder = new TextDecoder();
+
+type PMAFilesPayload = {
+  inbox: string[];
+  outbox: string[];
+};
+
+async function fetchPMAFiles(): Promise<PMAFilesPayload> {
+  const payload = (await api("/hub/pma/files", { method: "GET" })) as Partial<PMAFilesPayload>;
+  return {
+    inbox: Array.isArray(payload.inbox) ? payload.inbox : [],
+    outbox: Array.isArray(payload.outbox) ? payload.outbox : [],
+  };
+}
+
+function escapeMarkdownLinkText(text: string): string {
+  // Keep this ES2019-compatible (no String.prototype.replaceAll).
+  return text.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+}
+
+function formatOutboxAttachments(files: string[]): string {
+  if (!files.length) return "";
+  const lines = files.map((name) => {
+    const href = new URL(
+      resolvePath(`/hub/pma/files/outbox/${encodeURIComponent(name)}`),
+      window.location.origin
+    ).toString();
+    return `[${escapeMarkdownLinkText(name)}](${href})`;
+  });
+  return `**Outbox files (download):**\n${lines.join("\n")}`;
+}
+
+async function finalizePMAResponse(responseText: string): Promise<void> {
+  if (!pmaChat) return;
+
+  let attachments = "";
+  try {
+    const current = await fetchPMAFiles();
+    // Only attach outbox files if we captured a baseline at the start of the turn.
+    if (currentOutboxBaseline) {
+      const baseline = currentOutboxBaseline;
+      const added = (current.outbox || []).filter((name) => !baseline.has(name));
+      attachments = formatOutboxAttachments(added);
+    } else {
+      attachments = "";
+    }
+  } catch {
+    attachments = "";
+  } finally {
+    currentOutboxBaseline = null;
+    clearPendingTurn();
+    stopTurnEventsStream();
+  }
+
+  const trimmed = (responseText || "").trim();
+  const content = trimmed
+    ? (attachments ? `${trimmed}\n\n---\n\n${attachments}` : trimmed)
+    : attachments;
+
+  const startTime = pmaChat.state.startTime;
+  const duration = startTime ? (Date.now() - startTime) / 1000 : undefined;
+  const steps = pmaChat.state.events.length;
+
+  if (content) {
+    pmaChat.addAssistantMessage(content, true, { steps, duration });
+  }
+  pmaChat.state.streamText = "";
+  pmaChat.state.status = "done";
+  pmaChat.render();
+  pmaChat.renderMessages();
+  pmaChat.renderEvents();
+  void loadPMAFiles();
+}
 
 async function initPMA(): Promise<void> {
   const elements = getElements();
@@ -86,6 +333,13 @@ async function initPMA(): Promise<void> {
   pmaChat = createDocChat(pmaConfig);
   pmaChat.setTarget("pma");
   pmaChat.render();
+  // Ensure we start at the bottom
+  setTimeout(() => {
+    const stream = document.getElementById("pma-chat-stream");
+    const messages = document.getElementById("pma-chat-messages");
+    if (stream) stream.scrollTop = stream.scrollHeight;
+    if (messages) messages.scrollTop = messages.scrollHeight;
+  }, 100);
 
   initAgentControls({
     agentSelect: elements.agentSelect,
@@ -95,12 +349,100 @@ async function initPMA(): Promise<void> {
 
   await refreshAgentControls({ force: true, reason: "initial" });
   await loadPMAInbox();
+  await loadPMAFiles();
   attachHandlers();
+
+  // If we refreshed mid-turn, recover the final output from the server.
+  await resumePendingTurn();
+
+  // If the page refreshes/navigates while a turn is running, avoid showing a noisy
+  // "network error" and proactively interrupt the running turn on the server to
+  // prevent the next request from receiving a stale/previous response.
+  if (!unloadHandlerInstalled) {
+    unloadHandlerInstalled = true;
+    window.addEventListener("beforeunload", () => {
+      isUnloading = true;
+      clearQueuedTicker();
+      // Abort any in-flight request immediately.
+      if (currentController) {
+        try {
+          currentController.abort();
+        } catch {
+          // ignore
+        }
+      }
+    });
+  }
 
   // Periodically refresh inbox
   setInterval(() => {
     void loadPMAInbox();
+    void loadPMAFiles();
   }, 30000);
+}
+
+async function loadPMAFiles(): Promise<void> {
+  const elements = getElements();
+  try {
+    const payload = (await api("/hub/pma/files", { method: "GET" })) as {
+      inbox: string[];
+      outbox: string[];
+    };
+
+    if (elements.inboxFiles) {
+      const files = payload.inbox || [];
+      elements.inboxFiles.innerHTML = !files.length
+        ? ""
+        : files
+            .map(
+              (f) => `
+            <div class="pma-file-item">
+                <a href="${resolvePath(
+                  `/hub/pma/files/inbox/${f}`
+                )}" download>${escapeHtml(f)}</a>
+                <button class="ghost sm icon-btn pma-file-delete" data-box="inbox" data-file="${escapeHtml(
+                  f
+                )}">×</button>
+            </div>
+        `
+            )
+            .join("");
+    }
+    if (elements.outboxFiles) {
+      const files = payload.outbox || [];
+      elements.outboxFiles.innerHTML = !files.length
+        ? '<div class="muted small">No files</div>'
+        : files
+            .map(
+              (f) => `
+            <div class="pma-file-item">
+                <a href="${resolvePath(
+                  `/hub/pma/files/outbox/${f}`
+                )}" download>${escapeHtml(f)}</a>
+                <button class="ghost sm icon-btn pma-file-delete" data-box="outbox" data-file="${escapeHtml(
+                  f
+                )}">×</button>
+            </div>
+        `
+            )
+            .join("");
+    }
+    // Attach delete handlers
+    document.querySelectorAll(".pma-file-delete").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        const target = e.target as HTMLElement;
+        const box = target.dataset.box;
+        const file = target.dataset.file;
+        if (box && file) {
+          if (!confirm(`Delete ${file}?`)) return;
+          await api(`/hub/pma/files/${box}/${file}`, { method: "DELETE" });
+          void loadPMAFiles();
+        }
+      });
+    });
+  } catch (err) {
+    console.error("Failed to load PMA files", err);
+  }
 }
 
 async function loadPMAInbox(): Promise<void> {
@@ -154,18 +496,28 @@ async function sendMessage(): Promise<void> {
   const agent = elements.agentSelect?.value || getSelectedAgent();
   const model = elements.modelSelect?.value || getSelectedModel(agent);
   const reasoning = elements.reasoningSelect?.value || getSelectedReasoning(agent);
+  const clientTurnId = newClientTurnId();
+  savePendingTurn({ clientTurnId, message, startedAtMs: Date.now() });
 
   currentController = new AbortController();
   pmaChat.state.controller = currentController;
   pmaChat.state.status = "running";
   pmaChat.state.error = "";
   pmaChat.state.streamText = "";
+  pmaChat.state.startTime = Date.now();
   pmaChat.clearEvents();
   pmaChat.addUserMessage(message);
   pmaChat.render();
   pmaChat.renderMessages();
 
   try {
+    try {
+      const baseline = await fetchPMAFiles();
+      currentOutboxBaseline = new Set(baseline.outbox || []);
+    } catch {
+      currentOutboxBaseline = new Set();
+    }
+
     const endpoint = resolvePath("/hub/pma/chat");
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -178,6 +530,7 @@ async function sendMessage(): Promise<void> {
     const payload: Record<string, unknown> = {
       message,
       stream: true,
+      client_turn_id: clientTurnId,
     };
     if (agent) payload.agent = agent;
     if (model) payload.model = model;
@@ -202,6 +555,10 @@ async function sendMessage(): Promise<void> {
       throw new Error(detail || `Request failed (${res.status})`);
     }
 
+    // Stream tool calls/events separately as soon as we have (thread_id, turn_id).
+    // The main /hub/pma/chat stream only emits a final "update"/"done" today.
+    void pollForTurnMeta(clientTurnId);
+
     const contentType = res.headers.get("content-type") || "";
     if (contentType.includes("text/event-stream")) {
       await readPMAStream(res);
@@ -212,12 +569,26 @@ async function sendMessage(): Promise<void> {
       applyPMAResult(responsePayload);
     }
   } catch (err) {
+    // Aborts (including page refresh) shouldn't create an error message that pollutes history.
+    const name =
+      err && typeof err === "object" && "name" in err
+        ? String((err as { name?: unknown }).name || "")
+        : "";
+    if (isUnloading || name === "AbortError") {
+      pmaChat.state.status = "interrupted";
+      pmaChat.state.error = "";
+      pmaChat.state.statusText = isUnloading ? "Cancelled (page reload)" : "Cancelled";
+      pmaChat.render();
+      return;
+    }
     const errorMsg = (err as Error).message || "Request failed";
     pmaChat.state.status = "error";
     pmaChat.state.error = errorMsg;
     pmaChat.addAssistantMessage(`Error: ${errorMsg}`, true);
     pmaChat.render();
     pmaChat.renderMessages();
+    clearPendingTurn();
+    stopTurnEventsStream();
   } finally {
     currentController = null;
     pmaChat.state.controller = null;
@@ -285,12 +656,19 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
           ? parsed
           : ((parsed as Record<string, unknown>).status as string) || "";
       pmaChat!.state.statusText = status;
+      if ((status || "").toLowerCase() === "queued") {
+        queuedSinceMs = queuedSinceMs ?? Date.now();
+        startQueuedTicker();
+      } else {
+        clearQueuedTicker();
+      }
       pmaChat!.render();
       pmaChat!.renderEvents();
       break;
     }
 
     case "token": {
+      clearQueuedTicker();
       const token =
         typeof parsed === "string"
           ? parsed
@@ -299,8 +677,13 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
             rawData ||
             "";
       pmaChat!.state.streamText = (pmaChat!.state.streamText || "") + token;
+      // Force status to "responding" if we have tokens, so the stream loop picks it up
       if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "queued") {
         pmaChat!.state.statusText = "responding";
+      }
+      // Ensure we're in "running" state if receiving tokens
+      if (pmaChat!.state.status !== "running") {
+          pmaChat!.state.status = "running";
       }
       pmaChat!.render();
       break;
@@ -309,13 +692,26 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
     case "event":
     case "app-server": {
       if (pmaChat) {
+        clearQueuedTicker();
+        // Ensure we're in "running" state if receiving events
+        if (pmaChat!.state.status !== "running") {
+            pmaChat!.state.status = "running";
+        }
+        // If we are receiving events but still show "queued", bump status so the UI
+        // reflects progress even before token streaming starts.
+        if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "queued") {
+          pmaChat!.state.statusText = "working";
+        }
         pmaChat.applyAppEvent(parsed);
         pmaChat.renderEvents();
+        // Force a full render to update the inline thinking indicator
+        pmaChat.render();
       }
       break;
     }
 
     case "error": {
+      clearQueuedTicker();
       const message =
         typeof parsed === "object" && parsed !== null
           ? ((parsed as Record<string, unknown>).detail as string) ||
@@ -331,6 +727,7 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
     }
 
     case "interrupted": {
+      clearQueuedTicker();
       const message =
         typeof parsed === "object" && parsed !== null
           ? ((parsed as Record<string, unknown>).detail as string) || rawData
@@ -346,6 +743,10 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
 
     case "update": {
       const data = typeof parsed === "string" ? {} : (parsed as Record<string, unknown>);
+      // If server echoes client_turn_id, we can clear pending when we receive the final payload.
+      if (data.client_turn_id) {
+        clearPendingTurn();
+      }
       if (data.message) {
         pmaChat!.state.streamText = data.message as string;
       }
@@ -355,18 +756,8 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
 
     case "done":
     case "finish": {
-      const responseText = pmaChat!.state.streamText;
-      if (responseText && pmaChat!.state.messages.length > 0) {
-        const lastMessage = pmaChat!.state.messages[pmaChat!.state.messages.length - 1];
-        if (lastMessage.role === "user") {
-          pmaChat!.addAssistantMessage(responseText, true);
-          pmaChat!.state.streamText = "";
-        }
-      }
-      pmaChat!.state.status = "done";
-      pmaChat!.render();
-      pmaChat!.renderMessages();
-      pmaChat!.renderEvents();
+      clearQueuedTicker();
+      void finalizePMAResponse(pmaChat!.state.streamText || "");
       break;
     }
 
@@ -380,6 +771,74 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
       }
       break;
   }
+}
+
+async function resumePendingTurn(): Promise<void> {
+  const pending = loadPendingTurn();
+  if (!pending || !pmaChat) return;
+
+  // Show a running indicator immediately.
+  pmaChat.state.status = "running";
+  pmaChat.state.statusText = "Recovering previous turn…";
+  pmaChat.render();
+  pmaChat.renderMessages();
+
+  const poll = async (): Promise<void> => {
+    try {
+      const payload = (await api(
+        `/hub/pma/active?client_turn_id=${encodeURIComponent(pending.clientTurnId)}`,
+        { method: "GET" }
+      )) as { active?: boolean; current?: Record<string, unknown>; last_result?: Record<string, unknown> };
+
+      const cur = (payload.current || {}) as Record<string, unknown>;
+      const threadId = typeof cur.thread_id === "string" ? cur.thread_id : "";
+      const turnId = typeof cur.turn_id === "string" ? cur.turn_id : "";
+      const agent = typeof cur.agent === "string" ? cur.agent : "codex";
+      if (threadId && turnId && !currentEventsController) {
+        void startTurnEventsStream({ agent, threadId, turnId });
+      }
+
+      const last = (payload.last_result || {}) as Record<string, unknown>;
+      const status = String(last.status || "");
+      if (status === "ok" && typeof last.message === "string") {
+        await finalizePMAResponse(last.message);
+        return;
+      }
+      if (status === "error") {
+        const detail = String(last.detail || "PMA chat failed");
+        pmaChat.state.status = "error";
+        pmaChat.state.error = detail;
+        pmaChat.addAssistantMessage(`Error: ${detail}`, true);
+        pmaChat.render();
+        pmaChat.renderMessages();
+        clearPendingTurn();
+        stopTurnEventsStream();
+        return;
+      }
+      if (status === "interrupted") {
+        pmaChat.state.status = "interrupted";
+        pmaChat.state.error = "";
+        pmaChat.addAssistantMessage("Request interrupted", true);
+        pmaChat.render();
+        pmaChat.renderMessages();
+        clearPendingTurn();
+        stopTurnEventsStream();
+        return;
+      }
+
+      // Still running; keep polling.
+      pmaChat.state.status = "running";
+      pmaChat.state.statusText = "Recovering previous turn…";
+      pmaChat.render();
+      window.setTimeout(() => void poll(), 1000);
+    } catch {
+      // If recovery fails, don't spam errors; just stop trying.
+      pmaChat.state.statusText = "Recovering previous turn…";
+      pmaChat.render();
+    }
+  };
+
+  await poll();
 }
 
 function applyPMAResult(payload: unknown): void {
@@ -406,26 +865,12 @@ function applyPMAResult(payload: unknown): void {
     return;
   }
 
-  pmaChat!.state.status = "done";
-
   if (result.message) {
     pmaChat!.state.streamText = result.message as string;
   }
 
-  const responseText =
-    pmaChat!.state.streamText ||
-    pmaChat!.state.statusText ||
-    "Done";
-  if (responseText && pmaChat!.state.messages.length > 0) {
-    const lastMessage = pmaChat!.state.messages[pmaChat!.state.messages.length - 1];
-    if (lastMessage.role === "user") {
-      pmaChat!.addAssistantMessage(responseText, true);
-    }
-  }
-
-  pmaChat!.render();
-  pmaChat!.renderMessages();
-  pmaChat!.renderEvents();
+  const responseText = (pmaChat!.state.streamText || pmaChat!.state.statusText || "Done") as string;
+  void finalizePMAResponse(responseText);
 }
 
 function parseMaybeJson(data: string): unknown {
@@ -441,6 +886,7 @@ function cancelRequest(): void {
     currentController.abort();
     currentController = null;
   }
+  stopTurnEventsStream();
   if (pmaChat) {
     pmaChat.state.controller = null;
     pmaChat.state.status = "interrupted";
@@ -504,6 +950,59 @@ function attachHandlers(): void {
   if (elements.inboxRefresh) {
     elements.inboxRefresh.addEventListener("click", () => {
       void loadPMAInbox();
+      void loadPMAFiles();
+    });
+  }
+
+  if (elements.outboxRefresh) {
+    elements.outboxRefresh.addEventListener("click", () => {
+      void loadPMAFiles();
+    });
+  }
+
+  if (elements.chatUploadBtn && elements.chatUploadInput) {
+    elements.chatUploadBtn.addEventListener("click", () => {
+      elements.chatUploadInput?.click();
+    });
+    elements.chatUploadInput.addEventListener("change", async () => {
+      const files = elements.chatUploadInput?.files;
+      if (!files || !files.length) return;
+
+      const uploadedNames: string[] = [];
+      const formData = new FormData();
+      for (let i = 0; i < files.length; i++) {
+        formData.append(files[i].name, files[i]);
+        uploadedNames.push(files[i].name);
+      }
+
+      try {
+        const token = getAuthToken();
+        const headers: Record<string, string> = {};
+        if (token) headers.Authorization = `Bearer ${token}`;
+
+        await fetch(resolvePath("/hub/pma/files/inbox"), {
+          method: "POST",
+          headers,
+          body: formData,
+        });
+        if (elements.chatUploadInput) elements.chatUploadInput.value = "";
+        if (pmaChat && uploadedNames.length) {
+          const links = uploadedNames
+            .map((name) => {
+              const href = new URL(
+                resolvePath(`/hub/pma/files/inbox/${encodeURIComponent(name)}`),
+                window.location.origin
+              ).toString();
+              return `[${escapeMarkdownLinkText(name)}](${href})`;
+            })
+            .join("\n");
+          pmaChat.addUserMessage(`**Inbox files (uploaded):**\n${links}`);
+          pmaChat.render();
+        }
+        void loadPMAFiles();
+      } catch (err) {
+        flash("Upload failed", "error");
+      }
     });
   }
 }

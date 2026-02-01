@@ -12260,6 +12260,73 @@ button.loading::after {
   display: none;
 }
 
+/* Inline Thinking */
+.chat-thinking-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 13px;
+}
+
+.chat-thinking-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: chat-spin 1s linear infinite;
+  opacity: 0.7;
+}
+
+.chat-thinking-steps {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.chat-thinking-details-btn {
+  margin-left: auto;
+  padding: 0 6px;
+  height: 18px;
+  line-height: 18px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-thinking-details-btn:hover {
+  color: var(--text);
+}
+
+.chat-thinking-steps-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.chat-thinking-steps-list li {
+  margin: 4px 0;
+}
+
+.chat-thinking-step-title {
+  color: var(--text);
+  opacity: 0.9;
+  font-style: normal;
+}
+
+.chat-thinking-step-summary {
+  opacity: 0.75;
+  font-style: normal;
+}
+
+@keyframes chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Events section */
 .pma-chat-events {
   margin-bottom: 10px;
@@ -12268,7 +12335,7 @@ button.loading::after {
 }
 
 .pma-chat-events.hidden {
-  display: none;
+  display: none !important;
 }
 
 .pma-events-header {
@@ -12535,6 +12602,64 @@ button.loading::after {
   text-decoration: underline;
 }
 
+/* Make PMA file links look like downloadable "pills" */
+.pma-chat-messages .messages-markdown a.pma-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 11px;
+  line-height: 18px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pma-chat-messages .messages-markdown a.pma-file-link::before {
+  content: "↓";
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pma-chat-messages .messages-markdown a.pma-file-link:hover {
+  text-decoration: none;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.pma-chat-messages .messages-markdown a.pma-file-link:hover::before {
+  color: var(--accent);
+}
+
+/* Higher-contrast file pills inside user bubbles */
+.pma-chat-messages .chat-message-user .messages-markdown a.pma-file-link {
+  /* Frosted look on teal bubble, keep text readable */
+  background: rgba(255, 255, 255, 0.28);
+  border-color: rgba(0, 0, 0, 0.18);
+  color: rgba(0, 0, 0, 0.92);
+  font-weight: 650;
+}
+
+.pma-chat-messages .chat-message-user .messages-markdown a.pma-file-link::before {
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.pma-chat-messages .chat-message-user .messages-markdown a.pma-file-link:hover {
+  background: rgba(255, 255, 255, 0.36);
+  border-color: rgba(0, 0, 0, 0.26);
+  color: rgba(0, 0, 0, 0.95);
+}
+
+.pma-chat-messages .chat-message-user .messages-markdown a.pma-file-link:hover::before {
+  color: rgba(0, 0, 0, 0.75);
+}
+
 /* User messages don't need accent color for bold */
 .pma-chat-messages .chat-message-user .messages-markdown strong {
   color: inherit;
@@ -12651,6 +12776,28 @@ button.loading::after {
   opacity: 0.8;
 }
 
+.pma-upload-btn {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.pma-upload-btn:hover {
+  color: var(--text);
+  border-color: var(--text);
+  background: var(--bg-subtle);
+}
+
 /* PMA responsive adjustments */
 @media (max-width: 640px) {
   .pma-header {
@@ -12668,41 +12815,374 @@ button.loading::after {
   }
 
   .pma-chat-section {
-    padding: 8px 10px;
-  }
-
-  .pma-chat-controls-row {
+    padding: 0;
+    display: flex;
     flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
+    flex: 1;
+    overflow: hidden;
   }
 
-  .pma-chat-agent-controls {
-    justify-content: flex-start;
-  }
-
-  .pma-chat-agent-controls select {
-    max-width: 90px;
-    font-size: 10px;
-  }
-
-  .pma-chat-actions {
-    justify-content: flex-end;
+  .pma-chat-main {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
   }
 
   .pma-chat-stream {
-    min-height: 180px;
+    flex: 1;
+    min-height: 0;
+    padding: 10px;
+    margin-top: 0;
+    border: none;
+    border-radius: 0;
+  }
+
+  .pma-chat-compose {
+    padding: 8px;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border);
+  }
+
+  .pma-chat-controls-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .pma-chat-agent-controls {
+    gap: 4px;
+  }
+
+  .pma-chat-agent-controls select {
+    max-width: 80px;
+    font-size: 10px;
+    padding: 2px 4px;
+    height: 24px;
+  }
+
+  .pma-chat-actions {
+    gap: 4px;
+  }
+
+  .pma-new-thread-btn {
+    font-size: 10px;
+    padding: 2px 6px;
+    height: 24px;
+  }
+
+  .pma-status-pill {
+    font-size: 9px;
+    padding: 1px 4px;
+  }
+
+  .pma-chat-input-row {
+    gap: 6px;
+  }
+
+  .pma-chat-input {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 14px;
+    /* Prevent zoom on iOS */
+  }
+
+  .pma-send-btn,
+  .pma-upload-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  .pma-chat-hint {
+    display: none;
   }
 
   .pma-inbox-section {
-    padding: 6px 10px 10px;
+    padding: 6px 10px;
   }
 
   .pma-inbox-list {
-    max-height: 140px;
+    max-height: 120px;
   }
 
   .chat-message {
-    max-width: 92%;
+    max-width: 95%;
+    font-size: 13px;
   }
+}
+
+/* PMA Attachments Area */
+.pma-attachments-area {
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pma-inbox-section,
+.pma-outbox-section {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.pma-inbox-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.pma-inbox-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+}
+
+.pma-inbox-refresh-btn {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 10px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.pma-inbox-refresh-btn:hover {
+  opacity: 1;
+  color: var(--text);
+}
+
+.pma-inbox-list {
+  max-height: 80px;
+  overflow-y: auto;
+  margin-bottom: 4px;
+}
+
+/* PMA Top Bar */
+.pma-top-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.pma-paused-runs-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.pma-inbox-list {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  align-items: center;
+  margin: 0;
+  max-height: none;
+}
+
+.pma-inbox-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.pma-inbox-item:hover {
+  border-color: var(--accent);
+}
+
+.pma-inbox-repo {
+  font-weight: 600;
+  margin-right: 4px;
+  color: var(--accent);
+}
+
+.pma-inbox-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pma-inbox-excerpt,
+.pma-inbox-item-header .pill {
+  display: none;
+}
+
+/* Inline Thinking Indicator */
+.chat-thinking-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 2px 0;
+  font-style: italic;
+}
+
+.chat-thinking-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  display: inline-block;
+  opacity: 0.7;
+}
+
+.chat-thinking-steps {
+  font-size: 11px;
+  opacity: 0.8;
+  font-weight: 500;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pma-chat-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pma-files-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+}
+
+.pma-files-label {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  min-width: 20px;
+  flex-shrink: 0;
+}
+
+.pma-icon-btn-small {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 10px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pma-icon-btn-small:hover {
+  color: var(--text);
+}
+
+/* Compact file list */
+.pma-file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.pma-file-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  height: 20px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10px;
+  max-width: 140px;
+  margin: 0;
+}
+
+.pma-file-item a {
+  color: var(--text);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 110px;
+  line-height: 18px;
+}
+
+.pma-file-item a:hover {
+  text-decoration: underline;
+  color: var(--accent);
+}
+
+.pma-file-delete {
+  width: 12px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--muted);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 0;
+  opacity: 0.7;
+}
+
+.pma-file-delete:hover {
+  color: var(--error);
+  opacity: 1;
+}
+
+.pma-inbox-list .muted {
+  font-size: 11px;
+  padding: 4px 0;
+}
+
+/* Hide empty sections if needed, or style empty state */
+.pma-file-list:empty {
+  display: none;
+}
+
+/* PMA Attachments Area */
+.pma-attachments-area {
+  padding: 4px 8px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Hide empty rows to save space */
+.pma-files-row:has(.pma-file-list:empty) {
+  display: none;
 }

@@ -36,6 +36,8 @@ def format_pma_prompt(base_prompt: str, snapshot: dict[str, Any], message: str) 
     snapshot_text = json.dumps(snapshot, sort_keys=True)
     return (
         f"{base_prompt}\n\n"
+        "To send a file to the user, write it to `.codex-autorunner/pma/outbox/`.\n"
+        "User uploaded files are in `.codex-autorunner/pma/inbox/`.\n\n"
         "<hub_snapshot>\n"
         f"{snapshot_text}\n"
         "</hub_snapshot>\n\n"
@@ -191,6 +193,7 @@ def _gather_inbox(supervisor: HubSupervisor) -> list[dict[str, Any]]:
 
 async def build_hub_snapshot(
     supervisor: Optional[HubSupervisor],
+    hub_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     if supervisor is None:
         return {"repos": [], "inbox": []}
@@ -215,4 +218,21 @@ async def build_hub_snapshot(
 
     inbox = await asyncio.to_thread(_gather_inbox, supervisor)
     inbox = inbox[:PMA_MAX_MESSAGES]
-    return {"repos": repos, "inbox": inbox}
+
+    pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
+    if hub_root:
+        try:
+            pma_dir = hub_root / ".codex-autorunner" / "pma"
+            for box in ["inbox", "outbox"]:
+                box_dir = pma_dir / box
+                if box_dir.exists():
+                    files = [
+                        f.name
+                        for f in box_dir.iterdir()
+                        if f.is_file() and not f.name.startswith(".")
+                    ]
+                    pma_files[box] = sorted(files)
+        except Exception:
+            pass
+
+    return {"repos": repos, "inbox": inbox, "pma_files": pma_files}
