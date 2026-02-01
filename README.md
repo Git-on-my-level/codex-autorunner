@@ -52,7 +52,7 @@ car doctor
 ```
 # Create a ticket and run
 ```
-car run
+car flow ticket_flow bootstrap
 ```
 
 ## Supported models
