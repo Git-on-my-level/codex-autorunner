@@ -27,6 +27,7 @@ from urllib.parse import quote
 import yaml
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
+from ....core.filebox import ensure_structure, save_file
 from ....core.flows.models import FlowRunRecord, FlowRunStatus
 from ....core.flows.store import FlowStore
 from ....core.utils import find_repo_root
@@ -437,6 +438,13 @@ def build_messages_routes() -> APIRouter:
             data = await upload.read()
             try:
                 dest.write_bytes(data)
+                try:
+                    ensure_structure(repo_root)
+                    save_file(repo_root, "inbox", filename, data)
+                except Exception:
+                    _logger.debug(
+                        "Failed to mirror attachment into FileBox", exc_info=True
+                    )
             except OSError as exc:
                 raise HTTPException(
                     status_code=500, detail=f"Failed to write attachment: {exc}"

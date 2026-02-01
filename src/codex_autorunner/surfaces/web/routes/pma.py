@@ -32,8 +32,8 @@ def build_pma_routes() -> APIRouter:
     pma_lock = asyncio.Lock()
     pma_event: Optional[asyncio.Event] = None
     pma_active = False
-    pma_current: dict[str, Any] | None = None
-    pma_last_result: dict[str, Any] | None = None
+    pma_current: Optional[dict[str, Any]] = None
+    pma_last_result: Optional[dict[str, Any]] = None
 
     async def _get_interrupt_event() -> asyncio.Event:
         nonlocal pma_event
@@ -47,7 +47,7 @@ def build_pma_routes() -> APIRouter:
         async with pma_lock:
             pma_active = active
 
-    async def _begin_turn(client_turn_id: str | None) -> bool:
+    async def _begin_turn(client_turn_id: Optional[str]) -> bool:
         nonlocal pma_active, pma_current
         async with pma_lock:
             if pma_active:
@@ -83,7 +83,7 @@ def build_pma_routes() -> APIRouter:
             pma_event = None
 
     @router.get("/active")
-    async def pma_active_status(client_turn_id: str | None = None) -> dict[str, Any]:
+    async def pma_active_status(client_turn_id: Optional[str] = None) -> dict[str, Any]:
         async with pma_lock:
             current = dict(pma_current or {})
             last_result = dict(pma_last_result or {})

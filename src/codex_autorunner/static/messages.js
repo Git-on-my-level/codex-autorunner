@@ -4,6 +4,7 @@ import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { preserveScroll } from "./preserve.js";
 import { createSmartRefresh } from "./smartRefresh.js";
+import { createFileBoxWidget } from "./fileboxUi.js";
 let bellInitialized = false;
 let messagesInitialized = false;
 let activeRunId = null;
@@ -17,8 +18,14 @@ const refreshEl = document.getElementById("messages-refresh");
 const replyBodyEl = document.getElementById("messages-reply-body");
 const replyFilesEl = document.getElementById("messages-reply-files");
 const replySendEl = document.getElementById("messages-reply-send");
+const fileBoxInboxEl = document.getElementById("messages-filebox-inbox");
+const fileBoxOutboxEl = document.getElementById("messages-filebox-outbox");
+const fileBoxUploadEl = document.getElementById("messages-filebox-upload");
+const fileBoxUploadBtn = document.getElementById("messages-filebox-upload-btn");
+const fileBoxRefreshBtn = document.getElementById("messages-filebox-refresh");
 let threadListRefreshCount = 0;
 let threadDetailRefreshCount = 0;
+let fileBoxCtrl = null;
 function isMobileViewport() {
     return window.innerWidth <= 640;
 }
@@ -29,6 +36,21 @@ function showThreadDetail() {
     if (isMobileViewport()) {
         layoutEl?.classList.add("viewing-detail");
     }
+}
+function initFileBox() {
+    if (fileBoxCtrl || (!fileBoxInboxEl && !fileBoxOutboxEl))
+        return;
+    fileBoxCtrl = createFileBoxWidget({
+        scope: "repo",
+        inboxEl: fileBoxInboxEl,
+        outboxEl: fileBoxOutboxEl,
+        uploadInput: fileBoxUploadEl,
+        uploadBtn: fileBoxUploadBtn,
+        refreshBtn: fileBoxRefreshBtn,
+        uploadBox: "inbox",
+        emptyMessage: "No files",
+    });
+    void fileBoxCtrl.refresh();
 }
 function setThreadListRefreshing(active) {
     if (!threadsEl)
@@ -815,6 +837,7 @@ export function initMessages() {
     if (!threadsEl || !detailEl)
         return;
     messagesInitialized = true;
+    initFileBox();
     backBtn?.addEventListener("click", showThreadList);
     window.addEventListener("resize", () => {
         if (!isMobileViewport()) {
@@ -870,6 +893,9 @@ export function initMessages() {
             void loadThreads("background");
             if (selectedRunId) {
                 void loadThread(selectedRunId, "background");
+            }
+            if (status === "ok" || status === "degraded") {
+                void fileBoxCtrl?.refresh();
             }
         }
     });

@@ -1,9 +1,12 @@
 import { resolvePath, getAuthToken, api } from "./utils.js";
+import { readEventStream, parseMaybeJson } from "./streamUtils.js";
 
 export interface FileChatOptions {
   agent?: string;
   model?: string;
   reasoning?: string;
+  clientTurnId?: string;
+  basePath?: string;
 }
 
 export interface FileDraft {
@@ -45,16 +48,6 @@ export interface FileChatHandlers {
   onDone?(): void;
 }
 
-const decoder = new TextDecoder();
-
-function parseMaybeJson(data: string): unknown {
-  try {
-    return JSON.parse(data);
-  } catch {
-    return data;
-  }
-}
-
 export async function sendFileChat(
   target: string,
   message: string,
@@ -62,7 +55,7 @@ export async function sendFileChat(
   handlers: FileChatHandlers = {},
   options: FileChatOptions = {}
 ): Promise<void> {
-  const endpoint = resolvePath("/api/file-chat");
+  const endpoint = resolvePath(options.basePath || "/api/file-chat");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -74,6 +67,7 @@ export async function sendFileChat(
     message,
     stream: true,
   };
+  if (options.clientTurnId) payload.client_turn_id = options.clientTurnId;
   if (options.agent) payload.agent = options.agent;
   if (options.model) payload.model = options.model;
   if (options.reasoning) payload.reasoning = options.reasoning;
@@ -109,33 +103,7 @@ export async function sendFileChat(
 }
 
 async function readFileChatStream(res: Response, handlers: FileChatHandlers): Promise<void> {
-  if (!res.body) throw new Error("Streaming not supported in this browser");
-
-  const reader = res.body.getReader();
-  let buffer = "";
-
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() || "";
-    for (const chunk of chunks) {
-      if (!chunk.trim()) continue;
-      let event = "message";
-      const dataLines: string[] = [];
-      chunk.split("\n").forEach((line) => {
-        if (line.startsWith("event:")) {
-          event = line.slice(6).trim();
-        } else if (line.startsWith("data:")) {
-          dataLines.push(line.slice(5).trimStart());
-        }
-      });
-      if (!dataLines.length) continue;
-      const rawData = dataLines.join("\n");
-      handleStreamEvent(event, rawData, handlers);
-    }
-  }
+  await readEventStream(res, (event, raw) => handleStreamEvent(event, raw, handlers));
 }
 
 function handleStreamEvent(event: string, rawData: string, handlers: FileChatHandlers): void {
@@ -236,4 +204,77 @@ export async function discardDraft(target: string): Promise<{ content: string }>
 
 export async function interruptFileChat(target: string): Promise<void> {
   await api("/api/file-chat/interrupt", { method: "POST", body: { target } });
+}
+
+export interface ActiveTurnPayload {
+  active?: boolean;
+  current?: Record<string, unknown>;
+  last_result?: Record<string, unknown>;
+}
+
+export interface TurnEventMeta {
+  agent?: string;
+  threadId: string;
+  turnId: string;
+  basePath?: string;
+}
+
+export function newClientTurnId(prefix = "filechat"): string {
+  try {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // ignore
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export async function fetchActiveFileChat(
+  clientTurnId: string,
+  basePath = "/api/file-chat/active"
+): Promise<ActiveTurnPayload> {
+  const suffix = clientTurnId ? `?client_turn_id=${encodeURIComponent(clientTurnId)}` : "";
+  const path = `${basePath}${suffix}`;
+  try {
+    const res = (await api(path)) as ActiveTurnPayload;
+    return res || {};
+  } catch {
+    return {};
+  }
+}
+
+export function streamTurnEvents(
+  meta: TurnEventMeta,
+  handlers: { onEvent?(payload: unknown): void; onError?(msg: string): void } = {}
+): AbortController | null {
+  if (!meta.threadId || !meta.turnId) return null;
+  const ctrl = new AbortController();
+  const token = getAuthToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const url = resolvePath(
+    `${meta.basePath || "/api/file-chat/turns"}/${encodeURIComponent(meta.turnId)}/events?thread_id=${encodeURIComponent(
+      meta.threadId
+    )}&agent=${encodeURIComponent(meta.agent || "codex")}`
+  );
+  void (async () => {
+    try {
+      const res = await fetch(url, { method: "GET", headers, signal: ctrl.signal });
+      if (!res.ok) {
+        handlers.onError?.("Failed to stream events");
+        return;
+      }
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("text/event-stream")) return;
+      await readEventStream(res, (event, raw) => {
+        if (event === "app-server" || event === "event") {
+          handlers.onEvent?.(parseMaybeJson(raw));
+        }
+      });
+    } catch (err) {
+      handlers.onError?.((err as Error).message || "Event stream failed");
+    }
+  })();
+  return ctrl;
 }

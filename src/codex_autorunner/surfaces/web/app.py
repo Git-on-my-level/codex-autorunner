@@ -78,6 +78,7 @@ from .middleware import (
     SecurityHeadersMiddleware,
 )
 from .routes import build_repo_router
+from .routes.filebox import build_hub_filebox_routes
 from .routes.pma import build_pma_routes
 from .routes.system import build_system_routes
 from .runner_manager import RunnerManager
@@ -1135,6 +1136,7 @@ def create_hub_app(
     app.state.hub_static_assets = None
     app.mount("/static", static_files, name="static")
     app.include_router(build_pma_routes())
+    app.include_router(build_hub_filebox_routes())
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
     repo_apps: dict[str, ASGIApp] = {}
