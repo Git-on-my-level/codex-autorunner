@@ -1275,10 +1275,29 @@ class FilesCommands(SharedHelpers):
                 reply_to=message.message_id,
             )
             return
-        record = await self._require_bound_record(message)
-        if not record:
-            return
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.ensure_topic(message.chat_id, message.thread_id)
+        record, pma_error = message_handlers._record_with_media_workspace(self, record)
+        if pma_error:
+            await self._send_message(
+                message.chat_id,
+                pma_error,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if record is None or not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                self._with_conversation_id(
+                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         inbox_dir = self._files_inbox_dir(record.workspace_path, key)
         pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)
         sent_dir = self._files_outbox_sent_dir(record.workspace_path, key)

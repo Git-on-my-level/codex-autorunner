@@ -2052,22 +2052,29 @@ class WorkspaceCommands(SharedHelpers):
             runtime = self._router.runtime_for(key)
         approval_policy, sandbox_policy = self._effective_policies(record)
         agent = self._effective_agent(record)
+        is_pma = bool(getattr(record, "pma_enabled", False))
+        workspace_label = record.workspace_path or ("hub" if is_pma else "unbound")
         effort_label = (
             record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
         )
-        lines = [
-            f"Workspace: {record.workspace_path or 'unbound'}",
-            f"Workspace ID: {record.workspace_id or 'unknown'}",
-            f"Active thread: {record.active_thread_id or 'none'}",
-            f"Active turn: {runtime.current_turn_id or 'none'}",
-            f"Agent: {agent}",
-            f"Resume: {'supported' if self._agent_supports_resume(agent) else 'unsupported'}",
-            f"Model: {record.model or 'default'}",
-            f"Effort: {effort_label}",
-            f"Approval mode: {record.approval_mode}",
-            f"Approval policy: {approval_policy or 'default'}",
-            f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
-        ]
+        lines = []
+        if is_pma:
+            lines.append("Mode: PMA (hub)")
+        lines.extend(
+            [
+                f"Workspace: {workspace_label}",
+                f"Workspace ID: {record.workspace_id or 'unknown'}",
+                f"Active thread: {record.active_thread_id or 'none'}",
+                f"Active turn: {runtime.current_turn_id or 'none'}",
+                f"Agent: {agent}",
+                f"Resume: {'supported' if self._agent_supports_resume(agent) else 'unsupported'}",
+                f"Model: {record.model or 'default'}",
+                f"Effort: {effort_label}",
+                f"Approval mode: {record.approval_mode}",
+                f"Approval policy: {approval_policy or 'default'}",
+                f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
+            ]
+        )
         pending = await self._store.pending_approvals_for_key(key)
         if pending:
             lines.append(f"Pending approvals: {len(pending)}")
@@ -2086,45 +2093,48 @@ class WorkspaceCommands(SharedHelpers):
             lines.extend(_format_token_usage(token_usage))
         rate_limits = await self._read_rate_limits(record.workspace_path, agent=agent)
         lines.extend(_format_rate_limits(rate_limits))
-        if not record.workspace_path:
+
+        manifest_path = getattr(self, "_manifest_path", None)
+        hub_root = getattr(self, "_hub_root", None)
+        if is_pma and manifest_path and hub_root:
+            try:
+                manifest = load_manifest(manifest_path, hub_root)
+                enabled_repos = [repo for repo in manifest.repos if repo.enabled]
+                lines.append(
+                    f"Hub repos: {len(enabled_repos)}/{len(manifest.repos)} enabled"
+                )
+                active_count = 0
+                paused_count = 0
+                for repo in manifest.repos:
+                    if not repo.enabled:
+                        continue
+                    repo_root = (hub_root / repo.path).resolve()
+                    db_path = repo_root / ".codex-autorunner" / "flows.db"
+                    if not db_path.exists():
+                        continue
+
+                    store = FlowStore(db_path)
+                    try:
+                        store.initialize()
+                        runs = store.list_flow_runs(flow_type="ticket_flow")
+                        if runs:
+                            latest = runs[0]
+                            if latest.status.is_active():
+                                active_count += 1
+                            elif latest.status == FlowRunStatus.PAUSED:
+                                paused_count += 1
+                    except Exception:
+                        pass
+                    finally:
+                        store.close()
+                lines.append(f"Hub flows: {active_count} active, {paused_count} paused")
+            except Exception:
+                pass
+
+        if not record.workspace_path and not is_pma:
             lines.append("Use /bind <repo_id> or /bind <path>.")
 
-        if record.pma_enabled:
-            if self._manifest_path and self._hub_root:
-                try:
-                    manifest = load_manifest(self._manifest_path, self._hub_root)
-                    active_count = 0
-                    paused_count = 0
-                    for repo in manifest.repos:
-                        if not repo.enabled:
-                            continue
-                        repo_root = (self._hub_root / repo.path).resolve()
-                        db_path = repo_root / ".codex-autorunner" / "flows.db"
-                        if not db_path.exists():
-                            continue
-
-                        store = FlowStore(db_path)
-                        try:
-                            store.initialize()
-                            runs = store.list_flow_runs(flow_type="ticket_flow")
-                            if runs:
-                                latest = runs[0]
-                                if latest.status.is_active():
-                                    active_count += 1
-                                elif latest.status == FlowRunStatus.PAUSED:
-                                    paused_count += 1
-                        except Exception:
-                            pass
-                        finally:
-                            store.close()
-
-                    if active_count or paused_count:
-                        lines.append(
-                            f"Hub Flows: {active_count} active, {paused_count} paused"
-                        )
-                except Exception:
-                    pass
-        elif record.workspace_path:
+        if record.workspace_path and not is_pma:
             repo_root = Path(record.workspace_path)
             db_path = repo_root / ".codex-autorunner" / "flows.db"
             if db_path.exists():

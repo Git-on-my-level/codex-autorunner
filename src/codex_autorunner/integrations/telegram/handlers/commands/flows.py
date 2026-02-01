@@ -279,12 +279,11 @@ class FlowCommands(SharedHelpers):
 
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._store.get_topic(key)
+        is_pma = bool(record and getattr(record, "pma_enabled", False))
+        is_unbound = bool(not record or not getattr(record, "workspace_path", None))
 
         if not target_repo_root and not action_raw:
             # Check if we should show Hub Overview
-            is_pma = bool(record and record.pma_enabled)
-            is_unbound = bool(not record or not record.workspace_path)
-
             if is_pma or is_unbound:
                 await self._send_flow_hub_overview(message)
                 return
@@ -298,9 +297,12 @@ class FlowCommands(SharedHelpers):
         elif record and record.workspace_path:
             repo_root = canonicalize_path(Path(record.workspace_path))
         else:
+            if action == "status" and (is_pma or is_unbound):
+                await self._send_flow_hub_overview(message)
+                return
             await self._send_message(
                 message.chat_id,
-                "No workspace bound. Use /bind to bind this topic to a repo first, or use /flow <repo_id>.",
+                "No workspace bound. Use /flow <repo-id> status to inspect a repo without binding, or /bind <repo-id> to attach this topic.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -825,6 +827,9 @@ class FlowCommands(SharedHelpers):
                 lines.append(f"❓ `{repo.id}`: Error reading state")
             finally:
                 store.close()
+
+        lines.append("")
+        lines.append("Tip: use /flow <repo-id> status for repo details.")
 
         await self._send_message(
             message.chat_id,

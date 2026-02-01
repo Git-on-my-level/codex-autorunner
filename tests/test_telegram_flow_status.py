@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -189,3 +190,80 @@ async def test_flow_status_action_sends_keyboard(
     assert handler.sent
     assert any("Run:" in line for line in handler.sent[0].splitlines())
     assert handler.markups[0] is not None
+
+
+class _TopicStoreStub:
+    def __init__(self, record: object | None) -> None:
+        self._record = record
+
+    async def get_topic(self, _key: str) -> object | None:
+        return self._record
+
+
+class _PMAFlowStatusHandler(FlowCommands):
+    def __init__(self, record: object | None) -> None:
+        self._store = _TopicStoreStub(record)
+        self.hub_calls = 0
+        self.sent: list[str] = []
+
+    async def _resolve_topic_key(self, _chat_id: int, _thread_id: int | None) -> str:
+        return "topic"
+
+    def _resolve_workspace(self, _arg: str) -> tuple[str, Path] | None:
+        return None
+
+    async def _send_flow_hub_overview(self, _message: TelegramMessage) -> None:
+        self.hub_calls += 1
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id: int | None = None,
+        reply_to: int | None = None,
+        reply_markup: dict[str, object] | None = None,
+    ) -> None:
+        _ = (thread_id, reply_to, reply_markup)
+        self.sent.append(text)
+
+
+@pytest.mark.anyio
+async def test_flow_status_in_pma_topic_uses_hub_overview() -> None:
+    record = SimpleNamespace(pma_enabled=True, workspace_path=None)
+    handler = _PMAFlowStatusHandler(record)
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow_status",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_flow_status(message, "")
+
+    assert handler.hub_calls == 1
+    assert not handler.sent
+
+
+@pytest.mark.anyio
+async def test_flow_status_unbound_topic_uses_hub_overview() -> None:
+    handler = _PMAFlowStatusHandler(None)
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow_status",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_flow_status(message, "")
+
+    assert handler.hub_calls == 1
+    assert not handler.sent

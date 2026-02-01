@@ -61,6 +61,8 @@ class _StatusHandlerStub(TelegramCommandHandlers):
         self._client_calls = 0
         self._sent_messages: list[str] = []
         self._token_usage_by_thread: dict[str, dict[str, object]] = {}
+        self._manifest_path = None
+        self._hub_root = None
 
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return f"{chat_id}:{thread_id}"
@@ -129,3 +131,17 @@ async def test_status_codex_includes_rate_limits() -> None:
 
     assert handler._client_calls == 1
     assert "Limits:" in handler._sent_messages[-1]
+
+
+@pytest.mark.anyio
+async def test_status_pma_mode_skips_bind_hint() -> None:
+    record = TelegramTopicRecord(pma_enabled=True)
+    runtime = _RuntimeStub()
+    handler = _StatusHandlerStub(record, runtime, client=_RateLimitClientStub())
+
+    await handler._handle_status(_message(), runtime=runtime)
+
+    assert handler._sent_messages
+    text = handler._sent_messages[-1]
+    assert "PMA" in text
+    assert "Use /bind" not in text
