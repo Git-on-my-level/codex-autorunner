@@ -5,7 +5,7 @@
 import { api, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js";
 import { publish } from "./bus.js";
 import { clearTicketChatHistory } from "./ticketChatStorage.js";
-import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, ticketChatState, } from "./ticketChatActions.js";
+import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, ticketChatState, resumeTicketPendingTurn, } from "./ticketChatActions.js";
 import { initAgentControls } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
 import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
@@ -597,6 +597,7 @@ export function openTicketEditor(ticket) {
     renderTicketChat();
     renderTicketEvents();
     renderTicketMessages();
+    void resumeTicketPendingTurn(ticket?.index ?? null);
     state.isOpen = true;
     modal.classList.remove("hidden");
     // Update URL with ticket index

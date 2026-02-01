@@ -5,6 +5,8 @@
 import { api, resolvePath, getAuthToken, escapeHtml, flash } from "./utils.js";
 import { createDocChat, } from "./docChatCore.js";
 import { getSelectedAgent, getSelectedModel, getSelectedReasoning, refreshAgentControls, initAgentControls } from "./agentControls.js";
+import { createFileBoxWidget } from "./fileboxUi.js";
+import { REPO_ID } from "./env.js";
 const pmaStyling = {
     eventClass: "chat-event",
     eventTitleClass: "chat-event-title",
@@ -42,6 +44,9 @@ let isUnloading = false;
 let unloadHandlerInstalled = false;
 let currentEventsController = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
+let fileBoxRepoId = null;
+let fileBoxCtrl = null;
+let pendingUploadNames = [];
 function newClientTurnId() {
     // crypto.randomUUID is not guaranteed everywhere; keep a safe fallback.
     try {
@@ -85,6 +90,68 @@ function clearPendingTurn() {
     catch {
         // ignore
     }
+}
+async function resolveFileBoxRepoId() {
+    if (fileBoxRepoId)
+        return fileBoxRepoId;
+    if (REPO_ID) {
+        fileBoxRepoId = REPO_ID;
+        return fileBoxRepoId;
+    }
+    try {
+        const payload = (await api("/hub/repos", { method: "GET" }));
+        const repo = (payload.repos || []).find((r) => r?.id && r.initialized && r.exists_on_disk !== false);
+        if (repo?.id) {
+            fileBoxRepoId = repo.id;
+        }
+    }
+    catch {
+        // best-effort; UI will stay empty if unknown
+    }
+    return fileBoxRepoId;
+}
+async function initFileBoxUI() {
+    const elements = getElements();
+    const repoId = await resolveFileBoxRepoId();
+    if (!elements.inboxFiles || !elements.outboxFiles)
+        return;
+    if (!repoId) {
+        elements.inboxFiles.innerHTML = '<div class="muted small">FileBox unavailable</div>';
+        elements.outboxFiles.innerHTML = '<div class="muted small">FileBox unavailable</div>';
+        return;
+    }
+    fileBoxCtrl = createFileBoxWidget({
+        scope: REPO_ID ? "repo" : "hub",
+        repoId,
+        inboxEl: elements.inboxFiles,
+        outboxEl: elements.outboxFiles,
+        uploadInput: elements.chatUploadInput,
+        uploadBtn: elements.chatUploadBtn,
+        refreshBtn: elements.outboxRefresh,
+        uploadBox: "inbox",
+        emptyMessage: "No files",
+        onChange: (listing) => {
+            if (pendingUploadNames.length && pmaChat) {
+                const links = pendingUploadNames
+                    .map((name) => {
+                    const match = listing.inbox.find((e) => e.name === name);
+                    const href = match?.url ? resolvePath(match.url) : "";
+                    const text = escapeMarkdownLinkText(name);
+                    return href ? `[${text}](${href})` : text;
+                })
+                    .join("\n");
+                if (links) {
+                    pmaChat.addUserMessage(`**Inbox files (uploaded):**\n${links}`);
+                    pmaChat.render();
+                }
+                pendingUploadNames = [];
+            }
+        },
+        onUpload: (names) => {
+            pendingUploadNames = names;
+        },
+    });
+    await fileBoxCtrl.refresh();
 }
 function stopTurnEventsStream() {
     if (currentEventsController) {
@@ -216,40 +283,33 @@ function getElements() {
     };
 }
 const decoder = new TextDecoder();
-async function fetchPMAFiles() {
-    const payload = (await api("/hub/pma/files", { method: "GET" }));
-    return {
-        inbox: Array.isArray(payload.inbox) ? payload.inbox : [],
-        outbox: Array.isArray(payload.outbox) ? payload.outbox : [],
-    };
-}
 function escapeMarkdownLinkText(text) {
     // Keep this ES2019-compatible (no String.prototype.replaceAll).
     return text.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
 }
-function formatOutboxAttachments(files) {
-    if (!files.length)
+function formatOutboxAttachments(listing, names) {
+    if (!listing || !names.length)
         return "";
-    const lines = files.map((name) => {
-        const href = new URL(resolvePath(`/hub/pma/files/outbox/${encodeURIComponent(name)}`), window.location.origin).toString();
-        return `[${escapeMarkdownLinkText(name)}](${href})`;
+    const lines = names.map((name) => {
+        const entry = listing.outbox.find((e) => e.name === name);
+        const href = entry?.url ? new URL(resolvePath(entry.url), window.location.origin).toString() : "";
+        const label = escapeMarkdownLinkText(name);
+        return href ? `[${label}](${href})` : label;
     });
-    return `**Outbox files (download):**\n${lines.join("\n")}`;
+    return lines.length ? `**Outbox files (download):**\n${lines.join("\n")}` : "";
 }
 async function finalizePMAResponse(responseText) {
     if (!pmaChat)
         return;
     let attachments = "";
     try {
-        const current = await fetchPMAFiles();
-        // Only attach outbox files if we captured a baseline at the start of the turn.
-        if (currentOutboxBaseline) {
-            const baseline = currentOutboxBaseline;
-            const added = (current.outbox || []).filter((name) => !baseline.has(name));
-            attachments = formatOutboxAttachments(added);
-        }
-        else {
-            attachments = "";
+        if (fileBoxCtrl) {
+            const current = await fileBoxCtrl.refresh();
+            if (currentOutboxBaseline) {
+                const baseline = currentOutboxBaseline;
+                const added = (current.outbox || []).map((e) => e.name).filter((name) => !baseline.has(name));
+                attachments = formatOutboxAttachments(current, added);
+            }
         }
     }
     catch {
@@ -275,7 +335,7 @@ async function finalizePMAResponse(responseText) {
     pmaChat.render();
     pmaChat.renderMessages();
     pmaChat.renderEvents();
-    void loadPMAFiles();
+    void fileBoxCtrl?.refresh();
 }
 async function initPMA() {
     const elements = getElements();
@@ -300,7 +360,7 @@ async function initPMA() {
     });
     await refreshAgentControls({ force: true, reason: "initial" });
     await loadPMAInbox();
-    await loadPMAFiles();
+    await initFileBoxUI();
     attachHandlers();
     // If we refreshed mid-turn, recover the final output from the server.
     await resumePendingTurn();
@@ -326,57 +386,8 @@ async function initPMA() {
     // Periodically refresh inbox
     setInterval(() => {
         void loadPMAInbox();
-        void loadPMAFiles();
+        void fileBoxCtrl?.refresh();
     }, 30000);
-}
-async function loadPMAFiles() {
-    const elements = getElements();
-    try {
-        const payload = (await api("/hub/pma/files", { method: "GET" }));
-        if (elements.inboxFiles) {
-            const files = payload.inbox || [];
-            elements.inboxFiles.innerHTML = !files.length
-                ? ""
-                : files
-                    .map((f) => `
-            <div class="pma-file-item">
-                <a href="${resolvePath(`/hub/pma/files/inbox/${f}`)}" download>${escapeHtml(f)}</a>
-                <button class="ghost sm icon-btn pma-file-delete" data-box="inbox" data-file="${escapeHtml(f)}">×</button>
-            </div>
-        `)
-                    .join("");
-        }
-        if (elements.outboxFiles) {
-            const files = payload.outbox || [];
-            elements.outboxFiles.innerHTML = !files.length
-                ? '<div class="muted small">No files</div>'
-                : files
-                    .map((f) => `
-            <div class="pma-file-item">
-                <a href="${resolvePath(`/hub/pma/files/outbox/${f}`)}" download>${escapeHtml(f)}</a>
-                <button class="ghost sm icon-btn pma-file-delete" data-box="outbox" data-file="${escapeHtml(f)}">×</button>
-            </div>
-        `)
-                    .join("");
-        }
-        // Attach delete handlers
-        document.querySelectorAll(".pma-file-delete").forEach((btn) => {
-            btn.addEventListener("click", async (e) => {
-                const target = e.target;
-                const box = target.dataset.box;
-                const file = target.dataset.file;
-                if (box && file) {
-                    if (!confirm(`Delete ${file}?`))
-                        return;
-                    await api(`/hub/pma/files/${box}/${file}`, { method: "DELETE" });
-                    void loadPMAFiles();
-                }
-            });
-        });
-    }
-    catch (err) {
-        console.error("Failed to load PMA files", err);
-    }
 }
 async function loadPMAInbox() {
     const elements = getElements();
@@ -441,8 +452,9 @@ async function sendMessage() {
     pmaChat.renderMessages();
     try {
         try {
-            const baseline = await fetchPMAFiles();
-            currentOutboxBaseline = new Set(baseline.outbox || []);
+            const listing = fileBoxCtrl ? await fileBoxCtrl.refresh() : null;
+            const names = listing?.outbox?.map((e) => e.name) || [];
+            currentOutboxBaseline = new Set(names);
         }
         catch {
             currentOutboxBaseline = new Set();
@@ -842,55 +854,12 @@ function attachHandlers() {
     if (elements.inboxRefresh) {
         elements.inboxRefresh.addEventListener("click", () => {
             void loadPMAInbox();
-            void loadPMAFiles();
+            void fileBoxCtrl?.refresh();
         });
     }
     if (elements.outboxRefresh) {
         elements.outboxRefresh.addEventListener("click", () => {
-            void loadPMAFiles();
-        });
-    }
-    if (elements.chatUploadBtn && elements.chatUploadInput) {
-        elements.chatUploadBtn.addEventListener("click", () => {
-            elements.chatUploadInput?.click();
-        });
-        elements.chatUploadInput.addEventListener("change", async () => {
-            const files = elements.chatUploadInput?.files;
-            if (!files || !files.length)
-                return;
-            const uploadedNames = [];
-            const formData = new FormData();
-            for (let i = 0; i < files.length; i++) {
-                formData.append(files[i].name, files[i]);
-                uploadedNames.push(files[i].name);
-            }
-            try {
-                const token = getAuthToken();
-                const headers = {};
-                if (token)
-                    headers.Authorization = `Bearer ${token}`;
-                await fetch(resolvePath("/hub/pma/files/inbox"), {
-                    method: "POST",
-                    headers,
-                    body: formData,
-                });
-                if (elements.chatUploadInput)
-                    elements.chatUploadInput.value = "";
-                if (pmaChat && uploadedNames.length) {
-                    const links = uploadedNames
-                        .map((name) => {
-                        const href = new URL(resolvePath(`/hub/pma/files/inbox/${encodeURIComponent(name)}`), window.location.origin).toString();
-                        return `[${escapeMarkdownLinkText(name)}](${href})`;
-                    })
-                        .join("\n");
-                    pmaChat.addUserMessage(`**Inbox files (uploaded):**\n${links}`);
-                    pmaChat.render();
-                }
-                void loadPMAFiles();
-            }
-            catch (err) {
-                flash("Upload failed", "error");
-            }
+            void fileBoxCtrl?.refresh();
         });
     }
 }

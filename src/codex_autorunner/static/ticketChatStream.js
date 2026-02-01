@@ -3,17 +3,9 @@
  * Ticket Chat Stream - handles SSE streaming for ticket chat
  */
 import { resolvePath, getAuthToken } from "./utils.js";
-import { ticketChatState, renderTicketChat, clearTicketEvents, addUserMessage, addAssistantMessage, } from "./ticketChatActions.js";
+import { ticketChatState, renderTicketChat, clearTicketEvents, addUserMessage, addAssistantMessage, applyTicketChatResult, } from "./ticketChatActions.js";
 import { applyTicketEvent, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
-const decoder = new TextDecoder();
-function parseMaybeJson(data) {
-    try {
-        return JSON.parse(data);
-    }
-    catch {
-        return data;
-    }
-}
+import { readEventStream, parseMaybeJson } from "./streamUtils.js";
 export async function performTicketChatRequest(ticketIndex, message, signal, options = {}) {
     // Clear events from previous request and add user message to history
     clearTicketEvents();
@@ -39,6 +31,8 @@ export async function performTicketChatRequest(ticketIndex, message, signal, opt
         payload.model = options.model;
     if (options.reasoning)
         payload.reasoning = options.reasoning;
+    if (options.clientTurnId)
+        payload.client_turn_id = options.clientTurnId;
     const res = await fetch(endpoint, {
         method: "POST",
         headers,
@@ -59,7 +53,7 @@ export async function performTicketChatRequest(ticketIndex, message, signal, opt
     }
     const contentType = res.headers.get("content-type") || "";
     if (contentType.includes("text/event-stream")) {
-        await readTicketChatStream(res);
+        await readEventStream(res, (event, data) => handleTicketStreamEvent(event, data));
     }
     else {
         // Non-streaming response
@@ -67,54 +61,6 @@ export async function performTicketChatRequest(ticketIndex, message, signal, opt
             ? await res.json()
             : await res.text();
         applyTicketChatResult(responsePayload);
-    }
-}
-async function readTicketChatStream(res) {
-    if (!res.body)
-        throw new Error("Streaming not supported in this browser");
-    const reader = res.body.getReader();
-    let buffer = "";
-    let escapedNewlines = false;
-    for (;;) {
-        const { value, done } = await reader.read();
-        if (done)
-            break;
-        const decoded = decoder.decode(value, { stream: true });
-        // Handle escaped newlines
-        if (!escapedNewlines) {
-            const combined = buffer + decoded;
-            if (!combined.includes("\n") && combined.includes("\\n")) {
-                escapedNewlines = true;
-                buffer = buffer.replace(/\\n(?=event:|data:|\\n)/g, "\n");
-            }
-        }
-        buffer += escapedNewlines
-            ? decoded.replace(/\\n(?=event:|data:|\\n)/g, "\n")
-            : decoded;
-        // Split on double newlines (SSE message delimiter)
-        const chunks = buffer.split("\n\n");
-        buffer = chunks.pop() || "";
-        for (const chunk of chunks) {
-            if (!chunk.trim())
-                continue;
-            let event = "message";
-            const dataLines = [];
-            chunk.split("\n").forEach((line) => {
-                if (line.startsWith("event:")) {
-                    event = line.slice(6).trim();
-                }
-                else if (line.startsWith("data:")) {
-                    dataLines.push(line.slice(5).trimStart());
-                }
-                else if (line.trim()) {
-                    dataLines.push(line);
-                }
-            });
-            if (dataLines.length === 0)
-                continue;
-            const data = dataLines.join("\n");
-            handleTicketStreamEvent(event, data);
-        }
     }
 }
 function handleTicketStreamEvent(event, rawData) {
@@ -201,64 +147,4 @@ function handleTicketStreamEvent(event, rawData) {
             }
             break;
     }
-}
-function applyTicketChatResult(payload) {
-    if (!payload || typeof payload !== "object")
-        return;
-    const result = payload;
-    if (result.status === "interrupted") {
-        ticketChatState.status = "interrupted";
-        ticketChatState.error = "";
-        addAssistantMessage("Request interrupted", true);
-        renderTicketChat();
-        renderTicketMessages();
-        return;
-    }
-    if (result.status === "error" || result.error) {
-        ticketChatState.status = "error";
-        ticketChatState.error =
-            result.detail || result.error || "Chat failed";
-        addAssistantMessage(`Error: ${ticketChatState.error}`, true);
-        renderTicketChat();
-        renderTicketMessages();
-        return;
-    }
-    // Success
-    ticketChatState.status = "done";
-    if (result.message) {
-        ticketChatState.streamText = result.message;
-    }
-    if (result.agent_message || result.agentMessage) {
-        ticketChatState.statusText =
-            result.agent_message || result.agentMessage || "";
-    }
-    // Check for draft/patch in response
-    const hasDraft = result.has_draft ?? result.hasDraft;
-    if (hasDraft === false) {
-        ticketChatState.draft = null;
-    }
-    else if (hasDraft === true || result.draft || result.patch || result.content) {
-        ticketChatState.draft = {
-            content: result.content || "",
-            patch: result.patch || "",
-            agentMessage: result.agent_message || result.agentMessage || "",
-            createdAt: result.created_at || result.createdAt || "",
-            baseHash: result.base_hash || result.baseHash || "",
-        };
-    }
-    // Add assistant message from response
-    const responseText = ticketChatState.streamText ||
-        ticketChatState.statusText ||
-        (ticketChatState.draft ? "Changes ready to apply" : "Done");
-    if (responseText && ticketChatState.messages.length > 0) {
-        // Only add if we have messages (i.e., a user message was sent)
-        const lastMessage = ticketChatState.messages[ticketChatState.messages.length - 1];
-        // Avoid duplicate assistant messages
-        if (lastMessage.role === "user") {
-            addAssistantMessage(responseText, true);
-        }
-    }
-    renderTicketChat();
-    renderTicketMessages();
-    renderTicketEvents();
 }

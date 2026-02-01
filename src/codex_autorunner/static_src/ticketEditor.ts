@@ -14,6 +14,7 @@ import {
   renderTicketChat,
   resetTicketChatState,
   ticketChatState,
+  resumeTicketPendingTurn,
 } from "./ticketChatActions.js";
 import { initAgentControls } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
@@ -719,6 +720,7 @@ export function openTicketEditor(ticket?: TicketData): void {
   renderTicketChat();
   renderTicketEvents();
   renderTicketMessages();
+  void resumeTicketPendingTurn(ticket?.index ?? null);
 
   state.isOpen = true;
   modal.classList.remove("hidden");
