@@ -6,7 +6,7 @@
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:185:GithubContextRequest",
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:189:GithubPrSyncRequest",
     "python:class:src/codex_autorunner/surfaces/web/schemas.py:216:StateResponse",
-    "python:function:src/codex_autorunner/core/about_car.py:153:ensure_about_car_file",
+    "python:function:src/codex_autorunner/core/about_car.py:187:ensure_about_car_file",
     "python:function:src/codex_autorunner/core/adapter_utils.py:6:handle_agent_output",
     "python:function:src/codex_autorunner/core/docs.py:63:validate_todo_markdown",
     "python:function:src/codex_autorunner/core/git_checkpoint.py:16:maybe_git_commit",

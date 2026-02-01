@@ -2,7 +2,10 @@ from pathlib import Path
 
 import yaml
 
-from .core.about_car import ensure_about_car_file_for_repo
+from .core.about_car import (
+    ensure_about_car_file_for_repo,
+    ensure_ticket_flow_quickstart_file_for_repo,
+)
 from .core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
@@ -117,6 +120,7 @@ def seed_repo_files(
         },
         force=force,
     )
+    ensure_ticket_flow_quickstart_file_for_repo(repo_root, force=force)
     ensure_ticket_linter(repo_root, force=force)
     ensure_ticket_manager(repo_root, force=force)
 
@@ -172,4 +176,5 @@ You coordinate tickets and flows across multiple repos. You delegate code change
 - You have hub context (manifest/worktrees, repo statuses, paused flows, dispatch inbox).
 - You coordinate but do not directly edit code in repos.
 - Treat prompt.md as code: keep it short and stable.
+- When coordinating ticket flows, read `<repo>/.codex-autorunner/TICKET_FLOW_QUICKSTART.md` for CLI entrypoints and ticket paths.
 """

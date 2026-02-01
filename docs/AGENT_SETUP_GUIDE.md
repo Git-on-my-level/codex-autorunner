@@ -196,8 +196,11 @@ Once basic setup is complete, suggest these next steps:
 
 | Command | Description |
 |---------|-------------|
-| `car run` | Start the autorunner loop |
-| `car once` | Execute a single run |
+| `car flow ticket_flow bootstrap` | Seed tickets (if needed) and start a ticket flow |
+| `car flow ticket_flow start` | Start/resume the latest ticket flow |
+| `car flow ticket_flow status` | Show ticket flow status |
+| `car flow ticket_flow resume` | Resume a paused ticket flow |
+| `car flow ticket_flow stop` | Stop a ticket flow |
 | `car status` | Show autorunner status |
 | `car log` | Show autorunner log output |
 | `car edit <doc>` | Open a workspace doc in your editor |
