@@ -42,10 +42,11 @@ interface AgentControlsPayload {
   catalog: ModelCatalog | null;
 }
 
+const STORAGE_PREFIX = REPO_ID ? "car.agent" : "car.pma.agent";
 const STORAGE_KEYS = {
-  selected: "car.agent.selected",
-  model: (agent: string) => `car.agent.${agent}.model`,
-  reasoning: (agent: string) => `car.agent.${agent}.reasoning`,
+  selected: `${STORAGE_PREFIX}.selected`,
+  model: (agent: string) => `${STORAGE_PREFIX}.${agent}.model`,
+  reasoning: (agent: string) => `${STORAGE_PREFIX}.${agent}.reasoning`,
 } as const;
 
 const FALLBACK_AGENTS: Agent[] = [
@@ -447,4 +448,17 @@ export function initAgentControls(config: AgentControlConfig = {}): void {
 
 export async function ensureAgentCatalog(): Promise<void> {
   await refreshAgentControls({ force: true, reason: "manual" });
+}
+
+export function clearAgentSelectionStorage(): void {
+  if (REPO_ID) return;
+  safeSetStorage(STORAGE_KEYS.selected, "");
+  const candidates = new Set<string>([
+    ...agentList.map((agent) => agent.id),
+    ...FALLBACK_AGENTS.map((agent) => agent.id),
+  ]);
+  candidates.forEach((agentId) => {
+    safeSetStorage(STORAGE_KEYS.model(agentId), "");
+    safeSetStorage(STORAGE_KEYS.reasoning(agentId), "");
+  });
 }

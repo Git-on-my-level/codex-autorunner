@@ -113,3 +113,42 @@ def test_templates_fetch_disabled(hub_env) -> None:
 
     assert result.exit_code == 1
     assert "Templates are disabled." in result.output
+
+
+def test_templates_fetch_network_unavailable_includes_details(
+    hub_env, tmp_path: Path
+) -> None:
+    """Test that NetworkUnavailableError includes repo_id, ref, path, and git error details."""
+    # Configure a template repo that doesn't exist
+    _write_templates_config(
+        hub_env.hub_root,
+        enabled=True,
+        repos=[
+            {
+                "id": "nonexistent",
+                "url": "https://example.com/nonexistent-repo.git",
+                "trusted": True,
+                "default_ref": "main",
+            }
+        ],
+    )
+
+    runner = CliRunner()
+
+    # Try to fetch from the non-existent repo - should fail with detailed error
+    result = runner.invoke(
+        app,
+        [
+            "templates",
+            "fetch",
+            "nonexistent:tickets/TICKET-TEST.md",
+            "--repo",
+            str(hub_env.repo_root),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "repo_id=nonexistent" in result.output
+    assert "ref=main" in result.output
+    assert "path=tickets/TICKET-TEST.md" in result.output
+    assert "Hint: Fetch once while online to seed the cache" in result.output

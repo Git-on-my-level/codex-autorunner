@@ -4,7 +4,7 @@
  */
 import { api, resolvePath, getAuthToken, escapeHtml, flash } from "./utils.js";
 import { createDocChat, } from "./docChatCore.js";
-import { getSelectedAgent, getSelectedModel, getSelectedReasoning, refreshAgentControls, initAgentControls } from "./agentControls.js";
+import { clearAgentSelectionStorage, getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
 import { REPO_ID } from "./env.js";
 const pmaStyling = {
@@ -825,6 +825,8 @@ function cancelRequest() {
 }
 function resetThread() {
     cancelRequest();
+    clearPendingTurn();
+    stopTurnEventsStream();
     if (pmaChat) {
         pmaChat.state.messages = [];
         pmaChat.state.events = [];
@@ -838,6 +840,15 @@ function resetThread() {
         pmaChat.renderMessages();
     }
     flash("Thread reset", "info");
+}
+async function resetThreadOnServer() {
+    const elements = getElements();
+    const agent = elements.agentSelect?.value || getSelectedAgent();
+    const resetAgent = (agent || "").trim() || "all";
+    await api("/hub/pma/thread/reset", {
+        method: "POST",
+        body: { agent: resetAgent },
+    });
 }
 function attachHandlers() {
     const elements = getElements();
@@ -853,7 +864,19 @@ function attachHandlers() {
     }
     if (elements.newThreadBtn) {
         elements.newThreadBtn.addEventListener("click", () => {
-            resetThread();
+            void (async () => {
+                cancelRequest();
+                try {
+                    await resetThreadOnServer();
+                }
+                catch (err) {
+                    flash("Failed to reset server thread", "error");
+                    return;
+                }
+                clearAgentSelectionStorage();
+                await refreshAgentControls({ force: true, reason: "manual" });
+                resetThread();
+            })();
         });
     }
     if (elements.input) {

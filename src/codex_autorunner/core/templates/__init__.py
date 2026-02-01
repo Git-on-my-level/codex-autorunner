@@ -9,6 +9,7 @@ from .git_mirror import (
     fetch_template,
     parse_template_ref,
 )
+from .provenance import inject_provenance
 from .scan_cache import (
     TemplateScanRecord,
     get_scan_record,
@@ -28,6 +29,7 @@ __all__ = [
     "ensure_git_mirror",
     "fetch_template",
     "parse_template_ref",
+    "inject_provenance",
     "TemplateScanRecord",
     "get_scan_record",
     "scan_lock",

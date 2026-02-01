@@ -22,6 +22,7 @@ from ....core.templates import (
     RepoNotConfiguredError,
     TemplateNotFoundError,
     fetch_template,
+    inject_provenance,
     parse_template_ref,
 )
 from ....core.templates.scan_cache import TemplateScanRecord, get_scan_record, scan_lock
@@ -598,6 +599,9 @@ def build_templates_routes() -> APIRouter:
                         detail=_error_detail("agent_invalid", str(exc)),
                     ) from exc
             content = _apply_agent_override(content, payload.set_agent)
+
+        if payload.include_provenance:
+            content = inject_provenance(content, fetched, scan_record)
 
         try:
             path.write_text(

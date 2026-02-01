@@ -46,6 +46,7 @@ from ...core.templates import (
     TemplateNotFoundError,
     fetch_template,
     get_scan_record,
+    inject_provenance,
     parse_template_ref,
     scan_lock,
 )
@@ -191,9 +192,11 @@ def _fetch_template_with_scan(template: str, ctx: RuntimeContext, hub: Optional[
         fetched = fetch_template(
             repo=repo_cfg, hub_root=hub_root, template_ref=template
         )
-    except NetworkUnavailableError:
+    except NetworkUnavailableError as exc:
         _raise_exit(
-            "Network fetch failed and no cached copy exists; pause and notify user."
+            f"{str(exc)}\n"
+            "Hint: Fetch once while online to seed the cache. "
+            "If this template is untrusted, scanning may also require a working agent backend."
         )
     except (
         RepoNotConfiguredError,
@@ -638,6 +641,11 @@ def templates_apply(
     set_agent: Optional[str] = typer.Option(
         None, "--set-agent", help="Override frontmatter agent"
     ),
+    provenance: bool = typer.Option(
+        False,
+        "--provenance/--no-provenance",
+        help="Embed template provenance in ticket",
+    ),
     repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
 ):
@@ -685,6 +693,9 @@ def templates_apply(
             except ValueError as exc:
                 _raise_exit(str(exc), cause=exc)
         content = _apply_agent_override(content, set_agent)
+
+    if provenance:
+        content = inject_provenance(content, fetched, scan_record)
 
     try:
         path.write_text(content, encoding="utf-8")

@@ -255,6 +255,10 @@ class TemplateApplyRequest(Payload):
     set_agent: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("set_agent", "setAgent")
     )
+    include_provenance: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("include_provenance", "includeProvenance"),
+    )
 
 
 class TemplateApplyResponse(ResponseModel):
