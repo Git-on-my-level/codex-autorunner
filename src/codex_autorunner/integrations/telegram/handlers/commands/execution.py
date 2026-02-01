@@ -44,6 +44,7 @@ from .....integrations.github.service import GitHubService
 from ....app_server.client import (
     CodexAppServerClient,
     CodexAppServerDisconnected,
+    CodexAppServerResponseError,
     _normalize_sandbox_policy,
 )
 from ...adapter import (
@@ -1941,6 +1942,36 @@ class ExecutionCommands(SharedHelpers):
         turn_key: Optional[TurnKey] = None
         turn_started_at: Optional[float] = None
 
+        def _is_missing_thread_error(exc: Exception) -> bool:
+            if not isinstance(exc, CodexAppServerResponseError):
+                return False
+            message = str(exc).lower()
+            return "thread not found" in message
+
+        async def _start_new_thread(agent: str) -> Optional[str]:
+            nonlocal record
+            workspace_path = record.workspace_path
+            if not workspace_path:
+                return None
+            thread = await client.thread_start(workspace_path, agent=agent)
+            if not await self._require_thread_workspace(
+                message, workspace_path, thread, action="thread_start"
+            ):
+                return None
+            new_thread_id = _extract_thread_id(thread)
+            if not new_thread_id:
+                return None
+            if pma_mode and pma_thread_registry and pma_thread_key:
+                pma_thread_registry.set_thread_id(pma_thread_key, new_thread_id)
+            elif not pma_mode:
+                record = await self._apply_thread_result(
+                    message.chat_id,
+                    message.thread_id,
+                    thread,
+                    active_thread_id=new_thread_id,
+                )
+            return new_thread_id
+
         try:
             client = await self._client_for_workspace(record.workspace_path)
         except AppServerUnavailableError as exc:
@@ -1999,26 +2030,8 @@ class ExecutionCommands(SharedHelpers):
                         transcript_message_id,
                         transcript_text,
                     )
-                workspace_path = record.workspace_path
-                if not workspace_path:
-                    return _TurnRunFailure(
-                        "Workspace missing.",
-                        None,
-                        transcript_message_id,
-                        transcript_text,
-                    )
                 agent = self._effective_agent(record)
-                thread = await client.thread_start(workspace_path, agent=agent)
-                if not await self._require_thread_workspace(
-                    message, workspace_path, thread, action="thread_start"
-                ):
-                    return _TurnRunFailure(
-                        "Thread workspace mismatch.",
-                        None,
-                        transcript_message_id,
-                        transcript_text,
-                    )
-                thread_id = _extract_thread_id(thread)
+                thread_id = await _start_new_thread(agent)
                 if not thread_id:
                     failure_message = "Failed to start a new thread."
                     if send_failure_response:
@@ -2033,15 +2046,6 @@ class ExecutionCommands(SharedHelpers):
                         None,
                         transcript_message_id,
                         transcript_text,
-                    )
-                if pma_mode:
-                    pma_thread_registry.set_thread_id(pma_thread_key, thread_id)
-                else:
-                    record = await self._apply_thread_result(
-                        message.chat_id,
-                        message.thread_id,
-                        thread,
-                        active_thread_id=thread_id,
                     )
             else:
                 if not pma_mode:
@@ -2166,14 +2170,48 @@ class ExecutionCommands(SharedHelpers):
                         PLACEHOLDER_TEXT,
                     )
 
-                turn_handle = await client.turn_start(
-                    thread_id,
-                    prompt_text,
-                    input_items=input_items,
-                    approval_policy=approval_policy,
-                    sandbox_policy=sandbox_policy,
-                    **turn_kwargs,
-                )
+                try:
+                    turn_handle = await client.turn_start(
+                        thread_id,
+                        prompt_text,
+                        input_items=input_items,
+                        approval_policy=approval_policy,
+                        sandbox_policy=sandbox_policy,
+                        **turn_kwargs,
+                    )
+                except Exception as exc:
+                    if (
+                        pma_mode
+                        and allow_new_thread
+                        and _is_missing_thread_error(exc)
+                        and pma_thread_registry
+                        and pma_thread_key
+                    ):
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.pma.thread.reset",
+                            topic_key=key,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            codex_thread_id=thread_id,
+                            reason="thread_not_found",
+                        )
+                        pma_thread_registry.reset_thread(pma_thread_key)
+                        agent = self._effective_agent(record)
+                        thread_id = await _start_new_thread(agent)
+                        if thread_id is None:
+                            raise
+                        turn_handle = await client.turn_start(
+                            thread_id,
+                            prompt_text,
+                            input_items=input_items,
+                            approval_policy=approval_policy,
+                            sandbox_policy=sandbox_policy,
+                            **turn_kwargs,
+                        )
+                    else:
+                        raise
                 if pending_seed:
                     await self._router.update_topic(
                         message.chat_id,

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 from .....agents.opencode.runtime import extract_session_id
+from .....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from .....core.flows import FlowStore
 from .....core.flows.models import FlowRunStatus
 from .....core.logging_utils import log_event
@@ -936,6 +937,20 @@ class WorkspaceCommands(SharedHelpers):
     async def _handle_new(self, message: TelegramMessage) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.get_topic(key)
+        pma_enabled = bool(record and record.pma_enabled)
+        if pma_enabled:
+            registry = getattr(self, "_hub_thread_registry", None)
+            agent = self._effective_agent(record)
+            pma_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
+            if registry:
+                registry.reset_thread(pma_key)
+            await self._send_message(
+                message.chat_id,
+                "PMA session reset. Send a message to start a fresh PMA turn.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
