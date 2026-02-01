@@ -2165,8 +2165,12 @@ Compact canceled.""",
         )
         self._compact_pending.pop(key, None)
         record = await self._router.get_topic(key)
-        if record is None or not record.workspace_path:
+        if record is None:
             await self._answer_callback(callback, "Selection expired")
+            return
+        workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
+        if workspace_path is None:
+            await self._answer_callback(callback, error or "Selection expired")
             return
         if callback.chat_id is None:
             return
