@@ -292,10 +292,28 @@ def build_pma_routes() -> APIRouter:
         if not await _begin_turn():
             raise HTTPException(status_code=409, detail="PMA chat already running")
 
+        agents, available_default = _available_agents(request)
+        available_ids = {entry.get("id") for entry in agents if isinstance(entry, dict)}
+
+        def _resolve_default_agent() -> str:
+            raw = getattr(request.app.state.config, "raw", {})
+            configured_default = None
+            if isinstance(raw, dict):
+                pma_config = raw.get("pma", {})
+                if isinstance(pma_config, dict):
+                    configured_default = pma_config.get("default_agent")
+            try:
+                candidate = validate_agent_id(configured_default or "")
+            except ValueError:
+                candidate = None
+            if candidate and candidate in available_ids:
+                return candidate
+            return available_default
+
         try:
             agent_id = validate_agent_id(agent or "")
         except ValueError:
-            agent_id = "codex"
+            agent_id = _resolve_default_agent()
 
         hub_root = request.app.state.config.root
         prompt_base = load_pma_prompt(hub_root)
