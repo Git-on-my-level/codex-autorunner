@@ -26,14 +26,17 @@ class _FlowStatusAliasHandler(FlowCommands):
 
 
 class _FlowReplyAliasHandler(FlowCommands):
-    def __init__(self, repo_root: Path) -> None:
+    def __init__(self, repo_root: Path, *, explode: bool = False) -> None:
         self._store = _TopicStoreStub(repo_root)
         self.reply_args: list[str] = []
+        self.explode = explode
 
     async def _resolve_topic_key(self, _chat_id: int, _thread_id: int | None) -> str:
         return "topic"
 
     async def _handle_reply(self, _message: TelegramMessage, args: str) -> None:
+        if self.explode:
+            raise RuntimeError("boom")
         self.reply_args.append(args)
 
     def _resolve_workspace(self, _key: str) -> tuple[str, Path] | None:
@@ -76,3 +79,12 @@ async def test_flow_reply_alias_routes_to_flow_reply(tmp_path: Path) -> None:
     handler = _FlowReplyAliasHandler(tmp_path)
     await handler._handle_flow(_message("/flow reply hello"), "reply hello world")
     assert handler.reply_args == ["hello world"]
+
+
+@pytest.mark.anyio
+async def test_flow_command_errors_are_reported(tmp_path: Path) -> None:
+    handler = _FlowReplyAliasHandler(tmp_path, explode=True)
+    message = _message("/flow reply hello")
+    await handler._handle_flow(message, "reply hello world")
+
+    assert handler.reply_args == []

@@ -27,6 +27,7 @@ from .....core.flows.worker_process import (
     check_worker_health,
     clear_worker_metadata,
 )
+from .....core.logging_utils import log_event
 from .....core.runtime import RuntimeContext
 from .....core.state import now_iso
 from .....core.utils import atomic_write, canonicalize_path
@@ -308,38 +309,66 @@ class FlowCommands(SharedHelpers):
             )
             return
 
-        if action == "status":
-            await self._handle_flow_status_action(message, repo_root, rest_argv)
-            return
-        if action == "runs":
-            await self._handle_flow_runs(message, repo_root, rest_argv)
-            return
-        if action == "bootstrap":
-            await self._handle_flow_bootstrap(message, repo_root, rest_argv)
-            return
-        if action == "issue":
-            await self._handle_flow_issue(message, repo_root, remainder)
-            return
-        if action == "plan":
-            await self._handle_flow_plan(message, repo_root, remainder)
-            return
-        if action == "resume":
-            await self._handle_flow_resume(message, repo_root, rest_argv)
-            return
-        if action == "stop":
-            await self._handle_flow_stop(message, repo_root, rest_argv)
-            return
-        if action == "recover":
-            await self._handle_flow_recover(message, repo_root, rest_argv)
-            return
-        if action == "restart":
-            await self._handle_flow_restart(message, repo_root, rest_argv)
-            return
-        if action == "archive":
-            await self._handle_flow_archive(message, repo_root, rest_argv)
-            return
-        if action == "reply":
-            await self._handle_reply(message, remainder)
+        try:
+            if action == "status":
+                await self._handle_flow_status_action(message, repo_root, rest_argv)
+                return
+            if action == "runs":
+                await self._handle_flow_runs(message, repo_root, rest_argv)
+                return
+            if action == "bootstrap":
+                await self._handle_flow_bootstrap(message, repo_root, rest_argv)
+                return
+            if action == "issue":
+                await self._handle_flow_issue(message, repo_root, remainder)
+                return
+            if action == "plan":
+                await self._handle_flow_plan(message, repo_root, remainder)
+                return
+            if action == "resume":
+                await self._handle_flow_resume(message, repo_root, rest_argv)
+                return
+            if action == "stop":
+                await self._handle_flow_stop(message, repo_root, rest_argv)
+                return
+            if action == "recover":
+                await self._handle_flow_recover(message, repo_root, rest_argv)
+                return
+            if action == "restart":
+                await self._handle_flow_restart(message, repo_root, rest_argv)
+                return
+            if action == "archive":
+                await self._handle_flow_archive(message, repo_root, rest_argv)
+                return
+            if action == "reply":
+                await self._handle_reply(message, remainder)
+                return
+        except Exception as exc:  # pragma: no cover - defensive
+            log_event(
+                _logger,
+                logging.WARNING,
+                "telegram.flow.command_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                action=action or "unknown",
+                exc=exc,
+            )
+            format_msg = getattr(self, "_with_conversation_id", None)
+            error_text = (
+                format_msg(
+                    "Flow command failed; check logs for details.",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                )
+                if callable(format_msg)
+                else "Flow command failed; check logs for details."
+            )
+            await self._send_message(
+                message.chat_id,
+                error_text,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
             return
 
         await self._send_message(
