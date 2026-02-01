@@ -43,6 +43,7 @@ export const ticketChat = createDocChat({
 export const ticketChatState = Object.assign(ticketChat.state, {
     ticketIndex: null,
     draft: null,
+    contextUsagePercent: null,
 });
 let currentTurnEventsController = null;
 export function getTicketChatElements() {
@@ -80,6 +81,7 @@ export function resetTicketChatState() {
     ticketChatState.streamText = "";
     ticketChatState.statusText = "";
     ticketChatState.controller = null;
+    ticketChatState.contextUsagePercent = null;
     // Note: events are cleared at the start of each new request, not here
     // Messages persist across requests within the same ticket
 }

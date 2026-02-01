@@ -128,7 +128,9 @@ def build_filebox_routes() -> APIRouter:
 
 
 def _resolve_hub_repo_root(request: Request, repo_id: Optional[str]) -> Path:
-    supervisor: HubSupervisor | None = getattr(request.app.state, "supervisor", None)
+    supervisor: HubSupervisor | None = getattr(
+        request.app.state, "hub_supervisor", None
+    )
     if supervisor is None:
         raise HTTPException(status_code=404, detail="Hub supervisor unavailable")
     snapshots = supervisor.list_repos()

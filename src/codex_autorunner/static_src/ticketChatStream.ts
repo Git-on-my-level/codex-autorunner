@@ -135,6 +135,23 @@ function handleTicketStreamEvent(event: string, rawData: string): void {
       break;
     }
 
+    case "token_usage": {
+      // Token usage events - context window usage
+      if (typeof parsed === "object" && parsed !== null) {
+        const usage = parsed as Record<string, unknown>;
+        const totalTokens = usage.totalTokens as number | undefined;
+        const modelContextWindow = usage.modelContextWindow as number | undefined;
+        if (totalTokens !== undefined && modelContextWindow !== undefined && modelContextWindow > 0) {
+          const percentRemaining = Math.round(((modelContextWindow - totalTokens) / modelContextWindow) * 100);
+          const percentRemainingClamped = Math.max(0, Math.min(100, percentRemaining));
+          // Store context usage for display in chat UI
+          ticketChatState.contextUsagePercent = percentRemainingClamped;
+          renderTicketChat();
+        }
+      }
+      break;
+    }
+
     case "error": {
       const message =
         typeof parsed === "object" && parsed !== null

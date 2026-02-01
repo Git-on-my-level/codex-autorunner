@@ -687,7 +687,7 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
         if (pmaChat!.state.status !== "running") {
             pmaChat!.state.status = "running";
         }
-        // If we are receiving events but still show "queued", bump status so the UI
+        // If we are receiving events but still show "queued", bump status so UI
         // reflects progress even before token streaming starts.
         if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "queued") {
           pmaChat!.state.statusText = "working";
@@ -696,6 +696,25 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
         pmaChat.renderEvents();
         // Force a full render to update the inline thinking indicator
         pmaChat.render();
+      }
+      break;
+    }
+
+    case "token_usage": {
+      // Token usage events - context window usage
+      if (typeof parsed === "object" && parsed !== null) {
+        const usage = parsed as Record<string, unknown>;
+        const totalTokens = usage.totalTokens as number | undefined;
+        const modelContextWindow = usage.modelContextWindow as number | undefined;
+        if (totalTokens !== undefined && modelContextWindow !== undefined && modelContextWindow > 0) {
+          const percentRemaining = Math.round(((modelContextWindow - totalTokens) / modelContextWindow) * 100);
+          const percentRemainingClamped = Math.max(0, Math.min(100, percentRemaining));
+          // Store context usage for display in chat UI
+          if (pmaChat) {
+            pmaChat!.state.contextUsagePercent = percentRemainingClamped;
+            pmaChat!.render();
+          }
+        }
       }
       break;
     }
@@ -895,6 +914,7 @@ function resetThread(): void {
     pmaChat.state.streamText = "";
     pmaChat.state.statusText = "";
     pmaChat.state.status = "idle";
+    pmaChat.state.contextUsagePercent = null;
     pmaChat.render();
     pmaChat.renderMessages();
   }

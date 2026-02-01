@@ -140,6 +140,8 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
             state_key=f"workspace_{rel_suffix.replace('/', '_')}",
         )
 
+    raise HTTPException(status_code=400, detail=f"invalid target: {target}")
+
 
 def _build_file_chat_prompt(*, target: _Target, message: str, before: str) -> str:
     if target.kind == "ticket":
@@ -442,6 +444,9 @@ def build_file_chat_routes() -> APIRouter:
                 raw_events = result.pop("raw_events", []) or []
                 for event in raw_events:
                     yield format_sse("app-server", event)
+                usage_parts = result.pop("usage_parts", []) or []
+                for usage in usage_parts:
+                    yield format_sse("token_usage", usage)
                 result["client_turn_id"] = client_turn_id or ""
                 yield format_sse("update", result)
                 yield format_sse("done", {"status": "ok"})
@@ -470,6 +475,7 @@ def build_file_chat_routes() -> APIRouter:
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         on_meta: Optional[Callable[[str, str, str], Any]] = None,
+        on_usage: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         supervisor = getattr(request.app.state, "app_server_supervisor", None)
         threads = getattr(request.app.state, "app_server_threads", None)
@@ -519,6 +525,7 @@ def build_file_chat_routes() -> APIRouter:
                 thread_key=thread_key,
                 stall_timeout_seconds=stall_timeout_seconds,
                 on_meta=on_meta,
+                on_usage=on_usage,
             )
         else:
             if supervisor is None:
@@ -712,6 +719,7 @@ def build_file_chat_routes() -> APIRouter:
         thread_key: Optional[str] = None,
         stall_timeout_seconds: Optional[float] = None,
         on_meta: Optional[Callable[[str, str, str], Any]] = None,
+        on_usage: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
         from ....agents.opencode.runtime import (
             PERMISSION_ALLOW,
@@ -746,6 +754,20 @@ def build_file_chat_routes() -> APIRouter:
         model_payload = split_model_id(model)
         await supervisor.mark_turn_started(repo_root)
 
+        usage_parts: list[Dict[str, Any]] = []
+
+        async def _part_handler(
+            part_type: str, part: Any, turn_id_arg: Optional[str] | None
+        ) -> None:
+            if part_type == "usage" and on_usage is not None:
+                usage_parts.append(part)
+                try:
+                    maybe = on_usage(part)
+                    if asyncio.iscoroutine(maybe):
+                        await maybe
+                except Exception:
+                    logger.debug("file chat usage handler failed", exc_info=True)
+
         ready_event = asyncio.Event()
         output_task = asyncio.create_task(
             collect_opencode_output(
@@ -757,6 +779,7 @@ def build_file_chat_routes() -> APIRouter:
                 question_policy="auto_first_option",
                 should_stop=interrupt_event.is_set,
                 ready_event=ready_event,
+                part_handler=_part_handler,
                 stall_timeout_seconds=stall_timeout_seconds,
             )
         )
@@ -807,7 +830,7 @@ def build_file_chat_routes() -> APIRouter:
         if output_result.error:
             raise FileChatError(output_result.error)
         agent_message = _parse_agent_message(output_result.text)
-        return {
+        result = {
             "status": "ok",
             "agent_message": agent_message,
             "message": output_result.text,
@@ -815,6 +838,9 @@ def build_file_chat_routes() -> APIRouter:
             "turn_id": turn_id,
             "agent": "opencode",
         }
+        if usage_parts:
+            result["usage_parts"] = usage_parts
+        return result
 
     def _parse_agent_message(output: str) -> str:
         text = (output or "").strip()

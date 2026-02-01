@@ -25,6 +25,7 @@ export interface TicketDraft {
 export interface TicketChatState extends ChatState {
   ticketIndex: number | null;
   draft: TicketDraft | null;
+  contextUsagePercent: number | null;
 }
 
 // Limits for events display
@@ -61,6 +62,7 @@ export const ticketChat = createDocChat({
 export const ticketChatState: TicketChatState = Object.assign(ticketChat.state, {
   ticketIndex: null,
   draft: null,
+  contextUsagePercent: null,
 });
 let currentTurnEventsController: AbortController | null = null;
 
@@ -100,6 +102,7 @@ export function resetTicketChatState(): void {
   ticketChatState.streamText = "";
   ticketChatState.statusText = "";
   ticketChatState.controller = null;
+  ticketChatState.contextUsagePercent = null;
   // Note: events are cleared at the start of each new request, not here
   // Messages persist across requests within the same ticket
 }

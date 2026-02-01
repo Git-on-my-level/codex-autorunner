@@ -57,6 +57,7 @@ export function createDocChat(config) {
         messages: [],
         eventItemIndex: {},
         eventsExpanded: false,
+        contextUsagePercent: null,
     };
     const elements = getElements(config.idPrefix);
     function decorateFileLinks(root) {
@@ -239,6 +240,7 @@ export function createDocChat(config) {
         const summary = summarizeEvents(state.events, {
             maxActions: config.compactOptions?.maxActions ?? COMPACT_MAX_ACTIONS,
             maxTextLength: config.compactOptions?.maxTextLength ?? COMPACT_MAX_TEXT_LENGTH,
+            contextUsagePercent: state.contextUsagePercent ?? undefined,
         });
         const text = state.events.length ? renderCompactSummary(summary) : "";
         const wrapper = document.createElement("pre");
@@ -300,6 +302,9 @@ export function createDocChat(config) {
                     parts.push(`${msg.meta.steps} steps`);
                 if (msg.meta.duration)
                     parts.push(`${msg.meta.duration.toFixed(1)}s`);
+                if (state.contextUsagePercent !== null && msg.isFinal) {
+                    parts.push(`ctx ${state.contextUsagePercent}%`);
+                }
                 if (parts.length)
                     metaText += ` · ${parts.join(" · ")}`;
             }
@@ -364,6 +369,12 @@ export function createDocChat(config) {
                     steps.className = "chat-thinking-steps";
                     steps.textContent = `(${stepCount} steps)`;
                     header.appendChild(steps);
+                    if (state.contextUsagePercent !== null) {
+                        const context = document.createElement("span");
+                        context.className = "chat-thinking-steps";
+                        context.textContent = ` · ctx ${state.contextUsagePercent}%`;
+                        header.appendChild(context);
+                    }
                     // Only show the toggle if we have more than a couple steps.
                     if (meaningfulEvents.length > 2) {
                         const toggle = document.createElement("button");
