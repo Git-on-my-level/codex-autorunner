@@ -8,7 +8,14 @@ import {
   type ChatStyling,
   type DocChatInstance,
 } from "./docChatCore.js";
-import { getSelectedAgent, getSelectedModel, getSelectedReasoning, refreshAgentControls, initAgentControls } from "./agentControls.js";
+import {
+  clearAgentSelectionStorage,
+  getSelectedAgent,
+  getSelectedModel,
+  getSelectedReasoning,
+  initAgentControls,
+  refreshAgentControls,
+} from "./agentControls.js";
 
 interface PMAInboxItem {
   repo_id: string;
@@ -897,6 +904,8 @@ function cancelRequest(): void {
 
 function resetThread(): void {
   cancelRequest();
+  clearPendingTurn();
+  stopTurnEventsStream();
   if (pmaChat) {
     pmaChat.state.messages = [];
     pmaChat.state.events = [];
@@ -909,6 +918,16 @@ function resetThread(): void {
     pmaChat.renderMessages();
   }
   flash("Thread reset", "info");
+}
+
+async function resetThreadOnServer(): Promise<void> {
+  const elements = getElements();
+  const agent = elements.agentSelect?.value || getSelectedAgent();
+  const resetAgent = (agent || "").trim() || "all";
+  await api("/hub/pma/thread/reset", {
+    method: "POST",
+    body: { agent: resetAgent },
+  });
 }
 
 function attachHandlers(): void {
@@ -927,7 +946,18 @@ function attachHandlers(): void {
 
   if (elements.newThreadBtn) {
     elements.newThreadBtn.addEventListener("click", () => {
-      resetThread();
+      void (async () => {
+        cancelRequest();
+        try {
+          await resetThreadOnServer();
+        } catch (err) {
+          flash("Failed to reset server thread", "error");
+          return;
+        }
+        clearAgentSelectionStorage();
+        await refreshAgentControls({ force: true, reason: "manual" });
+        resetThread();
+      })();
     });
   }
 

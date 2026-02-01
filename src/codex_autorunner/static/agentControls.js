@@ -3,10 +3,11 @@ import { api, flash } from "./utils.js";
 import { createSmartRefresh } from "./smartRefresh.js";
 import { REPO_ID } from "./env.js";
 const API_PREFIX = REPO_ID ? "/api" : "/hub/pma";
+const STORAGE_PREFIX = REPO_ID ? "car.agent" : "car.pma.agent";
 const STORAGE_KEYS = {
-    selected: "car.agent.selected",
-    model: (agent) => `car.agent.${agent}.model`,
-    reasoning: (agent) => `car.agent.${agent}.reasoning`,
+    selected: `${STORAGE_PREFIX}.selected`,
+    model: (agent) => `${STORAGE_PREFIX}.${agent}.model`,
+    reasoning: (agent) => `${STORAGE_PREFIX}.${agent}.reasoning`,
 };
 const FALLBACK_AGENTS = [
     { id: "codex", name: "Codex" },
@@ -380,4 +381,17 @@ export function initAgentControls(config = {}) {
 }
 export async function ensureAgentCatalog() {
     await refreshAgentControls({ force: true, reason: "manual" });
+}
+export function clearAgentSelectionStorage() {
+    if (REPO_ID)
+        return;
+    safeSetStorage(STORAGE_KEYS.selected, "");
+    const candidates = new Set([
+        ...agentList.map((agent) => agent.id),
+        ...FALLBACK_AGENTS.map((agent) => agent.id),
+    ]);
+    candidates.forEach((agentId) => {
+        safeSetStorage(STORAGE_KEYS.model(agentId), "");
+        safeSetStorage(STORAGE_KEYS.reasoning(agentId), "");
+    });
 }

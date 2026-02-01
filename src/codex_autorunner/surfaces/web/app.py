@@ -1134,7 +1134,10 @@ def create_hub_app(
     app.state.static_assets_lock = threading.Lock()
     app.state.hub_static_assets = None
     app.mount("/static", static_files, name="static")
-    app.include_router(build_pma_routes())
+    raw_config = getattr(context.config, "raw", {})
+    pma_config = raw_config.get("pma", {}) if isinstance(raw_config, dict) else {}
+    if isinstance(pma_config, dict) and pma_config.get("enabled"):
+        app.include_router(build_pma_routes())
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
     repo_apps: dict[str, ASGIApp] = {}

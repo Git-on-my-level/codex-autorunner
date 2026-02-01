@@ -8,7 +8,7 @@ import { initMessages, initMessageBell } from "./messages.js";
 import { initMobileCompact } from "./mobileCompact.js";
 import { subscribe } from "./bus.js";
 import { initRepoSettingsPanel, openRepoSettings } from "./settings.js";
-import { flash, repairModalBackgroundIfStuck, updateUrlParams } from "./utils.js";
+import { flash, getAuthToken, repairModalBackgroundIfStuck, resolvePath, updateUrlParams, } from "./utils.js";
 import { initLiveUpdates } from "./liveUpdates.js";
 import { initHealthGate } from "./health.js";
 import { initWorkspace } from "./workspace.js";
@@ -40,6 +40,65 @@ function showPMAView() {
         pmaShell.classList.remove("hidden");
     void initPMAView();
     updateUrlParams({ view: "pma" });
+}
+async function probePMAEnabled() {
+    const headers = {};
+    const token = getAuthToken();
+    if (token) {
+        headers.Authorization = `Bearer ${token}`;
+    }
+    try {
+        const res = await fetch(resolvePath("/hub/pma/agents"), {
+            method: "GET",
+            headers,
+        });
+        if (res.ok)
+            return true;
+        if (res.status === 403 || res.status === 404)
+            return false;
+        return true;
+    }
+    catch {
+        return true;
+    }
+}
+async function initHubShell() {
+    const hubShell = document.getElementById("hub-shell");
+    const repoShell = document.getElementById("repo-shell");
+    const hubPmaBtn = document.getElementById("hub-pma");
+    const pmaBackBtn = document.getElementById("pma-back");
+    if (hubShell)
+        hubShell.classList.remove("hidden");
+    if (repoShell)
+        repoShell.classList.add("hidden");
+    initHub();
+    if (hubPmaBtn) {
+        hubPmaBtn.addEventListener("click", () => {
+            showPMAView();
+        });
+    }
+    if (pmaBackBtn) {
+        pmaBackBtn.addEventListener("click", () => {
+            showHubView();
+        });
+    }
+    const urlParams = new URLSearchParams(window.location.search);
+    const requestedPMA = urlParams.get("view") === "pma";
+    const pmaEnabled = await probePMAEnabled();
+    if (!pmaEnabled) {
+        if (hubPmaBtn) {
+            hubPmaBtn.classList.add("hidden");
+            hubPmaBtn.setAttribute("aria-hidden", "true");
+            hubPmaBtn.disabled = true;
+        }
+        if (requestedPMA) {
+            showHubView();
+        }
+        return;
+    }
+    if (requestedPMA) {
+        showPMAView();
+    }
 }
 async function initRepoShell() {
     await initHealthGate();
@@ -126,33 +185,12 @@ async function initRepoShell() {
     }
 }
 function bootstrap() {
-    const hubShell = document.getElementById("hub-shell");
-    const repoShell = document.getElementById("repo-shell");
-    const hubPmaBtn = document.getElementById("hub-pma");
-    const pmaBackBtn = document.getElementById("pma-back");
     if (!REPO_ID) {
-        if (hubShell)
-            hubShell.classList.remove("hidden");
-        if (repoShell)
-            repoShell.classList.add("hidden");
-        initHub();
-        if (hubPmaBtn) {
-            hubPmaBtn.addEventListener("click", () => {
-                showPMAView();
-            });
-        }
-        if (pmaBackBtn) {
-            pmaBackBtn.addEventListener("click", () => {
-                showHubView();
-            });
-        }
-        // Check URL params for PMA view
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.get("view") === "pma") {
-            showPMAView();
-        }
+        void initHubShell();
         return;
     }
+    const hubShell = document.getElementById("hub-shell");
+    const repoShell = document.getElementById("repo-shell");
     if (repoShell)
         repoShell.classList.remove("hidden");
     if (hubShell)

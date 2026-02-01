@@ -35,6 +35,23 @@ def build_pma_routes() -> APIRouter:
     pma_current: dict[str, Any] | None = None
     pma_last_result: dict[str, Any] | None = None
 
+    def _normalize_optional_text(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        return value or None
+
+    def _get_pma_config(request: Request) -> dict[str, Optional[str]]:
+        raw = getattr(request.app.state.config, "raw", {})
+        pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
+        if not isinstance(pma_config, dict):
+            pma_config = {}
+        return {
+            "default_agent": _normalize_optional_text(pma_config.get("default_agent")),
+            "model": _normalize_optional_text(pma_config.get("model")),
+            "reasoning": _normalize_optional_text(pma_config.get("reasoning")),
+        }
+
     async def _get_interrupt_event() -> asyncio.Event:
         nonlocal pma_event
         async with pma_lock:
@@ -99,7 +116,18 @@ def build_pma_routes() -> APIRouter:
     @router.get("/agents")
     def list_pma_agents(request: Request) -> dict[str, Any]:
         agents, default_agent = _available_agents(request)
-        return {"agents": agents, "default": default_agent}
+        defaults = _get_pma_config(request)
+        payload: dict[str, Any] = {"agents": agents, "default": default_agent}
+        if defaults.get("model") or defaults.get("reasoning"):
+            payload["defaults"] = {
+                key: value
+                for key, value in {
+                    "model": defaults.get("model"),
+                    "reasoning": defaults.get("reasoning"),
+                }.items()
+                if value
+            }
+        return payload
 
     @router.get("/agents/{agent}/models")
     async def list_pma_agent_models(agent: str, request: Request):
@@ -337,8 +365,8 @@ def build_pma_routes() -> APIRouter:
         message = (body.get("message") or "").strip()
         stream = bool(body.get("stream", False))
         agent = body.get("agent")
-        model = body.get("model")
-        reasoning = body.get("reasoning")
+        model = _normalize_optional_text(body.get("model"))
+        reasoning = _normalize_optional_text(body.get("reasoning"))
         client_turn_id = (body.get("client_turn_id") or "").strip() or None
 
         if not message:
@@ -350,13 +378,10 @@ def build_pma_routes() -> APIRouter:
         agents, available_default = _available_agents(request)
         available_ids = {entry.get("id") for entry in agents if isinstance(entry, dict)}
 
+        defaults = _get_pma_config(request)
+
         def _resolve_default_agent() -> str:
-            raw = getattr(request.app.state.config, "raw", {})
-            configured_default = None
-            if isinstance(raw, dict):
-                pma_config = raw.get("pma", {})
-                if isinstance(pma_config, dict):
-                    configured_default = pma_config.get("default_agent")
+            configured_default = defaults.get("default_agent")
             try:
                 candidate = validate_agent_id(configured_default or "")
             except ValueError:
@@ -369,6 +394,11 @@ def build_pma_routes() -> APIRouter:
             agent_id = validate_agent_id(agent or "")
         except ValueError:
             agent_id = _resolve_default_agent()
+
+        if not model and defaults.get("model"):
+            model = defaults["model"]
+        if not reasoning and defaults.get("reasoning"):
+            reasoning = defaults["reasoning"]
 
         hub_root = request.app.state.config.root
         prompt_base = load_pma_prompt(hub_root)
