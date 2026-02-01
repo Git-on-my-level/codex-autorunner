@@ -2,10 +2,18 @@ import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.core.app_server_threads import (
+    PMA_KEY,
+    PMA_OPENCODE_KEY,
+    AppServerThreadRegistry,
+)
+from codex_autorunner.integrations.app_server.client import (
+    CodexAppServerResponseError,
+)
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramDocument,
     TelegramMessage,
@@ -14,6 +22,13 @@ from codex_autorunner.integrations.telegram.adapter import (
 from codex_autorunner.integrations.telegram.handlers.commands.execution import (
     ExecutionCommands,
     _TurnRunResult,
+)
+from codex_autorunner.integrations.telegram.handlers.commands.workspace import (
+    WorkspaceCommands,
+)
+from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
+    TelegramCommandHandlers,
+    _RuntimeStub,
 )
 from codex_autorunner.integrations.telegram.handlers.messages import (
     handle_media_message,
@@ -320,3 +335,342 @@ async def test_pma_voice_uses_hub_root(tmp_path: Path) -> None:
     assert captured["workspace_path"] == str(hub_root)
     assert captured["caption"] == "voice note"
     assert captured["kind"] == "voice"
+
+
+class _TurnResult:
+    def __init__(self) -> None:
+        self.agent_messages = ["ok"]
+        self.errors: list[str] = []
+        self.status = "completed"
+        self.token_usage = None
+
+
+class _TurnHandle:
+    def __init__(self, turn_id: str) -> None:
+        self.turn_id = turn_id
+
+    async def wait(self, *_args: object, **_kwargs: object) -> _TurnResult:
+        return _TurnResult()
+
+
+class _PMARouterStub:
+    def __init__(self, record: TelegramTopicRecord) -> None:
+        self._record = record
+
+    async def get_topic(self, _key: str) -> TelegramTopicRecord:
+        return self._record
+
+    async def set_active_thread(
+        self, _chat_id: int, _thread_id: Optional[int], _active_thread_id: Optional[str]
+    ) -> TelegramTopicRecord:
+        return self._record
+
+    async def update_topic(
+        self, _chat_id: int, _thread_id: Optional[int], apply: object
+    ) -> None:
+        if callable(apply):
+            apply(self._record)
+
+
+class _PMAClientStub:
+    def __init__(self) -> None:
+        self.thread_start_calls: list[tuple[str, str]] = []
+        self.turn_start_calls: list[str] = []
+
+    async def thread_start(self, cwd: str, *, agent: str, **_kwargs: object) -> dict:
+        self.thread_start_calls.append((cwd, agent))
+        return {"thread_id": f"fresh-{len(self.thread_start_calls)}"}
+
+    async def turn_start(
+        self, thread_id: str, _prompt_text: str, **_kwargs: object
+    ) -> _TurnHandle:
+        self.turn_start_calls.append(thread_id)
+        if thread_id == "stale":
+            raise CodexAppServerResponseError(
+                method="turn/start",
+                code=-32600,
+                message="thread not found: stale",
+                data=None,
+            )
+        return _TurnHandle("turn-1")
+
+
+class _PMAHandler(TelegramCommandHandlers):
+    def __init__(
+        self,
+        record: TelegramTopicRecord,
+        client: _PMAClientStub,
+        hub_root: Path,
+        registry: AppServerThreadRegistry,
+    ) -> None:
+        self._logger = logging.getLogger("test")
+        self._config = SimpleNamespace(
+            concurrency=SimpleNamespace(max_parallel_turns=1, per_topic_queue=False),
+            agent_turn_timeout_seconds={"codex": None, "opencode": None},
+        )
+        self._router = _PMARouterStub(record)
+        self._turn_semaphore = asyncio.Semaphore(1)
+        self._turn_contexts: dict[tuple[str, str], object] = {}
+        self._turn_preview_text: dict[tuple[str, str], str] = {}
+        self._turn_preview_updated_at: dict[tuple[str, str], float] = {}
+        self._token_usage_by_thread: dict[str, dict[str, object]] = {}
+        self._token_usage_by_turn: dict[str, dict[str, object]] = {}
+        self._voice_config = None
+        self._turn_progress_by_turn: dict[tuple[str, str], object] = {}
+        self._turn_progress_by_topic: dict[str, object] = {}
+        self._turn_progress_last_update: dict[tuple[str, str], float] = {}
+        self._client = client
+        self._hub_root = hub_root
+        self._hub_thread_registry = registry
+        self._bot_username = None
+
+    async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+        return f"{chat_id}:{thread_id}"
+
+    def _ensure_turn_semaphore(self) -> asyncio.Semaphore:
+        return self._turn_semaphore
+
+    async def _client_for_workspace(self, _workspace_path: str) -> _PMAClientStub:
+        return self._client
+
+    async def _find_thread_conflict(
+        self, _thread_id: str, *, key: str
+    ) -> Optional[str]:
+        return None
+
+    async def _refresh_workspace_id(
+        self, _key: str, _record: TelegramTopicRecord
+    ) -> Optional[str]:
+        return None
+
+    def _effective_policies(
+        self, _record: TelegramTopicRecord
+    ) -> tuple[Optional[str], Optional[Any]]:
+        return None, None
+
+    async def _handle_thread_conflict(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def _verify_active_thread(
+        self, _message: TelegramMessage, record: TelegramTopicRecord
+    ) -> TelegramTopicRecord:
+        return record
+
+    def _maybe_append_whisper_disclaimer(
+        self, prompt_text: str, *, transcript_text: Optional[str]
+    ) -> str:
+        return prompt_text
+
+    async def _maybe_inject_github_context(
+        self, prompt_text: str, _record: object
+    ) -> tuple[str, bool]:
+        return prompt_text, False
+
+    def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:
+        return prompt_text, False
+
+    def _maybe_inject_prompt_context(self, prompt_text: str) -> tuple[str, bool]:
+        return prompt_text, False
+
+    def _maybe_inject_outbox_context(
+        self, prompt_text: str, *, record: object, topic_key: str
+    ) -> tuple[str, bool]:
+        return prompt_text, False
+
+    async def _prepare_turn_placeholder(
+        self,
+        _message: TelegramMessage,
+        *,
+        placeholder_id: Optional[int],
+        send_placeholder: bool,
+        queued: bool,
+    ) -> Optional[int]:
+        return None
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        _text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> None:
+        return None
+
+    async def _edit_message_text(
+        self,
+        _chat_id: int,
+        _message_id: int,
+        _text: str,
+        *,
+        thread_id: Optional[int] = None,
+        reply_markup: Optional[object] = None,
+        parse_mode: Optional[str] = None,
+        disable_web_page_preview: bool = False,
+    ) -> None:
+        return None
+
+    async def _delete_message(
+        self,
+        _chat_id: int,
+        _message_id: int,
+        *,
+        thread_id: Optional[int] = None,
+    ) -> None:
+        return None
+
+    async def _finalize_voice_transcript(
+        self,
+        _chat_id: int,
+        _transcript_message_id: Optional[int],
+        _transcript_text: Optional[str],
+    ) -> None:
+        return None
+
+    async def _deliver_turn_response(
+        self,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+        placeholder_id: Optional[int],
+        response: str,
+    ) -> bool:
+        return True
+
+    async def _start_turn_progress(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        ctx: object,
+        agent: Optional[str],
+        model: Optional[str],
+        label: str,
+    ) -> None:
+        return None
+
+    def _clear_turn_progress(self, _turn_key: tuple[str, str]) -> None:
+        return None
+
+    def _turn_key(
+        self, thread_id: Optional[str], turn_id: Optional[str]
+    ) -> Optional[tuple[str, str]]:
+        if thread_id and turn_id:
+            return (thread_id, turn_id)
+        return None
+
+    def _register_turn_context(
+        self, turn_key: tuple[str, str], turn_id: str, ctx: object
+    ) -> bool:
+        self._turn_contexts[turn_key] = ctx
+        return True
+
+    def _clear_thinking_preview(self, _turn_key: tuple[str, str]) -> None:
+        return None
+
+    async def _require_thread_workspace(
+        self,
+        _message: TelegramMessage,
+        _workspace_path: str,
+        _thread: object,
+        *,
+        action: str,
+    ) -> bool:
+        return True
+
+    def _format_turn_metrics(self, *_args: object, **_kwargs: object) -> Optional[str]:
+        return None
+
+
+@pytest.mark.anyio
+async def test_pma_missing_thread_resets_registry_and_recovers(tmp_path: Path) -> None:
+    registry = AppServerThreadRegistry(tmp_path / "threads.json")
+    registry.reset_all()
+    registry.set_thread_id(PMA_KEY, "stale")
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        model="gpt-5.1-codex-max",
+    )
+    client = _PMAClientStub()
+    handler = _PMAHandler(record, client, tmp_path, registry)
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=10587,
+        from_user_id=42,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+
+    result = await handler._run_turn_and_collect_result(
+        message,
+        runtime=_RuntimeStub(),
+        send_placeholder=False,
+    )
+
+    assert isinstance(result, _TurnRunResult)
+    assert client.turn_start_calls[0] == "stale"
+    assert client.turn_start_calls[-1] != "stale"
+    assert registry.get_thread_id(PMA_KEY) != "stale"
+
+
+class _PMAWorkspaceRouter:
+    def __init__(self, record: TelegramTopicRecord) -> None:
+        self._record = record
+
+    async def get_topic(self, _key: str) -> TelegramTopicRecord:
+        return self._record
+
+
+class _PMAWorkspaceHandler(WorkspaceCommands):
+    def __init__(
+        self, record: TelegramTopicRecord, registry: AppServerThreadRegistry
+    ) -> None:
+        self._logger = logging.getLogger("test")
+        self._config = SimpleNamespace()
+        self._router = _PMAWorkspaceRouter(record)
+        self._hub_thread_registry = registry
+        self._sent: list[str] = []
+
+    async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+        return f"{chat_id}:{thread_id}"
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+        reply_markup: Optional[object] = None,
+    ) -> None:
+        self._sent.append(text)
+
+
+@pytest.mark.anyio
+async def test_pma_new_resets_session(tmp_path: Path) -> None:
+    registry = AppServerThreadRegistry(tmp_path / "threads.json")
+    registry.reset_all()
+    registry.set_thread_id(PMA_OPENCODE_KEY, "old-thread")
+    record = TelegramTopicRecord(
+        pma_enabled=True, workspace_path=None, agent="opencode"
+    )
+    handler = _PMAWorkspaceHandler(record, registry)
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=-2002,
+        thread_id=333,
+        from_user_id=99,
+        text="/new",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_new(message)
+
+    assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
+    assert handler._sent and "PMA session reset" in handler._sent[-1]
