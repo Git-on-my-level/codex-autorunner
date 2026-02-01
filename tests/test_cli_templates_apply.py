@@ -136,3 +136,115 @@ def test_templates_apply_set_agent_overrides_frontmatter(
         created_path.read_text(encoding="utf-8")
     )
     assert frontmatter["agent"] == "user"
+
+
+def test_templates_apply_with_provenance_includes_metadata(
+    hub_env, tmp_path: Path
+) -> None:
+    """Test that --provenance adds provenance keys to ticket frontmatter."""
+    repo_path = tmp_path / "templates_repo"
+    branch = _init_repo(repo_path)
+    content = "---\nagent: codex\ndone: false\n---\n\n# Template\nHello\n"
+    commit, blob_sha = _commit_file(repo_path, "tickets/TICKET-REVIEW.md", content)
+
+    _write_templates_config(
+        hub_env.hub_root,
+        enabled=True,
+        repos=[
+            {
+                "id": "local",
+                "url": str(repo_path),
+                "trusted": True,
+                "default_ref": branch,
+            }
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "templates",
+            "apply",
+            "local:tickets/TICKET-REVIEW.md",
+            "--repo",
+            str(hub_env.repo_root),
+            "--provenance",
+        ],
+    )
+
+    assert result.exit_code == 0
+    ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
+    created_path = ticket_dir / "TICKET-001.md"
+    assert created_path.exists()
+
+    frontmatter, _body = parse_markdown_frontmatter(
+        created_path.read_text(encoding="utf-8")
+    )
+
+    # Check provenance keys
+    assert frontmatter["template"] == f"local:tickets/TICKET-REVIEW.md@{branch}"
+    assert frontmatter["template_commit"] == commit
+    assert frontmatter["template_blob"] == blob_sha
+    assert frontmatter["template_trusted"] is True
+    assert frontmatter["template_scan"] == "skipped"
+
+    # Original frontmatter keys should be preserved
+    assert frontmatter["agent"] == "codex"
+    assert frontmatter["done"] is False
+
+
+def test_templates_apply_without_provenance_no_metadata(
+    hub_env, tmp_path: Path
+) -> None:
+    """Test that --no-provenance (default) does not add provenance keys."""
+    repo_path = tmp_path / "templates_repo"
+    branch = _init_repo(repo_path)
+    content = "---\nagent: codex\ndone: false\n---\n\n# Template\nHello\n"
+    _commit_file(repo_path, "tickets/TICKET-REVIEW.md", content)
+
+    _write_templates_config(
+        hub_env.hub_root,
+        enabled=True,
+        repos=[
+            {
+                "id": "local",
+                "url": str(repo_path),
+                "trusted": True,
+                "default_ref": branch,
+            }
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "templates",
+            "apply",
+            "local:tickets/TICKET-REVIEW.md",
+            "--repo",
+            str(hub_env.repo_root),
+            "--no-provenance",
+        ],
+    )
+
+    assert result.exit_code == 0
+    ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
+    created_path = ticket_dir / "TICKET-001.md"
+    assert created_path.exists()
+
+    frontmatter, _body = parse_markdown_frontmatter(
+        created_path.read_text(encoding="utf-8")
+    )
+
+    # Provenance keys should not be present
+    assert "template" not in frontmatter
+    assert "template_commit" not in frontmatter
+    assert "template_blob" not in frontmatter
+    assert "template_trusted" not in frontmatter
+    assert "template_scan" not in frontmatter
+
+    # Original frontmatter keys should be preserved
+    assert frontmatter["agent"] == "codex"
+    assert frontmatter["done"] is False
