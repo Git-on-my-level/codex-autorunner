@@ -543,6 +543,15 @@ class FilesCommands(SharedHelpers):
             first_msg.chat_id, first_msg.thread_id
         )
         record = await self._router.get_topic(topic_key)
+        record, pma_error = message_handlers._record_with_media_workspace(self, record)
+        if pma_error:
+            await self._send_message(
+                first_msg.chat_id,
+                pma_error,
+                thread_id=first_msg.thread_id,
+                reply_to=first_msg.message_id,
+            )
+            return None
         if record is None or not record.workspace_path:
             await self._send_message(
                 first_msg.chat_id,

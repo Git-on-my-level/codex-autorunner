@@ -75,6 +75,21 @@ def _message_text_candidate(message: TelegramMessage) -> tuple[str, str, Any]:
     return raw_text, text_candidate, entities
 
 
+def _record_with_media_workspace(
+    handlers: Any, record: Any
+) -> tuple[Any, Optional[str]]:
+    """Ensure media handlers have a workspace path, including PMA topics."""
+    if record is None:
+        return None, None
+    pma_enabled = bool(getattr(record, "pma_enabled", False))
+    if not pma_enabled:
+        return record, None
+    hub_root = getattr(handlers, "_hub_root", None)
+    if hub_root is None:
+        return None, "PMA unavailable; hub root not configured."
+    return dataclasses.replace(record, workspace_path=str(hub_root)), None
+
+
 async def _clear_pending_options(
     handlers: Any, key: str, message: TelegramMessage
 ) -> None:
@@ -802,6 +817,15 @@ async def handle_media_message(
         return
     key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
     record = await handlers._router.get_topic(key)
+    record, pma_error = _record_with_media_workspace(handlers, record)
+    if pma_error:
+        await handlers._send_message(
+            message.chat_id,
+            pma_error,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        return
     if record is None or not record.workspace_path:
         await handlers._send_message(
             message.chat_id,
