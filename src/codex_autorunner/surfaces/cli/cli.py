@@ -2008,7 +2008,7 @@ def ticket_flow_start(
                 )
                 return
 
-        if force_new and not list_ticket_paths(ticket_dir):
+        if not list_ticket_paths(ticket_dir):
             _raise_exit(
                 "No tickets found under .codex-autorunner/tickets. Use bootstrap first."
             )
