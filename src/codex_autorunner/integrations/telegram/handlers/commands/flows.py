@@ -343,6 +343,9 @@ class FlowCommands(SharedHelpers):
             if action == "reply":
                 await self._handle_reply(message, remainder)
                 return
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            # Let cancellations propagate so shutdowns/timeouts are not masked.
+            raise
         except Exception as exc:  # pragma: no cover - defensive
             log_event(
                 _logger,
