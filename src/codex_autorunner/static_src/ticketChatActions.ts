@@ -3,11 +3,14 @@
  */
 import { api, flash, splitMarkdownFrontmatter } from "./utils.js";
 import { performTicketChatRequest } from "./ticketChatStream.js";
-import { renderTicketMessages } from "./ticketChatEvents.js";
+import { renderTicketMessages, renderTicketEvents } from "./ticketChatEvents.js";
 import { publish } from "./bus.js";
 import { createDocChat, type ChatState, type ChatStatus } from "./docChatCore.js";
 import { saveTicketChatHistory } from "./ticketChatStorage.js";
 import { renderDiff } from "./diffRenderer.js";
+import { newClientTurnId, streamTurnEvents } from "./fileChat.js";
+import { loadPendingTurn, savePendingTurn, clearPendingTurn } from "./turnResume.js";
+import { resumeFileChatTurn } from "./turnEvents.js";
 
 export type TicketChatStatus = ChatStatus;
 
@@ -27,6 +30,8 @@ export interface TicketChatState extends ChatState {
 // Limits for events display
 export const TICKET_CHAT_EVENT_LIMIT = 8;
 export const TICKET_CHAT_EVENT_MAX = 50;
+const pendingKeyForTicket = (index: number | null) =>
+  index != null ? `car.ticketChat.pending.${index}` : "car.ticketChat.pending";
 
 export const ticketChat = createDocChat({
   idPrefix: "ticket-chat",
@@ -57,6 +62,7 @@ export const ticketChatState: TicketChatState = Object.assign(ticketChat.state, 
   ticketIndex: null,
   draft: null,
 });
+let currentTurnEventsController: AbortController | null = null;
 
 export function getTicketChatElements() {
   const base = ticketChat.elements;
@@ -133,6 +139,112 @@ export function clearTicketEvents(): void {
   ticketChat.clearEvents();
 }
 
+function clearTurnEventsStream(): void {
+  if (currentTurnEventsController) {
+    try {
+      currentTurnEventsController.abort();
+    } catch {
+      // ignore
+    }
+    currentTurnEventsController = null;
+  }
+}
+
+function clearPendingTurnState(pendingKey: string): void {
+  clearTurnEventsStream();
+  clearPendingTurn(pendingKey);
+}
+
+function handleTicketTurnMeta(update: Record<string, unknown>): void {
+  const threadId = typeof update.thread_id === "string" ? update.thread_id : "";
+  const turnId = typeof update.turn_id === "string" ? update.turn_id : "";
+  const agent = typeof update.agent === "string" ? update.agent : "codex";
+  if (!threadId || !turnId) return;
+  clearTurnEventsStream();
+  currentTurnEventsController = streamTurnEvents(
+    { agent, threadId, turnId },
+    {
+      onEvent: (event) => {
+        ticketChat.applyAppEvent(event);
+        ticketChat.renderEvents();
+        ticketChat.render();
+      },
+    }
+  );
+}
+
+export function applyTicketChatResult(payload: unknown): void {
+  if (!payload || typeof payload !== "object") return;
+
+  const result = payload as Record<string, unknown>;
+  handleTicketTurnMeta(result);
+
+  if (result.status === "interrupted") {
+    ticketChatState.status = "interrupted";
+    ticketChatState.error = "";
+    addAssistantMessage("Request interrupted", true);
+    renderTicketChat();
+    renderTicketMessages();
+    return;
+  }
+
+  if (result.status === "error" || result.error) {
+    ticketChatState.status = "error";
+    ticketChatState.error =
+      (result.detail as string) || (result.error as string) || "Chat failed";
+    addAssistantMessage(`Error: ${ticketChatState.error}`, true);
+    renderTicketChat();
+    renderTicketMessages();
+    return;
+  }
+
+  // Success
+  ticketChatState.status = "done";
+
+  if (result.message) {
+    ticketChatState.streamText = result.message as string;
+  }
+
+  if (result.agent_message || result.agentMessage) {
+    ticketChatState.statusText =
+      (result.agent_message as string) || (result.agentMessage as string) || "";
+  }
+
+  // Check for draft/patch in response
+  const hasDraft =
+    (result.has_draft as boolean | undefined) ?? (result.hasDraft as boolean | undefined);
+  if (hasDraft === false) {
+    ticketChatState.draft = null;
+  } else if (hasDraft === true || result.draft || result.patch || result.content) {
+    ticketChatState.draft = {
+      content: (result.content as string) || "",
+      patch: (result.patch as string) || "",
+      agentMessage:
+        (result.agent_message as string) || (result.agentMessage as string) || "",
+      createdAt: (result.created_at as string) || (result.createdAt as string) || "",
+      baseHash: (result.base_hash as string) || (result.baseHash as string) || "",
+    };
+  }
+
+  // Add assistant message from response
+  const responseText =
+    ticketChatState.streamText ||
+    ticketChatState.statusText ||
+    (ticketChatState.draft ? "Changes ready to apply" : "Done");
+  if (responseText && ticketChatState.messages.length > 0) {
+    // Only add if we have messages (i.e., a user message was sent)
+    const lastMessage = ticketChatState.messages[ticketChatState.messages.length - 1];
+    // Avoid duplicate assistant messages
+    if (lastMessage.role === "user") {
+      addAssistantMessage(responseText, true);
+    }
+  }
+
+  renderTicketChat();
+  renderTicketMessages();
+  renderTicketEvents();
+}
+
 /**
  * Add a user message to the chat history.
  */
@@ -153,6 +265,7 @@ export function setTicketIndex(index: number | null): void {
   ticketChatState.ticketIndex = index;
   ticketChatState.draft = null;
   resetTicketChatState();
+  clearTurnEventsStream();
   // Clear chat history when switching tickets
   if (changed) {
     ticketChat.setTarget(index != null ? String(index) : null);
@@ -217,7 +330,16 @@ export async function sendTicketChat(): Promise<void> {
   resetTicketChatState();
   ticketChatState.status = "running";
   ticketChatState.statusText = "queued";
+  clearTurnEventsStream();
   ticketChatState.controller = new AbortController();
+  const pendingKey = pendingKeyForTicket(ticketChatState.ticketIndex);
+  const clientTurnId = newClientTurnId("ticket");
+  savePendingTurn(pendingKey, {
+    clientTurnId,
+    message,
+    startedAtMs: Date.now(),
+    target: ticketChatState.ticketIndex != null ? `ticket:${ticketChatState.ticketIndex}` : "ticket",
+  });
 
   renderTicketChat();
   if (els.input) {
@@ -237,6 +359,7 @@ export async function sendTicketChat(): Promise<void> {
         agent,
         model,
         reasoning,
+        clientTurnId,
       }
     );
     
@@ -246,6 +369,7 @@ export async function sendTicketChat(): Promise<void> {
     if (ticketChatState.status === "running") {
       ticketChatState.status = "done";
     }
+    clearPendingTurnState(pendingKey);
   } catch (err) {
     const error = err as Error;
     if (error.name === "AbortError") {
@@ -255,6 +379,7 @@ export async function sendTicketChat(): Promise<void> {
       ticketChatState.status = "error";
       ticketChatState.error = error.message || "Ticket chat failed";
     }
+    clearPendingTurnState(pendingKey);
   } finally {
     ticketChatState.controller = null;
     renderTicketChat();
@@ -268,6 +393,7 @@ export async function cancelTicketChat(): Promise<void> {
   if (ticketChatState.controller) {
     ticketChatState.controller.abort();
   }
+  clearTurnEventsStream();
 
   // Send interrupt to server
   if (ticketChatState.ticketIndex != null) {
@@ -285,6 +411,55 @@ export async function cancelTicketChat(): Promise<void> {
   ticketChatState.statusText = "";
   ticketChatState.controller = null;
   renderTicketChat();
+  if (ticketChatState.ticketIndex != null) {
+    clearPendingTurnState(pendingKeyForTicket(ticketChatState.ticketIndex));
+  }
+}
+
+export async function resumeTicketPendingTurn(index: number | null): Promise<void> {
+  if (index == null) return;
+  const pendingKey = pendingKeyForTicket(index);
+  const pending = loadPendingTurn(pendingKey);
+  if (!pending || pending.target !== `ticket:${index}`) return;
+  const chatState = ticketChatState as ChatState;
+  chatState.status = "running";
+  chatState.statusText = "Recovering previous turn…";
+  ticketChat.render();
+  ticketChat.renderMessages();
+
+  try {
+    const outcome = await resumeFileChatTurn(pending.clientTurnId, {
+      onEvent: (event) => {
+        ticketChat.applyAppEvent(event);
+        ticketChat.renderEvents();
+        ticketChat.render();
+      },
+      onResult: (result) => {
+        applyTicketChatResult(result);
+        const status = (result as Record<string, unknown>).status;
+        if (status === "ok" || status === "error" || status === "interrupted") {
+          clearPendingTurnState(pendingKey);
+        }
+      },
+      onError: (msg) => {
+        chatState.statusText = msg;
+        renderTicketChat();
+      },
+    });
+    currentTurnEventsController = outcome.controller;
+    if (outcome.lastResult && (outcome.lastResult as Record<string, unknown>).status) {
+      applyTicketChatResult(outcome.lastResult as Record<string, unknown>);
+      clearPendingTurnState(pendingKey);
+      return;
+    }
+    if (!outcome.controller) {
+      window.setTimeout(() => void resumeTicketPendingTurn(index), 1000);
+    }
+  } catch (err) {
+    const msg = (err as Error).message || "Failed to resume turn";
+    chatState.statusText = msg;
+    renderTicketChat();
+  }
 }
 
 export async function applyTicketPatch(): Promise<void> {

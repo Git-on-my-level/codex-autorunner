@@ -129,11 +129,11 @@
           <div class="pma-attachments-area" id="pma-attachments-area">
             <div class="pma-files-row">
               <span class="pma-files-label">In</span>
-              <div class="pma-file-list" id="pma-inbox-files"></div>
+              <div class="pma-file-list filebox-list" id="pma-inbox-files"></div>
             </div>
             <div class="pma-files-row">
               <span class="pma-files-label">Out</span>
-              <div class="pma-file-list" id="pma-outbox-files"></div>
+              <div class="pma-file-list filebox-list" id="pma-outbox-files"></div>
               <button class="pma-icon-btn-small" id="pma-outbox-refresh" title="Refresh files">↻</button>
             </div>
           </div>
@@ -327,6 +327,28 @@
                     <div class="messages-empty-icon">💬</div>
                     <div class="messages-empty-title">Select a conversation</div>
                     <div class="messages-empty-hint">Choose a session from the left to view dispatches and replies.
+                    </div>
+                  </div>
+                </div>
+                <div class="messages-filebox">
+                  <div class="filebox-card">
+                    <div class="filebox-header">
+                      <span class="label">FileBox</span>
+                      <div class="filebox-actions">
+                        <input type="file" id="messages-filebox-upload" multiple hidden />
+                        <button class="ghost sm" id="messages-filebox-upload-btn" title="Upload to inbox">Upload</button>
+                        <button class="ghost sm icon-btn" id="messages-filebox-refresh" title="Refresh FileBox">↻</button>
+                      </div>
+                    </div>
+                    <div class="filebox-grid">
+                      <div class="filebox-column">
+                        <div class="filebox-title">Inbox</div>
+                        <div class="filebox-list" id="messages-filebox-inbox"></div>
+                      </div>
+                      <div class="filebox-column">
+                        <div class="filebox-title">Outbox</div>
+                        <div class="filebox-list" id="messages-filebox-outbox"></div>
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -20,7 +20,7 @@ def test_inject_provenance_no_frontmatter() -> None:
     result = inject_provenance(content, fetched, None)
 
     assert result.startswith("---")
-    assert result.endswith("---# Template\nHello")
+    assert result.endswith("---\n# Template\nHello")
 
     frontmatter_yaml = result[result.index("---") + 3 : result.index("---", 3)].strip()
     parsed = yaml.safe_load(frontmatter_yaml)
@@ -69,7 +69,7 @@ Hello
     result = inject_provenance(content, fetched, scan_record)
 
     assert result.startswith("---")
-    assert result.endswith("---\n# Template\nHello")
+    assert result.endswith("---\n\n# Template\nHello")
 
     frontmatter_yaml = result[result.index("---") + 3 : result.index("---", 3)].strip()
     parsed = yaml.safe_load(frontmatter_yaml)

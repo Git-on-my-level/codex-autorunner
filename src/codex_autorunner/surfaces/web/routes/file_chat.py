@@ -14,7 +14,7 @@ import difflib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -225,6 +225,10 @@ def build_file_chat_routes() -> APIRouter:
     router = APIRouter(prefix="/api", tags=["file-chat"])
     _active_chats: Dict[str, asyncio.Event] = {}
     _chat_lock = asyncio.Lock()
+    _turn_lock = asyncio.Lock()
+    _current_by_target: Dict[str, Dict[str, Any]] = {}
+    _current_by_client: Dict[str, Dict[str, Any]] = {}
+    _last_by_client: Dict[str, Dict[str, Any]] = {}
 
     async def _get_or_create_interrupt_event(key: str) -> asyncio.Event:
         async with _chat_lock:
@@ -236,6 +240,61 @@ def build_file_chat_routes() -> APIRouter:
         async with _chat_lock:
             _active_chats.pop(key, None)
 
+    async def _begin_turn_state(target: _Target, client_turn_id: Optional[str]) -> None:
+        async with _turn_lock:
+            state: Dict[str, Any] = {
+                "client_turn_id": client_turn_id or "",
+                "target": target.target,
+                "status": "starting",
+                "agent": None,
+                "thread_id": None,
+                "turn_id": None,
+            }
+            _current_by_target[target.state_key] = state
+            if client_turn_id:
+                _current_by_client[client_turn_id] = state
+
+    async def _update_turn_state(target: _Target, **updates: Any) -> None:
+        async with _turn_lock:
+            state = _current_by_target.get(target.state_key)
+            if not state:
+                return
+            for key, value in updates.items():
+                if value is None:
+                    continue
+                state[key] = value
+            cid = state.get("client_turn_id") or ""
+            if cid:
+                _current_by_client[cid] = state
+
+    async def _finalize_turn_state(target: _Target, result: Dict[str, Any]) -> None:
+        async with _turn_lock:
+            state = _current_by_target.pop(target.state_key, None)
+            cid = ""
+            if state:
+                cid = state.get("client_turn_id", "") or ""
+            if cid:
+                _current_by_client.pop(cid, None)
+                _last_by_client[cid] = dict(result or {})
+
+    async def _active_for_client(client_turn_id: Optional[str]) -> Dict[str, Any]:
+        if not client_turn_id:
+            return {}
+        async with _turn_lock:
+            return dict(_current_by_client.get(client_turn_id, {}))
+
+    async def _last_for_client(client_turn_id: Optional[str]) -> Dict[str, Any]:
+        if not client_turn_id:
+            return {}
+        async with _turn_lock:
+            return dict(_last_by_client.get(client_turn_id, {}))
+
+    @router.get("/file-chat/active")
+    async def file_chat_active(client_turn_id: Optional[str] = None) -> Dict[str, Any]:
+        current = await _active_for_client(client_turn_id)
+        last = await _last_for_client(client_turn_id)
+        return {"active": bool(current), "current": current, "last_result": last}
+
     @router.post("/file-chat")
     async def chat_file(request: Request):
         """Chat with a file target - optionally streams SSE events."""
@@ -246,6 +305,7 @@ def build_file_chat_routes() -> APIRouter:
         agent = body.get("agent", "codex")
         model = body.get("model")
         reasoning = body.get("reasoning")
+        client_turn_id = (body.get("client_turn_id") or "").strip() or None
 
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
@@ -264,6 +324,8 @@ def build_file_chat_routes() -> APIRouter:
                 raise HTTPException(status_code=409, detail="File chat already running")
             _active_chats[target.state_key] = asyncio.Event()
 
+        await _begin_turn_state(target, client_turn_id)
+
         if stream:
             return StreamingResponse(
                 _stream_file_chat(
@@ -274,21 +336,47 @@ def build_file_chat_routes() -> APIRouter:
                     agent=agent,
                     model=model,
                     reasoning=reasoning,
+                    client_turn_id=client_turn_id,
                 ),
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )
 
         try:
-            result = await _execute_file_chat(
-                request,
-                repo_root,
-                target,
-                message,
-                agent=agent,
-                model=model,
-                reasoning=reasoning,
-            )
+            result: Dict[str, Any]
+
+            async def _on_meta(agent_id: str, thread_id: str, turn_id: str) -> None:
+                await _update_turn_state(
+                    target,
+                    agent=agent_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                )
+
+            try:
+                result = await _execute_file_chat(
+                    request,
+                    repo_root,
+                    target,
+                    message,
+                    agent=agent,
+                    model=model,
+                    reasoning=reasoning,
+                    on_meta=_on_meta,
+                )
+            except Exception as exc:
+                await _finalize_turn_state(
+                    target,
+                    {
+                        "status": "error",
+                        "detail": str(exc),
+                        "client_turn_id": client_turn_id or "",
+                    },
+                )
+                raise
+            result = dict(result or {})
+            result["client_turn_id"] = client_turn_id or ""
+            await _finalize_turn_state(target, result)
             return result
         finally:
             await _clear_interrupt_event(target.state_key)
@@ -302,22 +390,59 @@ def build_file_chat_routes() -> APIRouter:
         agent: str = "codex",
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
+        client_turn_id: Optional[str] = None,
     ) -> AsyncIterator[str]:
         yield format_sse("status", {"status": "queued"})
         try:
-            result = await _execute_file_chat(
-                request,
-                repo_root,
-                target,
-                message,
-                agent=agent,
-                model=model,
-                reasoning=reasoning,
+
+            async def _on_meta(agent_id: str, thread_id: str, turn_id: str) -> None:
+                await _update_turn_state(
+                    target,
+                    agent=agent_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                )
+
+            run_task = asyncio.create_task(
+                _execute_file_chat(
+                    request,
+                    repo_root,
+                    target,
+                    message,
+                    agent=agent,
+                    model=model,
+                    reasoning=reasoning,
+                    on_meta=_on_meta,
+                )
             )
+
+            async def _finalize() -> None:
+                result = {"status": "error", "detail": "File chat failed"}
+                try:
+                    result = await run_task
+                except Exception as exc:
+                    logger.exception("file chat task failed")
+                    result = {
+                        "status": "error",
+                        "detail": str(exc) or "File chat failed",
+                    }
+                result = dict(result or {})
+                result["client_turn_id"] = client_turn_id or ""
+                await _finalize_turn_state(target, result)
+
+            asyncio.create_task(_finalize())
+
+            try:
+                result = await asyncio.shield(run_task)
+            except asyncio.CancelledError:
+                # client disconnected; turn continues in background
+                return
+
             if result.get("status") == "ok":
                 raw_events = result.pop("raw_events", []) or []
                 for event in raw_events:
                     yield format_sse("app-server", event)
+                result["client_turn_id"] = client_turn_id or ""
                 yield format_sse("update", result)
                 yield format_sse("done", {"status": "ok"})
             elif result.get("status") == "interrupted":
@@ -344,11 +469,13 @@ def build_file_chat_routes() -> APIRouter:
         agent: str = "codex",
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
+        on_meta: Optional[Callable[[str, str, str], Any]] = None,
     ) -> Dict[str, Any]:
         supervisor = getattr(request.app.state, "app_server_supervisor", None)
         threads = getattr(request.app.state, "app_server_threads", None)
         opencode = getattr(request.app.state, "opencode_supervisor", None)
         engine = getattr(request.app.state, "engine", None)
+        events = getattr(request.app.state, "app_server_events", None)
         stall_timeout_seconds = None
         try:
             stall_timeout_seconds = (
@@ -376,6 +503,7 @@ def build_file_chat_routes() -> APIRouter:
             agent_id = "codex"
 
         thread_key = f"file_chat.{target.state_key}"
+        await _update_turn_state(target, status="running", agent=agent_id)
 
         if agent_id == "opencode":
             if opencode is None:
@@ -390,6 +518,7 @@ def build_file_chat_routes() -> APIRouter:
                 thread_registry=threads,
                 thread_key=thread_key,
                 stall_timeout_seconds=stall_timeout_seconds,
+                on_meta=on_meta,
             )
         else:
             if supervisor is None:
@@ -402,10 +531,13 @@ def build_file_chat_routes() -> APIRouter:
                 repo_root,
                 prompt,
                 interrupt_event,
+                agent_id=agent_id,
                 model=model,
                 reasoning=reasoning,
                 thread_registry=threads,
                 thread_key=thread_key,
+                on_meta=on_meta,
+                events=events,
             )
 
         if result.get("status") != "ok":
@@ -440,6 +572,7 @@ def build_file_chat_routes() -> APIRouter:
             return {
                 "status": "ok",
                 "target": target.target,
+                "agent": agent_id,
                 "agent_message": agent_message,
                 "message": response_text,
                 "has_draft": True,
@@ -447,6 +580,8 @@ def build_file_chat_routes() -> APIRouter:
                 "content": after,
                 "base_hash": base_hash,
                 "created_at": drafts[target.state_key]["created_at"],
+                "thread_id": result.get("thread_id"),
+                "turn_id": result.get("turn_id"),
                 **(
                     {"raw_events": result.get("raw_events")}
                     if result.get("raw_events")
@@ -457,9 +592,12 @@ def build_file_chat_routes() -> APIRouter:
         return {
             "status": "ok",
             "target": target.target,
+            "agent": agent_id,
             "agent_message": agent_message,
             "message": response_text,
             "has_draft": False,
+            "thread_id": result.get("thread_id"),
+            "turn_id": result.get("turn_id"),
             **(
                 {"raw_events": result.get("raw_events")}
                 if result.get("raw_events")
@@ -475,8 +613,11 @@ def build_file_chat_routes() -> APIRouter:
         *,
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
+        agent_id: str = "codex",
         thread_registry: Optional[Any] = None,
         thread_key: Optional[str] = None,
+        on_meta: Optional[Callable[[str, str, str], Any]] = None,
+        events: Optional[Any] = None,
     ) -> Dict[str, Any]:
         client = await supervisor.get_client(repo_root)
 
@@ -510,6 +651,18 @@ def build_file_chat_routes() -> APIRouter:
             sandbox_policy="dangerFullAccess",
             **turn_kwargs,
         )
+        if events is not None:
+            try:
+                await events.register_turn(thread_id, handle.turn_id)
+            except Exception:
+                logger.debug("file chat register_turn failed", exc_info=True)
+        if on_meta is not None:
+            try:
+                maybe = on_meta(agent_id, thread_id, handle.turn_id)
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+            except Exception:
+                logger.debug("file chat meta callback failed", exc_info=True)
 
         turn_task = asyncio.create_task(handle.wait(timeout=None))
         timeout_task = asyncio.create_task(asyncio.sleep(FILE_CHAT_TIMEOUT_SECONDS))
@@ -542,6 +695,9 @@ def build_file_chat_routes() -> APIRouter:
             "agent_message": agent_message,
             "message": output,
             "raw_events": raw_events,
+            "thread_id": thread_id,
+            "turn_id": getattr(handle, "turn_id", None),
+            "agent": agent_id,
         }
 
     async def _execute_opencode(
@@ -555,9 +711,11 @@ def build_file_chat_routes() -> APIRouter:
         thread_registry: Optional[Any] = None,
         thread_key: Optional[str] = None,
         stall_timeout_seconds: Optional[float] = None,
+        on_meta: Optional[Callable[[str, str, str], Any]] = None,
     ) -> Dict[str, Any]:
         from ....agents.opencode.runtime import (
             PERMISSION_ALLOW,
+            build_turn_id,
             collect_opencode_output,
             extract_session_id,
             parse_message_response,
@@ -575,6 +733,15 @@ def build_file_chat_routes() -> APIRouter:
                 raise FileChatError("OpenCode did not return a session id")
             if thread_registry is not None and thread_key:
                 thread_registry.set_thread_id(thread_key, session_id)
+
+        turn_id = build_turn_id(session_id)
+        if on_meta is not None:
+            try:
+                maybe = on_meta("opencode", session_id, turn_id)
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+            except Exception:
+                logger.debug("file chat opencode meta failed", exc_info=True)
 
         model_payload = split_model_id(model)
         await supervisor.mark_turn_started(repo_root)
@@ -644,6 +811,9 @@ def build_file_chat_routes() -> APIRouter:
             "status": "ok",
             "agent_message": agent_message,
             "message": output_result.text,
+            "thread_id": session_id,
+            "turn_id": turn_id,
+            "agent": "opencode",
         }
 
     def _parse_agent_message(output: str) -> str:
@@ -740,6 +910,37 @@ def build_file_chat_routes() -> APIRouter:
             "content": _read_file(resolved.path),
         }
 
+    @router.get("/file-chat/turns/{turn_id}/events")
+    async def stream_file_chat_turn_events(
+        turn_id: str, request: Request, thread_id: str, agent: str = "codex"
+    ):
+        agent_id = (agent or "").strip().lower()
+        if agent_id == "codex":
+            events = getattr(request.app.state, "app_server_events", None)
+            if events is None:
+                raise HTTPException(status_code=404, detail="Events unavailable")
+            if not thread_id:
+                raise HTTPException(status_code=400, detail="thread_id is required")
+            return StreamingResponse(
+                events.stream(thread_id, turn_id),
+                media_type="text/event-stream",
+                headers=SSE_HEADERS,
+            )
+        if agent_id == "opencode":
+            supervisor = getattr(request.app.state, "opencode_supervisor", None)
+            if supervisor is None:
+                raise HTTPException(status_code=404, detail="OpenCode unavailable")
+            from ....agents.opencode.harness import OpenCodeHarness
+
+            harness = OpenCodeHarness(supervisor)
+            repo_root = _resolve_repo_root(request)
+            return StreamingResponse(
+                harness.stream_events(repo_root, thread_id, turn_id),
+                media_type="text/event-stream",
+                headers=SSE_HEADERS,
+            )
+        raise HTTPException(status_code=404, detail="Unknown agent")
+
     @router.post("/file-chat/interrupt")
     async def interrupt_file_chat(request: Request):
         body = await request.json()
@@ -762,6 +963,7 @@ def build_file_chat_routes() -> APIRouter:
         agent = body.get("agent", "codex")
         model = body.get("model")
         reasoning = body.get("reasoning")
+        client_turn_id = (body.get("client_turn_id") or "").strip() or None
 
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
@@ -776,6 +978,7 @@ def build_file_chat_routes() -> APIRouter:
                     status_code=409, detail="Ticket chat already running"
                 )
             _active_chats[target.state_key] = asyncio.Event()
+        await _begin_turn_state(target, client_turn_id)
 
         if stream:
             return StreamingResponse(
@@ -787,13 +990,14 @@ def build_file_chat_routes() -> APIRouter:
                     agent=agent,
                     model=model,
                     reasoning=reasoning,
+                    client_turn_id=client_turn_id,
                 ),
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )
 
         try:
-            return await _execute_file_chat(
+            result = await _execute_file_chat(
                 request,
                 repo_root,
                 target,
@@ -802,6 +1006,10 @@ def build_file_chat_routes() -> APIRouter:
                 model=model,
                 reasoning=reasoning,
             )
+            result = dict(result or {})
+            result["client_turn_id"] = client_turn_id or ""
+            await _finalize_turn_state(target, result)
+            return result
         finally:
             await _clear_interrupt_event(target.state_key)
 

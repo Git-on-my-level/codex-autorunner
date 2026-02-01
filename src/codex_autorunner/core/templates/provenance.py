@@ -53,4 +53,4 @@ def inject_provenance(
         data["template_scan"] = "skipped"
 
     rendered = yaml.safe_dump(data, sort_keys=False).rstrip()
-    return f"---\n{rendered}\n---{body}"
+    return f"---\n{rendered}\n---\n{body}"

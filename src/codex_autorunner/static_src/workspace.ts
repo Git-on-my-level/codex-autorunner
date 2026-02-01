@@ -19,6 +19,9 @@ import {
   FileDraft,
   sendFileChat,
   interruptFileChat,
+  newClientTurnId,
+  streamTurnEvents,
+  type FileChatUpdate,
 } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
 import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
@@ -28,6 +31,8 @@ import { renderDiff } from "./diffRenderer.js";
 import { createSmartRefresh, type SmartRefreshReason } from "./smartRefresh.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
+import { loadPendingTurn, savePendingTurn, clearPendingTurn } from "./turnResume.js";
+import { resumeFileChatTurn } from "./turnEvents.js";
 
 type WorkspaceTarget = {
   path: string; // relative to workspace dir
@@ -58,6 +63,7 @@ const state: WorkspaceState = {
 
 const WORKSPACE_CHAT_EVENT_LIMIT = 8;
 const WORKSPACE_CHAT_EVENT_MAX = 50;
+const WORKSPACE_PENDING_KEY = "car.workspace.pendingTurn";
 
 type WorkspaceTreePayload = {
   tree: WorkspaceNode[];
@@ -95,6 +101,7 @@ const workspaceChat = createDocChat({
 const WORKSPACE_DOC_KINDS = new Set<WorkspaceKind>(["active_context", "decisions", "spec"]);
 const WORKSPACE_REFRESH_REASONS: SmartRefreshReason[] = ["initial", "background", "manual"];
 let workspaceRefreshCount = 0;
+let currentTurnEventsController: AbortController | null = null;
 
 function hashString(value: string): string {
   let hash = 5381;
@@ -575,6 +582,142 @@ async function discardWorkspaceDraft(): Promise<void> {
   }
 }
 
+function clearTurnEventsStream(): void {
+  if (currentTurnEventsController) {
+    try {
+      currentTurnEventsController.abort();
+    } catch {
+      // ignore
+    }
+    currentTurnEventsController = null;
+  }
+}
+
+function clearPendingTurnState(): void {
+  clearTurnEventsStream();
+  clearPendingTurn(WORKSPACE_PENDING_KEY);
+}
+
+function maybeStartTurnEventsFromUpdate(update: FileChatUpdate): void {
+  const meta = update as Record<string, unknown>;
+  const threadId = typeof meta.thread_id === "string" ? meta.thread_id : "";
+  const turnId = typeof meta.turn_id === "string" ? meta.turn_id : "";
+  const agent = typeof meta.agent === "string" ? meta.agent : undefined;
+  if (!threadId || !turnId) return;
+  clearTurnEventsStream();
+  currentTurnEventsController = streamTurnEvents(
+    { agent, threadId, turnId },
+    {
+      onEvent: (event) => {
+        workspaceChat.applyAppEvent(event);
+        workspaceChat.renderEvents();
+        workspaceChat.render();
+      },
+    }
+  );
+}
+
+function applyChatUpdate(update: FileChatUpdate): void {
+  const hasDraft =
+    (update.has_draft as boolean | undefined) ?? (update.hasDraft as boolean | undefined);
+  if (hasDraft === false) {
+    state.draft = null;
+    if (typeof update.content === "string") {
+      state.content = update.content as string;
+      const textarea = els().textarea;
+      if (textarea) textarea.value = state.content;
+    }
+    renderPatch();
+  } else if (hasDraft === true || update.patch || update.content) {
+    state.draft = {
+      target: target(),
+      content: (update.content as string) || "",
+      patch: (update.patch as string) || "",
+      agent_message: update.agent_message,
+      created_at: update.created_at,
+      base_hash: update.base_hash,
+      current_hash: update.current_hash,
+      is_stale: Boolean(update.is_stale),
+    };
+    renderPatch();
+  }
+  if (update.message || update.agent_message) {
+    const text = (update.message as string) || (update.agent_message as string) || "";
+    if (text) workspaceChat.addAssistantMessage(text);
+  }
+  workspaceChat.render();
+}
+
+function applyFinalResult(result: Record<string, unknown>): void {
+  const chatState = workspaceChat.state as ChatState;
+  const status = String(result.status || "");
+  if (status === "ok") {
+    applyChatUpdate(result as FileChatUpdate);
+    chatState.status = "done";
+    chatState.error = "";
+    chatState.streamText = "";
+    clearPendingTurnState();
+    renderChat();
+    return;
+  }
+  if (status === "error") {
+    const detail = String(result.detail || "Chat failed");
+    chatState.status = "error";
+    chatState.error = detail;
+    renderChat();
+    flash(detail, "error");
+    clearPendingTurnState();
+    return;
+  }
+  if (status === "interrupted") {
+    chatState.status = "interrupted";
+    chatState.error = "";
+    chatState.streamText = "";
+    renderChat();
+    clearPendingTurnState();
+  }
+}
+
+async function resumePendingWorkspaceTurn(): Promise<void> {
+  const pending = loadPendingTurn(WORKSPACE_PENDING_KEY);
+  if (!pending) return;
+  const chatState = workspaceChat.state as ChatState;
+  chatState.status = "running";
+  chatState.statusText = "Recovering previous turn…";
+  workspaceChat.render();
+  workspaceChat.renderMessages();
+
+  try {
+    const outcome = await resumeFileChatTurn(pending.clientTurnId, {
+      onEvent: (event) => {
+        workspaceChat.applyAppEvent(event);
+        workspaceChat.renderEvents();
+        workspaceChat.render();
+      },
+      onResult: (result) => applyFinalResult(result as Record<string, unknown>),
+      onError: (msg) => {
+        chatState.statusText = msg;
+        renderChat();
+      },
+    });
+    currentTurnEventsController = outcome.controller;
+    if (outcome.lastResult && (outcome.lastResult as Record<string, unknown>).status) {
+      applyFinalResult(outcome.lastResult as Record<string, unknown>);
+      return;
+    }
+    // If still running but no event stream yet, poll again shortly.
+    if (!outcome.controller) {
+      window.setTimeout(() => {
+        void resumePendingWorkspaceTurn();
+      }, 1000);
+    }
+  } catch (err) {
+    const msg = (err as Error).message || "Failed to resume turn";
+    chatState.statusText = msg;
+    renderChat();
+  }
+}
+
 async function sendChat(): Promise<void> {
   const { chatInput, chatSend, chatCancel } = els();
   const message = (chatInput?.value || "").trim();
@@ -596,6 +739,15 @@ async function sendChat(): Promise<void> {
   if (chatInput) chatInput.value = "";
   chatSend?.setAttribute("disabled", "true");
   chatCancel?.classList.remove("hidden");
+  clearTurnEventsStream();
+
+  const clientTurnId = newClientTurnId("workspace");
+  savePendingTurn(WORKSPACE_PENDING_KEY, {
+    clientTurnId,
+    message,
+    startedAtMs: Date.now(),
+    target: target(),
+  });
 
   const agent = getSelectedAgent();
   const model = getSelectedModel(agent) || undefined;
@@ -621,40 +773,15 @@ async function sendChat(): Promise<void> {
           workspaceChat.renderEvents();
         },
         onUpdate: (update) => {
-          const hasDraft =
-            (update.has_draft as boolean | undefined) ?? (update.hasDraft as boolean | undefined);
-          if (hasDraft === false) {
-            chatState.draft = null;
-            if (typeof update.content === "string") {
-              state.content = update.content as string;
-              const textarea = els().textarea;
-              if (textarea) textarea.value = state.content;
-            }
-            renderPatch();
-          } else if (hasDraft === true || update.patch || update.content) {
-            state.draft = {
-              target: target(),
-              content: (update.content as string) || "",
-              patch: (update.patch as string) || "",
-              agent_message: update.agent_message,
-              created_at: update.created_at,
-              base_hash: update.base_hash,
-              current_hash: update.current_hash,
-              is_stale: Boolean(update.is_stale),
-            };
-            renderPatch();
-          }
-          if (update.message || update.agent_message) {
-            const text = (update.message as string) || (update.agent_message as string) || "";
-            if (text) workspaceChat.addAssistantMessage(text);
-          }
-          renderChat();
+          applyChatUpdate(update);
+          maybeStartTurnEventsFromUpdate(update);
         },
         onError: (msg) => {
           chatState.status = "error";
           chatState.error = msg;
           renderChat();
           flash(msg, "error");
+          clearPendingTurnState();
         },
         onInterrupted: (msg) => {
           chatState.status = "interrupted";
@@ -662,6 +789,7 @@ async function sendChat(): Promise<void> {
           chatState.streamText = "";
           renderChat();
           flash(msg, "info");
+          clearPendingTurnState();
         },
         onDone: () => {
           if (chatState.streamText) {
@@ -670,9 +798,10 @@ async function sendChat(): Promise<void> {
           }
           chatState.status = "done";
           renderChat();
+          clearPendingTurnState();
         },
       },
-      { agent, model, reasoning }
+      { agent, model, reasoning, clientTurnId }
     );
   } catch (err) {
     const msg = (err as Error).message || "Chat failed";
@@ -681,6 +810,7 @@ async function sendChat(): Promise<void> {
     chatStateLocal.error = msg;
     renderChat();
     flash(msg, "error");
+    clearPendingTurnState();
   } finally {
     chatSend?.removeAttribute("disabled");
     chatCancel?.classList.add("hidden");
@@ -702,6 +832,7 @@ async function cancelChat(): Promise<void> {
   chatState.status = "interrupted";
   chatState.streamText = "";
   renderChat();
+  clearPendingTurnState();
 }
 
 async function resetThread(): Promise<void> {
@@ -715,6 +846,7 @@ async function resetThread(): Promise<void> {
     chatState.messages = [];
     chatState.streamText = "";
     workspaceChat.clearEvents();
+    clearPendingTurnState();
     renderChat();
     flash("New workspace chat thread", "success");
   } catch (err) {
@@ -782,6 +914,7 @@ export async function initWorkspace(): Promise<void> {
   await maybeShowGenerate();
   await loadFiles(undefined, "initial");
   workspaceChat.setTarget(target());
+  void resumePendingWorkspaceTurn();
 
   const reloadEverything = async () => {
     await loadFiles(state.target?.path, "manual");

@@ -78,6 +78,7 @@ from .middleware import (
     SecurityHeadersMiddleware,
 )
 from .routes import build_repo_router
+from .routes.filebox import build_hub_filebox_routes
 from .routes.pma import build_pma_routes
 from .routes.system import build_system_routes
 from .runner_manager import RunnerManager
@@ -1138,6 +1139,7 @@ def create_hub_app(
     pma_config = raw_config.get("pma", {}) if isinstance(raw_config, dict) else {}
     if isinstance(pma_config, dict) and pma_config.get("enabled"):
         app.include_router(build_pma_routes())
+    app.include_router(build_hub_filebox_routes())
     mounted_repos: set[str] = set()
     mount_errors: dict[str, str] = {}
     repo_apps: dict[str, ASGIApp] = {}

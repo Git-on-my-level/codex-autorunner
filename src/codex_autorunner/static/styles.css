@@ -10458,6 +10458,76 @@ button.loading::after {
   min-width: 100px;
 }
 
+.filebox-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--panel);
+  margin: 12px 0;
+}
+
+.filebox-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.filebox-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filebox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.filebox-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.filebox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.filebox-item {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--bg-subtle);
+}
+
+.filebox-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.filebox-link {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.filebox-meta {
+  margin-top: 4px;
+}
+
+.filebox-empty {
+  padding: 4px 0;
+}
+
 /* Archive panel */
 #archive.panel.active {
   display: flex;

@@ -1,16 +1,8 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { resolvePath, getAuthToken, api } from "./utils.js";
-const decoder = new TextDecoder();
-function parseMaybeJson(data) {
-    try {
-        return JSON.parse(data);
-    }
-    catch {
-        return data;
-    }
-}
+import { readEventStream, parseMaybeJson } from "./streamUtils.js";
 export async function sendFileChat(target, message, controller, handlers = {}, options = {}) {
-    const endpoint = resolvePath("/api/file-chat");
+    const endpoint = resolvePath(options.basePath || "/api/file-chat");
     const headers = {
         "Content-Type": "application/json",
     };
@@ -22,6 +14,8 @@ export async function sendFileChat(target, message, controller, handlers = {}, o
         message,
         stream: true,
     };
+    if (options.clientTurnId)
+        payload.client_turn_id = options.clientTurnId;
     if (options.agent)
         payload.agent = options.agent;
     if (options.model)
@@ -58,36 +52,7 @@ export async function sendFileChat(target, message, controller, handlers = {}, o
     }
 }
 async function readFileChatStream(res, handlers) {
-    if (!res.body)
-        throw new Error("Streaming not supported in this browser");
-    const reader = res.body.getReader();
-    let buffer = "";
-    for (;;) {
-        const { value, done } = await reader.read();
-        if (done)
-            break;
-        buffer += decoder.decode(value, { stream: true });
-        const chunks = buffer.split("\n\n");
-        buffer = chunks.pop() || "";
-        for (const chunk of chunks) {
-            if (!chunk.trim())
-                continue;
-            let event = "message";
-            const dataLines = [];
-            chunk.split("\n").forEach((line) => {
-                if (line.startsWith("event:")) {
-                    event = line.slice(6).trim();
-                }
-                else if (line.startsWith("data:")) {
-                    dataLines.push(line.slice(5).trimStart());
-                }
-            });
-            if (!dataLines.length)
-                continue;
-            const rawData = dataLines.join("\n");
-            handleStreamEvent(event, rawData, handlers);
-        }
-    }
+    await readEventStream(res, (event, raw) => handleStreamEvent(event, raw, handlers));
 }
 function handleStreamEvent(event, rawData, handlers) {
     const parsed = parseMaybeJson(rawData);
@@ -179,4 +144,57 @@ export async function discardDraft(target) {
 }
 export async function interruptFileChat(target) {
     await api("/api/file-chat/interrupt", { method: "POST", body: { target } });
+}
+export function newClientTurnId(prefix = "filechat") {
+    try {
+        if (typeof crypto !== "undefined" && "randomUUID" in crypto && typeof crypto.randomUUID === "function") {
+            return crypto.randomUUID();
+        }
+    }
+    catch {
+        // ignore
+    }
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+export async function fetchActiveFileChat(clientTurnId, basePath = "/api/file-chat/active") {
+    const suffix = clientTurnId ? `?client_turn_id=${encodeURIComponent(clientTurnId)}` : "";
+    const path = `${basePath}${suffix}`;
+    try {
+        const res = (await api(path));
+        return res || {};
+    }
+    catch {
+        return {};
+    }
+}
+export function streamTurnEvents(meta, handlers = {}) {
+    if (!meta.threadId || !meta.turnId)
+        return null;
+    const ctrl = new AbortController();
+    const token = getAuthToken();
+    const headers = {};
+    if (token)
+        headers.Authorization = `Bearer ${token}`;
+    const url = resolvePath(`${meta.basePath || "/api/file-chat/turns"}/${encodeURIComponent(meta.turnId)}/events?thread_id=${encodeURIComponent(meta.threadId)}&agent=${encodeURIComponent(meta.agent || "codex")}`);
+    void (async () => {
+        try {
+            const res = await fetch(url, { method: "GET", headers, signal: ctrl.signal });
+            if (!res.ok) {
+                handlers.onError?.("Failed to stream events");
+                return;
+            }
+            const contentType = res.headers.get("content-type") || "";
+            if (!contentType.includes("text/event-stream"))
+                return;
+            await readEventStream(res, (event, raw) => {
+                if (event === "app-server" || event === "event") {
+                    handlers.onEvent?.(parseMaybeJson(raw));
+                }
+            });
+        }
+        catch (err) {
+            handlers.onError?.(err.message || "Event stream failed");
+        }
+    })();
+    return ctrl;
 }
