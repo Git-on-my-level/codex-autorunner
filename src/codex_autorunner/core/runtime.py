@@ -279,8 +279,6 @@ def pma_doctor_checks(
     pma_cfg = None
     if isinstance(config, dict):
         pma_cfg = config.get("pma")
-    elif isinstance(config, dict) and hasattr(config, "raw"):
-        pma_cfg = config.raw.get("pma")
     elif hasattr(config, "raw"):
         pma_cfg = config.raw.get("pma") if isinstance(config.raw, dict) else None
 
