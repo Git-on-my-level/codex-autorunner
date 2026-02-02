@@ -256,7 +256,7 @@ def archive_dispatch(
     _delete_dispatch_items(items)
 
     # Emit lifecycle event for dispatch creation
-    if repo_id and run_id:
+    if run_id:
         _emit_lifecycle(
             "dispatch_created",
             repo_id,

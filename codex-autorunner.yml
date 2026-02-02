@@ -190,7 +190,7 @@ templates:
       trusted: true
       default_ref: main
  
- pma:
+pma:
    # Project Management Assistant (hub-level chat + filebox).
    # When disabled, PMA routes return 404 and Telegram /pma is blocked.
    enabled: true

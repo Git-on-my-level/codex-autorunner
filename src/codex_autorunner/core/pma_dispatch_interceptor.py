@@ -230,7 +230,7 @@ async def run_dispatch_interceptor(
     supervisor: Any,
     interval_seconds: float = 5.0,
     on_intercept: Optional[Callable[[str, InterceptionResult], None]] = None,
-) -> asyncio.Task:
+) -> asyncio.Task[None]:
     interceptor = PmaDispatchInterceptor(
         hub_root=hub_root,
         supervisor=supervisor,

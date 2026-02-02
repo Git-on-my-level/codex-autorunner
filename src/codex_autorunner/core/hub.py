@@ -1019,6 +1019,8 @@ class HubSupervisor:
     def _start_dispatch_interceptor(self) -> None:
         if not self.hub_config.pma.enabled:
             return
+        if not self.hub_config.pma.dispatch_interception_enabled:
+            return
         if self._dispatch_interceptor_thread is not None:
             return
 
