@@ -152,7 +152,8 @@ def check_worker_health(
     try:
         data = json.loads(metadata_path.read_text(encoding="utf-8"))
         pid = int(data.get("pid")) if data.get("pid") is not None else None
-        cmd = data.get("cmd") or []
+        raw_cmd = data.get("cmd") or []
+        cmd = [str(part) for part in raw_cmd] if isinstance(raw_cmd, list) else []
     except Exception:
         return FlowWorkerHealth(
             status="invalid",
@@ -166,7 +167,7 @@ def check_worker_health(
         return FlowWorkerHealth(
             status="invalid",
             pid=pid,
-            cmdline=cmd if isinstance(cmd, list) else [],
+            cmdline=cmd,
             artifact_path=metadata_path,
             message="missing or invalid PID",
         )
@@ -175,19 +176,19 @@ def check_worker_health(
         return FlowWorkerHealth(
             status="dead",
             pid=pid,
-            cmdline=cmd if isinstance(cmd, list) else [],
+            cmdline=cmd,
             artifact_path=metadata_path,
             message="worker PID not running",
         )
 
-    expected_cmd = _build_worker_cmd(entrypoint, run_id)
+    expected_cmd = cmd or _build_worker_cmd(entrypoint, run_id)
     actual_cmd = _read_process_cmdline(pid)
     if actual_cmd is None:
         # Can't inspect cmdline; trust the PID check.
         return FlowWorkerHealth(
             status="alive",
             pid=pid,
-            cmdline=cmd if isinstance(cmd, list) else [],
+            cmdline=cmd,
             artifact_path=metadata_path,
             message="worker running (cmdline unknown)",
         )
@@ -198,7 +199,7 @@ def check_worker_health(
             pid=pid,
             cmdline=actual_cmd,
             artifact_path=metadata_path,
-            message="worker PID command does not match expected",
+            message="worker PID command does not match stored metadata",
         )
 
     return FlowWorkerHealth(
