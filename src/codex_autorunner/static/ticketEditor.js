@@ -485,8 +485,12 @@ async function performAutosave() {
         // Notify that tickets changed
         publish("tickets:updated", {});
     }
-    catch {
+    catch (err) {
+        // Surface the failure to the user and let DocEditor keep the "dirty" state
+        // so a retry is attempted instead of falsely reporting success.
         setAutosaveStatus("error");
+        flash(err?.message || "Failed to save ticket", "error");
+        throw err;
     }
 }
 /**
