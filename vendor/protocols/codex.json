@@ -289,11 +289,30 @@
       "type": "object"
     },
     "AuthMode": {
-      "enum": [
-        "apikey",
-        "chatgpt"
-      ],
-      "type": "string"
+      "description": "Authentication mode for OpenAI-backed providers.",
+      "oneOf": [
+        {
+          "description": "OpenAI API key provided by the caller and stored by Codex.",
+          "enum": [
+            "apikey"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).",
+          "enum": [
+            "chatgpt"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.\n\nChatGPT auth tokens are supplied by an external host app and are only stored in memory. Token refresh must be handled by the external host app.",
+          "enum": [
+            "chatgptAuthTokens"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "AuthStatusChangeNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -393,6 +412,54 @@
     "CancelLoginChatGptResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "CancelLoginChatGptResponse",
+      "type": "object"
+    },
+    "ChatgptAuthTokensRefreshParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "previousAccountId": {
+          "description": "Workspace/account identifier that Codex was previously using.\n\nClients that manage multiple accounts/workspaces can use this as a hint to refresh the token for the correct workspace.\n\nThis may be `null` when the prior ID token did not include a workspace identifier (`chatgpt_account_id`) or when the token could not be parsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "$ref": "#/definitions/ChatgptAuthTokensRefreshReason"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "ChatgptAuthTokensRefreshParams",
+      "type": "object"
+    },
+    "ChatgptAuthTokensRefreshReason": {
+      "oneOf": [
+        {
+          "description": "Codex attempted a backend request and received `401 Unauthorized`.",
+          "enum": [
+            "unauthorized"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ChatgptAuthTokensRefreshResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "accessToken": {
+          "type": "string"
+        },
+        "idToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accessToken",
+        "idToken"
+      ],
+      "title": "ChatgptAuthTokensRefreshResponse",
       "type": "object"
     },
     "ClientInfo": {
@@ -561,6 +628,30 @@
             "params"
           ],
           "title": "Thread/archiveRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/name/set"
+              ],
+              "title": "Thread/name/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadSetNameParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/name/setRequest",
           "type": "object"
         },
         {
@@ -1784,6 +1875,35 @@
         {
           "additionalProperties": false,
           "properties": {
+            "model_cap": {
+              "properties": {
+                "model": {
+                  "type": "string"
+                },
+                "reset_after_seconds": {
+                  "format": "uint64",
+                  "minimum": 0.0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "model"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "model_cap"
+          ],
+          "title": "ModelCapCodexErrorInfo",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "http_connection_failed": {
               "properties": {
                 "http_status_code": {
@@ -2425,6 +2545,14 @@
         {
           "description": "Agent has started a turn. v1 wire format uses `task_started`; accept `turn_started` for v2 interop.",
           "properties": {
+            "collaboration_mode_kind": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/ModeKind"
+                }
+              ],
+              "default": "code"
+            },
             "model_context_window": {
               "format": "int64",
               "type": [
@@ -2786,12 +2914,14 @@
               "description": "How to sandbox commands executed in the system"
             },
             "session_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/v2/ThreadId"
-                }
-              ],
-              "description": "Name left as session_id instead of thread_id for backwards compatibility."
+              "$ref": "#/definitions/v2/ThreadId"
+            },
+            "thread_name": {
+              "description": "Optional user-facing thread name (may be unset).",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -2813,6 +2943,33 @@
             "type"
           ],
           "title": "SessionConfiguredEventMsg",
+          "type": "object"
+        },
+        {
+          "description": "Updated session metadata (e.g., thread name changes).",
+          "properties": {
+            "thread_id": {
+              "$ref": "#/definitions/v2/ThreadId"
+            },
+            "thread_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "thread_name_updated"
+              ],
+              "title": "ThreadNameUpdatedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "thread_id",
+            "type"
+          ],
+          "title": "ThreadNameUpdatedEventMsg",
           "type": "object"
         },
         {
@@ -3876,6 +4033,7 @@
           "properties": {
             "explanation": {
               "default": null,
+              "description": "Arguments for the `update_plan` todo/checklist tool (not plan mode).",
               "type": [
                 "string",
                 "null"
@@ -4099,6 +4257,38 @@
             "type"
           ],
           "title": "AgentMessageContentDeltaEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delta": {
+              "type": "string"
+            },
+            "item_id": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "plan_delta"
+              ],
+              "title": "PlanDeltaEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "item_id",
+            "thread_id",
+            "turn_id",
+            "type"
+          ],
+          "title": "PlanDeltaEventMsg",
           "type": "object"
         },
         {
@@ -5818,6 +6008,17 @@
         }
       ]
     },
+    "ModeKind": {
+      "description": "Initial collaboration mode to use when the TUI starts.",
+      "enum": [
+        "plan",
+        "code",
+        "pair_programming",
+        "execute",
+        "custom"
+      ],
+      "type": "string"
+    },
     "NetworkAccess": {
       "description": "Represents whether outbound network access is available to the agent.",
       "enum": [
@@ -6067,6 +6268,7 @@
     "PlanType": {
       "enum": [
         "free",
+        "go",
         "plus",
         "pro",
         "team",
@@ -6352,6 +6554,10 @@
           "type": "string"
         },
         "isOther": {
+          "default": false,
+          "type": "boolean"
+        },
+        "isSecret": {
           "default": false,
           "type": "boolean"
         },
@@ -7511,6 +7717,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/name/updated"
+              ],
+              "title": "Thread/name/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadNameUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/name/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/tokenUsage/updated"
               ],
               "title": "Thread/tokenUsage/updatedNotificationMethod",
@@ -7686,6 +7912,27 @@
             "params"
           ],
           "title": "Item/agentMessage/deltaNotification",
+          "type": "object"
+        },
+        {
+          "description": "EXPERIMENTAL - proposed plan streaming deltas for plan items.",
+          "properties": {
+            "method": {
+              "enum": [
+                "item/plan/delta"
+              ],
+              "title": "Item/plan/deltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PlanDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/plan/deltaNotification",
           "type": "object"
         },
         {
@@ -7889,6 +8136,7 @@
           "type": "object"
         },
         {
+          "description": "Deprecated: Use `ContextCompaction` item type instead.",
           "properties": {
             "method": {
               "enum": [
@@ -8159,6 +8407,30 @@
           "type": "object"
         },
         {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/chatgptAuthTokens/refresh"
+              ],
+              "title": "Account/chatgptAuthTokens/refreshRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ChatgptAuthTokensRefreshParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/chatgptAuthTokens/refreshRequest",
+          "type": "object"
+        },
+        {
           "description": "DEPRECATED APIs below Request to approve a patch. This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).",
           "properties": {
             "id": {
@@ -8318,6 +8590,20 @@
       "title": "SetDefaultModelResponse",
       "type": "object"
     },
+    "SkillDependencies": {
+      "properties": {
+        "tools": {
+          "items": {
+            "$ref": "#/definitions/SkillToolDependency"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tools"
+      ],
+      "type": "object"
+    },
     "SkillErrorInfo": {
       "properties": {
         "message": {
@@ -8376,6 +8662,16 @@
     },
     "SkillMetadata": {
       "properties": {
+        "dependencies": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SkillDependencies"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "description": {
           "type": "string"
         },
@@ -8402,7 +8698,7 @@
           "$ref": "#/definitions/SkillScope"
         },
         "short_description": {
-          "description": "Legacy short_description from SKILL.md. Prefer SKILL.toml interface.short_description.",
+          "description": "Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.",
           "type": [
             "string",
             "null"
@@ -8426,6 +8722,45 @@
         "admin"
       ],
       "type": "string"
+    },
+    "SkillToolDependency": {
+      "properties": {
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transport": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "type": "object"
     },
     "SkillsListEntry": {
       "properties": {
@@ -8822,7 +9157,7 @@
       "type": "object"
     },
     "ToolRequestUserInputQuestion": {
-      "description": "EXPERIMENTAL. Represents one request_user_input question and its optional options.",
+      "description": "EXPERIMENTAL. Represents one request_user_input question and its required options.",
       "properties": {
         "header": {
           "type": "string"
@@ -8831,6 +9166,10 @@
           "type": "string"
         },
         "isOther": {
+          "default": false,
+          "type": "boolean"
+        },
+        "isSecret": {
           "default": false,
           "type": "boolean"
         },
@@ -8957,6 +9296,30 @@
             "id": {
               "type": "string"
             },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "Plan"
+              ],
+              "title": "PlanTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "type"
+          ],
+          "title": "PlanTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
             "raw_content": {
               "default": [],
               "items": {
@@ -9012,6 +9375,26 @@
             "type"
           ],
           "title": "WebSearchTurnItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "ContextCompaction"
+              ],
+              "title": "ContextCompactionTurnItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type"
+          ],
+          "title": "ContextCompactionTurnItem",
           "type": "object"
         }
       ]
@@ -9125,6 +9508,31 @@
             "type"
           ],
           "title": "SkillUserInput",
+          "type": "object"
+        },
+        {
+          "description": "Explicit mention selected by the user (name + app://connector id).",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "mention"
+              ],
+              "title": "MentionUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "path",
+            "type"
+          ],
+          "title": "MentionUserInput",
           "type": "object"
         }
       ]
@@ -9298,6 +9706,15 @@
       "oneOf": [
         {
           "properties": {
+            "queries": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
             "query": {
               "type": [
                 "string",
@@ -9563,6 +9980,12 @@
               "null"
             ]
           },
+          "distributionChannel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -9577,6 +10000,12 @@
             "type": "boolean"
           },
           "logoUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logoUrlDark": {
             "type": [
               "string",
               "null"
@@ -9678,11 +10107,30 @@
         "type": "object"
       },
       "AuthMode": {
-        "enum": [
-          "apikey",
-          "chatgpt"
-        ],
-        "type": "string"
+        "description": "Authentication mode for OpenAI-backed providers.",
+        "oneOf": [
+          {
+            "description": "OpenAI API key provided by the caller and stored by Codex.",
+            "enum": [
+              "apikey"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "ChatGPT OAuth managed by Codex (tokens persisted and refreshed by Codex).",
+            "enum": [
+              "chatgpt"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.\n\nChatGPT auth tokens are supplied by an external host app and are only stored in memory. Token refresh must be handled by the external host app.",
+            "enum": [
+              "chatgptAuthTokens"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "BlobResourceContents": {
         "properties": {
@@ -9772,6 +10220,35 @@
               "other"
             ],
             "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "modelCap": {
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  },
+                  "reset_after_seconds": {
+                    "format": "uint64",
+                    "minimum": 0.0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "model"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "modelCap"
+            ],
+            "title": "ModelCapCodexErrorInfo",
+            "type": "object"
           },
           {
             "additionalProperties": false,
@@ -10691,6 +11168,16 @@
               "array",
               "null"
             ]
+          },
+          "enforceResidency": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ResidencyRequirement"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"
@@ -10905,6 +11392,7 @@
       },
       "ContextCompactedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Deprecated: Use `ContextCompaction` item type instead.",
         "properties": {
           "threadId": {
             "type": "string"
@@ -11210,6 +11698,7 @@
         "properties": {
           "refreshToken": {
             "default": false,
+            "description": "When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
             "type": "boolean"
           }
         },
@@ -11527,6 +12016,33 @@
             ],
             "title": "Chatgptv2::LoginAccountParams",
             "type": "object"
+          },
+          {
+            "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
+            "properties": {
+              "accessToken": {
+                "description": "Access token (JWT) supplied by the client. This token is used for backend API requests.",
+                "type": "string"
+              },
+              "idToken": {
+                "description": "ID token (JWT) supplied by the client.\n\nThis token is used for identity and account metadata (email, plan type, workspace id).",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "chatgptAuthTokens"
+                ],
+                "title": "ChatgptAuthTokensv2::LoginAccountParamsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "accessToken",
+              "idToken",
+              "type"
+            ],
+            "title": "ChatgptAuthTokensv2::LoginAccountParams",
+            "type": "object"
           }
         ],
         "title": "LoginAccountParams"
@@ -11573,6 +12089,22 @@
               "type"
             ],
             "title": "Chatgptv2::LoginAccountResponse",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "chatgptAuthTokens"
+                ],
+                "title": "ChatgptAuthTokensv2::LoginAccountResponseType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ChatgptAuthTokensv2::LoginAccountResponse",
             "type": "object"
           }
         ],
@@ -11961,9 +12493,36 @@
         ],
         "type": "string"
       },
+      "PlanDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - proposed plan streaming deltas for plan items. Clients should not assume concatenated deltas match the completed plan item content.",
+        "properties": {
+          "delta": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delta",
+          "itemId",
+          "threadId",
+          "turnId"
+        ],
+        "title": "PlanDeltaNotification",
+        "type": "object"
+      },
       "PlanType": {
         "enum": [
           "free",
+          "go",
           "plus",
           "pro",
           "team",
@@ -12340,6 +12899,12 @@
         ],
         "title": "ReasoningTextDeltaNotification",
         "type": "object"
+      },
+      "ResidencyRequirement": {
+        "enum": [
+          "us"
+        ],
+        "type": "string"
       },
       "Resource": {
         "description": "A known resource that the server is capable of reading.",
@@ -13172,6 +13737,20 @@
         ],
         "type": "object"
       },
+      "SkillDependencies": {
+        "properties": {
+          "tools": {
+            "items": {
+              "$ref": "#/definitions/v2/SkillToolDependency"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tools"
+        ],
+        "type": "object"
+      },
       "SkillErrorInfo": {
         "properties": {
           "message": {
@@ -13230,6 +13809,16 @@
       },
       "SkillMetadata": {
         "properties": {
+          "dependencies": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SkillDependencies"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "description": {
             "type": "string"
           },
@@ -13256,7 +13845,7 @@
             "$ref": "#/definitions/v2/SkillScope"
           },
           "shortDescription": {
-            "description": "Legacy short_description from SKILL.md. Prefer SKILL.toml interface.short_description.",
+            "description": "Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.",
             "type": [
               "string",
               "null"
@@ -13280,6 +13869,45 @@
           "admin"
         ],
         "type": "string"
+      },
+      "SkillToolDependency": {
+        "properties": {
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transport": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "type": "object"
       },
       "SkillsConfigWriteParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -13830,6 +14458,31 @@
             "type": "object"
           },
           {
+            "description": "EXPERIMENTAL - proposed plan item content. The completed plan item is authoritative and may not match the concatenation of `PlanDelta` text.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "plan"
+                ],
+                "title": "PlanThreadItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "type"
+            ],
+            "title": "PlanThreadItem",
+            "type": "object"
+          },
+          {
             "properties": {
               "content": {
                 "default": [],
@@ -14097,6 +14750,16 @@
           },
           {
             "properties": {
+              "action": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/WebSearchAction"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "id": {
                 "type": "string"
               },
@@ -14189,6 +14852,26 @@
               "type"
             ],
             "title": "ExitedReviewModeThreadItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "contextCompaction"
+                ],
+                "title": "ContextCompactionThreadItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "type"
+            ],
+            "title": "ContextCompactionThreadItem",
             "type": "object"
           }
         ]
@@ -14322,6 +15005,25 @@
           "data"
         ],
         "title": "ThreadLoadedListResponse",
+        "type": "object"
+      },
+      "ThreadNameUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "threadName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadNameUpdatedNotification",
         "type": "object"
       },
       "ThreadReadParams": {
@@ -14533,6 +15235,28 @@
           "thread"
         ],
         "title": "ThreadRollbackResponse",
+        "type": "object"
+      },
+      "ThreadSetNameParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "threadId"
+        ],
+        "title": "ThreadSetNameParams",
+        "type": "object"
+      },
+      "ThreadSetNameResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadSetNameResponse",
         "type": "object"
       },
       "ThreadSortKey": {
@@ -15360,6 +16084,30 @@
             ],
             "title": "SkillUserInput",
             "type": "object"
+          },
+          {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "mention"
+                ],
+                "title": "MentionUserInputType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "path",
+              "type"
+            ],
+            "title": "MentionUserInput",
+            "type": "object"
           }
         ]
       },
@@ -15376,6 +16124,15 @@
         "oneOf": [
           {
             "properties": {
+              "queries": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "query": {
                 "type": [
                   "string",
