@@ -467,6 +467,26 @@ function formatBytes(size?: number | null): string {
   return `${size} B`;
 }
 
+function isSafeHref(url: string): boolean {
+  const trimmed = (url || "").trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("javascript:")) return false;
+  if (lower.startsWith("data:")) return false;
+  if (lower.startsWith("vbscript:")) return false;
+  if (lower.startsWith("file:")) return false;
+
+  return (
+    lower.startsWith("http://") ||
+    lower.startsWith("https://") ||
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../") ||
+    trimmed.startsWith("#") ||
+    lower.startsWith("mailto:")
+  );
+}
+
 export function renderMarkdown(body?: string | null): string {
   if (!body) return "";
   let text = escapeHtml(body);
@@ -493,7 +513,11 @@ export function renderMarkdown(body?: string | null): string {
 
   // Extract markdown links [text](url) to avoid double-linking
   const links: string[] = [];
-  text = text.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (_m, label, url) => {
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, rawUrl) => {
+    const url = (rawUrl || "").trim();
+    if (!isSafeHref(url)) {
+      return match;
+    }
     const placeholder = `@@LINK_${links.length}@@`;
     // Note: label and url are already escaped because text is escaped.
     links.push(`<a href="${url}" target="_blank" rel="noopener">${label}</a>`);
