@@ -3,11 +3,26 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Dict, Optional
 
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_dispatch_frontmatter
 from .models import Dispatch, DispatchRecord
+
+_lifecycle_emitter: Optional[Callable[[str, str, str, Dict[str, Any]], None]] = None
+
+
+def set_lifecycle_emitter(emitter: Optional[Callable[[str, str, str, Dict[str, Any]], None]]) -> None:
+    global _lifecycle_emitter
+    _lifecycle_emitter = emitter
+
+
+def _emit_lifecycle(event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]) -> None:
+    if _lifecycle_emitter:
+        try:
+            _lifecycle_emitter(event_type, repo_id, run_id, data)
+        except Exception:
+            pass
 
 
 @dataclass(frozen=True)
@@ -176,8 +191,10 @@ def archive_dispatch(
     *,
     next_seq: int,
     ticket_id: Optional[str] = None,
+    repo_id: str = "",
+    run_id: str = "",
 ) -> tuple[Optional[DispatchRecord], list[str]]:
-    """Archive the current dispatch and attachments to the dispatch history.
+    """Archive current dispatch and attachments to dispatch history.
 
     Moves DISPATCH.md + attachments into dispatch_history/<seq>/.
 
@@ -203,6 +220,60 @@ def archive_dispatch(
             title=dispatch.title,
             extra=extra,
         )
+
+    items = _list_dispatch_items(paths.dispatch_dir)
+    dest = paths.dispatch_history_dir / f"{next_seq:04d}"
+    try:
+        dest.mkdir(parents=True, exist_ok=False)
+    except OSError as exc:
+        return None, [f"Failed to create dispatch history dir: {exc}"]
+
+    archived: list[Path] = []
+    try:
+        # Archive the dispatch file.
+        msg_dest = dest / "DISPATCH.md"
+        _copy_item(paths.dispatch_path, msg_dest)
+        archived.append(msg_dest)
+
+        # Archive all attachments.
+        for item in items:
+            item_dest = dest / item.name
+            _copy_item(item, item_dest)
+            archived.append(item_dest)
+
+    except OSError as exc:
+        return None, [f"Failed to archive dispatch: {exc}"]
+
+    # Cleanup (best-effort).
+    try:
+        paths.dispatch_path.unlink()
+    except OSError:
+        pass
+    _delete_dispatch_items(items)
+
+    # Emit lifecycle event for dispatch creation
+    if repo_id and run_id:
+        _emit_lifecycle(
+            "dispatch_created",
+            repo_id,
+            run_id,
+            {
+                "seq": next_seq,
+                "mode": dispatch.mode,
+                "title": dispatch.title,
+                "ticket_id": ticket_id,
+            },
+        )
+
+    return (
+        DispatchRecord(
+            seq=next_seq,
+            dispatch=dispatch,
+            archived_dir=dest,
+            archived_files=tuple(archived),
+        ),
+        [],
+    )
 
     items = _list_dispatch_items(paths.dispatch_dir)
     dest = paths.dispatch_history_dir / f"{next_seq:04d}"

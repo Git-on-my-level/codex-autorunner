@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import enum
 import logging
@@ -29,6 +30,7 @@ from .git_utils import (
     git_upstream_status,
     run_git,
 )
+from .lifecycle_events import LifecycleEvent, LifecycleEventEmitter, LifecycleEventStore
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
@@ -275,7 +277,12 @@ class HubSupervisor:
         self._list_cache_at: Optional[float] = None
         self._list_cache: Optional[List[RepoSnapshot]] = None
         self._list_lock = threading.Lock()
+        self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
+        self._lifecycle_task_lock = threading.Lock()
+        self._lifecycle_stop_event = threading.Event()
+        self._lifecycle_thread: Optional[threading.Thread] = None
         self._reconcile_startup()
+        self._start_lifecycle_event_processor()
 
     @classmethod
     def from_path(
@@ -942,6 +949,67 @@ class HubSupervisor:
         with self._list_lock:
             self._list_cache = None
             self._list_cache_at = None
+
+    @property
+    def lifecycle_emitter(self) -> LifecycleEventEmitter:
+        return self._lifecycle_emitter
+
+    @property
+    def lifecycle_store(self) -> LifecycleEventStore:
+        return self._lifecycle_emitter._store
+
+    def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
+        if event.processed:
+            return
+        event_id = event.event_id
+        if event_id is None:
+            return
+        self.lifecycle_store.mark_processed(event_id)
+        self.lifecycle_store.prune_processed(keep_last=50)
+        logger.info(
+            "PMA wakeup triggered by lifecycle event: type=%s repo_id=%s run_id=%s",
+            event.event_type.value,
+            event.repo_id,
+            event.run_id,
+        )
+
+    def process_lifecycle_events(self) -> None:
+        events = self.lifecycle_store.get_unprocessed(limit=100)
+        if not events:
+            return
+        for event in events:
+            try:
+                self.trigger_pma_from_lifecycle_event(event)
+            except Exception as exc:
+                logger.exception(
+                    "Failed to process lifecycle event %s: %s", event.event_id, exc
+                )
+
+    def _start_lifecycle_event_processor(self) -> None:
+        if self._lifecycle_thread is not None:
+            return
+
+        def _process_loop():
+            while not self._lifecycle_stop_event.wait(5.0):
+                try:
+                    self.process_lifecycle_events()
+                except Exception:
+                    logger.exception("Error in lifecycle event processor")
+
+        self._lifecycle_thread = threading.Thread(
+            target=_process_loop, daemon=True, name="lifecycle-event-processor"
+        )
+        self._lifecycle_thread.start()
+
+    def _stop_lifecycle_event_processor(self) -> None:
+        if self._lifecycle_thread is None:
+            return
+        self._lifecycle_stop_event.set()
+        self._lifecycle_thread.join(timeout=2.0)
+        self._lifecycle_thread = None
+
+    def shutdown(self) -> None:
+        self._stop_lifecycle_event_processor()
 
     def _snapshot_from_record(self, record: DiscoveryRecord) -> RepoSnapshot:
         repo_path = record.absolute_path

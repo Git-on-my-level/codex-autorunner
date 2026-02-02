@@ -12,6 +12,7 @@ from .config import load_repo_config
 from .flows.models import FlowRunStatus
 from .flows.store import FlowStore
 from .hub import HubSupervisor
+from .lifecycle_events import LifecycleEventStore
 
 PMA_MAX_REPOS = 25
 PMA_MAX_MESSAGES = 10
@@ -273,12 +274,30 @@ def _gather_inbox(
     return messages
 
 
+def _gather_lifecycle_events(
+    supervisor: HubSupervisor, limit: int = 20
+) -> list[dict[str, Any]]:
+    events = supervisor.lifecycle_store.get_unprocessed(limit=limit)
+    result: list[dict[str, Any]] = []
+    for event in events[:limit]:
+        result.append(
+            {
+                "event_type": event.event_type.value,
+                "repo_id": event.repo_id,
+                "run_id": event.run_id,
+                "timestamp": event.timestamp,
+                "data": event.data,
+            }
+        )
+    return result
+
+
 async def build_hub_snapshot(
     supervisor: Optional[HubSupervisor],
     hub_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     if supervisor is None:
-        return {"repos": [], "inbox": []}
+        return {"repos": [], "inbox": [], "lifecycle_events": []}
 
     snapshots = await asyncio.to_thread(supervisor.list_repos)
     snapshots = sorted(snapshots, key=lambda snap: snap.id)
@@ -319,6 +338,10 @@ async def build_hub_snapshot(
     )
     inbox = inbox[:max_messages]
 
+    lifecycle_events = await asyncio.to_thread(
+        _gather_lifecycle_events, supervisor, limit=20
+    )
+
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
     if hub_root:
         try:
@@ -335,4 +358,4 @@ async def build_hub_snapshot(
         except Exception:
             pass
 
-    return {"repos": repos, "inbox": inbox, "pma_files": pma_files}
+    return {"repos": repos, "inbox": inbox, "pma_files": pma_files, "lifecycle_events": lifecycle_events}

@@ -8,6 +8,25 @@ from .definition import FlowDefinition
 from .models import FlowEvent, FlowRunRecord, FlowRunStatus
 from .runtime import FlowRuntime
 from .store import FlowStore
+from ..lifecycle_events import LifecycleEventEmitter, default_lifecycle_events_path
+from ..utils import find_repo_root
+
+
+def _find_hub_root(repo_root: Optional[Path] = None) -> Optional[Path]:
+    if repo_root is None:
+        repo_root = find_repo_root()
+    if repo_root is None:
+        return None
+    current = repo_root
+    for _ in range(5):
+        manifest_path = current / ".codex-autorunner" / "manifest.yml"
+        if manifest_path.exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
 
 _logger = logging.getLogger(__name__)
 
@@ -19,13 +38,21 @@ class FlowController:
         db_path: Path,
         artifacts_root: Path,
         durable: bool = False,
+        hub_root: Optional[Path] = None,
     ):
         self.definition = definition
         self.db_path = db_path
         self.artifacts_root = artifacts_root
         self.store = FlowStore(db_path, durable=durable)
         self._event_listeners: Set[Callable[[FlowEvent], None]] = set()
+        self._lifecycle_event_listeners: Set[Callable[[str, str, str, dict], None]] = set()
         self._lock = asyncio.Lock()
+        self._lifecycle_emitter: Optional[LifecycleEventEmitter] = None
+        if hub_root is None:
+            hub_root = _find_hub_root(db_path.parent.parent if db_path else None)
+        if hub_root is not None:
+            self._lifecycle_emitter = LifecycleEventEmitter(hub_root)
+            self.add_lifecycle_event_listener(self._emit_to_lifecycle_store)
 
     def initialize(self) -> None:
         self.artifacts_root.mkdir(parents=True, exist_ok=True)
@@ -71,6 +98,7 @@ class FlowController:
             definition=self.definition,
             store=self.store,
             emit_event=self._emit_event,
+            emit_lifecycle_event=self._emit_lifecycle,
         )
         return await runtime.run_flow(run_id=run_id, initial_state=initial_state)
 
@@ -174,6 +202,34 @@ class FlowController:
 
     def remove_event_listener(self, listener: Callable[[FlowEvent], None]) -> None:
         self._event_listeners.discard(listener)
+
+    def add_lifecycle_event_listener(self, listener: Callable[[str, str, str, dict], None]) -> None:
+        self._lifecycle_event_listeners.add(listener)
+
+    def remove_lifecycle_event_listener(self, listener: Callable[[str, str, str, dict], None]) -> None:
+        self._lifecycle_event_listeners.discard(listener)
+
+    def _emit_lifecycle(self, event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]) -> None:
+        for listener in self._lifecycle_event_listeners:
+            try:
+                listener(event_type, repo_id, run_id, data)
+            except Exception as e:
+                _logger.exception("Error in lifecycle event listener: %s", e)
+
+    def _emit_to_lifecycle_store(self, event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]) -> None:
+        if self._lifecycle_emitter is None:
+            return
+        try:
+            if event_type == "flow_paused":
+                self._lifecycle_emitter.emit_flow_paused(repo_id, run_id, data=data)
+            elif event_type == "flow_completed":
+                self._lifecycle_emitter.emit_flow_completed(repo_id, run_id, data=data)
+            elif event_type == "flow_failed":
+                self._lifecycle_emitter.emit_flow_failed(repo_id, run_id, data=data)
+            elif event_type == "flow_stopped":
+                self._lifecycle_emitter.emit_flow_stopped(repo_id, run_id, data=data)
+        except Exception as exc:
+            _logger.exception("Error emitting to lifecycle store: %s", exc)
 
     def _emit_event(self, event: FlowEvent) -> None:
         for listener in self._event_listeners:
