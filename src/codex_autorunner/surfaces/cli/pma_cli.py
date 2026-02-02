@@ -2,17 +2,23 @@
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 import httpx
 import typer
 
+from ...bootstrap import ensure_pma_docs
 from ...core.config import load_hub_config
 
 logger = logging.getLogger(__name__)
 
 pma_app = typer.Typer(add_completion=False, rich_markup_mode=None)
+docs_app = typer.Typer(add_completion=False, rich_markup_mode=None, name="docs")
+context_app = typer.Typer(add_completion=False, rich_markup_mode=None, name="context")
+pma_app.add_typer(docs_app)
+pma_app.add_typer(context_app)
 
 
 def _build_pma_url(config, path: str) -> str:
@@ -27,6 +33,8 @@ def _resolve_hub_path(path: Optional[Path]) -> Path:
         candidate = path
         if candidate.is_dir():
             candidate = candidate / "codex-autorunner.yml"
+            if not candidate.exists():
+                candidate = path / ".codex-autorunner" / "config.yml"
         if candidate.exists():
             return candidate.parent.parent.resolve()
     return Path.cwd()
@@ -632,3 +640,178 @@ def pma_delete(
             typer.echo(f"Deleted all files in {box}")
         else:
             typer.echo(f"Deleted {filename} from {box}")
+
+
+@docs_app.command("show")
+def pma_docs_show(
+    doc_type: str = typer.Argument(..., help="Document type: agents, active, or log"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Show PMA docs content to stdout."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        ensure_pma_docs(hub_root)
+    except Exception as exc:
+        typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    pma_dir = hub_root / ".codex-autorunner" / "pma"
+
+    if doc_type == "agents":
+        doc_path = pma_dir / "AGENTS.md"
+    elif doc_type == "active":
+        doc_path = pma_dir / "active_context.md"
+    elif doc_type == "log":
+        doc_path = pma_dir / "context_log.md"
+    else:
+        typer.echo("Invalid doc_type. Must be one of: agents, active, log", err=True)
+        raise typer.Exit(code=1) from None
+
+    try:
+        content = doc_path.read_text(encoding="utf-8")
+        typer.echo(content, nl=False)
+    except OSError as exc:
+        typer.echo(f"Failed to read {doc_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@context_app.command("reset")
+def pma_context_reset(
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Reset active_context.md to a minimal header."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        ensure_pma_docs(hub_root)
+    except Exception as exc:
+        typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    pma_dir = hub_root / ".codex-autorunner" / "pma"
+    active_context_path = pma_dir / "active_context.md"
+
+    minimal_content = """# PMA active context (short-lived)
+
+Use this file for the current working set: active projects, open questions, links, and immediate next steps.
+
+Pruning guidance:
+- Keep this file compact (prefer bullet points).
+- When it grows too large, summarize older items and move durable guidance to `AGENTS.md`.
+- Before a major prune, append a timestamped snapshot to `context_log.md`.
+"""
+
+    try:
+        active_context_path.write_text(minimal_content, encoding="utf-8")
+        typer.echo(f"Reset active_context.md at {active_context_path}")
+    except OSError as exc:
+        typer.echo(f"Failed to write {active_context_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@context_app.command("snapshot")
+def pma_context_snapshot(
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Snapshot active_context.md into context_log.md with ISO timestamp."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        ensure_pma_docs(hub_root)
+    except Exception as exc:
+        typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    pma_dir = hub_root / ".codex-autorunner" / "pma"
+    active_context_path = pma_dir / "active_context.md"
+    context_log_path = pma_dir / "context_log.md"
+
+    try:
+        active_content = active_context_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        typer.echo(f"Failed to read {active_context_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    snapshot_header = f"\n\n## Snapshot: {timestamp}\n\n"
+    snapshot_content = snapshot_header + active_content
+
+    try:
+        with context_log_path.open("a", encoding="utf-8") as f:
+            f.write(snapshot_content)
+        typer.echo(f"Appended snapshot to {context_log_path}")
+    except OSError as exc:
+        typer.echo(f"Failed to write {context_log_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@context_app.command("prune")
+def pma_context_prune(
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Prune active_context.md if over budget (snapshot first)."""
+    hub_root = _resolve_hub_path(path)
+
+    max_lines = 200
+    try:
+        config = load_hub_config(hub_root)
+        pma_cfg = getattr(config, "pma", None)
+        if pma_cfg is not None:
+            max_lines = int(getattr(pma_cfg, "active_context_max_lines", max_lines))
+    except Exception:
+        pass
+
+    try:
+        ensure_pma_docs(hub_root)
+    except Exception as exc:
+        typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    pma_dir = hub_root / ".codex-autorunner" / "pma"
+    active_context_path = pma_dir / "active_context.md"
+
+    try:
+        active_content = active_context_path.read_text(encoding="utf-8")
+        line_count = len(active_content.splitlines())
+    except OSError as exc:
+        typer.echo(f"Failed to read {active_context_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if line_count <= max_lines:
+        typer.echo(
+            f"active_context.md has {line_count} lines (budget: {max_lines}), no prune needed"
+        )
+        return
+
+    typer.echo(
+        f"active_context.md has {line_count} lines (budget: {max_lines}), snapshotting and pruning"
+    )
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    snapshot_header = f"\n\n## Snapshot: {timestamp}\n\n"
+    snapshot_content = snapshot_header + active_content
+
+    context_log_path = pma_dir / "context_log.md"
+    try:
+        with context_log_path.open("a", encoding="utf-8") as f:
+            f.write(snapshot_content)
+    except OSError as exc:
+        typer.echo(f"Failed to write {context_log_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    minimal_content = f"""# PMA active context (short-lived)
+
+Use this file for the current working set: active projects, open questions, links, and immediate next steps.
+
+Pruning guidance:
+- Keep this file compact (prefer bullet points).
+- When it grows too large, summarize older items and move durable guidance to `AGENTS.md`.
+- Before a major prune, append a timestamped snapshot to `context_log.md`.
+
+> Note: This file was pruned on {timestamp} (had {line_count} lines, budget: {max_lines})
+"""
+
+    try:
+        active_context_path.write_text(minimal_content, encoding="utf-8")
+        typer.echo(f"Pruned active_context.md at {active_context_path}")
+    except OSError as exc:
+        typer.echo(f"Failed to write {active_context_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from None
