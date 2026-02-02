@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
@@ -17,6 +18,7 @@ from ....agents.opencode.harness import OpenCodeHarness
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....agents.registry import validate_agent_id
 from ....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
+from ....core.filebox import sanitize_filename
 from ....core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
 from ....integrations.app_server.event_buffer import format_sse
 from .agents import _available_agents, _serialize_model_catalog
@@ -25,6 +27,7 @@ from .shared import SSE_HEADERS
 logger = logging.getLogger(__name__)
 
 PMA_TIMEOUT_SECONDS = 240
+PMA_MAX_UPLOAD_BYTES = 10_000_000
 
 
 def build_pma_routes() -> APIRouter:
@@ -587,20 +590,50 @@ def build_pma_routes() -> APIRouter:
             )
         raise HTTPException(status_code=404, detail="Unknown agent")
 
+    def _serialize_pma_entry(
+        entry: dict[str, Any], *, request: Request
+    ) -> dict[str, Any]:
+        base = request.scope.get("root_path", "") or ""
+        box = entry.get("box", "inbox")
+        filename = entry.get("name", "")
+        download = f"{base}/hub/pma/files/{box}/{filename}"
+        return {
+            "name": filename,
+            "box": box,
+            "size": entry.get("size"),
+            "modified_at": entry.get("modified_at"),
+            "source": "pma",
+            "url": download,
+        }
+
     @router.get("/files")
-    def list_pma_files(request: Request) -> dict[str, list[str]]:
+    def list_pma_files(request: Request) -> dict[str, list[dict[str, Any]]]:
         hub_root = request.app.state.config.root
         pma_dir = hub_root / ".codex-autorunner" / "pma"
-        result = {"inbox": [], "outbox": []}
+        result: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
         for box in ["inbox", "outbox"]:
             box_dir = pma_dir / box
             if box_dir.exists():
                 files = [
-                    f.name
+                    {
+                        "name": f.name,
+                        "box": box,
+                        "size": f.stat().st_size if f.is_file() else None,
+                        "modified_at": (
+                            datetime.fromtimestamp(
+                                f.stat().st_mtime, tz=timezone.utc
+                            ).isoformat()
+                            if f.is_file()
+                            else None
+                        ),
+                    }
                     for f in box_dir.iterdir()
                     if f.is_file() and not f.name.startswith(".")
                 ]
-                result[box] = sorted(files)
+                result[box] = [
+                    _serialize_pma_entry(f, request=request)
+                    for f in sorted(files, key=lambda x: x["name"])
+                ]
         return result
 
     @router.post("/files/{box}")
@@ -612,22 +645,53 @@ def build_pma_routes() -> APIRouter:
         box_dir.mkdir(parents=True, exist_ok=True)
 
         form = await request.form()
+        saved = []
         for filename, file in form.items():
-            content = await file.read()
-            # Sanitize filename
-            safe_name = Path(filename).name
-            (box_dir / safe_name).write_bytes(content)
-        return {"status": "ok"}
+            try:
+                content = await file.read()
+            except Exception as exc:
+                logger.warning("Failed to read PMA upload: %s", exc)
+                raise HTTPException(
+                    status_code=400, detail="Failed to read file"
+                ) from exc
+            try:
+                safe_name = sanitize_filename(filename)
+            except ValueError as exc:
+                logger.warning("Invalid filename in PMA upload: %s", filename)
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if len(content) > PMA_MAX_UPLOAD_BYTES:
+                logger.warning(
+                    "File too large for PMA upload: %s (%d bytes)",
+                    safe_name,
+                    len(content),
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File too large (max {PMA_MAX_UPLOAD_BYTES} bytes)",
+                )
+            try:
+                (box_dir / safe_name).write_bytes(content)
+                saved.append(safe_name)
+            except Exception as exc:
+                logger.warning("Failed to write PMA file: %s", exc)
+                raise HTTPException(
+                    status_code=500, detail="Failed to save file"
+                ) from exc
+        return {"status": "ok", "saved": saved}
 
     @router.get("/files/{box}/{filename}")
     def download_pma_file(box: str, filename: str, request: Request):
         if box not in ("inbox", "outbox"):
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
-        # Sanitize filename
-        safe_name = Path(filename).name
+        try:
+            safe_name = sanitize_filename(filename)
+        except ValueError as exc:
+            logger.warning("Invalid filename in PMA download: %s", filename)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         file_path = hub_root / ".codex-autorunner" / "pma" / box / safe_name
-        if not file_path.exists():
+        if not file_path.exists() or not file_path.is_file():
+            logger.warning("File not found in PMA download: %s", safe_name)
             raise HTTPException(status_code=404, detail="File not found")
         return FileResponse(file_path, filename=safe_name)
 
@@ -636,11 +700,22 @@ def build_pma_routes() -> APIRouter:
         if box not in ("inbox", "outbox"):
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
-        # Sanitize filename
-        safe_name = Path(filename).name
+        try:
+            safe_name = sanitize_filename(filename)
+        except ValueError as exc:
+            logger.warning("Invalid filename in PMA delete: %s", filename)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         file_path = hub_root / ".codex-autorunner" / "pma" / box / safe_name
-        if file_path.exists():
+        if not file_path.exists() or not file_path.is_file():
+            logger.warning("File not found in PMA delete: %s", safe_name)
+            raise HTTPException(status_code=404, detail="File not found")
+        try:
             file_path.unlink()
+        except Exception as exc:
+            logger.warning("Failed to delete PMA file: %s", exc)
+            raise HTTPException(
+                status_code=500, detail="Failed to delete file"
+            ) from exc
         return {"status": "ok"}
 
     @router.delete("/files/{box}")

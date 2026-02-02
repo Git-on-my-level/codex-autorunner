@@ -17,7 +17,6 @@ import {
   refreshAgentControls,
 } from "./agentControls.js";
 import { createFileBoxWidget, type FileBoxListing } from "./fileboxUi.js";
-import { REPO_ID } from "./env.js";
 
 interface PMAInboxItem {
   repo_id: string;
@@ -71,7 +70,6 @@ let isUnloading = false;
 let unloadHandlerInstalled = false;
 let currentEventsController: AbortController | null = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
-let fileBoxRepoId: string | null = null;
 let fileBoxCtrl: ReturnType<typeof createFileBoxWidget> | null = null;
 let pendingUploadNames: string[] = [];
 
@@ -123,37 +121,13 @@ function clearPendingTurn(): void {
   }
 }
 
-async function resolveFileBoxRepoId(): Promise<string | null> {
-  if (fileBoxRepoId) return fileBoxRepoId;
-  if (REPO_ID) {
-    fileBoxRepoId = REPO_ID;
-    return fileBoxRepoId;
-  }
-  try {
-    const payload = (await api("/hub/repos", { method: "GET" })) as { repos?: Array<{ id?: string; initialized?: boolean; exists_on_disk?: boolean }> };
-    const repo = (payload.repos || []).find((r) => r?.id && r.initialized && r.exists_on_disk !== false);
-    if (repo?.id) {
-      fileBoxRepoId = repo.id;
-    }
-  } catch {
-    // best-effort; UI will stay empty if unknown
-  }
-  return fileBoxRepoId;
-}
-
 async function initFileBoxUI(): Promise<void> {
   const elements = getElements();
-  const repoId = await resolveFileBoxRepoId();
   if (!elements.inboxFiles || !elements.outboxFiles) return;
-  if (!repoId) {
-    elements.inboxFiles.innerHTML = '<div class="muted small">FileBox unavailable</div>';
-    elements.outboxFiles.innerHTML = '<div class="muted small">FileBox unavailable</div>';
-    return;
-  }
 
   fileBoxCtrl = createFileBoxWidget({
-    scope: REPO_ID ? "repo" : "hub",
-    repoId,
+    scope: "pma",
+    basePath: "/hub/pma/files",
     inboxEl: elements.inboxFiles,
     outboxEl: elements.outboxFiles,
     uploadInput: elements.chatUploadInput,

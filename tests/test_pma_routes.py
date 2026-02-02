@@ -5,6 +5,7 @@ from typing import Optional
 import yaml
 from fastapi.testclient import TestClient
 
+from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.server import create_hub_app
@@ -127,3 +128,102 @@ def test_pma_thread_reset_clears_registry(hub_env) -> None:
     resp = client.post("/hub/pma/thread/reset", json={"agent": "all"})
     assert resp.status_code == 200
     assert registry.get_thread_id(PMA_KEY) is None
+
+
+def test_pma_files_list_empty(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/files")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["inbox"] == []
+    assert payload["outbox"] == []
+
+
+def test_pma_files_upload_list_download_delete(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    # Upload a file to inbox
+    files = {"file.txt": ("file.txt", b"Hello, PMA!", "text/plain")}
+    resp = client.post("/hub/pma/files/inbox", files=files)
+    assert resp.status_code == 200
+
+    # List files
+    resp = client.get("/hub/pma/files")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload["inbox"]) == 1
+    assert payload["inbox"][0]["name"] == "file.txt"
+    assert payload["inbox"][0]["box"] == "inbox"
+    assert payload["inbox"][0]["size"] == 11
+    assert payload["inbox"][0]["source"] == "pma"
+    assert "/hub/pma/files/inbox/file.txt" in payload["inbox"][0]["url"]
+    assert payload["outbox"] == []
+
+    # Download file
+    resp = client.get("/hub/pma/files/inbox/file.txt")
+    assert resp.status_code == 200
+    assert resp.content == b"Hello, PMA!"
+
+    # Delete file
+    resp = client.delete("/hub/pma/files/inbox/file.txt")
+    assert resp.status_code == 200
+
+    # Verify file is gone
+    resp = client.get("/hub/pma/files")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["inbox"] == []
+
+
+def test_pma_files_invalid_box(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    # Try to upload to invalid box
+    files = {"file.txt": ("file.txt", b"test", "text/plain")}
+    resp = client.post("/hub/pma/files/invalid", files=files)
+    assert resp.status_code == 400
+
+    # Try to download from invalid box
+    resp = client.get("/hub/pma/files/invalid/file.txt")
+    assert resp.status_code == 400
+
+    # Try to delete from invalid box
+    resp = client.delete("/hub/pma/files/invalid/file.txt")
+    assert resp.status_code == 400
+
+
+def test_pma_files_outbox(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    # Upload a file to outbox
+    files = {"output.txt": ("output.txt", b"Output content", "text/plain")}
+    resp = client.post("/hub/pma/files/outbox", files=files)
+    assert resp.status_code == 200
+
+    # List files
+    resp = client.get("/hub/pma/files")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload["outbox"]) == 1
+    assert payload["outbox"][0]["name"] == "output.txt"
+    assert payload["outbox"][0]["box"] == "outbox"
+    assert "/hub/pma/files/outbox/output.txt" in payload["outbox"][0]["url"]
+    assert payload["inbox"] == []
+
+    # Download from outbox
+    resp = client.get("/hub/pma/files/outbox/output.txt")
+    assert resp.status_code == 200
+    assert resp.content == b"Output content"

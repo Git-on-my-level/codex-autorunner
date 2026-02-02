@@ -17,6 +17,9 @@ function pathPrefix(config) {
     if (config.scope === "repo") {
         return config.basePath || "/api/filebox";
     }
+    if (config.scope === "pma") {
+        return config.basePath || "/hub/pma/files";
+    }
     if (!config.repoId) {
         throw new Error("repoId is required for hub filebox");
     }

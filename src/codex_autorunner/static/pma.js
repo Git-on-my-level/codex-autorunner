@@ -6,7 +6,6 @@ import { api, resolvePath, getAuthToken, escapeHtml, flash } from "./utils.js";
 import { createDocChat, } from "./docChatCore.js";
 import { clearAgentSelectionStorage, getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
-import { REPO_ID } from "./env.js";
 const pmaStyling = {
     eventClass: "chat-event",
     eventTitleClass: "chat-event-title",
@@ -44,7 +43,6 @@ let isUnloading = false;
 let unloadHandlerInstalled = false;
 let currentEventsController = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
-let fileBoxRepoId = null;
 let fileBoxCtrl = null;
 let pendingUploadNames = [];
 function newClientTurnId() {
@@ -91,38 +89,13 @@ function clearPendingTurn() {
         // ignore
     }
 }
-async function resolveFileBoxRepoId() {
-    if (fileBoxRepoId)
-        return fileBoxRepoId;
-    if (REPO_ID) {
-        fileBoxRepoId = REPO_ID;
-        return fileBoxRepoId;
-    }
-    try {
-        const payload = (await api("/hub/repos", { method: "GET" }));
-        const repo = (payload.repos || []).find((r) => r?.id && r.initialized && r.exists_on_disk !== false);
-        if (repo?.id) {
-            fileBoxRepoId = repo.id;
-        }
-    }
-    catch {
-        // best-effort; UI will stay empty if unknown
-    }
-    return fileBoxRepoId;
-}
 async function initFileBoxUI() {
     const elements = getElements();
-    const repoId = await resolveFileBoxRepoId();
     if (!elements.inboxFiles || !elements.outboxFiles)
         return;
-    if (!repoId) {
-        elements.inboxFiles.innerHTML = '<div class="muted small">FileBox unavailable</div>';
-        elements.outboxFiles.innerHTML = '<div class="muted small">FileBox unavailable</div>';
-        return;
-    }
     fileBoxCtrl = createFileBoxWidget({
-        scope: REPO_ID ? "repo" : "hub",
-        repoId,
+        scope: "pma",
+        basePath: "/hub/pma/files",
         inboxEl: elements.inboxFiles,
         outboxEl: elements.outboxFiles,
         uploadInput: elements.chatUploadInput,
