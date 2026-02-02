@@ -103,6 +103,41 @@ def build_pma_routes() -> APIRouter:
             pma_active = False
             pma_event = None
 
+    async def _get_current_snapshot() -> dict[str, Any]:
+        async with pma_lock:
+            return dict(pma_current or {})
+
+    async def _interrupt_active(request: Request, *, reason: str) -> dict[str, Any]:
+        event = await _get_interrupt_event()
+        event.set()
+        current = await _get_current_snapshot()
+        agent_id = (current.get("agent") or "").strip().lower()
+        thread_id = current.get("thread_id")
+        turn_id = current.get("turn_id")
+        hub_root = request.app.state.config.root
+        if agent_id == "opencode":
+            supervisor = getattr(request.app.state, "opencode_supervisor", None)
+            if supervisor is not None and thread_id:
+                harness = OpenCodeHarness(supervisor)
+                await harness.interrupt(hub_root, thread_id, turn_id)
+        else:
+            supervisor = getattr(request.app.state, "app_server_supervisor", None)
+            events = getattr(request.app.state, "app_server_events", None)
+            if supervisor is not None and events is not None and thread_id and turn_id:
+                harness = CodexHarness(supervisor, events)
+                try:
+                    await harness.interrupt(hub_root, thread_id, turn_id)
+                except Exception:
+                    logger.exception("Failed to interrupt Codex turn")
+        return {
+            "status": "ok",
+            "interrupted": bool(event.is_set()),
+            "detail": reason,
+            "agent": agent_id or None,
+            "thread_id": thread_id,
+            "turn_id": turn_id,
+        }
+
     @router.get("/active")
     async def pma_active_status(
         request: Request, client_turn_id: Optional[str] = None
@@ -173,6 +208,7 @@ def build_pma_routes() -> APIRouter:
 
     async def _execute_app_server(
         supervisor: Any,
+        events: Any,
         hub_root: Path,
         prompt: str,
         interrupt_event: asyncio.Event,
@@ -217,6 +253,7 @@ def build_pma_routes() -> APIRouter:
             sandbox_policy="dangerFullAccess",
             **turn_kwargs,
         )
+        codex_harness = CodexHarness(supervisor, events)
         if on_meta is not None:
             try:
                 maybe = on_meta(thread_id, handle.turn_id)
@@ -224,6 +261,13 @@ def build_pma_routes() -> APIRouter:
                     await maybe
             except Exception:
                 logger.exception("pma meta callback failed")
+
+        if interrupt_event.is_set():
+            try:
+                await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
+            except Exception:
+                logger.exception("Failed to interrupt Codex turn")
+            return {"status": "interrupted", "detail": "PMA chat interrupted"}
 
         turn_task = asyncio.create_task(handle.wait(timeout=None))
         timeout_task = asyncio.create_task(asyncio.sleep(PMA_TIMEOUT_SECONDS))
@@ -234,9 +278,17 @@ def build_pma_routes() -> APIRouter:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if timeout_task in done:
+                try:
+                    await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
+                except Exception:
+                    logger.exception("Failed to interrupt Codex turn")
                 turn_task.cancel()
                 return {"status": "error", "detail": "PMA chat timed out"}
             if interrupt_task in done:
+                try:
+                    await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
+                except Exception:
+                    logger.exception("Failed to interrupt Codex turn")
                 turn_task.cancel()
                 return {"status": "interrupted", "detail": "PMA chat interrupted"}
             turn_result = await turn_task
@@ -301,6 +353,11 @@ def build_pma_routes() -> APIRouter:
             except Exception:
                 logger.exception("pma meta callback failed")
 
+        opencode_harness = OpenCodeHarness(supervisor)
+        if interrupt_event.is_set():
+            await opencode_harness.interrupt(hub_root, session_id, None)
+            return {"status": "interrupted", "detail": "PMA chat interrupted"}
+
         model_payload = split_model_id(model)
         await supervisor.mark_turn_started(hub_root)
 
@@ -340,6 +397,7 @@ def build_pma_routes() -> APIRouter:
             except Exception as exc:
                 interrupt_event.set()
                 output_task.cancel()
+                await opencode_harness.interrupt(hub_root, session_id, None)
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
 
             done, _ = await asyncio.wait(
@@ -348,9 +406,11 @@ def build_pma_routes() -> APIRouter:
             )
             if timeout_task in done:
                 output_task.cancel()
+                await opencode_harness.interrupt(hub_root, session_id, None)
                 return {"status": "error", "detail": "PMA chat timed out"}
             if interrupt_task in done:
                 output_task.cancel()
+                await opencode_harness.interrupt(hub_root, session_id, None)
                 return {"status": "interrupted", "detail": "PMA chat interrupted"}
             output_result = await output_task
             if (not output_result.text) and prompt_response is not None:
@@ -439,6 +499,7 @@ def build_pma_routes() -> APIRouter:
 
         async def _run() -> dict[str, Any]:
             supervisor = getattr(request.app.state, "app_server_supervisor", None)
+            events = getattr(request.app.state, "app_server_events", None)
             opencode = getattr(request.app.state, "opencode_supervisor", None)
             registry = getattr(request.app.state, "app_server_threads", None)
             stall_timeout_seconds = None
@@ -464,10 +525,11 @@ def build_pma_routes() -> APIRouter:
                     stall_timeout_seconds=stall_timeout_seconds,
                     on_meta=_meta,
                 )
-            if supervisor is None:
+            if supervisor is None or events is None:
                 return {"status": "error", "detail": "App-server unavailable"}
             return await _execute_app_server(
                 supervisor,
+                events,
                 hub_root,
                 prompt,
                 interrupt_event,
@@ -547,9 +609,7 @@ def build_pma_routes() -> APIRouter:
         pma_config = _get_pma_config(request)
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
-        event = await _get_interrupt_event()
-        event.set()
-        return {"status": "ok", "interrupted": True}
+        return await _interrupt_active(request, reason="PMA chat interrupted")
 
     @router.post("/thread/reset")
     async def reset_pma_thread(request: Request) -> dict[str, Any]:
