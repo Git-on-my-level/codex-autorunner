@@ -12,7 +12,6 @@ from .config import load_repo_config
 from .flows.models import FlowRunStatus
 from .flows.store import FlowStore
 from .hub import HubSupervisor
-from .lifecycle_events import LifecycleEventStore
 
 PMA_MAX_REPOS = 25
 PMA_MAX_MESSAGES = 10
@@ -358,4 +357,9 @@ async def build_hub_snapshot(
         except Exception:
             pass
 
-    return {"repos": repos, "inbox": inbox, "pma_files": pma_files, "lifecycle_events": lifecycle_events}
+    return {
+        "repos": repos,
+        "inbox": inbox,
+        "pma_files": pma_files,
+        "lifecycle_events": lifecycle_events,
+    }

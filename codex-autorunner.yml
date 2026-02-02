@@ -190,18 +190,21 @@ templates:
       trusted: true
       default_ref: main
  
-pma:
-  # Project Management Assistant (hub-level chat + filebox).
-  # When disabled, PMA routes return 404 and Telegram /pma is blocked.
-  enabled: true
-  # Default agent for PMA chat (codex|opencode).
-  default_agent: codex
-  # Optional model override; null uses agent's default model.
-  model: null
-  # Optional reasoning effort for compatible agents (null = agent default).
-  reasoning: null
-  # Max upload size for PMA filebox (bytes).
-  max_upload_bytes: 10000000
+ pma:
+   # Project Management Assistant (hub-level chat + filebox).
+   # When disabled, PMA routes return 404 and Telegram /pma is blocked.
+   enabled: true
+   # Default agent for PMA chat (codex|opencode).
+   default_agent: codex
+   # Optional model override; null uses agent's default model.
+   model: null
+   # Optional reasoning effort for compatible agents (null = agent default).
+   reasoning: null
+   # Max upload size for PMA filebox (bytes).
+   max_upload_bytes: 10000000
+   # Enable PMA dispatch interception (auto-resolve trivial dispatches before user notification).
+   # When enabled, PMA intercepts dispatches and auto-resolves matching ones.
+   dispatch_interception_enabled: false
  
 terminal:
   # Idle timeout for terminal sessions (seconds).

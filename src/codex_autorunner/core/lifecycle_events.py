@@ -31,13 +31,16 @@ class LifecycleEvent:
     repo_id: str
     run_id: str
     data: dict[str, Any] = field(default_factory=dict)
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
     processed: bool = False
     event_id: str = ""
 
     def __post_init__(self):
         if not self.event_id:
             import uuid
+
             object.__setattr__(self, "event_id", str(uuid.uuid4()))
 
 
@@ -63,12 +66,16 @@ class LifecycleEventStore:
             try:
                 raw = self._path.read_text(encoding="utf-8")
             except OSError as exc:
-                logger.warning("Failed to read lifecycle events at %s: %s", self._path, exc)
+                logger.warning(
+                    "Failed to read lifecycle events at %s: %s", self._path, exc
+                )
                 return []
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError as exc:
-                logger.warning("Failed to parse lifecycle events at %s: %s", self._path, exc)
+                logger.warning(
+                    "Failed to parse lifecycle events at %s: %s", self._path, exc
+                )
                 return []
             if not isinstance(data, list):
                 logger.warning("Lifecycle events data is not a list: %s", self._path)
@@ -86,9 +93,12 @@ class LifecycleEventStore:
                     except ValueError:
                         continue
                     event_id_raw = entry.get("event_id")
-                    event_id = str(event_id_raw) if isinstance(event_id_raw, str) else ""
+                    event_id = (
+                        str(event_id_raw) if isinstance(event_id_raw, str) else ""
+                    )
                     if not event_id:
                         import uuid
+
                         event_id = str(uuid.uuid4())
                     event = LifecycleEvent(
                         event_type=event_type,
@@ -231,7 +241,7 @@ class LifecycleEventEmitter:
         self._listeners.append(listener)
 
     def remove_listener(self, listener: Callable[[LifecycleEvent], None]) -> None:
-        self._listeners = [l for l in self._listeners if l != listener]
+        self._listeners = [lst for lst in self._listeners if lst != listener]
 
 
 __all__ = [

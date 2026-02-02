@@ -315,7 +315,9 @@ class FlowRuntime:
                         f"Failed to update flow run after step {step_id}"
                     )
                 record = updated
-                self._emit_lifecycle("flow_failed", "", record.id, {"error": outcome.error or ""})
+                self._emit_lifecycle(
+                    "flow_failed", "", record.id, {"error": outcome.error or ""}
+                )
 
             elif outcome.status == FlowRunStatus.STOPPED:
                 self._emit(

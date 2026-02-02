@@ -4,12 +4,12 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
 
+from ..lifecycle_events import LifecycleEventEmitter
+from ..utils import find_repo_root
 from .definition import FlowDefinition
 from .models import FlowEvent, FlowRunRecord, FlowRunStatus
 from .runtime import FlowRuntime
 from .store import FlowStore
-from ..lifecycle_events import LifecycleEventEmitter, default_lifecycle_events_path
-from ..utils import find_repo_root
 
 
 def _find_hub_root(repo_root: Optional[Path] = None) -> Optional[Path]:
@@ -28,6 +28,7 @@ def _find_hub_root(repo_root: Optional[Path] = None) -> Optional[Path]:
         current = parent
     return None
 
+
 _logger = logging.getLogger(__name__)
 
 
@@ -45,7 +46,9 @@ class FlowController:
         self.artifacts_root = artifacts_root
         self.store = FlowStore(db_path, durable=durable)
         self._event_listeners: Set[Callable[[FlowEvent], None]] = set()
-        self._lifecycle_event_listeners: Set[Callable[[str, str, str, dict], None]] = set()
+        self._lifecycle_event_listeners: Set[Callable[[str, str, str, dict], None]] = (
+            set()
+        )
         self._lock = asyncio.Lock()
         self._lifecycle_emitter: Optional[LifecycleEventEmitter] = None
         if hub_root is None:
@@ -203,20 +206,28 @@ class FlowController:
     def remove_event_listener(self, listener: Callable[[FlowEvent], None]) -> None:
         self._event_listeners.discard(listener)
 
-    def add_lifecycle_event_listener(self, listener: Callable[[str, str, str, dict], None]) -> None:
+    def add_lifecycle_event_listener(
+        self, listener: Callable[[str, str, str, dict], None]
+    ) -> None:
         self._lifecycle_event_listeners.add(listener)
 
-    def remove_lifecycle_event_listener(self, listener: Callable[[str, str, str, dict], None]) -> None:
+    def remove_lifecycle_event_listener(
+        self, listener: Callable[[str, str, str, dict], None]
+    ) -> None:
         self._lifecycle_event_listeners.discard(listener)
 
-    def _emit_lifecycle(self, event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]) -> None:
+    def _emit_lifecycle(
+        self, event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]
+    ) -> None:
         for listener in self._lifecycle_event_listeners:
             try:
                 listener(event_type, repo_id, run_id, data)
             except Exception as e:
                 _logger.exception("Error in lifecycle event listener: %s", e)
 
-    def _emit_to_lifecycle_store(self, event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]) -> None:
+    def _emit_to_lifecycle_store(
+        self, event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]
+    ) -> None:
         if self._lifecycle_emitter is None:
             return
         try:

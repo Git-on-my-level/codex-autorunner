@@ -852,6 +852,7 @@ class PmaConfig:
     max_repos: int
     max_messages: int
     max_text_chars: int
+    dispatch_interception_enabled: bool = False
 
 
 @dataclasses.dataclass
@@ -1388,6 +1389,12 @@ def _parse_pma_config(
     max_repos = _parse_positive_int("max_repos", 25)
     max_messages = _parse_positive_int("max_messages", 10)
     max_text_chars = _parse_positive_int("max_text_chars", 800)
+    dispatch_interception_enabled = bool(
+        cfg.get(
+            "dispatch_interception_enabled",
+            defaults.get("dispatch_interception_enabled", False),
+        )
+    )
     return PmaConfig(
         enabled=enabled,
         default_agent=default_agent,
@@ -1397,6 +1404,7 @@ def _parse_pma_config(
         max_repos=max_repos,
         max_messages=max_messages,
         max_text_chars=max_text_chars,
+        dispatch_interception_enabled=dispatch_interception_enabled,
     )
 
 

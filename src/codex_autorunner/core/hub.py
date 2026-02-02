@@ -7,7 +7,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
@@ -281,8 +281,12 @@ class HubSupervisor:
         self._lifecycle_task_lock = threading.Lock()
         self._lifecycle_stop_event = threading.Event()
         self._lifecycle_thread: Optional[threading.Thread] = None
+        self._dispatch_interceptor_task: Optional[asyncio.Task] = None
+        self._dispatch_interceptor_stop_event: Optional[threading.Event] = None
+        self._dispatch_interceptor_thread: Optional[threading.Thread] = None
         self._reconcile_startup()
         self._start_lifecycle_event_processor()
+        self._start_dispatch_interceptor()
 
     @classmethod
     def from_path(
@@ -1010,6 +1014,82 @@ class HubSupervisor:
 
     def shutdown(self) -> None:
         self._stop_lifecycle_event_processor()
+        self._stop_dispatch_interceptor()
+
+    def _start_dispatch_interceptor(self) -> None:
+        if not self.hub_config.pma.enabled:
+            return
+        if self._dispatch_interceptor_thread is not None:
+            return
+
+        import asyncio
+        from typing import TYPE_CHECKING
+
+        if TYPE_CHECKING:
+            pass
+
+        def _run_interceptor():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            from .pma_dispatch_interceptor import run_dispatch_interceptor
+
+            stop_event = threading.Event()
+            self._dispatch_interceptor_stop_event = stop_event
+
+            async def run_until_stop():
+                task = None
+                try:
+                    task = run_dispatch_interceptor(
+                        hub_root=self.hub_config.root,
+                        supervisor=self,
+                        interval_seconds=5.0,
+                        on_intercept=self._on_dispatch_intercept,
+                    )
+                    while not stop_event.is_set():
+                        await asyncio.sleep(0.1)
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    if task is not None and not task.done():
+                        task.cancel()
+                    if task is not None:
+                        try:
+                            await task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+
+            loop.run_until_complete(run_until_stop())
+            loop.close()
+
+        self._dispatch_interceptor_thread = threading.Thread(
+            target=_run_interceptor, daemon=True, name="pma-dispatch-interceptor"
+        )
+        self._dispatch_interceptor_thread.start()
+
+    def _stop_dispatch_interceptor(self) -> None:
+        if self._dispatch_interceptor_stop_event is not None:
+            self._dispatch_interceptor_stop_event.set()
+        if self._dispatch_interceptor_thread is not None:
+            self._dispatch_interceptor_thread.join(timeout=2.0)
+            self._dispatch_interceptor_thread = None
+            self._dispatch_interceptor_stop_event = None
+
+    def _on_dispatch_intercept(self, event_id: str, result: Any) -> None:
+        logger.info(
+            "Dispatch intercepted: event_id=%s action=%s reason=%s",
+            event_id,
+            (
+                result.get("action")
+                if isinstance(result, dict)
+                else getattr(result, "action", None)
+            ),
+            (
+                result.get("reason")
+                if isinstance(result, dict)
+                else getattr(result, "reason", None)
+            ),
+        )
 
     def _snapshot_from_record(self, record: DiscoveryRecord) -> RepoSnapshot:
         repo_path = record.absolute_path

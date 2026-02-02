@@ -242,6 +242,12 @@ PMA is a **coordination abstraction layer**, not a code executor. It orchestrate
 - Monitor flow status and results across repos
 - Handle dispatch pauses from paused runs
 
+### Dispatch Interception
+- Intercept agent dispatches before they reach the user
+- Auto-resolve trivial dispatches based on allowlist patterns
+- Escalate non-trivial dispatches to user with structured notice
+- Write auto-replies and resume flows when appropriate
+
 ### Information Discovery
 - Scan and understand codebase structure across multiple repos
 - Access hub snapshots (repos, inbox, PMA files)
@@ -260,7 +266,7 @@ PMA is a **coordination abstraction layer**, not a code executor. It orchestrate
 - Directly edit code in repos (delegate to repo agents)
 - Execute builds, tests, or deployments directly
 - Modify repo configurations without explicit delegation
-- Access systems outside the hub or repo boundaries
+- Access systems outside of hub or repo boundaries
 
 ## Operational Constraints
 
@@ -268,8 +274,9 @@ PMA is a **coordination abstraction layer**, not a code executor. It orchestrate
 - Ask questions when requirements are ambiguous
 - Prefer explicit delegation over direct code changes
 - Use CAR-native artifacts (tickets, flows, dispatch, inbox/outbox)
+- Auto-resolve dispatches only when safe and appropriate
 
 ## Summary for Prompt Injection
 
-PMA: Hub-level coordination layer. Orchestrates tickets and flows across repos. Delegates code execution to repo agents. Does NOT edit code directly. Uses tickets, flows, dispatch, and PMA file transfer for coordination.
+PMA: Hub-level coordination layer. Orchestrates tickets and flows across repos. Delegates code execution to repo agents. Does NOT edit code directly. Uses tickets, flows, dispatch, PMA file transfer and dispatch interception for coordination.
 """

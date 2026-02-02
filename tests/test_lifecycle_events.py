@@ -1,7 +1,8 @@
 """Test lifecycle events system."""
-import json
+
 import tempfile
 from pathlib import Path
+
 from codex_autorunner.core.lifecycle_events import (
     LifecycleEvent,
     LifecycleEventEmitter,
