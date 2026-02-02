@@ -86,6 +86,7 @@ from ...tickets.frontmatter import split_markdown_frontmatter
 from ...tickets.lint import parse_ticket_index
 from ...voice import VoiceConfig
 from ..web.app import create_hub_app
+from .pma_cli import pma_app as pma_cli_app
 
 logger = logging.getLogger("codex_autorunner.cli")
 
@@ -414,6 +415,7 @@ templates_app.add_typer(repos_app, name="repos")
 app.add_typer(flow_app, name="flow")
 app.add_typer(ticket_flow_app, name="ticket-flow")
 flow_app.add_typer(ticket_flow_app, name="ticket_flow")
+app.add_typer(pma_cli_app, name="pma")
 
 
 def _has_nested_git(path: Path) -> bool:
