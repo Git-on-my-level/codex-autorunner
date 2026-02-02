@@ -296,3 +296,134 @@ def test_pma_files_returns_404_for_nonexistent_files(hub_env) -> None:
     resp = client.delete("/hub/pma/files/inbox/nonexistent.txt")
     assert resp.status_code == 404
     assert "File not found" in resp.json()["detail"]
+
+
+def test_pma_docs_list(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/docs")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert "docs" in payload
+    docs = payload["docs"]
+    assert isinstance(docs, list)
+    doc_names = {doc["name"] for doc in docs}
+    assert doc_names == {
+        "AGENTS.md",
+        "active_context.md",
+        "context_log.md",
+        "ABOUT_CAR.md",
+        "prompt.md",
+    }
+    for doc in docs:
+        assert "name" in doc
+        assert "exists" in doc
+        if doc["exists"]:
+            assert "size" in doc
+            assert "mtime" in doc
+        if doc["name"] == "active_context.md":
+            assert "line_count" in doc
+
+
+def test_pma_docs_get(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/docs/AGENTS.md")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["name"] == "AGENTS.md"
+    assert "content" in payload
+    assert isinstance(payload["content"], str)
+
+
+def test_pma_docs_get_nonexistent(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    # Delete a doc and then try to get it
+    pma_dir = hub_env.hub_root / ".codex-autorunner" / "pma"
+    agents_path = pma_dir / "AGENTS.md"
+    if agents_path.exists():
+        agents_path.unlink()
+
+    resp = client.get("/hub/pma/docs/AGENTS.md")
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"].lower()
+
+
+def test_pma_docs_put(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    new_content = "# AGENTS\n\nNew content"
+    resp = client.put("/hub/pma/docs/AGENTS.md", json={"content": new_content})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["name"] == "AGENTS.md"
+    assert payload["status"] == "ok"
+
+    # Verify the content was saved
+    resp = client.get("/hub/pma/docs/AGENTS.md")
+    assert resp.status_code == 200
+    assert resp.json()["content"] == new_content
+
+
+def test_pma_docs_put_invalid_name(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.put("/hub/pma/docs/invalid.md", json={"content": "test"})
+    assert resp.status_code == 400
+    assert "Unknown doc name" in resp.json()["detail"]
+
+
+def test_pma_docs_put_too_large(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    large_content = "x" * 500_001
+    resp = client.put("/hub/pma/docs/AGENTS.md", json={"content": large_content})
+    assert resp.status_code == 413
+    assert "too large" in resp.json()["detail"].lower()
+
+
+def test_pma_docs_put_invalid_content_type(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.put("/hub/pma/docs/AGENTS.md", json={"content": 123})
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    # FastAPI returns a list of validation errors
+    if isinstance(detail, list):
+        assert any("content" in str(err) for err in detail)
+    else:
+        assert "content" in str(detail)
+
+
+def test_pma_docs_disabled(hub_env) -> None:
+    _disable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/docs")
+    assert resp.status_code == 404
+
+    resp = client.get("/hub/pma/docs/AGENTS.md")
+    assert resp.status_code == 404

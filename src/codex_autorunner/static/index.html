@@ -194,6 +194,27 @@
         </div>
       </div>
     </section>
+    <section class="pma-docs-section hidden" id="pma-docs-section">
+      <div class="pma-docs-header">
+        <h2>PMA Docs</h2>
+        <div class="pma-docs-tabs">
+          <button class="pma-docs-tab active" data-doc="AGENTS.md">AGENTS</button>
+          <button class="pma-docs-tab" data-doc="active_context.md">Active Context</button>
+          <button class="pma-docs-tab" data-doc="context_log.md">Context Log</button>
+        </div>
+      </div>
+      <div class="pma-docs-content">
+        <div class="pma-docs-meta" id="pma-docs-meta"></div>
+        <div class="pma-docs-editor-wrapper">
+          <textarea id="pma-docs-editor" class="pma-docs-editor" spellcheck="false"></textarea>
+        </div>
+        <div class="pma-docs-actions">
+          <button class="ghost sm" id="pma-docs-reset" title="Reset to default">Reset</button>
+          <button class="ghost sm" id="pma-docs-snapshot" title="Snapshot active context to log">Snapshot to log</button>
+          <button class="primary sm" id="pma-docs-save">Save</button>
+        </div>
+      </div>
+    </section>
   </div>
   <div class="app-shell" id="repo-shell">
     <nav class="nav-bar">

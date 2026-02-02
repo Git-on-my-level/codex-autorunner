@@ -13441,3 +13441,139 @@ button.filebox-delete:hover {
   font-size: 11px;
   padding: 4px 0;
 }
+
+.pma-docs-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  background: var(--panel-bg);
+}
+
+.pma-docs-section.hidden {
+  display: none;
+}
+
+.pma-docs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pma-docs-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.pma-docs-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.pma-docs-tab {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.pma-docs-tab:hover {
+  color: var(--text);
+  background: var(--hover-bg);
+}
+
+.pma-docs-tab.active {
+  color: var(--text);
+  background: var(--primary-bg);
+  font-weight: 600;
+}
+
+.pma-docs-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pma-docs-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: var(--card-bg);
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.pma-docs-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pma-docs-editor-wrapper {
+  flex: 1;
+  min-height: 0;
+  background: var(--card-bg);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.pma-docs-editor {
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  resize: none;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Mono", Monaco, Consolas, monospace;
+}
+
+.pma-docs-editor:focus {
+  outline: none;
+}
+
+.pma-docs-editor:disabled,
+.pma-docs-editor[readonly] {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+.pma-docs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.pma-docs-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pill-caution {
+  background: #f59e0b;
+  color: #fff;
+}
+
+.pill-caution.pill-small {
+  font-size: 9px;
+  padding: 2px 6px;
+}

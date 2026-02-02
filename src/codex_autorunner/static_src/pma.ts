@@ -54,6 +54,30 @@ const pmaStyling: ChatStyling = {
   messageAssistantFinalClass: "chat-message-assistant-final",
 };
 
+type PMADocInfo = {
+  name: string;
+  exists: boolean;
+  size?: number;
+  mtime?: string;
+  line_count?: number;
+};
+
+type PMADocsResponse = {
+  docs: PMADocInfo[];
+};
+
+type PMADocContent = {
+  name: string;
+  content: string;
+};
+
+type PMADocUpdate = {
+  name: string;
+  status: string;
+};
+
+const EDITABLE_DOCS = ["AGENTS.md", "active_context.md"];
+
 const pmaConfig: ChatConfig = {
   idPrefix: "pma-chat",
   storage: { keyPrefix: "car.pma.", maxMessages: 100, version: 1 },
@@ -63,7 +87,6 @@ const pmaConfig: ChatConfig = {
   },
   styling: pmaStyling,
   compactMode: true,
-  // PMA should show agent progress inside the "Thinking" bubble, not in a standalone panel.
   inlineEvents: true,
 };
 
@@ -76,6 +99,9 @@ let currentEventsController: AbortController | null = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
 let fileBoxCtrl: ReturnType<typeof createFileBoxWidget> | null = null;
 let pendingUploadNames: string[] = [];
+let currentDocName: string | null = null;
+const docsInfo: Map<string, PMADocInfo> = new Map();
+let isSavingDoc = false;
 
 type PendingTurn = {
   clientTurnId: string;
@@ -179,6 +205,132 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+async function loadPMADocs(): Promise<void> {
+  try {
+    const payload = (await api("/hub/pma/docs", { method: "GET" })) as PMADocsResponse;
+    docsInfo.clear();
+    if (payload?.docs) {
+      payload.docs.forEach((doc) => {
+        docsInfo.set(doc.name, doc);
+      });
+    }
+    renderPMADocsMeta();
+  } catch (err) {
+    flash("Failed to load PMA docs", "error");
+  }
+}
+
+async function loadPMADocContent(name: string): Promise<string> {
+  try {
+    const payload = (await api(`/hub/pma/docs/${encodeURIComponent(name)}`, {
+      method: "GET",
+    })) as PMADocContent;
+    return payload?.content || "";
+  } catch (err) {
+    flash(`Failed to load ${name}`, "error");
+    return "";
+  }
+}
+
+async function savePMADoc(name: string, content: string): Promise<void> {
+  if (isSavingDoc) return;
+  isSavingDoc = true;
+  try {
+    const payload = (await api(`/hub/pma/docs/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: { content },
+    })) as PMADocUpdate;
+    if (payload?.status === "ok") {
+      flash(`Saved ${name}`, "info");
+      await loadPMADocs();
+    }
+  } catch (err) {
+    flash(`Failed to save ${name}`, "error");
+  } finally {
+    isSavingDoc = false;
+  }
+}
+
+function renderPMADocsMeta(): void {
+  const metaEl = document.getElementById("pma-docs-meta");
+  if (!metaEl) return;
+  const activeInfo = docsInfo.get("active_context.md");
+  if (!activeInfo) {
+    metaEl.innerHTML = "";
+    return;
+  }
+  const lineCount = activeInfo.line_count || 0;
+  const maxLines = 200;
+  const percent = Math.min(100, Math.round((lineCount / maxLines) * 100));
+  const statusClass = percent >= 90 ? "pill-warn" : percent >= 70 ? "pill-caution" : "pill-idle";
+  metaEl.innerHTML = `
+    <div class="pma-docs-meta-item">
+      <span class="muted">Active context:</span>
+      <span class="pill pill-small ${statusClass}">${lineCount} / ${maxLines} lines</span>
+    </div>
+  `;
+}
+
+function switchPMADoc(name: string): void {
+  currentDocName = name;
+  const tabs = document.querySelectorAll(".pma-docs-tab");
+  tabs.forEach((tab) => {
+    if (tab instanceof HTMLElement && tab.dataset.doc === name) {
+      tab.classList.add("active");
+    } else {
+      tab.classList.remove("active");
+    }
+  });
+  const editor = document.getElementById("pma-docs-editor") as HTMLTextAreaElement | null;
+  const resetBtn = document.getElementById("pma-docs-reset") as HTMLButtonElement | null;
+  const snapshotBtn = document.getElementById("pma-docs-snapshot") as HTMLButtonElement | null;
+  const saveBtn = document.getElementById("pma-docs-save") as HTMLButtonElement | null;
+
+  if (!editor) return;
+
+  const isEditable = EDITABLE_DOCS.includes(name);
+  editor.readOnly = !isEditable;
+  if (resetBtn) resetBtn.disabled = name !== "active_context.md";
+  if (snapshotBtn) snapshotBtn.disabled = name !== "active_context.md";
+  if (saveBtn) saveBtn.disabled = !isEditable;
+
+  void loadPMADocContent(name).then((content) => {
+    editor.value = content;
+  });
+}
+
+async function snapshotActiveContext(): Promise<void> {
+  const editor = document.getElementById("pma-docs-editor") as HTMLTextAreaElement | null;
+  if (!editor) return;
+  const activeContent = editor.value;
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
+  const logName = "context_log.md";
+
+  try {
+    const logContent = await loadPMADocContent(logName);
+    const newSection = `\n## ${timestamp}\n\n${activeContent}\n`;
+    await savePMADoc(logName, logContent + newSection);
+
+    const resetContent = "# Active Context\n\n<!-- Current working context -->\n";
+    await savePMADoc("active_context.md", resetContent);
+    editor.value = resetContent;
+
+    flash("Active context snapshot saved to log and reset", "info");
+    await loadPMADocs();
+  } catch (err) {
+    flash("Failed to snapshot active context", "error");
+  }
+}
+
+function resetActiveContext(): void {
+  if (!confirm("Reset active context to default?")) return;
+  const editor = document.getElementById("pma-docs-editor") as HTMLTextAreaElement | null;
+  if (!editor) return;
+  const resetContent = "# Active Context\n\n<!-- Current working context -->\n";
+  editor.value = resetContent;
+  void savePMADoc("active_context.md", resetContent);
+}
+
 async function startTurnEventsStream(meta: {
   agent: string;
   threadId: string;
@@ -279,6 +431,11 @@ function getElements() {
     threadInfoStatus: document.getElementById("pma-thread-info-status"),
     repoActions: document.getElementById("pma-repo-actions"),
     scanReposBtn: document.getElementById("pma-scan-repos-btn"),
+    docsSection: document.getElementById("pma-docs-section"),
+    docsEditor: document.getElementById("pma-docs-editor") as HTMLTextAreaElement | null,
+    docsSaveBtn: document.getElementById("pma-docs-save") as HTMLButtonElement | null,
+    docsResetBtn: document.getElementById("pma-docs-reset") as HTMLButtonElement | null,
+    docsSnapshotBtn: document.getElementById("pma-docs-snapshot") as HTMLButtonElement | null,
   };
 }
 
@@ -366,6 +523,7 @@ async function initPMA(): Promise<void> {
   await loadPMAInbox();
   await loadPMAThreadInfo();
   await initFileBoxUI();
+  await loadPMADocs();
   attachHandlers();
 
   // If we refreshed mid-turn, recover the final output from the server.
@@ -1083,6 +1241,68 @@ function attachHandlers(): void {
       }
     });
     elements.threadInfoTurnId.style.cursor = "pointer";
+  }
+
+  document.querySelectorAll(".pma-docs-tab").forEach((tab) => {
+    if (tab instanceof HTMLElement) {
+      tab.addEventListener("click", () => {
+        const docName = tab.dataset.doc;
+        if (docName) switchPMADoc(docName);
+      });
+    }
+  });
+
+  if (elements.docsSaveBtn) {
+    elements.docsSaveBtn.addEventListener("click", () => {
+      const editor = elements.docsEditor;
+      if (editor && currentDocName && EDITABLE_DOCS.includes(currentDocName)) {
+        void savePMADoc(currentDocName, editor.value);
+      }
+    });
+  }
+
+  if (elements.docsResetBtn) {
+    elements.docsResetBtn.addEventListener("click", resetActiveContext);
+  }
+
+  if (elements.docsSnapshotBtn) {
+    elements.docsSnapshotBtn.addEventListener("click", () => {
+      void snapshotActiveContext();
+    });
+  }
+
+  const pmaModeManual = document.getElementById("pma-mode-manual");
+  const pmaModePma = document.getElementById("pma-mode-pma");
+  const docsSection = document.getElementById("pma-docs-section");
+
+  if (pmaModeManual && pmaModePma) {
+    const handleModeChange = (mode: string) => {
+      if (!docsSection) return;
+      if (mode === "manual") {
+        docsSection.classList.remove("hidden");
+      } else {
+        docsSection.classList.add("hidden");
+      }
+    };
+
+    pmaModeManual.addEventListener("click", () => {
+      if (pmaModeManual.dataset.hubMode === "manual") {
+        handleModeChange("manual");
+      }
+    });
+
+    pmaModePma.addEventListener("click", () => {
+      if (pmaModePma.dataset.hubMode === "pma") {
+        handleModeChange("pma");
+      }
+    });
+  }
+
+  if (elements.docsEditor) {
+    elements.docsEditor.addEventListener("input", () => {
+      elements.docsEditor.style.height = "auto";
+      elements.docsEditor.style.height = `${elements.docsEditor.scrollHeight}px`;
+    });
   }
 }
 
