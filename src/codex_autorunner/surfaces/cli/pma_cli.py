@@ -61,25 +61,6 @@ def _is_json_response_error(data: dict) -> Optional[str]:
     return None
 
 
-def _handle_pma_error(
-    data: dict, output_json: bool = False, message: str = "PMA request failed"
-) -> None:
-    error = _is_json_response_error(data)
-    if error:
-        if output_json:
-            typer.echo(json.dumps({"error": error, "detail": data}, indent=2))
-        else:
-            typer.echo(f"{message}: {error}", err=True)
-        raise typer.Exit(code=1) from None
-
-
-def _format_output(data: dict, output_json: bool = False) -> None:
-    if output_json:
-        typer.echo(json.dumps(data, indent=2))
-    else:
-        typer.echo(json.dumps(data, indent=2))
-
-
 @pma_app.command("chat")
 def pma_chat(
     message: str = typer.Argument(..., help="Message to send to PMA"),

@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 PACKAGE_ROOT = SRC_ROOT / "codex_autorunner"
