@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .....agents.registry import validate_agent_id
-from .....core.config import load_repo_config
+from .....core.config import load_hub_config, load_repo_config
 from .....core.flows import FlowController, FlowStore
 from .....core.flows.models import FlowRunStatus
 from .....core.flows.reconciler import reconcile_flow_run
@@ -118,6 +118,58 @@ def _flow_help_lines() -> list[str]:
         "/flow reply <message>",
         "Alias: /flow start",
     ]
+
+
+def _discover_unregistered_worktrees(
+    manifest, hub_root: Optional[Path]
+) -> list[dict[str, object]]:
+    if not hub_root:
+        return []
+    try:
+        hub_config = load_hub_config(hub_root)
+    except Exception:
+        return []
+    worktrees_root = hub_config.worktrees_root
+    if not worktrees_root.exists() or not worktrees_root.is_dir():
+        return []
+
+    known_paths = {(hub_root / repo.path).resolve() for repo in manifest.repos}
+    known_ids = {repo.id for repo in manifest.repos}
+    extras: list[dict[str, object]] = []
+    for child in sorted(worktrees_root.iterdir()):
+        if not child.is_dir():
+            continue
+        if not (child / ".git").exists():
+            continue
+        resolved = child.resolve()
+        if resolved in known_paths:
+            continue
+
+        flows_root = child / ".codex-autorunner" / "flows"
+        flows_db = child / ".codex-autorunner" / "flows.db"
+        if not flows_root.exists() and not flows_db.exists():
+            continue
+
+        repo_id = child.name
+        label = repo_id
+        indent = ""
+        if "--" in repo_id:
+            _, suffix = repo_id.split("--", 1)
+            label = suffix or repo_id
+            indent = "  - "
+        label = f"{label} (unregistered)"
+        if repo_id in known_ids:
+            label = f"{label} (duplicate id)"
+        extras.append(
+            {
+                "repo_id": repo_id,
+                "repo_root": resolved,
+                "label": label,
+                "indent": indent,
+                "unregistered": True,
+            }
+        )
+    return extras
 
 
 def _get_ticket_controller(repo_root: Path) -> FlowController:
@@ -866,17 +918,41 @@ class FlowCommands(SharedHelpers):
         groups: dict[str, list[tuple[str, str]]] = {}
         group_order: list[str] = []
 
+        entries: list[dict[str, object]] = []
         for repo in manifest.repos:
             if not repo.enabled:
                 continue
-
             repo_root = (self._hub_root / repo.path).resolve()
             group, suffix = _group_key(repo.id)
+            label = suffix or repo.id
+            indent = "  - " if suffix else ""
+            entries.append(
+                {
+                    "repo_id": repo.id,
+                    "repo_root": repo_root,
+                    "label": label,
+                    "indent": indent,
+                    "group": group,
+                    "unregistered": False,
+                }
+            )
+
+        extras = _discover_unregistered_worktrees(manifest, self._hub_root)
+        for extra in extras:
+            repo_id = str(extra["repo_id"])
+            group, _ = _group_key(repo_id)
+            extra["group"] = group
+            entries.append(extra)
+
+        for entry in entries:
+            repo_id = str(entry["repo_id"])
+            repo_root = Path(entry["repo_root"])
+            label = str(entry["label"])
+            indent = str(entry.get("indent", ""))
+            group = str(entry.get("group", repo_id))
             if group not in groups:
                 groups[group] = []
                 group_order.append(group)
-            label = suffix or repo.id
-            indent = "  - " if suffix else ""
 
             store = _load_flow_store(repo_root)
             try:
@@ -937,6 +1013,11 @@ class FlowCommands(SharedHelpers):
 
         if lines and lines[-1] == "":
             lines.pop()
+        if extras:
+            lines.append("")
+            lines.append(
+                "Note: Unregistered worktrees detected. Run 'car hub scan' to register them."
+            )
         lines.append("")
         lines.append("Tip: use /flow <repo-id> status for repo details.")
 
