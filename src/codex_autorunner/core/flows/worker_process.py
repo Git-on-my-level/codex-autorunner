@@ -211,6 +211,31 @@ def check_worker_health(
     )
 
 
+def register_worker_metadata(
+    repo_root: Path,
+    run_id: str,
+    *,
+    artifacts_root: Optional[Path] = None,
+    pid: Optional[int] = None,
+    cmd: Optional[list[str]] = None,
+    entrypoint: str = "codex_autorunner",
+) -> Path:
+    normalized_run_id = _normalized_run_id(run_id)
+    artifacts_dir = _worker_artifacts_dir(repo_root, normalized_run_id, artifacts_root)
+
+    resolved_pid = pid or os.getpid()
+    resolved_cmd = cmd or _read_process_cmdline(resolved_pid)
+    if not resolved_cmd:
+        resolved_cmd = _build_worker_cmd(entrypoint, normalized_run_id)
+
+    _write_worker_metadata(
+        _worker_metadata_path(artifacts_dir),
+        resolved_pid,
+        resolved_cmd,
+    )
+    return artifacts_dir
+
+
 def spawn_flow_worker(
     repo_root: Path,
     run_id: str,

@@ -31,7 +31,11 @@ from ...core.config import (
 from ...core.flows import FlowController, FlowStore
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
-from ...core.flows.worker_process import check_worker_health, clear_worker_metadata
+from ...core.flows.worker_process import (
+    check_worker_health,
+    clear_worker_metadata,
+    register_worker_metadata,
+)
 from ...core.git_utils import GitError, run_git
 from ...core.hub import HubSupervisor
 from ...core.locks import file_lock
@@ -1865,6 +1869,15 @@ def flow_worker(
                 raise typer.Exit(code=0)
 
         store.close()
+
+        try:
+            register_worker_metadata(
+                engine.repo_root,
+                normalized_run_id,
+                artifacts_root=artifacts_root,
+            )
+        except Exception as exc:
+            typer.echo(f"Failed to register worker metadata: {exc}", err=True)
 
         agent_pool: AgentPool | None = None
 
