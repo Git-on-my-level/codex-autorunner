@@ -128,6 +128,29 @@
         <div class="pma-inbox-list" id="pma-inbox-list">Loading…</div>
         <button class="pma-inbox-refresh-btn" id="pma-inbox-refresh" title="Refresh inbox">↻</button>
       </div>
+      <div class="pma-thread-info hidden" id="pma-thread-info">
+        <div class="pma-thread-info-header">
+          <span class="pma-thread-info-label">Thread</span>
+          <span class="pill pill-small pill-idle" id="pma-thread-info-status">idle</span>
+        </div>
+        <div class="pma-thread-info-details">
+          <div class="pma-thread-info-row">
+            <span class="pma-thread-info-key muted">Agent</span>
+            <span class="pma-thread-info-value" id="pma-thread-info-agent">–</span>
+          </div>
+          <div class="pma-thread-info-row">
+            <span class="pma-thread-info-key muted">Thread ID</span>
+            <span class="pma-thread-info-value" id="pma-thread-info-thread-id" title="Click to copy">–</span>
+          </div>
+          <div class="pma-thread-info-row">
+            <span class="pma-thread-info-key muted">Turn ID</span>
+            <span class="pma-thread-info-value" id="pma-thread-info-turn-id" title="Click to copy">–</span>
+          </div>
+        </div>
+      </div>
+      <div class="pma-repo-actions" id="pma-repo-actions">
+        <button class="ghost sm" id="pma-scan-repos-btn">Scan repos</button>
+      </div>
     </section>
     <section class="pma-chat-section">
       <div class="pma-chat-main">

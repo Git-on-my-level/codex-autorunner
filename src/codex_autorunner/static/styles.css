@@ -13002,6 +13002,36 @@ button.filebox-delete:hover {
   opacity: 0.8;
 }
 
+.pma-inbox-run-id {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.pma-inbox-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.pma-inbox-action {
+  font-size: 10px;
+  padding: 3px 8px;
+  background: rgba(108, 245, 216, 0.08);
+  border: 1px solid rgba(108, 245, 216, 0.2);
+  border-radius: 4px;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-block;
+}
+
+.pma-inbox-action:hover {
+  background: rgba(108, 245, 216, 0.15);
+  border-color: rgba(108, 245, 216, 0.4);
+}
+
 .pma-upload-btn {
   width: 38px;
   height: 38px;
@@ -13206,9 +13236,72 @@ button.filebox-delete:hover {
 
 .pma-paused-runs-bar {
   display: flex;
-  align-items: center;
+  flex-direction: row;
+  align-items: stretch;
   gap: 8px;
-  min-height: 24px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  max-height: 200px;
+}
+
+.pma-thread-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.pma-thread-info-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pma-thread-info-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pma-thread-info-details {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pma-thread-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.pma-thread-info-key {
+  font-size: 10px;
+  min-width: 60px;
+}
+
+.pma-thread-info-value {
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--text);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.pma-thread-info-value:hover {
+  color: var(--accent);
+}
+
+.pma-repo-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
 }
 
 .pma-inbox-list {
