@@ -2,6 +2,7 @@ from pathlib import Path
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import load_hub_config
+from codex_autorunner.core.pma_context import format_pma_prompt, load_pma_prompt
 
 
 def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
@@ -54,3 +55,34 @@ def test_pma_files_not_overridden_without_force(tmp_path: Path) -> None:
 
     assert prompt_path.read_text(encoding="utf-8") == "custom prompt"
     assert about_path.read_text(encoding="utf-8") == "custom about"
+
+
+def test_pma_capabilities_file_created(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    pma_dir = tmp_path / ".codex-autorunner" / "pma"
+    capabilities_path = pma_dir / "CAPABILITIES.md"
+    assert capabilities_path.exists()
+    capabilities_content = capabilities_path.read_text(encoding="utf-8")
+    assert "PMA Capability Contract" in capabilities_content
+    assert "## Summary for Prompt Injection" in capabilities_content
+
+
+def test_pma_capabilities_summary_injected_in_prompt(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    pma_dir = tmp_path / ".codex-autorunner" / "pma"
+    capabilities_path = pma_dir / "CAPABILITIES.md"
+    capabilities_content = capabilities_path.read_text(encoding="utf-8")
+    assert "PMA: Hub-level coordination layer" in capabilities_content
+
+    base_prompt = load_pma_prompt(tmp_path)
+    prompt = format_pma_prompt(
+        base_prompt,
+        {"repos": [], "inbox": [], "pma_files": {"inbox": [], "outbox": []}},
+        "test message",
+        hub_root=tmp_path,
+    )
+    assert "<capability_contract>" in prompt
+    assert "PMA: Hub-level coordination layer" in prompt
+    assert "Does NOT edit code directly" in prompt

@@ -634,7 +634,7 @@ def build_pma_routes() -> APIRouter:
         prompt_base = load_pma_prompt(hub_root)
         supervisor = getattr(request.app.state, "hub_supervisor", None)
         snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
-        prompt = format_pma_prompt(prompt_base, snapshot, message)
+        prompt = format_pma_prompt(prompt_base, snapshot, message, hub_root=hub_root)
 
         interrupt_event = await _get_interrupt_event()
         if interrupt_event.is_set():

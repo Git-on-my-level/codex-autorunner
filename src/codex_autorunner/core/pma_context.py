@@ -55,11 +55,62 @@ def load_pma_prompt(hub_root: Path) -> str:
         return ""
 
 
-def format_pma_prompt(base_prompt: str, snapshot: dict[str, Any], message: str) -> str:
+def load_pma_capabilities(hub_root: Path) -> str:
+    path = hub_root / ".codex-autorunner" / "pma" / "CAPABILITIES.md"
+    try:
+        ensure_pma_docs(hub_root)
+    except Exception:
+        pass
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def _extract_capability_summary(capabilities: str) -> str:
+    for line in capabilities.splitlines():
+        if line.startswith("## Summary for Prompt Injection"):
+            lines = []
+            in_summary = False
+            for line_content in capabilities.splitlines()[
+                capabilities.splitlines().index(line) :
+            ]:
+                if line_content.startswith("## Summary for Prompt Injection"):
+                    in_summary = True
+                    continue
+                if in_summary:
+                    if line_content.startswith("## ") and not line_content.startswith(
+                        "## Summary"
+                    ):
+                        break
+                    lines.append(line_content)
+            return "\n".join(lines).strip()
+    return ""
+
+
+def format_pma_prompt(
+    base_prompt: str,
+    snapshot: dict[str, Any],
+    message: str,
+    hub_root: Optional[Path] = None,
+) -> str:
     snapshot_text = json.dumps(snapshot, sort_keys=True)
-    return (
-        f"{base_prompt}\n\n"
+    capabilities_summary = ""
+    if hub_root:
+        try:
+            capabilities = load_pma_capabilities(hub_root)
+            capabilities_summary = _extract_capability_summary(capabilities)
+        except Exception:
+            pass
+
+    prompt = f"{base_prompt}\n\n"
+    if capabilities_summary:
+        prompt += (
+            f"<capability_contract>\n{capabilities_summary}\n</capability_contract>\n\n"
+        )
+    prompt += (
         "Ops guide: `.codex-autorunner/pma/ABOUT_CAR.md`.\n"
+        "Capability contract: `.codex-autorunner/pma/CAPABILITIES.md`.\n"
         "To send a file to the user, write it to `.codex-autorunner/pma/outbox/`.\n"
         "User uploaded files are in `.codex-autorunner/pma/inbox/`.\n\n"
         "<hub_snapshot>\n"
@@ -69,6 +120,7 @@ def format_pma_prompt(base_prompt: str, snapshot: dict[str, Any], message: str) 
         f"{message}\n"
         "</user_message>\n"
     )
+    return prompt
 
 
 def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict[str, Any]]:
