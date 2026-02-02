@@ -45,22 +45,7 @@ def resolve_flow_transition(
     inner_status = engine.get("status")
     reason_code = engine.get("reason_code")
 
-    # 1) Worker liveness overrides for active flows.
-    if (
-        record.status in (FlowRunStatus.RUNNING, FlowRunStatus.STOPPING)
-        and not health.is_alive
-    ):
-        new_status = (
-            FlowRunStatus.STOPPED
-            if record.status == FlowRunStatus.STOPPING
-            else FlowRunStatus.FAILED
-        )
-        state = ensure_reason_summary(state, status=new_status, default="Worker died")
-        return TransitionDecision(
-            status=new_status, finished_at=now, state=state, note="worker-dead"
-        )
-
-    # 2) Inner engine reconciliation (worker is alive or not required).
+    # 1) Inner engine completion takes priority over worker liveness for active flows.
     if record.status == FlowRunStatus.RUNNING:
         if inner_status == "paused":
             state = ensure_reason_summary(state, status=FlowRunStatus.PAUSED)
@@ -79,8 +64,30 @@ def resolve_flow_transition(
                 note="engine-completed",
             )
 
+        # 2) Worker liveness overrides for active flows (only if engine not completed).
+        if not health.is_alive:
+            new_status = FlowRunStatus.FAILED
+            state = ensure_reason_summary(
+                state, status=new_status, default="Worker died"
+            )
+            return TransitionDecision(
+                status=new_status, finished_at=now, state=state, note="worker-dead"
+            )
+
         return TransitionDecision(
             status=FlowRunStatus.RUNNING, finished_at=None, state=state, note="running"
+        )
+
+    # Handle STOPPING case separately - worker liveness check still applies.
+    if record.status == FlowRunStatus.STOPPING and not health.is_alive:
+        state = ensure_reason_summary(
+            state, status=FlowRunStatus.STOPPED, default="Worker stopped"
+        )
+        return TransitionDecision(
+            status=FlowRunStatus.STOPPED,
+            finished_at=now,
+            state=state,
+            note="worker-dead",
         )
 
     if record.status == FlowRunStatus.PAUSED:

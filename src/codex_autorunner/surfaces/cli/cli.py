@@ -1731,6 +1731,22 @@ def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecor
     return None
 
 
+def _resumable_run(records: list[FlowRunRecord]) -> tuple[Optional[FlowRunRecord], str]:
+    """Return a resumable run and the reason.
+
+    Returns (run, reason) where run may be None.
+    Reason is one of: 'active', 'completed_pending', 'force_new', 'new_run'.
+    """
+    if not records:
+        return None, "new_run"
+    latest = records[0]
+    if latest.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
+        return latest, "active"
+    if latest.status == FlowRunStatus.COMPLETED:
+        return latest, "completed_pending"
+    return None, "new_run"
+
+
 def _ticket_flow_status_payload(
     engine: RuntimeContext, record: FlowRunRecord, store: Optional[FlowStore]
 ) -> dict:
@@ -1779,14 +1795,31 @@ def _print_ticket_flow_status(payload: dict) -> None:
         f"Last event: {payload.get('last_event_at')} (seq={payload.get('last_event_seq')})"
     )
     worker = payload.get("worker") or {}
-    if worker:
+    status = payload.get("status") or ""
+    # Only show worker details for non-terminal states
+    if worker and status not in {"completed", "failed", "stopped"}:
         typer.echo(
             f"Worker: {worker.get('status')} pid={worker.get('pid')} {worker.get('message') or ''}".rstrip()
         )
+    elif worker and status in {"completed", "failed", "stopped"}:
+        # For terminal runs, show minimal worker info or clarify state
+        worker_status = worker.get("status") or ""
+        worker_pid = worker.get("pid")
+        worker_msg = worker.get("message") or ""
+        if worker_status == "absent" or "missing" in worker_msg.lower():
+            typer.echo("Worker: exited")
+        elif worker_status == "dead" or "not running" in worker_msg.lower():
+            typer.echo(f"Worker: exited (pid={worker_pid})")
+        else:
+            typer.echo(
+                f"Worker: {worker.get('status')} pid={worker.get('pid')} {worker.get('message') or ''}".rstrip()
+            )
 
 
-def _start_ticket_flow_worker(repo_root: Path, run_id: str) -> None:
-    result = ensure_worker(repo_root, run_id)
+def _start_ticket_flow_worker(
+    repo_root: Path, run_id: str, is_terminal: bool = False
+) -> None:
+    result = ensure_worker(repo_root, run_id, is_terminal=is_terminal)
     if result["status"] == "reused":
         return
 
@@ -1943,7 +1976,10 @@ def ticket_flow_bootstrap(
         False, "--force-new", help="Always create a new run"
     ),
 ):
-    """Bootstrap ticket_flow (seed TICKET-001 if needed) and start a run."""
+    """Bootstrap ticket_flow (seed TICKET-001 if needed) and start a run.
+
+    If latest run is COMPLETED and new tickets are added, a new run is created
+    (use --force-new to force a new run regardless of state)."""
     engine = _require_repo_config(repo, hub)
     db_path, artifacts_root, ticket_dir = _ticket_flow_paths(engine)
     ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -1953,12 +1989,14 @@ def ticket_flow_bootstrap(
     try:
         if not force_new:
             records = store.list_flow_runs(flow_type="ticket_flow")
-            active = _active_or_paused_run(records)
-            if active:
-                _start_ticket_flow_worker(engine.repo_root, active.id)
-                typer.echo(f"Reused active run: {active.id}")
+            existing_run, reason = _resumable_run(records)
+            if existing_run and reason == "active":
+                _start_ticket_flow_worker(
+                    engine.repo_root, existing_run.id, is_terminal=False
+                )
+                typer.echo(f"Reused active run: {existing_run.id}")
                 typer.echo(
-                    f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {active.id}"
+                    f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
                 )
                 return
     finally:
@@ -2002,7 +2040,7 @@ You are the first ticket in a new ticket_flow run.
                 metadata={"seeded_ticket": seeded},
             )
         )
-        _start_ticket_flow_worker(engine.repo_root, record.id)
+        _start_ticket_flow_worker(engine.repo_root, record.id, is_terminal=False)
     finally:
         controller.shutdown()
         asyncio.run(agent_pool.close())
@@ -2021,7 +2059,10 @@ def ticket_flow_start(
         False, "--force-new", help="Always create a new run"
     ),
 ):
-    """Start or resume the latest ticket_flow run."""
+    """Start or resume the latest ticket_flow run.
+
+    If latest run is COMPLETED and new tickets are added, a new run is created
+    (use --force-new to force a new run regardless of state)."""
     engine = _require_repo_config(repo, hub)
     _, _, ticket_dir = _ticket_flow_paths(engine)
     ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -2030,12 +2071,14 @@ def ticket_flow_start(
     try:
         if not force_new:
             records = store.list_flow_runs(flow_type="ticket_flow")
-            active = _active_or_paused_run(records)
-            if active:
-                _start_ticket_flow_worker(engine.repo_root, active.id)
-                typer.echo(f"Reused active run: {active.id}")
+            existing_run, reason = _resumable_run(records)
+            if existing_run and reason == "active":
+                _start_ticket_flow_worker(
+                    engine.repo_root, existing_run.id, is_terminal=False
+                )
+                typer.echo(f"Reused active run: {existing_run.id}")
                 typer.echo(
-                    f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {active.id}"
+                    f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
                 )
                 return
 
@@ -2050,7 +2093,7 @@ def ticket_flow_start(
     try:
         run_id = str(uuid.uuid4())
         record = asyncio.run(controller.start_flow(input_data={}, run_id=run_id))
-        _start_ticket_flow_worker(engine.repo_root, record.id)
+        _start_ticket_flow_worker(engine.repo_root, record.id, is_terminal=False)
     finally:
         controller.shutdown()
         asyncio.run(agent_pool.close())

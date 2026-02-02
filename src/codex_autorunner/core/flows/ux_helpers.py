@@ -236,9 +236,10 @@ def build_flow_status_snapshot(
     }
 
 
-def ensure_worker(repo_root: Path, run_id: str) -> dict:
+def ensure_worker(repo_root: Path, run_id: str, is_terminal: bool = False) -> dict:
     health = check_worker_health(repo_root, run_id)
-    if health.status in {"dead", "mismatch", "invalid"}:
+    # Only clear metadata for dead/mismatch/invalid workers if not terminal
+    if not is_terminal and health.status in {"dead", "mismatch", "invalid"}:
         try:
             clear_worker_metadata(health.artifact_path.parent)
         except Exception:
