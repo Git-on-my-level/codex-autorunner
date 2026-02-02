@@ -44,6 +44,31 @@ def _truncate_text_by_bytes(text: str, max_bytes: int) -> str:
     return truncated + TRUNCATION_MARKER
 
 
+def _is_network_error(error_message: str) -> bool:
+    """Check if an error message indicates a transient network issue.
+
+    Returns True if the error appears to be network-related and retryable.
+    This includes connection errors, timeouts, and transport failures.
+    """
+    if not error_message:
+        return False
+    error_lower = error_message.lower()
+    network_indicators = [
+        "network error",
+        "connection",
+        "timeout",
+        "transport error",
+        "disconnected",
+        "unreachable",
+        "reconnecting",
+        "connection refused",
+        "connection reset",
+        "connection broken",
+        "temporary failure",
+    ]
+    return any(indicator in error_lower for indicator in network_indicators)
+
+
 def _preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
     """Truncate ticket block while preserving prefix and ticket frontmatter.
 
@@ -185,6 +210,12 @@ class TicketRunner:
         commit_retries = int(commit_state.get("retries") or 0)
         # Global counters.
         total_turns = int(state.get("total_turns") or 0)
+
+        _network_raw = state.get("network_retry")
+        network_retry_state: dict[str, Any] = (
+            _network_raw if isinstance(_network_raw, dict) else {}
+        )
+        network_retries = int(network_retry_state.get("retries") or 0)
         if total_turns >= self._config.max_total_turns:
             return self._pause(
                 state,
@@ -459,6 +490,31 @@ class TicketRunner:
             state["last_agent_id"] = result.agent_id
             state["last_agent_conversation_id"] = result.conversation_id
             state["last_agent_turn_id"] = result.turn_id
+
+            # Check if this is a network error that should be retried
+            if _is_network_error(result.error):
+                network_retries += 1
+                if network_retries <= self._config.max_network_retries:
+                    state["network_retry"] = {
+                        "retries": network_retries,
+                        "last_error": result.error,
+                    }
+                    return TicketResult(
+                        status="continue",
+                        state=state,
+                        reason=(
+                            f"Network error detected (attempt {network_retries}/{self._config.max_network_retries}): {result.error}\n"
+                            "Retrying automatically..."
+                        ),
+                        current_ticket=safe_relpath(current_path, self._workspace_root),
+                        agent_output=result.text,
+                        agent_id=result.agent_id,
+                        agent_conversation_id=result.conversation_id,
+                        agent_turn_id=result.turn_id,
+                    )
+
+            # Not a network error or retries exhausted - pause for user intervention
+            state.pop("network_retry", None)
             return self._pause(
                 state,
                 reason="Agent turn failed. Fix the issue and resume.",
@@ -471,6 +527,8 @@ class TicketRunner:
         if reply_max_seq > reply_seq:
             state["reply_seq"] = reply_max_seq
         state["last_agent_output"] = result.text
+        # Clear network retry state on successful turn
+        state.pop("network_retry", None)
         state["last_agent_id"] = result.agent_id
         state["last_agent_conversation_id"] = result.conversation_id
         state["last_agent_turn_id"] = result.turn_id
