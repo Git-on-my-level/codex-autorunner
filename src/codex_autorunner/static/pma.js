@@ -162,7 +162,7 @@ async function startTurnEventsStream(meta) {
         const contentType = res.headers.get("content-type") || "";
         if (!contentType.includes("text/event-stream"))
             return;
-        await readPMAStream(res);
+        await readPMAStream(res, false);
     }
     catch {
         // ignore (abort / network)
@@ -511,7 +511,7 @@ async function sendMessage() {
         void pollForTurnMeta(clientTurnId);
         const contentType = res.headers.get("content-type") || "";
         if (contentType.includes("text/event-stream")) {
-            await readPMAStream(res);
+            await readPMAStream(res, true);
         }
         else {
             const responsePayload = contentType.includes("application/json")
@@ -546,7 +546,7 @@ async function sendMessage() {
         pmaChat.state.controller = null;
     }
 }
-async function readPMAStream(res) {
+async function readPMAStream(res, finalizeOnClose = false) {
     if (!res.body)
         throw new Error("Streaming not supported in this browser");
     const reader = res.body.getReader();
@@ -589,6 +589,30 @@ async function readPMAStream(res) {
                 continue;
             const data = dataLines.join("\n");
             handlePMAStreamEvent(event, data);
+        }
+    }
+    if (buffer.trim()) {
+        let event = "message";
+        const dataLines = [];
+        buffer.split("\n").forEach((line) => {
+            if (line.startsWith("event:")) {
+                event = line.slice(6).trim();
+            }
+            else if (line.startsWith("data:")) {
+                dataLines.push(line.slice(5).trimStart());
+            }
+            else if (line.trim()) {
+                dataLines.push(line);
+            }
+        });
+        if (dataLines.length) {
+            handlePMAStreamEvent(event, dataLines.join("\n"));
+        }
+    }
+    if (finalizeOnClose && pmaChat && pmaChat.state.status === "running") {
+        const responseText = pmaChat.state.streamText || "";
+        if (responseText.trim()) {
+            void finalizePMAResponse(responseText);
         }
     }
 }
