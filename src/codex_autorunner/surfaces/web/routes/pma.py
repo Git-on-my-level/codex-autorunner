@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.datastructures import UploadFile
 
 from ....agents.codex.harness import CodexHarness
 from ....agents.opencode.harness import OpenCodeHarness
@@ -27,7 +28,6 @@ from .shared import SSE_HEADERS
 logger = logging.getLogger(__name__)
 
 PMA_TIMEOUT_SECONDS = 240
-PMA_MAX_UPLOAD_BYTES = 10_000_000
 
 
 def build_pma_routes() -> APIRouter:
@@ -641,37 +641,41 @@ def build_pma_routes() -> APIRouter:
         if box not in ("inbox", "outbox"):
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
-        box_dir = hub_root / ".codex-autorunner" / "pma" / box
-        box_dir.mkdir(parents=True, exist_ok=True)
+        max_upload_bytes = request.app.state.config.pma.max_upload_bytes
 
         form = await request.form()
         saved = []
-        for filename, file in form.items():
+        for _form_field_name, file in form.items():
             try:
-                content = await file.read()
+                if isinstance(file, UploadFile):
+                    content = await file.read()
+                    filename = file.filename or ""
+                else:
+                    content = file if isinstance(file, bytes) else str(file).encode()
+                    filename = ""
             except Exception as exc:
                 logger.warning("Failed to read PMA upload: %s", exc)
                 raise HTTPException(
                     status_code=400, detail="Failed to read file"
                 ) from exc
-            try:
-                safe_name = sanitize_filename(filename)
-            except ValueError as exc:
-                logger.warning("Invalid filename in PMA upload: %s", filename)
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            if len(content) > PMA_MAX_UPLOAD_BYTES:
+            if len(content) > max_upload_bytes:
                 logger.warning(
                     "File too large for PMA upload: %s (%d bytes)",
-                    safe_name,
+                    filename,
                     len(content),
                 )
                 raise HTTPException(
                     status_code=400,
-                    detail=f"File too large (max {PMA_MAX_UPLOAD_BYTES} bytes)",
+                    detail=f"File too large (max {max_upload_bytes} bytes)",
                 )
             try:
-                (box_dir / safe_name).write_bytes(content)
-                saved.append(safe_name)
+                target_path = _pma_target_path(hub_root, box, filename)
+            except HTTPException:
+                logger.warning("Invalid filename in PMA upload: %s", filename)
+                raise
+            try:
+                target_path.write_bytes(content)
+                saved.append(target_path.name)
             except Exception as exc:
                 logger.warning("Failed to write PMA file: %s", exc)
                 raise HTTPException(
@@ -679,21 +683,38 @@ def build_pma_routes() -> APIRouter:
                 ) from exc
         return {"status": "ok", "saved": saved}
 
+    def _pma_target_path(hub_root: Path, box: str, filename: str) -> Path:
+        """Return a resolved path within the PMA box folder, rejecting traversal attempts."""
+        box_dir = hub_root / ".codex-autorunner" / "pma" / box
+        box_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            safe_name = sanitize_filename(filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid filename") from exc
+        root = box_dir.resolve()
+        candidate = (root / safe_name).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid filename") from exc
+        if candidate.parent != root:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        return candidate
+
     @router.get("/files/{box}/{filename}")
     def download_pma_file(box: str, filename: str, request: Request):
         if box not in ("inbox", "outbox"):
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
         try:
-            safe_name = sanitize_filename(filename)
-        except ValueError as exc:
+            file_path = _pma_target_path(hub_root, box, filename)
+        except HTTPException:
             logger.warning("Invalid filename in PMA download: %s", filename)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        file_path = hub_root / ".codex-autorunner" / "pma" / box / safe_name
+            raise
         if not file_path.exists() or not file_path.is_file():
-            logger.warning("File not found in PMA download: %s", safe_name)
+            logger.warning("File not found in PMA download: %s", filename)
             raise HTTPException(status_code=404, detail="File not found")
-        return FileResponse(file_path, filename=safe_name)
+        return FileResponse(file_path, filename=file_path.name)
 
     @router.delete("/files/{box}/{filename}")
     def delete_pma_file(box: str, filename: str, request: Request):
@@ -701,13 +722,12 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
         try:
-            safe_name = sanitize_filename(filename)
-        except ValueError as exc:
+            file_path = _pma_target_path(hub_root, box, filename)
+        except HTTPException:
             logger.warning("Invalid filename in PMA delete: %s", filename)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        file_path = hub_root / ".codex-autorunner" / "pma" / box / safe_name
+            raise
         if not file_path.exists() or not file_path.is_file():
-            logger.warning("File not found in PMA delete: %s", safe_name)
+            logger.warning("File not found in PMA delete: %s", filename)
             raise HTTPException(status_code=404, detail="File not found")
         try:
             file_path.unlink()

@@ -227,3 +227,57 @@ def test_pma_files_outbox(hub_env) -> None:
     resp = client.get("/hub/pma/files/outbox/output.txt")
     assert resp.status_code == 200
     assert resp.content == b"Output content"
+
+
+def test_pma_files_rejects_invalid_filenames(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    # Test traversal attempts - upload rejects invalid filenames
+    for filename in ["../x", "..", "a/b", "a\\b", ".", ""]:
+        files = {"file": (filename, b"test", "text/plain")}
+        resp = client.post("/hub/pma/files/inbox", files=files)
+        assert resp.status_code == 400, f"Should reject filename: {filename}"
+        assert "Invalid filename" in resp.json()["detail"]
+
+
+def test_pma_files_size_limit(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    max_upload_bytes = DEFAULT_HUB_CONFIG["pma"]["max_upload_bytes"]
+
+    # Upload a file that exceeds the size limit
+    large_content = b"x" * (max_upload_bytes + 1)
+    files = {"large.bin": ("large.bin", large_content, "application/octet-stream")}
+    resp = client.post("/hub/pma/files/inbox", files=files)
+    assert resp.status_code == 400
+    assert "too large" in resp.json()["detail"].lower()
+
+    # Upload a file that is exactly at the limit
+    limit_content = b"y" * max_upload_bytes
+    files = {"limit.bin": ("limit.bin", limit_content, "application/octet-stream")}
+    resp = client.post("/hub/pma/files/inbox", files=files)
+    assert resp.status_code == 200
+    assert "limit.bin" in resp.json()["saved"]
+
+
+def test_pma_files_returns_404_for_nonexistent_files(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    # Download non-existent file
+    resp = client.get("/hub/pma/files/inbox/nonexistent.txt")
+    assert resp.status_code == 404
+    assert "File not found" in resp.json()["detail"]
+
+    # Delete non-existent file
+    resp = client.delete("/hub/pma/files/inbox/nonexistent.txt")
+    assert resp.status_code == 404
+    assert "File not found" in resp.json()["detail"]

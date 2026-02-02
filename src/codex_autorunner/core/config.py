@@ -477,6 +477,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "default_agent": "codex",
         "model": None,
         "reasoning": None,
+        "max_upload_bytes": 10_000_000,
     },
     "templates": {
         "enabled": True,
@@ -839,6 +840,15 @@ class OpenCodeConfig:
 
 
 @dataclasses.dataclass
+class PmaConfig:
+    enabled: bool
+    default_agent: str
+    model: Optional[str]
+    reasoning: Optional[str]
+    max_upload_bytes: int
+
+
+@dataclasses.dataclass
 class UsageConfig:
     cache_scope: str
     global_cache_root: Path
@@ -948,6 +958,7 @@ class HubConfig:
     update_skip_checks: bool
     app_server: AppServerConfig
     opencode: OpenCodeConfig
+    pma: PmaConfig
     usage: UsageConfig
     server_host: str
     server_port: int
@@ -1333,6 +1344,39 @@ def _parse_opencode_config(
     if stall_timeout_seconds is not None and stall_timeout_seconds <= 0:
         stall_timeout_seconds = None
     return OpenCodeConfig(session_stall_timeout_seconds=stall_timeout_seconds)
+
+
+def _parse_pma_config(
+    cfg: Optional[Dict[str, Any]],
+    _root: Path,
+    defaults: Optional[Dict[str, Any]],
+) -> PmaConfig:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+    enabled = bool(cfg.get("enabled", defaults.get("enabled", True)))
+    default_agent = str(
+        cfg.get("default_agent", defaults.get("default_agent", "codex"))
+    )
+    model_raw = cfg.get("model", defaults.get("model"))
+    model = str(model_raw).strip() or None if model_raw else None
+    reasoning_raw = cfg.get("reasoning", defaults.get("reasoning"))
+    reasoning = str(reasoning_raw).strip() or None if reasoning_raw else None
+    max_upload_bytes_raw = cfg.get(
+        "max_upload_bytes", defaults.get("max_upload_bytes", 10_000_000)
+    )
+    try:
+        max_upload_bytes = int(max_upload_bytes_raw)
+    except (ValueError, TypeError):
+        max_upload_bytes = 10_000_000
+    if max_upload_bytes <= 0:
+        max_upload_bytes = 10_000_000
+    return PmaConfig(
+        enabled=enabled,
+        default_agent=default_agent,
+        model=model,
+        reasoning=reasoning,
+        max_upload_bytes=max_upload_bytes,
+    )
 
 
 def _parse_usage_config(
@@ -1891,6 +1935,7 @@ def _build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         opencode=_parse_opencode_config(
             cfg.get("opencode"), root, DEFAULT_HUB_CONFIG.get("opencode")
         ),
+        pma=_parse_pma_config(cfg.get("pma"), root, DEFAULT_HUB_CONFIG.get("pma")),
         usage=_parse_usage_config(
             cfg.get("usage"), root, DEFAULT_HUB_CONFIG.get("usage")
         ),
