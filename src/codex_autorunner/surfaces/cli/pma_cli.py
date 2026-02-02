@@ -12,7 +12,7 @@ from ...core.config import load_hub_config
 
 logger = logging.getLogger(__name__)
 
-pma_app = typer.Typer(add_completion=False)
+pma_app = typer.Typer(add_completion=False, rich_markup_mode=None)
 
 
 def _build_pma_url(config, path: str) -> str:

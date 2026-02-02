@@ -1042,7 +1042,7 @@ class HubSupervisor:
             async def run_until_stop():
                 task = None
                 try:
-                    task = run_dispatch_interceptor(
+                    task = await run_dispatch_interceptor(
                         hub_root=self.hub_config.root,
                         supervisor=self,
                         interval_seconds=5.0,
