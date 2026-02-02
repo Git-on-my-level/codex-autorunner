@@ -30,6 +30,10 @@ class AgentTurnRequest:
     options: Optional[dict[str, Any]] = None
     # Optional flow event emitter (for live streaming).
     emit_event: Optional[EmitEventFn] = None
+    # Optional list of additional messages to send in the same turn.
+    # Each message is a dict with a "text" field. Agents that support
+    # multiple messages will receive all of them; others may queue them.
+    additional_messages: Optional[list[dict[str, Any]]] = None
 
 
 @dataclass(frozen=True)
@@ -249,6 +253,19 @@ class AgentPool:
                 turn_kwargs["model"] = req.options["model"]
             if req.options.get("reasoning"):
                 turn_kwargs["effort"] = req.options["reasoning"]
+
+        # Build input items - main prompt plus any additional messages
+        input_items: Optional[list[dict[str, Any]]] = None
+        if req.additional_messages:
+            input_items = [{"type": "text", "text": req.prompt}]
+            for msg in req.additional_messages:
+                if isinstance(msg, dict):
+                    text = msg.get("text", "")
+                    if text:
+                        input_items.append({"type": "text", "text": text})
+        if input_items:
+            turn_kwargs["input_items"] = input_items
+
         turn_handle = await client.turn_start(thread_id, req.prompt, **turn_kwargs)
         if req.emit_event is not None:
             self._active_emitters[turn_handle.turn_id] = req.emit_event
@@ -300,9 +317,18 @@ class AgentPool:
             if not session_id:
                 raise RuntimeError("OpenCode create_session returned no session id")
 
+        # Send main prompt and any additional messages
+        # OpenCode processes messages sequentially; agents that queue will handle them
         prompt_response = await client.prompt_async(
             session_id, message=req.prompt, model=model_payload, variant=variant
         )
+        if req.additional_messages:
+            for msg in req.additional_messages:
+                text = msg.get("text", "") if isinstance(msg, dict) else ""
+                if text:
+                    await client.prompt_async(
+                        session_id, message=text, model=model_payload, variant=variant
+                    )
 
         import uuid
 
