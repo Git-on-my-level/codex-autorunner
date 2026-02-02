@@ -821,9 +821,16 @@ def build_pma_routes() -> APIRouter:
                     if not isinstance(message, dict):
                         continue
                     method = message.get("method")
+                    params = message.get("params")
+                    if method == "thread/tokenUsage/updated" and isinstance(
+                        params, dict
+                    ):
+                        token_usage = params.get("tokenUsage")
+                        if isinstance(token_usage, dict):
+                            await queue.put(format_sse("token_usage", token_usage))
+                        continue
                     if method not in ("item/agentMessage/delta", "turn/streamDelta"):
                         continue
-                    params = message.get("params")
                     delta = None
                     if isinstance(params, dict):
                         raw = params.get("delta") or params.get("text")
