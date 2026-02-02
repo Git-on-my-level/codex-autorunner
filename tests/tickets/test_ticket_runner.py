@@ -409,3 +409,260 @@ async def test_previous_ticket_context_included_when_enabled(tmp_path: Path) -> 
         in pool.requests[0].prompt
     )
     assert "agent: codex\ndone: true" in pool.requests[0].prompt
+
+
+def test_is_network_error_detection() -> None:
+    """Test network error detection logic."""
+    from codex_autorunner.tickets.runner import _is_network_error
+
+    # Positive cases (should return True)
+    assert _is_network_error("network error") is True
+    assert _is_network_error("Connection timeout") is True
+    assert _is_network_error("transport error") is True
+    assert _is_network_error("stream disconnected") is True
+    assert _is_network_error("Reconnecting... 1/5") is True
+    assert _is_network_error("connection refused") is True
+    assert _is_network_error("connection reset") is True
+    assert _is_network_error("connection broken") is True
+    assert _is_network_error("unreachable") is True
+    assert _is_network_error("temporary failure") is True
+
+    # Negative cases (should return False)
+    assert _is_network_error("validation error") is False
+    assert _is_network_error("config error") is False
+    assert _is_network_error("permission denied") is False
+    assert _is_network_error("auth failed") is False
+    assert _is_network_error("") is False
+    assert _is_network_error("successful completion") is False
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_retries_on_network_error(tmp_path: Path) -> None:
+    """Test that network errors trigger automatic retries."""
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    call_count = 0
+    max_network_errors = 2
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        nonlocal call_count
+        call_count += 1
+        if call_count <= max_network_errors:
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="conv1",
+                turn_id=f"t{call_count}",
+                text="failed",
+                error="Network error: stream disconnected",
+            )
+        _set_ticket_done(ticket_path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv1",
+            turn_id=f"t{call_count}",
+            text="done",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            max_network_retries=5,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    # First step: network error 1, should retry
+    r1 = await runner.step({})
+    assert r1.status == "continue"
+    assert "Network error detected (attempt 1/5)" in r1.reason
+    assert r1.state.get("network_retry") is not None
+    assert r1.state["network_retry"]["retries"] == 1
+
+    # Second step: network error 2, should retry
+    r2 = await runner.step(r1.state)
+    assert r2.status == "continue"
+    assert "Network error detected (attempt 2/5)" in r2.reason
+    assert r2.state["network_retry"]["retries"] == 2
+
+    # Third step: success, retry state should be cleared
+    r3 = await runner.step(r2.state)
+    assert r3.status == "continue"
+    assert r3.state.get("network_retry") is None
+
+    assert call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_pauses_after_network_retries_exhausted(
+    tmp_path: Path,
+) -> None:
+    """Test that the runner pauses when network retries are exhausted."""
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv1",
+            turn_id="t1",
+            text="failed",
+            error="Network error: connection timeout",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            max_network_retries=2,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    # Retry 1
+    r1 = await runner.step({})
+    assert r1.status == "continue"
+    assert r1.state["network_retry"]["retries"] == 1
+
+    # Retry 2
+    r2 = await runner.step(r1.state)
+    assert r2.status == "continue"
+    assert r2.state["network_retry"]["retries"] == 2
+
+    # Retry 3 (exhausted, should pause)
+    r3 = await runner.step(r2.state)
+    assert r3.status == "paused"
+    assert r3.reason == "Agent turn failed. Fix the issue and resume."
+    assert "Network error: connection timeout" in r3.reason_details
+    assert r3.state.get("network_retry") is None
+
+    assert len(pool.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_clears_network_retry_on_non_network_error(
+    tmp_path: Path,
+) -> None:
+    """Test that network retry state is cleared on non-network errors."""
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    call_count = 0
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="conv1",
+                turn_id="t1",
+                text="failed",
+                error="Network error: connection failed",
+            )
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv1",
+            turn_id="t2",
+            text="failed",
+            error="Validation error: invalid config",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            max_network_retries=5,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    # First step: network error, set retry state
+    r1 = await runner.step({})
+    assert r1.status == "continue"
+    assert r1.state["network_retry"]["retries"] == 1
+
+    # Second step: non-network error, should pause immediately
+    r2 = await runner.step(r1.state)
+    assert r2.status == "paused"
+    assert r2.reason == "Agent turn failed. Fix the issue and resume."
+    assert "Validation error" in r2.reason_details
+    assert r2.state.get("network_retry") is None
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_clears_network_retry_on_success(tmp_path: Path) -> None:
+    """Test that network retry state is cleared on successful turn."""
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    call_count = 0
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return AgentTurnResult(
+                agent_id=req.agent_id,
+                conversation_id="conv1",
+                turn_id="t1",
+                text="failed",
+                error="Network error: transport error",
+            )
+        _set_ticket_done(ticket_path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv1",
+            turn_id="t2",
+            text="done",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            max_network_retries=5,
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    # First step: network error, set retry state
+    r1 = await runner.step({})
+    assert r1.status == "continue"
+    assert r1.state["network_retry"]["retries"] == 1
+
+    # Second step: success, retry state should be cleared
+    r2 = await runner.step(r1.state)
+    assert r2.status == "continue"
+    assert r2.state.get("network_retry") is None
+
+    assert call_count == 2
