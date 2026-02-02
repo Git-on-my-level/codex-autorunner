@@ -505,6 +505,9 @@ async function sendMessage(): Promise<void> {
     return;
   }
 
+  // Ensure prior turn event streams are cleared so we don't render stale actions.
+  stopTurnEventsStream();
+
   elements.input.value = "";
   elements.input.style.height = "auto";
 
@@ -518,6 +521,8 @@ async function sendMessage(): Promise<void> {
   pmaChat.state.controller = currentController;
   pmaChat.state.status = "running";
   pmaChat.state.error = "";
+  pmaChat.state.statusText = "";
+  pmaChat.state.contextUsagePercent = null;
   pmaChat.state.streamText = "";
   pmaChat.state.startTime = Date.now();
   pmaChat.clearEvents();
