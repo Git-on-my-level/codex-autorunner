@@ -1623,19 +1623,6 @@ class FilesCommands(SharedHelpers):
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
-                if success:
-                    try:
-                        candidate.unlink()
-                    except OSError as exc:
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "telegram.files.pma_outbox.delete_failed",
-                            chat_id=message.chat_id,
-                            thread_id=message.thread_id,
-                            path=str(candidate),
-                            exc=exc,
-                        )
             else:
                 success = await self._send_outbox_file(
                     candidate,
