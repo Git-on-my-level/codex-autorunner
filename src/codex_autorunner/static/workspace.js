@@ -663,6 +663,7 @@ async function sendChat() {
     chatState.error = "";
     chatState.statusText = "queued";
     chatState.streamText = "";
+    chatState.contextUsagePercent = null;
     workspaceChat.clearEvents();
     workspaceChat.addUserMessage(message);
     renderChat();
@@ -695,6 +696,10 @@ async function sendChat() {
             onEvent: (event) => {
                 workspaceChat.applyAppEvent(event);
                 workspaceChat.renderEvents();
+            },
+            onTokenUsage: (percent) => {
+                chatState.contextUsagePercent = percent;
+                renderChat();
             },
             onUpdate: (update) => {
                 applyChatUpdate(update);
@@ -755,6 +760,7 @@ async function cancelChat() {
     }
     chatState.status = "interrupted";
     chatState.streamText = "";
+    chatState.contextUsagePercent = null;
     renderChat();
     clearPendingTurnState();
 }
@@ -769,6 +775,7 @@ async function resetThread() {
         const chatState = workspaceChat.state;
         chatState.messages = [];
         chatState.streamText = "";
+        chatState.contextUsagePercent = null;
         workspaceChat.clearEvents();
         clearPendingTurnState();
         renderChat();

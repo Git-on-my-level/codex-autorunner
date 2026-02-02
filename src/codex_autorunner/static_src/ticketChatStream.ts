@@ -11,7 +11,7 @@ import {
   applyTicketChatResult,
 } from "./ticketChatActions.js";
 import { applyTicketEvent, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
-import { readEventStream, parseMaybeJson } from "./streamUtils.js";
+import { extractContextRemainingPercent, readEventStream, parseMaybeJson } from "./streamUtils.js";
 
 interface ChatRequestPayload {
   message: string;
@@ -38,6 +38,7 @@ export async function performTicketChatRequest(
   // Clear events from previous request and add user message to history
   clearTicketEvents();
   addUserMessage(message);
+  ticketChatState.contextUsagePercent = null;
   // Render both chat (for container visibility) and messages
   renderTicketChat();
   renderTicketMessages();
@@ -138,14 +139,9 @@ function handleTicketStreamEvent(event: string, rawData: string): void {
     case "token_usage": {
       // Token usage events - context window usage
       if (typeof parsed === "object" && parsed !== null) {
-        const usage = parsed as Record<string, unknown>;
-        const totalTokens = usage.totalTokens as number | undefined;
-        const modelContextWindow = usage.modelContextWindow as number | undefined;
-        if (totalTokens !== undefined && modelContextWindow !== undefined && modelContextWindow > 0) {
-          const percentRemaining = Math.round(((modelContextWindow - totalTokens) / modelContextWindow) * 100);
-          const percentRemainingClamped = Math.max(0, Math.min(100, percentRemaining));
-          // Store context usage for display in chat UI
-          ticketChatState.contextUsagePercent = percentRemainingClamped;
+        const percentRemaining = extractContextRemainingPercent(parsed);
+        if (percentRemaining !== null) {
+          ticketChatState.contextUsagePercent = percentRemaining;
           renderTicketChat();
         }
       }

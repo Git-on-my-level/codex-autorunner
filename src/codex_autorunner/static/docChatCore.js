@@ -306,7 +306,7 @@ export function createDocChat(config) {
                 if (msg.meta.duration)
                     parts.push(`${msg.meta.duration.toFixed(1)}s`);
                 if (state.contextUsagePercent !== null && msg.isFinal) {
-                    parts.push(`ctx ${state.contextUsagePercent}%`);
+                    parts.push(`ctx left ${state.contextUsagePercent}%`);
                 }
                 if (parts.length)
                     metaText += ` · ${parts.join(" · ")}`;
@@ -375,7 +375,7 @@ export function createDocChat(config) {
                     if (state.contextUsagePercent !== null) {
                         const context = document.createElement("span");
                         context.className = "chat-thinking-steps";
-                        context.textContent = ` · ctx ${state.contextUsagePercent}%`;
+                        context.textContent = ` · ctx left ${state.contextUsagePercent}%`;
                         header.appendChild(context);
                     }
                     // Only show the toggle if we have more than a couple steps.

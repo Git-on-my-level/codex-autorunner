@@ -7,6 +7,7 @@ import { createDocChat, } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import { clearAgentSelectionStorage, getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
+import { extractContextRemainingPercent } from "./streamUtils.js";
 const pmaStyling = {
     eventClass: "chat-event",
     eventTitleClass: "chat-event-title",
@@ -453,6 +454,7 @@ async function sendMessage() {
     pmaChat.state.statusText = "";
     pmaChat.state.contextUsagePercent = null;
     pmaChat.state.streamText = "";
+    pmaChat.state.contextUsagePercent = null;
     pmaChat.state.startTime = Date.now();
     pmaChat.clearEvents();
     pmaChat.addUserMessage(message);
@@ -643,17 +645,10 @@ function handlePMAStreamEvent(event, rawData) {
         case "token_usage": {
             // Token usage events - context window usage
             if (typeof parsed === "object" && parsed !== null) {
-                const usage = parsed;
-                const totalTokens = usage.totalTokens;
-                const modelContextWindow = usage.modelContextWindow;
-                if (totalTokens !== undefined && modelContextWindow !== undefined && modelContextWindow > 0) {
-                    const percentRemaining = Math.round(((modelContextWindow - totalTokens) / modelContextWindow) * 100);
-                    const percentRemainingClamped = Math.max(0, Math.min(100, percentRemaining));
-                    // Store context usage for display in chat UI
-                    if (pmaChat) {
-                        pmaChat.state.contextUsagePercent = percentRemainingClamped;
-                        pmaChat.render();
-                    }
+                const percentRemaining = extractContextRemainingPercent(parsed);
+                if (percentRemaining !== null && pmaChat) {
+                    pmaChat.state.contextUsagePercent = percentRemaining;
+                    pmaChat.render();
                 }
             }
             break;
@@ -816,6 +811,7 @@ function cancelRequest() {
         pmaChat.state.controller = null;
         pmaChat.state.status = "interrupted";
         pmaChat.state.statusText = "Cancelled";
+        pmaChat.state.contextUsagePercent = null;
         pmaChat.render();
     }
 }

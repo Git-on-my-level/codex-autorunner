@@ -5,11 +5,12 @@
 import { resolvePath, getAuthToken } from "./utils.js";
 import { ticketChatState, renderTicketChat, clearTicketEvents, addUserMessage, addAssistantMessage, applyTicketChatResult, } from "./ticketChatActions.js";
 import { applyTicketEvent, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
-import { readEventStream, parseMaybeJson } from "./streamUtils.js";
+import { extractContextRemainingPercent, readEventStream, parseMaybeJson } from "./streamUtils.js";
 export async function performTicketChatRequest(ticketIndex, message, signal, options = {}) {
     // Clear events from previous request and add user message to history
     clearTicketEvents();
     addUserMessage(message);
+    ticketChatState.contextUsagePercent = null;
     // Render both chat (for container visibility) and messages
     renderTicketChat();
     renderTicketMessages();
@@ -103,14 +104,9 @@ function handleTicketStreamEvent(event, rawData) {
         case "token_usage": {
             // Token usage events - context window usage
             if (typeof parsed === "object" && parsed !== null) {
-                const usage = parsed;
-                const totalTokens = usage.totalTokens;
-                const modelContextWindow = usage.modelContextWindow;
-                if (totalTokens !== undefined && modelContextWindow !== undefined && modelContextWindow > 0) {
-                    const percentRemaining = Math.round(((modelContextWindow - totalTokens) / modelContextWindow) * 100);
-                    const percentRemainingClamped = Math.max(0, Math.min(100, percentRemaining));
-                    // Store context usage for display in chat UI
-                    ticketChatState.contextUsagePercent = percentRemainingClamped;
+                const percentRemaining = extractContextRemainingPercent(parsed);
+                if (percentRemaining !== null) {
+                    ticketChatState.contextUsagePercent = percentRemaining;
                     renderTicketChat();
                 }
             }

@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { resolvePath, getAuthToken, api } from "./utils.js";
-import { readEventStream, parseMaybeJson } from "./streamUtils.js";
+import { extractContextRemainingPercent, readEventStream, parseMaybeJson } from "./streamUtils.js";
 export async function sendFileChat(target, message, controller, handlers = {}, options = {}) {
     const endpoint = resolvePath(options.basePath || "/api/file-chat");
     const headers = {
@@ -67,6 +67,16 @@ function handleStreamEvent(event, rawData, handlers) {
                 ? parsed
                 : parsed.token || parsed.text || rawData || "";
             handlers.onToken?.(token);
+            break;
+        }
+        case "token_usage": {
+            if (typeof parsed === "object" && parsed !== null) {
+                const usage = parsed;
+                const percent = extractContextRemainingPercent(usage);
+                if (percent !== null) {
+                    handlers.onTokenUsage?.(percent, usage);
+                }
+            }
             break;
         }
         case "update": {

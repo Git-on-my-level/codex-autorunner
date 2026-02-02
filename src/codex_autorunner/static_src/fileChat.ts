@@ -1,5 +1,5 @@
 import { resolvePath, getAuthToken, api } from "./utils.js";
-import { readEventStream, parseMaybeJson } from "./streamUtils.js";
+import { extractContextRemainingPercent, readEventStream, parseMaybeJson } from "./streamUtils.js";
 
 export interface FileChatOptions {
   agent?: string;
@@ -41,6 +41,7 @@ export interface FileChatUpdate {
 export interface FileChatHandlers {
   onStatus?(status: string): void;
   onToken?(token: string): void;
+  onTokenUsage?(percentRemaining: number, usage: Record<string, unknown>): void;
   onUpdate?(update: FileChatUpdate): void;
   onEvent?(event: unknown): void;
   onError?(message: string): void;
@@ -120,6 +121,16 @@ function handleStreamEvent(event: string, rawData: string, handlers: FileChatHan
           ? parsed
           : (parsed.token as string) || (parsed.text as string) || rawData || "";
       handlers.onToken?.(token);
+      break;
+    }
+    case "token_usage": {
+      if (typeof parsed === "object" && parsed !== null) {
+        const usage = parsed as Record<string, unknown>;
+        const percent = extractContextRemainingPercent(usage);
+        if (percent !== null) {
+          handlers.onTokenUsage?.(percent, usage);
+        }
+      }
       break;
     }
     case "update": {
