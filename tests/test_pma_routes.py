@@ -29,6 +29,13 @@ def _enable_pma(
     _write_config(hub_root / CONFIG_FILENAME, cfg)
 
 
+def _disable_pma(hub_root: Path) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})
+    cfg["pma"]["enabled"] = False
+    _write_config(hub_root / CONFIG_FILENAME, cfg)
+
+
 def test_pma_agents_endpoint(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -53,6 +60,14 @@ def test_pma_routes_enabled_by_default(hub_env) -> None:
     client = TestClient(app)
     assert client.get("/hub/pma/agents").status_code == 200
     assert client.post("/hub/pma/chat", json={}).status_code == 400
+
+
+def test_pma_routes_disabled_by_config(hub_env) -> None:
+    _disable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+    assert client.get("/hub/pma/agents").status_code == 404
+    assert client.post("/hub/pma/chat", json={"message": "hi"}).status_code == 404
 
 
 def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:

@@ -79,10 +79,9 @@ async function probePMAEnabled(): Promise<boolean> {
       method: "GET",
       headers,
     });
-    if (res.status === 404) return false;
-    return true;
+    return res.ok;
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -121,6 +120,7 @@ async function initHubShell(): Promise<void> {
       btn.disabled = true;
       btn.setAttribute("aria-disabled", "true");
       btn.title = "Enable PMA in config to use Project Manager";
+      btn.classList.add("hidden");
       btn.classList.remove("active");
       btn.setAttribute("aria-selected", "false");
     });

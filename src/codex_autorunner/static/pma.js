@@ -834,8 +834,8 @@ function resetThread() {
 }
 async function resetThreadOnServer() {
     const elements = getElements();
-    const agent = elements.agentSelect?.value || getSelectedAgent();
-    const resetAgent = (agent || "").trim() || "all";
+    const rawAgent = (elements.agentSelect?.value || getSelectedAgent() || "").trim().toLowerCase();
+    const resetAgent = rawAgent === "codex" || rawAgent === "opencode" ? rawAgent : "all";
     await api("/hub/pma/thread/reset", {
         method: "POST",
         body: { agent: resetAgent },

@@ -302,6 +302,9 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/agents")
     def list_pma_agents(request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
         if (
             getattr(request.app.state, "app_server_supervisor", None) is None
             and getattr(request.app.state, "opencode_supervisor", None) is None
@@ -323,6 +326,9 @@ def build_pma_routes() -> APIRouter:
 
     @router.get("/agents/{agent}/models")
     async def list_pma_agent_models(agent: str, request: Request):
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
         agent_id = (agent or "").strip().lower()
         hub_root = request.app.state.config.root
         if agent_id == "codex":
