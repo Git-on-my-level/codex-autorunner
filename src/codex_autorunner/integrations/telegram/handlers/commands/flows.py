@@ -71,8 +71,8 @@ def _ticket_dir(repo_root: Path) -> Path:
     return repo_root.resolve() / ".codex-autorunner" / "tickets"
 
 
-def _load_flow_store(repo_root: Path) -> FlowStore:
-    config = load_repo_config(repo_root)
+def _load_flow_store(repo_root: Path, hub_root: Optional[Path] = None) -> FlowStore:
+    config = load_repo_config(repo_root, hub_root)
     return FlowStore(_flow_paths(repo_root)[0], durable=config.durable_writes)
 
 
