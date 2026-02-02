@@ -1134,6 +1134,18 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
             )
             return
+
+        supervisor = getattr(self, "_hub_supervisor", None)
+        if supervisor and hasattr(supervisor, "hub_config"):
+            pma_config = supervisor.hub_config.pma
+            if not pma_config.enabled:
+                await self._send_message(
+                    message.chat_id,
+                    "PMA is disabled in hub config. Set pma.enabled: true to enable.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
         argv = self._parse_command_args(args)
         action = argv[0].lower() if argv else ""
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
