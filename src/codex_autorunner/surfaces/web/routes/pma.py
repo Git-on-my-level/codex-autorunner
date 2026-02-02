@@ -20,7 +20,14 @@ from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....agents.registry import validate_agent_id
 from ....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....core.filebox import sanitize_filename
-from ....core.pma_context import build_hub_snapshot, format_pma_prompt, load_pma_prompt
+from ....core.pma_context import (
+    PMA_MAX_TEXT,
+    build_hub_snapshot,
+    format_pma_prompt,
+    load_pma_prompt,
+)
+from ....core.pma_state import PmaStateStore
+from ....core.time_utils import now_iso
 from ....integrations.app_server.event_buffer import format_sse
 from .agents import _available_agents, _serialize_model_catalog
 from .shared import SSE_HEADERS
@@ -37,6 +44,8 @@ def build_pma_routes() -> APIRouter:
     pma_active = False
     pma_current: Optional[dict[str, Any]] = None
     pma_last_result: Optional[dict[str, Any]] = None
+    pma_state_store: Optional[PmaStateStore] = None
+    pma_state_root: Optional[Path] = None
 
     def _normalize_optional_text(value: Any) -> Optional[str]:
         if not isinstance(value, str):
@@ -56,6 +65,61 @@ def build_pma_routes() -> APIRouter:
             "reasoning": _normalize_optional_text(pma_config.get("reasoning")),
         }
 
+    def _get_state_store(request: Request) -> PmaStateStore:
+        nonlocal pma_state_store, pma_state_root
+        hub_root = request.app.state.config.root
+        if pma_state_store is None or pma_state_root != hub_root:
+            pma_state_store = PmaStateStore(hub_root)
+            pma_state_root = hub_root
+        return pma_state_store
+
+    async def _persist_state(store: Optional[PmaStateStore]) -> None:
+        if store is None:
+            return
+        async with pma_lock:
+            state = {
+                "version": 1,
+                "active": bool(pma_active),
+                "current": dict(pma_current or {}),
+                "last_result": dict(pma_last_result or {}),
+                "updated_at": now_iso(),
+            }
+        try:
+            store.save(state)
+        except Exception:
+            logger.exception("Failed to persist PMA state")
+
+    def _truncate_text(value: Any, limit: int) -> str:
+        if not isinstance(value, str):
+            value = "" if value is None else str(value)
+        if len(value) <= limit:
+            return value
+        return value[: max(0, limit - 3)] + "..."
+
+    def _format_last_result(
+        result: dict[str, Any], current: dict[str, Any]
+    ) -> dict[str, Any]:
+        status = result.get("status") or "error"
+        message = result.get("message")
+        detail = result.get("detail")
+        text = message if isinstance(message, str) and message else detail
+        summary = _truncate_text(text or "", PMA_MAX_TEXT)
+        return {
+            "status": status,
+            "message": summary,
+            "detail": (
+                _truncate_text(detail or "", PMA_MAX_TEXT)
+                if isinstance(detail, str)
+                else None
+            ),
+            "client_turn_id": result.get("client_turn_id") or "",
+            "agent": current.get("agent"),
+            "thread_id": result.get("thread_id") or current.get("thread_id"),
+            "turn_id": result.get("turn_id") or current.get("turn_id"),
+            "started_at": current.get("started_at"),
+            "finished_at": now_iso(),
+        }
+
     async def _get_interrupt_event() -> asyncio.Event:
         nonlocal pma_event
         async with pma_lock:
@@ -63,12 +127,17 @@ def build_pma_routes() -> APIRouter:
                 pma_event = asyncio.Event()
             return pma_event
 
-    async def _set_active(active: bool) -> None:
+    async def _set_active(
+        active: bool, *, store: Optional[PmaStateStore] = None
+    ) -> None:
         nonlocal pma_active
         async with pma_lock:
             pma_active = active
+        await _persist_state(store)
 
-    async def _begin_turn(client_turn_id: Optional[str]) -> bool:
+    async def _begin_turn(
+        client_turn_id: Optional[str], *, store: Optional[PmaStateStore] = None
+    ) -> bool:
         nonlocal pma_active, pma_current
         async with pma_lock:
             if pma_active:
@@ -80,28 +149,37 @@ def build_pma_routes() -> APIRouter:
                 "agent": None,
                 "thread_id": None,
                 "turn_id": None,
+                "started_at": now_iso(),
             }
-            return True
+        await _persist_state(store)
+        return True
 
     async def _clear_interrupt_event() -> None:
         nonlocal pma_event
         async with pma_lock:
             pma_event = None
 
-    async def _update_current(**updates: Any) -> None:
+    async def _update_current(
+        *, store: Optional[PmaStateStore] = None, **updates: Any
+    ) -> None:
         nonlocal pma_current
         async with pma_lock:
             if pma_current is None:
                 pma_current = {}
             pma_current.update(updates)
+        await _persist_state(store)
 
-    async def _finalize_result(result: dict[str, Any]) -> None:
+    async def _finalize_result(
+        result: dict[str, Any], *, store: Optional[PmaStateStore] = None
+    ) -> None:
         nonlocal pma_current, pma_last_result, pma_active, pma_event
         async with pma_lock:
-            pma_last_result = dict(result or {})
+            current_snapshot = dict(pma_current or {})
+            pma_last_result = _format_last_result(result or {}, current_snapshot)
             pma_current = None
             pma_active = False
             pma_event = None
+        await _persist_state(store)
 
     async def _get_current_snapshot() -> dict[str, Any]:
         async with pma_lock:
@@ -149,6 +227,25 @@ def build_pma_routes() -> APIRouter:
             current = dict(pma_current or {})
             last_result = dict(pma_last_result or {})
             active = bool(pma_active)
+        store = _get_state_store(request)
+        disk_state = store.load(ensure_exists=True)
+        if isinstance(disk_state, dict):
+            disk_current = (
+                disk_state.get("current")
+                if isinstance(disk_state.get("current"), dict)
+                else {}
+            )
+            disk_last = (
+                disk_state.get("last_result")
+                if isinstance(disk_state.get("last_result"), dict)
+                else {}
+            )
+            if not current and disk_current:
+                current = dict(disk_current)
+            if not last_result and disk_last:
+                last_result = dict(disk_last)
+            if not active and disk_state.get("active"):
+                active = True
         if client_turn_id:
             # If caller is asking about a specific client turn id, only return the matching last result.
             if last_result.get("client_turn_id") != client_turn_id:
@@ -449,7 +546,9 @@ def build_pma_routes() -> APIRouter:
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
 
-        if not await _begin_turn(client_turn_id):
+        store = _get_state_store(request)
+        store.load(ensure_exists=True)
+        if not await _begin_turn(client_turn_id, store=store):
             raise HTTPException(status_code=409, detail="PMA chat already running")
 
         agents, available_default = _available_agents(request)
@@ -485,11 +584,12 @@ def build_pma_routes() -> APIRouter:
 
         interrupt_event = await _get_interrupt_event()
         if interrupt_event.is_set():
-            await _set_active(False)
+            await _set_active(False, store=store)
             return {"status": "interrupted", "detail": "PMA chat interrupted"}
 
         async def _meta(thread_id: str, turn_id: str) -> None:
             await _update_current(
+                store=store,
                 client_turn_id=client_turn_id or "",
                 status="running",
                 agent=agent_id,
@@ -557,7 +657,7 @@ def build_pma_routes() -> APIRouter:
                     }
                 result = dict(result or {})
                 result["client_turn_id"] = client_turn_id or ""
-                await _finalize_result(result)
+                await _finalize_result(result, store=store)
 
             asyncio.create_task(_finalize())
 
@@ -598,7 +698,7 @@ def build_pma_routes() -> APIRouter:
             result = await _run()
             result = dict(result or {})
             result["client_turn_id"] = client_turn_id or ""
-            await _finalize_result(result)
+            await _finalize_result(result, store=store)
             return result
         finally:
             # _finalize_result already clears active/interrupt state
