@@ -596,8 +596,12 @@ async function performAutosave(): Promise<void> {
     
     // Notify that tickets changed
     publish("tickets:updated", {});
-  } catch {
+  } catch (err) {
+    // Surface the failure to the user and let DocEditor keep the "dirty" state
+    // so a retry is attempted instead of falsely reporting success.
     setAutosaveStatus("error");
+    flash((err as Error)?.message || "Failed to save ticket", "error");
+    throw err;
   }
 }
 
@@ -751,7 +755,9 @@ export function closeTicketEditor(): void {
 
   // Autosave on close if there are changes
   if (hasUnsavedChanges()) {
-    void performAutosave();
+    // Fire-and-forget: swallow rejection because the error is already flashed
+    // inside performAutosave and DocEditor keeps the buffer dirty for retry.
+    void performAutosave().catch(() => {});
   }
 
   // Cancel any running chat
