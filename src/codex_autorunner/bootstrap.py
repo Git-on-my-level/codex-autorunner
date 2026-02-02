@@ -131,6 +131,9 @@ def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
     pma_dir.mkdir(parents=True, exist_ok=True)
     _seed_doc(pma_dir / "prompt.md", force, pma_prompt_content())
     _seed_doc(pma_dir / "ABOUT_CAR.md", force, pma_about_content())
+    _seed_doc(pma_dir / "AGENTS.md", force, pma_agents_content())
+    _seed_doc(pma_dir / "active_context.md", force, pma_active_context_content())
+    _seed_doc(pma_dir / "context_log.md", force, pma_context_log_content())
 
 
 def seed_hub_files(hub_root: Path, force: bool = False) -> None:
@@ -174,6 +177,12 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Ask questions when requirements are ambiguous; keep updates concise.
 - Treat this prompt as code: keep it short and stable.
 - See `.codex-autorunner/pma/ABOUT_CAR.md` for operational how-to.
+
+## PMA durable workspace
+
+Prefer writing durable guidance and recurring best-practices to `.codex-autorunner/pma/AGENTS.md`.
+Keep short-lived working context in `.codex-autorunner/pma/active_context.md` and prune it when it grows.
+When pruning, append the prior context to `.codex-autorunner/pma/context_log.md` with a timestamp.
 """
 
 
@@ -214,3 +223,51 @@ def pma_notes_content() -> str:
 
 def pma_about_content() -> str:
     return pma_notes_content()
+
+
+def pma_agents_content() -> str:
+    return """# PMA AGENTS (durable guidance + defaults)
+
+This document is jointly maintained by the user and PMA.
+
+## What belongs here
+
+- Durable best-practices you want PMA to apply repeatedly ("defaults").
+- Stable preferences (how to structure tickets, review habits, PR conventions).
+- Template shortcuts / references that PMA should re-use.
+
+## What does NOT belong here
+
+- Temporary work-in-progress details (put those in `active_context.md`).
+- Long transcripts.
+
+## Template shortcuts (optional)
+
+- Add references to frequently used ticket templates here (repo/path/ref) and when to apply them.
+
+## Defaults (examples)
+
+- After implementation work, add a final review ticket, then a ticket to open a PR.
+"""
+
+
+def pma_active_context_content() -> str:
+    return """# PMA active context (short-lived)
+
+Use this file for the current working set: active projects, open questions, links, and immediate next steps.
+
+Pruning guidance:
+- Keep this file compact (prefer bullet points).
+- When it grows too large, summarize older items and move durable guidance to `AGENTS.md`.
+- Before a major prune, append a timestamped snapshot to `context_log.md`.
+"""
+
+
+def pma_context_log_content() -> str:
+    return """# PMA context log (append-only)
+
+This file is an append-only history of past `active_context.md` snapshots.
+
+- Add a new section with an ISO timestamp when you perform a major prune.
+- Keep entries concise; the goal is searchability and historical recall.
+"""

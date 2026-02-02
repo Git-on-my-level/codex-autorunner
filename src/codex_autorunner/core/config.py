@@ -481,6 +481,10 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "max_repos": 25,
         "max_messages": 10,
         "max_text_chars": 800,
+        # PMA durable workspace docs (hub-level)
+        "docs_max_chars": 12_000,
+        "active_context_max_lines": 200,
+        "context_log_tail_lines": 120,
     },
     "templates": {
         "enabled": True,
@@ -852,6 +856,10 @@ class PmaConfig:
     max_repos: int
     max_messages: int
     max_text_chars: int
+    # Hub-level PMA durable workspace docs
+    docs_max_chars: int = 12_000
+    active_context_max_lines: int = 200
+    context_log_tail_lines: int = 120
     dispatch_interception_enabled: bool = False
 
 
@@ -1389,6 +1397,9 @@ def _parse_pma_config(
     max_repos = _parse_positive_int("max_repos", 25)
     max_messages = _parse_positive_int("max_messages", 10)
     max_text_chars = _parse_positive_int("max_text_chars", 800)
+    docs_max_chars = _parse_positive_int("docs_max_chars", 12_000)
+    active_context_max_lines = _parse_positive_int("active_context_max_lines", 200)
+    context_log_tail_lines = _parse_positive_int("context_log_tail_lines", 120)
     dispatch_interception_enabled = bool(
         cfg.get(
             "dispatch_interception_enabled",
@@ -1404,6 +1415,9 @@ def _parse_pma_config(
         max_repos=max_repos,
         max_messages=max_messages,
         max_text_chars=max_text_chars,
+        docs_max_chars=docs_max_chars,
+        active_context_max_lines=active_context_max_lines,
+        context_log_tail_lines=context_log_tail_lines,
         dispatch_interception_enabled=dispatch_interception_enabled,
     )
 
