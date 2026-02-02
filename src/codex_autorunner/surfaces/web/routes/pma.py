@@ -23,12 +23,14 @@ from ....agents.registry import validate_agent_id
 from ....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....core.filebox import sanitize_filename
 from ....core.logging_utils import log_event
+from ....core.pma_audit import PmaActionType, PmaAuditLog
 from ....core.pma_context import (
     PMA_MAX_TEXT,
     build_hub_snapshot,
     format_pma_prompt,
     load_pma_prompt,
 )
+from ....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from ....core.pma_state import PmaStateStore
 from ....core.text_delta_coalescer import StreamingTextCoalescer
 from ....core.time_utils import now_iso
@@ -50,6 +52,9 @@ def build_pma_routes() -> APIRouter:
     pma_last_result: Optional[dict[str, Any]] = None
     pma_state_store: Optional[PmaStateStore] = None
     pma_state_root: Optional[Path] = None
+    pma_safety_checker: Optional[PmaSafetyChecker] = None
+    pma_safety_root: Optional[Path] = None
+    pma_audit_log: Optional[PmaAuditLog] = None
 
     def _normalize_optional_text(value: Any) -> Optional[str]:
         if not isinstance(value, str):
@@ -76,6 +81,34 @@ def build_pma_routes() -> APIRouter:
             pma_state_store = PmaStateStore(hub_root)
             pma_state_root = hub_root
         return pma_state_store
+
+    def _get_safety_checker(request: Request) -> PmaSafetyChecker:
+        nonlocal pma_safety_checker, pma_safety_root, pma_audit_log
+        hub_root = request.app.state.config.root
+        if pma_safety_checker is None or pma_safety_root != hub_root:
+            raw = getattr(request.app.state.config, "raw", {})
+            pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
+            safety_config = PmaSafetyConfig(
+                dedup_window_seconds=pma_config.get("dedup_window_seconds", 300),
+                max_duplicate_actions=pma_config.get("max_duplicate_actions", 3),
+                rate_limit_window_seconds=pma_config.get(
+                    "rate_limit_window_seconds", 60
+                ),
+                max_actions_per_window=pma_config.get("max_actions_per_window", 20),
+                circuit_breaker_threshold=pma_config.get(
+                    "circuit_breaker_threshold", 5
+                ),
+                circuit_breaker_cooldown_seconds=pma_config.get(
+                    "circuit_breaker_cooldown_seconds", 600
+                ),
+                enable_dedup=pma_config.get("enable_dedup", True),
+                enable_rate_limit=pma_config.get("enable_rate_limit", True),
+                enable_circuit_breaker=pma_config.get("enable_circuit_breaker", True),
+            )
+            pma_audit_log = PmaAuditLog(hub_root)
+            pma_safety_checker = PmaSafetyChecker(hub_root, config=safety_config)
+            pma_safety_root = hub_root
+        return pma_safety_checker
 
     async def _persist_state(store: Optional[PmaStateStore]) -> None:
         if store is None:
@@ -174,7 +207,10 @@ def build_pma_routes() -> APIRouter:
         await _persist_state(store)
 
     async def _finalize_result(
-        result: dict[str, Any], *, store: Optional[PmaStateStore] = None
+        result: dict[str, Any],
+        *,
+        request: Request,
+        store: Optional[PmaStateStore] = None,
     ) -> None:
         nonlocal pma_current, pma_last_result, pma_active, pma_event
         async with pma_lock:
@@ -206,6 +242,29 @@ def build_pma_routes() -> APIRouter:
             client_turn_id=current_snapshot.get("client_turn_id"),
             thread_id=pma_last_result.get("thread_id"),
             turn_id=pma_last_result.get("turn_id"),
+            error=result.get("detail") if status == "error" else None,
+        )
+
+        if status == "ok":
+            action_type = PmaActionType.CHAT_COMPLETED
+        elif status == "interrupted":
+            action_type = PmaActionType.CHAT_INTERRUPTED
+        else:
+            action_type = PmaActionType.CHAT_FAILED
+
+        _get_safety_checker(request).record_action(
+            action_type=action_type,
+            agent=current_snapshot.get("agent"),
+            thread_id=pma_last_result.get("thread_id"),
+            turn_id=pma_last_result.get("turn_id"),
+            client_turn_id=current_snapshot.get("client_turn_id"),
+            details={"status": status, "duration_ms": duration_ms},
+            status=status,
+            error=result.get("detail") if status == "error" else None,
+        )
+        _get_safety_checker(request).record_chat_result(
+            agent=current_snapshot.get("agent") or "",
+            status=status,
             error=result.get("detail") if status == "error" else None,
         )
 
@@ -323,6 +382,40 @@ def build_pma_routes() -> APIRouter:
                 if value
             }
         return payload
+
+    @router.get("/audit/recent")
+    def get_pma_audit_log(request: Request, limit: int = 100):
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        safety_checker = _get_safety_checker(request)
+        entries = safety_checker._audit_log.list_recent(limit=limit)
+        return {
+            "entries": [
+                {
+                    "entry_id": e.entry_id,
+                    "action_type": e.action_type.value,
+                    "timestamp": e.timestamp,
+                    "agent": e.agent,
+                    "thread_id": e.thread_id,
+                    "turn_id": e.turn_id,
+                    "client_turn_id": e.client_turn_id,
+                    "details": e.details,
+                    "status": e.status,
+                    "error": e.error,
+                    "fingerprint": e.fingerprint,
+                }
+                for e in entries
+            ]
+        }
+
+    @router.get("/safety/stats")
+    def get_pma_safety_stats(request: Request):
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        safety_checker = _get_safety_checker(request)
+        return safety_checker.get_stats()
 
     @router.get("/agents/{agent}/models")
     async def list_pma_agent_models(agent: str, request: Request):
@@ -625,6 +718,17 @@ def build_pma_routes() -> APIRouter:
         except ValueError:
             agent_id = _resolve_default_agent()
 
+        safety_checker = _get_safety_checker(request)
+        safety_check = safety_checker.check_chat_start(
+            agent_id, message, client_turn_id
+        )
+        if not safety_check.allowed:
+            await _set_active(False, store=store)
+            detail = safety_check.reason or "PMA action blocked by safety check"
+            if safety_check.details:
+                detail = f"{detail}: {safety_check.details}"
+            raise HTTPException(status_code=429, detail=detail)
+
         if not model and defaults.get("model"):
             model = defaults["model"]
         if not reasoning and defaults.get("reasoning"):
@@ -634,7 +738,7 @@ def build_pma_routes() -> APIRouter:
         prompt_base = load_pma_prompt(hub_root)
         supervisor = getattr(request.app.state, "hub_supervisor", None)
         snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
-        prompt = format_pma_prompt(prompt_base, snapshot, message)
+        prompt = format_pma_prompt(prompt_base, snapshot, message, hub_root=hub_root)
 
         interrupt_event = await _get_interrupt_event()
         if interrupt_event.is_set():
@@ -654,6 +758,15 @@ def build_pma_routes() -> APIRouter:
                 agent=agent_id,
                 thread_id=thread_id,
                 turn_id=turn_id,
+            )
+
+            safety_checker.record_action(
+                action_type=PmaActionType.CHAT_STARTED,
+                agent=agent_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                client_turn_id=client_turn_id,
+                details={"message": message[:200]},
             )
 
             log_event(
@@ -815,7 +928,7 @@ def build_pma_routes() -> APIRouter:
                     }
                 result = dict(result or {})
                 result["client_turn_id"] = client_turn_id or ""
-                await _finalize_result(result, store=store)
+                await _finalize_result(result, request=request, store=store)
 
             asyncio.create_task(_finalize())
 
@@ -887,7 +1000,7 @@ def build_pma_routes() -> APIRouter:
             result = await _run()
             result = dict(result or {})
             result["client_turn_id"] = client_turn_id or ""
-            await _finalize_result(result, store=store)
+            await _finalize_result(result, request=request, store=store)
             return result
         finally:
             # _finalize_result already clears active/interrupt state
@@ -1051,6 +1164,14 @@ def build_pma_routes() -> APIRouter:
             try:
                 target_path.write_bytes(content)
                 saved.append(target_path.name)
+                _get_safety_checker(request).record_action(
+                    action_type=PmaActionType.FILE_UPLOADED,
+                    details={
+                        "box": box,
+                        "filename": target_path.name,
+                        "size": len(content),
+                    },
+                )
             except Exception as exc:
                 logger.warning("Failed to write PMA file: %s", exc)
                 raise HTTPException(
@@ -1092,6 +1213,14 @@ def build_pma_routes() -> APIRouter:
         if not file_path.exists() or not file_path.is_file():
             logger.warning("File not found in PMA download: %s", filename)
             raise HTTPException(status_code=404, detail="File not found")
+        _get_safety_checker(request).record_action(
+            action_type=PmaActionType.FILE_DOWNLOADED,
+            details={
+                "box": box,
+                "filename": file_path.name,
+                "size": file_path.stat().st_size,
+            },
+        )
         return FileResponse(file_path, filename=file_path.name)
 
     @router.delete("/files/{box}/{filename}")
@@ -1111,7 +1240,12 @@ def build_pma_routes() -> APIRouter:
             logger.warning("File not found in PMA delete: %s", filename)
             raise HTTPException(status_code=404, detail="File not found")
         try:
+            file_size = file_path.stat().st_size
             file_path.unlink()
+            _get_safety_checker(request).record_action(
+                action_type=PmaActionType.FILE_DELETED,
+                details={"box": box, "filename": file_path.name, "size": file_size},
+            )
         except Exception as exc:
             logger.warning("Failed to delete PMA file: %s", exc)
             raise HTTPException(

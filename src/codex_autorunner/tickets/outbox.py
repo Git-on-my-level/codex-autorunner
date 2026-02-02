@@ -3,11 +3,30 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Dict, Optional
 
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_dispatch_frontmatter
 from .models import Dispatch, DispatchRecord
+
+_lifecycle_emitter: Optional[Callable[[str, str, str, Dict[str, Any]], None]] = None
+
+
+def set_lifecycle_emitter(
+    emitter: Optional[Callable[[str, str, str, Dict[str, Any]], None]],
+) -> None:
+    global _lifecycle_emitter
+    _lifecycle_emitter = emitter
+
+
+def _emit_lifecycle(
+    event_type: str, repo_id: str, run_id: str, data: Dict[str, Any]
+) -> None:
+    if _lifecycle_emitter:
+        try:
+            _lifecycle_emitter(event_type, repo_id, run_id, data)
+        except Exception:
+            pass
 
 
 @dataclass(frozen=True)
@@ -176,8 +195,10 @@ def archive_dispatch(
     *,
     next_seq: int,
     ticket_id: Optional[str] = None,
+    repo_id: str = "",
+    run_id: str = "",
 ) -> tuple[Optional[DispatchRecord], list[str]]:
-    """Archive the current dispatch and attachments to the dispatch history.
+    """Archive current dispatch and attachments to dispatch history.
 
     Moves DISPATCH.md + attachments into dispatch_history/<seq>/.
 
@@ -233,6 +254,20 @@ def archive_dispatch(
     except OSError:
         pass
     _delete_dispatch_items(items)
+
+    # Emit lifecycle event for dispatch creation
+    if run_id:
+        _emit_lifecycle(
+            "dispatch_created",
+            repo_id,
+            run_id,
+            {
+                "seq": next_seq,
+                "mode": dispatch.mode,
+                "title": dispatch.title,
+                "ticket_id": ticket_id,
+            },
+        )
 
     return (
         DispatchRecord(

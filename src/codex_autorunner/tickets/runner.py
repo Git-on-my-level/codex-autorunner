@@ -153,11 +153,13 @@ class TicketRunner:
         run_id: str,
         config: TicketRunConfig,
         agent_pool: AgentPool,
+        repo_id: str = "",
     ):
         self._workspace_root = workspace_root
         self._run_id = run_id
         self._config = config
         self._agent_pool = agent_pool
+        self._repo_id = repo_id
 
     async def step(
         self,
@@ -503,7 +505,11 @@ class TicketRunner:
         dispatch_seq = int(state.get("dispatch_seq") or 0)
         current_ticket_id = safe_relpath(current_path, self._workspace_root)
         dispatch, dispatch_errors = archive_dispatch(
-            outbox_paths, next_seq=dispatch_seq + 1, ticket_id=current_ticket_id
+            outbox_paths,
+            next_seq=dispatch_seq + 1,
+            ticket_id=current_ticket_id,
+            repo_id=self._repo_id,
+            run_id=self._run_id,
         )
         if dispatch_errors:
             # Treat as pause: user should fix DISPATCH.md frontmatter. Keep outbox

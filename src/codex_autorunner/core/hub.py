@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import enum
 import logging
@@ -6,7 +7,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
@@ -29,6 +30,7 @@ from .git_utils import (
     git_upstream_status,
     run_git,
 )
+from .lifecycle_events import LifecycleEvent, LifecycleEventEmitter, LifecycleEventStore
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
@@ -275,7 +277,16 @@ class HubSupervisor:
         self._list_cache_at: Optional[float] = None
         self._list_cache: Optional[List[RepoSnapshot]] = None
         self._list_lock = threading.Lock()
+        self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
+        self._lifecycle_task_lock = threading.Lock()
+        self._lifecycle_stop_event = threading.Event()
+        self._lifecycle_thread: Optional[threading.Thread] = None
+        self._dispatch_interceptor_task: Optional[asyncio.Task] = None
+        self._dispatch_interceptor_stop_event: Optional[threading.Event] = None
+        self._dispatch_interceptor_thread: Optional[threading.Thread] = None
         self._reconcile_startup()
+        self._start_lifecycle_event_processor()
+        self._start_dispatch_interceptor()
 
     @classmethod
     def from_path(
@@ -942,6 +953,145 @@ class HubSupervisor:
         with self._list_lock:
             self._list_cache = None
             self._list_cache_at = None
+
+    @property
+    def lifecycle_emitter(self) -> LifecycleEventEmitter:
+        return self._lifecycle_emitter
+
+    @property
+    def lifecycle_store(self) -> LifecycleEventStore:
+        return self._lifecycle_emitter._store
+
+    def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
+        if event.processed:
+            return
+        event_id = event.event_id
+        if event_id is None:
+            return
+        self.lifecycle_store.mark_processed(event_id)
+        self.lifecycle_store.prune_processed(keep_last=50)
+        logger.info(
+            "PMA wakeup triggered by lifecycle event: type=%s repo_id=%s run_id=%s",
+            event.event_type.value,
+            event.repo_id,
+            event.run_id,
+        )
+
+    def process_lifecycle_events(self) -> None:
+        events = self.lifecycle_store.get_unprocessed(limit=100)
+        if not events:
+            return
+        for event in events:
+            try:
+                self.trigger_pma_from_lifecycle_event(event)
+            except Exception as exc:
+                logger.exception(
+                    "Failed to process lifecycle event %s: %s", event.event_id, exc
+                )
+
+    def _start_lifecycle_event_processor(self) -> None:
+        if self._lifecycle_thread is not None:
+            return
+
+        def _process_loop():
+            while not self._lifecycle_stop_event.wait(5.0):
+                try:
+                    self.process_lifecycle_events()
+                except Exception:
+                    logger.exception("Error in lifecycle event processor")
+
+        self._lifecycle_thread = threading.Thread(
+            target=_process_loop, daemon=True, name="lifecycle-event-processor"
+        )
+        self._lifecycle_thread.start()
+
+    def _stop_lifecycle_event_processor(self) -> None:
+        if self._lifecycle_thread is None:
+            return
+        self._lifecycle_stop_event.set()
+        self._lifecycle_thread.join(timeout=2.0)
+        self._lifecycle_thread = None
+
+    def shutdown(self) -> None:
+        self._stop_lifecycle_event_processor()
+        self._stop_dispatch_interceptor()
+
+    def _start_dispatch_interceptor(self) -> None:
+        if not self.hub_config.pma.enabled:
+            return
+        if not self.hub_config.pma.dispatch_interception_enabled:
+            return
+        if self._dispatch_interceptor_thread is not None:
+            return
+
+        import asyncio
+        from typing import TYPE_CHECKING
+
+        if TYPE_CHECKING:
+            pass
+
+        def _run_interceptor():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            from .pma_dispatch_interceptor import run_dispatch_interceptor
+
+            stop_event = threading.Event()
+            self._dispatch_interceptor_stop_event = stop_event
+
+            async def run_until_stop():
+                task = None
+                try:
+                    task = await run_dispatch_interceptor(
+                        hub_root=self.hub_config.root,
+                        supervisor=self,
+                        interval_seconds=5.0,
+                        on_intercept=self._on_dispatch_intercept,
+                    )
+                    while not stop_event.is_set():
+                        await asyncio.sleep(0.1)
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    if task is not None and not task.done():
+                        task.cancel()
+                    if task is not None:
+                        try:
+                            await task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+
+            loop.run_until_complete(run_until_stop())
+            loop.close()
+
+        self._dispatch_interceptor_thread = threading.Thread(
+            target=_run_interceptor, daemon=True, name="pma-dispatch-interceptor"
+        )
+        self._dispatch_interceptor_thread.start()
+
+    def _stop_dispatch_interceptor(self) -> None:
+        if self._dispatch_interceptor_stop_event is not None:
+            self._dispatch_interceptor_stop_event.set()
+        if self._dispatch_interceptor_thread is not None:
+            self._dispatch_interceptor_thread.join(timeout=2.0)
+            self._dispatch_interceptor_thread = None
+            self._dispatch_interceptor_stop_event = None
+
+    def _on_dispatch_intercept(self, event_id: str, result: Any) -> None:
+        logger.info(
+            "Dispatch intercepted: event_id=%s action=%s reason=%s",
+            event_id,
+            (
+                result.get("action")
+                if isinstance(result, dict)
+                else getattr(result, "action", None)
+            ),
+            (
+                result.get("reason")
+                if isinstance(result, dict)
+                else getattr(result, "reason", None)
+            ),
+        )
 
     def _snapshot_from_record(self, record: DiscoveryRecord) -> RepoSnapshot:
         repo_path = record.absolute_path
