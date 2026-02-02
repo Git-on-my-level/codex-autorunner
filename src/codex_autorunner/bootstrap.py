@@ -125,6 +125,14 @@ def seed_repo_files(
     ensure_ticket_manager(repo_root, force=force)
 
 
+def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
+    ca_dir = hub_root / ".codex-autorunner"
+    pma_dir = ca_dir / "pma"
+    pma_dir.mkdir(parents=True, exist_ok=True)
+    _seed_doc(pma_dir / "prompt.md", force, pma_prompt_content())
+    _seed_doc(pma_dir / "ABOUT_CAR.md", force, pma_about_content())
+
+
 def seed_hub_files(hub_root: Path, force: bool = False) -> None:
     """
     Initialize a hub workspace with defaults and a manifest.
@@ -138,10 +146,7 @@ def seed_hub_files(hub_root: Path, force: bool = False) -> None:
 
     write_hub_config(hub_root, force=force)
 
-    pma_dir = ca_dir / "pma"
-    pma_dir.mkdir(parents=True, exist_ok=True)
-    _seed_doc(pma_dir / "prompt.md", force, _pma_prompt_content())
-    _seed_doc(pma_dir / "notes.md", force, _pma_notes_content())
+    ensure_pma_docs(hub_root, force=force)
 
     manifest_path = hub_root / DEFAULT_HUB_CONFIG["hub"]["manifest"]
     load_manifest(manifest_path, hub_root)
@@ -154,7 +159,7 @@ def seed_hub_files(hub_root: Path, force: bool = False) -> None:
         )
 
 
-def _pma_prompt_content() -> str:
+def pma_prompt_content() -> str:
     return """# Project Management Agent (PMA)
 
 You are the hub-level Project Management Agent (PMA), the user's primary interface for coordinating work across repos.
@@ -168,11 +173,11 @@ Coordinate tickets and flows across multiple repos. Delegate code changes to rep
 - Use CAR-native artifacts (tickets, ticket_flow, dispatch, PMA inbox/outbox).
 - Ask questions when requirements are ambiguous; keep updates concise.
 - Treat this prompt as code: keep it short and stable.
-- See `.codex-autorunner/pma/notes.md` for operational how-to.
+- See `.codex-autorunner/pma/ABOUT_CAR.md` for operational how-to.
 """
 
 
-def _pma_notes_content() -> str:
+def pma_notes_content() -> str:
     return """# PMA Operations Guide
 
 ## Tickets (create/modify)
@@ -205,3 +210,7 @@ def _pma_notes_content() -> str:
 - User uploads arrive in `.codex-autorunner/pma/inbox/`.
 - Send user-facing files by writing to `.codex-autorunner/pma/outbox/`.
 """
+
+
+def pma_about_content() -> str:
+    return pma_notes_content()

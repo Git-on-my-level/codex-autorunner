@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
+from ..bootstrap import ensure_pma_docs
 from ..tickets.files import list_ticket_paths, safe_relpath, ticket_is_done
 from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from .config import load_repo_config
@@ -45,6 +46,10 @@ def _trim_extra(extra: Any, limit: int) -> Any:
 def load_pma_prompt(hub_root: Path) -> str:
     path = hub_root / ".codex-autorunner" / "pma" / "prompt.md"
     try:
+        ensure_pma_docs(hub_root)
+    except Exception:
+        pass
+    try:
         return path.read_text(encoding="utf-8")
     except Exception:
         return ""
@@ -54,7 +59,7 @@ def format_pma_prompt(base_prompt: str, snapshot: dict[str, Any], message: str) 
     snapshot_text = json.dumps(snapshot, sort_keys=True)
     return (
         f"{base_prompt}\n\n"
-        "Ops guide: `.codex-autorunner/pma/notes.md` (tickets, ticket_flow, dispatch).\n"
+        "Ops guide: `.codex-autorunner/pma/ABOUT_CAR.md`.\n"
         "To send a file to the user, write it to `.codex-autorunner/pma/outbox/`.\n"
         "User uploaded files are in `.codex-autorunner/pma/inbox/`.\n\n"
         "<hub_snapshot>\n"

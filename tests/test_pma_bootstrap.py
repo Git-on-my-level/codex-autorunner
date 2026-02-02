@@ -17,11 +17,11 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "Project Management Agent" in prompt_content
     assert "You are the hub-level" in prompt_content
 
-    notes_path = pma_dir / "notes.md"
-    assert notes_path.exists()
-    notes_content = notes_path.read_text(encoding="utf-8")
-    assert "PMA Operations Guide" in notes_content
-    assert "Ticket flow" in notes_content
+    about_path = pma_dir / "ABOUT_CAR.md"
+    assert about_path.exists()
+    about_content = about_path.read_text(encoding="utf-8")
+    assert "PMA Operations Guide" in about_content
+    assert "Ticket flow" in about_content
 
 
 def test_pma_config_defaults(tmp_path: Path) -> None:
@@ -45,12 +45,12 @@ def test_pma_files_not_overridden_without_force(tmp_path: Path) -> None:
 
     pma_dir = tmp_path / ".codex-autorunner" / "pma"
     prompt_path = pma_dir / "prompt.md"
-    notes_path = pma_dir / "notes.md"
+    about_path = pma_dir / "ABOUT_CAR.md"
 
     prompt_path.write_text("custom prompt", encoding="utf-8")
-    notes_path.write_text("custom notes", encoding="utf-8")
+    about_path.write_text("custom about", encoding="utf-8")
 
     seed_hub_files(tmp_path, force=False)
 
     assert prompt_path.read_text(encoding="utf-8") == "custom prompt"
-    assert notes_path.read_text(encoding="utf-8") == "custom notes"
+    assert about_path.read_text(encoding="utf-8") == "custom about"
