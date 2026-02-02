@@ -1134,6 +1134,18 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
             )
             return
+
+        supervisor = getattr(self, "_hub_supervisor", None)
+        if supervisor and hasattr(supervisor, "hub_config"):
+            pma_config = supervisor.hub_config.pma
+            if not pma_config.enabled:
+                await self._send_message(
+                    message.chat_id,
+                    "PMA is disabled in hub config. Set pma.enabled: true to enable.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
         argv = self._parse_command_args(args)
         action = argv[0].lower() if argv else ""
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
@@ -1162,10 +1174,28 @@ class TelegramCommandHandlers(
         def apply_pma(record: TelegramTopicRecord) -> None:
             record.pma_enabled = enabled
             if enabled:
+                # Save previous binding before entering PMA mode.
+                record.pma_prev_repo_id = record.repo_id
+                record.pma_prev_workspace_path = record.workspace_path
+                record.pma_prev_workspace_id = record.workspace_id
+                record.pma_prev_active_thread_id = record.active_thread_id
                 # Mutual exclusion: PMA mode implies Hub context, so unbind specific repo.
                 record.workspace_path = None
                 record.repo_id = None
                 record.workspace_id = None
+                record.active_thread_id = None
+            else:
+                # Restore previous binding when exiting PMA mode.
+                if record.pma_prev_repo_id or record.pma_prev_workspace_path:
+                    record.repo_id = record.pma_prev_repo_id
+                    record.workspace_path = record.pma_prev_workspace_path
+                    record.workspace_id = record.pma_prev_workspace_id
+                    record.active_thread_id = record.pma_prev_active_thread_id
+                    # Clear saved previous binding after restore.
+                    record.pma_prev_repo_id = None
+                    record.pma_prev_workspace_path = None
+                    record.pma_prev_workspace_id = None
+                    record.pma_prev_active_thread_id = None
 
         await self._router.update_topic(
             message.chat_id,
@@ -1173,7 +1203,14 @@ class TelegramCommandHandlers(
             apply_pma,
         )
         status = "enabled" if enabled else "disabled"
-        hint = "Use /pma off to exit." if enabled else "Back to repo mode."
+        if enabled:
+            hint = "Use /pma off to exit. Previous repo binding saved."
+        else:
+            previous = (record and record.pma_prev_workspace_path) or None
+            if previous:
+                hint = f"Back to repo mode. Restored {previous}."
+            else:
+                hint = "Back to repo mode."
         await self._send_message(
             message.chat_id,
             f"PMA mode {status}. {hint}",
@@ -2006,7 +2043,7 @@ class TelegramCommandHandlers(
         pma_enabled = bool(record.pma_enabled)
         if pma_enabled:
             registry = getattr(self, "_hub_thread_registry", None)
-            pma_key = self._pma_registry_key(record)
+            pma_key = self._pma_registry_key(record, message)
             pma_thread_id = (
                 registry.get_thread_id(pma_key)
                 if registry is not None and pma_key

@@ -24,6 +24,24 @@ def _truncate(text: Optional[str], limit: int) -> str:
     return raw[: max(0, limit - 3)] + "..."
 
 
+def _trim_extra(extra: Any, limit: int) -> Any:
+    if extra is None:
+        return None
+    if isinstance(extra, str):
+        return _truncate(extra, limit)
+    try:
+        raw = json.dumps(extra, ensure_ascii=True, sort_keys=True, default=str)
+    except Exception:
+        raw = str(extra)
+    if len(raw) <= limit:
+        return extra
+    return {
+        "_omitted": True,
+        "note": "extra omitted due to size",
+        "preview": _truncate(raw, limit),
+    }
+
+
 def load_pma_prompt(hub_root: Path) -> str:
     path = hub_root / ".codex-autorunner" / "pma" / "prompt.md"
     try:
@@ -36,6 +54,7 @@ def format_pma_prompt(base_prompt: str, snapshot: dict[str, Any], message: str) 
     snapshot_text = json.dumps(snapshot, sort_keys=True)
     return (
         f"{base_prompt}\n\n"
+        "Ops guide: `.codex-autorunner/pma/notes.md` (tickets, ticket_flow, dispatch).\n"
         "To send a file to the user, write it to `.codex-autorunner/pma/outbox/`.\n"
         "User uploaded files are in `.codex-autorunner/pma/inbox/`.\n\n"
         "<hub_snapshot>\n"
@@ -89,7 +108,7 @@ def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict[str, Any]]:
 
 
 def _latest_dispatch(
-    repo_root: Path, run_id: str, input_data: dict
+    repo_root: Path, run_id: str, input_data: dict, *, max_text_chars: int
 ) -> Optional[dict[str, Any]]:
     try:
         workspace_root = Path(input_data.get("workspace_root") or repo_root)
@@ -131,9 +150,9 @@ def _latest_dispatch(
                 files.append(child.name)
         dispatch_dict = {
             "mode": dispatch.mode,
-            "title": _truncate(dispatch.title, PMA_MAX_TEXT),
-            "body": _truncate(dispatch.body, PMA_MAX_TEXT),
-            "extra": dispatch.extra,
+            "title": _truncate(dispatch.title, max_text_chars),
+            "body": _truncate(dispatch.body, max_text_chars),
+            "extra": _trim_extra(dispatch.extra, max_text_chars),
             "is_handoff": dispatch.is_handoff,
         }
         return {
@@ -147,7 +166,9 @@ def _latest_dispatch(
         return None
 
 
-def _gather_inbox(supervisor: HubSupervisor) -> list[dict[str, Any]]:
+def _gather_inbox(
+    supervisor: HubSupervisor, *, max_text_chars: int
+) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     try:
         snapshots = supervisor.list_repos()
@@ -172,7 +193,10 @@ def _gather_inbox(supervisor: HubSupervisor) -> list[dict[str, Any]]:
             continue
         for record in paused:
             latest = _latest_dispatch(
-                repo_root, str(record.id), dict(record.input_data or {})
+                repo_root,
+                str(record.id),
+                dict(record.input_data or {}),
+                max_text_chars=max_text_chars,
             )
             if not latest or not latest.get("dispatch"):
                 continue
@@ -185,6 +209,7 @@ def _gather_inbox(supervisor: HubSupervisor) -> list[dict[str, Any]]:
                     "seq": latest["seq"],
                     "dispatch": latest["dispatch"],
                     "files": latest.get("files") or [],
+                    "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
                 }
             )
     messages.sort(key=lambda m: (m.get("run_created_at") or ""), reverse=True)
@@ -200,8 +225,24 @@ async def build_hub_snapshot(
 
     snapshots = await asyncio.to_thread(supervisor.list_repos)
     snapshots = sorted(snapshots, key=lambda snap: snap.id)
+    pma_config = supervisor.hub_config.pma if supervisor else None
+    max_repos = (
+        pma_config.max_repos
+        if pma_config and pma_config.max_repos > 0
+        else PMA_MAX_REPOS
+    )
+    max_messages = (
+        pma_config.max_messages
+        if pma_config and pma_config.max_messages > 0
+        else PMA_MAX_MESSAGES
+    )
+    max_text_chars = (
+        pma_config.max_text_chars
+        if pma_config and pma_config.max_text_chars > 0
+        else PMA_MAX_TEXT
+    )
     repos: list[dict[str, Any]] = []
-    for snap in snapshots[:PMA_MAX_REPOS]:
+    for snap in snapshots[:max_repos]:
         summary: dict[str, Any] = {
             "id": snap.id,
             "display_name": snap.display_name,
@@ -216,8 +257,10 @@ async def build_hub_snapshot(
             summary["ticket_flow"] = _get_ticket_flow_summary(snap.path)
         repos.append(summary)
 
-    inbox = await asyncio.to_thread(_gather_inbox, supervisor)
-    inbox = inbox[:PMA_MAX_MESSAGES]
+    inbox = await asyncio.to_thread(
+        _gather_inbox, supervisor, max_text_chars=max_text_chars
+    )
+    inbox = inbox[:max_messages]
 
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
     if hub_root:

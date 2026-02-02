@@ -14,7 +14,7 @@ export type FileBoxListing = {
   outbox: FileBoxEntry[];
 };
 
-export type FileBoxScope = "repo" | "hub";
+export type FileBoxScope = "repo" | "hub" | "pma";
 
 type FileBoxConfig = {
   scope: FileBoxScope;
@@ -51,6 +51,9 @@ function formatBytes(size?: number | null): string {
 function pathPrefix(config: FileBoxConfig): string {
   if (config.scope === "repo") {
     return config.basePath || "/api/filebox";
+  }
+  if (config.scope === "pma") {
+    return config.basePath || "/hub/pma/files";
   }
   if (!config.repoId) {
     throw new Error("repoId is required for hub filebox");

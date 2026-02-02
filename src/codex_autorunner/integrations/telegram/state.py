@@ -191,6 +191,10 @@ class TelegramTopicRecord:
     workspace_path: Optional[str] = None
     workspace_id: Optional[str] = None
     pma_enabled: bool = False
+    pma_prev_repo_id: Optional[str] = None
+    pma_prev_workspace_path: Optional[str] = None
+    pma_prev_workspace_id: Optional[str] = None
+    pma_prev_active_thread_id: Optional[str] = None
     active_thread_id: Optional[str] = None
     thread_ids: list[str] = dataclasses.field(default_factory=list)
     thread_summaries: dict[str, ThreadSummary] = dataclasses.field(default_factory=dict)
@@ -224,6 +228,26 @@ class TelegramTopicRecord:
         pma_enabled = payload.get("pma_enabled") or payload.get("pmaEnabled")
         if not isinstance(pma_enabled, bool):
             pma_enabled = False
+        pma_prev_repo_id = payload.get("pma_prev_repo_id") or payload.get(
+            "pmaPrevRepoId"
+        )
+        if not isinstance(pma_prev_repo_id, str):
+            pma_prev_repo_id = None
+        pma_prev_workspace_path = payload.get("pma_prev_workspace_path") or payload.get(
+            "pmaPrevWorkspacePath"
+        )
+        if not isinstance(pma_prev_workspace_path, str):
+            pma_prev_workspace_path = None
+        pma_prev_workspace_id = payload.get("pma_prev_workspace_id") or payload.get(
+            "pmaPrevWorkspaceId"
+        )
+        if not isinstance(pma_prev_workspace_id, str):
+            pma_prev_workspace_id = None
+        pma_prev_active_thread_id = payload.get(
+            "pma_prev_active_thread_id"
+        ) or payload.get("pmaPrevActiveThreadId")
+        if not isinstance(pma_prev_active_thread_id, str):
+            pma_prev_active_thread_id = None
         active_thread_id = payload.get("active_thread_id") or payload.get(
             "activeThreadId"
         )
@@ -306,6 +330,10 @@ class TelegramTopicRecord:
             workspace_path=workspace_path,
             workspace_id=workspace_id,
             pma_enabled=pma_enabled,
+            pma_prev_repo_id=pma_prev_repo_id,
+            pma_prev_workspace_path=pma_prev_workspace_path,
+            pma_prev_workspace_id=pma_prev_workspace_id,
+            pma_prev_active_thread_id=pma_prev_active_thread_id,
             active_thread_id=active_thread_id,
             thread_ids=thread_ids,
             thread_summaries=thread_summaries,
@@ -330,6 +358,10 @@ class TelegramTopicRecord:
             "workspace_path": self.workspace_path,
             "workspace_id": self.workspace_id,
             "pma_enabled": self.pma_enabled,
+            "pma_prev_repo_id": self.pma_prev_repo_id,
+            "pma_prev_workspace_path": self.pma_prev_workspace_path,
+            "pma_prev_workspace_id": self.pma_prev_workspace_id,
+            "pma_prev_active_thread_id": self.pma_prev_active_thread_id,
             "active_thread_id": self.active_thread_id,
             "thread_ids": list(self.thread_ids),
             "thread_summaries": {

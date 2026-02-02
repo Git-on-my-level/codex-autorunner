@@ -189,7 +189,20 @@ templates:
       url: https://github.com/Git-on-my-level/car-ticket-templates
       trusted: true
       default_ref: main
-
+ 
+pma:
+  # Project Management Assistant (hub-level chat + filebox).
+  # When disabled, PMA routes return 404 and Telegram /pma is blocked.
+  enabled: true
+  # Default agent for PMA chat (codex|opencode).
+  default_agent: codex
+  # Optional model override; null uses agent's default model.
+  model: null
+  # Optional reasoning effort for compatible agents (null = agent default).
+  reasoning: null
+  # Max upload size for PMA filebox (bytes).
+  max_upload_bytes: 10000000
+ 
 terminal:
   # Idle timeout for terminal sessions (seconds).
   idle_timeout_seconds: 43200

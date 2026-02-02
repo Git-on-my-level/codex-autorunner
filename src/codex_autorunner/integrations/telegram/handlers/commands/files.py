@@ -29,6 +29,13 @@ FILES_HINT_TEMPLATE = (
     "Check delivery with /files outbox.\n"
     "Max file size: {max_bytes} bytes."
 )
+PMA_FILES_HINT_TEMPLATE = (
+    "PMA inbox: {inbox}\n"
+    "PMA outbox (pending): {outbox}\n"
+    "Place files in outbox pending to send after this turn finishes.\n"
+    "Check delivery with /files outbox.\n"
+    "Max file size: {max_bytes} bytes."
+)
 
 
 _GENERIC_TELEGRAM_ERRORS = {
@@ -302,7 +309,11 @@ class FilesCommands(SharedHelpers):
             return
         try:
             image_path = self._save_image_file(
-                record.workspace_path, data, file_path, candidate
+                record.workspace_path,
+                data,
+                file_path,
+                candidate,
+                pma_enabled=bool(getattr(record, "pma_enabled", False)),
             )
         except asyncio.CancelledError:
             raise
@@ -499,6 +510,7 @@ class FilesCommands(SharedHelpers):
                 data,
                 candidate=candidate,
                 file_path=file_path,
+                pma_enabled=bool(getattr(record, "pma_enabled", False)),
             )
         except asyncio.CancelledError:
             raise
@@ -527,6 +539,7 @@ class FilesCommands(SharedHelpers):
             file_size=file_size or len(data),
             topic_key=key,
             workspace_path=record.workspace_path,
+            pma_enabled=bool(getattr(record, "pma_enabled", False)),
         )
         log_event(
             self._logger,
@@ -735,7 +748,11 @@ class FilesCommands(SharedHelpers):
             return True
         try:
             image_path = self._save_image_file(
-                context.record.workspace_path, data, file_path, candidate
+                context.record.workspace_path,
+                data,
+                file_path,
+                candidate,
+                pma_enabled=bool(getattr(context.record, "pma_enabled", False)),
             )
             saved_image_paths.append(image_path)
         except asyncio.CancelledError:
@@ -825,6 +842,7 @@ class FilesCommands(SharedHelpers):
                 data,
                 candidate=candidate,
                 file_path=file_path,
+                pma_enabled=bool(getattr(context.record, "pma_enabled", False)),
             )
             original_name = (
                 candidate.file_name
@@ -881,23 +899,10 @@ class FilesCommands(SharedHelpers):
             prompt_parts.append(
                 f"\nFailed to process {result.stats.failed_count} item(s)."
             )
-        inbox_dir = self._files_inbox_dir(
-            context.record.workspace_path, context.topic_key
-        )
-        outbox_dir = self._files_outbox_pending_dir(
-            context.record.workspace_path, context.topic_key
-        )
-        topic_dir = self._files_topic_dir(
-            context.record.workspace_path, context.topic_key
-        )
-        hint = wrap_injected_context(
-            FILES_HINT_TEMPLATE.format(
-                inbox=str(inbox_dir),
-                outbox=str(outbox_dir),
-                topic_key=context.topic_key,
-                topic_dir=str(topic_dir),
-                max_bytes=self._config.media.max_file_bytes,
-            )
+        hint = self._build_files_hint(
+            workspace_path=context.record.workspace_path,
+            topic_key=context.topic_key,
+            pma_enabled=bool(getattr(context.record, "pma_enabled", False)),
         )
         prompt_parts.append(hint)
         combined_prompt = "\n\n".join(prompt_parts)
@@ -971,7 +976,11 @@ class FilesCommands(SharedHelpers):
             data = await self._bot.download_file(file_path)
         return data, file_path, file_size
 
-    def _image_storage_dir(self, workspace_path: str) -> Path:
+    def _image_storage_dir(self, workspace_path: str, *, pma_enabled: bool) -> Path:
+        if pma_enabled:
+            pma_inbox = self._pma_inbox_dir()
+            if pma_inbox is not None:
+                return pma_inbox
         return (
             Path(workspace_path) / ".codex-autorunner" / "uploads" / "telegram-images"
         )
@@ -1001,8 +1010,10 @@ class FilesCommands(SharedHelpers):
         data: bytes,
         file_path: Optional[str],
         candidate: TelegramMediaCandidate,
+        *,
+        pma_enabled: bool,
     ) -> Path:
-        images_dir = self._image_storage_dir(workspace_path)
+        images_dir = self._image_storage_dir(workspace_path, pma_enabled=pma_enabled)
         images_dir.mkdir(parents=True, exist_ok=True)
         ext = self._choose_image_extension(
             file_path=file_path,
@@ -1017,6 +1028,24 @@ class FilesCommands(SharedHelpers):
 
     def _files_root_dir(self, workspace_path: str) -> Path:
         return Path(workspace_path) / ".codex-autorunner" / "uploads" / "telegram-files"
+
+    def _pma_root_dir(self) -> Optional[Path]:
+        hub_root = getattr(self, "_hub_root", None)
+        if hub_root is None:
+            return None
+        return Path(hub_root) / ".codex-autorunner" / "pma"
+
+    def _pma_inbox_dir(self) -> Optional[Path]:
+        pma_root = self._pma_root_dir()
+        if pma_root is None:
+            return None
+        return pma_root / "inbox"
+
+    def _pma_outbox_dir(self) -> Optional[Path]:
+        pma_root = self._pma_root_dir()
+        if pma_root is None:
+            return None
+        return pma_root / "outbox"
 
     def _sanitize_topic_dir_name(self, key: str) -> str:
         cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", key).strip("._-")
@@ -1079,8 +1108,13 @@ class FilesCommands(SharedHelpers):
         *,
         candidate: TelegramMediaCandidate,
         file_path: Optional[str],
+        pma_enabled: bool,
     ) -> Path:
         inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
+        if pma_enabled:
+            pma_inbox = self._pma_inbox_dir()
+            if pma_inbox is not None:
+                inbox_dir = pma_inbox
         inbox_dir.mkdir(parents=True, exist_ok=True)
         stem = self._sanitize_filename_component(
             self._choose_file_stem(candidate.file_name, file_path),
@@ -1107,6 +1141,7 @@ class FilesCommands(SharedHelpers):
         file_size: int,
         topic_key: str,
         workspace_path: str,
+        pma_enabled: bool,
     ) -> str:
         header = caption_text.strip() or "File received."
         original_name = (
@@ -1114,17 +1149,10 @@ class FilesCommands(SharedHelpers):
             or (Path(source_path).name if source_path else None)
             or "unknown"
         )
-        inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
-        outbox_dir = self._files_outbox_pending_dir(workspace_path, topic_key)
-        topic_dir = self._files_topic_dir(workspace_path, topic_key)
-        hint = wrap_injected_context(
-            FILES_HINT_TEMPLATE.format(
-                inbox=str(inbox_dir),
-                outbox=str(outbox_dir),
-                topic_key=topic_key,
-                topic_dir=str(topic_dir),
-                max_bytes=self._config.media.max_file_bytes,
-            )
+        hint = self._build_files_hint(
+            workspace_path=workspace_path,
+            topic_key=topic_key,
+            pma_enabled=pma_enabled,
         )
         parts = [
             header,
@@ -1139,6 +1167,37 @@ class FilesCommands(SharedHelpers):
         parts.append("")
         parts.append(hint)
         return "\n".join(parts)
+
+    def _build_files_hint(
+        self,
+        *,
+        workspace_path: str,
+        topic_key: str,
+        pma_enabled: bool,
+    ) -> str:
+        if pma_enabled:
+            pma_inbox = self._pma_inbox_dir()
+            pma_outbox = self._pma_outbox_dir()
+            if pma_inbox is not None and pma_outbox is not None:
+                return wrap_injected_context(
+                    PMA_FILES_HINT_TEMPLATE.format(
+                        inbox=str(pma_inbox),
+                        outbox=str(pma_outbox),
+                        max_bytes=self._config.media.max_file_bytes,
+                    )
+                )
+        inbox_dir = self._files_inbox_dir(workspace_path, topic_key)
+        outbox_dir = self._files_outbox_pending_dir(workspace_path, topic_key)
+        topic_dir = self._files_topic_dir(workspace_path, topic_key)
+        return wrap_injected_context(
+            FILES_HINT_TEMPLATE.format(
+                inbox=str(inbox_dir),
+                outbox=str(outbox_dir),
+                topic_key=topic_key,
+                topic_dir=str(topic_dir),
+                max_bytes=self._config.media.max_file_bytes,
+            )
+        )
 
     def _format_bytes(self, size: int) -> str:
         if size < 1024:
@@ -1258,7 +1317,12 @@ class FilesCommands(SharedHelpers):
             key = topic_key
         else:
             key = await self._resolve_topic_key(chat_id, thread_id)
+        pma_enabled = bool(getattr(record, "pma_enabled", False))
         pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)
+        if pma_enabled:
+            pma_outbox = self._pma_outbox_dir()
+            if pma_outbox is not None:
+                pending_dir = pma_outbox
         if not pending_dir.exists():
             return
         files = self._list_files(pending_dir)
@@ -1281,13 +1345,34 @@ class FilesCommands(SharedHelpers):
                     reply_to=reply_to,
                 )
                 continue
-            await self._send_outbox_file(
-                path,
-                sent_dir=sent_dir,
-                chat_id=chat_id,
-                thread_id=thread_id,
-                reply_to=reply_to,
-            )
+            if pma_enabled:
+                success = await self._send_pma_outbox_file(
+                    path,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    reply_to=reply_to,
+                )
+                if success:
+                    try:
+                        path.unlink()
+                    except OSError as exc:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.files.pma_outbox.delete_failed",
+                            chat_id=chat_id,
+                            thread_id=thread_id,
+                            path=str(path),
+                            exc=exc,
+                        )
+            else:
+                await self._send_outbox_file(
+                    path,
+                    sent_dir=sent_dir,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    reply_to=reply_to,
+                )
 
     def _format_file_listing(self, title: str, files: list[Path]) -> str:
         if not files:
