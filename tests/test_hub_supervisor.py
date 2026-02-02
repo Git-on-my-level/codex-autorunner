@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import shutil
 import time
@@ -133,6 +134,59 @@ def test_hub_api_lists_repos(tmp_path: Path):
     assert resp.status_code == 200
     data = resp.json()
     assert data["repos"][0]["id"] == "demo"
+
+
+def test_list_repos_thread_safety(tmp_path: Path):
+    """Test that list_repos is thread-safe and doesn't return None or inconsistent state."""
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    _write_config(cfg_path, cfg)
+
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    supervisor = HubSupervisor.from_path(hub_root)
+
+    results = []
+    errors = []
+
+    def call_list_repos():
+        try:
+            repos = supervisor.list_repos(use_cache=False)
+            results.append(repos)
+        except Exception as e:
+            errors.append(e)
+
+    def invalidate_cache():
+        supervisor._invalidate_list_cache()
+
+    num_threads = 10
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = []
+        for i in range(num_threads):
+            if i % 2 == 0:
+                futures.append(executor.submit(call_list_repos))
+            else:
+                futures.append(executor.submit(invalidate_cache))
+        concurrent.futures.wait(futures)
+
+    # No errors should have occurred
+    assert len(errors) == 0, f"Errors occurred: {errors}"
+
+    # All results should be non-empty lists
+    for i, repos in enumerate(results):
+        assert repos is not None, f"Result {i} was None"
+        assert isinstance(repos, list), f"Result {i} was not a list: {type(repos)}"
+
+    # All results should have the same repo IDs
+    if results:
+        repo_ids_sets = [set(repo.id for repo in repos) for repos in results]
+        first_ids = repo_ids_sets[0]
+        for i, ids in enumerate(repo_ids_sets[1:], 1):
+            assert (
+                ids == first_ids
+            ), f"Result {i} has different repo IDs: {ids} vs {first_ids}"
 
 
 def test_hub_home_served_and_repo_mounted(tmp_path: Path):

@@ -3,6 +3,7 @@ import enum
 import logging
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -273,6 +274,7 @@ class HubSupervisor:
         self.state = load_hub_state(self.state_path, self.hub_config.root)
         self._list_cache_at: Optional[float] = None
         self._list_cache: Optional[List[RepoSnapshot]] = None
+        self._list_lock = threading.Lock()
         self._reconcile_startup()
 
     @classmethod
@@ -303,16 +305,17 @@ class HubSupervisor:
         return snapshots
 
     def list_repos(self, *, use_cache: bool = True) -> List[RepoSnapshot]:
-        if use_cache and self._list_cache and self._list_cache_at is not None:
-            if time.monotonic() - self._list_cache_at < 2.0:
-                return self._list_cache
-        manifest, records = self._manifest_records(manifest_only=True)
-        snapshots = self._build_snapshots(records)
-        self.state = HubState(last_scan_at=self.state.last_scan_at, repos=snapshots)
-        save_hub_state(self.state_path, self.state, self.hub_config.root)
-        self._list_cache = snapshots
-        self._list_cache_at = time.monotonic()
-        return snapshots
+        with self._list_lock:
+            if use_cache and self._list_cache and self._list_cache_at is not None:
+                if time.monotonic() - self._list_cache_at < 2.0:
+                    return self._list_cache
+            manifest, records = self._manifest_records(manifest_only=True)
+            snapshots = self._build_snapshots(records)
+            self.state = HubState(last_scan_at=self.state.last_scan_at, repos=snapshots)
+            save_hub_state(self.state_path, self.state, self.hub_config.root)
+            self._list_cache = snapshots
+            self._list_cache_at = time.monotonic()
+            return snapshots
 
     def _reconcile_startup(self) -> None:
         try:
@@ -936,8 +939,9 @@ class HubSupervisor:
         return snapshot
 
     def _invalidate_list_cache(self) -> None:
-        self._list_cache = None
-        self._list_cache_at = None
+        with self._list_lock:
+            self._list_cache = None
+            self._list_cache_at = None
 
     def _snapshot_from_record(self, record: DiscoveryRecord) -> RepoSnapshot:
         repo_path = record.absolute_path
