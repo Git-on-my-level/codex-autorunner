@@ -41,7 +41,13 @@ from ...core.hub import HubSupervisor
 from ...core.locks import file_lock
 from ...core.logging_utils import log_event, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
-from ...core.runtime import DoctorReport, RuntimeContext, clear_stale_lock, doctor
+from ...core.runtime import (
+    DoctorReport,
+    RuntimeContext,
+    clear_stale_lock,
+    doctor,
+    pma_doctor_checks,
+)
 from ...core.state import RunnerState, load_state, now_iso, save_state, state_lock
 from ...core.templates import (
     NetworkUnavailableError,
@@ -1297,14 +1303,19 @@ def doctor_cmd(
 
         hub_config = load_hub_config(start_path)
         repo_config: Optional[RepoConfig] = None
+        repo_root: Optional[Path] = None
         try:
             repo_root = find_repo_root(start_path)
             repo_config = derive_repo_config(hub_config, repo_root)
         except RepoNotFoundError:
             repo_config = None
 
-        telegram_checks = telegram_doctor_checks(repo_config or hub_config)
-        report = DoctorReport(checks=report.checks + telegram_checks)
+        telegram_checks = telegram_doctor_checks(
+            repo_config or hub_config, repo_root=repo_root
+        )
+        pma_checks = pma_doctor_checks(hub_config, repo_root=repo_root)
+
+        report = DoctorReport(checks=report.checks + telegram_checks + pma_checks)
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
     if json_output:
