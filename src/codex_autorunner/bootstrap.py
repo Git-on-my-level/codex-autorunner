@@ -141,7 +141,7 @@ def seed_hub_files(hub_root: Path, force: bool = False) -> None:
     pma_dir = ca_dir / "pma"
     pma_dir.mkdir(parents=True, exist_ok=True)
     _seed_doc(pma_dir / "prompt.md", force, _pma_prompt_content())
-    _seed_doc(pma_dir / "notes.md", force, "")
+    _seed_doc(pma_dir / "notes.md", force, _pma_notes_content())
 
     manifest_path = hub_root / DEFAULT_HUB_CONFIG["hub"]["manifest"]
     load_manifest(manifest_path, hub_root)
@@ -161,20 +161,47 @@ You are the hub-level Project Management Agent (PMA), the user's primary interfa
 
 ## Role
 
-You coordinate tickets and flows across multiple repos. You delegate code changes to repo agents rather than making edits directly.
+Coordinate tickets and flows across multiple repos. Delegate code changes to repo agents rather than editing directly.
 
-## Behavior
+## Guidance
 
-- Ask questions when requirements are ambiguous.
-- Escalate to the user when you are stuck.
-- Prefer CAR tools and CLI commands.
-- Use template tools/CLI internally when appropriate.
-- Keep messages concise; avoid spamming.
+- Use CAR-native artifacts (tickets, ticket_flow, dispatch, PMA inbox/outbox).
+- Ask questions when requirements are ambiguous; keep updates concise.
+- Treat this prompt as code: keep it short and stable.
+- See `.codex-autorunner/pma/notes.md` for operational how-to.
+"""
 
-## Constraints
 
-- You have hub context (manifest/worktrees, repo statuses, paused flows, dispatch inbox).
-- You coordinate but do not directly edit code in repos.
-- Treat prompt.md as code: keep it short and stable.
-- When coordinating ticket flows, read `<repo>/.codex-autorunner/TICKET_FLOW_QUICKSTART.md` for CLI entrypoints and ticket paths.
+def _pma_notes_content() -> str:
+    return """# PMA Operations Guide
+
+## Tickets (create/modify)
+
+- Tickets live per repo at `<repo>/.codex-autorunner/tickets/`.
+- Create or edit `TICKET-###*.md` files directly; keep diffs small and single-purpose.
+- Set `done: true` in the ticket frontmatter only when the ticket is complete.
+
+## Ticket flow (start/resume)
+
+- Bootstrap (creates TICKET-001 if missing):
+  `car flow ticket_flow bootstrap --repo <path>`
+- Start/resume:
+  `car flow ticket_flow start --repo <path>`
+  `car flow ticket_flow resume --repo <path> [--run-id <uuid>]`
+- Status/stop:
+  `car flow ticket_flow status --repo <path> [--run-id <uuid>]`
+  `car flow ticket_flow stop --repo <path> [--run-id <uuid>]`
+- See `<repo>/.codex-autorunner/TICKET_FLOW_QUICKSTART.md` for CLI entrypoints + gotchas.
+
+## Dispatch pauses (handle)
+
+- Paused runs appear in the hub inbox snapshot with `repo_id`, `run_id`, and `open_url`.
+- Read the latest dispatch, respond to the user, then resume the run.
+- Dispatch history lives under:
+  `<repo>/.codex-autorunner/runs/<run_id>/dispatch_history/####/DISPATCH.md`
+
+## PMA file handoff
+
+- User uploads arrive in `.codex-autorunner/pma/inbox/`.
+- Send user-facing files by writing to `.codex-autorunner/pma/outbox/`.
 """

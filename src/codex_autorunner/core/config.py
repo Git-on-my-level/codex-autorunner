@@ -478,6 +478,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "model": None,
         "reasoning": None,
         "max_upload_bytes": 10_000_000,
+        "max_repos": 25,
+        "max_messages": 10,
+        "max_text_chars": 800,
     },
     "templates": {
         "enabled": True,
@@ -846,6 +849,9 @@ class PmaConfig:
     model: Optional[str]
     reasoning: Optional[str]
     max_upload_bytes: int
+    max_repos: int
+    max_messages: int
+    max_text_chars: int
 
 
 @dataclasses.dataclass
@@ -1370,12 +1376,27 @@ def _parse_pma_config(
         max_upload_bytes = 10_000_000
     if max_upload_bytes <= 0:
         max_upload_bytes = 10_000_000
+
+    def _parse_positive_int(key: str, fallback: int) -> int:
+        raw = cfg.get(key, defaults.get(key, fallback))
+        try:
+            value = int(raw)
+        except (ValueError, TypeError):
+            return fallback
+        return value if value > 0 else fallback
+
+    max_repos = _parse_positive_int("max_repos", 25)
+    max_messages = _parse_positive_int("max_messages", 10)
+    max_text_chars = _parse_positive_int("max_text_chars", 800)
     return PmaConfig(
         enabled=enabled,
         default_agent=default_agent,
         model=model,
         reasoning=reasoning,
         max_upload_bytes=max_upload_bytes,
+        max_repos=max_repos,
+        max_messages=max_messages,
+        max_text_chars=max_text_chars,
     )
 
 

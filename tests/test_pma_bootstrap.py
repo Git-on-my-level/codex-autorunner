@@ -19,7 +19,9 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
 
     notes_path = pma_dir / "notes.md"
     assert notes_path.exists()
-    assert notes_path.read_text(encoding="utf-8") == ""
+    notes_content = notes_path.read_text(encoding="utf-8")
+    assert "PMA Operations Guide" in notes_content
+    assert "Ticket flow" in notes_content
 
 
 def test_pma_config_defaults(tmp_path: Path) -> None:
@@ -33,6 +35,9 @@ def test_pma_config_defaults(tmp_path: Path) -> None:
     assert pma_config.get("default_agent") == "codex"
     assert pma_config.get("model") is None
     assert pma_config.get("reasoning") is None
+    assert pma_config.get("max_repos") == 25
+    assert pma_config.get("max_messages") == 10
+    assert pma_config.get("max_text_chars") == 800
 
 
 def test_pma_files_not_overridden_without_force(tmp_path: Path) -> None:
