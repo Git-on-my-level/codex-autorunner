@@ -2178,6 +2178,10 @@ class WorkspaceCommands(SharedHelpers):
         lines = []
         if is_pma:
             lines.append("Mode: PMA (hub)")
+            # Show previous binding if available
+            if record.pma_prev_workspace_path:
+                lines.append(f"Previous binding: {record.pma_prev_workspace_path}")
+                lines.append("Use /pma off to restore previous binding.")
         lines.extend(
             [
                 f"Workspace: {workspace_label}",
@@ -2222,9 +2226,12 @@ class WorkspaceCommands(SharedHelpers):
             registry = getattr(self, "_hub_thread_registry", None)
             if registry and hasattr(self, "_pma_registry_key"):
                 try:
-                    pma_key = self._pma_registry_key(record)
+                    pma_key = self._pma_registry_key(record, message)
                     pma_thread_id = registry.get_thread_id(pma_key) if pma_key else None
-                    lines.append(f"PMA thread: {pma_thread_id or 'none'}")
+                    # Show thread scoping
+                    require_topics = getattr(self._config, "require_topics", False)
+                    scoping = "per-topic" if require_topics else "global (per hub)"
+                    lines.append(f"PMA thread: {pma_thread_id or 'none'} ({scoping})")
                 except Exception:
                     pass
             if hub_root:

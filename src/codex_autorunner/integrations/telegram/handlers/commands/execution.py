@@ -83,6 +83,7 @@ from ...helpers import (
     find_github_links,
     is_interrupt_status,
 )
+from ...state import topic_key as build_topic_key
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
@@ -2445,11 +2446,31 @@ class ExecutionCommands(SharedHelpers):
         )
         return prompt_text
 
-    def _pma_registry_key(self, record: "TelegramTopicRecord") -> str:
+    def _pma_registry_key(
+        self, record: "TelegramTopicRecord", message: Optional[TelegramMessage] = None
+    ) -> str:
+        """
+        Return PMA thread registry key.
+
+        Thread scoping decision:
+        - When require_topics is false (default): use global keys (pma/pma.opencode).
+          All Telegram topics share one PMA conversation per agent.
+        - When require_topics is true: use per-topic keys (pma.{topic_key}/pma.opencode.{topic_key}).
+          Each Telegram topic gets its own isolated PMA conversation.
+
+        This allows hubs with multiple topics to maintain separate PMA contexts
+        when require_topics is enabled, while keeping a single shared context
+        in the common case (require_topics disabled).
+        """
         agent = self._effective_agent(record)
-        if agent == "opencode":
-            return PMA_OPENCODE_KEY
-        return PMA_KEY
+        base_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
+
+        # PMA thread scoping: per-topic when require_topics is true
+        require_topics = getattr(self._config, "require_topics", False)
+        if require_topics and message is not None:
+            topic_key = build_topic_key(message.chat_id, message.thread_id)
+            return f"{base_key}.{topic_key}"
+        return base_key
 
     async def _prepare_pma_prompt(self, message_text: str) -> Optional[str]:
         hub_root = getattr(self, "_hub_root", None)
@@ -2631,7 +2652,9 @@ class ExecutionCommands(SharedHelpers):
         pma_thread_registry = (
             getattr(self, "_hub_thread_registry", None) if pma_enabled else None
         )
-        pma_thread_key = self._pma_registry_key(record) if pma_enabled else None
+        pma_thread_key = (
+            self._pma_registry_key(record, message) if pma_enabled else None
+        )
         thread_id = None if pma_enabled else record.active_thread_id
         if pma_enabled and pma_thread_registry and pma_thread_key:
             thread_id = pma_thread_registry.get_thread_id(pma_thread_key)
