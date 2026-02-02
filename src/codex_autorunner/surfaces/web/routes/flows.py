@@ -802,13 +802,18 @@ You are the first ticket in a new ticket_flow run.
         while next_index in existing_indices:
             next_index += 1
 
-        # Build frontmatter
-        title_line = f"title: {request.title}\n" if request.title else ""
-        goal_line = f"goal: {request.goal}\n" if request.goal else ""
+        # Build frontmatter (quote scalars to avoid YAML parse issues with colons, etc.)
+        def _quote(val: Optional[str]) -> str:
+            return (
+                json.dumps(val) if val is not None else ""
+            )  # JSON string is valid YAML scalar
+
+        title_line = f"title: {_quote(request.title)}\n" if request.title else ""
+        goal_line = f"goal: {_quote(request.goal)}\n" if request.goal else ""
 
         content = (
             "---\n"
-            f"agent: {request.agent}\n"
+            f"agent: {_quote(request.agent)}\n"
             "done: false\n"
             f"{title_line}"
             f"{goal_line}"

@@ -394,19 +394,24 @@ function extractFrontmatter(ticket: TicketData): FrontmatterState {
 /**
  * Build full markdown content from frontmatter form + body textarea
  */
+function yamlQuote(value: string): string {
+  // Use JSON.stringify for simple, safe double-quoted scalars (handles colons, quotes, newlines).
+  return JSON.stringify(value ?? "");
+}
+
 function buildTicketContent(): string {
   const { content } = els();
   const fm = getFrontmatterFromForm();
   const body = content?.value || "";
 
-  // Reconstruct frontmatter YAML
+  // Reconstruct frontmatter YAML with quoted scalars to tolerate special characters.
   const lines: string[] = ["---"];
 
-  lines.push(`agent: ${fm.agent}`);
+  lines.push(`agent: ${yamlQuote(fm.agent)}`);
   lines.push(`done: ${fm.done}`);
-  if (fm.title) lines.push(`title: ${fm.title}`);
-  if (fm.model) lines.push(`model: ${fm.model}`);
-  if (fm.reasoning) lines.push(`reasoning: ${fm.reasoning}`);
+  if (fm.title) lines.push(`title: ${yamlQuote(fm.title)}`);
+  if (fm.model) lines.push(`model: ${yamlQuote(fm.model)}`);
+  if (fm.reasoning) lines.push(`reasoning: ${yamlQuote(fm.reasoning)}`);
 
   lines.push("---");
   lines.push("");

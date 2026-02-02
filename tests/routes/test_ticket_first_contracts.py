@@ -150,6 +150,44 @@ def test_get_ticket_by_index_returns_body_on_invalid_frontmatter(tmp_path, monke
         assert "Still show body" in (payload["body"] or "")
 
 
+def test_update_ticket_allows_colon_titles_and_models(tmp_path, monkeypatch):
+    """PUT /api/flows/ticket_flow/tickets/{index} should accept quoted scalars containing colons."""
+
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    ticket_path = ticket_dir / "TICKET-004.md"
+    ticket_path.write_text(
+        "---\nagent: codex\ndone: false\n---\n\nBody\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    content = """---
+agent: \"opencode\"
+done: false
+title: \"TICKET-004: Review CLI lint error (issue #512)\"
+model: \"zai-coding-plan/glm-4.7-aicoding\"
+---
+
+Updated body
+"""
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/flows/ticket_flow/tickets/4",
+            json={"content": content},
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["frontmatter"]["title"].startswith("TICKET-004: Review CLI")
+        assert payload["frontmatter"]["agent"] == "opencode"
+        assert payload["frontmatter"]["model"] == "zai-coding-plan/glm-4.7-aicoding"
+
+
 def test_get_ticket_by_index_404(tmp_path, monkeypatch):
     """GET /api/flows/ticket_flow/tickets/{index} returns 404 when missing."""
 
