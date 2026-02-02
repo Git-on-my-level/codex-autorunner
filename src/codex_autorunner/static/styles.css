@@ -879,7 +879,7 @@ main {
 
 .hub-hero {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   background: linear-gradient(120deg, rgba(108, 245, 216, 0.08), rgba(108, 168, 255, 0.05));
@@ -904,7 +904,13 @@ main {
   display: flex;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.hub-hero-text > * {
+  min-width: 0;
 }
 
 .hub-hero-text>.muted.small {
@@ -1319,6 +1325,15 @@ a.hub-pr-pill:hover {
   font-size: 10px;
   color: var(--muted);
   letter-spacing: 0.01em;
+}
+
+.hub-version {
+  display: inline-block;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 16ch;
 }
 
 /* Status pills */
@@ -6974,24 +6989,33 @@ button.loading::after {
   }
 
   .hub-hero {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     align-items: center;
-    gap: 8px;
+    gap: 6px 10px;
+    padding: 8px 10px;
+    overflow-x: auto;
   }
 
   .hub-hero-text {
     flex: 1;
     flex-direction: row;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    flex-wrap: nowrap;
   }
 
   .hub-hero-actions {
     justify-content: flex-start;
+    gap: 4px;
+    flex-wrap: nowrap;
   }
 
   .hub-mode-toggle {
-    justify-self: start;
+    justify-self: end;
+  }
+
+  .hub-version {
+    max-width: 140px;
   }
 
   .hub-stats {
@@ -7083,9 +7107,9 @@ button.loading::after {
   }
 
   .hub-hero {
-    padding: 8px 10px;
-    gap: 8px;
-    grid-template-columns: 1fr;
+    padding: 6px 8px;
+    gap: 6px 8px;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     justify-items: start;
     overflow: visible;
   }
@@ -7095,14 +7119,16 @@ button.loading::after {
   }
 
   .hub-hero-text {
-    gap: 8px;
+    gap: 6px;
+    flex-wrap: nowrap;
   }
 
   .hub-hero-actions {
-    gap: 6px;
-    flex-wrap: wrap;
+    gap: 4px;
+    flex-wrap: nowrap;
     width: 100%;
     justify-content: flex-start;
+    overflow-x: auto;
   }
 
   .hub-mode-btn {
@@ -7119,11 +7145,11 @@ button.loading::after {
   }
 
   .hub-hero-actions button {
-    padding: 6px 10px;
+    padding: 5px 8px;
   }
 
   .hub-version {
-    max-width: 80px;
+    max-width: 90px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
