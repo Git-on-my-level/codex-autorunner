@@ -84,7 +84,7 @@ async def test_files_lists_for_pma_topic(tmp_path: Path) -> None:
     assert handler._sent, "should respond in PMA mode"
     text = handler._sent[-1]
     assert "Inbox:" in text
-    assert "Outbox pending:" in text
+    assert "Outbox:" in text
     assert "Use /bind" not in text
 
 

@@ -97,6 +97,63 @@ class MediaBatchResult:
 
 
 class FilesCommands(SharedHelpers):
+    def _files_usage(self, *, pma: bool) -> str:
+        header = "Usage:"
+        lines = [
+            header,
+            "/files",
+            "/files inbox",
+            "/files outbox",
+            "/files all",
+            "/files send <filename>",
+            "/files clear inbox|outbox|all",
+        ]
+        if pma:
+            lines.append("Note: PMA files live in .codex-autorunner/pma/inbox|outbox.")
+        return "\n".join(lines)
+
+    async def _send_pma_outbox_file(
+        self,
+        path: Path,
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> bool:
+        try:
+            data = path.read_bytes()
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.files.pma_outbox.read_failed",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                path=str(path),
+                exc=exc,
+            )
+            return False
+        try:
+            await self._bot.send_document(
+                chat_id,
+                data,
+                filename=path.name,
+                message_thread_id=thread_id,
+                reply_to_message_id=reply_to,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.files.pma_outbox.send_failed",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                path=str(path),
+                exc=exc,
+            )
+            return False
+        return True
+
     def _format_telegram_download_error(self, exc: Exception) -> Optional[str]:
         for current in _iter_exception_chain(exc):
             if isinstance(current, Exception):
@@ -1298,22 +1355,49 @@ class FilesCommands(SharedHelpers):
                 reply_to=message.message_id,
             )
             return
-        inbox_dir = self._files_inbox_dir(record.workspace_path, key)
-        pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)
-        sent_dir = self._files_outbox_sent_dir(record.workspace_path, key)
+        pma_enabled = bool(getattr(record, "pma_enabled", False))
+        if pma_enabled:
+            hub_root = getattr(self, "_hub_root", None)
+            if hub_root is None:
+                await self._send_message(
+                    message.chat_id,
+                    "PMA unavailable; hub root not configured.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            pma_root = Path(hub_root) / ".codex-autorunner" / "pma"
+            inbox_dir = pma_root / "inbox"
+            outbox_dir = pma_root / "outbox"
+            pending_dir = outbox_dir
+            sent_dir = outbox_dir
+        else:
+            inbox_dir = self._files_inbox_dir(record.workspace_path, key)
+            pending_dir = self._files_outbox_pending_dir(record.workspace_path, key)
+            sent_dir = self._files_outbox_sent_dir(record.workspace_path, key)
         argv = self._parse_command_args(args)
         if not argv:
             inbox_items = self._list_files(inbox_dir)
             pending_items = self._list_files(pending_dir)
-            sent_items = self._list_files(sent_dir)
-            text = "\n".join(
-                [
-                    f"Inbox: {len(inbox_items)} item(s)",
-                    f"Outbox pending: {len(pending_items)} item(s)",
-                    f"Outbox sent: {len(sent_items)} item(s)",
-                    "Usage: /files inbox|outbox|clear inbox|outbox|all|send <filename>",
-                ]
-            )
+            sent_items = [] if pma_enabled else self._list_files(sent_dir)
+            usage = self._files_usage(pma=pma_enabled)
+            if pma_enabled:
+                text = "\n".join(
+                    [
+                        f"Inbox: {len(inbox_items)} file(s)",
+                        f"Outbox: {len(pending_items)} file(s)",
+                        usage,
+                    ]
+                )
+            else:
+                text = "\n".join(
+                    [
+                        f"Inbox: {len(inbox_items)} item(s)",
+                        f"Outbox pending: {len(pending_items)} item(s)",
+                        f"Outbox sent: {len(sent_items)} item(s)",
+                        usage,
+                    ]
+                )
             await self._send_message(
                 message.chat_id,
                 text,
@@ -1334,14 +1418,46 @@ class FilesCommands(SharedHelpers):
             return
         if subcommand == "outbox":
             pending_items = self._list_files(pending_dir)
-            sent_items = self._list_files(sent_dir)
-            text = "\n".join(
-                [
-                    self._format_file_listing("Outbox pending", pending_items),
-                    "",
-                    self._format_file_listing("Outbox sent", sent_items),
-                ]
+            if pma_enabled:
+                text = self._format_file_listing("Outbox", pending_items)
+            else:
+                sent_items = self._list_files(sent_dir)
+                text = "\n".join(
+                    [
+                        self._format_file_listing("Outbox pending", pending_items),
+                        "",
+                        self._format_file_listing("Outbox sent", sent_items),
+                    ]
+                )
+            await self._send_message(
+                message.chat_id,
+                text,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
             )
+            return
+        if subcommand == "all":
+            inbox_items = self._list_files(inbox_dir)
+            pending_items = self._list_files(pending_dir)
+            if pma_enabled:
+                text = "\n".join(
+                    [
+                        self._format_file_listing("Inbox", inbox_items),
+                        "",
+                        self._format_file_listing("Outbox", pending_items),
+                    ]
+                )
+            else:
+                sent_items = self._list_files(sent_dir)
+                text = "\n".join(
+                    [
+                        self._format_file_listing("Inbox", inbox_items),
+                        "",
+                        self._format_file_listing("Outbox pending", pending_items),
+                        "",
+                        self._format_file_listing("Outbox sent", sent_items),
+                    ]
+                )
             await self._send_message(
                 message.chat_id,
                 text,
@@ -1353,7 +1469,7 @@ class FilesCommands(SharedHelpers):
             if len(argv) < 2:
                 await self._send_message(
                     message.chat_id,
-                    "Usage: /files clear inbox|outbox|all",
+                    self._files_usage(pma=pma_enabled),
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1364,15 +1480,17 @@ class FilesCommands(SharedHelpers):
                 deleted = self._delete_files_in_dir(inbox_dir)
             elif target == "outbox":
                 deleted = self._delete_files_in_dir(pending_dir)
-                deleted += self._delete_files_in_dir(sent_dir)
+                if not pma_enabled:
+                    deleted += self._delete_files_in_dir(sent_dir)
             elif target == "all":
                 deleted = self._delete_files_in_dir(inbox_dir)
                 deleted += self._delete_files_in_dir(pending_dir)
-                deleted += self._delete_files_in_dir(sent_dir)
+                if not pma_enabled:
+                    deleted += self._delete_files_in_dir(sent_dir)
             else:
                 await self._send_message(
                     message.chat_id,
-                    "Usage: /files clear inbox|outbox|all",
+                    self._files_usage(pma=pma_enabled),
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1388,7 +1506,7 @@ class FilesCommands(SharedHelpers):
             if len(argv) < 2:
                 await self._send_message(
                     message.chat_id,
-                    "Usage: /files send <filename>",
+                    self._files_usage(pma=pma_enabled),
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1398,7 +1516,7 @@ class FilesCommands(SharedHelpers):
             if not _path_within(pending_dir, candidate) or not candidate.is_file():
                 await self._send_message(
                     message.chat_id,
-                    f"Outbox pending file not found: {name}",
+                    f"Outbox file not found: {name}",
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1413,13 +1531,21 @@ class FilesCommands(SharedHelpers):
                     reply_to=message.message_id,
                 )
                 return
-            success = await self._send_outbox_file(
-                candidate,
-                sent_dir=sent_dir,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
+            if pma_enabled:
+                success = await self._send_pma_outbox_file(
+                    candidate,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+            else:
+                success = await self._send_outbox_file(
+                    candidate,
+                    sent_dir=sent_dir,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
             result = "Sent." if success else "Failed to send."
             await self._send_message(
                 message.chat_id,
@@ -1430,7 +1556,7 @@ class FilesCommands(SharedHelpers):
             return
         await self._send_message(
             message.chat_id,
-            "Usage: /files inbox|outbox|clear inbox|outbox|all|send <filename>",
+            self._files_usage(pma=pma_enabled),
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )

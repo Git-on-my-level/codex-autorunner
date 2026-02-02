@@ -274,8 +274,7 @@ async def test_flow_default_unbound_topic_uses_hub_overview() -> None:
 async def test_flow_hub_overview_allows_parse_mode_override(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Regression: /flow hub overview passes parse_mode to _send_message
-    # Ensure the transport accepts it.
+    # Regression: /flow hub overview uses explicit parse_mode override.
     class _StubStore:
         def initialize(self) -> None: ...
 
@@ -336,5 +335,5 @@ async def test_flow_hub_overview_allows_parse_mode_override(
     await handler._send_flow_hub_overview(message)
 
     assert handler.sent
-    # parse_mode should be propagated without raising TypeError
-    assert handler.sent[0][1] == "Markdown"
+    # parse_mode override should be propagated without raising TypeError
+    assert handler.sent[0][1] is None

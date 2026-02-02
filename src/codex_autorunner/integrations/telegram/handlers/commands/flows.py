@@ -844,12 +844,40 @@ class FlowCommands(SharedHelpers):
             )
             return
 
+        def _group_key(repo_id: str) -> tuple[str, Optional[str]]:
+            parts = repo_id.split("--", 1)
+            if len(parts) == 1:
+                return repo_id, None
+            return parts[0], parts[1]
+
+        def _format_status_line(
+            label: str,
+            *,
+            status_icon: str,
+            status_value: str,
+            progress_label: str,
+            run_id: Optional[str],
+            indent: str = "",
+        ) -> str:
+            run_suffix = f" run {run_id}" if run_id else ""
+            return f"{indent}{status_icon} {label}: {status_value} {progress_label}{run_suffix}"
+
         lines = ["Hub Flow Overview:"]
+        groups: dict[str, list[tuple[str, str]]] = {}
+        group_order: list[str] = []
+
         for repo in manifest.repos:
             if not repo.enabled:
                 continue
 
             repo_root = (self._hub_root / repo.path).resolve()
+            group, suffix = _group_key(repo.id)
+            if group not in groups:
+                groups[group] = []
+                group_order.append(group)
+            label = suffix or repo.id
+            indent = "  - " if suffix else ""
+
             store = _load_flow_store(repo_root)
             try:
                 store.initialize()
@@ -857,31 +885,58 @@ class FlowCommands(SharedHelpers):
                 done = progress.get("done", 0)
                 total = progress.get("total", 0)
                 progress_label = f"{done}/{total}"
-                # Check for active runs
                 active = _select_latest_run(store, lambda run: run.status.is_active())
                 if active:
                     status_icon = (
                         "🟢" if active.status == FlowRunStatus.RUNNING else "🟡"
                     )
-                    lines.append(
-                        f"{status_icon} `{repo.id}`: {active.status.value} ({progress_label}) (run {active.id})"
+                    status_line = _format_status_line(
+                        label,
+                        status_icon=status_icon,
+                        status_value=active.status.value,
+                        progress_label=progress_label,
+                        run_id=active.id,
+                        indent=indent,
                     )
                 else:
-                    # Check for paused
                     paused = _select_latest_run(
                         store, lambda run: run.status == FlowRunStatus.PAUSED
                     )
                     if paused:
-                        lines.append(
-                            f"🔴 `{repo.id}`: PAUSED ({progress_label}) (run {paused.id})"
+                        status_line = _format_status_line(
+                            label,
+                            status_icon="🔴",
+                            status_value="PAUSED",
+                            progress_label=progress_label,
+                            run_id=paused.id,
+                            indent=indent,
                         )
                     else:
-                        lines.append(f"⚪ `{repo.id}`: Idle ({progress_label})")
+                        status_line = _format_status_line(
+                            label,
+                            status_icon="⚪",
+                            status_value="Idle",
+                            progress_label=progress_label,
+                            run_id=None,
+                            indent=indent,
+                        )
             except Exception:
-                lines.append(f"❓ `{repo.id}`: Error reading state")
+                status_line = f"{indent}❓ {label}: Error reading state"
             finally:
                 store.close()
 
+            groups[group].append((label, status_line))
+
+        for group in group_order:
+            entries = groups.get(group, [])
+            if not entries:
+                continue
+            entries.sort(key=lambda pair: (0 if pair[0] == group else 1, pair[0]))
+            lines.extend([line for _label, line in entries])
+            lines.append("")
+
+        if lines and lines[-1] == "":
+            lines.pop()
         lines.append("")
         lines.append("Tip: use /flow <repo-id> status for repo details.")
 
@@ -890,7 +945,7 @@ class FlowCommands(SharedHelpers):
             "\n".join(lines),
             thread_id=message.thread_id,
             reply_to=message.message_id,
-            parse_mode="Markdown",
+            parse_mode=None,
         )
 
     async def _handle_flow_status_action(
