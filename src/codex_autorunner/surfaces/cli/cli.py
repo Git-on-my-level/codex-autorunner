@@ -1744,6 +1744,7 @@ def _ticket_flow_status_payload(
         "last_event_seq": snapshot.get("last_event_seq"),
         "last_event_at": snapshot.get("last_event_at"),
         "current_ticket": effective_ticket,
+        "ticket_progress": snapshot.get("ticket_progress"),
         "worker": (
             {
                 "status": health.status,
@@ -1759,6 +1760,12 @@ def _ticket_flow_status_payload(
 def _print_ticket_flow_status(payload: dict) -> None:
     typer.echo(f"Run id: {payload.get('run_id')}")
     typer.echo(f"Status: {payload.get('status')}")
+    progress = payload.get("ticket_progress") or {}
+    if isinstance(progress, dict):
+        done = progress.get("done")
+        total = progress.get("total")
+        if isinstance(done, int) and isinstance(total, int):
+            typer.echo(f"Tickets: {done}/{total}")
     typer.echo(f"Current step: {payload.get('current_step')}")
     typer.echo(f"Current ticket: {payload.get('current_ticket') or 'n/a'}")
     typer.echo(f"Created at: {payload.get('created_at')}")

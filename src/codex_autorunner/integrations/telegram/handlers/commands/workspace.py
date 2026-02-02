@@ -2214,6 +2214,51 @@ class WorkspaceCommands(SharedHelpers):
 
         manifest_path = getattr(self, "_manifest_path", None)
         hub_root = getattr(self, "_hub_root", None)
+        if is_pma:
+            if hub_root:
+                lines.append(f"Hub root: {hub_root}")
+            if manifest_path:
+                lines.append(f"Manifest: {manifest_path}")
+            registry = getattr(self, "_hub_thread_registry", None)
+            if registry and hasattr(self, "_pma_registry_key"):
+                try:
+                    pma_key = self._pma_registry_key(record)
+                    pma_thread_id = registry.get_thread_id(pma_key) if pma_key else None
+                    lines.append(f"PMA thread: {pma_thread_id or 'none'}")
+                except Exception:
+                    pass
+            if hub_root:
+                try:
+                    pma_dir = hub_root / ".codex-autorunner" / "pma"
+                    inbox_dir = pma_dir / "inbox"
+                    outbox_dir = pma_dir / "outbox"
+                    inbox_count = (
+                        len(
+                            [
+                                path
+                                for path in inbox_dir.iterdir()
+                                if path.is_file() and not path.name.startswith(".")
+                            ]
+                        )
+                        if inbox_dir.exists()
+                        else 0
+                    )
+                    outbox_count = (
+                        len(
+                            [
+                                path
+                                for path in outbox_dir.iterdir()
+                                if path.is_file() and not path.name.startswith(".")
+                            ]
+                        )
+                        if outbox_dir.exists()
+                        else 0
+                    )
+                    lines.append(
+                        f"PMA files: inbox {inbox_count}, outbox {outbox_count}"
+                    )
+                except Exception:
+                    pass
         if is_pma and manifest_path and hub_root:
             try:
                 manifest = load_manifest(manifest_path, hub_root)
@@ -2223,12 +2268,16 @@ class WorkspaceCommands(SharedHelpers):
                 )
                 active_count = 0
                 paused_count = 0
+                idle_count = 0
+                active_repos: list[str] = []
+                paused_repos: list[str] = []
                 for repo in manifest.repos:
                     if not repo.enabled:
                         continue
                     repo_root = (hub_root / repo.path).resolve()
                     db_path = repo_root / ".codex-autorunner" / "flows.db"
                     if not db_path.exists():
+                        idle_count += 1
                         continue
 
                     store = FlowStore(db_path)
@@ -2239,13 +2288,29 @@ class WorkspaceCommands(SharedHelpers):
                             latest = runs[0]
                             if latest.status.is_active():
                                 active_count += 1
+                                active_repos.append(repo.id)
                             elif latest.status == FlowRunStatus.PAUSED:
                                 paused_count += 1
+                                paused_repos.append(repo.id)
+                            else:
+                                idle_count += 1
+                        else:
+                            idle_count += 1
                     except Exception:
                         pass
                     finally:
                         store.close()
-                lines.append(f"Hub flows: {active_count} active, {paused_count} paused")
+                lines.append(
+                    f"Hub flows: {active_count} active, {paused_count} paused, {idle_count} idle"
+                )
+                if active_repos:
+                    preview = ", ".join(active_repos[:5])
+                    suffix = "" if len(active_repos) <= 5 else "..."
+                    lines.append(f"Active repos: {preview}{suffix}")
+                if paused_repos:
+                    preview = ", ".join(paused_repos[:5])
+                    suffix = "" if len(paused_repos) <= 5 else "..."
+                    lines.append(f"Paused repos: {preview}{suffix}")
             except Exception:
                 pass
 

@@ -48,12 +48,6 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             lambda message, args, _runtime: handlers._handle_flow(message, args),
             allow_during_turn=True,
         ),
-        "flow_status": CommandSpec(
-            "flow_status",
-            "show ticket flow status (alias for /flow status)",
-            lambda message, args, _runtime: handlers._handle_flow_status(message, args),
-            allow_during_turn=True,
-        ),
         "reply": CommandSpec(
             "reply",
             "reply to a paused ticket flow dispatch (prefer /flow reply)",

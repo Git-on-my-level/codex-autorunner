@@ -277,6 +277,7 @@ class FlowStatusResponse(BaseModel):
     error_message: Optional[str]
     state: Dict = Field(default_factory=dict)
     reason_summary: Optional[str] = None
+    ticket_progress: Optional[Dict[str, int]] = None
     last_event_seq: Optional[int] = None
     last_event_at: Optional[str] = None
     worker_health: Optional[FlowWorkerHealthResponse] = None
@@ -338,6 +339,7 @@ def _build_flow_status_response(
         last_event_at=snapshot["last_event_at"],
         worker_health=snapshot["worker_health"],
     )
+    resp.ticket_progress = snapshot.get("ticket_progress")
     if snapshot.get("state") is not None:
         resp.state = snapshot["state"]
     return resp

@@ -39,7 +39,6 @@ Command reference:
 - `/flow reply <message>`
 
 Aliases:
-- `/flow_status` (status only)
 - `/reply` (legacy alias for `/flow reply`)
 
 Examples:

@@ -17,14 +17,6 @@ class _TopicStoreStub:
         return self._record
 
 
-class _FlowStatusAliasHandler(FlowCommands):
-    def __init__(self) -> None:
-        self.seen: list[str] = []
-
-    async def _handle_flow(self, _message: TelegramMessage, args: str) -> None:
-        self.seen.append(args)
-
-
 class _FlowReplyAliasHandler(FlowCommands):
     def __init__(self, repo_root: Path, *, explode: bool = False) -> None:
         self._store = _TopicStoreStub(repo_root)
@@ -65,13 +57,6 @@ def _message(text: str) -> TelegramMessage:
         date=None,
         is_topic_message=True,
     )
-
-
-@pytest.mark.anyio
-async def test_flow_status_alias_forwards_to_flow() -> None:
-    handler = _FlowStatusAliasHandler()
-    await handler._handle_flow_status(_message("/flow_status"), "run-123")
-    assert handler.seen == ["status run-123"]
 
 
 @pytest.mark.anyio

@@ -887,7 +887,6 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         "resume",
         "review",
         "flow",
-        "flow_status",
         "reply",
         "pr",
         "agent",
@@ -936,8 +935,6 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("/flow restart")
         lines.append("/flow archive [run_id] [--force]")
         lines.append("/flow reply <message>")
-        if "flow_status" in command_specs:
-            lines.append("/flow_status [run_id]")
         if "reply" in command_specs:
             lines.append("/reply <message> (legacy)")
 

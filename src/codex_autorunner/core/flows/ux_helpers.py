@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol
 
-from ...tickets.files import list_ticket_paths
+from ...tickets.files import list_ticket_paths, ticket_is_done
 from .models import FlowEventType, FlowRunRecord
 from .store import FlowStore
 from .worker_process import (
@@ -56,6 +56,18 @@ def issue_md_has_content(repo_root: Path) -> bool:
 
 def _ticket_dir(repo_root: Path) -> Path:
     return repo_root.resolve() / ".codex-autorunner" / "tickets"
+
+
+def ticket_progress(repo_root: Path) -> dict[str, int]:
+    ticket_dir = _ticket_dir(repo_root)
+    ticket_paths = list_ticket_paths(ticket_dir)
+    total = len(ticket_paths)
+    done = 0
+    if total:
+        for path in ticket_paths:
+            if ticket_is_done(path):
+                done += 1
+    return {"done": done, "total": total}
 
 
 def bootstrap_check(
@@ -219,6 +231,7 @@ def build_flow_status_snapshot(
         "last_event_at": last_event_at,
         "worker_health": health,
         "effective_current_ticket": effective_ticket,
+        "ticket_progress": ticket_progress(repo_root),
         "state": updated_state,
     }
 
@@ -252,6 +265,7 @@ __all__ = [
     "format_issue_as_markdown",
     "issue_md_has_content",
     "issue_md_path",
+    "ticket_progress",
     "seed_issue_from_github",
     "seed_issue_from_text",
 ]

@@ -54,12 +54,3 @@ def test_diff_command_lists_detects_order_changes() -> None:
     assert diff.removed == []
     assert diff.changed == []
     assert diff.order_changed is True
-
-
-def test_build_command_payloads_accepts_flow_status() -> None:
-    specs = {
-        "flow_status": CommandSpec("flow_status", "Show flow status", _noop_handler)
-    }
-    commands, invalid = build_command_payloads(specs)
-    assert invalid == []
-    assert commands == [{"command": "flow_status", "description": "Show flow status"}]

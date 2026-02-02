@@ -21,6 +21,7 @@ from .....core.flows.ux_helpers import (
     issue_md_path,
     seed_issue_from_github,
     seed_issue_from_text,
+    ticket_progress,
 )
 from .....core.flows.worker_process import (
     FlowWorkerHealth,
@@ -115,7 +116,7 @@ def _flow_help_lines() -> list[str]:
         "/flow restart",
         "/flow archive [run_id] [--force]",
         "/flow reply <message>",
-        "Aliases: /flow start, /flow_status",
+        "Alias: /flow start",
     ]
 
 
@@ -274,6 +275,10 @@ class FlowCommands(SharedHelpers):
                 effective_args = " ".join(argv)
 
         action_raw = argv[0] if argv else ""
+        if target_repo_root and not action_raw:
+            action_raw = "status"
+            argv = ["status"]
+            effective_args = "status"
         action = _normalize_flow_action(action_raw)
         _, remainder = _split_flow_action(effective_args)
         rest_argv = argv[1:]
@@ -288,6 +293,8 @@ class FlowCommands(SharedHelpers):
             if is_pma or is_unbound:
                 await self._send_flow_hub_overview(message)
                 return
+            action = "status"
+            rest_argv = []
 
         if action == "help":
             await self._send_flow_overview(message, record)
@@ -635,7 +642,16 @@ class FlowCommands(SharedHelpers):
         run = record
         status = getattr(run, "status", None)
         status_value = status.value if status else "unknown"
+        progress = snapshot.get("ticket_progress") if snapshot else None
+        progress_label = None
+        if isinstance(progress, dict):
+            done = progress.get("done")
+            total = progress.get("total")
+            if isinstance(done, int) and isinstance(total, int) and total >= 0:
+                progress_label = f"{done}/{total}"
         lines = [f"Run: {run.id}", f"Status: {status_value}"]
+        if progress_label:
+            lines.append(f"Tickets: {progress_label}")
         flow_type = getattr(run, "flow_type", None)
         if flow_type:
             lines.append(f"Flow: {flow_type}")
@@ -837,6 +853,10 @@ class FlowCommands(SharedHelpers):
             store = _load_flow_store(repo_root)
             try:
                 store.initialize()
+                progress = ticket_progress(repo_root)
+                done = progress.get("done", 0)
+                total = progress.get("total", 0)
+                progress_label = f"{done}/{total}"
                 # Check for active runs
                 active = _select_latest_run(store, lambda run: run.status.is_active())
                 if active:
@@ -844,7 +864,7 @@ class FlowCommands(SharedHelpers):
                         "🟢" if active.status == FlowRunStatus.RUNNING else "🟡"
                     )
                     lines.append(
-                        f"{status_icon} `{repo.id}`: {active.status.value} (run {active.id})"
+                        f"{status_icon} `{repo.id}`: {active.status.value} ({progress_label}) (run {active.id})"
                     )
                 else:
                     # Check for paused
@@ -852,9 +872,11 @@ class FlowCommands(SharedHelpers):
                         store, lambda run: run.status == FlowRunStatus.PAUSED
                     )
                     if paused:
-                        lines.append(f"🔴 `{repo.id}`: PAUSED (run {paused.id})")
+                        lines.append(
+                            f"🔴 `{repo.id}`: PAUSED ({progress_label}) (run {paused.id})"
+                        )
                     else:
-                        lines.append(f"⚪ `{repo.id}`: Idle")
+                        lines.append(f"⚪ `{repo.id}`: Idle ({progress_label})")
             except Exception:
                 lines.append(f"❓ `{repo.id}`: Error reading state")
             finally:

@@ -230,7 +230,7 @@ class _PMAFlowStatusHandler(FlowCommands):
 
 
 @pytest.mark.anyio
-async def test_flow_status_in_pma_topic_uses_hub_overview() -> None:
+async def test_flow_default_in_pma_topic_uses_hub_overview() -> None:
     record = SimpleNamespace(pma_enabled=True, workspace_path=None)
     handler = _PMAFlowStatusHandler(record)
     message = TelegramMessage(
@@ -239,19 +239,19 @@ async def test_flow_status_in_pma_topic_uses_hub_overview() -> None:
         chat_id=3,
         thread_id=4,
         from_user_id=5,
-        text="/flow_status",
+        text="/flow",
         date=None,
         is_topic_message=True,
     )
 
-    await handler._handle_flow_status(message, "")
+    await handler._handle_flow(message, "")
 
     assert handler.hub_calls == 1
     assert not handler.sent
 
 
 @pytest.mark.anyio
-async def test_flow_status_unbound_topic_uses_hub_overview() -> None:
+async def test_flow_default_unbound_topic_uses_hub_overview() -> None:
     handler = _PMAFlowStatusHandler(None)
     message = TelegramMessage(
         update_id=1,
@@ -259,12 +259,12 @@ async def test_flow_status_unbound_topic_uses_hub_overview() -> None:
         chat_id=3,
         thread_id=4,
         from_user_id=5,
-        text="/flow_status",
+        text="/flow",
         date=None,
         is_topic_message=True,
     )
 
-    await handler._handle_flow_status(message, "")
+    await handler._handle_flow(message, "")
 
     assert handler.hub_calls == 1
     assert not handler.sent
@@ -274,7 +274,7 @@ async def test_flow_status_unbound_topic_uses_hub_overview() -> None:
 async def test_flow_hub_overview_allows_parse_mode_override(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Regression: /flow_status in PMA topics passes parse_mode to _send_message
+    # Regression: /flow hub overview passes parse_mode to _send_message
     # Ensure the transport accepts it.
     class _StubStore:
         def initialize(self) -> None: ...
@@ -328,7 +328,7 @@ async def test_flow_hub_overview_allows_parse_mode_override(
         chat_id=3,
         thread_id=4,
         from_user_id=5,
-        text="/flow_status",
+        text="/flow",
         date=None,
         is_topic_message=True,
     )
