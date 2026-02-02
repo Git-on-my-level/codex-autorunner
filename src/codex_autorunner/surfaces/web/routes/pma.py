@@ -20,6 +20,7 @@ from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....agents.registry import validate_agent_id
 from ....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....core.filebox import sanitize_filename
+from ....core.logging_utils import log_event
 from ....core.pma_context import (
     PMA_MAX_TEXT,
     build_hub_snapshot,
@@ -179,20 +180,62 @@ def build_pma_routes() -> APIRouter:
             pma_current = None
             pma_active = False
             pma_event = None
+
+        status = result.get("status") or "error"
+        started_at = current_snapshot.get("started_at")
+        duration_ms = None
+        if started_at:
+            try:
+                start_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                duration_ms = int(
+                    (datetime.now(timezone.utc) - start_dt).total_seconds() * 1000
+                )
+            except Exception:
+                pass
+
+        log_event(
+            logger,
+            logging.INFO,
+            "pma.turn.completed",
+            status=status,
+            duration_ms=duration_ms,
+            agent=current_snapshot.get("agent"),
+            client_turn_id=current_snapshot.get("client_turn_id"),
+            thread_id=pma_last_result.get("thread_id"),
+            turn_id=pma_last_result.get("turn_id"),
+            error=result.get("detail") if status == "error" else None,
+        )
+
         await _persist_state(store)
 
     async def _get_current_snapshot() -> dict[str, Any]:
         async with pma_lock:
             return dict(pma_current or {})
 
-    async def _interrupt_active(request: Request, *, reason: str) -> dict[str, Any]:
+    async def _interrupt_active(
+        request: Request, *, reason: str, source: str = "unknown"
+    ) -> dict[str, Any]:
         event = await _get_interrupt_event()
         event.set()
         current = await _get_current_snapshot()
         agent_id = (current.get("agent") or "").strip().lower()
         thread_id = current.get("thread_id")
         turn_id = current.get("turn_id")
+        client_turn_id = current.get("client_turn_id")
         hub_root = request.app.state.config.root
+
+        log_event(
+            logger,
+            logging.INFO,
+            "pma.turn.interrupted",
+            agent=agent_id or None,
+            client_turn_id=client_turn_id or None,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            reason=reason,
+            source=source,
+        )
+
         if agent_id == "opencode":
             supervisor = getattr(request.app.state, "opencode_supervisor", None)
             if supervisor is not None and thread_id:
@@ -597,6 +640,16 @@ def build_pma_routes() -> APIRouter:
                 turn_id=turn_id,
             )
 
+            log_event(
+                logger,
+                logging.INFO,
+                "pma.turn.started",
+                agent=agent_id,
+                client_turn_id=client_turn_id or None,
+                thread_id=thread_id,
+                turn_id=turn_id,
+            )
+
         async def _run() -> dict[str, Any]:
             supervisor = getattr(request.app.state, "app_server_supervisor", None)
             events = getattr(request.app.state, "app_server_events", None)
@@ -709,7 +762,9 @@ def build_pma_routes() -> APIRouter:
         pma_config = _get_pma_config(request)
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
-        return await _interrupt_active(request, reason="PMA chat interrupted")
+        return await _interrupt_active(
+            request, reason="PMA chat interrupted", source="user_request"
+        )
 
     @router.post("/thread/reset")
     async def reset_pma_thread(request: Request) -> dict[str, Any]:
