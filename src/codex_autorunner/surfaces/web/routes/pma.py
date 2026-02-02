@@ -38,7 +38,7 @@ from .shared import SSE_HEADERS
 
 logger = logging.getLogger(__name__)
 
-PMA_TIMEOUT_SECONDS = 240
+PMA_TIMEOUT_SECONDS = 28800
 
 
 def build_pma_routes() -> APIRouter:
