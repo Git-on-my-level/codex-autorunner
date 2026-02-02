@@ -54,6 +54,7 @@ export function createDocChat(config) {
         controller: null,
         draft: null,
         events: [],
+        totalEvents: 0,
         messages: [],
         eventItemIndex: {},
         eventsExpanded: false,
@@ -114,6 +115,7 @@ export function createDocChat(config) {
     }
     function clearEvents() {
         state.events = [];
+        state.totalEvents = 0;
         state.eventItemIndex = {};
     }
     function applyAppEvent(payload) {
@@ -135,6 +137,7 @@ export function createDocChat(config) {
             return;
         }
         addEvent(state, { ...event }, config.limits);
+        state.totalEvents += 1;
         if (itemId)
             state.eventItemIndex[itemId] = state.events.length - 1;
     }
@@ -167,7 +170,8 @@ export function createDocChat(config) {
                 eventsMain.classList.toggle("hidden", !showEvents);
             }
         }
-        eventsCount.textContent = String(state.events.length);
+        const eventCount = state.totalEvents || state.events.length;
+        eventsCount.textContent = String(eventCount);
         if (!showEvents) {
             eventsList.innerHTML = "";
             return;
@@ -340,7 +344,7 @@ export function createDocChat(config) {
                 decorateFileLinks(content);
             }
             else {
-                const stepCount = state.events.length;
+                const stepCount = state.totalEvents || state.events.length;
                 const statusText = (state.statusText || "").trim();
                 const isNoiseEvent = (evt) => {
                     const title = (evt.title || "").toLowerCase();

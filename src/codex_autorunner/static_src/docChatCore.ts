@@ -38,6 +38,7 @@ export interface ChatState {
   controller: AbortController | null;
   draft: unknown | null;
   events: ChatEvent[];
+  totalEvents: number;
   messages: ChatMessage[];
   eventItemIndex: Record<string, number>;
   eventsExpanded: boolean;
@@ -168,6 +169,7 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     controller: null,
     draft: null,
     events: [],
+    totalEvents: 0,
     messages: [],
     eventItemIndex: {},
     eventsExpanded: false,
@@ -231,6 +233,7 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
 
   function clearEvents(): void {
     state.events = [];
+    state.totalEvents = 0;
     state.eventItemIndex = {};
   }
 
@@ -253,6 +256,7 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     }
 
     addEvent(state, { ...event }, config.limits);
+    state.totalEvents += 1;
     if (itemId) state.eventItemIndex[itemId] = state.events.length - 1;
   }
 
@@ -285,7 +289,8 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
       }
     }
 
-    eventsCount.textContent = String(state.events.length);
+    const eventCount = state.totalEvents || state.events.length;
+    eventsCount.textContent = String(eventCount);
     if (!showEvents) {
       eventsList.innerHTML = "";
       return;
@@ -478,7 +483,7 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
         content.innerHTML = renderMarkdown(state.streamText);
         decorateFileLinks(content);
       } else {
-        const stepCount = state.events.length;
+        const stepCount = state.totalEvents || state.events.length;
         const statusText = (state.statusText || "").trim();
         const isNoiseEvent = (evt: ChatEvent): boolean => {
           const title = (evt.title || "").toLowerCase();
