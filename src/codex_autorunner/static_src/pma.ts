@@ -64,8 +64,6 @@ const pmaConfig: ChatConfig = {
 let pmaChat: DocChatInstance | null = null;
 let currentController: AbortController | null = null;
 let currentOutboxBaseline: Set<string> | null = null;
-let queuedTickerId: number | null = null;
-let queuedSinceMs: number | null = null;
 let isUnloading = false;
 let unloadHandlerInstalled = false;
 let currentEventsController: AbortController | null = null;
@@ -240,38 +238,7 @@ async function pollForTurnMeta(clientTurnId: string, timeoutMs = 8000): Promise<
   }
 }
 
-function clearQueuedTicker(): void {
-  if (queuedTickerId !== null) {
-    window.clearInterval(queuedTickerId);
-    queuedTickerId = null;
-  }
-  queuedSinceMs = null;
-}
 
-function startQueuedTicker(): void {
-  if (!pmaChat) return;
-  if (queuedTickerId !== null) return;
-  if (!queuedSinceMs) queuedSinceMs = Date.now();
-  queuedTickerId = window.setInterval(() => {
-    if (!pmaChat) {
-      clearQueuedTicker();
-      return;
-    }
-    if (pmaChat.state.status !== "running") {
-      clearQueuedTicker();
-      return;
-    }
-    const status = (pmaChat.state.statusText || "").toLowerCase();
-    if (status !== "queued") {
-      // Once we transition away from queued, stop the ticker.
-      clearQueuedTicker();
-      return;
-    }
-    const elapsed = Math.max(0, Math.floor((Date.now() - (queuedSinceMs || Date.now())) / 1000));
-    pmaChat.state.statusText = `waiting to start (${elapsed}s)`;
-    pmaChat.render();
-  }, 500);
-}
 
 function getElements() {
   return {
@@ -397,8 +364,9 @@ async function initPMA(): Promise<void> {
     unloadHandlerInstalled = true;
     window.addEventListener("beforeunload", () => {
       isUnloading = true;
-      clearQueuedTicker();
       // Abort any in-flight request immediately.
+      // Note: we do NOT send an interrupt request to the server; the run continues
+      // in the background and can be recovered after reload via /hub/pma/active.
       if (currentController) {
         try {
           currentController.abort();
@@ -633,19 +601,12 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
           ? parsed
           : ((parsed as Record<string, unknown>).status as string) || "";
       pmaChat!.state.statusText = status;
-      if ((status || "").toLowerCase() === "queued") {
-        queuedSinceMs = queuedSinceMs ?? Date.now();
-        startQueuedTicker();
-      } else {
-        clearQueuedTicker();
-      }
       pmaChat!.render();
       pmaChat!.renderEvents();
       break;
     }
 
     case "token": {
-      clearQueuedTicker();
       const token =
         typeof parsed === "string"
           ? parsed
@@ -655,7 +616,7 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
             "";
       pmaChat!.state.streamText = (pmaChat!.state.streamText || "") + token;
       // Force status to "responding" if we have tokens, so the stream loop picks it up
-      if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "queued") {
+      if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "starting") {
         pmaChat!.state.statusText = "responding";
       }
       // Ensure we're in "running" state if receiving tokens
@@ -669,14 +630,13 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
     case "event":
     case "app-server": {
       if (pmaChat) {
-        clearQueuedTicker();
         // Ensure we're in "running" state if receiving events
         if (pmaChat!.state.status !== "running") {
             pmaChat!.state.status = "running";
         }
-        // If we are receiving events but still show "queued", bump status so UI
+        // If we are receiving events but still show "starting", bump status so UI
         // reflects progress even before token streaming starts.
-        if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "queued") {
+        if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "starting") {
           pmaChat!.state.statusText = "working";
         }
         pmaChat.applyAppEvent(parsed);
@@ -707,7 +667,6 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
     }
 
     case "error": {
-      clearQueuedTicker();
       const message =
         typeof parsed === "object" && parsed !== null
           ? ((parsed as Record<string, unknown>).detail as string) ||
@@ -723,7 +682,6 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
     }
 
     case "interrupted": {
-      clearQueuedTicker();
       const message =
         typeof parsed === "object" && parsed !== null
           ? ((parsed as Record<string, unknown>).detail as string) || rawData
@@ -752,7 +710,6 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
 
     case "done":
     case "finish": {
-      clearQueuedTicker();
       void finalizePMAResponse(pmaChat!.state.streamText || "");
       break;
     }

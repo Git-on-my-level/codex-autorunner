@@ -561,7 +561,7 @@ def build_pma_routes() -> APIRouter:
 
             asyncio.create_task(_finalize())
 
-            yield format_sse("status", {"status": "queued"})
+            yield format_sse("status", {"status": "starting"})
             try:
                 result = await asyncio.shield(run_task)
                 if result.get("status") == "ok":
