@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from ...core.flows.definition import EmitEventFn, FlowDefinition, StepOutcome
 from ...core.flows.models import FlowEventType, FlowRunRecord
 from ...core.utils import find_repo_root
+from ...manifest import ManifestError, load_manifest
 from ...tickets import (
     DEFAULT_MAX_TOTAL_TURNS,
     AgentPool,
@@ -53,6 +54,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
             else False
         )
 
+        repo_id = _resolve_ticket_flow_repo_id(workspace_root)
         runner = TicketRunner(
             workspace_root=workspace_root,
             run_id=str(record.id),
@@ -67,6 +69,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
                 include_previous_ticket_context=include_previous_ticket_context,
             ),
             agent_pool=agent_pool,
+            repo_id=repo_id,
         )
 
         if emit_event is not None:
@@ -106,3 +109,21 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         },
         steps={"ticket_turn": _ticket_turn_step},
     )
+
+
+def _resolve_ticket_flow_repo_id(workspace_root: Path) -> str:
+    current = workspace_root
+    for _ in range(5):
+        manifest_path = current / ".codex-autorunner" / "manifest.yml"
+        if manifest_path.exists():
+            try:
+                manifest = load_manifest(manifest_path, current)
+            except ManifestError:
+                return ""
+            entry = manifest.get_by_path(current, workspace_root)
+            return entry.id if entry else ""
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return ""

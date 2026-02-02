@@ -2479,7 +2479,7 @@ class ExecutionCommands(SharedHelpers):
         supervisor = getattr(self, "_hub_supervisor", None)
         snapshot = await build_hub_snapshot(supervisor)
         base_prompt = load_pma_prompt(hub_root)
-        return format_pma_prompt(base_prompt, snapshot, message_text)
+        return format_pma_prompt(base_prompt, snapshot, message_text, hub_root=hub_root)
 
     async def _prepare_turn_context(
         self,

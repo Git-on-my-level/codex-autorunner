@@ -497,13 +497,18 @@
             },
             "type": "array"
           },
-          "mcp": {
-            "type": "boolean"
-          },
           "model": {
             "type": "string"
           },
           "name": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "command",
+              "mcp",
+              "skill"
+            ],
             "type": "string"
           },
           "subtask": {
@@ -10714,6 +10719,9 @@
                 "schema": {
                   "items": {
                     "properties": {
+                      "content": {
+                        "type": "string"
+                      },
                       "description": {
                         "type": "string"
                       },
@@ -10727,7 +10735,8 @@
                     "required": [
                       "name",
                       "description",
-                      "location"
+                      "location",
+                      "content"
                     ],
                     "type": "object"
                   },

@@ -273,7 +273,7 @@ async function finalizePMAResponse(responseText) {
         : attachments;
     const startTime = pmaChat.state.startTime;
     const duration = startTime ? (Date.now() - startTime) / 1000 : undefined;
-    const steps = pmaChat.state.events.length;
+    const steps = pmaChat.state.totalEvents || pmaChat.state.events.length;
     if (content) {
         pmaChat.addAssistantMessage(content, true, { steps, duration });
     }

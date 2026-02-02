@@ -20,10 +20,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import subprocess
 import sys
 import time
-import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory

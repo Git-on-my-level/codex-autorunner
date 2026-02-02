@@ -49,6 +49,7 @@ Reference docs in `docs/` (e.g., configuration, operations, debugging).
 - More details: `docs/ops/worktree-archives.md`.
 
 ## Python venv
+- Run `make setup` to initialize the venv and dependencies if not already set up.
 - Always use the project venv (`.venv/bin/python`) for running Python and tests.
 
 ## GitHub CLI

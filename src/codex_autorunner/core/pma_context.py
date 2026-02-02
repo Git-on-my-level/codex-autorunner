@@ -55,10 +55,16 @@ def load_pma_prompt(hub_root: Path) -> str:
         return ""
 
 
-def format_pma_prompt(base_prompt: str, snapshot: dict[str, Any], message: str) -> str:
+def format_pma_prompt(
+    base_prompt: str,
+    snapshot: dict[str, Any],
+    message: str,
+    hub_root: Optional[Path] = None,
+) -> str:
     snapshot_text = json.dumps(snapshot, sort_keys=True)
-    return (
-        f"{base_prompt}\n\n"
+
+    prompt = f"{base_prompt}\n\n"
+    prompt += (
         "Ops guide: `.codex-autorunner/pma/ABOUT_CAR.md`.\n"
         "To send a file to the user, write it to `.codex-autorunner/pma/outbox/`.\n"
         "User uploaded files are in `.codex-autorunner/pma/inbox/`.\n\n"
@@ -69,6 +75,7 @@ def format_pma_prompt(base_prompt: str, snapshot: dict[str, Any], message: str) 
         f"{message}\n"
         "</user_message>\n"
     )
+    return prompt
 
 
 def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict[str, Any]]:
@@ -221,12 +228,30 @@ def _gather_inbox(
     return messages
 
 
+def _gather_lifecycle_events(
+    supervisor: HubSupervisor, limit: int = 20
+) -> list[dict[str, Any]]:
+    events = supervisor.lifecycle_store.get_unprocessed(limit=limit)
+    result: list[dict[str, Any]] = []
+    for event in events[:limit]:
+        result.append(
+            {
+                "event_type": event.event_type.value,
+                "repo_id": event.repo_id,
+                "run_id": event.run_id,
+                "timestamp": event.timestamp,
+                "data": event.data,
+            }
+        )
+    return result
+
+
 async def build_hub_snapshot(
     supervisor: Optional[HubSupervisor],
     hub_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     if supervisor is None:
-        return {"repos": [], "inbox": []}
+        return {"repos": [], "inbox": [], "lifecycle_events": []}
 
     snapshots = await asyncio.to_thread(supervisor.list_repos)
     snapshots = sorted(snapshots, key=lambda snap: snap.id)
@@ -267,6 +292,10 @@ async def build_hub_snapshot(
     )
     inbox = inbox[:max_messages]
 
+    lifecycle_events = await asyncio.to_thread(
+        _gather_lifecycle_events, supervisor, limit=20
+    )
+
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
     if hub_root:
         try:
@@ -283,4 +312,9 @@ async def build_hub_snapshot(
         except Exception:
             pass
 
-    return {"repos": repos, "inbox": inbox, "pma_files": pma_files}
+    return {
+        "repos": repos,
+        "inbox": inbox,
+        "pma_files": pma_files,
+        "lifecycle_events": lifecycle_events,
+    }

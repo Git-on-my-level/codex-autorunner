@@ -12292,7 +12292,7 @@ button.filebox-delete:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -12959,77 +12959,46 @@ button.filebox-delete:hover {
 }
 
 .pma-inbox-item {
-  display: block;
-  padding: 8px 10px;
-  background: var(--panel);
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  padding: 2px 6px;
+  background: var(--bg-subtle);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 12px;
   text-decoration: none;
   color: var(--text);
+  font-size: 10px;
+  white-space: nowrap;
+  max-width: 180px;
   transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.pma-inbox-item > * {
+  display: inline-flex;
+  align-items: center;
 }
 
 .pma-inbox-item:hover {
   border-color: var(--accent);
-  background: rgba(108, 245, 216, 0.04);
-}
-
-.pma-inbox-item-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 3px;
 }
 
 .pma-inbox-repo {
-  font-size: 11px;
   font-weight: 600;
+  margin-right: 3px;
   color: var(--accent);
 }
 
 .pma-inbox-title {
-  font-size: 12px;
-  font-weight: 500;
-  margin-bottom: 1px;
-}
-
-.pma-inbox-excerpt {
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0.8;
 }
 
-.pma-inbox-run-id {
-  font-weight: 400;
-  color: var(--muted);
-}
-
+.pma-inbox-excerpt,
+.pma-inbox-item-header,
+.pma-inbox-item-header .pill,
 .pma-inbox-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 6px;
-  flex-wrap: wrap;
-}
-
-.pma-inbox-action {
-  font-size: 10px;
-  padding: 3px 8px;
-  background: rgba(108, 245, 216, 0.08);
-  border: 1px solid rgba(108, 245, 216, 0.2);
-  border-radius: 4px;
-  color: var(--accent);
-  text-decoration: none;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  display: inline-block;
-}
-
-.pma-inbox-action:hover {
-  background: rgba(108, 245, 216, 0.15);
-  border-color: rgba(108, 245, 216, 0.4);
+  display: none;
 }
 
 .pma-upload-btn {
@@ -13159,7 +13128,43 @@ button.filebox-delete:hover {
   }
 
   .pma-inbox-list {
-    max-height: 120px;
+    max-height: none;
+  }
+
+  .pma-inbox-item {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2px 6px;
+    font-size: 10px;
+  }
+
+  .pma-inbox-item > * {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .pma-inbox-excerpt,
+  .pma-inbox-item-header,
+  .pma-inbox-item-header .pill,
+  .pma-inbox-actions {
+    display: none;
+  }
+
+  .pma-thread-info {
+    flex-direction: row;
+    padding: 4px 8px;
+    gap: 4px;
+  }
+
+  .pma-thread-info-details {
+    flex-direction: row;
+    gap: 4px;
+  }
+
+  .pma-thread-info-row {
+    flex-direction: row;
+    gap: 2px;
   }
 
   .chat-message {
@@ -13227,8 +13232,8 @@ button.filebox-delete:hover {
 .pma-top-bar {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 6px 8px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -13239,25 +13244,26 @@ button.filebox-delete:hover {
   flex-direction: row;
   align-items: stretch;
   gap: 8px;
-  padding: 8px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
-  max-height: 200px;
+  max-height: none;
 }
 
 .pma-thread-info {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
 
 .pma-thread-info-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 6px;
 }
 
 .pma-thread-info-label {
@@ -13268,20 +13274,20 @@ button.filebox-delete:hover {
 
 .pma-thread-info-details {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
 }
 
 .pma-thread-info-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 4px;
 }
 
 .pma-thread-info-key {
   font-size: 10px;
-  min-width: 60px;
+  min-width: auto;
 }
 
 .pma-thread-info-value {
@@ -13316,6 +13322,7 @@ button.filebox-delete:hover {
 
 .pma-inbox-item {
   display: inline-flex;
+  flex-direction: row;
   align-items: center;
   padding: 2px 8px;
   background: var(--bg-subtle);
@@ -13326,6 +13333,11 @@ button.filebox-delete:hover {
   font-size: 11px;
   white-space: nowrap;
   max-width: 200px;
+}
+
+.pma-inbox-item > * {
+  display: inline-flex;
+  align-items: center;
 }
 
 .pma-inbox-item:hover {
@@ -13344,7 +13356,9 @@ button.filebox-delete:hover {
 }
 
 .pma-inbox-excerpt,
-.pma-inbox-item-header .pill {
+.pma-inbox-item-header .pill,
+.pma-inbox-item-header,
+.pma-inbox-actions {
   display: none;
 }
 

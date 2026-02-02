@@ -47,7 +47,7 @@ from ....tickets.files import (
     safe_relpath,
 )
 from ....tickets.frontmatter import parse_markdown_frontmatter
-from ....tickets.lint import lint_ticket_frontmatter
+from ....tickets.lint import lint_ticket_directory, lint_ticket_frontmatter
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..schemas import (
     TicketCreateRequest,
@@ -199,6 +199,27 @@ def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
         return str(uuid.UUID(str(run_id)))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid run_id") from None
+
+
+def _validate_tickets(ticket_dir: Path) -> list[str]:
+    """Validate all tickets in the directory and return a list of error messages."""
+    errors: list[str] = []
+
+    if not ticket_dir.exists():
+        return errors
+
+    # Check for directory-level errors (duplicate indices)
+    dir_errors = lint_ticket_directory(ticket_dir)
+    errors.extend(dir_errors)
+
+    # Check each ticket file for frontmatter errors
+    ticket_paths = list_ticket_paths(ticket_dir)
+    for path in ticket_paths:
+        _, ticket_errors = read_ticket(path)
+        for err in ticket_errors:
+            errors.append(f"{path.relative_to(path.parent.parent)}: {err}")
+
+    return errors
 
 
 def _cleanup_worker_handle(run_id: str) -> None:
@@ -497,7 +518,11 @@ def build_flow_routes() -> APIRouter:
         return _definition_info(definition)
 
     async def _start_flow(
-        flow_type: str, request: FlowStartRequest, *, force_new: bool = False
+        flow_type: str,
+        request: FlowStartRequest,
+        *,
+        force_new: bool = False,
+        validate_tickets: bool = True,
     ) -> FlowStatusResponse:
         if flow_type not in _supported_flow_types:
             raise HTTPException(
@@ -507,15 +532,25 @@ def build_flow_routes() -> APIRouter:
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root, flow_type)
 
-        if flow_type == "ticket_flow" and force_new:
+        if flow_type == "ticket_flow" and validate_tickets:
             ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-            if not list_ticket_paths(ticket_dir):
+            if force_new and not list_ticket_paths(ticket_dir):
                 raise HTTPException(
                     status_code=400,
                     detail=(
                         "No tickets found under .codex-autorunner/tickets. "
                         "Use /api/flows/ticket_flow/bootstrap to seed tickets."
                     ),
+                )
+
+            lint_errors = _validate_tickets(ticket_dir)
+            if lint_errors:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": "Ticket validation failed",
+                        "errors": lint_errors,
+                    },
                 )
 
         # Reuse an active/paused run unless force_new is requested.
@@ -639,6 +674,16 @@ def build_flow_routes() -> APIRouter:
             )
             active = _active_or_paused_run(records)
             if active:
+                # Validate tickets before reusing active run
+                lint_errors = _validate_tickets(ticket_dir)
+                if lint_errors:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "message": "Ticket validation failed",
+                            "errors": lint_errors,
+                        },
+                    )
                 _reap_dead_worker(active.id)
                 _start_flow_worker(repo_root, active.id)
                 store = _require_flow_store(repo_root)
@@ -683,7 +728,13 @@ You are the first ticket in a new ticket_flow run.
             input_data=flow_request.input_data,
             metadata=meta | {"seeded_ticket": seeded},
         )
-        return await _start_flow("ticket_flow", payload, force_new=force_new)
+        validate_tickets = not tickets_exist or force_new
+        return await _start_flow(
+            "ticket_flow",
+            payload,
+            force_new=force_new,
+            validate_tickets=validate_tickets,
+        )
 
     @router.get("/ticket_flow/tickets")
     async def list_ticket_files():
@@ -916,6 +967,19 @@ You are the first ticket in a new ticket_flow run.
         record = _get_flow_record(repo_root, run_id)
         controller = _get_flow_controller(repo_root, record.flow_type)
 
+        # Validate tickets before resuming ticket_flow
+        if record.flow_type == "ticket_flow":
+            ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+            lint_errors = _validate_tickets(ticket_dir)
+            if lint_errors:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": "Ticket validation failed",
+                        "errors": lint_errors,
+                    },
+                )
+
         updated = await controller.resume_flow(run_id)
         _reap_dead_worker(run_id)
         _start_flow_worker(repo_root, run_id)
@@ -1050,7 +1114,7 @@ You are the first ticket in a new ticket_flow run.
                     run_id, after_seq=resume_after
                 ):
                     data = event.model_dump(mode="json")
-                    yield f"id: {event.seq}\n" f"data: {json.dumps(data)}\n\n"
+                    yield f"id: {event.seq}\ndata: {json.dumps(data)}\n\n"
             except Exception as e:
                 _logger.exception("Error streaming events for run %s: %s", run_id, e)
                 raise
