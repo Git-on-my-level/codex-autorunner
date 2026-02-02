@@ -28,6 +28,7 @@ from ....core.pma_context import (
     format_pma_prompt,
     load_pma_prompt,
 )
+from ....core.pma_lifecycle import PmaLifecycleRouter
 from ....core.pma_queue import PmaQueue, QueueItemState
 from ....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from ....core.pma_state import PmaStateStore
@@ -947,6 +948,66 @@ def build_pma_routes() -> APIRouter:
         await _interrupt_active(request, reason="Lane stopped", source="user_request")
 
         return {"status": "ok", "cancelled_items": cancelled, "lane_id": lane_id}
+
+    @router.post("/new")
+    async def new_pma_session(request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+
+        body = await request.json()
+        agent = _normalize_optional_text(body.get("agent"))
+        lane_id = (body.get("lane_id") or "pma:default").strip()
+
+        hub_root = request.app.state.config.root
+        lifecycle_router = PmaLifecycleRouter(hub_root)
+
+        result = await lifecycle_router.new(agent=agent, lane_id=lane_id)
+
+        if result.status != "ok":
+            raise HTTPException(status_code=500, detail=result.error)
+
+        return {
+            "status": result.status,
+            "message": result.message,
+            "artifact_path": (
+                str(result.artifact_path) if result.artifact_path else None
+            ),
+            "details": result.details,
+        }
+
+    @router.post("/compact")
+    async def compact_pma_history(request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+
+        body = await request.json()
+        summary = (body.get("summary") or "").strip()
+        agent = _normalize_optional_text(body.get("agent"))
+        thread_id = _normalize_optional_text(body.get("thread_id"))
+
+        if not summary:
+            raise HTTPException(status_code=400, detail="summary is required")
+
+        hub_root = request.app.state.config.root
+        lifecycle_router = PmaLifecycleRouter(hub_root)
+
+        result = await lifecycle_router.compact(
+            summary=summary, agent=agent, thread_id=thread_id
+        )
+
+        if result.status != "ok":
+            raise HTTPException(status_code=500, detail=result.error)
+
+        return {
+            "status": result.status,
+            "message": result.message,
+            "artifact_path": (
+                str(result.artifact_path) if result.artifact_path else None
+            ),
+            "details": result.details,
+        }
 
     @router.post("/thread/reset")
     async def reset_pma_thread(request: Request) -> dict[str, Any]:
