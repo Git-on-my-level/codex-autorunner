@@ -10,7 +10,7 @@ const IMAGE_MIME_EXT = {
     "image/heif": "heif",
 };
 function escapeMarkdownLinkText(text) {
-    return text.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+    return text.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
 }
 function toAbsoluteUrl(path) {
     const resolved = resolvePath(path);
