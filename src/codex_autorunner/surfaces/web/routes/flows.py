@@ -518,7 +518,11 @@ def build_flow_routes() -> APIRouter:
         return _definition_info(definition)
 
     async def _start_flow(
-        flow_type: str, request: FlowStartRequest, *, force_new: bool = False
+        flow_type: str,
+        request: FlowStartRequest,
+        *,
+        force_new: bool = False,
+        validate_tickets: bool = True,
     ) -> FlowStatusResponse:
         if flow_type not in _supported_flow_types:
             raise HTTPException(
@@ -528,9 +532,9 @@ def build_flow_routes() -> APIRouter:
         repo_root = find_repo_root()
         controller = _get_flow_controller(repo_root, flow_type)
 
-        if flow_type == "ticket_flow" and force_new:
+        if flow_type == "ticket_flow" and validate_tickets:
             ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-            if not list_ticket_paths(ticket_dir):
+            if force_new and not list_ticket_paths(ticket_dir):
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -556,18 +560,6 @@ def build_flow_routes() -> APIRouter:
             )
             active = _active_or_paused_run(runs)
             if active:
-                # Validate tickets before reusing active ticket_flow run
-                if flow_type == "ticket_flow":
-                    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-                    lint_errors = _validate_tickets(ticket_dir)
-                    if lint_errors:
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
-                                "message": "Ticket validation failed",
-                                "errors": lint_errors,
-                            },
-                        )
                 _reap_dead_worker(active.id)
                 _start_flow_worker(repo_root, active.id)
                 store = _require_flow_store(repo_root)
@@ -736,7 +728,13 @@ You are the first ticket in a new ticket_flow run.
             input_data=flow_request.input_data,
             metadata=meta | {"seeded_ticket": seeded},
         )
-        return await _start_flow("ticket_flow", payload, force_new=force_new)
+        validate_tickets = not tickets_exist or force_new
+        return await _start_flow(
+            "ticket_flow",
+            payload,
+            force_new=force_new,
+            validate_tickets=validate_tickets,
+        )
 
     @router.get("/ticket_flow/tickets")
     async def list_ticket_files():
