@@ -26,6 +26,7 @@ import {
 import { DocEditor } from "./docEditor.js";
 import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
 import { createDocChat, type ChatState } from "./docChatCore.js";
+import { initChatPasteUpload } from "./chatUploads.js";
 import { initDocChatVoice } from "./docChatVoice.js";
 import { renderDiff } from "./diffRenderer.js";
 import { createSmartRefresh, type SmartRefreshReason } from "./smartRefresh.js";
@@ -1010,6 +1011,14 @@ export async function initWorkspace(): Promise<void> {
         evt.preventDefault();
         void sendChat();
       }
+    });
+
+    initChatPasteUpload({
+      textarea: chatInput,
+      basePath: "/api/filebox",
+      box: "inbox",
+      insertStyle: "both",
+      pathPrefix: ".codex-autorunner/filebox",
     });
   }
 

@@ -19,6 +19,7 @@ import {
 import { initAgentControls } from "./agentControls.js";
 import { initTicketVoice } from "./ticketVoice.js";
 import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
+import { initChatPasteUpload } from "./chatUploads.js";
 import { DocEditor } from "./docEditor.js";
 import { initTicketTemplates } from "./ticketTemplates.js";
 
@@ -942,6 +943,14 @@ export function initTicketEditor(): void {
     chatInput.addEventListener("input", () => {
       chatInput.style.height = "auto";
       chatInput.style.height = Math.min(chatInput.scrollHeight, 100) + "px";
+    });
+
+    initChatPasteUpload({
+      textarea: chatInput,
+      basePath: "/api/filebox",
+      box: "inbox",
+      insertStyle: "both",
+      pathPrefix: ".codex-autorunner/filebox",
     });
   }
 

@@ -8,6 +8,7 @@ import {
   type ChatStyling,
   type DocChatInstance,
 } from "./docChatCore.js";
+import { initChatPasteUpload } from "./chatUploads.js";
 import {
   clearAgentSelectionStorage,
   getSelectedAgent,
@@ -991,6 +992,16 @@ function attachHandlers(): void {
         elements.input.style.height = "auto";
         elements.input.style.height = `${elements.input.scrollHeight}px`;
       }
+    });
+
+    initChatPasteUpload({
+      textarea: elements.input,
+      basePath: "/hub/pma/files",
+      box: "inbox",
+      insertStyle: "markdown",
+      onUploaded: () => {
+        void fileBoxCtrl?.refresh();
+      },
     });
   }
 

@@ -6,6 +6,7 @@ import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFil
 import { DocEditor } from "./docEditor.js";
 import { WorkspaceFileBrowser } from "./workspaceFileBrowser.js";
 import { createDocChat } from "./docChatCore.js";
+import { initChatPasteUpload } from "./chatUploads.js";
 import { initDocChatVoice } from "./docChatVoice.js";
 import { renderDiff } from "./diffRenderer.js";
 import { createSmartRefresh } from "./smartRefresh.js";
@@ -901,6 +902,13 @@ export async function initWorkspace() {
                 evt.preventDefault();
                 void sendChat();
             }
+        });
+        initChatPasteUpload({
+            textarea: chatInput,
+            basePath: "/api/filebox",
+            box: "inbox",
+            insertStyle: "both",
+            pathPrefix: ".codex-autorunner/filebox",
         });
     }
     const { createModal, createClose, createCancel, createSubmit } = els();

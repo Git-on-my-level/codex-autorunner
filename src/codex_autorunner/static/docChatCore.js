@@ -283,7 +283,10 @@ export function createDocChat(config) {
             // Use markdown rendering for assistant messages.
             // For user messages, keep plain text unless the message includes PMA file links
             // (used for "uploaded file" pills).
-            const shouldRenderMarkdown = msg.role === "assistant" || msg.content.includes("/hub/pma/files/");
+            const shouldRenderMarkdown = msg.role === "assistant" ||
+                msg.content.includes("/hub/pma/files/") ||
+                msg.content.includes("/api/filebox/") ||
+                msg.content.includes("/hub/filebox/");
             if (shouldRenderMarkdown) {
                 content.innerHTML = renderMarkdown(msg.content);
                 decorateFileLinks(content);

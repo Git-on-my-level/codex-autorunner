@@ -4,6 +4,7 @@
  */
 import { api, resolvePath, getAuthToken, escapeHtml, flash } from "./utils.js";
 import { createDocChat, } from "./docChatCore.js";
+import { initChatPasteUpload } from "./chatUploads.js";
 import { clearAgentSelectionStorage, getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
 const pmaStyling = {
@@ -882,6 +883,15 @@ function attachHandlers() {
                 elements.input.style.height = "auto";
                 elements.input.style.height = `${elements.input.scrollHeight}px`;
             }
+        });
+        initChatPasteUpload({
+            textarea: elements.input,
+            basePath: "/hub/pma/files",
+            box: "inbox",
+            insertStyle: "markdown",
+            onUploaded: () => {
+                void fileBoxCtrl?.refresh();
+            },
         });
     }
     if (elements.inboxRefresh) {
