@@ -26,6 +26,15 @@ function escapeMarkdownLinkText(text: string): string {
   return text.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
 }
 
+function toAbsoluteUrl(path: string): string {
+  const resolved = resolvePath(path);
+  try {
+    return new URL(resolved, window.location.origin).toString();
+  } catch {
+    return resolved;
+  }
+}
+
 function isImageFile(file: File): boolean {
   if (file.type && file.type.startsWith("image/")) return true;
   const lower = (file.name || "").toLowerCase();
@@ -84,7 +93,8 @@ async function uploadImages(
     const name = normalizeFilename(file, index, used);
     form.append(name, file, name);
     const path = normalizedPathPrefix ? `${normalizedPathPrefix}/${box}/${name}` : undefined;
-    entries.push({ name, url: resolvePath(`${prefix}/${box}/${encodeURIComponent(name)}`), path });
+    const relativeUrl = `${prefix}/${box}/${encodeURIComponent(name)}`;
+    entries.push({ name, url: toAbsoluteUrl(relativeUrl), path });
   });
 
   await api(`${prefix}/${box}`, { method: "POST", body: form });

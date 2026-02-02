@@ -12,6 +12,15 @@ const IMAGE_MIME_EXT = {
 function escapeMarkdownLinkText(text) {
     return text.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
 }
+function toAbsoluteUrl(path) {
+    const resolved = resolvePath(path);
+    try {
+        return new URL(resolved, window.location.origin).toString();
+    }
+    catch {
+        return resolved;
+    }
+}
 function isImageFile(file) {
     if (file.type && file.type.startsWith("image/"))
         return true;
@@ -67,7 +76,8 @@ async function uploadImages(basePath, box, files, pathPrefix) {
         const name = normalizeFilename(file, index, used);
         form.append(name, file, name);
         const path = normalizedPathPrefix ? `${normalizedPathPrefix}/${box}/${name}` : undefined;
-        entries.push({ name, url: resolvePath(`${prefix}/${box}/${encodeURIComponent(name)}`), path });
+        const relativeUrl = `${prefix}/${box}/${encodeURIComponent(name)}`;
+        entries.push({ name, url: toAbsoluteUrl(relativeUrl), path });
     });
     await api(`${prefix}/${box}`, { method: "POST", body: form });
     return entries;
