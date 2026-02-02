@@ -8,6 +8,27 @@ export function parseMaybeJson(data: string): unknown {
   }
 }
 
+export function extractContextRemainingPercent(usage: unknown): number | null {
+  if (!usage || typeof usage !== "object") return null;
+  const payload = usage as Record<string, unknown>;
+  const totalRaw = payload.totalTokens ?? payload.total ?? payload.total_tokens;
+  const contextRaw =
+    payload.modelContextWindow ?? payload.contextWindow ?? payload.model_context_window;
+
+  const totalTokens = typeof totalRaw === "number" ? totalRaw : Number(totalRaw);
+  const contextWindow =
+    typeof contextRaw === "number" && Number.isFinite(contextRaw)
+      ? contextRaw
+      : Number(contextRaw);
+
+  if (!Number.isFinite(totalTokens) || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+    return null;
+  }
+
+  const percentRemaining = Math.round(((contextWindow - totalTokens) / contextWindow) * 100);
+  return Math.max(0, Math.min(100, percentRemaining));
+}
+
 export async function readEventStream(
   res: Response,
   handler: (event: string, data: string) => void

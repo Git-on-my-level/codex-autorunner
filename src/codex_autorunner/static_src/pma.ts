@@ -18,6 +18,7 @@ import {
   refreshAgentControls,
 } from "./agentControls.js";
 import { createFileBoxWidget, type FileBoxListing } from "./fileboxUi.js";
+import { extractContextRemainingPercent } from "./streamUtils.js";
 
 interface PMAInboxItem {
   repo_id: string;
@@ -519,6 +520,7 @@ async function sendMessage(): Promise<void> {
   pmaChat.state.status = "running";
   pmaChat.state.error = "";
   pmaChat.state.streamText = "";
+  pmaChat.state.contextUsagePercent = null;
   pmaChat.state.startTime = Date.now();
   pmaChat.clearEvents();
   pmaChat.addUserMessage(message);
@@ -721,17 +723,10 @@ function handlePMAStreamEvent(event: string, rawData: string): void {
     case "token_usage": {
       // Token usage events - context window usage
       if (typeof parsed === "object" && parsed !== null) {
-        const usage = parsed as Record<string, unknown>;
-        const totalTokens = usage.totalTokens as number | undefined;
-        const modelContextWindow = usage.modelContextWindow as number | undefined;
-        if (totalTokens !== undefined && modelContextWindow !== undefined && modelContextWindow > 0) {
-          const percentRemaining = Math.round(((modelContextWindow - totalTokens) / modelContextWindow) * 100);
-          const percentRemainingClamped = Math.max(0, Math.min(100, percentRemaining));
-          // Store context usage for display in chat UI
-          if (pmaChat) {
-            pmaChat!.state.contextUsagePercent = percentRemainingClamped;
-            pmaChat!.render();
-          }
+        const percentRemaining = extractContextRemainingPercent(parsed);
+        if (percentRemaining !== null && pmaChat) {
+          pmaChat.state.contextUsagePercent = percentRemaining;
+          pmaChat.render();
         }
       }
       break;
@@ -915,6 +910,7 @@ function cancelRequest(): void {
     pmaChat.state.controller = null;
     pmaChat.state.status = "interrupted";
     pmaChat.state.statusText = "Cancelled";
+    pmaChat.state.contextUsagePercent = null;
     pmaChat.render();
   }
 }
