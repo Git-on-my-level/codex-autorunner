@@ -85,7 +85,7 @@ from ...integrations.templates.scan_agent import (
 )
 from ...manifest import load_manifest
 from ...tickets import AgentPool
-from ...tickets.files import list_ticket_paths
+from ...tickets.files import list_ticket_paths, ticket_is_done
 from ...tickets.frontmatter import split_markdown_frontmatter
 from ...tickets.lint import parse_ticket_index
 from ...voice import VoiceConfig
@@ -1999,6 +1999,19 @@ def ticket_flow_bootstrap(
                     f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
                 )
                 return
+            elif existing_run and reason == "completed_pending":
+                existing_tickets = list_ticket_paths(ticket_dir)
+                pending_count = len(
+                    [t for t in existing_tickets if not ticket_is_done(t)]
+                )
+                if pending_count > 0:
+                    typer.echo(
+                        f"Warning: Latest run {existing_run.id} is COMPLETED with {pending_count} pending ticket(s)."
+                    )
+                    typer.echo(
+                        "Use --force-new to start a fresh run (dispatch history will be reset)."
+                    )
+                    _raise_exit("Add --force-new to create a new run.")
     finally:
         store.close()
 
@@ -2081,6 +2094,19 @@ def ticket_flow_start(
                     f"Next: car flow ticket_flow status --repo {engine.repo_root} --run-id {existing_run.id}"
                 )
                 return
+            elif existing_run and reason == "completed_pending":
+                existing_tickets = list_ticket_paths(ticket_dir)
+                pending_count = len(
+                    [t for t in existing_tickets if not ticket_is_done(t)]
+                )
+                if pending_count > 0:
+                    typer.echo(
+                        f"Warning: Latest run {existing_run.id} is COMPLETED with {pending_count} pending ticket(s)."
+                    )
+                    typer.echo(
+                        "Use --force-new to start a fresh run (dispatch history will be reset)."
+                    )
+                    _raise_exit("Add --force-new to create a new run.")
 
         if not list_ticket_paths(ticket_dir):
             _raise_exit(
