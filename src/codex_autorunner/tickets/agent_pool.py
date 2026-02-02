@@ -261,7 +261,7 @@ class AgentPool:
             for msg in req.additional_messages:
                 if isinstance(msg, dict):
                     text = msg.get("text", "")
-                    if text:
+                    if text and text.strip():
                         input_items.append({"type": "text", "text": text})
         if input_items:
             turn_kwargs["input_items"] = input_items
@@ -325,7 +325,7 @@ class AgentPool:
         if req.additional_messages:
             for msg in req.additional_messages:
                 text = msg.get("text", "") if isinstance(msg, dict) else ""
-                if text:
+                if text and text.strip():
                     await client.prompt_async(
                         session_id, message=text, model=model_payload, variant=variant
                     )
