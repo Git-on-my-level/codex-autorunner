@@ -20,3 +20,17 @@ test("leaves unsafe markdown links as text", () => {
   assert.match(html, /\[run\]\(javascript:alert\(1\)\)/);
   assert.doesNotMatch(html, /href="javascript:alert\(1\)"/);
 });
+
+test("renders code blocks correctly", () => {
+  const html = renderMarkdown("Here's a code block:\n```\ncode here\n```\nDone");
+  assert.match(html, /<pre class="md-code">/);
+  assert.match(html, /code here/);
+  assert.doesNotMatch(html, /@@CODEBLOCK_/);
+});
+
+test("renders standalone code block", () => {
+  const html = renderMarkdown("```\ncode here\n```");
+  assert.match(html, /<pre class="md-code">/);
+  assert.match(html, /code here/);
+  assert.doesNotMatch(html, /@@CODEBLOCK_/);
+});

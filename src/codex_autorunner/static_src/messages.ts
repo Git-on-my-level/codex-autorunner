@@ -588,7 +588,8 @@ export function renderMarkdown(body?: string | null): string {
         const idx = Number(match[1]);
         return codeBlocks[idx] ?? "";
       }
-      return `<p>${block.replace(/\n/g, "<br>")}</p>`;
+      const content = block.replace(/\n/g, "<br>").replace(/@@CODEBLOCK_(\d+)@@/g, (_m, id) => codeBlocks[Number(id)] ?? "");
+      return `<p>${content}</p>`;
     })
     .join("");
 }
