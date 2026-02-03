@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,9 +119,28 @@ async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
     prompt_path = hub_root / ".codex-autorunner" / "pma" / "prompt.md"
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path.write_text("PMA system prompt", encoding="utf-8")
+    inbox_dir = prompt_path.parent / "inbox"
+    outbox_dir = prompt_path.parent / "outbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    (inbox_dir / "input.txt").write_text("inbox", encoding="utf-8")
+    (outbox_dir / "output.txt").write_text("outbox", encoding="utf-8")
+
+    class _LifecycleStoreStub:
+        def get_unprocessed(self, limit: int = 20) -> list:
+            return []
+
+    class _HubSupervisorStub:
+        def __init__(self) -> None:
+            self.hub_config = SimpleNamespace(pma=None)
+            self.lifecycle_store = _LifecycleStoreStub()
+
+        def list_repos(self) -> list:
+            return []
 
     record = TelegramTopicRecord(pma_enabled=True, workspace_path=None)
     handler = _ExecutionStub(record, hub_root)
+    handler._hub_supervisor = _HubSupervisorStub()
     message = TelegramMessage(
         update_id=1,
         message_id=10,
@@ -145,6 +165,12 @@ async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
     assert "<hub_snapshot>" in prompt_text
     assert "<user_message>" in prompt_text
     assert "hello" in prompt_text
+    snapshot_json = prompt_text.split("<hub_snapshot>\n", 1)[1].split(
+        "\n</hub_snapshot>", 1
+    )[0]
+    snapshot = json.loads(snapshot_json)
+    assert snapshot["pma_files"]["inbox"] == ["input.txt"]
+    assert snapshot["pma_files"]["outbox"] == ["output.txt"]
 
 
 @pytest.mark.anyio

@@ -2477,7 +2477,7 @@ class ExecutionCommands(SharedHelpers):
         if hub_root is None:
             return None
         supervisor = getattr(self, "_hub_supervisor", None)
-        snapshot = await build_hub_snapshot(supervisor)
+        snapshot = await build_hub_snapshot(supervisor, hub_root=Path(hub_root))
         base_prompt = load_pma_prompt(hub_root)
         return format_pma_prompt(base_prompt, snapshot, message_text, hub_root=hub_root)
 
