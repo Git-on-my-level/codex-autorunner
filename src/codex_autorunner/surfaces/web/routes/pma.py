@@ -977,16 +977,27 @@ def build_pma_routes() -> APIRouter:
 
         body = await request.json() if request.headers.get("content-type") else {}
         lane_id = (body.get("lane_id") or "pma:default").strip()
+        hub_root = request.app.state.config.root
+        lifecycle_router = PmaLifecycleRouter(hub_root)
 
-        queue = _get_pma_queue(request)
-        cancelled = await queue.cancel_lane(lane_id)
+        result = await lifecycle_router.stop(lane_id=lane_id)
+
+        if result.status != "ok":
+            raise HTTPException(status_code=500, detail=result.error)
 
         if lane_id in lane_cancel_events:
             lane_cancel_events[lane_id].set()
 
         await _interrupt_active(request, reason="Lane stopped", source="user_request")
 
-        return {"status": "ok", "cancelled_items": cancelled, "lane_id": lane_id}
+        return {
+            "status": result.status,
+            "message": result.message,
+            "artifact_path": (
+                str(result.artifact_path) if result.artifact_path else None
+            ),
+            "details": result.details,
+        }
 
     @router.post("/new")
     async def new_pma_session(request: Request) -> dict[str, Any]:
@@ -1002,6 +1013,33 @@ def build_pma_routes() -> APIRouter:
         lifecycle_router = PmaLifecycleRouter(hub_root)
 
         result = await lifecycle_router.new(agent=agent, lane_id=lane_id)
+
+        if result.status != "ok":
+            raise HTTPException(status_code=500, detail=result.error)
+
+        return {
+            "status": result.status,
+            "message": result.message,
+            "artifact_path": (
+                str(result.artifact_path) if result.artifact_path else None
+            ),
+            "details": result.details,
+        }
+
+    @router.post("/reset")
+    async def reset_pma_session(request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+
+        body = await request.json() if request.headers.get("content-type") else {}
+        raw_agent = (body.get("agent") or "").strip().lower()
+        agent = raw_agent or None
+
+        hub_root = request.app.state.config.root
+        lifecycle_router = PmaLifecycleRouter(hub_root)
+
+        result = await lifecycle_router.reset(agent=agent)
 
         if result.status != "ok":
             raise HTTPException(status_code=500, detail=result.error)
@@ -1054,21 +1092,24 @@ def build_pma_routes() -> APIRouter:
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
         body = await request.json()
-        agent = (body.get("agent") or "").strip().lower()
-        registry = request.app.state.app_server_threads
-        cleared = []
-        if agent in ("", "all", None):
-            if registry.reset_thread(PMA_KEY):
-                cleared.append(PMA_KEY)
-            if registry.reset_thread(PMA_OPENCODE_KEY):
-                cleared.append(PMA_OPENCODE_KEY)
-        elif agent == "opencode":
-            if registry.reset_thread(PMA_OPENCODE_KEY):
-                cleared.append(PMA_OPENCODE_KEY)
-        else:
-            if registry.reset_thread(PMA_KEY):
-                cleared.append(PMA_KEY)
-        return {"status": "ok", "cleared": cleared}
+        raw_agent = (body.get("agent") or "").strip().lower()
+        agent = raw_agent or None
+
+        hub_root = request.app.state.config.root
+        lifecycle_router = PmaLifecycleRouter(hub_root)
+
+        result = await lifecycle_router.reset(agent=agent)
+
+        if result.status != "ok":
+            raise HTTPException(status_code=500, detail=result.error)
+
+        return {
+            "status": result.status,
+            "cleared": result.details.get("cleared_threads", []),
+            "artifact_path": (
+                str(result.artifact_path) if result.artifact_path else None
+            ),
+        }
 
     @router.get("/turns/{turn_id}/events")
     async def stream_pma_turn_events(

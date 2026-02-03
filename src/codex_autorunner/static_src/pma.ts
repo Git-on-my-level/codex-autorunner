@@ -1163,13 +1163,13 @@ function resetThread(): void {
   flash("Thread reset", "info");
 }
 
-async function resetThreadOnServer(): Promise<void> {
+async function startNewThreadOnServer(): Promise<void> {
   const elements = getElements();
   const rawAgent = (elements.agentSelect?.value || getSelectedAgent() || "").trim().toLowerCase();
-  const resetAgent = rawAgent === "codex" || rawAgent === "opencode" ? rawAgent : "all";
-  await api("/hub/pma/thread/reset", {
+  const selectedAgent = rawAgent === "codex" || rawAgent === "opencode" ? rawAgent : undefined;
+  await api("/hub/pma/new", {
     method: "POST",
-    body: { agent: resetAgent },
+    body: { agent: selectedAgent, lane_id: DEFAULT_PMA_LANE_ID },
   });
 }
 
@@ -1197,9 +1197,9 @@ function attachHandlers(): void {
           statusText: "Cancelled (new thread)",
         });
         try {
-          await resetThreadOnServer();
+          await startNewThreadOnServer();
         } catch (err) {
-          flash("Failed to reset server thread", "error");
+          flash("Failed to start new session", "error");
           return;
         }
         clearAgentSelectionStorage();

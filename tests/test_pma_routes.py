@@ -218,12 +218,60 @@ def test_pma_thread_reset_clears_registry(hub_env) -> None:
     client = TestClient(app)
     resp = client.post("/hub/pma/thread/reset", json={"agent": "opencode"})
     assert resp.status_code == 200
+    payload = resp.json()
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
     assert registry.get_thread_id(PMA_KEY) == "thread-codex"
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
 
     resp = client.post("/hub/pma/thread/reset", json={"agent": "all"})
     assert resp.status_code == 200
+    payload = resp.json()
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
     assert registry.get_thread_id(PMA_KEY) is None
+
+
+def test_pma_reset_creates_artifact(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post("/hub/pma/reset", json={"agent": "all"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
+
+
+def test_pma_stop_creates_artifact(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post("/hub/pma/stop", json={"lane_id": "pma:default"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
+    assert payload["details"]["lane_id"] == "pma:default"
+
+
+def test_pma_new_creates_artifact(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/hub/pma/new", json={"agent": "codex", "lane_id": "pma:default"}
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    artifact_path = Path(payload["artifact_path"])
+    assert artifact_path.exists()
 
 
 def test_pma_files_list_empty(hub_env) -> None:
