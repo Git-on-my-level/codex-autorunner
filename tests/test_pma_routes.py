@@ -5,7 +5,7 @@ from typing import Optional
 import yaml
 from fastapi.testclient import TestClient
 
-from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.server import create_hub_app
@@ -415,6 +415,30 @@ def test_pma_docs_put_invalid_content_type(hub_env) -> None:
         assert any("content" in str(err) for err in detail)
     else:
         assert "content" in str(detail)
+
+
+def test_pma_context_snapshot(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    pma_dir = hub_env.hub_root / ".codex-autorunner" / "pma"
+    active_path = pma_dir / "active_context.md"
+    active_content = "# Active Context\n\n- alpha\n- beta\n"
+    active_path.write_text(active_content, encoding="utf-8")
+
+    resp = client.post("/hub/pma/context/snapshot", json={"reset": True})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["active_context_line_count"] == len(active_content.splitlines())
+    assert payload["reset"] is True
+
+    log_content = (pma_dir / "context_log.md").read_text(encoding="utf-8")
+    assert "## Snapshot:" in log_content
+    assert active_content in log_content
+    assert active_path.read_text(encoding="utf-8") == pma_active_context_content()
 
 
 def test_pma_docs_disabled(hub_env) -> None:

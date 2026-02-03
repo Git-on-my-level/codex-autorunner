@@ -308,20 +308,21 @@ function switchPMADoc(name: string): void {
 async function snapshotActiveContext(): Promise<void> {
   const editor = document.getElementById("pma-docs-editor") as HTMLTextAreaElement | null;
   if (!editor) return;
-  const activeContent = editor.value;
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "Z";
-  const logName = "context_log.md";
 
   try {
-    const logContent = await loadPMADocContent(logName);
-    const newSection = `\n## ${timestamp}\n\n${activeContent}\n`;
-    await savePMADoc(logName, logContent + newSection);
-
-    const resetContent = "# Active Context\n\n<!-- Current working context -->\n";
-    await savePMADoc("active_context.md", resetContent);
+    const payload = (await api("/hub/pma/context/snapshot", {
+      method: "POST",
+      body: { reset: true },
+    })) as { status?: string; warning?: string };
+    if (payload?.status !== "ok") {
+      throw new Error("snapshot failed");
+    }
+    const resetContent = await loadPMADocContent("active_context.md");
     editor.value = resetContent;
-
-    flash("Active context snapshot saved to log and reset", "info");
+    const message = payload?.warning
+      ? `Active context snapshot saved (${payload.warning})`
+      : "Active context snapshot saved";
+    flash(message, "info");
     await loadPMADocs();
   } catch (err) {
     flash("Failed to snapshot active context", "error");

@@ -18,6 +18,7 @@ from ....agents.codex.harness import CodexHarness
 from ....agents.opencode.harness import OpenCodeHarness
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....agents.registry import validate_agent_id
+from ....bootstrap import ensure_pma_docs, pma_active_context_content
 from ....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....core.filebox import sanitize_filename
 from ....core.logging_utils import log_event
@@ -40,6 +41,8 @@ from .shared import SSE_HEADERS
 logger = logging.getLogger(__name__)
 
 PMA_TIMEOUT_SECONDS = 28800
+PMA_CONTEXT_SNAPSHOT_MAX_BYTES = 200_000
+PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES = 5_000_000
 
 
 def build_pma_routes() -> APIRouter:
@@ -1302,6 +1305,83 @@ def build_pma_routes() -> APIRouter:
                 if f.is_file() and not f.name.startswith("."):
                     f.unlink()
         return {"status": "ok"}
+
+    @router.post("/context/snapshot")
+    def snapshot_pma_context(request: Request, body: Optional[dict[str, Any]] = None):
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        hub_root = request.app.state.config.root
+        try:
+            ensure_pma_docs(hub_root)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to ensure PMA docs: {exc}"
+            ) from exc
+
+        reset = False
+        if isinstance(body, dict):
+            reset = bool(body.get("reset", False))
+
+        pma_dir = hub_root / ".codex-autorunner" / "pma"
+        active_context_path = pma_dir / "active_context.md"
+        context_log_path = pma_dir / "context_log.md"
+
+        try:
+            active_content = active_context_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to read active_context.md: {exc}"
+            ) from exc
+
+        timestamp = now_iso()
+        snapshot_header = f"\n\n## Snapshot: {timestamp}\n\n"
+        snapshot_content = snapshot_header + active_content
+        snapshot_bytes = len(snapshot_content.encode("utf-8"))
+        if snapshot_bytes > PMA_CONTEXT_SNAPSHOT_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "Snapshot too large "
+                    f"(max {PMA_CONTEXT_SNAPSHOT_MAX_BYTES} bytes)"
+                ),
+            )
+
+        try:
+            with context_log_path.open("a", encoding="utf-8") as f:
+                f.write(snapshot_content)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to append context_log.md: {exc}"
+            ) from exc
+
+        if reset:
+            try:
+                atomic_write(active_context_path, pma_active_context_content())
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to reset active_context.md: {exc}"
+                ) from exc
+
+        line_count = len(active_content.splitlines())
+        response: dict[str, Any] = {
+            "status": "ok",
+            "timestamp": timestamp,
+            "active_context_line_count": line_count,
+            "reset": reset,
+        }
+        try:
+            context_log_bytes = context_log_path.stat().st_size
+            response["context_log_bytes"] = context_log_bytes
+            if context_log_bytes > PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES:
+                response["warning"] = (
+                    "context_log.md is large "
+                    f"({context_log_bytes} bytes); consider pruning"
+                )
+        except Exception:
+            pass
+
+        return response
 
     @router.get("/docs")
     def list_pma_docs(request: Request) -> dict[str, Any]:
