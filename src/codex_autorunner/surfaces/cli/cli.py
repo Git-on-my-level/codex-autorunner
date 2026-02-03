@@ -46,6 +46,7 @@ from ...core.runtime import (
     RuntimeContext,
     clear_stale_lock,
     doctor,
+    hub_worktree_doctor_checks,
     pma_doctor_checks,
 )
 from ...core.state import RunnerState, load_state, now_iso, save_state, state_lock
@@ -67,7 +68,7 @@ from ...core.usage import (
     summarize_hub_usage,
     summarize_repo_usage,
 )
-from ...core.utils import RepoNotFoundError, default_editor, find_repo_root
+from ...core.utils import RepoNotFoundError, default_editor, find_repo_root, is_within
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.wiring import (
@@ -113,6 +114,7 @@ hub_app = typer.Typer(add_completion=False)
 telegram_app = typer.Typer(add_completion=False)
 templates_app = typer.Typer(add_completion=False)
 repos_app = typer.Typer(add_completion=False)
+worktree_app = typer.Typer(add_completion=False)
 flow_app = typer.Typer(add_completion=False)
 ticket_flow_app = typer.Typer(add_completion=False)
 
@@ -326,6 +328,39 @@ def _resolve_hub_config_path_for_cli(
     return find_nearest_hub_config_path(repo_root)
 
 
+def _guard_unregistered_hub_repo(repo_root: Path, hub: Optional[Path]) -> None:
+    hub_config_path = _resolve_hub_config_path_for_cli(repo_root, hub)
+    if hub_config_path is None:
+        return
+    try:
+        hub_config = load_hub_config(hub_config_path)
+    except ConfigError as exc:
+        _raise_exit(str(exc), cause=exc)
+
+    repo_root = repo_root.resolve()
+    under_repos = is_within(hub_config.repos_root, repo_root)
+    under_worktrees = is_within(hub_config.worktrees_root, repo_root)
+    if not (under_repos or under_worktrees):
+        return
+
+    manifest = load_manifest(hub_config.manifest_path, hub_config.root)
+    if manifest.get_by_path(hub_config.root, repo_root) is not None:
+        return
+
+    lines = [
+        "Repo not registered in hub manifest. Run `car hub scan` or create via `car hub worktree create`.",
+        f"Detected hub root: {hub_config.root}",
+        f"Repo path: {repo_root}",
+        "Runs won't show up in the hub UI until registered.",
+    ]
+    if under_worktrees:
+        lines.append(
+            "Hint: Worktree names should look like <base_repo_id>--<branch> under "
+            f"{hub_config.worktrees_root}"
+        )
+    _raise_exit("\n".join(lines))
+
+
 def _resolve_repo_api_path(repo_root: Path, hub: Optional[Path], path: str) -> str:
     if not path.startswith("/"):
         path = f"/{path}"
@@ -427,6 +462,7 @@ def _require_optional_feature(
 
 
 app.add_typer(hub_app, name="hub")
+hub_app.add_typer(worktree_app, name="worktree")
 app.add_typer(telegram_app, name="telegram")
 app.add_typer(templates_app, name="templates")
 templates_app.add_typer(repos_app, name="repos")
@@ -1314,8 +1350,11 @@ def doctor_cmd(
             repo_config or hub_config, repo_root=repo_root
         )
         pma_checks = pma_doctor_checks(hub_config, repo_root=repo_root)
+        hub_worktree_checks = hub_worktree_doctor_checks(hub_config)
 
-        report = DoctorReport(checks=report.checks + telegram_checks + pma_checks)
+        report = DoctorReport(
+            checks=report.checks + telegram_checks + pma_checks + hub_worktree_checks
+        )
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
     if json_output:
@@ -1367,7 +1406,7 @@ def serve(
 
 @hub_app.command("create")
 def hub_create(
-    repo_id: str = typer.Argument(..., help="Repo id to create and initialize"),
+    repo_id: str = typer.Argument(..., help="Base repo id to create and initialize"),
     repo_path: Optional[Path] = typer.Option(
         None,
         "--repo-path",
@@ -1379,7 +1418,10 @@ def hub_create(
         True, "--git-init/--no-git-init", help="Run git init in the new repo"
     ),
 ):
-    """Create a new git repo under the hub and initialize codex-autorunner files."""
+    """Create a new base git repo under the hub and initialize codex-autorunner files.
+
+    For worktrees, use `car hub worktree create`.
+    """
     config = _require_hub_config(path)
     supervisor = HubSupervisor(
         config,
@@ -1430,6 +1472,157 @@ def hub_clone(
     typer.echo(
         f"Cloned repo {snapshot.id} at {snapshot.path} (status={snapshot.status.value})"
     )
+
+
+def _worktree_snapshot_payload(snapshot) -> dict:
+    return {
+        "id": snapshot.id,
+        "worktree_of": snapshot.worktree_of,
+        "branch": snapshot.branch,
+        "path": str(snapshot.path),
+        "initialized": snapshot.initialized,
+        "exists_on_disk": snapshot.exists_on_disk,
+        "status": snapshot.status.value,
+    }
+
+
+@worktree_app.command("create")
+def hub_worktree_create(
+    base_repo_id: str = typer.Argument(..., help="Base repo id to branch from"),
+    branch: str = typer.Argument(..., help="Branch name for the new worktree"),
+    hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    force: bool = typer.Option(False, "--force", help="Allow existing directory"),
+    start_point: Optional[str] = typer.Option(
+        None, "--start-point", help="Optional git ref to branch from"
+    ),
+):
+    """Create a new hub-managed worktree."""
+    config = _require_hub_config(hub)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+        agent_id_validator=validate_agent_id,
+    )
+    try:
+        snapshot = supervisor.create_worktree(
+            base_repo_id=base_repo_id,
+            branch=branch,
+            force=force,
+            start_point=start_point,
+        )
+    except Exception as exc:
+        _raise_exit(str(exc), cause=exc)
+    typer.echo(
+        f"Created worktree {snapshot.id} (branch={snapshot.branch}) at {snapshot.path}"
+    )
+
+
+@worktree_app.command("list")
+def hub_worktree_list(
+    hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+):
+    """List hub-managed worktrees."""
+    config = _require_hub_config(hub)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        agent_id_validator=validate_agent_id,
+    )
+    snapshots = [
+        snapshot
+        for snapshot in supervisor.list_repos(use_cache=False)
+        if snapshot.kind == "worktree"
+    ]
+    payload = [_worktree_snapshot_payload(snapshot) for snapshot in snapshots]
+    if output_json:
+        typer.echo(json.dumps({"worktrees": payload}, indent=2))
+        return
+    if not payload:
+        typer.echo("No worktrees found.")
+        return
+    typer.echo(f"Worktrees ({len(payload)}):")
+    for item in payload:
+        typer.echo(
+            "  - {id} (base={worktree_of}, branch={branch}, status={status}, initialized={initialized}, exists={exists_on_disk}, path={path})".format(
+                **item
+            )
+        )
+
+
+@worktree_app.command("scan")
+def hub_worktree_scan(
+    hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+):
+    """Scan hub root and list discovered worktrees."""
+    config = _require_hub_config(hub)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        agent_id_validator=validate_agent_id,
+    )
+    snapshots = [snap for snap in supervisor.scan() if snap.kind == "worktree"]
+    payload = [_worktree_snapshot_payload(snapshot) for snapshot in snapshots]
+    if output_json:
+        typer.echo(json.dumps({"worktrees": payload}, indent=2))
+        return
+    if not payload:
+        typer.echo("No worktrees found.")
+        return
+    typer.echo(f"Worktrees ({len(payload)}):")
+    for item in payload:
+        typer.echo(
+            "  - {id} (base={worktree_of}, branch={branch}, status={status}, initialized={initialized}, exists={exists_on_disk}, path={path})".format(
+                **item
+            )
+        )
+
+
+@worktree_app.command("cleanup")
+def hub_worktree_cleanup(
+    worktree_repo_id: str = typer.Argument(..., help="Worktree repo id to remove"),
+    hub: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+    delete_branch: bool = typer.Option(
+        False, "--delete-branch", help="Delete the local branch"
+    ),
+    delete_remote: bool = typer.Option(
+        False, "--delete-remote", help="Delete the remote branch"
+    ),
+    archive: bool = typer.Option(
+        True, "--archive/--no-archive", help="Archive worktree snapshot"
+    ),
+    force_archive: bool = typer.Option(
+        False, "--force-archive", help="Continue cleanup if archive fails"
+    ),
+    archive_note: Optional[str] = typer.Option(
+        None, "--archive-note", help="Optional archive note"
+    ),
+):
+    """Cleanup a hub-managed worktree."""
+    config = _require_hub_config(hub)
+    supervisor = HubSupervisor(
+        config,
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        agent_id_validator=validate_agent_id,
+    )
+    try:
+        supervisor.cleanup_worktree(
+            worktree_repo_id=worktree_repo_id,
+            delete_branch=delete_branch,
+            delete_remote=delete_remote,
+            archive=archive,
+            force_archive=force_archive,
+            archive_note=archive_note,
+        )
+    except Exception as exc:
+        _raise_exit(str(exc), cause=exc)
+    typer.echo("ok")
 
 
 @hub_app.command("serve")
@@ -2045,6 +2238,7 @@ def ticket_flow_bootstrap(
     If latest run is COMPLETED and new tickets are added, a new run is created
     (use --force-new to force a new run regardless of state)."""
     engine = _require_repo_config(repo, hub)
+    _guard_unregistered_hub_repo(engine.repo_root, hub)
     db_path, artifacts_root, ticket_dir = _ticket_flow_paths(engine)
     ticket_dir.mkdir(parents=True, exist_ok=True)
     ticket_path = ticket_dir / "TICKET-001.md"
@@ -2141,6 +2335,7 @@ def ticket_flow_start(
     If latest run is COMPLETED and new tickets are added, a new run is created
     (use --force-new to force a new run regardless of state)."""
     engine = _require_repo_config(repo, hub)
+    _guard_unregistered_hub_repo(engine.repo_root, hub)
     _, _, ticket_dir = _ticket_flow_paths(engine)
     ticket_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2254,6 +2449,7 @@ def ticket_flow_resume(
 ):
     """Resume a paused ticket_flow run."""
     engine = _require_repo_config(repo, hub)
+    _guard_unregistered_hub_repo(engine.repo_root, hub)
     normalized_run_id = _normalize_flow_run_id(run_id)
 
     store = _open_flow_store(engine)
