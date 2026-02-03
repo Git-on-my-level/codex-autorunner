@@ -38,6 +38,16 @@ The project manager agent (PMA) is a way to use an AI agent to run CAR. For exam
 
 The fastest way to get started is to pass [this setup guide](docs/AGENT_SETUP_GUIDE.md) to your favorite AI agent. The agent will walk you through installation and configuration interactively based on your environment.
 
+### From source (repo checkout)
+
+If you're working from a fresh clone of this repo, you can run the repo-local CLI shim:
+
+```bash
+./car --help
+```
+
+The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will bootstrap a local `.venv` and install CAR.
+
 ## Supported models
 CAR currently supports:
 - Codex

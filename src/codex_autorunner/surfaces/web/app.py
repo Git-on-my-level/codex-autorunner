@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import shlex
+import sys
 import threading
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from starlette.types import ASGIApp
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import validate_agent_id
+from ...bootstrap import ensure_hub_car_shim
 from ...core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -680,6 +682,15 @@ def _build_hub_context(
         logging.INFO,
         f"Hub app ready at {config.root}",
     )
+    try:
+        ensure_hub_car_shim(config.root, python_executable=sys.executable)
+    except Exception as exc:
+        safe_log(
+            logger,
+            logging.WARNING,
+            "Failed to ensure hub car shim",
+            exc=exc,
+        )
     app_server_events = AppServerEventBuffer()
     app_server_supervisor, app_server_prune_interval = _build_app_server_supervisor(
         config.app_server,
