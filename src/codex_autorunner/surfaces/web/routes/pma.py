@@ -5,12 +5,10 @@ Hub-level PMA routes (chat + models + events).
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -30,12 +28,12 @@ from ....core.pma_context import (
     format_pma_prompt,
     load_pma_prompt,
 )
+from ....core.pma_lifecycle import PmaLifecycleRouter
+from ....core.pma_queue import PmaQueue, QueueItemState
 from ....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from ....core.pma_state import PmaStateStore
-from ....core.text_delta_coalescer import StreamingTextCoalescer
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
-from ....integrations.app_server.event_buffer import format_sse
 from .agents import _available_agents, _serialize_model_catalog
 from .shared import SSE_HEADERS
 
@@ -56,6 +54,11 @@ def build_pma_routes() -> APIRouter:
     pma_safety_checker: Optional[PmaSafetyChecker] = None
     pma_safety_root: Optional[Path] = None
     pma_audit_log: Optional[PmaAuditLog] = None
+    pma_queue: Optional[PmaQueue] = None
+    pma_queue_root: Optional[Path] = None
+    lane_workers: dict[str, asyncio.Task] = {}
+    lane_cancel_events: dict[str, asyncio.Event] = {}
+    item_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     def _normalize_optional_text(value: Any) -> Optional[str]:
         if not isinstance(value, str):
@@ -113,6 +116,14 @@ def build_pma_routes() -> APIRouter:
             pma_safety_checker = PmaSafetyChecker(hub_root, config=safety_config)
             pma_safety_root = hub_root
         return pma_safety_checker
+
+    def _get_pma_queue(request: Request) -> PmaQueue:
+        nonlocal pma_queue, pma_queue_root
+        hub_root = request.app.state.config.root
+        if pma_queue is None or pma_queue_root != hub_root:
+            pma_queue = PmaQueue(hub_root)
+            pma_queue_root = hub_root
+        return pma_queue
 
     async def _persist_state(store: Optional[PmaStateStore]) -> None:
         if store is None:
@@ -324,6 +335,181 @@ def build_pma_routes() -> APIRouter:
             "thread_id": thread_id,
             "turn_id": turn_id,
         }
+
+    async def _ensure_lane_worker(lane_id: str, request: Request) -> None:
+        nonlocal lane_workers, lane_cancel_events
+        if lane_id in lane_workers and not lane_workers[lane_id].done():
+            return
+
+        cancel_event = asyncio.Event()
+        lane_cancel_events[lane_id] = cancel_event
+
+        async def lane_worker():
+            queue = _get_pma_queue(request)
+            while not cancel_event.is_set():
+                item = await queue.dequeue(lane_id)
+                if item is None:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                if cancel_event.is_set():
+                    await queue.fail_item(item, "cancelled by lane stop")
+                    continue
+
+                result_future = item_futures.get(item.item_id)
+                try:
+                    result = await _execute_queue_item(item, request)
+                    await queue.complete_item(item, result)
+                    if result_future and not result_future.done():
+                        result_future.set_result(result)
+                except Exception as exc:
+                    logger.exception("Failed to process queue item %s", item.item_id)
+                    error_result = {"status": "error", "detail": str(exc)}
+                    await queue.fail_item(item, str(exc))
+                    if result_future and not result_future.done():
+                        result_future.set_result(error_result)
+                finally:
+                    item_futures.pop(item.item_id, None)
+
+        task = asyncio.create_task(lane_worker())
+        lane_workers[lane_id] = task
+
+    async def _execute_queue_item(item: Any, request: Request) -> dict[str, Any]:
+        hub_root = request.app.state.config.root
+        payload = item.payload
+
+        client_turn_id = payload.get("client_turn_id")
+        message = payload.get("message", "")
+        agent = payload.get("agent")
+        model = _normalize_optional_text(payload.get("model"))
+        reasoning = _normalize_optional_text(payload.get("reasoning"))
+
+        store = _get_state_store(request)
+        agents, available_default = _available_agents(request)
+        available_ids = {entry.get("id") for entry in agents if isinstance(entry, dict)}
+        defaults = _get_pma_config(request)
+
+        def _resolve_default_agent() -> str:
+            configured_default = defaults.get("default_agent")
+            try:
+                candidate = validate_agent_id(configured_default or "")
+            except ValueError:
+                candidate = None
+            if candidate and candidate in available_ids:
+                return candidate
+            return available_default
+
+        try:
+            agent_id = validate_agent_id(agent or "")
+        except ValueError:
+            agent_id = _resolve_default_agent()
+
+        safety_checker = _get_safety_checker(request)
+        safety_check = safety_checker.check_chat_start(
+            agent_id, message, client_turn_id
+        )
+        if not safety_check.allowed:
+            detail = safety_check.reason or "PMA action blocked by safety check"
+            if safety_check.details:
+                detail = f"{detail}: {safety_check.details}"
+            return {"status": "error", "detail": detail}
+
+        if not model and defaults.get("model"):
+            model = defaults["model"]
+        if not reasoning and defaults.get("reasoning"):
+            reasoning = defaults["reasoning"]
+
+        prompt_base = load_pma_prompt(hub_root)
+        supervisor = getattr(request.app.state, "hub_supervisor", None)
+        snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
+        prompt = format_pma_prompt(prompt_base, snapshot, message, hub_root=hub_root)
+
+        interrupt_event = await _get_interrupt_event()
+        if interrupt_event.is_set():
+            return {"status": "interrupted", "detail": "PMA chat interrupted"}
+
+        meta_future: asyncio.Future[tuple[str, str]] = (
+            asyncio.get_running_loop().create_future()
+        )
+
+        async def _meta(thread_id: str, turn_id: str) -> None:
+            await _update_current(
+                store=store,
+                client_turn_id=client_turn_id or "",
+                status="running",
+                agent=agent_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+            )
+
+            safety_checker.record_action(
+                action_type=PmaActionType.CHAT_STARTED,
+                agent=agent_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                client_turn_id=client_turn_id,
+                details={"message": message[:200]},
+            )
+
+            log_event(
+                logger,
+                logging.INFO,
+                "pma.turn.started",
+                agent=agent_id,
+                client_turn_id=client_turn_id or None,
+                thread_id=thread_id,
+                turn_id=turn_id,
+            )
+            if not meta_future.done():
+                meta_future.set_result((thread_id, turn_id))
+
+        supervisor = getattr(request.app.state, "app_server_supervisor", None)
+        events = getattr(request.app.state, "app_server_events", None)
+        opencode = getattr(request.app.state, "opencode_supervisor", None)
+        registry = getattr(request.app.state, "app_server_threads", None)
+        stall_timeout_seconds = None
+        try:
+            stall_timeout_seconds = (
+                request.app.state.config.opencode.session_stall_timeout_seconds
+            )
+        except Exception:
+            stall_timeout_seconds = None
+
+        if agent_id == "opencode":
+            if opencode is None:
+                return {"status": "error", "detail": "OpenCode unavailable"}
+            result = await _execute_opencode(
+                opencode,
+                hub_root,
+                prompt,
+                interrupt_event,
+                model=model,
+                reasoning=reasoning,
+                thread_registry=registry,
+                thread_key=PMA_OPENCODE_KEY,
+                stall_timeout_seconds=stall_timeout_seconds,
+                on_meta=_meta,
+            )
+        else:
+            if supervisor is None or events is None:
+                return {"status": "error", "detail": "App-server unavailable"}
+            result = await _execute_app_server(
+                supervisor,
+                events,
+                hub_root,
+                prompt,
+                interrupt_event,
+                model=model,
+                reasoning=reasoning,
+                thread_registry=registry,
+                thread_key=PMA_KEY,
+                on_meta=_meta,
+            )
+
+        result = dict(result or {})
+        result["client_turn_id"] = client_turn_id or ""
+        await _finalize_result(result, request=request, store=store)
+        return result
 
     @router.get("/active")
     async def pma_active_status(
@@ -697,325 +883,50 @@ def build_pma_routes() -> APIRouter:
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
 
-        store = _get_state_store(request)
-        store.load(ensure_exists=True)
-        if not await _begin_turn(client_turn_id, store=store):
-            raise HTTPException(status_code=409, detail="PMA chat already running")
-
-        agents, available_default = _available_agents(request)
-        available_ids = {entry.get("id") for entry in agents if isinstance(entry, dict)}
-
-        defaults = _get_pma_config(request)
-
-        def _resolve_default_agent() -> str:
-            configured_default = defaults.get("default_agent")
-            try:
-                candidate = validate_agent_id(configured_default or "")
-            except ValueError:
-                candidate = None
-            if candidate and candidate in available_ids:
-                return candidate
-            return available_default
-
-        try:
-            agent_id = validate_agent_id(agent or "")
-        except ValueError:
-            agent_id = _resolve_default_agent()
-
-        safety_checker = _get_safety_checker(request)
-        safety_check = safety_checker.check_chat_start(
-            agent_id, message, client_turn_id
-        )
-        if not safety_check.allowed:
-            await _set_active(False, store=store)
-            detail = safety_check.reason or "PMA action blocked by safety check"
-            if safety_check.details:
-                detail = f"{detail}: {safety_check.details}"
-            raise HTTPException(status_code=429, detail=detail)
-
-        if not model and defaults.get("model"):
-            model = defaults["model"]
-        if not reasoning and defaults.get("reasoning"):
-            reasoning = defaults["reasoning"]
-
         hub_root = request.app.state.config.root
-        prompt_base = load_pma_prompt(hub_root)
-        supervisor = getattr(request.app.state, "hub_supervisor", None)
-        snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
-        prompt = format_pma_prompt(prompt_base, snapshot, message, hub_root=hub_root)
+        queue = _get_pma_queue(request)
 
-        interrupt_event = await _get_interrupt_event()
-        if interrupt_event.is_set():
-            await _set_active(False, store=store)
-            return {"status": "interrupted", "detail": "PMA chat interrupted"}
+        lane_id = "pma:default"
+        idempotency_key = f"{hub_root}:{client_turn_id or 'none'}:{message[:100]}"
 
-        meta_future: asyncio.Future[tuple[str, str]] = (
-            asyncio.get_running_loop().create_future()
-        )
-        token_queue: asyncio.Queue[str] = asyncio.Queue()
+        payload = {
+            "message": message,
+            "agent": agent,
+            "model": model,
+            "reasoning": reasoning,
+            "client_turn_id": client_turn_id,
+            "stream": stream,
+            "hub_root": str(hub_root),
+        }
 
-        async def _meta(thread_id: str, turn_id: str) -> None:
-            await _update_current(
-                store=store,
-                client_turn_id=client_turn_id or "",
-                status="running",
-                agent=agent_id,
-                thread_id=thread_id,
-                turn_id=turn_id,
-            )
+        item, dupe_reason = await queue.enqueue(lane_id, idempotency_key, payload)
+        if dupe_reason:
+            logger.info("Duplicate PMA turn: %s", dupe_reason)
 
-            safety_checker.record_action(
-                action_type=PmaActionType.CHAT_STARTED,
-                agent=agent_id,
-                thread_id=thread_id,
-                turn_id=turn_id,
-                client_turn_id=client_turn_id,
-                details={"message": message[:200]},
-            )
+        if item.state == QueueItemState.DEDUPED:
+            return {
+                "status": "ok",
+                "message": "Duplicate request - already processing",
+                "deduped": True,
+            }
 
-            log_event(
-                logger,
-                logging.INFO,
-                "pma.turn.started",
-                agent=agent_id,
-                client_turn_id=client_turn_id or None,
-                thread_id=thread_id,
-                turn_id=turn_id,
-            )
-            if not meta_future.done():
-                meta_future.set_result((thread_id, turn_id))
+        result_future = asyncio.get_running_loop().create_future()
+        item_futures[item.item_id] = result_future
 
-        async def _stream_app_server_tokens(
-            queue: asyncio.Queue[str],
-        ) -> None:
-            try:
-                thread_id, turn_id = await meta_future
-            except asyncio.CancelledError:
-                return
-            if not thread_id or not turn_id:
-                return
-            events = getattr(request.app.state, "app_server_events", None)
-            if events is None:
-                return
-            coalescer = StreamingTextCoalescer()
-            try:
-                async for chunk in events.stream(thread_id, turn_id):
-                    if interrupt_event.is_set():
-                        break
-                    if not chunk or chunk.startswith(":"):
-                        continue
-                    event = "message"
-                    data_lines: list[str] = []
-                    for line in chunk.splitlines():
-                        if line.startswith("event:"):
-                            event = line[len("event:") :].strip()
-                        elif line.startswith("data:"):
-                            data_lines.append(line[len("data:") :].lstrip())
-                        elif line.strip():
-                            data_lines.append(line)
-                    if event != "app-server" or not data_lines:
-                        continue
-                    try:
-                        payload = json.loads("\n".join(data_lines))
-                    except Exception:
-                        continue
-                    if not isinstance(payload, dict):
-                        continue
-                    message = payload.get("message")
-                    if not isinstance(message, dict):
-                        continue
-                    method = message.get("method")
-                    params = message.get("params")
-                    if method == "thread/tokenUsage/updated" and isinstance(
-                        params, dict
-                    ):
-                        token_usage = params.get("tokenUsage")
-                        if isinstance(token_usage, dict):
-                            await queue.put(format_sse("token_usage", token_usage))
-                        continue
-                    if method not in ("item/agentMessage/delta", "turn/streamDelta"):
-                        continue
-                    delta = None
-                    if isinstance(params, dict):
-                        raw = params.get("delta") or params.get("text")
-                        if isinstance(raw, str):
-                            delta = raw
-                    if not delta:
-                        continue
-                    for text in coalescer.add(delta):
-                        await queue.put(format_sse("token", {"token": text}))
-            except asyncio.CancelledError:
-                pass
-            finally:
-                for text in coalescer.flush():
-                    await queue.put(format_sse("token", {"token": text}))
-
-        async def _run() -> dict[str, Any]:
-            supervisor = getattr(request.app.state, "app_server_supervisor", None)
-            events = getattr(request.app.state, "app_server_events", None)
-            opencode = getattr(request.app.state, "opencode_supervisor", None)
-            registry = getattr(request.app.state, "app_server_threads", None)
-            stall_timeout_seconds = None
-            try:
-                stall_timeout_seconds = (
-                    request.app.state.config.opencode.session_stall_timeout_seconds
-                )
-            except Exception:
-                stall_timeout_seconds = None
-
-            if agent_id == "opencode":
-                if opencode is None:
-                    return {"status": "error", "detail": "OpenCode unavailable"}
-                part_handler = None
-                opencode_coalescer: Optional[StreamingTextCoalescer] = None
-                if stream:
-                    opencode_coalescer = StreamingTextCoalescer()
-
-                    async def _handle_part(
-                        part_type: str, part: dict[str, Any], delta_text: Optional[str]
-                    ) -> None:
-                        if (
-                            part_type == "text"
-                            and isinstance(delta_text, str)
-                            and delta_text
-                        ):
-                            for chunk in opencode_coalescer.add(delta_text):
-                                await token_queue.put(
-                                    format_sse("token", {"token": chunk})
-                                )
-                        elif part_type == "usage" and isinstance(part, dict):
-                            await token_queue.put(format_sse("token_usage", part))
-
-                    part_handler = _handle_part
-                result = await _execute_opencode(
-                    opencode,
-                    hub_root,
-                    prompt,
-                    interrupt_event,
-                    model=model,
-                    reasoning=reasoning,
-                    thread_registry=registry,
-                    thread_key=PMA_OPENCODE_KEY,
-                    stall_timeout_seconds=stall_timeout_seconds,
-                    on_meta=_meta,
-                    part_handler=part_handler,
-                )
-                if opencode_coalescer is not None:
-                    for chunk in opencode_coalescer.flush():
-                        await token_queue.put(format_sse("token", {"token": chunk}))
-                return result
-            if supervisor is None or events is None:
-                return {"status": "error", "detail": "App-server unavailable"}
-            return await _execute_app_server(
-                supervisor,
-                events,
-                hub_root,
-                prompt,
-                interrupt_event,
-                model=model,
-                reasoning=reasoning,
-                thread_registry=registry,
-                thread_key=PMA_KEY,
-                on_meta=_meta,
-            )
-
-        async def _stream() -> AsyncIterator[str]:
-            # IMPORTANT: shield the underlying turn from client disconnects (e.g. page refresh).
-            # We also store the final result server-side so the UI can recover after reload.
-            run_task = asyncio.create_task(_run())
-            token_task: Optional[asyncio.Task[None]] = None
-            if agent_id != "opencode":
-                token_task = asyncio.create_task(_stream_app_server_tokens(token_queue))
-
-            async def _finalize() -> None:
-                result: dict[str, Any]
-                try:
-                    result = await run_task
-                except Exception as exc:
-                    logger.exception("pma chat task failed")
-                    result = {
-                        "status": "error",
-                        "detail": str(exc) or "PMA chat failed",
-                    }
-                result = dict(result or {})
-                result["client_turn_id"] = client_turn_id or ""
-                await _finalize_result(result, request=request, store=store)
-
-            asyncio.create_task(_finalize())
-
-            yield format_sse("status", {"status": "starting"})
-            try:
-                result: Optional[dict[str, Any]] = None
-                while True:
-                    if run_task.done() and token_queue.empty():
-                        break
-                    queue_get = asyncio.create_task(token_queue.get())
-                    done, _ = await asyncio.wait(
-                        {queue_get, run_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if queue_get in done:
-                        payload = queue_get.result()
-                        if payload:
-                            yield payload
-                        continue
-                    queue_get.cancel()
-                    result = await asyncio.shield(run_task)
-                    break
-                if result is None:
-                    result = await asyncio.shield(run_task)
-                if token_task is not None:
-                    token_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await token_task
-                while not token_queue.empty():
-                    payload = token_queue.get_nowait()
-                    if payload:
-                        yield payload
-                if result.get("status") == "ok":
-                    raw_events = result.pop("raw_events", []) or []
-                    for event in raw_events:
-                        yield format_sse("app-server", event)
-                    result["client_turn_id"] = client_turn_id or ""
-                    yield format_sse("update", result)
-                    yield format_sse("done", {"status": "ok"})
-                elif result.get("status") == "interrupted":
-                    yield format_sse(
-                        "interrupted",
-                        {"detail": result.get("detail") or "PMA chat interrupted"},
-                    )
-                else:
-                    yield format_sse(
-                        "error", {"detail": result.get("detail") or "PMA chat failed"}
-                    )
-            except asyncio.CancelledError:
-                # Client disconnected; the run continues in the background and can be recovered via /active.
-                return
-            except Exception:
-                logger.exception("pma chat stream failed")
-                yield format_sse("error", {"detail": "PMA chat failed"})
-            finally:
-                if token_task is not None:
-                    token_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await token_task
-
-        if stream:
-            return StreamingResponse(
-                _stream(),
-                media_type="text/event-stream",
-                headers=SSE_HEADERS,
-            )
+        await _ensure_lane_worker(lane_id, request)
 
         try:
-            result = await _run()
-            result = dict(result or {})
-            result["client_turn_id"] = client_turn_id or ""
-            await _finalize_result(result, request=request, store=store)
-            return result
-        finally:
-            # _finalize_result already clears active/interrupt state
-            pass
+            result = await asyncio.wait_for(result_future, timeout=PMA_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            return {"status": "error", "detail": "PMA chat timed out"}
+        except Exception:
+            logger.exception("PMA chat error")
+            return {
+                "status": "error",
+                "detail": "An error occurred processing your request",
+            }
+
+        return result
 
     @router.post("/interrupt")
     async def pma_interrupt(request: Request) -> dict[str, Any]:
@@ -1025,6 +936,85 @@ def build_pma_routes() -> APIRouter:
         return await _interrupt_active(
             request, reason="PMA chat interrupted", source="user_request"
         )
+
+    @router.post("/stop")
+    async def pma_stop(request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+
+        body = await request.json() if request.headers.get("content-type") else {}
+        lane_id = (body.get("lane_id") or "pma:default").strip()
+
+        queue = _get_pma_queue(request)
+        cancelled = await queue.cancel_lane(lane_id)
+
+        if lane_id in lane_cancel_events:
+            lane_cancel_events[lane_id].set()
+
+        await _interrupt_active(request, reason="Lane stopped", source="user_request")
+
+        return {"status": "ok", "cancelled_items": cancelled, "lane_id": lane_id}
+
+    @router.post("/new")
+    async def new_pma_session(request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+
+        body = await request.json()
+        agent = _normalize_optional_text(body.get("agent"))
+        lane_id = (body.get("lane_id") or "pma:default").strip()
+
+        hub_root = request.app.state.config.root
+        lifecycle_router = PmaLifecycleRouter(hub_root)
+
+        result = await lifecycle_router.new(agent=agent, lane_id=lane_id)
+
+        if result.status != "ok":
+            raise HTTPException(status_code=500, detail=result.error)
+
+        return {
+            "status": result.status,
+            "message": result.message,
+            "artifact_path": (
+                str(result.artifact_path) if result.artifact_path else None
+            ),
+            "details": result.details,
+        }
+
+    @router.post("/compact")
+    async def compact_pma_history(request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+
+        body = await request.json()
+        summary = (body.get("summary") or "").strip()
+        agent = _normalize_optional_text(body.get("agent"))
+        thread_id = _normalize_optional_text(body.get("thread_id"))
+
+        if not summary:
+            raise HTTPException(status_code=400, detail="summary is required")
+
+        hub_root = request.app.state.config.root
+        lifecycle_router = PmaLifecycleRouter(hub_root)
+
+        result = await lifecycle_router.compact(
+            summary=summary, agent=agent, thread_id=thread_id
+        )
+
+        if result.status != "ok":
+            raise HTTPException(status_code=500, detail=result.error)
+
+        return {
+            "status": result.status,
+            "message": result.message,
+            "artifact_path": (
+                str(result.artifact_path) if result.artifact_path else None
+            ),
+            "details": result.details,
+        }
 
     @router.post("/thread/reset")
     async def reset_pma_thread(request: Request) -> dict[str, Any]:
@@ -1131,6 +1121,40 @@ def build_pma_routes() -> APIRouter:
                     for f in sorted(files, key=lambda x: x["name"])
                 ]
         return result
+
+    @router.get("/queue")
+    async def pma_queue_status(request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+
+        queue = _get_pma_queue(request)
+        summary = await queue.get_queue_summary()
+        return summary
+
+    @router.get("/queue/{lane_id:path}")
+    async def pma_lane_queue_status(request: Request, lane_id: str) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+
+        queue = _get_pma_queue(request)
+        items = await queue.list_items(lane_id)
+        return {
+            "lane_id": lane_id,
+            "items": [
+                {
+                    "item_id": item.item_id,
+                    "state": item.state.value,
+                    "enqueued_at": item.enqueued_at,
+                    "started_at": item.started_at,
+                    "finished_at": item.finished_at,
+                    "error": item.error,
+                    "dedupe_reason": item.dedupe_reason,
+                }
+                for item in items
+            ],
+        }
 
     @router.post("/files/{box}")
     async def upload_pma_file(box: str, request: Request):
