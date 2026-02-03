@@ -25,6 +25,8 @@ class PmaActionType(str, Enum):
     FILE_UPLOADED = "file_uploaded"
     FILE_DOWNLOADED = "file_downloaded"
     FILE_DELETED = "file_deleted"
+    FILE_BULK_DELETED = "file_bulk_deleted"
+    DOC_UPDATED = "doc_updated"
     DISPATCH_PROCESSED = "dispatch_processed"
     AGENT_ACTION = "agent_action"
     SESSION_NEW = "session_new"

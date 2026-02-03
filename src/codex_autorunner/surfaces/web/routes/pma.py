@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 PMA_TIMEOUT_SECONDS = 28800
 PMA_CONTEXT_SNAPSHOT_MAX_BYTES = 200_000
 PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES = 5_000_000
+PMA_BULK_DELETE_SAMPLE_LIMIT = 10
 
 
 def build_pma_routes() -> APIRouter:
@@ -1417,10 +1418,20 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
         box_dir = hub_root / ".codex-autorunner" / "pma" / box
+        deleted_files: list[str] = []
         if box_dir.exists():
             for f in box_dir.iterdir():
                 if f.is_file() and not f.name.startswith("."):
+                    deleted_files.append(f.name)
                     f.unlink()
+        _get_safety_checker(request).record_action(
+            action_type=PmaActionType.FILE_BULK_DELETED,
+            details={
+                "box": box,
+                "count": len(deleted_files),
+                "sample": deleted_files[:PMA_BULK_DELETE_SAMPLE_LIMIT],
+            },
+        )
         return {"status": "ok"}
 
     @router.post("/context/snapshot")
@@ -1610,6 +1621,17 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(
                 status_code=500, detail=f"Failed to write doc: {exc}"
             ) from exc
+        details = {
+            "name": name,
+            "size": len(content.encode("utf-8")),
+            "source": "web",
+        }
+        if name == "active_context.md":
+            details["line_count"] = len(content.splitlines())
+        _get_safety_checker(request).record_action(
+            action_type=PmaActionType.DOC_UPDATED,
+            details=details,
+        )
         return {"name": name, "status": "ok"}
 
     return router
