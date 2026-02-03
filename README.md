@@ -21,7 +21,7 @@ The philosophy behind CAR is to let the agents do what they do best, and get out
 CAR treats tickets as the control plane and models as the execution layer. This means that we rely on agents to follow the instructions written in the tickets. If you use a sufficiently weak model, CAR may not work well for you. CAR is an amplifier for agent capabilities. Agents who like to scope creep (create too many new tickets) or reward hack (mark a ticket as done despite it being incomplete) are not a good fit for CAR.
 
 ## Interaction patterns
-CAR's core is a set of python functions surfaced as a CLI, operating on a file system. There are current 2 UIs built on top of this core.
+CAR's core is a set of python functions surfaced as a CLI, operating on a file system. There are current 3 UIs built on top of this core.
 
 ### Web UI
 The web UI is the main control plane for CAR. From here you can set up new repositories or clone existing ones, chat with agents using their TUI, and run the ticket autorunner. There are many quality-of-life features like Whisper integration, editing documents by chatting with AI (useful for mobile), viewing usage analytics, and much more. The Web UI is the most full featured user-facing interface and a good starting point for trying out CAR.
@@ -31,32 +31,12 @@ I recommend serving the web UI over Tailscale. There is an auth token option but
 ### Telegram
 Telegram is the "on-the-go" and notification hub for CAR. From here you can kick off and monitor existing tickets, set up new tickets, and chat with agents. Your primary UX here is asking the agent to do things for you rather than you doing it yourself like you would on the web UI. This is great for on-the-go work, but it doesn't have full feature parity with the web UI.
 
-### PMA durable docs
-PMA keeps hub-scoped docs under `.codex-autorunner/pma/`. Put durable guidance in `AGENTS.md`, keep short-lived notes in `active_context.md`, and append timestamped snapshots to `context_log.md` when pruning. In the web UI, switch PMA to manual mode to edit these docs and trigger snapshots.
+### Project Manager Agent
+The project manager agent (PMA) is a way to use an AI agent to run CAR. For example instead of making/editing tickets in the UI, you can ask the PMA to do it for you. Instead of starting a ticket flow, the PMA can babysit it for you. The PMA can be accessed in the web and in Telegram, and also uses the CAR CLI directly.
 
 ## Quickstart
 
 The fastest way to get started is to pass [this setup guide](docs/AGENT_SETUP_GUIDE.md) to your favorite AI agent. The agent will walk you through installation and configuration interactively based on your environment.
-
-**TL;DR for the impatient:**
-
-# Install
-```
-pipx install codex-autorunner
-```
-# Initialize in your repo
-```
-cd /path/to/your/repo
-car init
-```
-# Verify setup
-```
-car doctor
-```
-# Create a ticket and run
-```
-car flow ticket_flow bootstrap
-```
 
 ## Supported models
 CAR currently supports:
@@ -88,6 +68,9 @@ If you need to do something more custom or granular, you can use your favorite a
 On the go? The web UI is mobile responsive, or if you prefer you can type or voice chat with your agents on Telegram.
 ![CAR Telegram Media Voice Screenshot](docs/screenshots/telegram-media-voice.PNG)
 ![CAR Telegram Media Image Screenshot](docs/screenshots/telegram-media-image.PNG)
+
+Don't want to use the product directly? Delegate work to the PMA.
+![CAR Telegram PMA Screenshot](docs/screenshots/telegram-pma.png)
 
 ## Star history
 [![Star History Chart](https://api.star-history.com/svg?repos=Git-on-my-level/codex-autorunner&type=Date)](https://star-history.com/#Git-on-my-level/codex-autorunner&Date)
