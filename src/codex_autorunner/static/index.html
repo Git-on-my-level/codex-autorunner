@@ -25,6 +25,15 @@
         <button class="primary sm" id="hub-new-repo">+ New</button>
         <button class="sm" id="hub-scan">Scan</button>
         <button class="ghost sm" id="hub-refresh">Refresh</button>
+        <div class="notifications-bell" data-notifications-root="hub">
+          <button class="ghost sm icon-btn notifications-bell-btn" data-notifications-trigger title="Notifications"
+            aria-label="Notifications">
+            <span aria-hidden="true">🔔</span>
+            <span class="notifications-bell-badge hidden" data-notifications-badge></span>
+          </button>
+          <div class="notifications-dropdown hidden" data-notifications-dropdown role="menu"
+            aria-label="Pending dispatches"></div>
+        </div>
         <button class="ghost sm icon-btn" id="hub-settings" title="Settings">⚙</button>
       </div>
       <div class="hub-mode-toggle" role="tablist" aria-label="Hub mode">
@@ -99,6 +108,15 @@
         <span class="hub-version" id="pma-version">v–</span>
       </div>
       <div class="hub-hero-actions pma-hero-actions">
+        <div class="notifications-bell" data-notifications-root="pma">
+          <button class="ghost sm icon-btn notifications-bell-btn" data-notifications-trigger title="Notifications"
+            aria-label="Notifications">
+            <span aria-hidden="true">🔔</span>
+            <span class="notifications-bell-badge hidden" data-notifications-badge></span>
+          </button>
+          <div class="notifications-dropdown hidden" data-notifications-dropdown role="menu"
+            aria-label="Pending dispatches"></div>
+        </div>
         <button class="ghost sm icon-btn" id="pma-settings" title="Settings">⚙</button>
       </div>
       <div class="hub-mode-toggle" role="tablist" aria-label="Hub mode">
@@ -1148,6 +1166,17 @@
       <div class="modal-actions">
         <button class="ghost" id="repo-settings-close">Close</button>
       </div>
+    </div>
+  </div>
+  <!-- Notifications Modal -->
+  <div class="modal-overlay hidden" id="notifications-modal">
+    <div aria-labelledby="notifications-modal-title" aria-modal="true" class="modal-dialog notifications-modal-dialog"
+      role="dialog" tabindex="-1">
+      <div class="notifications-modal-header">
+        <span class="label" id="notifications-modal-title">Pending dispatch</span>
+        <button class="ghost sm icon-btn" id="notifications-modal-close" title="Close">×</button>
+      </div>
+      <div class="notifications-modal-body-wrapper" id="notifications-modal-body"></div>
     </div>
   </div>
   <!-- Reason Details Modal -->

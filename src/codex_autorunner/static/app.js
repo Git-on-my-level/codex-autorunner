@@ -15,6 +15,7 @@ import { initWorkspace } from "./workspace.js";
 import { initDashboard } from "./dashboard.js";
 import { initArchive } from "./archive.js";
 import { initPMA } from "./pma.js";
+import { initNotifications } from "./notifications.js";
 let pmaInitialized = false;
 async function initPMAView() {
     if (!pmaInitialized) {
@@ -84,6 +85,7 @@ async function initHubShell() {
     if (repoShell)
         repoShell.classList.add("hidden");
     initHub();
+    initNotifications();
     manualBtns.forEach((btn) => {
         btn.addEventListener("click", () => {
             showHubView();
