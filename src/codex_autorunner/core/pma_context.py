@@ -153,16 +153,16 @@ def format_pma_prompt(
         line_count = pma_docs.get("active_context_line_count")
         prompt += (
             "<pma_workspace_docs>\n"
-            "<AGENTS.md>\n"
+            "<AGENTS_MD>\n"
             f"{pma_docs.get('agents', '')}\n"
-            "</AGENTS.md>\n"
-            "<active_context.md>\n"
+            "</AGENTS_MD>\n"
+            "<ACTIVE_CONTEXT_MD>\n"
             f"{pma_docs.get('active_context', '')}\n"
-            "</active_context.md>\n"
-            f"<active_context_budget lines='{max_lines}' current_lines='{line_count}' />\n"
-            "<context_log_tail.md>\n"
+            "</ACTIVE_CONTEXT_MD>\n"
+            f"<ACTIVE_CONTEXT_BUDGET lines='{max_lines}' current_lines='{line_count}' />\n"
+            "<CONTEXT_LOG_TAIL_MD>\n"
             f"{pma_docs.get('context_log_tail', '')}\n"
-            "</context_log_tail.md>\n"
+            "</CONTEXT_LOG_TAIL_MD>\n"
             "</pma_workspace_docs>\n\n"
         )
 

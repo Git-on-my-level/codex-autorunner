@@ -310,14 +310,14 @@ def test_pma_docs_list(hub_env) -> None:
     assert "docs" in payload
     docs = payload["docs"]
     assert isinstance(docs, list)
-    doc_names = {doc["name"] for doc in docs}
-    assert doc_names == {
+    doc_names = [doc["name"] for doc in docs]
+    assert doc_names == [
         "AGENTS.md",
         "active_context.md",
         "context_log.md",
         "ABOUT_CAR.md",
         "prompt.md",
-    }
+    ]
     for doc in docs:
         assert "name" in doc
         assert "exists" in doc

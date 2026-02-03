@@ -1383,6 +1383,15 @@ def build_pma_routes() -> APIRouter:
 
         return response
 
+    PMA_DOC_ORDER = (
+        "AGENTS.md",
+        "active_context.md",
+        "context_log.md",
+        "ABOUT_CAR.md",
+        "prompt.md",
+    )
+    PMA_DOC_SET = set(PMA_DOC_ORDER)
+
     @router.get("/docs")
     def list_pma_docs(request: Request) -> dict[str, Any]:
         pma_config = _get_pma_config(request)
@@ -1390,15 +1399,8 @@ def build_pma_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="PMA is disabled")
         hub_root = request.app.state.config.root
         pma_dir = hub_root / ".codex-autorunner" / "pma"
-        allowed_docs = {
-            "AGENTS.md",
-            "active_context.md",
-            "context_log.md",
-            "ABOUT_CAR.md",
-            "prompt.md",
-        }
         result: list[dict[str, Any]] = []
-        for doc_name in allowed_docs:
+        for doc_name in PMA_DOC_ORDER:
             doc_path = pma_dir / doc_name
             entry: dict[str, Any] = {"name": doc_name}
             if doc_path.exists():
@@ -1430,14 +1432,7 @@ def build_pma_routes() -> APIRouter:
         pma_config = _get_pma_config(request)
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
-        allowed_docs = {
-            "AGENTS.md",
-            "active_context.md",
-            "context_log.md",
-            "ABOUT_CAR.md",
-            "prompt.md",
-        }
-        if name not in allowed_docs:
+        if name not in PMA_DOC_SET:
             raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
         hub_root = request.app.state.config.root
         pma_dir = hub_root / ".codex-autorunner" / "pma"
@@ -1459,14 +1454,7 @@ def build_pma_routes() -> APIRouter:
         pma_config = _get_pma_config(request)
         if not pma_config.get("enabled", True):
             raise HTTPException(status_code=404, detail="PMA is disabled")
-        allowed_docs = {
-            "AGENTS.md",
-            "active_context.md",
-            "context_log.md",
-            "ABOUT_CAR.md",
-            "prompt.md",
-        }
-        if name not in allowed_docs:
+        if name not in PMA_DOC_SET:
             raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
         content = body.get("content", "")
         if not isinstance(content, str):
