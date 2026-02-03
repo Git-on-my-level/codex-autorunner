@@ -36,9 +36,20 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         engine_state = dict(engine_state) if isinstance(engine_state, dict) else {}
 
         repo_root = find_repo_root()
-        workspace_root = Path(input_data.get("workspace_root") or repo_root)
+        raw_workspace = input_data.get("workspace_root") or repo_root
+        workspace_root = Path(raw_workspace)
+        if not workspace_root.is_absolute():
+            workspace_root = (Path(repo_root) / workspace_root).resolve()
+        else:
+            workspace_root = workspace_root.resolve()
+
         ticket_dir = Path(input_data.get("ticket_dir") or ".codex-autorunner/tickets")
+        if not ticket_dir.is_absolute():
+            ticket_dir = (workspace_root / ticket_dir).resolve()
+
         runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
+        if not runs_dir.is_absolute():
+            runs_dir = (workspace_root / runs_dir).resolve()
         max_total_turns = int(
             input_data.get("max_total_turns") or DEFAULT_MAX_TOTAL_TURNS
         )
