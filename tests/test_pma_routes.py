@@ -21,7 +21,11 @@ def _write_config(path: Path, data: dict) -> None:
 
 
 def _enable_pma(
-    hub_root: Path, *, model: Optional[str] = None, reasoning: Optional[str] = None
+    hub_root: Path,
+    *,
+    model: Optional[str] = None,
+    reasoning: Optional[str] = None,
+    max_text_chars: Optional[int] = None,
 ) -> None:
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     cfg.setdefault("pma", {})
@@ -30,6 +34,8 @@ def _enable_pma(
         cfg["pma"]["model"] = model
     if reasoning is not None:
         cfg["pma"]["reasoning"] = reasoning
+    if max_text_chars is not None:
+        cfg["pma"]["max_text_chars"] = max_text_chars
     _write_config(hub_root / CONFIG_FILENAME, cfg)
 
 
@@ -57,6 +63,16 @@ def test_pma_chat_requires_message(hub_env) -> None:
     client = TestClient(app)
     resp = client.post("/hub/pma/chat", json={})
     assert resp.status_code == 400
+
+
+def test_pma_chat_rejects_oversize_message(hub_env) -> None:
+    _enable_pma(hub_env.hub_root, max_text_chars=5)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "toolong"})
+    assert resp.status_code == 400
+    payload = resp.json()
+    assert "max_text_chars" in (payload.get("detail") or "")
 
 
 def test_pma_routes_enabled_by_default(hub_env) -> None:
@@ -129,6 +145,79 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
         "model": "test-model",
         "effort": "high",
     }
+
+
+@pytest.mark.anyio
+async def test_pma_chat_idempotency_key_uses_full_message(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    blocker = asyncio.Event()
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-1"
+
+        async def wait(self, timeout=None):
+            await blocker.wait()
+            return type(
+                "Result",
+                (),
+                {"agent_messages": ["ok"], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        async def thread_resume(self, thread_id: str) -> None:
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        prefix = "a" * 100
+        message_one = f"{prefix}one"
+        message_two = f"{prefix}two"
+        task_one = asyncio.create_task(
+            client.post("/hub/pma/chat", json={"message": message_one})
+        )
+        await anyio.sleep(0.05)
+        task_two = asyncio.create_task(
+            client.post("/hub/pma/chat", json={"message": message_two})
+        )
+        await anyio.sleep(0.05)
+        assert not task_two.done()
+        blocker.set()
+        with anyio.fail_after(2):
+            resp_one = await task_one
+            resp_two = await task_two
+
+    assert resp_one.status_code == 200
+    assert resp_two.status_code == 200
+    assert resp_two.json().get("deduped") is not True
 
 
 @pytest.mark.anyio

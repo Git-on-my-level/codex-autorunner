@@ -5,6 +5,8 @@ Hub-level PMA routes (chat + models + events).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,7 +84,29 @@ def build_pma_routes() -> APIRouter:
             "active_context_max_lines": int(
                 pma_config.get("active_context_max_lines", 200)
             ),
+            "max_text_chars": int(pma_config.get("max_text_chars", 800)),
         }
+
+    def _build_idempotency_key(
+        *,
+        lane_id: str,
+        agent: Optional[str],
+        model: Optional[str],
+        reasoning: Optional[str],
+        client_turn_id: Optional[str],
+        message: str,
+    ) -> str:
+        payload = {
+            "lane_id": lane_id,
+            "agent": agent,
+            "model": model,
+            "reasoning": reasoning,
+            "client_turn_id": client_turn_id,
+            "message": message,
+        }
+        raw = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=True)
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return f"pma:{digest}"
 
     def _get_state_store(request: Request) -> PmaStateStore:
         nonlocal pma_state_store, pma_state_root
@@ -908,19 +932,34 @@ def build_pma_routes() -> APIRouter:
         body = await request.json()
         message = (body.get("message") or "").strip()
         stream = bool(body.get("stream", False))
-        agent = body.get("agent")
+        agent = _normalize_optional_text(body.get("agent"))
         model = _normalize_optional_text(body.get("model"))
         reasoning = _normalize_optional_text(body.get("reasoning"))
         client_turn_id = (body.get("client_turn_id") or "").strip() or None
 
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
+        max_text_chars = int(pma_config.get("max_text_chars", 0) or 0)
+        if max_text_chars > 0 and len(message) > max_text_chars:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "message exceeds max_text_chars " f"({max_text_chars} characters)"
+                ),
+            )
 
         hub_root = request.app.state.config.root
         queue = _get_pma_queue(request)
 
         lane_id = "pma:default"
-        idempotency_key = f"{hub_root}:{client_turn_id or 'none'}:{message[:100]}"
+        idempotency_key = _build_idempotency_key(
+            lane_id=lane_id,
+            agent=agent,
+            model=model,
+            reasoning=reasoning,
+            client_turn_id=client_turn_id,
+            message=message,
+        )
 
         payload = {
             "message": message,
