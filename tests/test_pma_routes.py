@@ -1,7 +1,11 @@
+import asyncio
 import json
 from pathlib import Path
 from typing import Optional
 
+import anyio
+import httpx
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
@@ -125,6 +129,83 @@ def test_pma_chat_applies_model_reasoning_defaults(hub_env) -> None:
         "model": "test-model",
         "effort": "high",
     }
+
+
+@pytest.mark.anyio
+async def test_pma_active_updates_during_running_turn(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    blocker = asyncio.Event()
+
+    class FakeTurnHandle:
+        def __init__(self) -> None:
+            self.turn_id = "turn-1"
+
+        async def wait(self, timeout=None):
+            await blocker.wait()
+            return type(
+                "Result",
+                (),
+                {"agent_messages": ["ok"], "raw_events": [], "errors": []},
+            )()
+
+    class FakeClient:
+        async def thread_resume(self, thread_id: str) -> None:
+            return None
+
+        async def thread_start(self, root: str) -> dict:
+            return {"id": "thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        chat_task = asyncio.create_task(
+            client.post("/hub/pma/chat", json={"message": "hi"})
+        )
+        try:
+            with anyio.fail_after(2):
+                while True:
+                    resp = await client.get("/hub/pma/active")
+                    assert resp.status_code == 200
+                    payload = resp.json()
+                    current = payload.get("current") or {}
+                    if (
+                        payload.get("active")
+                        and current.get("thread_id")
+                        and current.get("turn_id")
+                    ):
+                        break
+                    await anyio.sleep(0.05)
+            assert payload["active"] is True
+            assert payload["current"]["lane_id"] == "pma:default"
+        finally:
+            blocker.set()
+        resp = await chat_task
+        assert resp.status_code == 200
+        assert resp.json().get("status") == "ok"
 
 
 def test_pma_thread_reset_clears_registry(hub_env) -> None:

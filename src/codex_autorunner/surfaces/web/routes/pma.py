@@ -191,7 +191,10 @@ def build_pma_routes() -> APIRouter:
         await _persist_state(store)
 
     async def _begin_turn(
-        client_turn_id: Optional[str], *, store: Optional[PmaStateStore] = None
+        client_turn_id: Optional[str],
+        *,
+        store: Optional[PmaStateStore] = None,
+        lane_id: Optional[str] = None,
     ) -> bool:
         nonlocal pma_active, pma_current
         async with pma_lock:
@@ -204,6 +207,7 @@ def build_pma_routes() -> APIRouter:
                 "agent": None,
                 "thread_id": None,
                 "turn_id": None,
+                "lane_id": lane_id or "",
                 "started_at": now_iso(),
             }
         await _persist_state(store)
@@ -417,6 +421,12 @@ def build_pma_routes() -> APIRouter:
                 detail = f"{detail}: {safety_check.details}"
             return {"status": "error", "detail": detail}
 
+        started = await _begin_turn(
+            client_turn_id, store=store, lane_id=getattr(item, "lane_id", None)
+        )
+        if not started:
+            logger.warning("PMA turn started while another was active")
+
         if not model and defaults.get("model"):
             model = defaults["model"]
         if not reasoning and defaults.get("reasoning"):
@@ -429,7 +439,10 @@ def build_pma_routes() -> APIRouter:
 
         interrupt_event = await _get_interrupt_event()
         if interrupt_event.is_set():
-            return {"status": "interrupted", "detail": "PMA chat interrupted"}
+            result = {"status": "interrupted", "detail": "PMA chat interrupted"}
+            if started:
+                await _finalize_result(result, request=request, store=store)
+            return result
 
         meta_future: asyncio.Future[tuple[str, str]] = (
             asyncio.get_running_loop().create_future()
@@ -478,36 +491,52 @@ def build_pma_routes() -> APIRouter:
         except Exception:
             stall_timeout_seconds = None
 
-        if agent_id == "opencode":
-            if opencode is None:
-                return {"status": "error", "detail": "OpenCode unavailable"}
-            result = await _execute_opencode(
-                opencode,
-                hub_root,
-                prompt,
-                interrupt_event,
-                model=model,
-                reasoning=reasoning,
-                thread_registry=registry,
-                thread_key=PMA_OPENCODE_KEY,
-                stall_timeout_seconds=stall_timeout_seconds,
-                on_meta=_meta,
-            )
-        else:
-            if supervisor is None or events is None:
-                return {"status": "error", "detail": "App-server unavailable"}
-            result = await _execute_app_server(
-                supervisor,
-                events,
-                hub_root,
-                prompt,
-                interrupt_event,
-                model=model,
-                reasoning=reasoning,
-                thread_registry=registry,
-                thread_key=PMA_KEY,
-                on_meta=_meta,
-            )
+        try:
+            if agent_id == "opencode":
+                if opencode is None:
+                    result = {"status": "error", "detail": "OpenCode unavailable"}
+                    if started:
+                        await _finalize_result(result, request=request, store=store)
+                    return result
+                result = await _execute_opencode(
+                    opencode,
+                    hub_root,
+                    prompt,
+                    interrupt_event,
+                    model=model,
+                    reasoning=reasoning,
+                    thread_registry=registry,
+                    thread_key=PMA_OPENCODE_KEY,
+                    stall_timeout_seconds=stall_timeout_seconds,
+                    on_meta=_meta,
+                )
+            else:
+                if supervisor is None or events is None:
+                    result = {"status": "error", "detail": "App-server unavailable"}
+                    if started:
+                        await _finalize_result(result, request=request, store=store)
+                    return result
+                result = await _execute_app_server(
+                    supervisor,
+                    events,
+                    hub_root,
+                    prompt,
+                    interrupt_event,
+                    model=model,
+                    reasoning=reasoning,
+                    thread_registry=registry,
+                    thread_key=PMA_KEY,
+                    on_meta=_meta,
+                )
+        except Exception as exc:
+            if started:
+                error_result = {
+                    "status": "error",
+                    "detail": str(exc),
+                    "client_turn_id": client_turn_id or "",
+                }
+                await _finalize_result(error_result, request=request, store=store)
+            raise
 
         result = dict(result or {})
         result["client_turn_id"] = client_turn_id or ""
