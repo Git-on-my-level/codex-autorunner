@@ -183,6 +183,7 @@ class AgentPool:
             max_handles=app_server_cfg.max_handles,
             idle_ttl_seconds=app_server_cfg.idle_ttl_seconds,
             session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
+            max_text_chars=self._config.opencode.max_text_chars,
             base_env=None,
             subagent_models=subagent_models,
         )

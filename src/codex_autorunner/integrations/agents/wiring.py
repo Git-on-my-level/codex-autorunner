@@ -192,6 +192,7 @@ class AgentBackendFactory:
             max_handles=self._config.app_server.max_handles,
             idle_ttl_seconds=self._config.app_server.idle_ttl_seconds,
             session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
+            max_text_chars=self._config.opencode.max_text_chars,
             base_env=None,
             subagent_models=subagent_models,
         )
