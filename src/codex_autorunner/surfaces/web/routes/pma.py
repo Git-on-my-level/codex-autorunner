@@ -20,7 +20,14 @@ from ....agents.codex.harness import CodexHarness
 from ....agents.opencode.harness import OpenCodeHarness
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
 from ....agents.registry import validate_agent_id
-from ....bootstrap import ensure_pma_docs, pma_active_context_content
+from ....bootstrap import (
+    ensure_pma_docs,
+    pma_about_content,
+    pma_active_context_content,
+    pma_agents_content,
+    pma_context_log_content,
+    pma_prompt_content,
+)
 from ....core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from ....core.filebox import sanitize_filename
 from ....core.logging_utils import log_event
@@ -1501,6 +1508,25 @@ def build_pma_routes() -> APIRouter:
         "prompt.md",
     )
     PMA_DOC_SET = set(PMA_DOC_ORDER)
+    PMA_DOC_DEFAULTS = {
+        "AGENTS.md": pma_agents_content,
+        "active_context.md": pma_active_context_content,
+        "context_log.md": pma_context_log_content,
+        "ABOUT_CAR.md": pma_about_content,
+        "prompt.md": pma_prompt_content,
+    }
+
+    @router.get("/docs/default/{name}")
+    def get_pma_doc_default(name: str, request: Request) -> dict[str, str]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        if name not in PMA_DOC_SET:
+            raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
+        content_fn = PMA_DOC_DEFAULTS.get(name)
+        if content_fn is None:
+            raise HTTPException(status_code=404, detail=f"Default not found: {name}")
+        return {"name": name, "content": content_fn()}
 
     @router.get("/docs")
     def list_pma_docs(request: Request) -> dict[str, Any]:

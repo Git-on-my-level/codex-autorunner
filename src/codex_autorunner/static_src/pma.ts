@@ -239,6 +239,18 @@ async function loadPMADocContent(name: string): Promise<string> {
   }
 }
 
+async function loadPMADocDefaultContent(name: string): Promise<string> {
+  try {
+    const payload = (await api(`/hub/pma/docs/default/${encodeURIComponent(name)}`, {
+      method: "GET",
+    })) as PMADocContent;
+    return payload?.content || "";
+  } catch (err) {
+    flash(`Failed to load default ${name}`, "error");
+    return "";
+  }
+}
+
 async function savePMADoc(name: string, content: string): Promise<void> {
   if (isSavingDoc) return;
   isSavingDoc = true;
@@ -334,9 +346,11 @@ function resetActiveContext(): void {
   if (!confirm("Reset active context to default?")) return;
   const editor = document.getElementById("pma-docs-editor") as HTMLTextAreaElement | null;
   if (!editor) return;
-  const resetContent = "# Active Context\n\n<!-- Current working context -->\n";
-  editor.value = resetContent;
-  void savePMADoc("active_context.md", resetContent);
+  void loadPMADocDefaultContent("active_context.md").then((resetContent) => {
+    if (!resetContent) return;
+    editor.value = resetContent;
+    void savePMADoc("active_context.md", resetContent);
+  });
 }
 
 async function startTurnEventsStream(meta: {
