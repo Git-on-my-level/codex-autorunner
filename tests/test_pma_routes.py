@@ -13,6 +13,7 @@ from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_file
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes import pma as pma_routes
 
 
 def _write_config(path: Path, data: dict) -> None:
@@ -295,6 +296,27 @@ async def test_pma_active_updates_during_running_turn(hub_env) -> None:
         resp = await chat_task
         assert resp.status_code == 200
         assert resp.json().get("status") == "ok"
+
+
+def test_pma_active_clears_on_prompt_build_error(hub_env, monkeypatch) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("snapshot failed")
+
+    monkeypatch.setattr(pma_routes, "build_hub_snapshot", _boom)
+
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "hi"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "error"
+    assert "snapshot failed" in (payload.get("detail") or "")
+
+    active = client.get("/hub/pma/active").json()
+    assert active["active"] is False
+    assert active["current"] == {}
 
 
 def test_pma_thread_reset_clears_registry(hub_env) -> None:

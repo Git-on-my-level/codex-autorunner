@@ -465,10 +465,22 @@ def build_pma_routes() -> APIRouter:
         if not reasoning and defaults.get("reasoning"):
             reasoning = defaults["reasoning"]
 
-        prompt_base = load_pma_prompt(hub_root)
-        supervisor = getattr(request.app.state, "hub_supervisor", None)
-        snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
-        prompt = format_pma_prompt(prompt_base, snapshot, message, hub_root=hub_root)
+        try:
+            prompt_base = load_pma_prompt(hub_root)
+            supervisor = getattr(request.app.state, "hub_supervisor", None)
+            snapshot = await build_hub_snapshot(supervisor, hub_root=hub_root)
+            prompt = format_pma_prompt(
+                prompt_base, snapshot, message, hub_root=hub_root
+            )
+        except Exception as exc:
+            error_result = {
+                "status": "error",
+                "detail": str(exc),
+                "client_turn_id": client_turn_id or "",
+            }
+            if started:
+                await _finalize_result(error_result, request=request, store=store)
+            return error_result
 
         interrupt_event = await _get_interrupt_event()
         if interrupt_event.is_set():
