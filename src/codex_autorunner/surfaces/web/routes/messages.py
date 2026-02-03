@@ -48,6 +48,31 @@ def _flows_db_path(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "flows.db"
 
 
+def _resolve_workspace_and_runs(
+    record_input: dict[str, Any], repo_root: Path
+) -> tuple[Path, Path]:
+    """
+    Normalize workspace_root/runs_dir with sensible fallbacks.
+
+    - workspace_root defaults to the current repo_root.
+    - runs_dir defaults to .codex-autorunner/runs.
+    - If runs_dir is absolute, keep it as-is; otherwise join to workspace_root.
+    """
+
+    raw_workspace = record_input.get("workspace_root")
+    workspace_root = Path(raw_workspace) if raw_workspace else repo_root
+    if not workspace_root.is_absolute():
+        workspace_root = (repo_root / workspace_root).resolve()
+    else:
+        workspace_root = workspace_root.resolve()
+
+    runs_dir_raw = record_input.get("runs_dir") or ".codex-autorunner/runs"
+    runs_dir_path = Path(runs_dir_raw)
+    if not runs_dir_path.is_absolute():
+        runs_dir_path = (workspace_root / runs_dir_path).resolve()
+    return workspace_root, runs_dir_path
+
+
 def _timestamp(path: Path) -> Optional[str]:
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
@@ -93,8 +118,7 @@ def _collect_dispatch_history(
     *, repo_root: Path, run_id: str, record_input: dict[str, Any]
 ) -> list[dict[str, Any]]:
     """Collect all dispatches from the dispatch history directory."""
-    workspace_root = Path(record_input.get("workspace_root") or repo_root)
-    runs_dir = Path(record_input.get("runs_dir") or ".codex-autorunner/runs")
+    workspace_root, runs_dir = _resolve_workspace_and_runs(record_input, repo_root)
     outbox_paths = resolve_outbox_paths(
         workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
     )
@@ -151,8 +175,7 @@ def _collect_dispatch_history(
 def _collect_reply_history(
     *, repo_root: Path, run_id: str, record_input: dict[str, Any]
 ):
-    workspace_root = Path(record_input.get("workspace_root") or repo_root)
-    runs_dir = Path(record_input.get("runs_dir") or ".codex-autorunner/runs")
+    workspace_root, runs_dir = _resolve_workspace_and_runs(record_input, repo_root)
     reply_paths = resolve_reply_paths(
         workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
     )
@@ -401,8 +424,7 @@ def build_messages_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="Run not found")
 
         input_data = dict(record.input_data or {})
-        workspace_root = Path(input_data.get("workspace_root") or repo_root)
-        runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
+        workspace_root, runs_dir = _resolve_workspace_and_runs(input_data, repo_root)
         reply_paths = resolve_reply_paths(
             workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
         )
