@@ -184,7 +184,28 @@ def _default_path_prefixes() -> list[str]:
         str(home / ".opencode" / "bin"),  # OpenCode default install
         str(home / ".local" / "bin"),  # Common user-local installs
     ]
-    return [p for p in candidates if os.path.isdir(p)]
+    repo_candidates: list[str] = []
+    repo_root = get_repo_root_context()
+    if repo_root is None:
+        try:
+            repo_root = find_repo_root()
+        except RepoNotFoundError:
+            repo_root = None
+    if repo_root is not None:
+        bin_dir = "Scripts" if os.name == "nt" else "bin"
+        repo_candidates = [
+            str(repo_root / ".venv" / bin_dir),
+            str(repo_root / ".codex-autorunner" / "bin"),
+            str(repo_root / "bin"),
+        ]
+        car_shim = repo_root / "car"
+        if car_shim.exists():
+            repo_candidates.append(str(repo_root))
+    return [
+        p
+        for p in (repo_candidates + candidates)
+        if (os.path.isdir(p) or os.path.isfile(p))
+    ]
 
 
 def augmented_path(path: Optional[str] = None) -> str:
@@ -300,6 +321,7 @@ def build_opencode_supervisor(
     max_handles: Optional[int] = None,
     idle_ttl_seconds: Optional[float] = None,
     session_stall_timeout_seconds: Optional[float] = None,
+    max_text_chars: Optional[int] = None,
     base_env: Optional[MutableMapping[str, str]] = None,
     subagent_models: Optional[Mapping[str, str]] = None,
 ) -> Optional[Any]:
@@ -357,6 +379,7 @@ def build_opencode_supervisor(
         max_handles=max_handles,
         idle_ttl_seconds=idle_ttl_seconds,
         session_stall_timeout_seconds=session_stall_timeout_seconds,
+        max_text_chars=max_text_chars,
         username=username if password else None,
         password=password if password else None,
         base_env=base_env,

@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Repo-local CAR CLI shim.
+
+This lets `./car` work in a fresh checkout without installing the package.
+If dependencies are missing, it bootstraps a local venv and installs CAR.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional
+
+
+REPO_ROOT = Path(__file__).resolve().parent
+SRC_ROOT = REPO_ROOT / "src"
+VENV_DIR = REPO_ROOT / ".venv"
+
+
+def _venv_python(venv_dir: Path) -> Optional[Path]:
+    if os.name == "nt":
+        candidate = venv_dir / "Scripts" / "python.exe"
+    else:
+        candidate = venv_dir / "bin" / "python"
+    return candidate if candidate.exists() else None
+
+
+def _system_python() -> Optional[str]:
+    for name in ("python3", "python"):
+        path = shutil.which(name)
+        if path:
+            return path
+    if sys.executable:
+        return sys.executable
+    return None
+
+
+def _with_pythonpath(env: dict[str, str]) -> dict[str, str]:
+    merged = dict(env)
+    existing = merged.get("PYTHONPATH", "")
+    if existing:
+        merged["PYTHONPATH"] = f"{SRC_ROOT}{os.pathsep}{existing}"
+    else:
+        merged["PYTHONPATH"] = str(SRC_ROOT)
+    return merged
+
+
+def _can_import(python: str, env: dict[str, str]) -> bool:
+    try:
+        result = subprocess.run(
+            [python, "-c", "import codex_autorunner"],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _exec(python: str, env: dict[str, str]) -> None:
+    os.execvpe(python, [python, "-m", "codex_autorunner.cli", *sys.argv[1:]], env)
+
+
+def _bootstrap(bootstrap_python: str) -> Path:
+    sys.stderr.write("Bootstrapping CAR venv...\n")
+    subprocess.run(
+        [bootstrap_python, "-m", "venv", str(VENV_DIR)],
+        check=True,
+    )
+    venv_python = _venv_python(VENV_DIR)
+    if venv_python is None:
+        raise RuntimeError("Failed to create venv; missing python executable.")
+    subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "--upgrade", "pip"],
+        check=True,
+    )
+    subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "-e", str(REPO_ROOT)],
+        check=True,
+    )
+    return venv_python
+
+
+def main() -> int:
+    env = os.environ.copy()
+
+    venv_python = _venv_python(VENV_DIR)
+    if venv_python and _can_import(str(venv_python), env):
+        _exec(str(venv_python), env)
+
+    system_python = _system_python()
+    if system_python is None:
+        sys.stderr.write("Python 3 is required to run CAR.\n")
+        return 1
+
+    src_env = _with_pythonpath(env)
+    if _can_import(system_python, src_env):
+        _exec(system_python, src_env)
+
+    try:
+        venv_python = _bootstrap(system_python)
+    except subprocess.CalledProcessError as exc:
+        sys.stderr.write(f"Failed to bootstrap CAR venv (exit {exc.returncode}).\n")
+        return exc.returncode or 1
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"Failed to bootstrap CAR venv: {exc}\n")
+        return 1
+
+    _exec(str(venv_python), env)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
