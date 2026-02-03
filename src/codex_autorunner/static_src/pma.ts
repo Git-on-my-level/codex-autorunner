@@ -374,13 +374,18 @@ async function startTurnEventsStream(meta: {
   }
 }
 
-async function pollForTurnMeta(clientTurnId: string, timeoutMs = 8000): Promise<void> {
+async function pollForTurnMeta(
+  clientTurnId: string,
+  options: { timeoutMs?: number; signal?: AbortSignal } = {}
+): Promise<void> {
   if (!clientTurnId) return;
+  const timeoutMs = options.timeoutMs ?? 8000;
   const started = Date.now();
 
   while (Date.now() - started < timeoutMs) {
     if (!pmaChat || pmaChat.state.status !== "running") return;
     if (currentEventsController) return;
+    if (options.signal?.aborted) return;
 
     try {
       const payload = (await api(
@@ -724,13 +729,18 @@ async function sendMessage(): Promise<void> {
     if (model) payload.model = model;
     if (reasoning) payload.reasoning = reasoning;
 
-    const res = await fetch(endpoint, {
+    const responsePromise = fetch(endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
       signal: currentController.signal,
     });
 
+    // Stream tool calls/events separately as soon as we have (thread_id, turn_id).
+    // The main /hub/pma/chat stream only emits a final "update"/"done" today.
+    void pollForTurnMeta(clientTurnId, { signal: currentController.signal });
+
+    const res = await responsePromise;
     if (!res.ok) {
       const text = await res.text();
       let detail = text;
@@ -742,10 +752,6 @@ async function sendMessage(): Promise<void> {
       }
       throw new Error(detail || `Request failed (${res.status})`);
     }
-
-    // Stream tool calls/events separately as soon as we have (thread_id, turn_id).
-    // The main /hub/pma/chat stream only emits a final "update"/"done" today.
-    void pollForTurnMeta(clientTurnId);
 
     const contentType = res.headers.get("content-type") || "";
     if (contentType.includes("text/event-stream")) {

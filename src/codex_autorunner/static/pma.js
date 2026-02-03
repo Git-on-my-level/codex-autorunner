@@ -307,14 +307,17 @@ async function startTurnEventsStream(meta) {
         // ignore (abort / network)
     }
 }
-async function pollForTurnMeta(clientTurnId, timeoutMs = 8000) {
+async function pollForTurnMeta(clientTurnId, options = {}) {
     if (!clientTurnId)
         return;
+    const timeoutMs = options.timeoutMs ?? 8000;
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
         if (!pmaChat || pmaChat.state.status !== "running")
             return;
         if (currentEventsController)
+            return;
+        if (options.signal?.aborted)
             return;
         try {
             const payload = (await api(`/hub/pma/active?client_turn_id=${encodeURIComponent(clientTurnId)}`, { method: "GET" }));
@@ -633,12 +636,16 @@ async function sendMessage() {
             payload.model = model;
         if (reasoning)
             payload.reasoning = reasoning;
-        const res = await fetch(endpoint, {
+        const responsePromise = fetch(endpoint, {
             method: "POST",
             headers,
             body: JSON.stringify(payload),
             signal: currentController.signal,
         });
+        // Stream tool calls/events separately as soon as we have (thread_id, turn_id).
+        // The main /hub/pma/chat stream only emits a final "update"/"done" today.
+        void pollForTurnMeta(clientTurnId, { signal: currentController.signal });
+        const res = await responsePromise;
         if (!res.ok) {
             const text = await res.text();
             let detail = text;
@@ -651,9 +658,6 @@ async function sendMessage() {
             }
             throw new Error(detail || `Request failed (${res.status})`);
         }
-        // Stream tool calls/events separately as soon as we have (thread_id, turn_id).
-        // The main /hub/pma/chat stream only emits a final "update"/"done" today.
-        void pollForTurnMeta(clientTurnId);
         const contentType = res.headers.get("content-type") || "";
         if (contentType.includes("text/event-stream")) {
             await readPMAStream(res, true);
