@@ -99,6 +99,7 @@ let isUnloading = false;
 let unloadHandlerInstalled = false;
 let currentEventsController: AbortController | null = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
+const DEFAULT_PMA_LANE_ID = "pma:default";
 let fileBoxCtrl: ReturnType<typeof createFileBoxWidget> | null = null;
 let pendingUploadNames: string[] = [];
 let currentDocName: string | null = null;
@@ -672,7 +673,7 @@ async function sendMessage(): Promise<void> {
   if (!message) return;
 
   if (currentController) {
-    cancelRequest();
+    void cancelRequest({ clearPending: true, interruptServer: true });
     return;
   }
 
@@ -1100,23 +1101,51 @@ function parseMaybeJson(data: string): unknown {
   }
 }
 
-function cancelRequest(): void {
+type CancelRequestOptions = {
+  clearPending?: boolean;
+  interruptServer?: boolean;
+  stopLane?: boolean;
+  statusText?: string;
+};
+
+async function interruptActiveTurn(options: { stopLane?: boolean } = {}): Promise<void> {
+  try {
+    if (options.stopLane) {
+      await api("/hub/pma/stop", {
+        method: "POST",
+        body: { lane_id: DEFAULT_PMA_LANE_ID },
+      });
+      return;
+    }
+    await api("/hub/pma/interrupt", { method: "POST" });
+  } catch {
+    // Best-effort; UI state already reflects cancellation.
+  }
+}
+
+async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> {
+  const { clearPending = false, interruptServer = false, stopLane = false, statusText } = options;
   if (currentController) {
     currentController.abort();
     currentController = null;
   }
   stopTurnEventsStream();
+  if (interruptServer || stopLane) {
+    await interruptActiveTurn({ stopLane });
+  }
+  if (clearPending) {
+    clearPendingTurn();
+  }
   if (pmaChat) {
     pmaChat.state.controller = null;
     pmaChat.state.status = "interrupted";
-    pmaChat.state.statusText = "Cancelled";
+    pmaChat.state.statusText = statusText || "Cancelled";
     pmaChat.state.contextUsagePercent = null;
     pmaChat.render();
   }
 }
 
 function resetThread(): void {
-  cancelRequest();
   clearPendingTurn();
   stopTurnEventsStream();
   if (pmaChat) {
@@ -1154,14 +1183,19 @@ function attachHandlers(): void {
 
   if (elements.cancelBtn) {
     elements.cancelBtn.addEventListener("click", () => {
-      cancelRequest();
+      void cancelRequest({ clearPending: true, interruptServer: true });
     });
   }
 
   if (elements.newThreadBtn) {
     elements.newThreadBtn.addEventListener("click", () => {
       void (async () => {
-        cancelRequest();
+        await cancelRequest({
+          clearPending: true,
+          interruptServer: true,
+          stopLane: true,
+          statusText: "Cancelled (new thread)",
+        });
         try {
           await resetThreadOnServer();
         } catch (err) {

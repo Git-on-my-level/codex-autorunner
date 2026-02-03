@@ -44,6 +44,7 @@ let isUnloading = false;
 let unloadHandlerInstalled = false;
 let currentEventsController = null;
 const PMA_PENDING_TURN_KEY = "car.pma.pendingTurn";
+const DEFAULT_PMA_LANE_ID = "pma:default";
 let fileBoxCtrl = null;
 let pendingUploadNames = [];
 let currentDocName = null;
@@ -583,7 +584,7 @@ async function sendMessage() {
     if (!message)
         return;
     if (currentController) {
-        cancelRequest();
+        void cancelRequest({ clearPending: true, interruptServer: true });
         return;
     }
     // Ensure prior turn event streams are cleared so we don't render stale actions.
@@ -974,22 +975,43 @@ function parseMaybeJson(data) {
         return data;
     }
 }
-function cancelRequest() {
+async function interruptActiveTurn(options = {}) {
+    try {
+        if (options.stopLane) {
+            await api("/hub/pma/stop", {
+                method: "POST",
+                body: { lane_id: DEFAULT_PMA_LANE_ID },
+            });
+            return;
+        }
+        await api("/hub/pma/interrupt", { method: "POST" });
+    }
+    catch {
+        // Best-effort; UI state already reflects cancellation.
+    }
+}
+async function cancelRequest(options = {}) {
+    const { clearPending = false, interruptServer = false, stopLane = false, statusText } = options;
     if (currentController) {
         currentController.abort();
         currentController = null;
     }
     stopTurnEventsStream();
+    if (interruptServer || stopLane) {
+        await interruptActiveTurn({ stopLane });
+    }
+    if (clearPending) {
+        clearPendingTurn();
+    }
     if (pmaChat) {
         pmaChat.state.controller = null;
         pmaChat.state.status = "interrupted";
-        pmaChat.state.statusText = "Cancelled";
+        pmaChat.state.statusText = statusText || "Cancelled";
         pmaChat.state.contextUsagePercent = null;
         pmaChat.render();
     }
 }
 function resetThread() {
-    cancelRequest();
     clearPendingTurn();
     stopTurnEventsStream();
     if (pmaChat) {
@@ -1024,13 +1046,18 @@ function attachHandlers() {
     }
     if (elements.cancelBtn) {
         elements.cancelBtn.addEventListener("click", () => {
-            cancelRequest();
+            void cancelRequest({ clearPending: true, interruptServer: true });
         });
     }
     if (elements.newThreadBtn) {
         elements.newThreadBtn.addEventListener("click", () => {
             void (async () => {
-                cancelRequest();
+                await cancelRequest({
+                    clearPending: true,
+                    interruptServer: true,
+                    stopLane: true,
+                    statusText: "Cancelled (new thread)",
+                });
                 try {
                     await resetThreadOnServer();
                 }
