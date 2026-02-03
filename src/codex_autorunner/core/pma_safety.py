@@ -52,7 +52,11 @@ class PmaSafetyChecker:
             return False
         if self._circuit_breaker_until is None:
             return False
-        return datetime.now(timezone.utc).timestamp() < self._circuit_breaker_until
+        now = datetime.now(timezone.utc).timestamp()
+        if now >= self._circuit_breaker_until:
+            self._reset_circuit_breaker()
+            return False
+        return True
 
     def _activate_circuit_breaker(self) -> None:
         self._circuit_breaker_until = (
