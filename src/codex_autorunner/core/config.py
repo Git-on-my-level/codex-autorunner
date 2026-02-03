@@ -2204,6 +2204,8 @@ def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
         max_text_chars = opencode_cfg.get("max_text_chars")
         if not isinstance(max_text_chars, int):
             raise ConfigError("opencode.max_text_chars must be an integer or null")
+        if max_text_chars <= 0:
+            raise ConfigError("opencode.max_text_chars must be > 0")
 
 
 def _validate_update_config(cfg: Dict[str, Any]) -> None:
