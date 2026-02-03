@@ -899,6 +899,13 @@ def build_pma_routes() -> APIRouter:
         if dupe_reason:
             logger.info("Duplicate PMA turn: %s", dupe_reason)
 
+        if item.state == QueueItemState.DEDUPED:
+            return {
+                "status": "ok",
+                "message": "Duplicate request - already processing",
+                "deduped": True,
+            }
+
         result_future = asyncio.get_running_loop().create_future()
         item_futures[item.item_id] = result_future
 
@@ -908,15 +915,11 @@ def build_pma_routes() -> APIRouter:
             result = await asyncio.wait_for(result_future, timeout=PMA_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             return {"status": "error", "detail": "PMA chat timed out"}
-        except Exception as exc:
+        except Exception:
             logger.exception("PMA chat error")
-            return {"status": "error", "detail": str(exc)}
-
-        if item.state == QueueItemState.DEDUPED:
             return {
-                "status": "ok",
-                "message": "Duplicate request - already processing",
-                "deduped": True,
+                "status": "error",
+                "detail": "An error occurred processing your request",
             }
 
         return result

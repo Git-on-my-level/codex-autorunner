@@ -84,7 +84,7 @@ class PmaQueue:
         self._lock = asyncio.Lock()
 
     def _lane_queue_path(self, lane_id: str) -> Path:
-        safe_lane_id = lane_id.replace("/", "_").replace(":", "_")
+        safe_lane_id = lane_id.replace(":", "__COLON__").replace("/", "__SLASH__")
         return self._queue_dir / f"{safe_lane_id}{QUEUE_FILE_SUFFIX}"
 
     def _lane_queue_lock_path(self, lane_id: str) -> Path:
@@ -286,7 +286,9 @@ class PmaQueue:
 
         for path in self._queue_dir.iterdir():
             if path.is_file() and path.suffix == QUEUE_FILE_SUFFIX:
-                lane_name = path.stem.replace("_", "/").replace("_", ":")
+                lane_name = path.stem.replace("__SLASH__", "/").replace(
+                    "__COLON__", ":"
+                )
                 lanes.add(lane_name)
 
         return sorted(lanes)
