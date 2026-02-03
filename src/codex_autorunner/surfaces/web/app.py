@@ -67,6 +67,7 @@ from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...manifest import load_manifest
 from ...tickets.files import list_ticket_paths, safe_relpath, ticket_is_done
+from ...tickets.models import Dispatch
 from ...tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService
 from .hub_jobs import HubJobManager
@@ -1620,6 +1621,27 @@ def create_hub_app(
                 history_dir = outbox_paths.dispatch_history_dir
                 if not history_dir.exists() or not history_dir.is_dir():
                     return None
+
+                def _dispatch_dict(dispatch: Dispatch) -> dict:
+                    return {
+                        "mode": dispatch.mode,
+                        "title": dispatch.title,
+                        "body": dispatch.body,
+                        "extra": dispatch.extra,
+                        "is_handoff": dispatch.is_handoff,
+                    }
+
+                def _list_files(dispatch_dir: Path) -> list[str]:
+                    files: list[str] = []
+                    for child in sorted(dispatch_dir.iterdir(), key=lambda p: p.name):
+                        if child.name.startswith("."):
+                            continue
+                        if child.name == "DISPATCH.md":
+                            continue
+                        if child.is_file():
+                            files.append(child.name)
+                    return files
+
                 seq_dirs: list[Path] = []
                 for child in history_dir.iterdir():
                     if not child.is_dir():
@@ -1629,40 +1651,74 @@ def create_hub_app(
                         seq_dirs.append(child)
                 if not seq_dirs:
                     return None
-                latest_dir = sorted(seq_dirs, key=lambda p: p.name)[-1]
-                seq = int(latest_dir.name)
-                dispatch_path = latest_dir / "DISPATCH.md"
-                dispatch, errors = parse_dispatch(dispatch_path)
-                if errors or dispatch is None:
-                    return {
-                        "seq": seq,
-                        "dir": safe_relpath(latest_dir, repo_root),
-                        "dispatch": None,
-                        "errors": errors,
-                        "files": [],
-                    }
-                files: list[str] = []
-                for child in sorted(latest_dir.iterdir(), key=lambda p: p.name):
-                    if child.name.startswith("."):
+
+                seq_dirs = sorted(seq_dirs, key=lambda p: p.name, reverse=True)
+                handoff_candidate: Optional[dict] = None
+                non_summary_candidate: Optional[dict] = None
+                turn_summary_candidate: Optional[dict] = None
+                error_candidate: Optional[dict] = None
+
+                for seq_dir in seq_dirs:
+                    seq = int(seq_dir.name)
+                    dispatch_path = seq_dir / "DISPATCH.md"
+                    dispatch, errors = parse_dispatch(dispatch_path)
+                    if errors or dispatch is None:
+                        if error_candidate is None:
+                            error_candidate = {
+                                "seq": seq,
+                                "dir": seq_dir,
+                                "errors": errors,
+                            }
                         continue
-                    if child.name == "DISPATCH.md":
-                        continue
-                    if child.is_file():
-                        files.append(child.name)
-                dispatch_dict = {
-                    "mode": dispatch.mode,
-                    "title": dispatch.title,
-                    "body": dispatch.body,
-                    "extra": dispatch.extra,
-                    "is_handoff": dispatch.is_handoff,
-                }
-                return {
-                    "seq": seq,
-                    "dir": safe_relpath(latest_dir, repo_root),
-                    "dispatch": dispatch_dict,
+                    candidate = {"seq": seq, "dir": seq_dir, "dispatch": dispatch}
+                    if dispatch.is_handoff and handoff_candidate is None:
+                        handoff_candidate = candidate
+                    if (
+                        dispatch.mode != "turn_summary"
+                        and non_summary_candidate is None
+                    ):
+                        non_summary_candidate = candidate
+                    if (
+                        dispatch.mode == "turn_summary"
+                        and turn_summary_candidate is None
+                    ):
+                        turn_summary_candidate = candidate
+                    if (
+                        handoff_candidate
+                        and non_summary_candidate
+                        and turn_summary_candidate
+                    ):
+                        break
+
+                selected = (
+                    handoff_candidate or non_summary_candidate or turn_summary_candidate
+                )
+                if not selected:
+                    if error_candidate:
+                        return {
+                            "seq": error_candidate["seq"],
+                            "dir": safe_relpath(error_candidate["dir"], repo_root),
+                            "dispatch": None,
+                            "errors": error_candidate["errors"],
+                            "files": [],
+                        }
+                    return None
+
+                selected_dir = selected["dir"]
+                dispatch = selected["dispatch"]
+                result = {
+                    "seq": selected["seq"],
+                    "dir": safe_relpath(selected_dir, repo_root),
+                    "dispatch": _dispatch_dict(dispatch),
                     "errors": [],
-                    "files": files,
+                    "files": _list_files(selected_dir),
                 }
+                if turn_summary_candidate is not None:
+                    result["turn_summary_seq"] = turn_summary_candidate["seq"]
+                    result["turn_summary"] = _dispatch_dict(
+                        turn_summary_candidate["dispatch"]
+                    )
+                return result
             except Exception:
                 return None
 
