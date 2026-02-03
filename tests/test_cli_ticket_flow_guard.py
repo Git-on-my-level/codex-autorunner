@@ -32,7 +32,7 @@ def test_ticket_flow_start_rejects_unregistered_worktree(tmp_path) -> None:
     first_line = result.output.splitlines()[0]
     assert (
         first_line
-        == "Repo not registered in hub manifest. Run `car hub scan` or create via `car hub worktree create`."
+        == "Repo not registered in hub manifest. Run car hub scan or create via car hub worktree create."
     )
     assert str(hub_root) in result.output
     assert str(repo_root) in result.output

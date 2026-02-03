@@ -348,7 +348,7 @@ def _guard_unregistered_hub_repo(repo_root: Path, hub: Optional[Path]) -> None:
         return
 
     lines = [
-        "Repo not registered in hub manifest. Run `car hub scan` or create via `car hub worktree create`.",
+        "Repo not registered in hub manifest. Run car hub scan or create via car hub worktree create.",
         f"Detected hub root: {hub_config.root}",
         f"Repo path: {repo_root}",
         "Runs won't show up in the hub UI until registered.",
