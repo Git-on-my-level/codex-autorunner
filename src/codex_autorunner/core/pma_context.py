@@ -12,10 +12,13 @@ from .config import load_hub_config, load_repo_config
 from .flows.models import FlowRunStatus
 from .flows.store import FlowStore
 from .hub import HubSupervisor
+from .state_roots import resolve_hub_templates_root
 
 PMA_MAX_REPOS = 25
 PMA_MAX_MESSAGES = 10
 PMA_MAX_TEXT = 800
+PMA_MAX_TEMPLATE_REPOS = 25
+PMA_MAX_TEMPLATE_FIELD_CHARS = 120
 
 # Defaults used when hub config is not available (should be rare).
 PMA_DOCS_MAX_CHARS = 12_000
@@ -109,6 +112,72 @@ def _trim_extra(extra: Any, limit: int) -> Any:
         "note": "extra omitted due to size",
         "preview": _truncate(raw, limit),
     }
+
+
+def _load_template_scan_summary(
+    hub_root: Optional[Path],
+    *,
+    max_field_chars: int = PMA_MAX_TEMPLATE_FIELD_CHARS,
+) -> Optional[dict[str, Any]]:
+    if hub_root is None:
+        return None
+    try:
+        scans_root = resolve_hub_templates_root(hub_root) / "scans"
+        if not scans_root.exists():
+            return None
+        candidates = [
+            entry
+            for entry in scans_root.iterdir()
+            if entry.is_file() and entry.suffix == ".json"
+        ]
+        if not candidates:
+            return None
+        newest = max(candidates, key=lambda entry: entry.stat().st_mtime)
+        payload = json.loads(newest.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        return {
+            "repo_id": _truncate(str(payload.get("repo_id", "")), max_field_chars),
+            "decision": _truncate(str(payload.get("decision", "")), max_field_chars),
+            "severity": _truncate(str(payload.get("severity", "")), max_field_chars),
+            "scanned_at": _truncate(
+                str(payload.get("scanned_at", "")), max_field_chars
+            ),
+        }
+    except Exception:
+        return None
+
+
+def _build_templates_snapshot(
+    supervisor: HubSupervisor,
+    *,
+    hub_root: Optional[Path] = None,
+    max_repos: int = PMA_MAX_TEMPLATE_REPOS,
+    max_field_chars: int = PMA_MAX_TEMPLATE_FIELD_CHARS,
+) -> dict[str, Any]:
+    hub_config = getattr(supervisor, "hub_config", None)
+    templates_cfg = getattr(hub_config, "templates", None)
+    if templates_cfg is None:
+        return {"enabled": False, "repos": []}
+    repos = []
+    for repo in templates_cfg.repos[: max(0, max_repos)]:
+        repos.append(
+            {
+                "id": _truncate(repo.id, max_field_chars),
+                "default_ref": _truncate(repo.default_ref, max_field_chars),
+                "trusted": bool(repo.trusted),
+            }
+        )
+    payload: dict[str, Any] = {
+        "enabled": bool(templates_cfg.enabled),
+        "repos": repos,
+    }
+    scan_summary = _load_template_scan_summary(
+        hub_root, max_field_chars=max_field_chars
+    )
+    if scan_summary:
+        payload["last_scan"] = scan_summary
+    return payload
 
 
 def load_pma_prompt(hub_root: Path) -> str:
@@ -350,7 +419,12 @@ async def build_hub_snapshot(
     hub_root: Optional[Path] = None,
 ) -> dict[str, Any]:
     if supervisor is None:
-        return {"repos": [], "inbox": [], "lifecycle_events": []}
+        return {
+            "repos": [],
+            "inbox": [],
+            "templates": {"enabled": False, "repos": []},
+            "lifecycle_events": [],
+        }
 
     snapshots = await asyncio.to_thread(supervisor.list_repos)
     snapshots = sorted(snapshots, key=lambda snap: snap.id)
@@ -395,6 +469,8 @@ async def build_hub_snapshot(
         _gather_lifecycle_events, supervisor, limit=20
     )
 
+    templates = _build_templates_snapshot(supervisor, hub_root=hub_root)
+
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
     if hub_root:
         try:
@@ -414,6 +490,7 @@ async def build_hub_snapshot(
     return {
         "repos": repos,
         "inbox": inbox,
+        "templates": templates,
         "pma_files": pma_files,
         "lifecycle_events": lifecycle_events,
     }
