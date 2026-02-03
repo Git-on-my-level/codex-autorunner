@@ -200,6 +200,15 @@ pma:
   model: null
   # Optional reasoning effort for compatible agents (null = agent default).
   reasoning: null
+  # Max characters loaded from PMA docs (AGENTS/active_context/context_log tail).
+  # Lower values reduce prompt-injection surface and keep prompts lean.
+  docs_max_chars: 12000
+  # Max lines shown/edited for active_context.md in the PMA docs UI.
+  # Lower values keep the manual editor and prompt budget predictable.
+  active_context_max_lines: 200
+  # Tail lines pulled from context_log.md for PMA prompt context.
+  # Lower values bound history and reduce prompt-injection surface.
+  context_log_tail_lines: 120
   # Max upload size for PMA filebox (bytes).
   max_upload_bytes: 10000000
   # Enable PMA dispatch interception (auto-resolve trivial dispatches before user notification).

@@ -22,6 +22,16 @@ All PMA files live under the hub root:
 └── outbox/   # Files written by agents for users to download
 ```
 
+## PMA Durable Docs (Manual Mode)
+
+PMA also maintains hub-scoped docs under `.codex-autorunner/pma/`:
+
+- `AGENTS.md` for durable guidance and defaults.
+- `active_context.md` for short-lived working context.
+- `context_log.md` for append-only snapshots when `active_context.md` is pruned.
+
+In the web UI, switch PMA to manual mode to open the docs editor. Use "Save" to write changes and "Snapshot" to append a timestamped copy of `active_context.md` into `context_log.md`.
+
 ## Configuration Limits
 
 | Setting | Default | Description |

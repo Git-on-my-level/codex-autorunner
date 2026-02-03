@@ -31,6 +31,9 @@ I recommend serving the web UI over Tailscale. There is an auth token option but
 ### Telegram
 Telegram is the "on-the-go" and notification hub for CAR. From here you can kick off and monitor existing tickets, set up new tickets, and chat with agents. Your primary UX here is asking the agent to do things for you rather than you doing it yourself like you would on the web UI. This is great for on-the-go work, but it doesn't have full feature parity with the web UI.
 
+### PMA durable docs
+PMA keeps hub-scoped docs under `.codex-autorunner/pma/`. Put durable guidance in `AGENTS.md`, keep short-lived notes in `active_context.md`, and append timestamped snapshots to `context_log.md` when pruning. In the web UI, switch PMA to manual mode to edit these docs and trigger snapshots.
+
 ## Quickstart
 
 The fastest way to get started is to pass [this setup guide](docs/AGENT_SETUP_GUIDE.md) to your favorite AI agent. The agent will walk you through installation and configuration interactively based on your environment.
