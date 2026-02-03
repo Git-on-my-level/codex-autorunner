@@ -46,6 +46,25 @@ def _seed_paused_run(repo_root: Path, run_id: str) -> None:
     store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
 
 
+def _seed_paused_run_relative_paths(repo_root: Path, run_id: str) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    store = FlowStore(db_path)
+    store.initialize()
+    # Store workspace_root as "." to mimic relative input_data written by hub/UI flows.
+    store.create_flow_run(
+        run_id,
+        "ticket_flow",
+        input_data={
+            "workspace_root": ".",
+            "runs_dir": ".codex-autorunner/runs",
+        },
+        state={},
+        metadata={},
+    )
+    store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+
+
 def test_messages_active_and_reply_archive(tmp_path, monkeypatch):
     repo_root = Path(tmp_path)
     run_id = "11111111-1111-1111-1111-111111111111"
@@ -94,3 +113,38 @@ def test_messages_active_and_reply_archive(tmp_path, monkeypatch):
         fetched = client.get(file_url)
         assert fetched.status_code == 200
         assert fetched.content == b"hello"
+
+
+def test_reply_archive_resolves_relative_workspace_root(tmp_path, monkeypatch):
+    repo_root = Path(tmp_path)
+    run_id = "22222222-2222-2222-2222-222222222222"
+
+    # Seed run with relative workspace_root to ensure server resolves paths relative to repo root.
+    _seed_paused_run_relative_paths(repo_root, run_id)
+    _write_dispatch_history(repo_root, run_id, seq=1)
+
+    monkeypatch.setattr(messages_routes, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
+
+    app = FastAPI()
+    app.state.repo_id = "repo"
+    app.include_router(messages_routes.build_messages_routes())
+    app.include_router(flows_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/api/messages/{run_id}/reply",
+            data={"body": "Check paths"},
+        )
+        assert resp.status_code == 200
+        entry = (
+            repo_root
+            / ".codex-autorunner"
+            / "runs"
+            / run_id
+            / "reply_history"
+            / "0001"
+            / "USER_REPLY.md"
+        )
+        assert entry.exists()
+        assert "Check paths" in entry.read_text(encoding="utf-8")
