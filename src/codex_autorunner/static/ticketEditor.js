@@ -2,7 +2,7 @@
 /**
  * Ticket Editor Modal - handles creating, editing, and deleting tickets
  */
-import { api, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js";
+import { api, confirmModal, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js";
 import { publish } from "./bus.js";
 import { clearTicketChatHistory } from "./ticketChatStorage.js";
 import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, ticketChatState, resumeTicketPendingTurn, } from "./ticketChatActions.js";
@@ -673,7 +673,7 @@ export async function deleteTicket() {
         flash("Cannot delete: no ticket selected", "error");
         return;
     }
-    const confirmed = window.confirm(`Delete TICKET-${String(state.ticketIndex).padStart(3, "0")}.md? This cannot be undone.`);
+    const confirmed = await confirmModal(`Delete TICKET-${String(state.ticketIndex).padStart(3, "0")}.md? This cannot be undone.`);
     if (!confirmed)
         return;
     setButtonsLoading(true);

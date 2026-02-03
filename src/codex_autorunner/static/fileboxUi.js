@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, escapeHtml, flash, resolvePath } from "./utils.js";
+import { api, confirmModal, escapeHtml, flash, resolvePath } from "./utils.js";
 function formatBytes(size) {
     if (!size && size !== 0)
         return "";
@@ -89,7 +89,7 @@ export function createFileBoxWidget(opts) {
                 const file = target.dataset.file || "";
                 if (!boxName || !file)
                     return;
-                const confirmed = window.confirm(`Delete ${file}?`);
+                const confirmed = await confirmModal(`Delete ${file}?`);
                 if (!confirmed)
                     return;
                 try {

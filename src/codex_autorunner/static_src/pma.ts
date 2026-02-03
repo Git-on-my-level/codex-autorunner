@@ -1,7 +1,7 @@
 /**
  * PMA (Project Management Agent) - Hub-level chat interface
  */
-import { api, resolvePath, getAuthToken, escapeHtml, flash } from "./utils.js";
+import { api, confirmModal, resolvePath, getAuthToken, escapeHtml, flash } from "./utils.js";
 import {
   createDocChat,
   type ChatConfig,
@@ -342,8 +342,9 @@ async function snapshotActiveContext(): Promise<void> {
   }
 }
 
-function resetActiveContext(): void {
-  if (!confirm("Reset active context to default?")) return;
+async function resetActiveContext(): Promise<void> {
+  const confirmed = await confirmModal("Reset active context to default?");
+  if (!confirmed) return;
   const editor = document.getElementById("pma-docs-editor") as HTMLTextAreaElement | null;
   if (!editor) return;
   void loadPMADocDefaultContent("active_context.md").then((resetContent) => {

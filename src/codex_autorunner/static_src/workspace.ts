@@ -1,4 +1,4 @@
-import { api, flash, setButtonLoading } from "./utils.js";
+import { api, confirmModal, flash, setButtonLoading } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 import {
   fetchWorkspace,
@@ -429,7 +429,7 @@ const workspaceTreeRefresh = createSmartRefresh<WorkspaceTreePayload>({
         onConfirm: (message) =>
           (window as unknown as { workspaceConfirm?: (msg: string) => Promise<boolean> }).workspaceConfirm?.(
             message
-          ) ?? Promise.resolve(confirm(message)),
+          ) ?? confirmModal(message),
       });
     }
 
@@ -550,7 +550,7 @@ async function applyWorkspaceDraft(): Promise<void> {
   try {
     const isStale = Boolean(state.draft?.is_stale);
     if (isStale) {
-      const confirmForce = window.confirm(
+      const confirmForce = await confirmModal(
         "This draft is stale because the file changed after it was created. Force apply anyway?"
       );
       if (!confirmForce) return;

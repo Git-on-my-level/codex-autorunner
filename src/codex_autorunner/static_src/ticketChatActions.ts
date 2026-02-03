@@ -1,7 +1,7 @@
 /**
  * Ticket Chat Actions - handles sending messages, applying/discarding patches
  */
-import { api, flash, splitMarkdownFrontmatter } from "./utils.js";
+import { api, confirmModal, flash, splitMarkdownFrontmatter } from "./utils.js";
 import { performTicketChatRequest } from "./ticketChatStream.js";
 import { renderTicketMessages, renderTicketEvents } from "./ticketChatEvents.js";
 import { publish } from "./bus.js";
@@ -110,7 +110,7 @@ export function resetTicketChatState(): void {
 export async function startNewTicketChatThread(): Promise<void> {
   if (ticketChatState.ticketIndex == null) return;
 
-  const confirmed = window.confirm("Start a new conversation thread for this ticket?");
+  const confirmed = await confirmModal("Start a new conversation thread for this ticket?");
   if (!confirmed) return;
 
   try {

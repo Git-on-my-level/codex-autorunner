@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal, inputModal, setButtonLoading, } from "./utils.js";
+import { api, confirmModal, flash, getUrlParams, resolvePath, statusPill, getAuthToken, openModal, inputModal, setButtonLoading, } from "./utils.js";
 // Note: activateTab removed - header now used for collapse, not inbox navigation
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
@@ -1757,7 +1757,8 @@ async function restartTicketFlow() {
         flash("Create a ticket first before restarting the flow.", "error");
         return;
     }
-    if (!confirm("Restart ticket flow? This will stop the current run and start a new one.")) {
+    const confirmed = await confirmModal("Restart ticket flow? This will stop the current run and start a new one.");
+    if (!confirmed) {
         return;
     }
     setButtonsDisabled(true);
@@ -1797,7 +1798,8 @@ async function archiveTicketFlow() {
         flash("No ticket flow run to archive", "info");
         return;
     }
-    if (!confirm("Archive all tickets from this flow? They will be moved to the run's artifact directory.")) {
+    const confirmed = await confirmModal("Archive all tickets from this flow? They will be moved to the run's artifact directory.");
+    if (!confirmed) {
         return;
     }
     setButtonsDisabled(true);

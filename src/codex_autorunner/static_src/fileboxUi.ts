@@ -1,4 +1,4 @@
-import { api, escapeHtml, flash, resolvePath } from "./utils.js";
+import { api, confirmModal, escapeHtml, flash, resolvePath } from "./utils.js";
 
 export type FileBoxEntry = {
   name: string;
@@ -135,7 +135,7 @@ export function createFileBoxWidget(opts: FileBoxWidgetOpts) {
         const boxName = (target.dataset.box || "") as "inbox" | "outbox";
         const file = target.dataset.file || "";
         if (!boxName || !file) return;
-        const confirmed = window.confirm(`Delete ${file}?`);
+        const confirmed = await confirmModal(`Delete ${file}?`);
         if (!confirmed) return;
         try {
           await deleteFile(opts, boxName, file);

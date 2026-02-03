@@ -1,7 +1,7 @@
 /**
  * Ticket Editor Modal - handles creating, editing, and deleting tickets
  */
-import { api, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js";
+import { api, confirmModal, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js";
 import { publish } from "./bus.js";
 import { clearTicketChatHistory } from "./ticketChatStorage.js";
 import {
@@ -812,7 +812,7 @@ export async function deleteTicket(): Promise<void> {
     return;
   }
 
-  const confirmed = window.confirm(
+  const confirmed = await confirmModal(
     `Delete TICKET-${String(state.ticketIndex).padStart(3, "0")}.md? This cannot be undone.`
   );
   if (!confirmed) return;

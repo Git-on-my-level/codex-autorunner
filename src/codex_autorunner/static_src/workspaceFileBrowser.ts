@@ -1,5 +1,5 @@
 import { WorkspaceNode, deleteWorkspaceFile, deleteWorkspaceFolder, downloadWorkspaceFile, downloadWorkspaceZip } from "./workspaceApi.js";
-import { flash } from "./utils.js";
+import { confirmModal, flash } from "./utils.js";
 
 type ChangeHandler = (file: WorkspaceNode) => void;
 
@@ -308,7 +308,9 @@ export class WorkspaceFileBrowser {
           delBtn.title = "Delete file";
           delBtn.addEventListener("click", async (evt) => {
             evt.stopPropagation();
-            const ok = this.onConfirm ? await this.onConfirm(`Delete ${node.name}?`) : confirm(`Delete ${node.name}?`);
+            const ok = this.onConfirm
+              ? await this.onConfirm(`Delete ${node.name}?`)
+              : await confirmModal(`Delete ${node.name}?`);
             if (!ok) return;
             try {
               await deleteWorkspaceFile(node.path);
@@ -334,7 +336,7 @@ export class WorkspaceFileBrowser {
             evt.stopPropagation();
             const ok = this.onConfirm
               ? await this.onConfirm(`Delete folder ${node.name}? (must be empty)`)
-              : confirm(`Delete folder ${node.name}? (must be empty)`);
+              : await confirmModal(`Delete folder ${node.name}? (must be empty)`);
             if (!ok) return;
             try {
               await deleteWorkspaceFolder(node.path);
@@ -449,15 +451,15 @@ export class WorkspaceFileBrowser {
         delBtn.className = "ghost sm danger";
         delBtn.textContent = "✕";
         delBtn.title = `Delete ${node.type}`;
-        delBtn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          const ok = this.onConfirm
-            ? await this.onConfirm(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`)
-            : confirm(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`);
-          if (!ok) return;
-          try {
-            if (node.type === "folder") {
-              await deleteWorkspaceFolder(node.path);
+          delBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const ok = this.onConfirm
+              ? await this.onConfirm(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`)
+              : await confirmModal(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`);
+            if (!ok) return;
+            try {
+              if (node.type === "folder") {
+                await deleteWorkspaceFolder(node.path);
             } else {
               await deleteWorkspaceFile(node.path);
               if (this.selectedPath === node.path) this.selectedPath = null;

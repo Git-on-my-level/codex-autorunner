@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, setButtonLoading } from "./utils.js";
+import { api, confirmModal, flash, setButtonLoading } from "./utils.js";
 import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning } from "./agentControls.js";
 import { fetchWorkspace, ingestSpecToTickets, listTickets, fetchWorkspaceTree, uploadWorkspaceFiles, downloadWorkspaceZip, createWorkspaceFolder, writeWorkspace, } from "./workspaceApi.js";
 import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, newClientTurnId, streamTurnEvents, } from "./fileChat.js";
@@ -367,7 +367,7 @@ const workspaceTreeRefresh = createSmartRefresh({
                 },
                 onPathChange: () => updateDownloadButton(),
                 onRefresh: () => loadFiles(state.target?.path, "manual"),
-                onConfirm: (message) => window.workspaceConfirm?.(message) ?? Promise.resolve(confirm(message)),
+                onConfirm: (message) => window.workspaceConfirm?.(message) ?? confirmModal(message),
             });
         }
         const defaultPath = payload.defaultPath ?? state.target?.path ?? undefined;
@@ -484,7 +484,7 @@ async function applyWorkspaceDraft() {
     try {
         const isStale = Boolean(state.draft?.is_stale);
         if (isStale) {
-            const confirmForce = window.confirm("This draft is stale because the file changed after it was created. Force apply anyway?");
+            const confirmForce = await confirmModal("This draft is stale because the file changed after it was created. Force apply anyway?");
             if (!confirmForce)
                 return;
         }

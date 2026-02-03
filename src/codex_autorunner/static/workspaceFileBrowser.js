@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { deleteWorkspaceFile, deleteWorkspaceFolder, downloadWorkspaceFile, downloadWorkspaceZip } from "./workspaceApi.js";
-import { flash } from "./utils.js";
+import { confirmModal, flash } from "./utils.js";
 export class WorkspaceFileBrowser {
     constructor(options) {
         this.tree = [];
@@ -274,7 +274,9 @@ export class WorkspaceFileBrowser {
                     delBtn.title = "Delete file";
                     delBtn.addEventListener("click", async (evt) => {
                         evt.stopPropagation();
-                        const ok = this.onConfirm ? await this.onConfirm(`Delete ${node.name}?`) : confirm(`Delete ${node.name}?`);
+                        const ok = this.onConfirm
+                            ? await this.onConfirm(`Delete ${node.name}?`)
+                            : await confirmModal(`Delete ${node.name}?`);
                         if (!ok)
                             return;
                         try {
@@ -301,7 +303,7 @@ export class WorkspaceFileBrowser {
                         evt.stopPropagation();
                         const ok = this.onConfirm
                             ? await this.onConfirm(`Delete folder ${node.name}? (must be empty)`)
-                            : confirm(`Delete folder ${node.name}? (must be empty)`);
+                            : await confirmModal(`Delete folder ${node.name}? (must be empty)`);
                         if (!ok)
                             return;
                         try {
@@ -418,7 +420,7 @@ export class WorkspaceFileBrowser {
                     e.stopPropagation();
                     const ok = this.onConfirm
                         ? await this.onConfirm(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`)
-                        : confirm(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`);
+                        : await confirmModal(`Delete ${node.name}${node.type === "folder" ? " (must be empty)" : ""}?`);
                     if (!ok)
                         return;
                     try {
