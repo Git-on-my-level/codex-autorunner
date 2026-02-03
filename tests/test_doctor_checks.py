@@ -6,7 +6,13 @@ from unittest.mock import patch
 
 import pytest
 
-from codex_autorunner.core.runtime import DoctorCheck, pma_doctor_checks
+from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.config import load_hub_config
+from codex_autorunner.core.runtime import (
+    DoctorCheck,
+    hub_worktree_doctor_checks,
+    pma_doctor_checks,
+)
 from codex_autorunner.integrations.telegram.doctor import (
     telegram_doctor_checks,
 )
@@ -84,6 +90,26 @@ def test_pma_doctor_checks_missing_config():
     checks = pma_doctor_checks({})
     assert len(checks) > 0
     assert any(c.check_id == "pma.config" for c in checks)
+
+
+def test_hub_worktree_doctor_checks_detects_orphans(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    hub_config = load_hub_config(hub_root)
+    orphan = hub_config.worktrees_root / "orphan--branch"
+    orphan.mkdir(parents=True)
+    (orphan / ".git").mkdir()
+
+    checks = hub_worktree_doctor_checks(hub_config)
+    assert len(checks) == 1
+    check = checks[0]
+    assert check.name == "Hub worktrees registered"
+    assert check.severity == "warning"
+    assert check.passed is False
+    assert str(hub_config.worktrees_root) in check.message
+    assert check.fix == f"Run: car hub scan --path {hub_root}"
 
 
 @pytest.fixture

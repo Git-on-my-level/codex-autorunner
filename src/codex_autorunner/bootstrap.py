@@ -236,6 +236,15 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Treat this prompt as code: keep it short and stable.
 - See `.codex-autorunner/pma/ABOUT_CAR.md` for operational how-to.
 
+## Worktrees (hub-managed)
+
+- Prefer hub-owned worktrees:
+  - Hub UI: “New Worktree”
+  - CLI: `car hub worktree create <base_repo_id> <branch> [--start-point <ref>]`
+- If a worktree was created manually (e.g. `git worktree add`), it MUST be registered:
+  - `car hub scan --path <hub_root>`
+- Never copy `.codex-autorunner/` between worktrees. Each worktree has its own CAR state/docs.
+
 ## PMA durable workspace
 
 Prefer writing durable guidance and recurring best-practices to `.codex-autorunner/pma/AGENTS.md`.
@@ -264,6 +273,27 @@ def pma_notes_content() -> str:
   `car flow ticket_flow status --repo <path> [--run-id <uuid>]`
   `car flow ticket_flow stop --repo <path> [--run-id <uuid>]`
 - See `<repo>/.codex-autorunner/TICKET_FLOW_QUICKSTART.md` for CLI entrypoints + gotchas.
+
+## Worktrees 101 (Hub-managed)
+
+Canonical worktree creation:
+- Hub UI: “New Worktree”
+- CLI (from hub root):
+  `car hub worktree create <base_repo_id> <branch> [--start-point <ref>]`
+
+Registering a manually-created worktree:
+- If you used `git worktree add`, run:
+  `car hub scan --path <hub_root>`
+- Worktrees should live under the hub’s configured worktrees root and be shallow (depth=1) discoverable.
+
+Naming / grouping:
+- Prefer worktree directory names like:
+  `<base_repo_id>--<branch>`
+- This enables `worktree_of` inference during scan and grouping in the hub UI.
+
+Do NOT copy `.codex-autorunner/` between worktrees:
+- Each worktree is a full repo with its own `.codex-autorunner/` state/docs.
+- Copying can introduce stale locks and confusing run metadata.
 
 ## Dispatch pauses (handle)
 

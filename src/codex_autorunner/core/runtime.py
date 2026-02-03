@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Union
 
+from ..manifest import load_manifest
 from .config import HubConfig, RepoConfig, load_repo_config
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock
 from .notifications import NotificationManager
@@ -366,6 +367,55 @@ def pma_doctor_checks(
         _check_pma_queue(checks, repo_root)
         _check_pma_artifacts(checks, repo_root)
 
+    return checks
+
+
+def hub_worktree_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
+    """Check for unregistered worktrees under the hub worktrees root."""
+    checks: list[DoctorCheck] = []
+    worktrees_root = hub_config.worktrees_root
+    manifest = load_manifest(hub_config.manifest_path, hub_config.root)
+    manifest_paths = {
+        (hub_config.root / repo.path).resolve() for repo in manifest.repos
+    }
+
+    orphans: list[Path] = []
+    if worktrees_root.exists():
+        try:
+            entries = list(worktrees_root.iterdir())
+        except OSError:
+            entries = []
+        for entry in entries:
+            if not entry.is_dir() or entry.is_symlink():
+                continue
+            if not (entry / ".git").exists():
+                continue
+            resolved = entry.resolve()
+            if resolved not in manifest_paths:
+                orphans.append(resolved)
+
+    if orphans:
+        checks.append(
+            DoctorCheck(
+                name="Hub worktrees registered",
+                passed=False,
+                message=(
+                    f"{len(orphans)} worktree(s) exist under {worktrees_root} "
+                    "but are not in the hub manifest"
+                ),
+                severity="warning",
+                fix=f"Run: car hub scan --path {hub_config.root}",
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                name="Hub worktrees registered",
+                passed=True,
+                message="OK",
+                severity="warning",
+            )
+        )
     return checks
 
 
@@ -774,5 +824,6 @@ __all__ = [
     "DoctorCheck",
     "DoctorReport",
     "clear_stale_lock",
+    "hub_worktree_doctor_checks",
     "pma_doctor_checks",
 ]

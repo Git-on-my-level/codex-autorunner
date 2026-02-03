@@ -181,6 +181,7 @@ def build_ticket_flow_quickstart_markdown(*, repo_root: Path) -> str:
         "- Hub vs repo: ticket flows run per-repo; CLI commands need a repo path.\n"
         "- `--repo` expects a filesystem path, not a hub repo_id.\n"
         "- Each worktree has its own `.codex-autorunner/` directory.\n"
+        "- If this repo/worktree lives under a hub, it must be registered in the hub manifest to show up in the hub UI. Run: `car hub scan` (or create it via `car hub worktree create`).\n"
     )
 
 

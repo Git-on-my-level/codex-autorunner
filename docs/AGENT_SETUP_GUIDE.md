@@ -190,6 +190,7 @@ Once basic setup is complete, suggest these next steps:
 | `car hub scan` | Scan for repositories |
 | `car hub clone <url>` | Clone a repo into the hub |
 | `car hub create <name>` | Create a new repo in the hub |
+| `car hub worktree create <base_repo_id> <branch>` | Create a hub-owned worktree |
 | `car doctor` | Validate hub/repo setup |
 
 ### Repo Commands (run from within a repo, or use `--repo`)
