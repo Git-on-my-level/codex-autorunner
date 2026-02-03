@@ -74,6 +74,8 @@ class PmaQueueItem:
 
 
 class PmaQueue:
+    """PMA queue backed by JSONL state; pending items are replayed into memory."""
+
     def __init__(self, hub_root: Path) -> None:
         self._hub_root = hub_root
         self._queue_dir = hub_root / PMA_QUEUE_DIR
@@ -81,6 +83,7 @@ class PmaQueue:
         self._lane_queues: dict[str, asyncio.Queue[PmaQueueItem]] = {}
         self._lane_locks: dict[str, asyncio.Lock] = {}
         self._lane_events: dict[str, asyncio.Event] = {}
+        self._replayed_lanes: set[str] = set()
         self._lock = asyncio.Lock()
 
     def _lane_queue_path(self, lane_id: str) -> Path:
@@ -136,6 +139,7 @@ class PmaQueue:
             await self._append_to_file(item)
             queue = self._ensure_lane_queue(lane_id)
             await queue.put(item)
+            self._ensure_lane_event(lane_id).set()
             return item, None
 
     async def dequeue(self, lane_id: str) -> Optional[PmaQueueItem]:
@@ -143,12 +147,12 @@ class PmaQueue:
         if queue is None or queue.empty():
             return None
         try:
-            item = await asyncio.wait_for(queue.get(), timeout=0.1)
+            item = queue.get_nowait()
             item.state = QueueItemState.RUNNING
             item.started_at = now_iso()
             await self._update_in_file(item)
             return item
-        except asyncio.TimeoutError:
+        except asyncio.QueueEmpty:
             return None
 
     async def complete_item(
@@ -168,6 +172,7 @@ class PmaQueue:
 
     async def cancel_lane(self, lane_id: str) -> int:
         cancelled = 0
+        cancelled_ids: set[str] = set()
         items = await self.list_items(lane_id)
         for item in items:
             if item.state == QueueItemState.PENDING:
@@ -175,18 +180,71 @@ class PmaQueue:
                 item.finished_at = now_iso()
                 await self._update_in_file(item)
                 cancelled += 1
+                cancelled_ids.add(item.item_id)
 
         queue = self._lane_queues.get(lane_id)
         if queue is not None:
             while not queue.empty():
-                queue.get_nowait()
+                try:
+                    queued_item = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if queued_item.item_id in cancelled_ids:
+                    continue
+                if queued_item.state != QueueItemState.PENDING:
+                    continue
+                queued_item.state = QueueItemState.CANCELLED
+                queued_item.finished_at = now_iso()
+                await self._update_in_file(queued_item)
                 cancelled += 1
+                cancelled_ids.add(queued_item.item_id)
 
         event = self._lane_events.get(lane_id)
         if event is not None:
             event.set()
 
         return cancelled
+
+    async def replay_pending(self, lane_id: str) -> int:
+        if lane_id in self._replayed_lanes:
+            return 0
+        self._replayed_lanes.add(lane_id)
+
+        items = await self.list_items(lane_id)
+        pending = [item for item in items if item.state == QueueItemState.PENDING]
+        if not pending:
+            return 0
+
+        queue = self._ensure_lane_queue(lane_id)
+        for item in pending:
+            await queue.put(item)
+        self._ensure_lane_event(lane_id).set()
+        return len(pending)
+
+    async def wait_for_lane_item(
+        self, lane_id: str, cancel_event: Optional[asyncio.Event] = None
+    ) -> bool:
+        event = self._ensure_lane_event(lane_id)
+        if event.is_set():
+            event.clear()
+            return True
+
+        wait_tasks = [asyncio.create_task(event.wait())]
+        if cancel_event is not None:
+            wait_tasks.append(asyncio.create_task(cancel_event.wait()))
+
+        done, pending = await asyncio.wait(
+            wait_tasks, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+
+        if event.is_set():
+            event.clear()
+        return True
 
     async def list_items(self, lane_id: str) -> list[PmaQueueItem]:
         path = self._lane_queue_path(lane_id)

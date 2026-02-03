@@ -353,10 +353,11 @@ def build_pma_routes() -> APIRouter:
 
         async def lane_worker():
             queue = _get_pma_queue(request)
+            await queue.replay_pending(lane_id)
             while not cancel_event.is_set():
                 item = await queue.dequeue(lane_id)
                 if item is None:
-                    await asyncio.sleep(0.5)
+                    await queue.wait_for_lane_item(lane_id, cancel_event)
                     continue
 
                 if cancel_event.is_set():
