@@ -374,33 +374,33 @@
                     </div>
                   </div>
                 </div>
-                <div class="messages-filebox">
-                  <div class="filebox-card filebox-stacked">
-                    <div class="filebox-header">
-                      <div class="filebox-actions">
-                        <input type="file" id="messages-filebox-upload" multiple hidden />
-                        <button class="ghost sm" id="messages-filebox-upload-btn" title="Upload to inbox">Upload</button>
-                        <button class="ghost sm icon-btn" id="messages-filebox-refresh" title="Refresh FileBox">↻</button>
+                <div class="messages-compose">
+                  <div class="messages-attachments">
+                    <input type="file" id="messages-filebox-upload" multiple hidden />
+                    <div class="chat-files-row">
+                      <span class="chat-files-label">In</span>
+                      <div class="filebox-list" id="messages-filebox-inbox"></div>
+                      <div class="chat-filebox-actions">
+                        <button class="ghost sm icon-btn chat-icon-btn" id="messages-filebox-upload-btn"
+                          title="Upload to inbox">⭱</button>
+                        <button class="ghost sm icon-btn chat-icon-btn" id="messages-filebox-refresh"
+                          title="Refresh FileBox">↻</button>
                       </div>
                     </div>
-                    <div class="filebox-grid">
-                      <div class="filebox-column">
-                        <div class="filebox-title">Inbox</div>
-                        <div class="filebox-list" id="messages-filebox-inbox"></div>
-                      </div>
-                      <div class="filebox-column">
-                        <div class="filebox-title">Outbox</div>
-                        <div class="filebox-list" id="messages-filebox-outbox"></div>
-                      </div>
+                    <div class="chat-files-row">
+                      <span class="chat-files-label">Out</span>
+                      <div class="filebox-list" id="messages-filebox-outbox"></div>
                     </div>
                   </div>
-                </div>
-                <div class="messages-reply-box">
-                  <textarea class="messages-reply-body" id="messages-reply-body"
-                    placeholder="Write a reply…"></textarea>
-                  <div class="messages-reply-row">
-                    <input type="file" id="messages-reply-files" multiple />
-                    <div class="messages-reply-actions">
+                  <div class="messages-input-row">
+                    <textarea class="messages-reply-body" id="messages-reply-body" enterkeyhint="enter"
+                      placeholder="Write a reply…" rows="2" spellcheck="false"></textarea>
+                    <div class="messages-input-actions">
+                      <input type="file" id="messages-reply-files" multiple hidden />
+                      <button class="ghost sm icon-btn messages-attach-btn" id="messages-reply-attach"
+                        title="Attach files">📎</button>
+                      <span class="muted small messages-attach-summary hidden" id="messages-reply-attach-summary">No
+                        files</span>
                       <button class="primary sm" id="messages-reply-send">Send</button>
                     </div>
                   </div>

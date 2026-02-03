@@ -18,6 +18,8 @@ const refreshEl = document.getElementById("messages-refresh");
 const replyBodyEl = document.getElementById("messages-reply-body");
 const replyFilesEl = document.getElementById("messages-reply-files");
 const replySendEl = document.getElementById("messages-reply-send");
+const replyAttachBtn = document.getElementById("messages-reply-attach");
+const replyAttachSummary = document.getElementById("messages-reply-attach-summary");
 const fileBoxInboxEl = document.getElementById("messages-filebox-inbox");
 const fileBoxOutboxEl = document.getElementById("messages-filebox-outbox");
 const fileBoxUploadEl = document.getElementById("messages-filebox-upload");
@@ -809,7 +811,7 @@ function renderThreadDetail(detail, runId, ctx) {
         attachCollapseHandlers();
     }
     // Only show reply box for paused runs - replies to other states won't be seen
-    const replyBoxEl = document.querySelector(".messages-reply-box");
+    const replyBoxEl = document.querySelector(".messages-compose");
     if (replyBoxEl) {
         replyBoxEl.classList.toggle("hidden", !isPaused);
     }
@@ -820,6 +822,19 @@ function renderThreadDetail(detail, runId, ctx) {
             }
         });
     }
+}
+function refreshAttachSummary() {
+    if (!replyAttachSummary || !replyFilesEl)
+        return;
+    const files = Array.from(replyFilesEl.files || []);
+    if (!files.length) {
+        replyAttachSummary.textContent = "";
+        replyAttachSummary.classList.add("hidden");
+        return;
+    }
+    const label = files.length > 2 ? `${files.length} files` : files.map((f) => f.name).join(", ");
+    replyAttachSummary.textContent = label;
+    replyAttachSummary.classList.remove("hidden");
 }
 async function sendReply() {
     const runId = selectedRunId;
@@ -846,6 +861,7 @@ async function sendReply() {
             replyBodyEl.value = "";
         if (replyFilesEl)
             replyFilesEl.value = "";
+        refreshAttachSummary();
         flash("Reply sent", "success");
         // Always resume after sending
         await api(`/api/flows/${encodeURIComponent(runId)}/resume`, { method: "POST" });
@@ -879,6 +895,13 @@ export function initMessages() {
     replySendEl?.addEventListener("click", () => {
         void sendReply();
     });
+    replyAttachBtn?.addEventListener("click", () => {
+        replyFilesEl?.click();
+    });
+    replyFilesEl?.addEventListener("change", () => {
+        refreshAttachSummary();
+    });
+    refreshAttachSummary();
     // Load threads immediately, and try to open run_id from URL if present.
     void loadThreads("initial").then(() => {
         const params = getUrlParams();

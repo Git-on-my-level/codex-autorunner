@@ -10515,40 +10515,107 @@ button.loading::after {
   font-weight: 600;
 }
 
-.messages-reply-box {
-  margin-top: 12px;
+.messages-compose {
+  margin-top: 10px;
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.messages-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-files-row,
+.pma-files-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+}
+
+.chat-files-label,
+.pma-files-label {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  min-width: 20px;
+  flex-shrink: 0;
+}
+
+.chat-filebox-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.chat-icon-btn,
+.pma-icon-btn-small {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 10px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-icon-btn:hover,
+.pma-icon-btn-small:hover {
+  color: var(--text);
+}
+
+.messages-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
 }
 
 .messages-reply-body {
   width: 100%;
-  min-height: 120px;
+  min-height: 64px;
+  max-height: 200px;
   resize: vertical;
-  padding: 10px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.02);
   color: var(--text);
   font-family: inherit;
+  line-height: 1.4;
 }
 
-.messages-reply-row {
-  display: flex;
+.messages-input-actions {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 8px;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-.messages-reply-actions {
-  display: flex;
+.messages-attach-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  font-size: 14px;
 }
 
-.messages-reply-actions button {
-  min-width: 100px;
+.messages-attach-summary {
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .filebox-card {
@@ -13401,40 +13468,6 @@ button.filebox-delete:hover {
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.pma-files-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 20px;
-}
-
-.pma-files-label {
-  font-size: 9px;
-  font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  min-width: 20px;
-  flex-shrink: 0;
-}
-
-.pma-icon-btn-small {
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  font-size: 10px;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.pma-icon-btn-small:hover {
-  color: var(--text);
 }
 
 .pma-inbox-list .muted {

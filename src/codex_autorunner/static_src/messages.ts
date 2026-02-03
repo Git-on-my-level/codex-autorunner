@@ -112,6 +112,8 @@ const refreshEl = document.getElementById("messages-refresh") as HTMLButtonEleme
 const replyBodyEl = document.getElementById("messages-reply-body") as HTMLTextAreaElement | null;
 const replyFilesEl = document.getElementById("messages-reply-files") as HTMLInputElement | null;
 const replySendEl = document.getElementById("messages-reply-send") as HTMLButtonElement | null;
+const replyAttachBtn = document.getElementById("messages-reply-attach") as HTMLButtonElement | null;
+const replyAttachSummary = document.getElementById("messages-reply-attach-summary") as HTMLElement | null;
 const fileBoxInboxEl = document.getElementById("messages-filebox-inbox") as HTMLElement | null;
 const fileBoxOutboxEl = document.getElementById("messages-filebox-outbox") as HTMLElement | null;
 const fileBoxUploadEl = document.getElementById("messages-filebox-upload") as HTMLInputElement | null;
@@ -960,7 +962,7 @@ function renderThreadDetail(detail: ThreadDetail, runId: string, ctx: { reason: 
   }
 
   // Only show reply box for paused runs - replies to other states won't be seen
-  const replyBoxEl = document.querySelector(".messages-reply-box") as HTMLElement | null;
+  const replyBoxEl = document.querySelector(".messages-compose") as HTMLElement | null;
   if (replyBoxEl) {
     replyBoxEl.classList.toggle("hidden", !isPaused);
   }
@@ -972,6 +974,19 @@ function renderThreadDetail(detail: ThreadDetail, runId: string, ctx: { reason: 
       }
     });
   }
+}
+
+function refreshAttachSummary(): void {
+  if (!replyAttachSummary || !replyFilesEl) return;
+  const files = Array.from(replyFilesEl.files || []);
+  if (!files.length) {
+    replyAttachSummary.textContent = "";
+    replyAttachSummary.classList.add("hidden");
+    return;
+  }
+  const label = files.length > 2 ? `${files.length} files` : files.map((f) => f.name).join(", ");
+  replyAttachSummary.textContent = label;
+  replyAttachSummary.classList.remove("hidden");
 }
 
 async function sendReply(): Promise<void> {
@@ -997,6 +1012,7 @@ async function sendReply(): Promise<void> {
     });
     if (replyBodyEl) replyBodyEl.value = "";
     if (replyFilesEl) replyFilesEl.value = "";
+    refreshAttachSummary();
     flash("Reply sent", "success");
     // Always resume after sending
     await api(`/api/flows/${encodeURIComponent(runId)}/resume`, { method: "POST" });
@@ -1032,6 +1048,16 @@ export function initMessages(): void {
   replySendEl?.addEventListener("click", () => {
     void sendReply();
   });
+
+  replyAttachBtn?.addEventListener("click", () => {
+    replyFilesEl?.click();
+  });
+
+  replyFilesEl?.addEventListener("change", () => {
+    refreshAttachSummary();
+  });
+
+  refreshAttachSummary();
 
   // Load threads immediately, and try to open run_id from URL if present.
   void loadThreads("initial").then(() => {
