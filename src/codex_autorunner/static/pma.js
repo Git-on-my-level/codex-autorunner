@@ -2,7 +2,7 @@
 /**
  * PMA (Project Management Agent) - Hub-level chat interface
  */
-import { api, confirmModal, resolvePath, getAuthToken, escapeHtml, flash } from "./utils.js";
+import { api, confirmModal, resolvePath, getAuthToken, flash } from "./utils.js";
 import { createDocChat, } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import { clearAgentSelectionStorage, getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
@@ -368,12 +368,9 @@ function getElements() {
         eventsToggle: document.getElementById("pma-chat-events-toggle"),
         messagesEl: document.getElementById("pma-chat-messages"),
         historyHeader: document.getElementById("pma-chat-history-header"),
-        pausedRunsBar: document.getElementById("pma-paused-runs"),
         agentSelect: document.getElementById("pma-chat-agent-select"),
         modelSelect: document.getElementById("pma-chat-model-select"),
         reasoningSelect: document.getElementById("pma-chat-reasoning-select"),
-        inboxList: document.getElementById("pma-inbox-list"),
-        inboxRefresh: document.getElementById("pma-inbox-refresh"),
         chatUploadInput: document.getElementById("pma-chat-upload-input"),
         chatUploadBtn: document.getElementById("pma-chat-upload-btn"),
         inboxFiles: document.getElementById("pma-inbox-files"),
@@ -470,7 +467,6 @@ async function initPMA() {
         reasoningSelect: elements.reasoningSelect,
     });
     await refreshAgentControls({ force: true, reason: "initial" });
-    await loadPMAInbox();
     await loadPMAThreadInfo();
     await initFileBoxUI();
     await loadPMADocs();
@@ -497,56 +493,11 @@ async function initPMA() {
             }
         });
     }
-    // Periodically refresh inbox and thread info
+    // Periodically refresh thread info
     setInterval(() => {
-        void loadPMAInbox();
         void loadPMAThreadInfo();
         void fileBoxCtrl?.refresh();
     }, 30000);
-}
-async function loadPMAInbox() {
-    const elements = getElements();
-    if (!elements.inboxList)
-        return;
-    try {
-        const payload = (await api("/hub/messages", { method: "GET" }));
-        const items = payload?.items || [];
-        if (!items.length) {
-            elements.inboxList.innerHTML = "";
-            elements.pausedRunsBar?.classList.add("hidden");
-            return;
-        }
-        const html = items
-            .map((item) => {
-            const title = item.dispatch?.title || item.dispatch?.mode || "Message";
-            const excerpt = item.dispatch?.body ? item.dispatch.body.slice(0, 160) : "";
-            const repoLabel = item.repo_display_name || item.repo_id;
-            const href = item.open_url || `/repos/${item.repo_id}/?tab=inbox&run_id=${item.run_id}`;
-            const seq = item.seq ? `#${item.seq}` : "";
-            return `
-          <div class="pma-inbox-item">
-            <div class="pma-inbox-item-header">
-              <span class="pma-inbox-repo">${escapeHtml(repoLabel)} <span class="pma-inbox-run-id muted">(${item.run_id.slice(0, 8)}${seq})</span></span>
-              <span class="pill pill-small pill-warn">paused</span>
-            </div>
-            <div class="pma-inbox-title">${escapeHtml(title)}</div>
-            <div class="pma-inbox-excerpt muted small">${escapeHtml(excerpt)}</div>
-            <div class="pma-inbox-actions">
-              <a class="pma-inbox-action" href="${escapeHtml(resolvePath(href))}" title="Open run page">Open run</a>
-              <button class="pma-inbox-action ghost sm" data-action="copy-run-id" data-run-id="${escapeHtml(item.run_id)}" title="Copy run ID">Copy ID</button>
-              ${item.repo_id ? `<button class="pma-inbox-action ghost sm" data-action="copy-repo-id" data-repo-id="${escapeHtml(item.repo_id)}" title="Copy repo ID">Copy repo</button>` : ""}
-            </div>
-          </div>
-        `;
-        })
-            .join("");
-        elements.inboxList.innerHTML = html;
-        elements.pausedRunsBar?.classList.remove("hidden");
-    }
-    catch (_err) {
-        elements.inboxList.innerHTML = '<div class="muted">Failed to load inbox</div>';
-        elements.pausedRunsBar?.classList.remove("hidden");
-    }
 }
 async function loadPMAThreadInfo() {
     const elements = getElements();
@@ -1110,35 +1061,6 @@ function attachHandlers() {
             },
         });
     }
-    if (elements.inboxRefresh) {
-        elements.inboxRefresh.addEventListener("click", () => {
-            void loadPMAInbox();
-            void fileBoxCtrl?.refresh();
-        });
-    }
-    if (elements.inboxList) {
-        elements.inboxList.addEventListener("click", (e) => {
-            const target = e.target;
-            if (target.classList.contains("pma-inbox-action")) {
-                if (target.dataset.action === "copy-run-id") {
-                    const runId = target.dataset.runId;
-                    if (runId) {
-                        void navigator.clipboard.writeText(runId).then(() => {
-                            flash("Copied run ID", "info");
-                        });
-                    }
-                }
-                else if (target.dataset.action === "copy-repo-id") {
-                    const repoId = target.dataset.repoId;
-                    if (repoId) {
-                        void navigator.clipboard.writeText(repoId).then(() => {
-                            flash("Copied repo ID", "info");
-                        });
-                    }
-                }
-            }
-        });
-    }
     if (elements.outboxRefresh) {
         elements.outboxRefresh.addEventListener("click", () => {
             void fileBoxCtrl?.refresh();
@@ -1152,7 +1074,6 @@ function attachHandlers() {
                 btn.textContent = "Scanning…";
                 await api("/hub/repos/scan", { method: "POST" });
                 flash("Repositories scanned", "info");
-                await loadPMAInbox();
             }
             catch (err) {
                 flash("Failed to scan repos", "error");

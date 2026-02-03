@@ -8,7 +8,7 @@ import {
   inputModal,
   openModal,
 } from "./utils.js";
-import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
+import { registerAutoRefresh } from "./autoRefresh.js";
 import { HUB_BASE } from "./env.js";
 import { preserveScroll } from "./preserve.js";
 
@@ -111,7 +111,6 @@ interface UpdateResponse {
 
 let hubData: HubData = { repos: [], last_scan_at: null };
 const prefetchedUrls = new Set<string>();
-let hubInboxHydrated = false;
 
 const HUB_CACHE_TTL_MS = 30000;
 const HUB_CACHE_KEY = `car:hub:${HUB_BASE || "/"}`;
@@ -134,8 +133,6 @@ const hubUsageChartRange = document.getElementById("hub-usage-chart-range");
 const hubUsageChartSegment = document.getElementById("hub-usage-chart-segment");
 const hubVersionEl = document.getElementById("hub-version");
 const pmaVersionEl = document.getElementById("pma-version");
-const hubInboxList = document.getElementById("hub-inbox-list");
-const hubInboxRefresh = document.getElementById("hub-inbox-refresh") as HTMLButtonElement | null;
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 const HUB_JOB_POLL_INTERVAL_MS = 1200;
 const HUB_JOB_TIMEOUT_MS = 180000;
@@ -199,9 +196,7 @@ function formatLastActivity(repo: HubRepo): string {
 
 function setButtonLoading(scanning: boolean): void {
   const buttons = [
-    document.getElementById("hub-scan"),
     document.getElementById("hub-quick-scan"),
-    document.getElementById("hub-refresh"),
   ] as (HTMLButtonElement | null)[];
   buttons.forEach((btn) => {
     if (!btn) return;
@@ -1166,64 +1161,11 @@ async function refreshHub(): Promise<void> {
     saveSessionCache(HUB_CACHE_KEY, hubData);
     renderSummary(data.repos || []);
     renderReposWithScroll(data.repos || []);
-    await loadHubInbox().catch(() => {});
     loadHubUsage({ silent: true }).catch(() => {});
   } catch (err) {
     flash((err as Error).message || "Hub request failed", "error");
   } finally {
     setButtonLoading(false);
-  }
-}
-
-interface HubInboxItem {
-  repo_id: string;
-  repo_display_name?: string;
-  run_id: string;
-  status?: string;
-  message?: {
-    mode?: string;
-    title?: string | null;
-    body?: string | null;
-  };
-  open_url?: string;
-}
-
-async function loadHubInbox(ctx?: RefreshContext): Promise<void> {
-  if (!hubInboxList) return;
-  if (!hubInboxHydrated || ctx?.reason === "manual") {
-    hubInboxList.textContent = "Loading…";
-  }
-  try {
-    const payload = (await api("/hub/messages", { method: "GET" })) as { items?: HubInboxItem[] };
-    const items = payload?.items || [];
-    const html = !items.length
-      ? '<div class="muted">No paused runs</div>'
-      : items
-        .map((item) => {
-          const title = item.message?.title || item.message?.mode || "Message";
-          const excerpt = item.message?.body ? item.message.body.slice(0, 160) : "";
-          const repoLabel = item.repo_display_name || item.repo_id;
-          const href = item.open_url || `/repos/${item.repo_id}/?tab=messages&run_id=${item.run_id}`;
-          return `
-            <a class="hub-inbox-item" href="${escapeHtml(resolvePath(href))}">
-              <div class="hub-inbox-item-header">
-                <span class="hub-inbox-repo">${escapeHtml(repoLabel)}</span>
-                <span class="pill pill-small pill-warn">paused</span>
-              </div>
-              <div class="hub-inbox-title">${escapeHtml(title)}</div>
-              <div class="hub-inbox-excerpt muted small">${escapeHtml(excerpt)}</div>
-            </a>
-          `;
-        })
-        .join("");
-    preserveScroll(hubInboxList, () => {
-      hubInboxList.innerHTML = html;
-    }, { restoreOnNextFrame: true });
-    hubInboxHydrated = true;
-  } catch (_err) {
-    preserveScroll(hubInboxList, () => {
-      hubInboxList.innerHTML = "";
-    }, { restoreOnNextFrame: true });
   }
 }
 
@@ -1453,22 +1395,14 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
 
 function attachHubHandlers(): void {
   initHubSettings();
-  const scanBtn = document.getElementById("hub-scan") as HTMLButtonElement | null;
-  const refreshBtn = document.getElementById("hub-refresh") as HTMLButtonElement | null;
   const quickScanBtn = document.getElementById("hub-quick-scan") as HTMLButtonElement | null;
   const newRepoBtn = document.getElementById("hub-new-repo") as HTMLButtonElement | null;
   const createCancelBtn = document.getElementById("create-repo-cancel") as HTMLButtonElement | null;
   const createSubmitBtn = document.getElementById("create-repo-submit") as HTMLButtonElement | null;
   const createRepoId = document.getElementById("create-repo-id") as HTMLInputElement | null;
 
-  if (scanBtn) {
-    scanBtn.addEventListener("click", () => triggerHubScan());
-  }
   if (quickScanBtn) {
     quickScanBtn.addEventListener("click", () => triggerHubScan());
-  }
-  if (refreshBtn) {
-    refreshBtn.addEventListener("click", () => refreshHub());
   }
   if (hubUsageRefresh) {
     hubUsageRefresh.addEventListener("click", () => loadHubUsage());
@@ -1617,9 +1551,6 @@ export function initHub(): void {
   if (!repoListEl) return;
   attachHubHandlers();
   initHubUsageChartControls();
-  hubInboxRefresh?.addEventListener("click", () => {
-    void loadHubInbox({ reason: "manual" });
-  });
   const cachedHub = loadSessionCache<HubData | null>(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
   if (cachedHub) {
     hubData = cachedHub;
