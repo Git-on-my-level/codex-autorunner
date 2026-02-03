@@ -29,8 +29,13 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "new": CommandSpec(
             "new",
-            "start a new session",
+            "start a new PMA session",
             lambda message, _args, _runtime: handlers._handle_new(message),
+        ),
+        "reset": CommandSpec(
+            "reset",
+            "reset PMA thread state (clear volatile state)",
+            lambda message, _args, _runtime: handlers._handle_reset(message),
         ),
         "resume": CommandSpec(
             "resume",

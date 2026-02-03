@@ -995,6 +995,157 @@ class WorkspaceCommands(SharedHelpers):
             reply_to=message.message_id,
         )
 
+    async def _handle_reset(self, message: TelegramMessage) -> None:
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        record = await self._router.get_topic(key)
+        pma_enabled = bool(record and record.pma_enabled)
+        if pma_enabled:
+            registry = getattr(self, "_hub_thread_registry", None)
+            agent = self._effective_agent(record)
+            pma_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
+            if registry:
+                registry.reset_thread(pma_key)
+            await self._send_message(
+                message.chat_id,
+                "PMA thread reset. Send a message to start a fresh PMA turn.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        if record is None or not record.workspace_path:
+            await self._send_message(
+                message.chat_id,
+                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        agent = self._effective_agent(record)
+        if agent == "opencode":
+            supervisor = getattr(self, "_opencode_supervisor", None)
+            if supervisor is None:
+                await self._send_message(
+                    message.chat_id,
+                    "OpenCode backend unavailable; install opencode or switch to /agent codex.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            workspace_root = self._canonical_workspace_root(record.workspace_path)
+            if workspace_root is None:
+                await self._send_message(
+                    message.chat_id,
+                    "Workspace unavailable.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            try:
+                client = await supervisor.get_client(workspace_root)
+                session = await client.create_session(directory=str(workspace_root))
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.opencode.session.failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Failed to reset OpenCode thread.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            session_id = extract_session_id(session, allow_fallback_id=True)
+            if not session_id:
+                await self._send_message(
+                    message.chat_id,
+                    "Failed to reset OpenCode thread.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+
+            def apply(record: "TelegramTopicRecord") -> None:
+                record.active_thread_id = session_id
+                if session_id in record.thread_ids:
+                    record.thread_ids.remove(session_id)
+                record.thread_ids.insert(0, session_id)
+                if len(record.thread_ids) > MAX_TOPIC_THREAD_HISTORY:
+                    record.thread_ids = record.thread_ids[:MAX_TOPIC_THREAD_HISTORY]
+                _set_thread_summary(
+                    record,
+                    session_id,
+                    last_used_at=now_iso(),
+                    workspace_path=record.workspace_path,
+                    rollout_path=record.rollout_path,
+                )
+
+            await self._router.update_topic(message.chat_id, message.thread_id, apply)
+            thread_id = session_id
+        else:
+            try:
+                client = await self._client_for_workspace(record.workspace_path)
+            except AppServerUnavailableError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.unavailable",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "App server unavailable; try again or check logs.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            if client is None:
+                await self._send_message(
+                    message.chat_id,
+                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            thread = await client.thread_start(record.workspace_path, agent=agent)
+            if not await self._require_thread_workspace(
+                message, record.workspace_path, thread, action="thread_start"
+            ):
+                return
+            thread_id = _extract_thread_id(thread)
+            if not thread_id:
+                await self._send_message(
+                    message.chat_id,
+                    "Failed to reset thread.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            await self._apply_thread_result(
+                message.chat_id, message.thread_id, thread, active_thread_id=thread_id
+            )
+        effort_label = (
+            record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
+        )
+        await self._send_message(
+            message.chat_id,
+            "\n".join(
+                [
+                    f"Reset thread {thread_id}.",
+                    f"Agent: {agent}",
+                    f"Effort: {effort_label}",
+                ]
+            ),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+
     async def _handle_new(self, message: TelegramMessage) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.get_topic(key)
