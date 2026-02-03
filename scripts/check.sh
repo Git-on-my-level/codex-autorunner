@@ -10,6 +10,7 @@ unset GIT_INDEX_FILE
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
+export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
