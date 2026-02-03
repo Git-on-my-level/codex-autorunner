@@ -73,6 +73,9 @@ def build_pma_routes() -> APIRouter:
             "default_agent": _normalize_optional_text(pma_config.get("default_agent")),
             "model": _normalize_optional_text(pma_config.get("model")),
             "reasoning": _normalize_optional_text(pma_config.get("reasoning")),
+            "active_context_max_lines": int(
+                pma_config.get("active_context_max_lines", 200)
+            ),
         }
 
     def _get_state_store(request: Request) -> PmaStateStore:
@@ -1311,7 +1314,12 @@ def build_pma_routes() -> APIRouter:
             else:
                 entry["exists"] = False
             result.append(entry)
-        return {"docs": result}
+        return {
+            "docs": result,
+            "active_context_max_lines": int(
+                pma_config.get("active_context_max_lines", 200)
+            ),
+        }
 
     @router.get("/docs/{name}")
     def get_pma_doc(name: str, request: Request) -> dict[str, str]:

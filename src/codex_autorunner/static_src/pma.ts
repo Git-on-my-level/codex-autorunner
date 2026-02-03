@@ -64,6 +64,7 @@ type PMADocInfo = {
 
 type PMADocsResponse = {
   docs: PMADocInfo[];
+  active_context_max_lines?: number;
 };
 
 type PMADocContent = {
@@ -77,6 +78,7 @@ type PMADocUpdate = {
 };
 
 const EDITABLE_DOCS = ["AGENTS.md", "active_context.md"];
+let activeContextMaxLines = 200;
 
 const pmaConfig: ChatConfig = {
   idPrefix: "pma-chat",
@@ -214,6 +216,10 @@ async function loadPMADocs(): Promise<void> {
         docsInfo.set(doc.name, doc);
       });
     }
+    activeContextMaxLines =
+      typeof payload?.active_context_max_lines === "number"
+        ? payload.active_context_max_lines
+        : 200;
     renderPMADocsMeta();
   } catch (err) {
     flash("Failed to load PMA docs", "error");
@@ -260,7 +266,7 @@ function renderPMADocsMeta(): void {
     return;
   }
   const lineCount = activeInfo.line_count || 0;
-  const maxLines = 200;
+  const maxLines = activeContextMaxLines || 200;
   const percent = Math.min(100, Math.round((lineCount / maxLines) * 100));
   const statusClass = percent >= 90 ? "pill-warn" : percent >= 70 ? "pill-caution" : "pill-idle";
   metaEl.innerHTML = `

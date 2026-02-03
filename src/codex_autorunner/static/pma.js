@@ -25,6 +25,7 @@ const pmaStyling = {
     messageAssistantFinalClass: "chat-message-assistant-final",
 };
 const EDITABLE_DOCS = ["AGENTS.md", "active_context.md"];
+let activeContextMaxLines = 200;
 const pmaConfig = {
     idPrefix: "pma-chat",
     storage: { keyPrefix: "car.pma.", maxMessages: 100, version: 1 },
@@ -152,6 +153,10 @@ async function loadPMADocs() {
                 docsInfo.set(doc.name, doc);
             });
         }
+        activeContextMaxLines =
+            typeof payload?.active_context_max_lines === "number"
+                ? payload.active_context_max_lines
+                : 200;
         renderPMADocsMeta();
     }
     catch (err) {
@@ -201,7 +206,7 @@ function renderPMADocsMeta() {
         return;
     }
     const lineCount = activeInfo.line_count || 0;
-    const maxLines = 200;
+    const maxLines = activeContextMaxLines || 200;
     const percent = Math.min(100, Math.round((lineCount / maxLines) * 100));
     const statusClass = percent >= 90 ? "pill-warn" : percent >= 70 ? "pill-caution" : "pill-idle";
     metaEl.innerHTML = `
