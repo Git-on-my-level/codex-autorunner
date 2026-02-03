@@ -384,6 +384,12 @@ app_server:
       todo_excerpt_max_chars: 4000
       prev_run_max_chars: 3000
 
+opencode:
+  # Max characters per OpenCode message part (client-side chunking). null/<=0 disables.
+  max_text_chars: 20000
+  # Per-connection timeout for OpenCode stream stalls (seconds). null/<=0 disables.
+  session_stall_timeout_seconds: 60
+
 server:
   # Bind host/port for the local UI/API. Use 0.0.0.0 only if you intend to expose it.
   host: 127.0.0.1

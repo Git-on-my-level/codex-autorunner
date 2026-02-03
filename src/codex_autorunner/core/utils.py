@@ -300,6 +300,7 @@ def build_opencode_supervisor(
     max_handles: Optional[int] = None,
     idle_ttl_seconds: Optional[float] = None,
     session_stall_timeout_seconds: Optional[float] = None,
+    max_text_chars: Optional[int] = None,
     base_env: Optional[MutableMapping[str, str]] = None,
     subagent_models: Optional[Mapping[str, str]] = None,
 ) -> Optional[Any]:
@@ -357,6 +358,7 @@ def build_opencode_supervisor(
         max_handles=max_handles,
         idle_ttl_seconds=idle_ttl_seconds,
         session_stall_timeout_seconds=session_stall_timeout_seconds,
+        max_text_chars=max_text_chars,
         username=username if password else None,
         password=password if password else None,
         base_env=base_env,

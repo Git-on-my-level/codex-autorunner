@@ -21,6 +21,7 @@ class OpenCodeApiProfile:
 
     supports_prompt_async: bool = True
     supports_global_endpoints: bool = True
+    max_text_chars: Optional[int] = None
     spec_fetched: bool = False
 
 
@@ -83,6 +84,7 @@ class OpenCodeClient:
         *,
         auth: Optional[tuple[str, str]] = None,
         timeout: Optional[float] = None,
+        max_text_chars: Optional[int] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._client = httpx.AsyncClient(
@@ -93,6 +95,10 @@ class OpenCodeClient:
         self._logger = logger or logging.getLogger(__name__)
         self._api_profile: Optional[OpenCodeApiProfile] = None
         self._api_profile_lock = asyncio.Lock()
+        self._max_text_chars_override = (
+            int(max_text_chars) if isinstance(max_text_chars, int) else None
+        )
+        self._max_text_chars_cache: Optional[int] = None
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -121,6 +127,7 @@ class OpenCodeClient:
                     profile.supports_global_endpoints = self.has_endpoint(
                         spec, "get", "/global/health"
                     ) or self.has_endpoint(spec, "get", "/global/event")
+                    profile.max_text_chars = self._extract_max_text_chars(spec)
 
                 log_event(
                     self._logger,
@@ -146,6 +153,103 @@ class OpenCodeClient:
             # Return default profile if not yet detected
             return OpenCodeApiProfile()
         return self._api_profile
+
+    @staticmethod
+    def _extract_max_text_chars(spec: dict[str, Any]) -> Optional[int]:
+        if not isinstance(spec, dict):
+            return None
+        components = spec.get("components")
+        if not isinstance(components, dict):
+            return None
+        schemas = components.get("schemas")
+        if not isinstance(schemas, dict):
+            return None
+        candidates: list[int] = []
+        for schema in schemas.values():
+            max_len = OpenCodeClient._find_text_max_length(schema)
+            if isinstance(max_len, int) and max_len > 0:
+                candidates.append(max_len)
+        return min(candidates) if candidates else None
+
+    @staticmethod
+    def _find_text_max_length(schema: Any) -> Optional[int]:
+        if not isinstance(schema, dict):
+            return None
+        candidates: list[int] = []
+        properties = schema.get("properties")
+        if isinstance(properties, dict) and "text" in properties:
+            text_schema = properties.get("text")
+            if isinstance(text_schema, dict):
+                max_len = text_schema.get("maxLength")
+                if isinstance(max_len, int) and max_len > 0:
+                    candidates.append(max_len)
+        for key in ("allOf", "anyOf", "oneOf"):
+            seq = schema.get(key)
+            if isinstance(seq, list):
+                for item in seq:
+                    item_len = OpenCodeClient._find_text_max_length(item)
+                    if isinstance(item_len, int) and item_len > 0:
+                        candidates.append(item_len)
+        return min(candidates) if candidates else None
+
+    def set_max_text_chars(self, value: Optional[int]) -> None:
+        self._max_text_chars_override = int(value) if isinstance(value, int) else None
+        self._max_text_chars_cache = None
+
+    async def _resolve_max_text_chars(
+        self, profile: Optional[OpenCodeApiProfile] = None
+    ) -> Optional[int]:
+        if self._max_text_chars_cache is not None:
+            return self._max_text_chars_cache
+        if profile is None:
+            profile = await self.detect_api_shape()
+        detected = (
+            profile.max_text_chars
+            if isinstance(profile.max_text_chars, int) and profile.max_text_chars > 0
+            else None
+        )
+        override = (
+            self._max_text_chars_override
+            if isinstance(self._max_text_chars_override, int)
+            and self._max_text_chars_override > 0
+            else None
+        )
+        if override is None:
+            resolved = detected
+        elif detected is None:
+            resolved = override
+        else:
+            resolved = min(override, detected)
+        self._max_text_chars_cache = resolved
+        return resolved
+
+    @staticmethod
+    def _split_text(text: str, max_chars: int) -> list[str]:
+        if max_chars <= 0 or len(text) <= max_chars:
+            return [text]
+        parts: list[str] = []
+        start = 0
+        length = len(text)
+        while start < length:
+            end = min(start + max_chars, length)
+            if end < length:
+                split = text.rfind("\n", start, end)
+                if split <= start:
+                    split = text.rfind(" ", start, end)
+                if split > start:
+                    end = split + 1
+            parts.append(text[start:end])
+            start = end
+        return [part for part in parts if part]
+
+    async def _build_text_parts(
+        self, message: str, profile: Optional[OpenCodeApiProfile] = None
+    ) -> list[dict[str, str]]:
+        limit = await self._resolve_max_text_chars(profile)
+        if limit is None:
+            return [{"type": "text", "text": message}]
+        chunks = self._split_text(message, limit)
+        return [{"type": "text", "text": chunk} for chunk in chunks]
 
     def _dir_params(self, directory: Optional[str]) -> dict[str, str]:
         return {"directory": directory} if directory else {}
@@ -275,8 +379,10 @@ class OpenCodeClient:
         model: Optional[dict[str, str]] = None,
         variant: Optional[str] = None,
     ) -> Any:
+        profile = await self.detect_api_shape()
+        parts = await self._build_text_parts(message, profile)
         payload: dict[str, Any] = {
-            "parts": [{"type": "text", "text": message}],
+            "parts": parts,
         }
         if agent:
             payload["agent"] = agent
@@ -300,8 +406,10 @@ class OpenCodeClient:
         model: Optional[dict[str, str]] = None,
         variant: Optional[str] = None,
     ) -> Any:
+        profile = await self.detect_api_shape()
+        parts = await self._build_text_parts(message, profile)
         payload: dict[str, Any] = {
-            "parts": [{"type": "text", "text": message}],
+            "parts": parts,
         }
         if agent:
             payload["agent"] = agent
@@ -310,7 +418,6 @@ class OpenCodeClient:
         if variant:
             payload["variant"] = variant
 
-        profile = await self.detect_api_shape()
         if profile.supports_prompt_async:
             return await self._request(
                 "POST",
@@ -335,8 +442,10 @@ class OpenCodeClient:
         model: Optional[dict[str, str]] = None,
         variant: Optional[str] = None,
     ) -> Any:
+        profile = await self.detect_api_shape()
+        parts = await self._build_text_parts(message, profile)
         payload: dict[str, Any] = {
-            "parts": [{"type": "text", "text": message}],
+            "parts": parts,
         }
         if agent:
             payload["agent"] = agent

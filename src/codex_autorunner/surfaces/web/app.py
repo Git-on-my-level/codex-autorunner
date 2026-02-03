@@ -317,6 +317,7 @@ def _build_opencode_supervisor(
     env: Mapping[str, str],
     subagent_models: Optional[Mapping[str, str]] = None,
     session_stall_timeout_seconds: Optional[float] = None,
+    max_text_chars: Optional[int] = None,
 ) -> tuple[Optional[OpenCodeSupervisor], Optional[float]]:
     supervisor = build_opencode_supervisor(
         opencode_command=opencode_command,
@@ -327,6 +328,7 @@ def _build_opencode_supervisor(
         max_handles=config.max_handles,
         idle_ttl_seconds=config.idle_ttl_seconds,
         session_stall_timeout_seconds=session_stall_timeout_seconds,
+        max_text_chars=max_text_chars,
         base_env=env,
         subagent_models=subagent_models,
     )
@@ -491,6 +493,7 @@ def _build_app_context(
         env=env,
         subagent_models=subagent_models,
         session_stall_timeout_seconds=config.opencode.session_stall_timeout_seconds,
+        max_text_chars=config.opencode.max_text_chars,
     )
     voice_service: Optional[VoiceService]
     if voice_missing_reason:
@@ -703,6 +706,7 @@ def _build_hub_context(
         env=resolve_env_for_root(config.root),
         subagent_models=subagent_models,
         session_stall_timeout_seconds=config.opencode.session_stall_timeout_seconds,
+        max_text_chars=config.opencode.max_text_chars,
     )
     static_dir, static_context = materialize_static_assets(
         config.static_assets.cache_root,

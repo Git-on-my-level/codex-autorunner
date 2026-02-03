@@ -55,6 +55,7 @@ class OpenCodeSupervisor:
         base_url: Optional[str] = None,
         subagent_models: Optional[Mapping[str, str]] = None,
         session_stall_timeout_seconds: Optional[float] = None,
+        max_text_chars: Optional[int] = None,
     ) -> None:
         self._command = [str(arg) for arg in command]
         self._logger = logger or logging.getLogger(__name__)
@@ -70,6 +71,7 @@ class OpenCodeSupervisor:
         self._base_env = base_env
         self._base_url = base_url
         self._subagent_models = subagent_models or {}
+        self._max_text_chars = max_text_chars
         self._handles: dict[str, OpenCodeHandle] = {}
         self._lock: Optional[asyncio.Lock] = None
 
@@ -275,6 +277,7 @@ class OpenCodeSupervisor:
                 base_url,
                 auth=self._auth,
                 timeout=self._request_timeout,
+                max_text_chars=self._max_text_chars,
                 logger=self._logger,
             )
             try:
@@ -344,6 +347,7 @@ class OpenCodeSupervisor:
                 base_url,
                 auth=self._auth,
                 timeout=self._request_timeout,
+                max_text_chars=self._max_text_chars,
                 logger=self._logger,
             )
             try:
