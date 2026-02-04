@@ -270,7 +270,9 @@ def _list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
 
     root_real = snapshot_root.resolve(strict=False)
     nodes: list[dict[str, Any]] = []
-    for child in sorted(target.iterdir(), key=lambda p: p.name):
+    for child in sorted(
+        target.iterdir(), key=lambda p: p.name
+    ):  # codeql[py/path-injection] target validated by normalize helper
         try:
             resolved = child.resolve(strict=False)
             resolved.relative_to(root_real)
@@ -464,7 +466,9 @@ def build_archive_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="file not found")
 
         try:
-            content = target.read_text(encoding="utf-8", errors="replace")
+            content = target.read_text(
+                encoding="utf-8", errors="replace"
+            )  # codeql[py/path-injection] target validated by normalize helper
         except OSError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return PlainTextResponse(content)
