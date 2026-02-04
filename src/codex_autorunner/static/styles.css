@@ -10971,6 +10971,22 @@ button.filebox-delete:hover {
   min-height: 0;
 }
 
+.archive-list-section {
+  display: grid;
+  gap: 8px;
+}
+
+.archive-list-header {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  padding: 0 4px;
+}
+
+.archive-list-empty {
+  padding: 4px 6px;
+}
+
 .archive-snapshot {
   text-align: left;
   border: 1px solid var(--border);

@@ -86,6 +86,17 @@ class ArchiveSnapshotDetailResponse(ResponseModel):
     meta: Optional[Dict[str, Any]] = None
 
 
+class LocalRunArchiveSummary(ResponseModel):
+    run_id: str
+    archived_at: Optional[str] = None
+    has_tickets: bool = False
+    has_runs: bool = False
+
+
+class LocalRunArchivesResponse(ResponseModel):
+    archives: List[LocalRunArchiveSummary]
+
+
 class ArchiveTreeNode(ResponseModel):
     path: str
     name: str

@@ -17,6 +17,8 @@ from ..schemas import (
     ArchiveSnapshotsResponse,
     ArchiveSnapshotSummary,
     ArchiveTreeResponse,
+    LocalRunArchivesResponse,
+    LocalRunArchiveSummary,
 )
 
 logger = logging.getLogger("codex_autorunner.routes.archive")
@@ -26,6 +28,10 @@ _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 
 def _archive_worktrees_root(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "archive" / "worktrees"
+
+
+def _local_flows_root(repo_root: Path) -> Path:
+    return repo_root / ".codex-autorunner" / "flows"
 
 
 def _normalize_component(value: str, label: str) -> str:
@@ -68,6 +74,18 @@ def _normalize_archive_rel_path(base: Path, rel_path: str) -> tuple[Path, str]:
     return candidate, rel_posix
 
 
+_LOCAL_ARCHIVE_DIRS = {"archived_tickets", "archived_runs"}
+
+
+def _normalize_local_archive_rel_path(base: Path, rel_path: str) -> tuple[Path, str]:
+    target, rel_posix = _normalize_archive_rel_path(base, rel_path)
+    if rel_posix:
+        head = rel_posix.split("/", 1)[0]
+        if head not in _LOCAL_ARCHIVE_DIRS:
+            raise ValueError("invalid archive path")
+    return target, rel_posix
+
+
 def _resolve_snapshot_root(
     repo_root: Path,
     snapshot_id: str,
@@ -106,6 +124,15 @@ def _resolve_snapshot_root(
     except ValueError:
         raise ValueError("invalid snapshot path") from None
     return resolved_root, worktree_id
+
+
+def _resolve_local_run_root(repo_root: Path, run_id: str) -> Path:
+    run_id = _normalize_component(run_id, "run_id")
+    flows_root = _local_flows_root(repo_root)
+    run_root = flows_root / run_id
+    if not run_root.exists() or not run_root.is_dir():
+        raise FileNotFoundError("run archive not found")
+    return run_root
 
 
 def _safe_mtime(path: Path) -> Optional[float]:
@@ -194,6 +221,42 @@ def _iter_snapshots(repo_root: Path) -> list[ArchiveSnapshotSummary]:
     return snapshots
 
 
+def _format_mtime(ts: Optional[float]) -> Optional[str]:
+    if ts is None:
+        return None
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
+def _iter_local_run_archives(repo_root: Path) -> list[LocalRunArchiveSummary]:
+    flows_root = _local_flows_root(repo_root)
+    if not flows_root.exists() or not flows_root.is_dir():
+        return []
+    entries: list[tuple[float, LocalRunArchiveSummary]] = []
+    for run_dir in sorted(flows_root.iterdir(), key=lambda p: p.name):
+        if not run_dir.is_dir():
+            continue
+        tickets_dir = run_dir / "archived_tickets"
+        runs_dir = run_dir / "archived_runs"
+        has_tickets = tickets_dir.exists() and tickets_dir.is_dir()
+        has_runs = runs_dir.exists() and runs_dir.is_dir()
+        if not has_tickets and not has_runs:
+            continue
+        mtime_candidates = [
+            _safe_mtime(tickets_dir) if has_tickets else None,
+            _safe_mtime(runs_dir) if has_runs else None,
+        ]
+        mtime = max([ts for ts in mtime_candidates if ts is not None], default=0.0)
+        summary = LocalRunArchiveSummary(
+            run_id=run_dir.name,
+            archived_at=_format_mtime(mtime) if mtime else None,
+            has_tickets=has_tickets,
+            has_runs=has_runs,
+        )
+        entries.append((mtime, summary))
+    entries.sort(key=lambda item: (item[0], item[1].run_id), reverse=True)
+    return [entry[1] for entry in entries]
+
+
 def _list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
     target, rel_posix = _normalize_archive_rel_path(snapshot_root, rel_path)
     if (
@@ -242,6 +305,67 @@ def _list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
     return ArchiveTreeResponse(path=rel_posix, nodes=nodes)
 
 
+def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
+    target, rel_posix = _normalize_local_archive_rel_path(run_root, rel_path)
+    if not rel_posix:
+        nodes: list[dict[str, Any]] = []
+        for name in sorted(_LOCAL_ARCHIVE_DIRS):
+            candidate = run_root / name
+            if not candidate.exists() or not candidate.is_dir():
+                continue
+            nodes.append(
+                {
+                    "path": name,
+                    "name": name,
+                    "type": "folder",
+                    "size_bytes": None,
+                    "mtime": _safe_mtime(candidate),
+                }
+            )
+        return ArchiveTreeResponse(path="", nodes=nodes)
+
+    if not target.exists():
+        raise FileNotFoundError("path not found")
+    if not target.is_dir():
+        raise ValueError("path is not a directory")
+
+    root_real = run_root.resolve(strict=False)
+    nodes: list[dict[str, Any]] = []
+    for child in sorted(target.iterdir(), key=lambda p: p.name):
+        try:
+            resolved = child.resolve(strict=False)
+            resolved.relative_to(root_real)
+        except Exception:
+            continue
+
+        if child.is_dir():
+            node_type = "folder"
+            size_bytes = None
+        else:
+            node_type = "file"
+            try:
+                size_bytes = child.stat().st_size
+            except OSError:
+                size_bytes = None
+
+        try:
+            node_path = resolved.relative_to(root_real).as_posix()
+        except ValueError:
+            continue
+
+        nodes.append(
+            {
+                "path": node_path,
+                "name": child.name,
+                "type": node_type,
+                "size_bytes": size_bytes,
+                "mtime": _safe_mtime(child),
+            }
+        )
+
+    return ArchiveTreeResponse(path=rel_posix, nodes=nodes)
+
+
 def build_archive_routes() -> APIRouter:
     router = APIRouter(prefix="/api/archive", tags=["archive"])
 
@@ -250,6 +374,12 @@ def build_archive_routes() -> APIRouter:
         repo_root = request.app.state.engine.repo_root
         snapshots = _iter_snapshots(repo_root)
         return {"snapshots": snapshots}
+
+    @router.get("/local-runs", response_model=LocalRunArchivesResponse)
+    def list_local_runs(request: Request):
+        repo_root = request.app.state.engine.repo_root
+        archives = _iter_local_run_archives(repo_root)
+        return {"archives": archives}
 
     @router.get(
         "/snapshots/{snapshot_id}", response_model=ArchiveSnapshotDetailResponse
@@ -294,6 +424,22 @@ def build_archive_routes() -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return response
 
+    @router.get("/local/tree", response_model=ArchiveTreeResponse)
+    def list_local_tree(
+        request: Request,
+        run_id: str,
+        path: str = "",
+    ):
+        repo_root = request.app.state.engine.repo_root
+        try:
+            run_root = _resolve_local_run_root(repo_root, run_id)
+            response = _list_local_tree(run_root, path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return response
+
     @router.get("/file", response_class=PlainTextResponse)
     def read_file(
         request: Request,
@@ -323,6 +469,30 @@ def build_archive_routes() -> APIRouter:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return PlainTextResponse(content)
 
+    @router.get("/local/file", response_class=PlainTextResponse)
+    def read_local_file(
+        request: Request,
+        run_id: str,
+        path: str,
+    ):
+        repo_root = request.app.state.engine.repo_root
+        try:
+            run_root = _resolve_local_run_root(repo_root, run_id)
+            target, rel_posix = _normalize_local_archive_rel_path(run_root, path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        if not rel_posix or not target.exists() or target.is_dir():
+            raise HTTPException(status_code=404, detail="file not found")
+
+        try:
+            content = target.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return PlainTextResponse(content)
+
     @router.get("/download")
     def download_file(
         request: Request,
@@ -344,6 +514,29 @@ def build_archive_routes() -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         if not target.exists() or target.is_dir():
+            raise HTTPException(status_code=404, detail="file not found")
+
+        return FileResponse(
+            path=target,  # codeql[py/path-injection] target validated by normalize helper
+            filename=target.name,
+        )
+
+    @router.get("/local/download")
+    def download_local_file(
+        request: Request,
+        run_id: str,
+        path: str,
+    ):
+        repo_root = request.app.state.engine.repo_root
+        try:
+            run_root = _resolve_local_run_root(repo_root, run_id)
+            target, rel_posix = _normalize_local_archive_rel_path(run_root, path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        if not rel_posix or not target.exists() or target.is_dir():
             raise HTTPException(status_code=404, detail="file not found")
 
         return FileResponse(
