@@ -240,14 +240,38 @@ def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> 
     """Test that hub_snapshot and user_message sections are always included."""
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {"test": "data", "foo": "bar"}
+    snapshot = {
+        "inbox": [
+            {
+                "repo_id": "repo-1",
+                "run_id": "run-9",
+                "seq": 3,
+                "dispatch": {
+                    "mode": "pause",
+                    "is_handoff": True,
+                    "title": "Need input",
+                    "body": "Please respond",
+                },
+                "files": ["request.md", "log.txt"],
+                "open_url": "https://example.invalid/run/9",
+            }
+        ]
+    }
     base_prompt = "Base prompt"
     message = "User message"
 
     result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
 
     assert "<hub_snapshot>" in result
-    assert '"test": "data"' in result
+    assert "Inbox (paused runs needing attention):" in result
+    assert "repo_id=repo-1" in result
+    assert "run_id=run-9" in result
+    assert "mode=pause" in result
+    assert "handoff=true" in result
+    assert "title: Need input" in result
+    assert "body: Please respond" in result
+    assert "attachments: [request.md, log.txt]" in result
+    assert "open_url: https://example.invalid/run/9" in result
     assert "</hub_snapshot>" in result
     assert "<user_message>" in result
     assert "User message" in result

@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -165,12 +164,12 @@ async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
     assert "<hub_snapshot>" in prompt_text
     assert "<user_message>" in prompt_text
     assert "hello" in prompt_text
-    snapshot_json = prompt_text.split("<hub_snapshot>\n", 1)[1].split(
+    snapshot_text = prompt_text.split("<hub_snapshot>\n", 1)[1].split(
         "\n</hub_snapshot>", 1
     )[0]
-    snapshot = json.loads(snapshot_json)
-    assert snapshot["pma_files"]["inbox"] == ["input.txt"]
-    assert snapshot["pma_files"]["outbox"] == ["output.txt"]
+    assert "PMA files:" in snapshot_text
+    assert "- inbox: [input.txt]" in snapshot_text
+    assert "- outbox: [output.txt]" in snapshot_text
 
 
 @pytest.mark.anyio
