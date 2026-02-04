@@ -7,7 +7,6 @@ from .config import (
     REPO_OVERRIDE_FILENAME,
     ROOT_CONFIG_FILENAME,
     ROOT_OVERRIDE_FILENAME,
-    Config,
     find_nearest_hub_config_path,
 )
 
@@ -98,6 +97,18 @@ def build_about_car_markdown(
         f"`{decisions_disp}`\n"
         "- **Spec**: "
         f"`{spec_disp}`\n\n"
+        "## Web UI quick map (repo page)\n"
+        "- Repo view: `/repos/<repo_id>/`\n"
+        "- Tabs: **Tickets** = `.codex-autorunner/tickets/` queue.\n"
+        "- Tabs: **Inbox** = paused run dispatches/handoffs.\n"
+        "- Tabs: **Workspace** = edit `active_context.md`, `spec.md`, `decisions.md`.\n"
+        "- Tabs: **Terminal** = launches the configured `codex` binary in a PTY.\n"
+        "- Tabs: **Archive** = browse worktree snapshots.\n\n"
+        "## FileBox (attachments)\n"
+        "- Repo FileBox root: `.codex-autorunner/filebox/`.\n"
+        "- User uploads: `.codex-autorunner/filebox/inbox/`.\n"
+        "- Files to send back: `.codex-autorunner/filebox/outbox/`.\n"
+        "- Note: ticket_flow uses per-run dispatch directories; do not confuse dispatch with FileBox.\n\n"
         "## Critical rules\n"
         "- Do **not** create new copies of workspace docs elsewhere in the repo.\n"
         "- Treat `.codex-autorunner/` as intentional project structure even though it is hidden/gitignored.\n\n"
@@ -209,17 +220,6 @@ def build_tickets_agents_markdown(*, repo_root: Path) -> str:
         "## Ticket flow (runner)\n"
         f"- See `{quickstart_path}` for `car flow ticket_flow ...` commands.\n"
     )
-
-
-def ensure_about_car_file(config: Config, *, force: bool = False) -> Path:
-    """Config-aware wrapper that uses configured doc paths."""
-    repo_root = config.root
-    docs = {
-        "active_context": config.doc_path("active_context"),
-        "decisions": config.doc_path("decisions"),
-        "spec": config.doc_path("spec"),
-    }
-    return ensure_about_car_file_for_repo(repo_root, doc_paths=docs, force=force)
 
 
 def ensure_ticket_flow_quickstart_file_for_repo(
