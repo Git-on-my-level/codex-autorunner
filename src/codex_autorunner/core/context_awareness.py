@@ -12,6 +12,7 @@ CAR’s durable control-plane lives under `.codex-autorunner/`:
   - `active_context.md` — current “north star” context; kept fresh for ongoing work.
   - `spec.md` — longer spec / acceptance criteria when needed.
   - `decisions.md` — prior decisions / tradeoffs when relevant.
+- `.codex-autorunner/filebox/` — attachments inbox/outbox used by CAR surfaces (if present).
 
 Intent signals: if the user mentions tickets, “dispatch”, “resume”, workspace docs, or `.codex-autorunner/`, they are likely referring to CAR artifacts/workflow rather than generic repo files.
 

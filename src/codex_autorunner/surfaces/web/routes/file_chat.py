@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 
 from ....agents.registry import validate_agent_id
 from ....core import drafts as draft_utils
+from ....core.context_awareness import CAR_AWARENESS_BLOCK, format_file_role_addendum
 from ....core.state import now_iso
 from ....core.utils import atomic_write, find_repo_root
 from ....integrations.app_server.event_buffer import format_sse
@@ -146,41 +147,20 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
 def _build_file_chat_prompt(*, target: _Target, message: str, before: str) -> str:
     if target.kind == "ticket":
         file_role_context = (
-            "This file is a CAR ticket. Ticket flow processes "
-            "`.codex-autorunner/tickets/TICKET-###*.md` in numeric order.\n"
+            f"{format_file_role_addendum('ticket', target.rel_path)}\n"
             "Edits here change what the ticket flow agent will do; keep YAML "
             "frontmatter valid."
         )
     elif target.kind == "workspace":
         file_role_context = (
-            "This file is a CAR workspace doc under `.codex-autorunner/workspace/`."
-            " These docs act as shared memory across ticket turns."
+            f"{format_file_role_addendum('workspace', target.rel_path)}\n"
+            "These docs act as shared memory across ticket turns."
         )
     else:
-        file_role_context = (
-            "This file is a normal repo file (not a CAR ticket/workspace doc)."
-        )
+        file_role_context = format_file_role_addendum("other", target.rel_path)
 
     return (
-        "<injected context>\n"
-        "You are operating inside a Codex Autorunner (CAR) managed repo.\n\n"
-        "CAR’s durable control-plane lives under `.codex-autorunner/`:\n"
-        "- `.codex-autorunner/ABOUT_CAR.md` — short repo-local briefing "
-        "(ticket/workspace conventions + helper scripts).\n"
-        "- `.codex-autorunner/tickets/` — ordered ticket queue "
-        "(`TICKET-###*.md`) used by the ticket flow runner.\n"
-        "- `.codex-autorunner/workspace/` — shared context docs:\n"
-        "  - `active_context.md` — current “north star” context; kept fresh "
-        "for ongoing work.\n"
-        "  - `spec.md` — longer spec / acceptance criteria when needed.\n"
-        "  - `decisions.md` — prior decisions / tradeoffs when relevant.\n\n"
-        "Intent signals: if the user mentions tickets, “dispatch”, “resume”, "
-        "workspace docs, or `.codex-autorunner/`, they are likely referring "
-        "to CAR artifacts/workflow rather than generic repo files.\n\n"
-        "Use the above as orientation. If you need the operational details "
-        "(exact helper commands, what CAR auto-generates), read "
-        "`.codex-autorunner/ABOUT_CAR.md`.\n"
-        "</injected context>\n\n"
+        f"{CAR_AWARENESS_BLOCK}\n\n"
         "<file_role_context>\n"
         f"{file_role_context}\n"
         "</file_role_context>\n\n"
