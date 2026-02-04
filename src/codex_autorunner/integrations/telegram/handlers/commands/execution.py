@@ -2183,7 +2183,6 @@ class ExecutionCommands(SharedHelpers):
                 except Exception as exc:
                     if (
                         pma_mode
-                        and allow_new_thread
                         and _is_missing_thread_error(exc)
                         and pma_thread_registry
                         and pma_thread_key
@@ -2199,6 +2198,28 @@ class ExecutionCommands(SharedHelpers):
                             reason="thread_not_found",
                         )
                         pma_thread_registry.reset_thread(pma_thread_key)
+                        if not allow_new_thread:
+                            failure_message = (
+                                "PMA thread no longer exists. Send a new message to "
+                                "start a PMA thread, then retry /compact."
+                            )
+                            if send_failure_response:
+                                await self._send_message(
+                                    message.chat_id,
+                                    failure_message,
+                                    thread_id=message.thread_id,
+                                    reply_to=message.message_id,
+                                )
+                                if placeholder_id is not None:
+                                    await self._delete_message(
+                                        message.chat_id, placeholder_id
+                                    )
+                            return _TurnRunFailure(
+                                failure_message,
+                                placeholder_id,
+                                transcript_message_id,
+                                transcript_text,
+                            )
                         agent = self._effective_agent(record)
                         thread_id = await _start_new_thread(agent)
                         if thread_id is None:
