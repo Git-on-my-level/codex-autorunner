@@ -936,6 +936,7 @@ main {
 
 .notifications-bell-btn {
   position: relative;
+  overflow: visible;
 }
 
 .notifications-bell-badge {
@@ -953,6 +954,7 @@ main {
   text-align: center;
   border: 1px solid var(--bg);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
 }
 
 .notifications-dropdown {
