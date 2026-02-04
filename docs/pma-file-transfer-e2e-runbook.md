@@ -9,7 +9,7 @@ This runbook describes the end-to-end verification steps for PMA (Project Manage
 - Telegram bot configured and running
 - PMA enabled in hub config (default: `pma.enabled: true`)
 - Test files ready:
-  - Small text file (< 10 MB)
+  - Small text file (< 100 MB)
   - Medium file (e.g., 1-5 MB)
   - Various file types (txt, pdf, png, etc.)
 
@@ -37,7 +37,7 @@ In the web UI, switch PMA to manual mode to open the docs editor. Use "Save" to 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `pma.max_upload_bytes` | 10,000,000 | Max file size for web uploads (10 MB) |
-| `telegram.media.max_file_bytes` | 10,000,000 | Max file size for Telegram (10 MB) |
+| `telegram.media.max_file_bytes` | 100,000,000 | Max file size for Telegram (100 MB) |
 | `telegram.media.max_image_bytes` | 5,000,000 | Max image size for Telegram (5 MB) |
 
 ---
@@ -302,7 +302,7 @@ cat <hub_root>/.codex-autorunner/pma/outbox/telegram-output.txt
 
 **Causes:**
 - Web: File exceeds `pma.max_upload_bytes` (default 10 MB)
-- Telegram: File exceeds `telegram.media.max_file_bytes` (default 10 MB)
+- Telegram: File exceeds `telegram.media.max_file_bytes` (default 100 MB)
 
 **Resolution:**
 - Reduce file size or increase limits in config

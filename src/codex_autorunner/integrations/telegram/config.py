@@ -44,7 +44,7 @@ DEFAULT_APP_SERVER_TURN_TIMEOUT_SECONDS = 28800
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
 DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
-DEFAULT_MEDIA_MAX_FILE_BYTES = 10 * 1024 * 1024
+DEFAULT_MEDIA_MAX_FILE_BYTES = 100 * 1024 * 1024
 DEFAULT_MEDIA_IMAGE_PROMPT = (
     "The user sent an image with no caption. Use it to continue the "
     "conversation; if no clear task, describe the image and ask what they want."
