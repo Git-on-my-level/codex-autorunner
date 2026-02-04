@@ -47,6 +47,8 @@ _SCRIPT = dedent(
         for path in sorted(tickets_dir.iterdir()):
             if not path.is_file():
                 continue
+            if path.name == "AGENTS.md":
+                continue
             match = _TICKET_NAME_RE.match(path.name)
             if not match:
                 errors.append(

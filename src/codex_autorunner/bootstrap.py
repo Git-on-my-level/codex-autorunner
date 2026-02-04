@@ -7,6 +7,7 @@ import yaml
 from .core.about_car import (
     ensure_about_car_file_for_repo,
     ensure_ticket_flow_quickstart_file_for_repo,
+    ensure_tickets_agents_file_for_repo,
 )
 from .core.config import (
     CONFIG_FILENAME,
@@ -178,6 +179,7 @@ def seed_repo_files(
         force=force,
     )
     ensure_ticket_flow_quickstart_file_for_repo(repo_root, force=force)
+    ensure_tickets_agents_file_for_repo(repo_root, force=force)
     ensure_ticket_linter(repo_root, force=force)
     ensure_ticket_manager(repo_root, force=force)
 

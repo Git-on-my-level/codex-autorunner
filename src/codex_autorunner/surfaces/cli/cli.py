@@ -1940,6 +1940,8 @@ def _validate_tickets(ticket_dir: Path) -> list[str]:
     for path in sorted(ticket_dir.iterdir()):
         if not path.is_file():
             continue
+        if path.name == "AGENTS.md":
+            continue
         if parse_ticket_index(path.name) is None:
             rel_path = safe_relpath(path, ticket_root)
             errors.append(

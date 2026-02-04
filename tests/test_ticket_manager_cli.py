@@ -76,7 +76,9 @@ def test_insert_with_title_creates_ticket(repo: Path) -> None:
     assert res.returncode == 0
     assert "Inserted gap and created" in res.stdout
 
-    ticket_paths = sorted(p.name for p in tickets.iterdir())
+    ticket_paths = sorted(
+        p.name for p in tickets.iterdir() if p.name.startswith("TICKET-")
+    )
     assert ticket_paths == ["TICKET-001.md", "TICKET-002.md", "TICKET-003.md"]
 
     content = (tickets / "TICKET-001.md").read_text(encoding="utf-8")
@@ -94,7 +96,9 @@ def test_insert_without_title_warns_next_step(repo: Path) -> None:
     assert res.returncode == 0
     assert "run create --at 2" in res.stdout
 
-    ticket_paths = sorted(p.name for p in tickets.iterdir())
+    ticket_paths = sorted(
+        p.name for p in tickets.iterdir() if p.name.startswith("TICKET-")
+    )
     assert ticket_paths == ["TICKET-001.md"]
 
 
