@@ -666,3 +666,42 @@ async def test_ticket_runner_clears_network_retry_on_success(tmp_path: Path) -> 
     assert r2.state.get("network_retry") is None
 
     assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_archives_user_reply_before_turn(tmp_path: Path) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    run_dir = workspace_root / ".codex-autorunner" / "runs" / "run-1"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "USER_REPLY.md").write_text("User says hi\n", encoding="utf-8")
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        assert "User says hi" in req.prompt
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id=req.conversation_id or "conv1",
+            turn_id="t1",
+            text="ok",
+        )
+
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            runs_dir=Path(".codex-autorunner/runs"),
+            auto_commit=False,
+        ),
+        agent_pool=FakeAgentPool(handler),
+    )
+
+    result = await runner.step({})
+    assert result.status == "continue"
+
+    archived_reply = run_dir / "reply_history" / "0001" / "USER_REPLY.md"
+    assert archived_reply.exists()

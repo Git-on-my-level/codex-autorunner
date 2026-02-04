@@ -18,7 +18,13 @@ from .outbox import (
     ensure_outbox_dirs,
     resolve_outbox_paths,
 )
-from .replies import ensure_reply_dirs, parse_user_reply, resolve_reply_paths
+from .replies import (
+    dispatch_reply,
+    ensure_reply_dirs,
+    next_reply_seq,
+    parse_user_reply,
+    resolve_reply_paths,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -243,6 +249,23 @@ class TicketRunner:
             run_id=self._run_id,
         )
         ensure_reply_dirs(reply_paths)
+        if reply_paths.user_reply_path.exists():
+            next_seq = next_reply_seq(reply_paths.reply_history_dir)
+            archived, errors = dispatch_reply(reply_paths, next_seq=next_seq)
+            if errors:
+                return self._pause(
+                    state,
+                    reason="Failed to archive USER_REPLY.md.",
+                    reason_details="Errors:\n- " + "\n- ".join(errors),
+                    reason_code="needs_user_fix",
+                )
+            if archived is None:
+                return self._pause(
+                    state,
+                    reason="Failed to archive USER_REPLY.md.",
+                    reason_details="Errors:\n- Failed to archive reply",
+                    reason_code="needs_user_fix",
+                )
 
         ticket_paths = list_ticket_paths(ticket_dir)
         if not ticket_paths:
