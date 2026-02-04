@@ -141,6 +141,8 @@ class FlowController:
             engine = state.get("ticket_engine")
             if isinstance(engine, dict):
                 engine = dict(engine)
+                if engine.get("reason_code") == "max_turns":
+                    engine["total_turns"] = 0
                 engine["status"] = "running"
                 engine.pop("reason", None)
                 engine.pop("reason_details", None)

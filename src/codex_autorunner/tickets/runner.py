@@ -222,7 +222,7 @@ class TicketRunner:
             return self._pause(
                 state,
                 reason=f"Max turns reached ({self._config.max_total_turns}). Review tickets and resume.",
-                reason_code="needs_user_fix",
+                reason_code="max_turns",
             )
 
         ticket_dir = self._workspace_root / self._config.ticket_dir
