@@ -20,6 +20,17 @@ export interface ArchiveSnapshotDetailResponse {
   meta?: Record<string, unknown> | null;
 }
 
+export interface LocalRunArchiveSummary {
+  run_id: string;
+  archived_at?: string | null;
+  has_tickets: boolean;
+  has_runs: boolean;
+}
+
+export interface LocalRunArchivesResponse {
+  archives: LocalRunArchiveSummary[];
+}
+
 export interface ArchiveTreeNode {
   path: string;
   name: string;
@@ -49,6 +60,11 @@ export async function fetchArchiveSnapshot(
   return (await api(url)) as ArchiveSnapshotDetailResponse;
 }
 
+export async function listLocalRunArchives(): Promise<LocalRunArchiveSummary[]> {
+  const res = (await api("/api/archive/local-runs")) as LocalRunArchivesResponse;
+  return res?.archives ?? [];
+}
+
 export async function listArchiveTree(
   snapshotId: string,
   worktreeRepoId?: string | null,
@@ -58,6 +74,13 @@ export async function listArchiveTree(
   if (worktreeRepoId) params.set("worktree_repo_id", worktreeRepoId);
   if (path) params.set("path", path);
   const url = `/api/archive/tree?${params.toString()}`;
+  return (await api(url)) as ArchiveTreeResponse;
+}
+
+export async function listLocalArchiveTree(runId: string, path: string = ""): Promise<ArchiveTreeResponse> {
+  const params = new URLSearchParams({ run_id: runId });
+  if (path) params.set("path", path);
+  const url = `/api/archive/local/tree?${params.toString()}`;
   return (await api(url)) as ArchiveTreeResponse;
 }
 
@@ -72,9 +95,21 @@ export async function readArchiveFile(
   return (await api(url)) as string;
 }
 
+export async function readLocalArchiveFile(runId: string, path: string): Promise<string> {
+  const params = new URLSearchParams({ run_id: runId, path });
+  const url = `/api/archive/local/file?${params.toString()}`;
+  return (await api(url)) as string;
+}
+
 export function downloadArchiveFile(snapshotId: string, worktreeRepoId: string | null, path: string): void {
   const params = new URLSearchParams({ snapshot_id: snapshotId, path });
   if (worktreeRepoId) params.set("worktree_repo_id", worktreeRepoId);
   const url = resolvePath(`/api/archive/download?${params.toString()}`);
+  window.location.href = url;
+}
+
+export function downloadLocalArchiveFile(runId: string, path: string): void {
+  const params = new URLSearchParams({ run_id: runId, path });
+  const url = resolvePath(`/api/archive/local/download?${params.toString()}`);
   window.location.href = url;
 }

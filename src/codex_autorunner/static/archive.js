@@ -1,16 +1,23 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { subscribe } from "./bus.js";
-import { downloadArchiveFile, fetchArchiveSnapshot, listArchiveSnapshots, listArchiveTree, readArchiveFile, } from "./archiveApi.js";
+import { downloadArchiveFile, downloadLocalArchiveFile, fetchArchiveSnapshot, listArchiveSnapshots, listArchiveTree, listLocalArchiveTree, listLocalRunArchives, readArchiveFile, readLocalArchiveFile, } from "./archiveApi.js";
 import { escapeHtml, flash, statusPill, setButtonLoading } from "./utils.js";
 let initialized = false;
 let snapshots = [];
-let selected = null;
-let activeSnapshotKey = "";
+let localArchives = [];
+let selectedItem = null;
+let activeSourceKey = "";
 let activeSubTab = "snapshot";
-let lastSnapshotsSignature = "";
-/** Compute a signature of the snapshots list for change detection. */
-function snapshotsSignature(items) {
-    return items.map((s) => `${s.snapshot_id}:${s.worktree_repo_id}:${s.status || ""}`).join("|");
+let lastArchiveSignature = "";
+/** Compute a signature of the archive lists for change detection. */
+function archiveSignature(snapshotItems, localItems) {
+    const snapSig = snapshotItems
+        .map((s) => `${s.snapshot_id}:${s.worktree_repo_id}:${s.status || ""}`)
+        .join("|");
+    const localSig = localItems
+        .map((s) => `${s.run_id}:${s.archived_at || ""}:${s.has_tickets ? "t" : "f"}:${s.has_runs ? "t" : "f"}`)
+        .join("|");
+    return `${snapSig}::${localSig}`;
 }
 const listEl = document.getElementById("archive-snapshot-list");
 const detailEl = document.getElementById("archive-snapshot-detail");
@@ -23,7 +30,7 @@ let fileEls = null;
 let treeRequestToken = 0;
 let fileRequestToken = 0;
 let artifactRequestToken = 0;
-const QUICK_LINKS = [
+const SNAPSHOT_QUICK_LINKS = [
     { label: "Active Context", path: "workspace/active_context.md", kind: "file" },
     { label: "Decisions", path: "workspace/decisions.md", kind: "file" },
     { label: "Spec", path: "workspace/spec.md", kind: "file" },
@@ -31,6 +38,10 @@ const QUICK_LINKS = [
     { label: "Runs", path: "runs", kind: "folder" },
     { label: "Flows", path: "flows", kind: "folder" },
     { label: "Logs", path: "logs", kind: "folder" },
+];
+const LOCAL_QUICK_LINKS = [
+    { label: "Archived tickets", path: "archived_tickets", kind: "folder" },
+    { label: "Archived runs", path: "archived_runs", kind: "folder" },
 ];
 function formatTimestamp(ts) {
     if (!ts)
@@ -54,6 +65,12 @@ function formatBytes(bytes) {
 function snapshotKey(snapshot) {
     return `${snapshot.snapshot_id}::${snapshot.worktree_repo_id}`;
 }
+function listItemKey(item) {
+    if (item.kind === "snapshot") {
+        return `snapshot:${snapshotKey(item.summary)}`;
+    }
+    return `local:${item.summary.run_id}`;
+}
 function parentPath(path) {
     const parts = path.split("/").filter(Boolean);
     if (parts.length <= 1)
@@ -67,32 +84,33 @@ function renderEmptyDetail(message) {
     detailEl.innerHTML = `
     <div class="archive-empty-state">
       <div class="archive-empty-title">${escapeHtml(message)}</div>
-      <div class="archive-empty-hint">Select a snapshot on the left to view metadata.</div>
+      <div class="archive-empty-hint">Select a snapshot or local run archive on the left to view details.</div>
     </div>
   `;
 }
-function renderList(items) {
+function renderList(snapshotItems, localItems) {
     if (!listEl)
         return;
-    if (!items.length) {
+    const hasItems = snapshotItems.length > 0 || localItems.length > 0;
+    if (!hasItems) {
         listEl.innerHTML = "";
         if (emptyEl)
             emptyEl.classList.remove("hidden");
-        renderEmptyDetail("No archived snapshots yet.");
+        renderEmptyDetail("No archives yet.");
         return;
     }
     if (emptyEl)
         emptyEl.classList.add("hidden");
-    const selectedKey = selected ? snapshotKey(selected) : "";
-    listEl.innerHTML = items
+    const selectedKey = selectedItem ? listItemKey(selectedItem) : "";
+    const snapshotHtml = snapshotItems
         .map((item) => {
-        const isActive = selectedKey && selectedKey === snapshotKey(item);
+        const isActive = selectedKey && selectedKey === `snapshot:${snapshotKey(item)}`;
         const created = formatTimestamp(item.created_at);
         const branch = item.branch ? `· ${item.branch}` : "";
         const status = item.status ? item.status : "unknown";
         const note = item.note ? ` · ${item.note}` : "";
         return `
-        <button class="archive-snapshot${isActive ? " active" : ""}" data-snapshot-id="${escapeHtml(item.snapshot_id)}" data-worktree-id="${escapeHtml(item.worktree_repo_id)}">
+        <button class="archive-snapshot${isActive ? " active" : ""}" data-kind="snapshot" data-snapshot-id="${escapeHtml(item.snapshot_id)}" data-worktree-id="${escapeHtml(item.worktree_repo_id)}">
           <div class="archive-snapshot-title">${escapeHtml(item.snapshot_id)}</div>
           <div class="archive-snapshot-meta muted small">${escapeHtml(created)} ${escapeHtml(branch)}</div>
           <div class="archive-snapshot-meta muted small">Status: ${escapeHtml(status)}${escapeHtml(note)}</div>
@@ -100,6 +118,34 @@ function renderList(items) {
       `;
     })
         .join("");
+    const localHtml = localItems
+        .map((item) => {
+        const isActive = selectedKey && selectedKey === `local:${item.run_id}`;
+        const created = formatTimestamp(item.archived_at);
+        const tickets = item.has_tickets ? "tickets" : "no tickets";
+        const runs = item.has_runs ? "runs" : "no runs";
+        return `
+        <button class="archive-snapshot${isActive ? " active" : ""}" data-kind="local" data-run-id="${escapeHtml(item.run_id)}">
+          <div class="archive-snapshot-title">${escapeHtml(item.run_id)}</div>
+          <div class="archive-snapshot-meta muted small">${escapeHtml(created)} · Local run archive</div>
+          <div class="archive-snapshot-meta muted small">${escapeHtml(tickets)} · ${escapeHtml(runs)}</div>
+        </button>
+      `;
+    })
+        .join("");
+    const snapshotSection = `
+    <div class="archive-list-section">
+      <div class="archive-list-header muted small">Worktree snapshots</div>
+      ${snapshotHtml || `<div class="archive-list-empty muted small">No snapshots.</div>`}
+    </div>
+  `;
+    const localSection = `
+    <div class="archive-list-section">
+      <div class="archive-list-header muted small">Local run archives</div>
+      ${localHtml || `<div class="archive-list-empty muted small">No run archives.</div>`}
+    </div>
+  `;
+    listEl.innerHTML = `${snapshotSection}${localSection}`;
 }
 function renderSummaryGrid(summary, meta) {
     const created = formatTimestamp(summary.created_at);
@@ -233,10 +279,10 @@ function renderArtifactSection(summary, meta) {
     </div>
   `;
 }
-function renderSubTabs() {
+function renderSubTabs(summaryLabel) {
     return `
     <div class="archive-subtabs">
-      <button class="archive-subtab${activeSubTab === "snapshot" ? " active" : ""}" data-subtab="snapshot">Snapshot</button>
+      <button class="archive-subtab${activeSubTab === "snapshot" ? " active" : ""}" data-subtab="snapshot">${escapeHtml(summaryLabel)}</button>
       <button class="archive-subtab${activeSubTab === "files" ? " active" : ""}" data-subtab="files">Files</button>
     </div>
   `;
@@ -272,14 +318,17 @@ function wireSubTabs() {
         }
     });
 }
-function renderFileSection() {
-    const quickLinks = QUICK_LINKS.map((item) => `<button class="ghost sm" data-archive-path="${escapeHtml(item.path)}" data-archive-kind="${item.kind}">${escapeHtml(item.label)}</button>`).join("");
+function renderFileSection(quickLinksData, description) {
+    const quickLinks = quickLinksData
+        .map((item) => `<button class="ghost sm" data-archive-path="${escapeHtml(item.path)}" data-archive-kind="${item.kind}">${escapeHtml(item.label)}</button>`)
+        .join("");
+    const descriptionText = description || "Browse archive files (read-only).";
     return `
     <div class="archive-file-section">
       <div class="archive-file-header-row">
         <div>
           <div class="archive-section-title">Archive files</div>
-          <div class="muted small">Browse snapshot files (read-only).</div>
+          <div class="muted small">${escapeHtml(descriptionText)}</div>
         </div>
         <div class="archive-quick-links" id="archive-quick-links">
           ${quickLinks}
@@ -307,6 +356,47 @@ function renderFileSection() {
           <div class="archive-file-empty muted small" id="archive-file-empty">Select a file to preview.</div>
           <pre class="archive-file-content hidden" id="archive-file-content"></pre>
         </div>
+      </div>
+    </div>
+  `;
+}
+function renderLocalSummary(run) {
+    const archivedAt = formatTimestamp(run.archived_at);
+    const tickets = run.has_tickets ? "Yes" : "No";
+    const runs = run.has_runs ? "Yes" : "No";
+    const actionButtons = [
+        run.has_tickets
+            ? `<button class="ghost sm" data-archive-path="archived_tickets" data-archive-kind="folder">Archived tickets</button>`
+            : "",
+        run.has_runs
+            ? `<button class="ghost sm" data-archive-path="archived_runs" data-archive-kind="folder">Archived runs</button>`
+            : "",
+    ]
+        .filter(Boolean)
+        .join("");
+    return `
+    <div class="archive-meta-grid">
+      <div class="archive-meta-row">
+        <div class="archive-meta-label muted small">Run ID</div>
+        <div class="archive-meta-value">${escapeHtml(run.run_id)}</div>
+      </div>
+      <div class="archive-meta-row">
+        <div class="archive-meta-label muted small">Archived at</div>
+        <div class="archive-meta-value">${escapeHtml(archivedAt)}</div>
+      </div>
+      <div class="archive-meta-row">
+        <div class="archive-meta-label muted small">Archived tickets</div>
+        <div class="archive-meta-value">${escapeHtml(tickets)}</div>
+      </div>
+      <div class="archive-meta-row">
+        <div class="archive-meta-label muted small">Archived runs</div>
+        <div class="archive-meta-value">${escapeHtml(runs)}</div>
+      </div>
+    </div>
+    <div class="archive-summary-block">
+      <div class="archive-section-title">Artifacts</div>
+      <div class="archive-quick-links archive-artifact-actions" id="archive-local-artifact-actions">
+        ${actionButtons || `<span class="muted small">No archived folders found.</span>`}
       </div>
     </div>
   `;
@@ -358,7 +448,7 @@ function renderBreadcrumbs(path) {
     nav.className = "workspace-breadcrumbs-inner";
     const rootBtn = document.createElement("button");
     rootBtn.type = "button";
-    rootBtn.textContent = "Snapshot";
+    rootBtn.textContent = fileState?.rootLabel || "Archive";
     rootBtn.addEventListener("click", () => {
         void navigateTo("");
     });
@@ -500,14 +590,43 @@ function renderFileList() {
         list.appendChild(row);
     });
 }
+async function listTreeForState(state, path) {
+    if (state.kind === "snapshot" && state.snapshotId && state.worktreeRepoId) {
+        return listArchiveTree(state.snapshotId, state.worktreeRepoId, path);
+    }
+    if (state.kind === "local" && state.runId) {
+        return listLocalArchiveTree(state.runId, path);
+    }
+    throw new Error("Invalid archive source");
+}
+async function readFileForState(state, path) {
+    if (state.kind === "snapshot" && state.snapshotId) {
+        return readArchiveFile(state.snapshotId, state.worktreeRepoId ?? null, path);
+    }
+    if (state.kind === "local" && state.runId) {
+        return readLocalArchiveFile(state.runId, path);
+    }
+    throw new Error("Invalid archive source");
+}
+function downloadFileForState(state, path) {
+    if (state.kind === "snapshot" && state.snapshotId) {
+        downloadArchiveFile(state.snapshotId, state.worktreeRepoId ?? null, path);
+        return;
+    }
+    if (state.kind === "local" && state.runId) {
+        downloadLocalArchiveFile(state.runId, path);
+        return;
+    }
+    throw new Error("Invalid archive source");
+}
 async function navigateTo(path) {
     if (!fileState || !fileEls)
         return;
     fileEls.list.innerHTML = "Loading…";
     const requestId = ++treeRequestToken;
     try {
-        const res = await listArchiveTree(fileState.snapshotId, fileState.worktreeRepoId, path);
-        if (!fileState || fileState.snapshotKey !== activeSnapshotKey)
+        const res = await listTreeForState(fileState, path);
+        if (!fileState || fileState.sourceKey !== activeSourceKey)
             return;
         if (requestId !== treeRequestToken)
             return;
@@ -530,14 +649,14 @@ async function openFilePath(path) {
         return;
     const folder = parentPath(path);
     await navigateTo(folder);
-    if (!fileState || fileState.snapshotKey !== activeSnapshotKey)
+    if (!fileState || fileState.sourceKey !== activeSourceKey)
         return;
     const node = fileState.nodes.find((item) => item.path === path && item.type === "file");
     if (node) {
         await selectFile(node);
     }
     else {
-        flash("File not found in archive snapshot.", "error");
+        flash("File not found in archive.", "error");
     }
 }
 async function selectFile(node, forceLoad = false) {
@@ -556,7 +675,7 @@ async function selectFile(node, forceLoad = false) {
     fileEls.downloadBtn.onclick = () => {
         if (!fileState)
             return;
-        downloadArchiveFile(fileState.snapshotId, fileState.worktreeRepoId, node.path);
+        downloadFileForState(fileState, node.path);
     };
     if (node.size_bytes && node.size_bytes > MAX_PREVIEW_BYTES && !forceLoad) {
         fileEls.fileContent.textContent = `Preview disabled for ${formatBytes(node.size_bytes)} file. Use Download or Load anyway.`;
@@ -572,8 +691,8 @@ async function selectFile(node, forceLoad = false) {
     fileEls.fileContent.textContent = "Loading…";
     fileEls.fileContent.classList.remove("hidden");
     try {
-        const text = await readArchiveFile(fileState.snapshotId, fileState.worktreeRepoId, node.path);
-        if (!fileState || fileState.snapshotKey !== activeSnapshotKey)
+        const text = await readFileForState(fileState, node.path);
+        if (!fileState || fileState.sourceKey !== activeSourceKey)
             return;
         if (requestId !== fileRequestToken)
             return;
@@ -589,20 +708,35 @@ async function selectFile(node, forceLoad = false) {
         flash("Failed to load archive file.", "error");
     }
 }
-function initArchiveFileViewer(summary) {
+function initArchiveFileViewer(source) {
     fileEls = collectFileEls();
     if (!fileEls)
         return;
-    const key = snapshotKey(summary);
-    activeSnapshotKey = key;
-    fileState = {
-        snapshotId: summary.snapshot_id,
-        worktreeRepoId: summary.worktree_repo_id,
-        snapshotKey: key,
-        currentPath: "",
-        nodes: [],
-        selectedFile: null,
-    };
+    const key = listItemKey(source);
+    activeSourceKey = key;
+    if (source.kind === "snapshot") {
+        fileState = {
+            kind: "snapshot",
+            snapshotId: source.summary.snapshot_id,
+            worktreeRepoId: source.summary.worktree_repo_id,
+            sourceKey: key,
+            rootLabel: "Snapshot",
+            currentPath: "",
+            nodes: [],
+            selectedFile: null,
+        };
+    }
+    else {
+        fileState = {
+            kind: "local",
+            runId: source.summary.run_id,
+            sourceKey: key,
+            rootLabel: "Run archive",
+            currentPath: "",
+            nodes: [],
+            selectedFile: null,
+        };
+    }
     resetFileViewer();
     wireArchivePathButtons(fileEls.quickLinks);
     fileEls.refreshBtn?.addEventListener("click", () => {
@@ -654,7 +788,7 @@ async function loadArtifactListings(summary) {
         flowList.textContent = "Loading…";
     try {
         const runs = await listArchiveTree(summary.snapshot_id, summary.worktree_repo_id, "runs");
-        if (!fileState || fileState.snapshotKey !== activeSnapshotKey)
+        if (!fileState || fileState.sourceKey !== activeSourceKey)
             return;
         if (requestId !== artifactRequestToken)
             return;
@@ -668,7 +802,7 @@ async function loadArtifactListings(summary) {
     }
     try {
         const flows = await listArchiveTree(summary.snapshot_id, summary.worktree_repo_id, "flows");
-        if (!fileState || fileState.snapshotKey !== activeSnapshotKey)
+        if (!fileState || fileState.sourceKey !== activeSourceKey)
             return;
         if (requestId !== artifactRequestToken)
             return;
@@ -699,20 +833,20 @@ async function loadSnapshotDetail(target) {
         </div>
         <span class="pill pill-idle" id="archive-detail-status">${escapeHtml(summary.status || "unknown")}</span>
       </div>
-      ${renderSubTabs()}
+      ${renderSubTabs("Snapshot")}
       <div id="archive-tab-snapshot" class="archive-tab-content archive-tab-snapshot${activeSubTab === "snapshot" ? " active" : ""}">
         ${renderSummaryGrid(summary, meta)}
         ${renderArtifactSection(summary, meta)}
       </div>
       <div id="archive-tab-files" class="archive-tab-content archive-tab-files${activeSubTab === "files" ? " active" : ""}">
-        ${renderFileSection()}
+        ${renderFileSection(SNAPSHOT_QUICK_LINKS, "Browse snapshot files (read-only).")}
       </div>
     `;
         const statusEl = document.getElementById("archive-detail-status");
         if (statusEl)
             statusPill(statusEl, summary.status || "unknown");
         wireSubTabs();
-        initArchiveFileViewer(summary);
+        initArchiveFileViewer({ kind: "snapshot", summary });
         wireArchivePathButtons(document.getElementById("archive-artifact-actions"));
         void loadArtifactListings(summary);
     }
@@ -724,15 +858,44 @@ async function loadSnapshotDetail(target) {
         flash("Failed to load archive snapshot.", "error");
     }
 }
-function selectSnapshot(target) {
-    selected = target;
-    renderList(snapshots);
-    void loadSnapshotDetail(target);
+async function loadLocalDetail(target) {
+    if (!detailEl)
+        return;
+    detailEl.innerHTML = `<div class="muted small">Loading run archive…</div>`;
+    detailEl.innerHTML = `
+    <div class="archive-detail-header">
+      <div>
+        <div class="archive-detail-title">${escapeHtml(target.run_id)}</div>
+        <div class="archive-detail-subtitle muted small">Local run archive</div>
+      </div>
+      <span class="pill pill-idle" id="archive-detail-status">local</span>
+    </div>
+    ${renderSubTabs("Overview")}
+    <div id="archive-tab-snapshot" class="archive-tab-content archive-tab-snapshot${activeSubTab === "snapshot" ? " active" : ""}">
+      ${renderLocalSummary(target)}
+    </div>
+    <div id="archive-tab-files" class="archive-tab-content archive-tab-files${activeSubTab === "files" ? " active" : ""}">
+      ${renderFileSection(LOCAL_QUICK_LINKS, "Browse archived run files (read-only).")}
+    </div>
+  `;
+    wireSubTabs();
+    initArchiveFileViewer({ kind: "local", summary: target });
+    wireArchivePathButtons(document.getElementById("archive-local-artifact-actions"));
 }
-async function loadSnapshots(forceReload = false) {
+function selectItem(target) {
+    selectedItem = target;
+    renderList(snapshots, localArchives);
+    if (target.kind === "snapshot") {
+        void loadSnapshotDetail(target.summary);
+    }
+    else {
+        void loadLocalDetail(target.summary);
+    }
+}
+async function loadArchiveData(forceReload = false) {
     if (!listEl)
         return;
-    const isInitialLoad = snapshots.length === 0;
+    const isInitialLoad = snapshots.length === 0 && localArchives.length === 0;
     const showRefreshIndicator = !isInitialLoad;
     if (showRefreshIndicator) {
         setButtonLoading(refreshBtn, true);
@@ -744,47 +907,67 @@ async function loadSnapshots(forceReload = false) {
     if (emptyEl)
         emptyEl.classList.add("hidden");
     try {
-        const items = await listArchiveSnapshots();
-        const sorted = items.slice().sort((a, b) => {
+        const [snapshotItems, localItems] = await Promise.all([listArchiveSnapshots(), listLocalRunArchives()]);
+        const sortedSnapshots = snapshotItems.slice().sort((a, b) => {
             const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
             const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
             if (aTime !== bTime)
                 return bTime - aTime;
             return (b.snapshot_id || "").localeCompare(a.snapshot_id || "");
         });
-        // Check if snapshots have changed
-        const newSignature = snapshotsSignature(sorted);
-        const hasChanged = newSignature !== lastSnapshotsSignature;
+        const sortedLocals = localItems.slice().sort((a, b) => {
+            const aTime = a.archived_at ? new Date(a.archived_at).getTime() : 0;
+            const bTime = b.archived_at ? new Date(b.archived_at).getTime() : 0;
+            if (aTime !== bTime)
+                return bTime - aTime;
+            return (b.run_id || "").localeCompare(a.run_id || "");
+        });
+        // Check if archives have changed
+        const newSignature = archiveSignature(sortedSnapshots, sortedLocals);
+        const hasChanged = newSignature !== lastArchiveSignature;
         // Skip update if nothing changed and not forced
         if (!forceReload && !hasChanged && !isInitialLoad) {
             return;
         }
-        lastSnapshotsSignature = newSignature;
-        snapshots = sorted;
-        renderList(sorted);
-        if (!sorted.length)
+        lastArchiveSignature = newSignature;
+        snapshots = sortedSnapshots;
+        localArchives = sortedLocals;
+        renderList(sortedSnapshots, sortedLocals);
+        if (!sortedSnapshots.length && !sortedLocals.length)
             return;
-        const selectedKey = selected ? snapshotKey(selected) : "";
-        const match = selectedKey
-            ? sorted.find((item) => snapshotKey(item) === selectedKey)
+        const selectedKey = selectedItem ? listItemKey(selectedItem) : "";
+        const matchSnapshot = selectedKey && selectedKey.startsWith("snapshot:")
+            ? sortedSnapshots.find((item) => `snapshot:${snapshotKey(item)}` === selectedKey)
+            : null;
+        const matchLocal = selectedKey && selectedKey.startsWith("local:")
+            ? sortedLocals.find((item) => `local:${item.run_id}` === selectedKey)
             : null;
         // Only reload detail if selection changed or forced
-        if (forceReload || !match || isInitialLoad) {
-            const next = match || sorted[0];
-            selectSnapshot(next);
+        if (forceReload || (!matchSnapshot && !matchLocal) || isInitialLoad) {
+            const nextSnapshot = sortedSnapshots[0];
+            const nextLocal = sortedLocals[0];
+            if (nextSnapshot) {
+                selectItem({ kind: "snapshot", summary: nextSnapshot });
+            }
+            else if (nextLocal) {
+                selectItem({ kind: "local", summary: nextLocal });
+            }
         }
-        else if (match) {
-            // Update selected reference but don't reload detail
-            selected = match;
-            renderList(sorted);
+        else if (matchSnapshot) {
+            selectedItem = { kind: "snapshot", summary: matchSnapshot };
+            renderList(sortedSnapshots, sortedLocals);
+        }
+        else if (matchLocal) {
+            selectedItem = { kind: "local", summary: matchLocal };
+            renderList(sortedSnapshots, sortedLocals);
         }
     }
     catch (err) {
         listEl.innerHTML = "";
-        renderEmptyDetail("Unable to load archive snapshots.");
+        renderEmptyDetail("Unable to load archives.");
         if (emptyEl)
             emptyEl.classList.add("hidden");
-        flash("Failed to load archive snapshots.", "error");
+        flash("Failed to load archives.", "error");
     }
     finally {
         if (showRefreshIndicator) {
@@ -799,12 +982,22 @@ function handleListClick(event) {
     const btn = target.closest(".archive-snapshot");
     if (!btn)
         return;
-    const snapshotId = btn.dataset.snapshotId;
-    const worktreeId = btn.dataset.worktreeId;
-    if (!snapshotId || !worktreeId)
-        return;
-    const match = snapshots.find((item) => item.snapshot_id === snapshotId && item.worktree_repo_id === worktreeId);
-    selectSnapshot(match || { snapshot_id: snapshotId, worktree_repo_id: worktreeId });
+    const kind = btn.dataset.kind;
+    if (kind === "snapshot") {
+        const snapshotId = btn.dataset.snapshotId;
+        const worktreeId = btn.dataset.worktreeId;
+        if (!snapshotId || !worktreeId)
+            return;
+        const match = snapshots.find((item) => item.snapshot_id === snapshotId && item.worktree_repo_id === worktreeId);
+        selectItem({ kind: "snapshot", summary: match || { snapshot_id: snapshotId, worktree_repo_id: worktreeId } });
+    }
+    else if (kind === "local") {
+        const runId = btn.dataset.runId;
+        if (!runId)
+            return;
+        const match = localArchives.find((item) => item.run_id === runId);
+        selectItem({ kind: "local", summary: match || { run_id: runId, has_tickets: false, has_runs: false } });
+    }
 }
 export function initArchive() {
     if (initialized)
@@ -814,13 +1007,13 @@ export function initArchive() {
         return;
     listEl.addEventListener("click", handleListClick);
     refreshBtn?.addEventListener("click", () => {
-        void loadSnapshots(true); // Force reload on manual refresh
+        void loadArchiveData(true); // Force reload on manual refresh
     });
     subscribe("repo:health", (payload) => {
         const status = payload?.status || "";
         if (status === "ok" || status === "degraded") {
-            void loadSnapshots(); // Non-forced: only updates if data changed
+            void loadArchiveData(); // Non-forced: only updates if data changed
         }
     });
-    void loadSnapshots(true); // Initial load
+    void loadArchiveData(true); // Initial load
 }
