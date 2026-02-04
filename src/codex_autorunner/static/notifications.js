@@ -8,6 +8,8 @@ let closeModalFn = null;
 let documentListenerInstalled = false;
 let modalElements = null;
 let isRefreshing = false;
+const DROPDOWN_MARGIN = 8;
+const DROPDOWN_OFFSET = 6;
 const NOTIFICATIONS_REFRESH_ID = "notifications";
 const NOTIFICATIONS_REFRESH_MS = 15000;
 function getModalElements() {
@@ -93,9 +95,39 @@ function closeDropdown() {
     if (!activeRoot)
         return;
     activeRoot.dropdown.classList.add("hidden");
+    activeRoot.dropdown.style.position = "";
+    activeRoot.dropdown.style.left = "";
+    activeRoot.dropdown.style.right = "";
+    activeRoot.dropdown.style.top = "";
+    activeRoot.dropdown.style.visibility = "";
     activeRoot.trigger.setAttribute("aria-expanded", "false");
     activeRoot = null;
     removeDocumentListener();
+}
+function positionDropdown(root) {
+    const { trigger, dropdown } = root;
+    const triggerRect = trigger.getBoundingClientRect();
+    dropdown.style.position = "fixed";
+    dropdown.style.left = "0";
+    dropdown.style.right = "auto";
+    dropdown.style.top = "0";
+    dropdown.style.visibility = "hidden";
+    const dropdownRect = dropdown.getBoundingClientRect();
+    const width = dropdownRect.width || 240;
+    const height = dropdownRect.height || 0;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    let left = triggerRect.right - width;
+    left = Math.min(Math.max(left, DROPDOWN_MARGIN), viewportWidth - width - DROPDOWN_MARGIN);
+    const preferredTop = triggerRect.bottom + DROPDOWN_OFFSET;
+    const fallbackTop = triggerRect.top - DROPDOWN_OFFSET - height;
+    let top = preferredTop;
+    if (preferredTop + height > viewportHeight - DROPDOWN_MARGIN) {
+        top = Math.max(DROPDOWN_MARGIN, fallbackTop);
+    }
+    dropdown.style.left = `${Math.max(DROPDOWN_MARGIN, left)}px`;
+    dropdown.style.top = `${Math.max(DROPDOWN_MARGIN, top)}px`;
+    dropdown.style.visibility = "";
 }
 function openDropdown(root) {
     if (activeRoot && activeRoot !== root) {
@@ -105,6 +137,7 @@ function openDropdown(root) {
     activeRoot = root;
     renderDropdown(root);
     root.dropdown.classList.remove("hidden");
+    positionDropdown(root);
     root.trigger.setAttribute("aria-expanded", "true");
     installDocumentListener();
 }
