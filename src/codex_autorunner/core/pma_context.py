@@ -20,6 +20,28 @@ PMA_MAX_TEXT = 800
 PMA_MAX_TEMPLATE_REPOS = 25
 PMA_MAX_TEMPLATE_FIELD_CHARS = 120
 
+# Keep this short and stable; see ticket TICKET-001 for rationale.
+PMA_FASTPATH = """<pma_fastpath>
+You are PMA inside Codex Autorunner (CAR). Treat the filesystem as truth; prefer creating/updating CAR artifacts over "chat-only" plans.
+
+First-turn routine:
+1) Read <user_message> and <hub_snapshot>.
+2) If hub_snapshot.inbox has entries, handle them first (these are paused runs needing input):
+   - Summarize the dispatch question.
+   - Answer it or propose the next minimal action.
+   - Include the item.open_url so the user can jump straight to the repo Inbox tab.
+3) If the request is new work:
+   - Identify the target repo(s).
+   - Prefer hub-owned worktrees for changes.
+   - Create/adjust repo tickets under each repo's `.codex-autorunner/tickets/`.
+
+Web UI map (user perspective):
+- Hub root: `/` (repos list + global notifications).
+- Repo view: `/repos/<repo_id>/` tabs: Tickets | Inbox | Workspace | Terminal | Analytics | Archive.
+  - Tickets: edit queue; Inbox: paused run dispatches; Workspace: active_context/spec/decisions.
+</pma_fastpath>
+"""
+
 # Defaults used when hub config is not available (should be rare).
 PMA_DOCS_MAX_CHARS = 12_000
 PMA_ACTIVE_CONTEXT_MAX_LINES = 200
@@ -235,6 +257,7 @@ def format_pma_prompt(
             "</pma_workspace_docs>\n\n"
         )
 
+    prompt += f"{PMA_FASTPATH}\n\n"
     prompt += (
         "<hub_snapshot>\n"
         f"{snapshot_text}\n"
