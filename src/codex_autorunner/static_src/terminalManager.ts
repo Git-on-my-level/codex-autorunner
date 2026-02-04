@@ -123,6 +123,17 @@ const VOICE_TRANSCRIPT_DISCLAIMER_TEXT =
   CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER ||
   "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.";
 const INJECTED_CONTEXT_TAG_RE = /<injected context>/i;
+const CAR_CONTEXT_COMMAND_RE = [
+  /^\/\S/,
+  /^\.\/\S/,
+  /^git(\s|$)/,
+  /^cd(\s|$)/,
+  /^ls(\s|$)/,
+  /^make(\s|$)/,
+  /^pnpm(\s|$)/,
+  /^npm(\s|$)/,
+  /^python3?(\s|$)/,
+];
 
 function wrapInjectedContext(text: string): string {
   return `<injected context>\n${text}\n</injected context>`;
@@ -131,6 +142,13 @@ function wrapInjectedContext(text: string): string {
 function wrapInjectedContextIfNeeded(text: string | null): string | null {
   if (!text) return text;
   return INJECTED_CONTEXT_TAG_RE.test(text) ? text : wrapInjectedContext(text);
+}
+
+function looksLikeCommand(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const lowered = trimmed.toLowerCase();
+  return CAR_CONTEXT_COMMAND_RE.some((pattern) => pattern.test(lowered));
 }
 
 const LEGACY_SESSION_STORAGE_KEY = "codex_terminal_session_id";
@@ -770,11 +788,11 @@ export class TerminalManager {
       apply: ({ text, manager }) => {
         if (!text || !text.trim()) return null;
         if (manager._hasTextInputHookFired(CAR_CONTEXT_HOOK_ID)) return null;
+        if (looksLikeCommand(text)) return null;
 
         const lowered = text.toLowerCase();
-        const hit = CONSTANTS.KEYWORDS.CAR_CONTEXT.some((kw) => lowered.includes(kw));
-        if (!hit) return null;
         if (lowered.includes("about_car.md")) return null;
+        if (lowered.includes(".codex-autorunner")) return null;
         if (
           text.includes(CONSTANTS.PROMPTS.CAR_CONTEXT_HINT) ||
           text.includes(CAR_CONTEXT_HINT)

@@ -37,7 +37,7 @@ export const CONSTANTS = {
     },
     PROMPTS: {
         VOICE_TRANSCRIPT_DISCLAIMER: "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.",
-        CAR_CONTEXT_HINT: "Context: read .codex-autorunner/ABOUT_CAR.md for repo-specific rules.",
+        CAR_CONTEXT_HINT: "Context: This repo is managed by Codex Autorunner (CAR). Read `.codex-autorunner/ABOUT_CAR.md` (tickets, workspace docs, helper commands) before making workflow assumptions.",
     },
     KEYWORDS: {
         CAR_CONTEXT: [
