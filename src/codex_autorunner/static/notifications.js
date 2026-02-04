@@ -205,11 +205,17 @@ function attachRoot(root) {
     root.trigger.addEventListener("pointerdown", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        toggleDropdown(root);
     });
     root.trigger.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        if (notificationItems.length === 1) {
+            const [item] = notificationItems;
+            closeDropdown();
+            openNotificationsModal(item, root.trigger);
+            return;
+        }
+        toggleDropdown(root);
     });
     root.dropdown.addEventListener("click", (event) => {
         const target = event.target?.closest(".notifications-item");
