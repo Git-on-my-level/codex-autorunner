@@ -71,6 +71,8 @@ def _ticket_paths(ticket_dir: Path) -> Tuple[List[Path], List[str]]:
     for path in sorted(ticket_dir.iterdir()):
         if not path.is_file():
             continue
+        if path.name == "AGENTS.md":
+            continue
         m = _TICKET_NAME_RE.match(path.name)
         if not m:
             errors.append(
