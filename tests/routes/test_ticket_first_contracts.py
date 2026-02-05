@@ -14,11 +14,6 @@ def test_ticket_flow_runs_endpoint_returns_empty_list_on_fresh_repo(
     tmp_path, monkeypatch
 ):
     """Ticket-first: /api/flows/runs must not 404/500 when no runs exist."""
-
-    flow_routes._controller_cache.clear()
-    flow_routes._definition_cache.clear()
-    flow_routes._active_workers.clear()
-
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
     app = FastAPI()

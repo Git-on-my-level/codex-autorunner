@@ -7,13 +7,10 @@ from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.reconciler import reconcile_flow_run
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
-from codex_autorunner.routes import flows as flow_routes
 
 
 def _reset_state() -> None:
-    flow_routes._controller_cache.clear()
-    flow_routes._definition_cache.clear()
-    flow_routes._active_workers.clear()
+    pass
 
 
 def _make_alive_health(tmp_path: Path) -> FlowWorkerHealth:

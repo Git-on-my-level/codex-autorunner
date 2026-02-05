@@ -10,9 +10,7 @@ from codex_autorunner.routes import flows as flow_routes
 
 
 def _reset_state() -> None:
-    flow_routes._controller_cache.clear()
-    flow_routes._definition_cache.clear()
-    flow_routes._active_workers.clear()
+    pass
 
 
 def test_bootstrap_check_ready(tmp_path, monkeypatch):

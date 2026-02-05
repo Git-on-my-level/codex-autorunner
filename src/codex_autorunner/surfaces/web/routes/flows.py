@@ -3,8 +3,9 @@ import logging
 import re
 import shutil
 import subprocess
+import threading
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import IO, Dict, Optional, Tuple, Union
 from urllib.parse import quote
@@ -58,12 +59,23 @@ from ..schemas import (
 
 _logger = logging.getLogger(__name__)
 
-_active_workers: Dict[
-    str, Tuple[Optional[subprocess.Popen], Optional[IO[bytes]], Optional[IO[bytes]]]
-] = {}
-_controller_cache: Dict[tuple[Path, str], FlowController] = {}
-_definition_cache: Dict[tuple[Path, str], FlowDefinition] = {}
 _supported_flow_types = ("ticket_flow",)
+
+
+@dataclass
+class FlowRoutesState:
+    active_workers: Dict[
+        str, Tuple[Optional[subprocess.Popen], Optional[IO[bytes]], Optional[IO[bytes]]]
+    ]
+    controller_cache: Dict[tuple[Path, str], FlowController]
+    definition_cache: Dict[tuple[Path, str], FlowDefinition]
+    lock: threading.Lock
+
+    def __init__(self) -> None:
+        self.active_workers = {}
+        self.controller_cache = {}
+        self.definition_cache = {}
+        self.lock = threading.Lock()
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -122,11 +134,14 @@ def _safe_list_flow_runs(
             pass
 
 
-def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
+def _build_flow_definition(
+    repo_root: Path, flow_type: str, state: FlowRoutesState
+) -> FlowDefinition:
     repo_root = repo_root.resolve()
     key = (repo_root, flow_type)
-    if key in _definition_cache:
-        return _definition_cache[key]
+    with state.lock:
+        if key in state.definition_cache:
+            return state.definition_cache[key]
 
     if flow_type == "ticket_flow":
         config = load_repo_config(repo_root)
@@ -140,18 +155,22 @@ def _build_flow_definition(repo_root: Path, flow_type: str) -> FlowDefinition:
         raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
 
     definition.validate()
-    _definition_cache[key] = definition
+    with state.lock:
+        state.definition_cache[key] = definition
     return definition
 
 
-def _get_flow_controller(repo_root: Path, flow_type: str) -> FlowController:
+def _get_flow_controller(
+    repo_root: Path, flow_type: str, state: FlowRoutesState
+) -> FlowController:
     repo_root = repo_root.resolve()
     key = (repo_root, flow_type)
-    if key in _controller_cache:
-        return _controller_cache[key]
+    with state.lock:
+        if key in state.controller_cache:
+            return state.controller_cache[key]
 
     db_path, artifacts_root = _flow_paths(repo_root)
-    definition = _build_flow_definition(repo_root, flow_type)
+    definition = _build_flow_definition(repo_root, flow_type, state)
 
     controller = FlowController(
         definition=definition,
@@ -165,7 +184,8 @@ def _get_flow_controller(repo_root: Path, flow_type: str) -> FlowController:
         raise HTTPException(
             status_code=503, detail="Flows unavailable; initialize the repo first."
         ) from exc
-    _controller_cache[key] = controller
+    with state.lock:
+        state.controller_cache[key] = controller
     return controller
 
 
@@ -222,8 +242,9 @@ def _validate_tickets(ticket_dir: Path) -> list[str]:
     return errors
 
 
-def _cleanup_worker_handle(run_id: str) -> None:
-    handle = _active_workers.pop(run_id, None)
+def _cleanup_worker_handle(run_id: str, state: FlowRoutesState) -> None:
+    with state.lock:
+        handle = state.active_workers.pop(run_id, None)
     if not handle:
         return
 
@@ -246,13 +267,14 @@ def _cleanup_worker_handle(run_id: str) -> None:
                 pass
 
 
-def _reap_dead_worker(run_id: str) -> None:
-    handle = _active_workers.get(run_id)
+def _reap_dead_worker(run_id: str, state: FlowRoutesState) -> None:
+    with state.lock:
+        handle = state.active_workers.get(run_id)
     if not handle:
         return
     proc, *_ = handle
     if proc and proc.poll() is not None:
-        _cleanup_worker_handle(run_id)
+        _cleanup_worker_handle(run_id, state)
 
 
 class FlowStartRequest(BaseModel):
@@ -366,10 +388,12 @@ def _build_flow_status_response(
     return resp
 
 
-def _start_flow_worker(repo_root: Path, run_id: str) -> Optional[subprocess.Popen]:
+def _start_flow_worker(
+    repo_root: Path, run_id: str, state: FlowRoutesState
+) -> Optional[subprocess.Popen]:
     normalized_run_id = _normalize_run_id(run_id)
 
-    _reap_dead_worker(normalized_run_id)
+    _reap_dead_worker(normalized_run_id, state)
     result = ensure_worker(repo_root, normalized_run_id)
     if result["status"] == "reused":
         health = result["health"]
@@ -382,14 +406,16 @@ def _start_flow_worker(repo_root: Path, run_id: str) -> Optional[subprocess.Pope
     proc = result["proc"]
     stdout_handle = result["stdout"]
     stderr_handle = result["stderr"]
-    _active_workers[normalized_run_id] = (proc, stdout_handle, stderr_handle)
+    with state.lock:
+        state.active_workers[normalized_run_id] = (proc, stdout_handle, stderr_handle)
     _logger.info("Started flow worker for run %s (pid=%d)", normalized_run_id, proc.pid)
     return proc
 
 
-def _stop_worker(run_id: str, timeout: float = 10.0) -> None:
+def _stop_worker(run_id: str, state: FlowRoutesState, timeout: float = 10.0) -> None:
     normalized_run_id = _normalize_run_id(run_id)
-    handle = _active_workers.get(normalized_run_id)
+    with state.lock:
+        handle = state.active_workers.get(normalized_run_id)
     if not handle:
         health = check_worker_health(find_repo_root(), normalized_run_id)
         if health.is_alive and health.pid:
@@ -419,11 +445,18 @@ def _stop_worker(run_id: str, timeout: float = 10.0) -> None:
         except Exception as exc:
             _logger.warning("Error stopping worker %s: %s", normalized_run_id, exc)
 
-    _cleanup_worker_handle(normalized_run_id)
+    _cleanup_worker_handle(normalized_run_id, state)
 
 
 def build_flow_routes() -> APIRouter:
     router = APIRouter(prefix="/api/flows", tags=["flows"])
+
+    state = FlowRoutesState()
+
+    def _ensure_state_in_app(request: Request) -> FlowRoutesState:
+        if not hasattr(request.app.state, "flow_routes_state"):
+            request.app.state.flow_routes_state = state
+        return request.app.state.flow_routes_state
 
     def _definition_info(definition: FlowDefinition) -> Dict:
         return {
@@ -474,16 +507,20 @@ def build_flow_routes() -> APIRouter:
         return by_seq
 
     @router.get("")
-    async def list_flow_definitions():
+    async def list_flow_definitions(request: Request):
+        state = _ensure_state_in_app(request)
         repo_root = find_repo_root()
         definitions = [
-            _definition_info(_build_flow_definition(repo_root, flow_type))
+            _definition_info(_build_flow_definition(repo_root, flow_type, state))
             for flow_type in _supported_flow_types
         ]
         return {"definitions": definitions}
 
     @router.get("/runs", response_model=list[FlowStatusResponse])
-    async def list_runs(flow_type: Optional[str] = None, reconcile: bool = False):
+    async def list_runs(
+        request: Request, flow_type: Optional[str] = None, reconcile: bool = False
+    ):
+        _ensure_state_in_app(request)
         repo_root = find_repo_root()
         store = _require_flow_store(repo_root)
         records: list[FlowRunRecord] = []
@@ -508,18 +545,20 @@ def build_flow_routes() -> APIRouter:
                 store.close()
 
     @router.get("/{flow_type}")
-    async def get_flow_definition(flow_type: str):
+    async def get_flow_definition(request: Request, flow_type: str):
+        state = _ensure_state_in_app(request)
         repo_root = find_repo_root()
         if flow_type not in _supported_flow_types:
             raise HTTPException(
                 status_code=404, detail=f"Unknown flow type: {flow_type}"
             )
-        definition = _build_flow_definition(repo_root, flow_type)
+        definition = _build_flow_definition(repo_root, flow_type, state)
         return _definition_info(definition)
 
     async def _start_flow(
         flow_type: str,
         request: FlowStartRequest,
+        state: FlowRoutesState,
         *,
         force_new: bool = False,
         validate_tickets: bool = True,
@@ -530,7 +569,7 @@ def build_flow_routes() -> APIRouter:
             )
 
         repo_root = find_repo_root()
-        controller = _get_flow_controller(repo_root, flow_type)
+        controller = _get_flow_controller(repo_root, flow_type, state)
 
         if flow_type == "ticket_flow" and validate_tickets:
             ticket_dir = repo_root / ".codex-autorunner" / "tickets"
@@ -560,8 +599,8 @@ def build_flow_routes() -> APIRouter:
             )
             active = _active_or_paused_run(runs)
             if active:
-                _reap_dead_worker(active.id)
-                _start_flow_worker(repo_root, active.id)
+                _reap_dead_worker(active.id, state)
+                _start_flow_worker(repo_root, active.id, state)
                 store = _require_flow_store(repo_root)
                 try:
                     response = _build_flow_status_response(
@@ -582,7 +621,7 @@ def build_flow_routes() -> APIRouter:
             metadata=request.metadata,
         )
 
-        _start_flow_worker(repo_root, run_id)
+        _start_flow_worker(repo_root, run_id, state)
 
         store = _require_flow_store(repo_root)
         try:
@@ -592,10 +631,11 @@ def build_flow_routes() -> APIRouter:
                 store.close()
 
     @router.post("/{flow_type}/start", response_model=FlowStatusResponse)
-    async def start_flow(flow_type: str, request: FlowStartRequest):
-        meta = request.metadata if isinstance(request.metadata, dict) else {}
+    async def start_flow(request: Request, flow_type: str, req: FlowStartRequest):
+        state = _ensure_state_in_app(request)
+        meta = req.metadata if isinstance(req.metadata, dict) else {}
         force_new = bool(meta.get("force_new"))
-        return await _start_flow(flow_type, request, force_new=force_new)
+        return await _start_flow(flow_type, req, state, force_new=force_new)
 
     @router.get("/ticket_flow/bootstrap-check", response_model=BootstrapCheckResponse)
     async def bootstrap_check():
@@ -657,7 +697,10 @@ def build_flow_routes() -> APIRouter:
         )
 
     @router.post("/ticket_flow/bootstrap", response_model=FlowStatusResponse)
-    async def bootstrap_ticket_flow(request: Optional[FlowStartRequest] = None):
+    async def bootstrap_ticket_flow(
+        http_request: Request, request: Optional[FlowStartRequest] = None
+    ):
+        state = _ensure_state_in_app(http_request)
         repo_root = find_repo_root()
         ticket_dir = repo_root / ".codex-autorunner" / "tickets"
         ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -684,8 +727,8 @@ def build_flow_routes() -> APIRouter:
                             "errors": lint_errors,
                         },
                     )
-                _reap_dead_worker(active.id)
-                _start_flow_worker(repo_root, active.id)
+                _reap_dead_worker(active.id, state)
+                _start_flow_worker(repo_root, active.id, state)
                 store = _require_flow_store(repo_root)
                 try:
                     resp = _build_flow_status_response(active, repo_root, store=store)
@@ -732,6 +775,7 @@ You are the first ticket in a new ticket_flow run.
         return await _start_flow(
             "ticket_flow",
             payload,
+            state,
             force_new=force_new,
             validate_tickets=validate_tickets,
         )
@@ -944,13 +988,14 @@ You are the first ticket in a new ticket_flow run.
         )
 
     @router.post("/{run_id}/stop", response_model=FlowStatusResponse)
-    async def stop_flow(run_id: uuid.UUID):
+    async def stop_flow(http_request: Request, run_id: uuid.UUID):
+        state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
-        controller = _get_flow_controller(repo_root, record.flow_type)
+        controller = _get_flow_controller(repo_root, record.flow_type, state)
 
-        _stop_worker(run_id)
+        _stop_worker(run_id, state)
 
         updated = await controller.stop_flow(run_id)
         store = _require_flow_store(repo_root)
@@ -961,11 +1006,12 @@ You are the first ticket in a new ticket_flow run.
                 store.close()
 
     @router.post("/{run_id}/resume", response_model=FlowStatusResponse)
-    async def resume_flow(run_id: uuid.UUID):
+    async def resume_flow(http_request: Request, run_id: uuid.UUID):
+        state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
-        controller = _get_flow_controller(repo_root, record.flow_type)
+        controller = _get_flow_controller(repo_root, record.flow_type, state)
 
         # Validate tickets before resuming ticket_flow
         if record.flow_type == "ticket_flow":
@@ -981,8 +1027,8 @@ You are the first ticket in a new ticket_flow run.
                 )
 
         updated = await controller.resume_flow(run_id)
-        _reap_dead_worker(run_id)
-        _start_flow_worker(repo_root, run_id)
+        _reap_dead_worker(run_id, state)
+        _start_flow_worker(repo_root, run_id, state)
 
         store = _require_flow_store(repo_root)
         try:
@@ -992,7 +1038,7 @@ You are the first ticket in a new ticket_flow run.
                 store.close()
 
     @router.post("/{run_id}/reconcile", response_model=FlowStatusResponse)
-    async def reconcile_flow(run_id: uuid.UUID):
+    async def reconcile_flow(http_request: Request, run_id: uuid.UUID):
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
@@ -1007,7 +1053,10 @@ You are the first ticket in a new ticket_flow run.
 
     @router.post("/{run_id}/archive")
     async def archive_flow(
-        run_id: uuid.UUID, delete_run: bool = True, force: bool = False
+        http_request: Request,
+        run_id: uuid.UUID,
+        delete_run: bool = True,
+        force: bool = False,
     ):
         """Archive a completed flow by moving tickets to the run's artifact directory.
 
@@ -1017,6 +1066,7 @@ You are the first ticket in a new ticket_flow run.
             force: If True, allow archiving flows stuck in stopping/paused state
                    by force-stopping the worker first.
         """
+        state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
@@ -1028,7 +1078,7 @@ You are the first ticket in a new ticket_flow run.
                 FlowRunStatus.PAUSED,
             ):
                 # Force-stop any remaining worker before archiving
-                _stop_worker(run_id, timeout=2.0)
+                _stop_worker(run_id, state, timeout=2.0)
                 _logger.info(
                     "Force-archiving flow %s in %s state", run_id, record.status.value
                 )
@@ -1071,11 +1121,14 @@ You are the first ticket in a new ticket_flow run.
         }
 
     @router.get("/{run_id}/status", response_model=FlowStatusResponse)
-    async def get_flow_status(run_id: uuid.UUID, reconcile: bool = False):
+    async def get_flow_status(
+        http_request: Request, run_id: uuid.UUID, reconcile: bool = False
+    ):
+        state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
 
-        _reap_dead_worker(run_id)
+        _reap_dead_worker(run_id, state)
 
         record = _get_flow_record(repo_root, run_id)
         store = _require_flow_store(repo_root)
@@ -1089,18 +1142,19 @@ You are the first ticket in a new ticket_flow run.
 
     @router.get("/{run_id}/events")
     async def stream_flow_events(
-        run_id: uuid.UUID, request: Request, after: Optional[int] = None
+        http_request: Request, run_id: uuid.UUID, after: Optional[int] = None
     ):
+        state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, run_id)
-        controller = _get_flow_controller(repo_root, record.flow_type)
+        controller = _get_flow_controller(repo_root, record.flow_type, state)
 
         async def event_stream():
             try:
                 resume_after = after
                 if resume_after is None:
-                    last_event_id = request.headers.get("Last-Event-ID")
+                    last_event_id = http_request.headers.get("Last-Event-ID")
                     if last_event_id:
                         try:
                             resume_after = int(last_event_id)
@@ -1130,7 +1184,7 @@ You are the first ticket in a new ticket_flow run.
         )
 
     @router.get("/{run_id}/dispatch_history")
-    async def get_dispatch_history(run_id: str):
+    async def get_dispatch_history(http_request: Request, run_id: str):
         """Get dispatch history for a flow run.
 
         Returns all dispatches (agent->human communications) for this run.
@@ -1283,11 +1337,12 @@ You are the first ticket in a new ticket_flow run.
         return FileResponse(resolved, filename=resolved.name)
 
     @router.get("/{run_id}/artifacts", response_model=list[FlowArtifactInfo])
-    async def list_flow_artifacts(run_id: str):
+    async def list_flow_artifacts(http_request: Request, run_id: str):
+        state = _ensure_state_in_app(http_request)
         normalized = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, normalized)
-        controller = _get_flow_controller(repo_root, record.flow_type)
+        controller = _get_flow_controller(repo_root, record.flow_type, state)
 
         artifacts = controller.get_artifacts(normalized)
         return [
@@ -1302,11 +1357,14 @@ You are the first ticket in a new ticket_flow run.
         ]
 
     @router.get("/{run_id}/artifact")
-    async def get_flow_artifact(run_id: str, kind: Optional[str] = None):
+    async def get_flow_artifact(
+        http_request: Request, run_id: str, kind: Optional[str] = None
+    ):
+        state = _ensure_state_in_app(http_request)
         normalized = _normalize_run_id(run_id)
         repo_root = find_repo_root()
         record = _get_flow_record(repo_root, normalized)
-        controller = _get_flow_controller(repo_root, record.flow_type)
+        controller = _get_flow_controller(repo_root, record.flow_type, state)
 
         artifacts_root = controller.get_artifacts_dir(normalized)
         if not artifacts_root:

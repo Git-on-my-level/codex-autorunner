@@ -10,12 +10,11 @@ from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
 from codex_autorunner.routes import flows as flow_routes
+from codex_autorunner.surfaces.web.routes.flows import FlowRoutesState
 
 
 def _reset_state() -> None:
-    flow_routes._controller_cache.clear()
-    flow_routes._definition_cache.clear()
-    flow_routes._active_workers.clear()
+    pass
 
 
 def test_bootstrap_reuses_active_run_with_hint(tmp_path, monkeypatch):
@@ -124,7 +123,7 @@ def test_bootstrap_honors_force_new(tmp_path, monkeypatch):
     monkeypatch.setattr(
         flow_routes,
         "_get_flow_controller",
-        lambda _repo_root, _flow_type: StubController(store),
+        lambda _repo_root, _flow_type, _state: StubController(store),
     )
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
     monkeypatch.setattr(
@@ -192,7 +191,7 @@ def test_bootstrap_skips_seeding_when_tickets_exist(tmp_path, monkeypatch):
     monkeypatch.setattr(
         flow_routes,
         "_get_flow_controller",
-        lambda _repo_root, _flow_type: StubController(store),
+        lambda _repo_root, _flow_type, _state: StubController(store),
     )
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
 
@@ -236,7 +235,8 @@ def test_start_flow_worker_skips_when_process_alive(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: {"status": "reused", "health": health},
     )
 
-    proc = flow_routes._start_flow_worker(repo_root, run_id)
+    state = FlowRoutesState()
+    proc = flow_routes._start_flow_worker(repo_root, run_id, state)
 
     assert proc is None
 
@@ -267,7 +267,7 @@ def test_ticket_flow_start_rejects_no_tickets(tmp_path, monkeypatch):
     monkeypatch.setattr(
         flow_routes,
         "_get_flow_controller",
-        lambda _repo_root, _flow_type: StubController(store),
+        lambda _repo_root, _flow_type, _state: StubController(store),
     )
 
     app = FastAPI()
@@ -319,7 +319,7 @@ def test_ticket_flow_start_allows_with_tickets(tmp_path, monkeypatch):
     monkeypatch.setattr(
         flow_routes,
         "_get_flow_controller",
-        lambda _repo_root, _flow_type: StubController(store),
+        lambda _repo_root, _flow_type, _state: StubController(store),
     )
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
 
