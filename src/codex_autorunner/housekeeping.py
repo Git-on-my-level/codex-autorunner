@@ -8,6 +8,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Iterable, Optional, Protocol, cast
 
+_MAX_ERROR_SAMPLES = 5
+
 
 @dataclasses.dataclass(frozen=True)
 class HousekeepingRule:
@@ -42,6 +44,7 @@ class HousekeepingRuleResult:
     deleted_bytes: int = 0
     truncated_bytes: int = 0
     errors: int = 0
+    error_samples: list[str] = dataclasses.field(default_factory=list)
     duration_ms: int = 0
 
 
@@ -136,21 +139,26 @@ def run_housekeeping_once(
             continue
         results.append(result)
         if logger is not None:
+            log_fields: dict[str, Any] = {
+                "name": result.name,
+                "kind": result.kind,
+                "scanned_count": result.scanned_count,
+                "eligible_count": result.eligible_count,
+                "deleted_count": result.deleted_count,
+                "deleted_bytes": result.deleted_bytes,
+                "truncated_bytes": result.truncated_bytes,
+                "errors": result.errors,
+                "duration_ms": result.duration_ms,
+                "dry_run": config.dry_run,
+                "root": str(root),
+            }
+            if result.errors > 0 and result.error_samples:
+                log_fields["error_samples"] = result.error_samples
             _log_event(
                 logger,
                 logging.INFO,
                 "housekeeping.rule",
-                name=result.name,
-                kind=result.kind,
-                scanned_count=result.scanned_count,
-                eligible_count=result.eligible_count,
-                deleted_count=result.deleted_count,
-                deleted_bytes=result.deleted_bytes,
-                truncated_bytes=result.truncated_bytes,
-                errors=result.errors,
-                duration_ms=result.duration_ms,
-                dry_run=config.dry_run,
-                root=str(root),
+                **log_fields,
             )
     if logger is not None:
         _log_event(
@@ -174,7 +182,7 @@ def _apply_directory_rule(
         return result
     now = time.time()
     min_age = max(config.min_file_age_seconds, 0)
-    files = _collect_files(base, rule)
+    files = _collect_files(base, rule, result)
     result.scanned_count = len(files)
     if not files:
         result.duration_ms = int((time.monotonic() - start) * 1000)
@@ -192,8 +200,9 @@ def _apply_directory_rule(
         if not config.dry_run:
             try:
                 entry.path.unlink()
-            except OSError:
+            except OSError as e:
                 errors += 1
+                _add_error_sample(result, "unlink", entry.path, e)
                 return
         deleted.add(entry.path)
         deleted_bytes += entry.size
@@ -254,8 +263,9 @@ def _apply_file_rule(
         return result
     try:
         stat = path.stat()
-    except OSError:
+    except OSError as e:
         result.errors = 1
+        _add_error_sample(result, "stat", path, e)
         return result
     if not path.is_file():
         return result
@@ -271,6 +281,7 @@ def _apply_file_rule(
             path,
             rule.max_lines,
             dry_run=config.dry_run,
+            result=result,
         )
         result.truncated_bytes += truncated
     if rule.max_bytes is not None:
@@ -278,13 +289,16 @@ def _apply_file_rule(
             path,
             rule.max_bytes,
             dry_run=config.dry_run,
+            result=result,
         )
         result.truncated_bytes += truncated
     result.duration_ms = int((time.monotonic() - start) * 1000)
     return result
 
 
-def _collect_files(base: Path, rule: HousekeepingRule) -> list[_FileInfo]:
+def _collect_files(
+    base: Path, rule: HousekeepingRule, result: Optional[HousekeepingRuleResult] = None
+) -> list[_FileInfo]:
     results: list[_FileInfo] = []
     glob_pattern = rule.glob or "*"
     iterator = base.rglob(glob_pattern) if rule.recursive else base.glob(glob_pattern)
@@ -293,7 +307,9 @@ def _collect_files(base: Path, rule: HousekeepingRule) -> list[_FileInfo]:
             if not path.is_file():
                 continue
             stat = path.stat()
-        except OSError:
+        except OSError as e:
+            if result is not None:
+                _add_error_sample(result, "stat", path, e)
             continue
         results.append(_FileInfo(path=path, size=stat.st_size, mtime=stat.st_mtime))
     return results
@@ -310,12 +326,21 @@ def _is_absolute_path(path: str) -> bool:
     return Path(path).expanduser().is_absolute()
 
 
-def _truncate_bytes(path: Path, max_bytes: int, *, dry_run: bool) -> int:
+def _truncate_bytes(
+    path: Path,
+    max_bytes: int,
+    *,
+    dry_run: bool,
+    result: Optional[HousekeepingRuleResult] = None,
+) -> int:
     if max_bytes <= 0:
         return 0
     try:
         size = path.stat().st_size
-    except OSError:
+    except OSError as e:
+        if result is not None:
+            result.errors += 1
+            _add_error_sample(result, "truncate_bytes", path, e)
         return 0
     if size <= max_bytes:
         return 0
@@ -328,23 +353,38 @@ def _truncate_bytes(path: Path, max_bytes: int, *, dry_run: bool) -> int:
             payload = handle.read()
         _atomic_write_bytes(path, payload)
         return truncated
-    except OSError:
+    except OSError as e:
+        if result is not None:
+            result.errors += 1
+            _add_error_sample(result, "truncate_bytes", path, e)
         return 0
 
 
-def _truncate_lines(path: Path, max_lines: int, *, dry_run: bool) -> int:
+def _truncate_lines(
+    path: Path,
+    max_lines: int,
+    *,
+    dry_run: bool,
+    result: Optional[HousekeepingRuleResult] = None,
+) -> int:
     if max_lines <= 0:
         return 0
     try:
         size = path.stat().st_size
-    except OSError:
+    except OSError as e:
+        if result is not None:
+            result.errors += 1
+            _add_error_sample(result, "truncate_lines", path, e)
         return 0
     lines: deque[bytes] = deque(maxlen=max_lines)
     try:
         with path.open("rb") as handle:
             for line in handle:
                 lines.append(line)
-    except OSError:
+    except OSError as e:
+        if result is not None:
+            result.errors += 1
+            _add_error_sample(result, "truncate_lines", path, e)
         return 0
     payload = b"".join(lines)
     if len(payload) >= size:
@@ -353,7 +393,10 @@ def _truncate_lines(path: Path, max_lines: int, *, dry_run: bool) -> int:
         return size - len(payload)
     try:
         _atomic_write_bytes(path, payload)
-    except OSError:
+    except OSError as e:
+        if result is not None:
+            result.errors += 1
+            _add_error_sample(result, "truncate_lines", path, e)
         return 0
     return size - len(payload)
 
@@ -377,6 +420,17 @@ def _prune_empty_dirs(base: Path) -> None:
                     candidate.rmdir()
             except OSError:
                 continue
+
+
+def _add_error_sample(
+    result: HousekeepingRuleResult, operation: str, path: Path, exc: OSError
+) -> None:
+    if len(result.error_samples) >= _MAX_ERROR_SAMPLES:
+        return
+    exc_info = f"{type(exc).__name__}"
+    if exc.strerror:
+        exc_info += f": {exc.strerror}"
+    result.error_samples.append(f"{operation} {path}: {exc_info}")
 
 
 def _int_or_none(value: object) -> Optional[int]:
