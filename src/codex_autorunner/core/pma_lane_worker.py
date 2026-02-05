@@ -26,12 +26,14 @@ class PmaLaneWorker:
         *,
         log: Optional[logging.Logger] = None,
         on_result: Optional[PmaLaneResultHook] = None,
+        poll_interval_seconds: float = 1.0,
     ) -> None:
         self.lane_id = lane_id
         self._queue = queue
         self._executor = executor
         self._log = log or logger
         self._on_result = on_result
+        self._poll_interval_seconds = max(0.1, poll_interval_seconds)
         self._task: Optional[asyncio.Task[None]] = None
         self._cancel_event = asyncio.Event()
         self._lock = asyncio.Lock()
@@ -66,7 +68,11 @@ class PmaLaneWorker:
         while not self._cancel_event.is_set():
             item = await self._queue.dequeue(self.lane_id)
             if item is None:
-                await self._queue.wait_for_lane_item(self.lane_id, self._cancel_event)
+                await self._queue.wait_for_lane_item(
+                    self.lane_id,
+                    self._cancel_event,
+                    poll_interval_seconds=self._poll_interval_seconds,
+                )
                 continue
 
             if self._cancel_event.is_set():
