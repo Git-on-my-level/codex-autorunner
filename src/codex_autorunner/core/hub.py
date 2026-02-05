@@ -41,6 +41,7 @@ from .lifecycle_events import (
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .pma_dispatch_interceptor import PmaDispatchInterceptor
 from .pma_queue import PmaQueue
+from .pma_reactive import PmaReactiveStore
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
 )
@@ -1154,6 +1155,26 @@ class HubSupervisor:
             lines.append("Dispatch requires attention; check the repo inbox.")
         return "\n".join(lines)
 
+    def _pma_reactive_gate(self, event: LifecycleEvent) -> tuple[bool, str]:
+        pma = self.hub_config.pma
+        reactive_enabled = getattr(pma, "reactive_enabled", True)
+        if not reactive_enabled:
+            return False, "reactive_disabled"
+
+        allowlist = getattr(pma, "reactive_event_types", None)
+        if allowlist:
+            if event.event_type.value not in set(allowlist):
+                return False, "reactive_filtered"
+
+        debounce_seconds = int(getattr(pma, "reactive_debounce_seconds", 0) or 0)
+        if debounce_seconds > 0:
+            key = f"{event.event_type.value}:{event.repo_id}:{event.run_id}"
+            store = PmaReactiveStore(self.hub_config.root)
+            if not store.check_and_update(key, debounce_seconds):
+                return False, "reactive_debounced"
+
+        return True, "reactive_allowed"
+
     def _enqueue_pma_for_lifecycle_event(
         self, event: LifecycleEvent, *, reason: str
     ) -> bool:
@@ -1232,15 +1253,25 @@ class HubSupervisor:
                         decision = "dispatch_ignored"
                         processed = True
                     else:
-                        decision = "dispatch_escalated"
-                        processed = self._enqueue_pma_for_lifecycle_event(
-                            event, reason="dispatch_escalated"
-                        )
+                        allowed, gate_reason = self._pma_reactive_gate(event)
+                        if not allowed:
+                            decision = gate_reason
+                            processed = True
+                        else:
+                            decision = "dispatch_escalated"
+                            processed = self._enqueue_pma_for_lifecycle_event(
+                                event, reason="dispatch_escalated"
+                            )
                 else:
-                    decision = "dispatch_enqueued"
-                    processed = self._enqueue_pma_for_lifecycle_event(
-                        event, reason="dispatch_created"
-                    )
+                    allowed, gate_reason = self._pma_reactive_gate(event)
+                    if not allowed:
+                        decision = gate_reason
+                        processed = True
+                    else:
+                        decision = "dispatch_enqueued"
+                        processed = self._enqueue_pma_for_lifecycle_event(
+                            event, reason="dispatch_created"
+                        )
         elif event.event_type in (
             LifecycleEventType.FLOW_PAUSED,
             LifecycleEventType.FLOW_COMPLETED,
@@ -1251,10 +1282,15 @@ class HubSupervisor:
                 decision = "pma_disabled"
                 processed = True
             else:
-                decision = "flow_enqueued"
-                processed = self._enqueue_pma_for_lifecycle_event(
-                    event, reason=event.event_type.value
-                )
+                allowed, gate_reason = self._pma_reactive_gate(event)
+                if not allowed:
+                    decision = gate_reason
+                    processed = True
+                else:
+                    decision = "flow_enqueued"
+                    processed = self._enqueue_pma_for_lifecycle_event(
+                        event, reason=event.event_type.value
+                    )
 
         if processed:
             self.lifecycle_store.mark_processed(event_id)
