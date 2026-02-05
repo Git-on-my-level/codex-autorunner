@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -43,6 +44,7 @@ from ....core.pma_lifecycle import PmaLifecycleRouter
 from ....core.pma_queue import PmaQueue, QueueItemState
 from ....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from ....core.pma_state import PmaStateStore
+from ....core.pma_transcripts import PmaTranscriptStore
 from ....core.time_utils import now_iso
 from ....core.utils import atomic_write
 from .agents import _available_agents, _serialize_model_catalog
@@ -207,6 +209,104 @@ def build_pma_routes() -> APIRouter:
             "finished_at": now_iso(),
         }
 
+    def _resolve_transcript_turn_id(
+        result: dict[str, Any], current: dict[str, Any]
+    ) -> str:
+        for candidate in (
+            result.get("turn_id"),
+            current.get("turn_id"),
+            current.get("client_turn_id"),
+        ):
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        return f"local-{uuid.uuid4()}"
+
+    def _resolve_transcript_text(result: dict[str, Any]) -> str:
+        message = result.get("message")
+        if isinstance(message, str) and message.strip():
+            return message
+        detail = result.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail
+        return ""
+
+    def _build_transcript_metadata(
+        *,
+        result: dict[str, Any],
+        current: dict[str, Any],
+        prompt_message: Optional[str],
+        lifecycle_event: Optional[dict[str, Any]],
+        model: Optional[str],
+        reasoning: Optional[str],
+        duration_ms: Optional[int],
+        finished_at: str,
+    ) -> dict[str, Any]:
+        trigger = "lifecycle_event" if lifecycle_event else "user_prompt"
+        metadata: dict[str, Any] = {
+            "status": result.get("status") or "error",
+            "agent": current.get("agent"),
+            "thread_id": result.get("thread_id") or current.get("thread_id"),
+            "turn_id": _resolve_transcript_turn_id(result, current),
+            "client_turn_id": current.get("client_turn_id") or "",
+            "lane_id": current.get("lane_id") or "",
+            "trigger": trigger,
+            "model": model,
+            "reasoning": reasoning,
+            "started_at": current.get("started_at"),
+            "finished_at": finished_at,
+            "duration_ms": duration_ms,
+            "user_prompt": prompt_message or "",
+        }
+        if lifecycle_event:
+            metadata["lifecycle_event"] = dict(lifecycle_event)
+            metadata["event_id"] = lifecycle_event.get("event_id")
+            metadata["event_type"] = lifecycle_event.get("event_type")
+            metadata["repo_id"] = lifecycle_event.get("repo_id")
+            metadata["run_id"] = lifecycle_event.get("run_id")
+            metadata["event_timestamp"] = lifecycle_event.get("timestamp")
+        return metadata
+
+    async def _persist_transcript(
+        *,
+        request: Request,
+        result: dict[str, Any],
+        current: dict[str, Any],
+        prompt_message: Optional[str],
+        lifecycle_event: Optional[dict[str, Any]],
+        model: Optional[str],
+        reasoning: Optional[str],
+        duration_ms: Optional[int],
+        finished_at: str,
+    ) -> Optional[dict[str, Any]]:
+        hub_root = request.app.state.config.root
+        store = PmaTranscriptStore(hub_root)
+        assistant_text = _resolve_transcript_text(result)
+        metadata = _build_transcript_metadata(
+            result=result,
+            current=current,
+            prompt_message=prompt_message,
+            lifecycle_event=lifecycle_event,
+            model=model,
+            reasoning=reasoning,
+            duration_ms=duration_ms,
+            finished_at=finished_at,
+        )
+        try:
+            pointer = store.write_transcript(
+                turn_id=metadata["turn_id"],
+                metadata=metadata,
+                assistant_text=assistant_text,
+            )
+        except Exception:
+            logger.exception("Failed to write PMA transcript")
+            return None
+        return {
+            "turn_id": pointer.turn_id,
+            "metadata_path": pointer.metadata_path,
+            "content_path": pointer.content_path,
+            "created_at": pointer.created_at,
+        }
+
     async def _get_interrupt_event() -> asyncio.Event:
         nonlocal pma_event
         async with pma_lock:
@@ -265,6 +365,10 @@ def build_pma_routes() -> APIRouter:
         *,
         request: Request,
         store: Optional[PmaStateStore] = None,
+        prompt_message: Optional[str] = None,
+        lifecycle_event: Optional[dict[str, Any]] = None,
+        model: Optional[str] = None,
+        reasoning: Optional[str] = None,
     ) -> None:
         nonlocal pma_current, pma_last_result, pma_active, pma_event
         async with pma_lock:
@@ -277,6 +381,7 @@ def build_pma_routes() -> APIRouter:
         status = result.get("status") or "error"
         started_at = current_snapshot.get("started_at")
         duration_ms = None
+        finished_at = now_iso()
         if started_at:
             try:
                 start_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
@@ -285,6 +390,23 @@ def build_pma_routes() -> APIRouter:
                 )
             except Exception:
                 pass
+
+        transcript_pointer = await _persist_transcript(
+            request=request,
+            result=result,
+            current=current_snapshot,
+            prompt_message=prompt_message,
+            lifecycle_event=lifecycle_event,
+            model=model,
+            reasoning=reasoning,
+            duration_ms=duration_ms,
+            finished_at=finished_at,
+        )
+        if transcript_pointer is not None:
+            pma_last_result = dict(pma_last_result or {})
+            pma_last_result["transcript"] = transcript_pointer
+            if not pma_last_result.get("turn_id"):
+                pma_last_result["turn_id"] = transcript_pointer.get("turn_id")
 
         log_event(
             logger,
@@ -425,6 +547,9 @@ def build_pma_routes() -> APIRouter:
         agent = payload.get("agent")
         model = _normalize_optional_text(payload.get("model"))
         reasoning = _normalize_optional_text(payload.get("reasoning"))
+        lifecycle_event = payload.get("lifecycle_event")
+        if not isinstance(lifecycle_event, dict):
+            lifecycle_event = None
 
         store = _get_state_store(request)
         agents, available_default = _available_agents(request)
@@ -481,14 +606,30 @@ def build_pma_routes() -> APIRouter:
                 "client_turn_id": client_turn_id or "",
             }
             if started:
-                await _finalize_result(error_result, request=request, store=store)
+                await _finalize_result(
+                    error_result,
+                    request=request,
+                    store=store,
+                    prompt_message=message,
+                    lifecycle_event=lifecycle_event,
+                    model=model,
+                    reasoning=reasoning,
+                )
             return error_result
 
         interrupt_event = await _get_interrupt_event()
         if interrupt_event.is_set():
             result = {"status": "interrupted", "detail": "PMA chat interrupted"}
             if started:
-                await _finalize_result(result, request=request, store=store)
+                await _finalize_result(
+                    result,
+                    request=request,
+                    store=store,
+                    prompt_message=message,
+                    lifecycle_event=lifecycle_event,
+                    model=model,
+                    reasoning=reasoning,
+                )
             return result
 
         meta_future: asyncio.Future[tuple[str, str]] = (
@@ -543,7 +684,15 @@ def build_pma_routes() -> APIRouter:
                 if opencode is None:
                     result = {"status": "error", "detail": "OpenCode unavailable"}
                     if started:
-                        await _finalize_result(result, request=request, store=store)
+                        await _finalize_result(
+                            result,
+                            request=request,
+                            store=store,
+                            prompt_message=message,
+                            lifecycle_event=lifecycle_event,
+                            model=model,
+                            reasoning=reasoning,
+                        )
                     return result
                 result = await _execute_opencode(
                     opencode,
@@ -561,7 +710,15 @@ def build_pma_routes() -> APIRouter:
                 if supervisor is None or events is None:
                     result = {"status": "error", "detail": "App-server unavailable"}
                     if started:
-                        await _finalize_result(result, request=request, store=store)
+                        await _finalize_result(
+                            result,
+                            request=request,
+                            store=store,
+                            prompt_message=message,
+                            lifecycle_event=lifecycle_event,
+                            model=model,
+                            reasoning=reasoning,
+                        )
                     return result
                 result = await _execute_app_server(
                     supervisor,
@@ -582,12 +739,28 @@ def build_pma_routes() -> APIRouter:
                     "detail": str(exc),
                     "client_turn_id": client_turn_id or "",
                 }
-                await _finalize_result(error_result, request=request, store=store)
+                await _finalize_result(
+                    error_result,
+                    request=request,
+                    store=store,
+                    prompt_message=message,
+                    lifecycle_event=lifecycle_event,
+                    model=model,
+                    reasoning=reasoning,
+                )
             raise
 
         result = dict(result or {})
         result["client_turn_id"] = client_turn_id or ""
-        await _finalize_result(result, request=request, store=store)
+        await _finalize_result(
+            result,
+            request=request,
+            store=store,
+            prompt_message=message,
+            lifecycle_event=lifecycle_event,
+            model=model,
+            reasoning=reasoning,
+        )
         return result
 
     @router.get("/active")
@@ -627,6 +800,28 @@ def build_pma_routes() -> APIRouter:
             if current.get("client_turn_id") != client_turn_id:
                 current = {}
         return {"active": active, "current": current, "last_result": last_result}
+
+    @router.get("/history")
+    def list_pma_history(request: Request, limit: int = 50) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        hub_root = request.app.state.config.root
+        store = PmaTranscriptStore(hub_root)
+        entries = store.list_recent(limit=limit)
+        return {"entries": entries}
+
+    @router.get("/history/{turn_id}")
+    def get_pma_history(turn_id: str, request: Request) -> dict[str, Any]:
+        pma_config = _get_pma_config(request)
+        if not pma_config.get("enabled", True):
+            raise HTTPException(status_code=404, detail="PMA is disabled")
+        hub_root = request.app.state.config.root
+        store = PmaTranscriptStore(hub_root)
+        transcript = store.read_transcript(turn_id)
+        if not transcript:
+            raise HTTPException(status_code=404, detail="Transcript not found")
+        return transcript
 
     @router.get("/agents")
     def list_pma_agents(request: Request) -> dict[str, Any]:
