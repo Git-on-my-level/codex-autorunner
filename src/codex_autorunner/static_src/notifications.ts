@@ -306,11 +306,18 @@ function attachRoot(root: NotificationRoot): void {
       ".notifications-item"
     );
     if (!target) return;
+    event.preventDefault();
+    event.stopPropagation();
     const index = Number(target.dataset.index || "-1");
     const item = notificationItems[index];
     if (!item) return;
     closeDropdown();
-    openNotificationsModal(item, root.trigger);
+    const mouseEvent = event as MouseEvent;
+    if (mouseEvent.shiftKey) {
+      openNotificationsModal(item, root.trigger);
+      return;
+    }
+    window.location.href = resolvePath(item.openUrl);
   });
 }
 
