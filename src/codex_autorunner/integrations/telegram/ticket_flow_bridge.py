@@ -163,7 +163,7 @@ class TelegramTicketFlowBridge:
                 key, self._set_ticket_dispatch_marker(marker)
             )
 
-        primary_key, _primary_record = primary
+        primary_key, primary_record = primary
         try:
             chat_id, thread_id, _scope = parse_topic_key(primary_key)
         except Exception as exc:
@@ -182,6 +182,8 @@ class TelegramTicketFlowBridge:
                 seq=seq,
                 content=content,
                 archived_dir=archived_dir,
+                workspace_root=workspace_root,
+                repo_id=getattr(primary_record, "repo_id", None),
             )
             self._pause_targets[str(workspace_root)] = run_id
         except Exception as exc:
@@ -373,6 +375,7 @@ class TelegramTicketFlowBridge:
                 seq=seq,
                 content=content,
                 archived_dir=archived_dir,
+                workspace_root=workspace_root,
             )
             self._last_default_notification[workspace_root] = marker
             self._pause_targets[str(workspace_root)] = run_id
@@ -396,6 +399,8 @@ class TelegramTicketFlowBridge:
         seq: str,
         content: str,
         archived_dir: Optional[Path],
+        workspace_root: Optional[Path],
+        repo_id: Optional[str] = None,
     ) -> None:
         await self._send_dispatch_text(
             chat_id,
@@ -403,6 +408,8 @@ class TelegramTicketFlowBridge:
             run_id=run_id,
             seq=seq,
             content=content,
+            workspace_root=workspace_root,
+            repo_id=repo_id,
         )
         if self._pause_config.send_attachments and archived_dir:
             await self._send_dispatch_attachments(
@@ -421,9 +428,15 @@ class TelegramTicketFlowBridge:
         run_id: str,
         seq: str,
         content: str,
+        workspace_root: Optional[Path],
+        repo_id: Optional[str] = None,
     ) -> None:
         body = content.strip() or "(no dispatch message)"
-        header = f"Ticket flow paused (run {run_id}). Latest dispatch #{seq}:\n\n"
+        source = self._format_dispatch_source(workspace_root, repo_id)
+        header = (
+            f"Ticket flow paused (run {run_id}). Latest dispatch #{seq}:\n"
+            f"Source: {source}\n\n"
+        )
         footer = "\n\nUse /flow resume to continue."
         full_text = f"{header}{body}{footer}"
 
@@ -445,6 +458,38 @@ class TelegramTicketFlowBridge:
             )
             if idx == 0:
                 await asyncio.sleep(0)
+
+    def _format_dispatch_source(
+        self, workspace_root: Optional[Path], repo_id: Optional[str]
+    ) -> str:
+        workspace_label = None
+        if isinstance(workspace_root, Path):
+            workspace_label = str(workspace_root)
+        repo_label = repo_id.strip() if isinstance(repo_id, str) else ""
+        if self._hub_root and self._manifest_path and self._manifest_path.exists():
+            try:
+                manifest = load_manifest(self._manifest_path, self._hub_root)
+                if workspace_root:
+                    entry = manifest.get_by_path(self._hub_root, workspace_root)
+                else:
+                    entry = None
+                if entry:
+                    repo_label = entry.id or repo_label
+                    if entry.display_name and entry.display_name != repo_label:
+                        repo_label = f"{repo_label} ({entry.display_name})"
+                    if entry.kind == "worktree" and entry.worktree_of:
+                        repo_label = f"{repo_label} [worktree of {entry.worktree_of}]"
+            except Exception as exc:
+                self._logger.debug(
+                    "telegram.ticket_flow.manifest_label_failed", exc_info=exc
+                )
+        if repo_label and workspace_label:
+            return f"{repo_label} @ {workspace_label}"
+        if repo_label:
+            return repo_label
+        if workspace_label:
+            return workspace_label
+        return "unknown workspace"
 
     async def _send_dispatch_attachments(
         self,
