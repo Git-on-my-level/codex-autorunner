@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import enum
+import json
 import logging
 import re
 import shutil
@@ -31,8 +32,15 @@ from .git_utils import (
     git_upstream_status,
     run_git,
 )
-from .lifecycle_events import LifecycleEvent, LifecycleEventEmitter, LifecycleEventStore
+from .lifecycle_events import (
+    LifecycleEvent,
+    LifecycleEventEmitter,
+    LifecycleEventStore,
+    LifecycleEventType,
+)
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
+from .pma_dispatch_interceptor import PmaDispatchInterceptor
+from .pma_queue import PmaQueue
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
 )
@@ -285,10 +293,10 @@ class HubSupervisor:
         self._dispatch_interceptor_task: Optional[asyncio.Task] = None
         self._dispatch_interceptor_stop_event: Optional[threading.Event] = None
         self._dispatch_interceptor_thread: Optional[threading.Thread] = None
+        self._dispatch_interceptor: Optional[PmaDispatchInterceptor] = None
         self._wire_outbox_lifecycle()
         self._reconcile_startup()
         self._start_lifecycle_event_processor()
-        self._start_dispatch_interceptor()
 
     @classmethod
     def from_path(
@@ -965,19 +973,7 @@ class HubSupervisor:
         return self._lifecycle_emitter._store
 
     def trigger_pma_from_lifecycle_event(self, event: LifecycleEvent) -> None:
-        if event.processed:
-            return
-        event_id = event.event_id
-        if event_id is None:
-            return
-        self.lifecycle_store.mark_processed(event_id)
-        self.lifecycle_store.prune_processed(keep_last=50)
-        logger.info(
-            "PMA wakeup triggered by lifecycle event: type=%s repo_id=%s run_id=%s",
-            event.event_type.value,
-            event.repo_id,
-            event.run_id,
-        )
+        self._process_lifecycle_event(event)
 
     def process_lifecycle_events(self) -> None:
         events = self.lifecycle_store.get_unprocessed(limit=100)
@@ -985,7 +981,7 @@ class HubSupervisor:
             return
         for event in events:
             try:
-                self.trigger_pma_from_lifecycle_event(event)
+                self._process_lifecycle_event(event)
             except Exception as exc:
                 logger.exception(
                     "Failed to process lifecycle event %s: %s", event.event_id, exc
@@ -1109,6 +1105,169 @@ class HubSupervisor:
                 if isinstance(result, dict)
                 else getattr(result, "reason", None)
             ),
+        )
+
+    def _ensure_dispatch_interceptor(self) -> Optional[PmaDispatchInterceptor]:
+        if not self.hub_config.pma.enabled:
+            return None
+        if not self.hub_config.pma.dispatch_interception_enabled:
+            return None
+        if self._dispatch_interceptor is None:
+            self._dispatch_interceptor = PmaDispatchInterceptor(
+                hub_root=self.hub_config.root,
+                supervisor=self,
+                on_intercept=self._on_dispatch_intercept,
+            )
+        return self._dispatch_interceptor
+
+    def _run_coroutine(self, coro: Any) -> Any:
+        try:
+            return asyncio.run(coro)
+        except RuntimeError as exc:
+            if "asyncio.run() cannot be called" not in str(exc):
+                raise
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+
+    def _build_pma_lifecycle_message(
+        self, event: LifecycleEvent, *, reason: str
+    ) -> str:
+        lines = [
+            "Lifecycle event received.",
+            f"type: {event.event_type.value}",
+            f"repo_id: {event.repo_id}",
+            f"run_id: {event.run_id}",
+            f"event_id: {event.event_id}",
+        ]
+        if reason:
+            lines.append(f"reason: {reason}")
+        if event.data:
+            try:
+                payload = json.dumps(event.data, sort_keys=True, ensure_ascii=True)
+            except Exception:
+                payload = str(event.data)
+            lines.append(f"data: {payload}")
+        if event.event_type == LifecycleEventType.DISPATCH_CREATED:
+            lines.append("Dispatch requires attention; check the repo inbox.")
+        return "\n".join(lines)
+
+    def _enqueue_pma_for_lifecycle_event(
+        self, event: LifecycleEvent, *, reason: str
+    ) -> bool:
+        if not self.hub_config.pma.enabled:
+            return False
+
+        async def _enqueue() -> tuple[object, Optional[str]]:
+            queue = PmaQueue(self.hub_config.root)
+            message = self._build_pma_lifecycle_message(event, reason=reason)
+            payload = {
+                "message": message,
+                "agent": None,
+                "model": None,
+                "reasoning": None,
+                "client_turn_id": event.event_id,
+                "stream": False,
+                "hub_root": str(self.hub_config.root),
+                "lifecycle_event": {
+                    "event_id": event.event_id,
+                    "event_type": event.event_type.value,
+                    "repo_id": event.repo_id,
+                    "run_id": event.run_id,
+                    "timestamp": event.timestamp,
+                    "data": event.data,
+                },
+            }
+            idempotency_key = f"lifecycle:{event.event_id}"
+            return await queue.enqueue("pma:default", idempotency_key, payload)
+
+        _, dupe_reason = self._run_coroutine(_enqueue())
+        if dupe_reason:
+            logger.info(
+                "Deduped PMA queue item for lifecycle event %s: %s",
+                event.event_id,
+                dupe_reason,
+            )
+        return True
+
+    def _process_lifecycle_event(self, event: LifecycleEvent) -> None:
+        if event.processed:
+            return
+        event_id = event.event_id
+        if not event_id:
+            return
+
+        decision = "skip"
+        processed = False
+
+        if event.event_type == LifecycleEventType.DISPATCH_CREATED:
+            if not self.hub_config.pma.enabled:
+                decision = "pma_disabled"
+                processed = True
+            else:
+                interceptor = self._ensure_dispatch_interceptor()
+                repo_snapshot = None
+                try:
+                    snapshots = self.list_repos()
+                    for snap in snapshots:
+                        if snap.id == event.repo_id:
+                            repo_snapshot = snap
+                            break
+                except Exception:
+                    repo_snapshot = None
+
+                if repo_snapshot is None or not repo_snapshot.exists_on_disk:
+                    decision = "repo_missing"
+                    processed = True
+                elif interceptor is not None:
+                    result = self._run_coroutine(
+                        interceptor.process_dispatch_event(event, repo_snapshot.path)
+                    )
+                    if result and result.action == "auto_resolved":
+                        decision = "dispatch_auto_resolved"
+                        processed = True
+                    elif result and result.action == "ignore":
+                        decision = "dispatch_ignored"
+                        processed = True
+                    else:
+                        decision = "dispatch_escalated"
+                        processed = self._enqueue_pma_for_lifecycle_event(
+                            event, reason="dispatch_escalated"
+                        )
+                else:
+                    decision = "dispatch_enqueued"
+                    processed = self._enqueue_pma_for_lifecycle_event(
+                        event, reason="dispatch_created"
+                    )
+        elif event.event_type in (
+            LifecycleEventType.FLOW_PAUSED,
+            LifecycleEventType.FLOW_COMPLETED,
+            LifecycleEventType.FLOW_FAILED,
+            LifecycleEventType.FLOW_STOPPED,
+        ):
+            if not self.hub_config.pma.enabled:
+                decision = "pma_disabled"
+                processed = True
+            else:
+                decision = "flow_enqueued"
+                processed = self._enqueue_pma_for_lifecycle_event(
+                    event, reason=event.event_type.value
+                )
+
+        if processed:
+            self.lifecycle_store.mark_processed(event_id)
+            self.lifecycle_store.prune_processed(keep_last=50)
+
+        logger.info(
+            "Lifecycle event processed: event_id=%s type=%s repo_id=%s run_id=%s decision=%s processed=%s",
+            event.event_id,
+            event.event_type.value,
+            event.repo_id,
+            event.run_id,
+            decision,
+            processed,
         )
 
     def _snapshot_from_record(self, record: DiscoveryRecord) -> RepoSnapshot:
