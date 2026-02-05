@@ -38,7 +38,6 @@ from ...core.flows.worker_process import (
 )
 from ...core.git_utils import GitError, run_git
 from ...core.hub import HubSupervisor
-from ...core.locks import file_lock
 from ...core.logging_utils import log_event, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.runtime import (
@@ -106,6 +105,7 @@ from ...tickets.lint import (
 from ...voice import VoiceConfig
 from ..web.app import create_hub_app
 from .pma_cli import pma_app as pma_cli_app
+from .template_repos import TemplatesConfigError, load_template_repos_manager
 
 logger = logging.getLogger("codex_autorunner.cli")
 
@@ -153,26 +153,6 @@ def _require_hub_config(path: Optional[Path]) -> HubConfig:
         return load_hub_config(path or Path.cwd())
     except ConfigError as exc:
         _raise_exit(str(exc), cause=exc)
-
-
-def _load_hub_config_yaml(path: Path) -> dict:
-    if not path.exists():
-        _raise_exit(f"Hub config file not found: {path}")
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            _raise_exit(f"Hub config must be a YAML mapping: {path}")
-        return data
-    except yaml.YAMLError as exc:
-        _raise_exit(f"Invalid YAML in hub config: {exc}", cause=exc)
-    except OSError as exc:
-        _raise_exit(f"Failed to read hub config: {exc}", cause=exc)
-
-
-def _write_hub_config_yaml(path: Path, data: dict) -> None:
-    lock_path = path.parent / (path.name + ".lock")
-    with file_lock(lock_path):
-        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 def _require_templates_enabled(config: RepoConfig) -> None:
@@ -780,16 +760,8 @@ def repos_list(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
 ):
     """List configured template repos."""
-    config = _require_hub_config(hub)
-    hub_config_path = config.root / CONFIG_FILENAME
-    data = _load_hub_config_yaml(hub_config_path)
-
-    templates_config = data.get("templates", {})
-    if not isinstance(templates_config, dict):
-        templates_config = {}
-    repos = templates_config.get("repos", [])
-    if not isinstance(repos, list):
-        repos = []
+    manager = load_template_repos_manager(hub)
+    repos = manager.list_repos()
 
     if output_json:
         payload = {"repos": repos}
@@ -823,43 +795,16 @@ def repos_add(
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
 ):
     """Add a template repo to the hub config."""
-    config = _require_hub_config(hub)
-    hub_config_path = config.root / CONFIG_FILENAME
-    data = _load_hub_config_yaml(hub_config_path)
-
-    templates_config = data.get("templates", {})
-    if not isinstance(templates_config, dict):
-        templates_config = {}
-    enabled = templates_config.get("enabled", True)
-    if enabled is False:
-        _raise_exit(
-            "Templates are disabled. Set templates.enabled=true in the hub config to enable."
-        )
-
-    templates_config = data.setdefault("templates", {})
-    if not isinstance(templates_config, dict):
-        _raise_exit("Invalid templates config in hub config")
-    templates_config.setdefault("enabled", True)
-    repos = templates_config.setdefault("repos", [])
-    if not isinstance(repos, list):
-        _raise_exit("Invalid repos config in hub config")
-
-    existing_ids = {repo.get("id") for repo in repos if isinstance(repo, dict)}
-    if repo_id in existing_ids:
-        _raise_exit(f"Repo ID '{repo_id}' already exists. Use a unique ID.")
-
-    new_repo = {
-        "id": repo_id,
-        "url": url,
-        "default_ref": default_ref,
-    }
-    if trusted is not None:
-        new_repo["trusted"] = trusted
-
-    repos.append(new_repo)
+    manager = load_template_repos_manager(hub)
+    try:
+        manager.add_repo(repo_id, url, trusted, default_ref)
+    except TemplatesConfigError as exc:
+        _raise_exit(str(exc), cause=exc)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
     try:
-        _write_hub_config_yaml(hub_config_path, data)
+        manager.save()
     except OSError as exc:
         _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
@@ -872,29 +817,16 @@ def repos_remove(
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
 ):
     """Remove a template repo from the hub config."""
-    config = _require_hub_config(hub)
-    hub_config_path = config.root / CONFIG_FILENAME
-    data = _load_hub_config_yaml(hub_config_path)
-
-    templates_config = data.get("templates", {})
-    if not isinstance(templates_config, dict):
-        templates_config = {}
-    repos = templates_config.get("repos", [])
-    if not isinstance(repos, list):
-        repos = []
-
-    original_count = len(repos)
-    filtered_repos = [
-        repo for repo in repos if isinstance(repo, dict) and repo.get("id") != repo_id
-    ]
-
-    if len(filtered_repos) == original_count:
-        _raise_exit(f"Repo ID '{repo_id}' not found in config.")
-
-    templates_config["repos"] = filtered_repos
+    manager = load_template_repos_manager(hub)
+    try:
+        manager.remove_repo(repo_id)
+    except TemplatesConfigError as exc:
+        _raise_exit(str(exc), cause=exc)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
     try:
-        _write_hub_config_yaml(hub_config_path, data)
+        manager.save()
     except OSError as exc:
         _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
@@ -907,29 +839,16 @@ def repos_trust(
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
 ):
     """Mark a template repo as trusted (skip scanning)."""
-    config = _require_hub_config(hub)
-    hub_config_path = config.root / CONFIG_FILENAME
-    data = _load_hub_config_yaml(hub_config_path)
-
-    templates_config = data.get("templates", {})
-    if not isinstance(templates_config, dict):
-        templates_config = {}
-    repos = templates_config.get("repos", [])
-    if not isinstance(repos, list):
-        repos = []
-
-    found = False
-    for repo in repos:
-        if isinstance(repo, dict) and repo.get("id") == repo_id:
-            repo["trusted"] = True
-            found = True
-            break
-
-    if not found:
-        _raise_exit(f"Repo ID '{repo_id}' not found in config.")
+    manager = load_template_repos_manager(hub)
+    try:
+        manager.set_trusted(repo_id, True)
+    except TemplatesConfigError as exc:
+        _raise_exit(str(exc), cause=exc)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
     try:
-        _write_hub_config_yaml(hub_config_path, data)
+        manager.save()
     except OSError as exc:
         _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
@@ -942,29 +861,16 @@ def repos_untrust(
     hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
 ):
     """Mark a template repo as untrusted (require scanning)."""
-    config = _require_hub_config(hub)
-    hub_config_path = config.root / CONFIG_FILENAME
-    data = _load_hub_config_yaml(hub_config_path)
-
-    templates_config = data.get("templates", {})
-    if not isinstance(templates_config, dict):
-        templates_config = {}
-    repos = templates_config.get("repos", [])
-    if not isinstance(repos, list):
-        repos = []
-
-    found = False
-    for repo in repos:
-        if isinstance(repo, dict) and repo.get("id") == repo_id:
-            repo["trusted"] = False
-            found = True
-            break
-
-    if not found:
-        _raise_exit(f"Repo ID '{repo_id}' not found in config.")
+    manager = load_template_repos_manager(hub)
+    try:
+        manager.set_trusted(repo_id, False)
+    except TemplatesConfigError as exc:
+        _raise_exit(str(exc), cause=exc)
+    except OSError as exc:
+        _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
     try:
-        _write_hub_config_yaml(hub_config_path, data)
+        manager.save()
     except OSError as exc:
         _raise_exit(f"Failed to write hub config: {exc}", cause=exc)
 
