@@ -119,9 +119,9 @@ def read_workspace_file(
     ):  # codeql[py/path-injection] validated by normalize_workspace_rel_path
         return ""
     try:
-        return path.read_text(
+        return path.read_text(  # codeql[py/path-injection] validated by normalize_workspace_rel_path
             encoding="utf-8"
-        )  # codeql[py/path-injection] validated by normalize_workspace_rel_path
+        )
     except UnicodeDecodeError as exc:
         raise ValueError(
             "file is not UTF-8 text; download it to view binary data"
